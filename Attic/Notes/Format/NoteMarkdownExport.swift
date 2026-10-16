@@ -25,9 +25,9 @@ enum NoteMarkdownExport {
             }
             if block.kind == .text, block.style == "mono" {
                 numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll()
-                var code = [block.text]
+                var code = [inlineText(block, calendar: calendar, locale: locale, escapeLiterals: false, includeMarks: false)]
                 while index < document.blocks.count, document.blocks[index].kind == .text, document.blocks[index].style == "mono", document.blocks[index].language == block.language {
-                    code.append(document.blocks[index].text); index += 1
+                    code.append(inlineText(document.blocks[index], calendar: calendar, locale: locale, escapeLiterals: false, includeMarks: false)); index += 1
                 }
                 let source = code.joined(separator: "\n")
                 // A fence must be longer than any backtick run in the source.
@@ -149,7 +149,7 @@ enum NoteMarkdownExport {
     }
 
     private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale,
-                                   escapeLiterals: Bool = true) -> String {
+                                   escapeLiterals: Bool = true, includeMarks: Bool = true) -> String {
         var result = ""
         let text = block.text as NSString
         var boundaries: Set<Int> = [0, text.length]
@@ -175,7 +175,7 @@ enum NoteMarkdownExport {
                 continue
             }
             var value = text.substring(with: range)
-            let marks = block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 }
+            let marks = includeMarks ? block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 } : []
             if marks.contains(where: { $0.kind == .code }) {
                 let longest = value.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
                 let fence = String(repeating: "`", count: longest + 1)

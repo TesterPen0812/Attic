@@ -72,14 +72,9 @@ struct TasksPage: View {
     @State private var pointer: TasksPointer
     /// The drag in progress, outside view state (round 4).
     @State private var dragSession: TasksDragSession
-    @State private var rightClickMonitor: Any?
-    /// ⌘F on Done, before any menu sees it (CI run 3: the Edit menu's Find
-    /// sent it to whichever text view had the keyboard, the add bar or a
-    /// field editor left behind, and the search never opened).
-    @State private var findMonitor: Any?
-    /// Scroll events, before a list or the panel sees them: the pager's
-    /// swipe (round 9).
-    @State private var scrollMonitor: Any?
+    /// Kept outside SwiftUI's saved state values so stopping a monitor
+    /// releases its page-capturing handler before the graph is discarded.
+    @State private var eventMonitors = TasksPageEventMonitors()
     /// The add bar's text, edited the way typing does (the strip, suggestions).
     @State private var addBarEditor = AtticTokenFieldEditor()
     /// Each built list's scroll proxy, for `show` (not observed).
@@ -232,12 +227,7 @@ struct TasksPage: View {
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
-            if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
-            scrollMonitor = nil
-            if let rightClickMonitor { NSEvent.removeMonitor(rightClickMonitor) }
-            rightClickMonitor = nil
-            if let findMonitor { NSEvent.removeMonitor(findMonitor) }
-            findMonitor = nil
+            eventMonitors.stop()
         }
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
@@ -296,19 +286,17 @@ struct TasksPage: View {
             }
         }
         #endif
-        if findMonitor == nil {
-            findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        if !eventMonitors.isInstalled {
+            eventMonitors.add(matching: .keyDown) { event in
                 findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
                     || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
                     || tabPressed(event)
                     ? nil : event
             }
-        }
-        if scrollMonitor == nil {
             // The pager reads scroll events itself (round 9): a
             // horizontal swipe over the lists is its own, every other
             // scroll goes on to the list (or the panel) untouched.
-            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack, listProxies] event in
+            eventMonitors.add(matching: .scrollWheel) { [model, pointer, swipe, bottomStack, listProxies] event in
                 // Gated before any state is read (round 10): a page that
                 // is not shown, or not in this event's visible window,
                 // takes nothing, not even a gesture it owned before.
@@ -322,12 +310,10 @@ struct TasksPage: View {
                 listProxies.apply(TasksScrollerRule.change(phase: sample.phase, momentum: sample.momentum, axis: swipe.axis))
                 return consumed ? nil : event
             }
-        }
-        if rightClickMonitor == nil {
             // Every mouse press: a secondary click or a Control-click
             // binds the menu about to open to its row; any other press
             // ends the last menu's binding (round 4, Astra's final 3).
-            rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { event in
+            eventMonitors.add(matching: [.rightMouseDown, .leftMouseDown]) { event in
                 mousePressed(event)
                 return event
             }
@@ -3549,9 +3535,7 @@ struct TasksLiftedCardLayer<Card: View>: View {
 
     var body: some View {
         // The drag out of the panel carries this card as drawn here.
-        let _ = lift.snapshot = { [environment, card] current, scale in
-            TasksDragOut.Card.Images(card: card(current), width: current.origin.width, environment: environment, scale: scale)
-        }
+        let _ = installSnapshot()
         ZStack(alignment: .topLeading) {
             if let current = lift.lift {
                 card(current)
@@ -3563,6 +3547,14 @@ struct TasksLiftedCardLayer<Card: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onAppear { installSnapshot() }
+        .onDisappear { lift.snapshot = nil }
+    }
+
+    private func installSnapshot() {
+        lift.snapshot = { [environment, card] current, scale in
+            TasksDragOut.Card.Images(card: card(current), width: current.origin.width, environment: environment, scale: scale)
+        }
     }
 }
 
@@ -3907,6 +3899,33 @@ private struct TasksBoundaryHint: View {
         .frame(height: AtticErrorLineMetrics.height)
         .padding(.leading, AtticLayout.textX - AtticSpacing.panelMargin - AtticTaskRowMetrics.detailsIconSize - AtticSpacing.s4)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Removing an AppKit observer does not release a copy SwiftUI saved in
+/// `@State`. Clear the handlers directly, and let observer blocks hold only
+/// this owner weakly, so neither saved tokens nor page captures form a cycle.
+@MainActor
+private final class TasksPageEventMonitors {
+    private var tokens: [Any] = []
+    private var handlers: [(NSEvent) -> NSEvent?] = []
+    var isInstalled: Bool { !tokens.isEmpty }
+
+    func add(matching mask: NSEvent.EventTypeMask, handler: @escaping (NSEvent) -> NSEvent?) {
+        let index = handlers.count
+        handlers.append(handler)
+        if let token = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            guard let self, self.handlers.indices.contains(index) else { return event }
+            return self.handlers[index](event)
+        }) {
+            tokens.append(token)
+        }
+    }
+
+    func stop() {
+        for token in tokens { NSEvent.removeMonitor(token) }
+        tokens.removeAll()
+        handlers.removeAll()
     }
 }
 

@@ -36,7 +36,7 @@ final class PhaseXPicksTests: XCTestCase {
     // MARK: - N-2: the highlighter's colours
 
     /// A colour highlight is stored as its key on the mark, read back the
-    /// same, and grey stores none; a colour on any other mark is refused.
+    /// same, and grey stores its explicit key; a colour on any other mark is refused.
     private func block(_ text: String, _ marks: [NoteMark]) -> NoteBlock {
         var block = NoteBlock.text(text)
         block.marks = marks
@@ -50,7 +50,7 @@ final class PhaseXPicksTests: XCTestCase {
         return decoded
     }
 
-    func testAHighlightsColourRoundTripsAndGreyStoresNone() throws {
+    func testAHighlightsColourRoundTripsAndGreyStoresItsKey() throws {
         let document = NoteDocument(blocks: [
             .text("Title"),
             block("Two months free", [NoteMark(.highlight, offset: 0, length: 3, colour: "green"),
@@ -59,8 +59,8 @@ final class PhaseXPicksTests: XCTestCase {
         let decoded = try roundTrip(document)
         XCTAssertEqual(decoded.blocks[1].marks, document.blocks[1].marks)
         XCTAssertEqual(NoteHighlightColour(storedKey: decoded.blocks[1].marks[0].colour), .green)
-        XCTAssertEqual(NoteHighlightColour(storedKey: decoded.blocks[1].marks[1].colour), .grey)
-        XCTAssertNil(NoteHighlightColour.grey.storedKey)
+        XCTAssertEqual(NoteHighlightColour(storedKey: decoded.blocks[1].marks[1].colour), .yellow)
+        XCTAssertEqual(NoteHighlightColour.grey.storedKey, "grey")
         // A key from a newer Attic shows grey but is kept as it was.
         XCTAssertEqual(NoteHighlightColour(storedKey: "teal"), .grey)
         let unknown = NoteDocument(blocks: [.text("T"), block("abc", [NoteMark(.highlight, offset: 0, length: 3, colour: "teal")])])
@@ -71,7 +71,7 @@ final class PhaseXPicksTests: XCTestCase {
     }
 
     /// The chevron's colours: a colour replaces any other highlight on the
-    /// selection in one undo step, the grey click still toggles, None takes
+    /// selection in one undo step, the default click still toggles, None takes
     /// the highlight away, and the editor reads the colour back.
     func testTheHighlighterAppliesAColourAndNoneRemovesIt() throws {
         let (engine, textView) = engine(NoteDocument(blocks: [.text("Pricing"), .text("Lead with the free tier")]))
@@ -87,10 +87,10 @@ final class PhaseXPicksTests: XCTestCase {
         XCTAssertNil(engine.highlightColour(selection: words))
         XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
         // The one click is the yellow highlight (T-10, owner 2026-10-15),
-        // stored explicitly, toggling as before.
+        // stored without a key (owner 2026-10-16), toggling as before.
         XCTAssertTrue(engine.perform(.mark(.highlight), selection: words))
         XCTAssertEqual(engine.highlightColour(selection: words), .yellow)
-        XCTAssertEqual(engine.document().blocks[1].marks.first?.colour, "yellow")
+        XCTAssertNil(engine.document().blocks[1].marks.first?.colour)
         // Mixed colours read as none.
         XCTAssertTrue(engine.setHighlight(.pink, selection: range("free", textView)))
         XCTAssertNil(engine.highlightColour(selection: words))

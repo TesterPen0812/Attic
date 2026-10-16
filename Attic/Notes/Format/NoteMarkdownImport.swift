@@ -12,6 +12,8 @@ enum NoteMarkdownImport {
         var intents: [PresentationIntent.IntentType]
         var block = NoteBlock.text("")
         var literalEmojiOffsets = Set<Int>()
+        var startsWithChecklist = false
+        var startsWithAlert = false
     }
 
     static func document(_ markdown: String) throws -> NoteDocument {
@@ -19,9 +21,29 @@ enum NoteMarkdownImport {
         // definitions. R14 keeps both as literal text instead.
         let source = NSMutableString(string: markdown)
         let footnote = try NSRegularExpression(pattern: #"\[\^[^\]]+\]"#)
-        for match in footnote.matches(in: markdown, range: NSRange(location: 0, length: source.length)).reversed() {
-            let literal = source.substring(with: match.range)
-            source.replaceCharacters(in: match.range, with: literal.replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]"))
+        let matches = footnote.matches(in: markdown, range: NSRange(location: 0, length: source.length))
+        if !matches.isEmpty {
+            // Ask the same parser for code source ranges before applying the
+            // prose workaround. Code's real backslashes must stay verbatim.
+            let original = try AttributedString(markdown: markdown, options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true))
+            let codeRanges: [NSRange] = original.runs.compactMap { run in
+                let isCode = run.inlinePresentationIntent?.contains(.code) == true ||
+                    run.presentationIntent?.components.contains(where: { if case .codeBlock = $0.kind { true } else { false } }) == true
+                guard isCode, let position = run.markdownSourcePosition, let range = Range(position, in: markdown) else { return nil }
+                return NSRange(range, in: markdown)
+            }
+            let units = Array(markdown.utf16)
+            func escaped(at offset: Int) -> Bool {
+                var start = offset
+                while start > 0, units[start - 1] == 92 { start -= 1 }
+                return (offset - start) % 2 == 1
+            }
+            for match in matches.reversed() {
+                guard !escaped(at: match.range.location), !escaped(at: NSMaxRange(match.range) - 1),
+                      !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { continue }
+                let literal = source.substring(with: match.range)
+                source.replaceCharacters(in: match.range, with: literal.replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]"))
+            }
         }
         // Foundation emits no run for a truly empty list item. Give those
         // items a temporary parse-only token, then remove it from their text.
@@ -52,9 +74,20 @@ enum NoteMarkdownImport {
             text = text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
             let offset = (paragraphs[paragraphs.count - 1].block.text as NSString).length
             let length = (text as NSString).length
-            if let position = run.markdownSourcePosition, let range = Range(position, in: sourceText),
-               sourceText[range].hasPrefix("&#") {
-                paragraphs[paragraphs.count - 1].literalEmojiOffsets.insert(offset)
+            if let position = run.markdownSourcePosition, let range = Range(position, in: sourceText) {
+                let raw = String(sourceText[range])
+                if raw.hasPrefix("&#") { paragraphs[paragraphs.count - 1].literalEmojiOffsets.insert(offset) }
+                if offset == 0, !inline.contains(.code) {
+                    let lineStart = sourceText[..<range.lowerBound].lastIndex(of: "\n").map { sourceText.index(after: $0) } ?? sourceText.startIndex
+                    let before = String(sourceText[lineStart..<range.lowerBound])
+                    // Only container prefixes may precede a structural marker.
+                    // Inline delimiters, escapes and entities remain literal.
+                    let atBlockStart = before.range(of: #"^(?:[ \t]*(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+))*[ \t]*$"#, options: .regularExpression) != nil
+                    if atBlockStart {
+                        paragraphs[paragraphs.count - 1].startsWithChecklist = raw.range(of: #"^\[( |x|X)\](?: |$)"#, options: .regularExpression) != nil
+                        paragraphs[paragraphs.count - 1].startsWithAlert = raw.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |$|\n)"#, options: .regularExpression) != nil
+                    }
+                }
             }
             var marks: [NoteMark] = []
             for (intent, kind) in [(InlinePresentationIntent.stronglyEmphasized, NoteMark.Kind.bold), (.emphasized, .italic), (.strikethrough, .strikethrough), (.code, .code)] where inline.contains(intent) && length > 0 {
@@ -68,6 +101,7 @@ enum NoteMarkdownImport {
         var blocks: [NoteBlock] = []
         var seenLists = Set<Int>()
         var alerts: [Int: String] = [:]
+        var seenQuotes = Set<Int>()
         var tableIndices: [Int: Int] = [:]
         for (paragraphIndex, paragraph) in paragraphs.enumerated() {
             let intents = paragraph.intents
@@ -110,7 +144,7 @@ enum NoteMarkdownImport {
                 block.style = list.kind == .orderedList ? "number" : "bullet"
                 block.indent = min(2, max(0, depth)) == 0 ? nil : min(2, depth)
                 if seenLists.insert(list.identity).inserted, list.kind == .orderedList, ordinal != 1 { block.start = ordinal }
-                if let marker = block.text.range(of: #"^\[( |x|X)\](?: |$)"#, options: .regularExpression) {
+                if paragraph.startsWithChecklist, let marker = block.text.range(of: #"^\[( |x|X)\](?: |$)"#, options: .regularExpression) {
                     block.kind = .checklist; block.id = UUID(); block.checked = !block.text.hasPrefix("[ ]")
                     removePrefix((String(block.text[marker]) as NSString).length, from: &block); block.style = nil; block.start = nil
                 }
@@ -121,7 +155,7 @@ enum NoteMarkdownImport {
                     if block.kind == .checklist { prepend(block.checked ? "[x] " : "[ ] ", to: &block) }
                     prepend(prefix, to: &block)
                 }
-                if alerts[quote.identity] == nil,
+                if seenQuotes.insert(quote.identity).inserted, paragraph.startsWithAlert,
                    let alert = block.text.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |\u2028|\n)?"#, options: .regularExpression) {
                     let name = String(block.text[alert]).components(separatedBy: "]")[0].dropFirst(2)
                     let defaults = ["NOTE": "", "TIP": "💡", "IMPORTANT": "❗", "WARNING": "⚠️", "CAUTION": "🛑"]

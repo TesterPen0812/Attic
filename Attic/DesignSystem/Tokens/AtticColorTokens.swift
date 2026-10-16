@@ -414,24 +414,14 @@ struct AtticColorTokens: Equatable, Sendable {
 
     // MARK: Note content (colour pass)
 
-    /// The highlight mark: a plain grey wash (black 16 % in Light, white
-    /// 22 % in Dark) in every palette and surface (owner 2026-10-10: back
-    /// to grey; a separate colour highlighter is later work). It is
-    /// stronger than inline code's accent tint (`tagFill`: 10 % / 16 %), and
-    /// code also keeps its monospaced font, so the two never read alike.
-    /// Decoration under body text, which keeps 4.5 : 1 over it.
-    var highlightMarker: AtticRGBA {
-        context.mode == .dark ? AtticRGBA(0xFFFFFF).withAlpha(0.22) : AtticRGBA(0x000000).withAlpha(0.16)
-    }
+    /// A plain highlight uses the existing yellow look (owner 2026-10-16).
+    var highlightMarker: AtticRGBA { highlightMarker(.yellow) }
 
-    /// A highlight in `colour` (N-2, owner 2026-10-11): grey is
-    /// `highlightMarker`; the hues are colour set 1, the clear, Apple
-    /// Notes-like hues, opaque in Light and translucent fills in Dark (the
-    /// text stays the body ink, 4.5 : 1 over each on every surface).
+    /// Explicit menu colours. Body text keeps 4.5 : 1 over each fill.
     func highlightMarker(_ colour: NoteHighlightColour) -> AtticRGBA {
         let dark = context.mode == .dark
         switch colour {
-        case .grey: return highlightMarker
+        case .grey: return dark ? AtticRGBA(0xFFFFFF).withAlpha(0.22) : AtticRGBA(0x000000).withAlpha(0.16)
         case .yellow: return dark ? AtticRGBA(0xE6BE46, alpha: 0.36) : AtticRGBA(0xF2DB8C)
         case .green: return dark ? AtticRGBA(0x78BE78, alpha: 0.34) : AtticRGBA(0xB9E0B4)
         case .blue: return dark ? AtticRGBA(0x6EA0E6, alpha: 0.36) : AtticRGBA(0xB7D3F2)

@@ -256,28 +256,33 @@ final class PhaseXColourTokenTests: XCTestCase {
 
     // MARK: Notes
 
-    /// F-01 (owner 2026-10-10): the highlight is a plain grey wash again, in
-    /// every mode, palette and surface, and never reads as inline code.
-    func testHighlightIsAGreyWashThatKeepsBodyTextReadableAndDiffersFromCode() {
+    /// Owner 2026-10-16: plain highlights are yellow. Explicit grey keeps
+    /// its wash; both keep readable text and differ from inline code.
+    func testYellowAndExplicitGreyHighlightsKeepBodyTextReadableAndDifferFromCode() {
         for context in Self.matrix {
             let tokens = context.tokens
-            XCTAssertLessThan(tokens.highlightMarker.hsl.saturation, 0.02, "\(context.caption) is neutral grey")
-            XCTAssertEqual(tokens.highlightMarker.alpha, context.mode == .dark ? 0.22 : 0.16, accuracy: 0.001)
-            for base in surfaces(tokens, context) {
-                let marked = tokens.highlightMarker.over(base)
-                XCTAssertGreaterThanOrEqual(tokens.ink(.heading).contrast(on: marked), 4.5, context.caption)
-                // Decoration, not a signal: a quiet wash against the surface.
-                XCTAssertLessThan(marked.contrast(on: base), 2.1, context.caption)
-                XCTAssertGreaterThan(marked.contrast(on: base), 1.1, "\(context.caption) is visible")
-                // Clearly stronger than inline code's chip on the same surface.
-                let code = tokens.tagFill.over(base)
-                XCTAssertGreaterThan(marked.distance(to: base), code.distance(to: base) * 1.3,
-                                     "\(context.caption) highlight is a stronger wash than the code chip")
+            XCTAssertLessThan(tokens.highlightMarker(.grey).hsl.saturation, 0.02, "\(context.caption) is neutral grey")
+            XCTAssertEqual(tokens.highlightMarker(.grey).alpha, context.mode == .dark ? 0.22 : 0.16, accuracy: 0.001)
+            XCTAssertEqual(tokens.highlightMarker, tokens.highlightMarker(.yellow))
+            for colour in [NoteHighlightColour.yellow, .grey] {
+                for base in surfaces(tokens, context) {
+                    let marked = tokens.highlightMarker(colour).over(base)
+                    XCTAssertGreaterThanOrEqual(tokens.ink(.heading).contrast(on: marked), 4.5, context.caption)
+                    // The neutral wash keeps its existing upper bound. The owner
+                    // chose the existing yellow, which is stronger in Dark.
+                    if colour == .grey { XCTAssertLessThan(marked.contrast(on: base), 2.1, context.caption) }
+                    XCTAssertGreaterThan(marked.contrast(on: base), 1.1, "\(context.caption) is visible")
+                    // Clearly stronger than inline code's chip on the same surface.
+                    let code = tokens.tagFill.over(base)
+                    XCTAssertGreaterThan(marked.distance(to: base), code.distance(to: base) * 1.3,
+                                         "\(context.caption) highlight is a stronger wash than the code chip")
+                }
             }
         }
-        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.highlightMarker.over(.white(1)).hexString, "#D6D6D6")
+        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.highlightMarker.over(.white(1)).hexString, "#F2DB8C")
+        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.highlightMarker(.grey).over(.white(1)).hexString, "#D6D6D6")
         // Code keeps its monospaced font and its own fill; a highlight is
-        // proportional text on the grey wash.
+        // proportional text on the yellow wash.
         let style = NoteTextStyle(design: AtticDesignContext(mode: .light))
         let code = style.markedAttributes(marks: [.code: true], baseFont: .systemFont(ofSize: 15))
         let marked = style.markedAttributes(marks: [.highlight: true], baseFont: .systemFont(ofSize: 15))

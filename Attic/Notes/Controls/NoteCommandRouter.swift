@@ -126,7 +126,7 @@ final class NoteCommandRouter {
         if let table = engine.focusedTable {
             guard case let .mark(kind) = command else { return false }
             let applied = kind == .link ? engine.requestCellLink(in: table)
-                : engine.applyCellMark(kind, in: table, url: kind == .highlight ? NoteHighlightColour.oneClick.storedKey : nil)
+                : engine.applyCellMark(kind, in: table, url: nil)
             onChange?()
             return applied
         }

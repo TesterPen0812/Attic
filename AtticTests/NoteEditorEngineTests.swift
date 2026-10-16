@@ -1,4 +1,6 @@
 import AppKit
+import ObjectiveC
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -7,6 +9,634 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    // Owner decision 2026-10-16: plain highlights stay yellow, with no saved key.
+    func testJPlainHighlightRendersYellowAndDefaultWritesNoColourKey() throws {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            let style = NoteTextStyle(design: AtticDesignContext(mode: mode))
+            XCTAssertEqual(style.highlightColor(for: nil), style.highlightColor(for: "yellow"))
+            XCTAssertEqual(style.highlightColor(for: true), style.highlightColor(for: "yellow"))
+            XCTAssertNotEqual(style.highlightColor(for: "grey"), style.highlightColor(for: "yellow"))
+        }
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]))
+        defer { engine.detachView() }
+        let words = (view.string as NSString).range(of: "body")
+        XCTAssertTrue(engine.perform(.mark(.highlight), selection: words))
+        let saved = try NoteContentCodec.encode(engine.document())
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+        let mark = try XCTUnwrap(loaded.blocks[1].marks.first)
+        XCTAssertEqual(mark.kind, .highlight)
+        XCTAssertNil(mark.colour)
+        XCTAssertEqual(engine.highlightColour(selection: words), .yellow)
+    }
+
+    func testG10TypingHighlightHistoryKeepsExactSerializedPayload() throws {
+        let values: [Any?] = [nil, true, "future-amber"] + NoteHighlightColour.allCases.compactMap(\.storedKey)
+        for before in values {
+            for colour in NoteHighlightColour.allCases {
+                let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]))
+                defer { engine.detachView() }
+                view.setSelectedRange(NSRange(location: 6, length: 0))
+                view.typingAttributes[.noteMark(.highlight)] = before
+                view.typingAttributes[.noteMark(.bold)] = true
+                let unchanged = try NoteContentCodec.encode(engine.document())
+                XCTAssertTrue(engine.setHighlight(colour))
+                let after: Any = colour.storedKey as Any? ?? true
+                let changed = !NSDictionary(dictionary: ["value": before ?? NSNull()]).isEqual(to: ["value": after])
+                XCTAssertEqual(engine.history.undoOps.count, changed ? 1 : 0, "colour changes need their own step")
+                XCTAssertEqual(try NoteContentCodec.encode(engine.document()), unchanged, "a typing mark never rewrites existing text")
+                if changed {
+                    XCTAssertTrue(engine.history.undo())
+                    XCTAssertEqual(NSDictionary(dictionary: ["value": view.typingAttributes[.noteMark(.highlight)] ?? NSNull()]),
+                                   NSDictionary(dictionary: ["value": before ?? NSNull()]))
+                    XCTAssertTrue(engine.history.redo())
+                }
+                XCTAssertEqual(NSDictionary(dictionary: ["value": view.typingAttributes[.noteMark(.highlight)] ?? NSNull()]),
+                               NSDictionary(dictionary: ["value": after]))
+                XCTAssertEqual(view.typingAttributes[.noteMark(.bold)] as? Bool, true)
+                type("x", view)
+                let saved = try NoteContentCodec.encode(engine.document())
+                let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+                let mark = try XCTUnwrap(loaded.blocks[1].marks.first { $0.kind == .highlight })
+                XCTAssertEqual(mark.colour, colour.storedKey, "serialized colour after Redo then typing")
+                XCTAssertEqual(mark.offset, 4); XCTAssertEqual(mark.length, 1)
+            }
+        }
+        // Undo to a future colour, then type: the unknown stored key stays verbatim.
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("body")]))
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        view.typingAttributes[.noteMark(.highlight)] = "future-amber"
+        XCTAssertTrue(engine.setHighlight(nil)); XCTAssertTrue(engine.history.undo())
+        type("x", view)
+        let saved = try NoteContentCodec.encode(engine.document())
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+        XCTAssertEqual(loaded.blocks[1].marks.first { $0.kind == .highlight }?.colour, "future-amber")
+    }
+
+    // Owner decision 2026-10-16: the palette owns a visible input client.
+    // Selection notifications and native palette focus handoff do not cancel it.
+    func testG05NativePaletteFocusHandoffKeepsTheRequestAndText() throws {
+        let (engine, view) = g05Engine()
+        defer { engine.detachView() }
+        let selection = NSRange(location: 2, length: 3)
+        view.setSelectedRange(selection)
+        var receiver: NSTextView?
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {
+            receiver = view.window?.firstResponder as? NSTextView
+            XCTAssertFalse(receiver === view, "the palette must never target the note body")
+        })
+        let input = try XCTUnwrap(receiver)
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: view.window)
+        view.setSelectedRange(NSRange(location: 6, length: 0)) // native selection bookkeeping
+        input.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document().blocks[1].text, "tip", "a valid pick must not replace selected callout text")
+        XCTAssertEqual(engine.document().blocks[1].callout, "🌻")
+        XCTAssertEqual(engine.document().blocks[2].text, "body")
+        XCTAssertEqual(view.selectedRange(), selection)
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let next = try XCTUnwrap(view.window?.firstResponder as? NSTextView)
+        input.insertText("🌹", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(view.window?.firstResponder === next, "an old delivery cannot cancel a new request")
+        XCTAssertFalse(next === input)
+        view.window?.makeFirstResponder(view) // explicit keyboard/VoiceOver return
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        view.insertText("🌷", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document().blocks[1].callout, "🌻")
+        XCTAssertEqual(engine.document().blocks[2].text, "🌷body")
+    }
+
+    func testG05CalloutPaletteSelectionExpiresOnCaretChangeAndDismissal() throws {
+        for cancellation in ["selection", "dismissal", "focus", "engine", "edit", "identity", "same caret", "right click", "accessibility", "detach", "close", "hide", "read only"] {
+            let (engine, view) = g05Engine()
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 6, length: 0))
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            let input = try XCTUnwrap(view.window?.firstResponder as? NSTextView)
+            XCTAssertFalse(input === view)
+            var replacement: NoteEditorEngine?
+            switch cancellation {
+            case "selection":
+                view.window?.makeFirstResponder(view)
+                view.setSelectedRange(NSRange(location: 7, length: 0))
+            case "dismissal": input.cancelOperation(nil)
+            case "focus": view.window?.makeFirstResponder(view)
+            case "accessibility": view.setAccessibilityFocused(true)
+            case "engine":
+                replacement = NoteEditorEngine(noteID: UUID(), document: engine.document())
+                view.engine = replacement
+                input.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+                XCTAssertEqual(replacement?.document().blocks[1].callout, "💡")
+                view.engine = engine
+            case "edit":
+                XCTAssertTrue(engine.performEdit(NSRange(location: 8, length: 0), with: NSAttributedString(string: "!"), name: "Edit"))
+            case "identity":
+                engine.textStorage.addAttribute(.noteBlockID, value: UUID(), range: NSRange(location: 2, length: 3))
+            case "same caret", "right click":
+                let point = view.engine?.caretRect(at: 6)?.origin ?? .zero
+                let type: NSEvent.EventType = cancellation == "same caret" ? .leftMouseDown : .rightMouseDown
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil),
+                    modifierFlags: [], timestamp: 0, windowNumber: view.window!.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1))
+                // Exercise explicit editing intent without entering AppKit's tracking loop.
+                _ = view.menu(for: event)
+                view.window?.makeFirstResponder(view)
+            case "detach": engine.detachView()
+            case "close": NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: view.window)
+            case "hide": NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: view.window)
+            default: view.isEditable = false
+            }
+            let before = engine.document()
+            input.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(engine.document(), before, "a late callback is consumed after " + cancellation)
+            XCTAssertEqual(engine.document().blocks[1].callout, "💡", cancellation)
+            view.isEditable = true
+            view.window?.makeFirstResponder(view)
+            let caret = view.selectedRange().location
+            if cancellation != "detach" {
+                view.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+                XCTAssertEqual((view.string as NSString).substring(with: NSRange(location: caret, length: 2)), "🌻", cancellation)
+                XCTAssertNotEqual(engine.document(), before, "ordinary text resumes after " + cancellation)
+            }
+            withExtendedLifetime(replacement) {}
+        }
+    }
+
+    func testG05ValidCalloutPalettePickIsOneUndoStepAndConsumesOnlyOnce() throws {
+        let (engine, view) = g05Engine()
+        defer { engine.detachView() }
+        let selection = NSRange(location: 2, length: 3)
+        view.setSelectedRange(selection)
+        let before = engine.document()
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let input = try XCTUnwrap(view.window?.firstResponder as? NSTextView)
+        XCTAssertFalse(input === view)
+        input.insertText(NSAttributedString(string: "🌻"), replacementRange: NSRange(location: NSNotFound, length: 0))
+        let picked = engine.document()
+        XCTAssertEqual(picked.blocks[1].text, "tip")
+        XCTAssertEqual(picked.blocks[1].callout, "🌻")
+        XCTAssertEqual(view.selectedRange(), selection)
+        input.insertText("🌹", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document(), picked)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+        XCTAssertEqual(view.selectedRange(), selection)
+        XCTAssertFalse(engine.history.canUndo)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), picked)
+        XCTAssertEqual(view.selectedRange(), selection)
+        view.insertText("🌷", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(engine.document().blocks[1].text.contains("🌷"))
+        XCTAssertEqual(engine.document().blocks[1].callout, "🌻")
+    }
+
+    func testG05EmojiPredicateAcceptsCompleteEmojiGraphemesOnly() {
+        for emoji in ["🌻", "👍🏽", "👨‍👩‍👧‍👦", "🏳️‍🌈", "🇬🇧", "1️⃣", "©️", "#️⃣", "☀️"] {
+            XCTAssertTrue(NoteCalloutIconSession.isSingleEmoji(emoji), emoji)
+        }
+        for other in ["", "a", "Café", "1", "©", "∑", "🌷🌻", "🏽", "🇬", "🌻\u{301}", "a️", "1️"] {
+            XCTAssertFalse(NoteCalloutIconSession.isSingleEmoji(other), other)
+        }
+    }
+
+    func testG05InvalidAndCurrentIconPicksNeverInsertOrRecordHistory() throws {
+        for payload in ["💡", "text", "∑", "🌻🌷", "", "1"] {
+            let (engine, view) = g05Engine()
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 2, length: 3))
+            let before = engine.document()
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            let session = try XCTUnwrap(view.calloutIconSession)
+            let receiver = session.receiver
+            XCTAssertFalse(receiver.textStorage === engine.textStorage)
+            receiver.insertText(payload, replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(session.outcome, payload == "💡" ? .unchanged : .invalid)
+            XCTAssertEqual(session.state, .ended)
+            XCTAssertEqual(engine.document(), before)
+            XCTAssertFalse(engine.history.canUndo)
+            XCTAssertTrue(view.window?.firstResponder === view)
+            receiver.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(engine.document(), before)
+        }
+    }
+
+    func testG05UnexpectedBodyDeliveryFailsClosedAndCompositionCannotEscape() throws {
+        let (engine, view) = g05Engine()
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: 2, length: 3))
+        let before = engine.document()
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let session = try XCTUnwrap(view.calloutIconSession)
+        view.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertEqual(session.state, .active)
+        view.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(view.hasMarkedText())
+        session.receiver.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        session.receiver.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertFalse(engine.history.canUndo)
+        XCTAssertNil(view.calloutIconSession)
+    }
+
+    func testG05EmptyFinalAndMultiParagraphCalloutsKeepTextAndSelectionThroughReplay() throws {
+        for texts in [[""], ["tip", "more", ""]] {
+            let blocks = texts.map { text -> NoteBlock in
+                var box = NoteBlock.text(text, id: UUID(), style: "quote"); box.callout = "💡"; return box
+            }
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T")] + blocks), window: true)
+            defer { engine.detachView() }
+            let selection = NSRange(location: 2, length: texts.joined(separator: "\n").utf16.count)
+            view.setSelectedRange(selection)
+            let before = engine.document()
+            // Resolve the empty final paragraph through the engine, not storage.length - 1.
+            view.pickCalloutIconFromPalette(forBlockAt: engine.textStorage.length, showPalette: {})
+            let input = try XCTUnwrap(view.calloutIconSession?.receiver)
+            input.insertText(NSAttributedString(string: "1️⃣", attributes: [.foregroundColor: NSColor.red]), replacementRange: NSRange(location: 0, length: 99))
+            let after = engine.document()
+            XCTAssertEqual(after.blocks.dropFirst().map(\.text), texts)
+            XCTAssertTrue(after.blocks.dropFirst().allSatisfy { $0.callout == "1️⃣" })
+            XCTAssertEqual(view.selectedRange(), selection)
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), before)
+            XCTAssertEqual(view.selectedRange(), selection)
+            XCTAssertFalse(engine.history.canUndo)
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), after)
+            XCTAssertEqual(view.selectedRange(), selection)
+        }
+    }
+
+    func testG05IconHasItsOwnUndoStepAfterTypingAndReplayExpiresARequest() throws {
+        let (engine, view) = g05Engine()
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("!", view)
+        let typed = engine.document()
+        let selection = NSRange(location: 2, length: 3)
+        view.setSelectedRange(selection)
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        try XCTUnwrap(view.calloutIconSession?.receiver).insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let picked = engine.document()
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), typed)
+        XCTAssertEqual(view.selectedRange(), selection)
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document().blocks[2].text, "body")
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), typed)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), picked)
+        XCTAssertEqual(view.selectedRange(), selection)
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let stale = try XCTUnwrap(view.calloutIconSession?.receiver)
+        XCTAssertTrue(engine.history.undo())
+        stale.insertText("🌹", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document(), typed)
+        XCTAssertNil(view.calloutIconSession)
+    }
+
+    func testG05FixedIconsNoIconAndAnotherCalloutExpireOldReceivers() throws {
+        for icon in NoteCalloutIcons.menu + [""] {
+            let (engine, view) = g05Engine()
+            defer { engine.detachView() }
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            let stale = try XCTUnwrap(view.calloutIconSession?.receiver)
+            let command = try XCTUnwrap(view.calloutIconCommands(forBlockAt: 2).first { $0.title == (icon.isEmpty ? "No Icon" : icon) })
+            command.action()
+            stale.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(engine.document().blocks[1].callout, icon)
+            XCTAssertNil(view.calloutIconSession)
+        }
+        var first = NoteBlock.text("one", style: "quote"); first.callout = "💡"
+        var second = NoteBlock.text("two", style: "quote"); second.callout = "⚠️"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), first, .text("gap"), second]), window: true)
+        defer { engine.detachView() }
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let stale = try XCTUnwrap(view.calloutIconSession?.receiver)
+        view.pickCalloutIconFromPalette(forBlockAt: 10, showPalette: {})
+        let current = try XCTUnwrap(view.calloutIconSession?.receiver)
+        stale.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(view.window?.firstResponder === current)
+        current.insertText("🌷", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document().blocks[1].callout, "💡")
+        XCTAssertEqual(engine.document().blocks[3].callout, "🌷")
+    }
+
+    func testG05DifferentCalloutAtOldOffsetAndNoteIdentityCannotReceiveOldPick() throws {
+        for change in ["replacement", "note id", "format"] {
+            let (engine, view) = g05Engine()
+            defer { engine.detachView() }
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            let stale = try XCTUnwrap(view.calloutIconSession?.receiver)
+            switch change {
+            case "replacement":
+                var other = NoteBlock.text("new", id: UUID(), style: "quote"); other.callout = "⚠️"
+                let text = NoteTextCodec.attributedString(from: NoteDocument(blocks: [other]), style: engine.style, firstBlockIsTitle: false)
+                XCTAssertTrue(engine.performEdit(NSRange(location: 2, length: 3), with: text, name: "Replace callout"))
+            case "note id": engine.noteID = UUID()
+            default: XCTAssertTrue(engine.perform(.paragraph(.body), selection: NSRange(location: 2, length: 0)))
+            }
+            let changed = engine.document()
+            stale.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(engine.document(), changed)
+            XCTAssertNil(view.calloutIconSession)
+        }
+    }
+
+    func testG05AppearanceResignAndSelectionBookkeepingKeepSessionButTabExits() throws {
+        for backward in [false, true] {
+            let (engine, view) = g05Engine()
+            defer { engine.detachView() }
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            let session = try XCTUnwrap(view.calloutIconSession)
+            // Use NSWindow's responder transition; directly invoking
+            // resignFirstResponder violates AppKit's responder transaction.
+            view.window?.makeFirstResponder(nil)
+            XCTAssertEqual(session.state, .active)
+            view.window?.makeFirstResponder(session.receiver)
+            view.setSelectedRange(NSRange(location: 6, length: 0))
+            engine.update(design: AtticDesignContext(mode: .dark))
+            _ = engine.history.canUndo
+            _ = engine.history.canRedo
+            _ = engine.canUndoCommand
+            XCTAssertEqual(session.state, .active, "menu eligibility queries cannot cancel a picker")
+            if backward { session.receiver.insertBacktab(nil) } else { session.receiver.insertTab(nil) }
+            XCTAssertNil(view.calloutIconSession)
+            XCTAssertTrue(view.window?.firstResponder === view)
+            XCTAssertFalse(engine.history.canUndo)
+            view.insertText("Café", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(view.string.contains("Café"))
+            XCTAssertEqual(engine.document().blocks[1].callout, "💡")
+        }
+    }
+
+    func testG05HistoryEligibilityKeepsTheInputClientAndCancelReleasesIt() async throws {
+        let (engine, view) = g05Engine()
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        type("!", view)
+        weak var releasedSession: NoteCalloutIconSession?
+        weak var releasedReceiver: NSTextView?
+        let released = XCTestExpectation(description: "AppKit releases the receiver after its deferred text work")
+        try autoreleasepool {
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            let session = try XCTUnwrap(view.calloutIconSession)
+            releasedSession = session; releasedReceiver = session.receiver
+            objc_setAssociatedObject(session.receiver, &Self.calloutReleaseKey, CalloutReceiverReleaseNotice(released: released), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            XCTAssertTrue(engine.history.canUndo)
+            XCTAssertTrue(engine.canUndoCommand)
+            XCTAssertEqual(session.state, .active)
+            XCTAssertTrue(view.window?.firstResponder === session.receiver)
+            XCTAssertEqual(session.receiver.accessibilityLabel(), "Callout icon")
+            XCTAssertTrue((view.accessibilityChildren() ?? []).contains { ($0 as AnyObject) === session.receiver })
+            XCTAssertTrue(session.receiver.accessibilityCancelIcon())
+            XCTAssertFalse(session.receiver.accessibilityCancelIcon(), "teardown is idempotent")
+            XCTAssertEqual(engine.history.undoOps.count, 1, "Cancel adds no history")
+        }
+        XCTAssertNil(releasedSession)
+        let result = await XCTWaiter.fulfillment(of: [released], timeout: 5)
+        XCTAssertEqual(result, .completed)
+        XCTAssertNil(releasedReceiver)
+        XCTAssertTrue(view.window?.firstResponder === view)
+    }
+
+    func testG05CompleteEmojiPicksReachOnlyTheCallout() throws {
+        for emoji in ["🌻", "👍🏽", "👨‍👩‍👧‍👦", "🇬🇧", "1️⃣", "©️"] {
+            let (engine, view) = g05Engine()
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 2, length: 3))
+            view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+            let receiver = try XCTUnwrap(view.window?.firstResponder as? NSTextView)
+            receiver.insertText(emoji, replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(engine.document().blocks[1].callout, emoji)
+            XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "tip", "body"])
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 2, length: 3))
+            XCTAssertTrue(engine.history.undo()); XCTAssertFalse(engine.history.canUndo)
+        }
+    }
+
+    func testG05MovingAnotherCalloutIntoTheOldOffsetCannotTakeThePick() throws {
+        var first = NoteBlock.text("one", id: UUID(), style: "quote"); first.callout = "💡"
+        var second = NoteBlock.text("two", id: UUID(), style: "quote"); second.callout = "⚠️"
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), first, .text("gap"), second]), window: true)
+        defer { engine.detachView() }
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let old = try XCTUnwrap(view.calloutIconSession?.receiver)
+        XCTAssertTrue(engine.moveBlock(engine.blockRange(at: 10), to: 2))
+        let moved = engine.document()
+        XCTAssertEqual(moved.blocks[1].id, second.id)
+        old.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document(), moved)
+        XCTAssertEqual(engine.document().blocks[1].callout, "⚠️")
+        XCTAssertNil(view.calloutIconSession)
+    }
+
+    func testG05OpeningAPickerCannotDiscardAnExistingNoteComposition() {
+        let (engine, view) = g05Engine()
+        defer { engine.detachView() }
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        view.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        let composing = engine.document()
+        var opened = false
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: { opened = true })
+        XCTAssertFalse(opened)
+        XCTAssertNil(view.calloutIconSession)
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(engine.document(), composing)
+        view.insertText("日", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(engine.document().blocks[2].text.contains("日"))
+        XCTAssertEqual(engine.document().blocks[1].callout, "💡")
+    }
+
+    /// An associated notice follows the receiver itself. A view child can
+    /// be retained independently by AppKit's accessibility/layout work.
+    private static var calloutReleaseKey: UInt8 = 0
+    private final class CalloutReceiverReleaseNotice: NSObject {
+        let released: XCTestExpectation
+        init(released: XCTestExpectation) { self.released = released }
+        deinit { released.fulfill() }
+    }
+
+    func testG05AutomaticPageFocusRestorationPreservesThePaletteInputClient() throws {
+        let (engine, view) = g05Engine()
+        defer { engine.detachView() }
+        let chrome = NotesPageChrome()
+        let accessories = NoteTitleAccessories(engine: engine, textView: view, scrollView: try XCTUnwrap(view.enclosingScrollView),
+            chrome: chrome, design: .default, headerBottom: 40, isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
+        view.setSelectedRange(NSRange(location: 2, length: 3))
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let session = try XCTUnwrap(view.calloutIconSession)
+        chrome.focusText() // real page presentation/activation restoration boundary
+        XCTAssertEqual(session.state, .active)
+        XCTAssertTrue(view.window?.firstResponder === session.receiver)
+        session.receiver.insertText("🌻", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["T", "tip", "body"])
+        XCTAssertEqual(engine.document().blocks[1].callout, "🌻")
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 2, length: 3))
+        view.pickCalloutIconFromPalette(forBlockAt: 2, showPalette: {})
+        let abandoned = try XCTUnwrap(view.calloutIconSession)
+        let beforeReturn = engine.document()
+        chrome.returnKeyboardToText()
+        XCTAssertNil(view.calloutIconSession, "an explicit footer keyboard return leaves icon mode")
+        abandoned.receiver.insertText("🌹", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(engine.document(), beforeReturn)
+        withExtendedLifetime(accessories) {}
+    }
+
+    private func g05Engine() -> (NoteEditorEngine, NoteEditorTextView) {
+        var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
+        return makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]), window: true)
+    }
+
+    func testG07LineSeparatorTokensUseLFLineRulesAndOriginalUTF16Offsets() throws {
+        let fixtures = [
+            ("javascript", "// 💡 comment\nconst answer = 42;"),
+            ("swift", "// comment\nlet answer = 42"),
+            ("python", "# comment\nreturn 42"),
+            ("sql", "-- comment\nSELECT answer"),
+            ("diff", "--- old\n+++ new\n@@ rows\n+added\n-removed"),
+            ("yaml", "first\nsecond: 42"),
+            ("javascript", "const\nanswer = 42;"),
+            ("json", "\"value\"\n: 42")
+        ]
+        for (language, lf) in fixtures {
+            let source = lf.replacingOccurrences(of: "\n", with: "\u{2028}")
+            let expected = NoteSyntaxHighlighter.tokens(in: lf, language: language)
+            let actual = NoteSyntaxHighlighter.tokens(in: source, language: language)
+            XCTAssertEqual(actual.map { $0.0 }, expected.map { $0.0 }, language)
+            XCTAssertEqual(actual.map { $0.1 }, expected.map { $0.1 }, language)
+        }
+        var block = NoteBlock.text("// 💡 comment\u{2028}const answer = 42;", style: "mono")
+        block.language = "javascript"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), block]))
+        let before = try NoteContentCodec.encode(engine.document())
+        let tokens = engine.codeTokens(in: engine.blockRange(at: 2))
+        let keyword = (engine.textStorage.string as NSString).range(of: "const")
+        XCTAssertTrue(tokens.contains { $0.0 == keyword && $0.1 == .keyword })
+        XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+        XCTAssertTrue(engine.textStorage.string.contains("\u{2028}"))
+        XCTAssertFalse(engine.history.canUndo)
+    }
+
+    func testG02FootnotePrepassKeepsFencedIndentedAndInlineCodeVerbatim() throws {
+        for source in ["```swift\n[^a] \\[^b]\n```", "~~~\n[^a] \\[^b]\n~~~", "    [^a] \\[^b]", "`[^a] \\[^b]`", "``tick ` [^a] \\[^b]``", "> ```\n> [^a] \\[^b]\n> ```"] {
+            let first = try XCTUnwrap(NoteMarkdownImport.document(source).blocks.first)
+            let expected = source.contains("tick") ? "tick ` [^a] \\[^b]" : "[^a] \\[^b]"
+            XCTAssertEqual(first.text, expected, source)
+            var document = NoteDocument(blocks: [.text("T"), first])
+            for _ in 0..<4 {
+                document = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(document))
+                XCTAssertEqual(document.blocks[1].text, expected, "code escapes cannot accumulate")
+                XCTAssertEqual(document.blocks[1].style, first.style)
+                XCTAssertEqual(document.blocks[1].marks, first.marks)
+            }
+        }
+    }
+
+    func testG02FootnoteProseRemainsLiteralWithoutEscapeAccumulation() throws {
+        let source = "Reference [^a] and `[^code]`\n\n[^a]: keep definition\n\n    [^indent]"
+        var document = try NoteMarkdownImport.document(source)
+        XCTAssertEqual(document.blocks.map(\.text), ["Reference [^a] and [^code]", "[^a]: keep definition", "[^indent]"])
+        let before = document.blocks
+        document.blocks.insert(.text("T"), at: 0)
+        for _ in 0..<4 {
+            document = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(document))
+            XCTAssertEqual(document.blocks.dropFirst().map(\.text), before.map(\.text))
+            XCTAssertEqual(document.blocks.dropFirst().map(\.marks), before.map(\.marks))
+        }
+    }
+
+    func testG03EscapedListAndQuoteMarkersRoundTripAsLiteralText() throws {
+        for marker in ["[ ] ", "[x] ", "[X] "] {
+            let bullet = NoteBlock.text(marker + "literal marker", style: "bullet")
+            var document = NoteDocument(blocks: [.text("T"), bullet])
+            for _ in 0..<3 {
+                document = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(document))
+                XCTAssertEqual(document.blocks[1].text, bullet.text)
+                XCTAssertEqual(document.blocks[1].kind, .text)
+                XCTAssertEqual(document.blocks[1].style, "bullet")
+            }
+        }
+        for marker in ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] {
+            let quote = NoteBlock.text("[!" + marker + "] literal marker", style: "quote")
+            let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("T"), quote])))
+            XCTAssertEqual(restored.blocks[1].text, quote.text)
+            XCTAssertEqual(restored.blocks[1].style, "quote")
+            XCTAssertNil(restored.blocks[1].callout)
+        }
+    }
+
+    func testG03OnlyOriginalUnescapedBlockStartHasStructuralMarkers() throws {
+        for source in [#"- \[ ] literal"#, #"- [ \] literal"#, "- **[ ] literal**", "- `[ ] literal`", "- &#91; &#93; literal"] {
+            let block = try XCTUnwrap(NoteMarkdownImport.document(source).blocks.first)
+            XCTAssertEqual(block.kind, .text, source)
+            XCTAssertEqual(block.style, "bullet", source)
+            XCTAssertEqual(block.text, "[ ] literal", source)
+        }
+        for source in [#"> \[!NOTE] literal"#, #"> [\!NOTE] literal"#, "> **[!NOTE] literal**", "> `[!NOTE] literal`", "> &#91;!NOTE&#93; literal", "> first\n>\n> [!NOTE] literal"] {
+            let block = try XCTUnwrap(NoteMarkdownImport.document(source).blocks.last)
+            XCTAssertNil(block.callout, source)
+            XCTAssertEqual(block.text, "[!NOTE] literal", source)
+        }
+        for marker in ["[ ]", "[x]", "[X]"] {
+            let block = try XCTUnwrap(NoteMarkdownImport.document("- " + marker + " task").blocks.first)
+            XCTAssertEqual(block.kind, .checklist)
+            XCTAssertEqual(block.text, "task")
+            XCTAssertEqual(block.checked, marker != "[ ]")
+        }
+        let alert = try XCTUnwrap(NoteMarkdownImport.document("> [!TIP] tip").blocks.first)
+        XCTAssertEqual(alert.text, "tip"); XCTAssertEqual(alert.callout, "💡")
+    }
+
+    func testG04CodeExportFlattensDatesWithoutMarksOrMutation() throws {
+        let day = NoteDay(year: 2026, month: 10, day: 15)!
+        var dated = NoteBlock.text("Due \u{FFFC} **literal** `ticks`", style: "mono")
+        dated.language = "swift"
+        dated.inlines = [NoteInline(id: UUID(), kind: .date(day))]
+        dated.marks = [NoteMark(.bold, offset: 0, length: 3)]
+        var second = dated; second.text = "Next \u{FFFC}"; second.marks = []
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), dated, second]))
+        defer { engine.detachView() }
+        let before = try NoteContentCodec.encode(engine.document())
+        let calendar = Calendar(identifier: .gregorian)
+        let locale = Locale(identifier: "en_GB")
+        let readable = NoteMarkdownExport.dateText(day, calendar: calendar, locale: locale)
+        let exported = NoteMarkdownExport.markdown(engine.document(), calendar: calendar, locale: locale)
+        XCTAssertFalse(exported.contains("\u{FFFC}"))
+        XCTAssertTrue(exported.contains("Due " + readable + " **literal** `ticks`"))
+        XCTAssertTrue(exported.contains("Next " + readable))
+        XCTAssertFalse(exported.contains("**Due**"), "stored marks do not become code delimiters")
+        XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+        XCTAssertFalse(engine.history.canUndo)
+        let imported = try NoteMarkdownImport.document(exported)
+        XCTAssertEqual(imported.blocks.dropFirst().map(\.text), ["Due " + readable + " **literal** `ticks`", "Next " + readable])
+        XCTAssertEqual(imported.blocks.dropFirst().map(\.style), ["mono", "mono"])
+    }
+
+    func testG01ChecklistShorthandKeepsAttributedSuffixAndTrueUndoPayload() throws {
+        for prefix in ["[ ] ", "[x] ", "[X] "] {
+            let suffix = "Due \u{FFFC} styled tail"
+            var bullet = NoteBlock.text(String(prefix.dropLast()) + suffix, id: UUID(), style: "bullet")
+            bullet.indent = 1
+            bullet.extras = ["future": .string("keep")]
+            bullet.inlines = [NoteInline(id: UUID(), kind: .date(NoteDay(year: 2026, month: 10, day: 15)!))]
+            bullet.marks = [NoteMark(.bold, offset: 3 + 6, length: 11)]
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), bullet]))
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 5, length: 0))
+            view.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
+            let converted = engine.document()
+            var expected = bullet
+            expected.kind = .checklist; expected.style = nil; expected.text = suffix
+            expected.checked = prefix != "[ ] "
+            expected.marks = [NoteMark(.bold, offset: 6, length: 11)]
+            XCTAssertEqual(converted.blocks[1], expected, prefix)
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 3, length: 0))
+            XCTAssertTrue(engine.history.undo())
+            var restored = bullet
+            restored.text = prefix + suffix
+            restored.marks = [NoteMark(.bold, offset: 4 + 6, length: 11)]
+            XCTAssertEqual(engine.document().blocks[1], restored, "one Undo restores the actual bullet before conversion")
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 6, length: 0))
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), converted)
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 3, length: 0))
+        }
+    }
+
     func testFix14MovingLastTextKeepsItsEmptyCodePredecessorAndUndoRedo() {
         var emptyCode = NoteBlock.text("", style: "mono"); emptyCode.language = "swift"
         var heading = NoteBlock.text("Q", style: "heading"); heading.level = 4
@@ -2085,7 +2715,12 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertEqual(engine.document().blocks[1].kind, .checklist, literal)
             XCTAssertEqual(engine.document().blocks[1].checked, literal.contains("x"), literal)
             XCTAssertTrue(engine.history.undo())
-            XCTAssertEqual(engine.document().blocks[1].text, literal, literal)
+            // Owner's Fix G-01: restore the real pre-conversion bullet, not
+            // invented body text (phase2/owner-decisions.md, 2026-10-15).
+            let wasBullet = literal.hasPrefix("- ")
+            XCTAssertEqual(engine.document().blocks[1].text, wasBullet ? String(literal.dropFirst(2)) : literal, literal)
+            XCTAssertEqual(engine.document().blocks[1].style, wasBullet ? "bullet" : nil, literal)
+            XCTAssertEqual(engine.document().blocks[1].kind, .text, literal)
             XCTAssertTrue(engine.history.redo())
             XCTAssertEqual(engine.document().blocks[1].kind, .checklist, literal)
         }
