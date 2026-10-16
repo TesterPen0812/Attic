@@ -64,6 +64,9 @@ final class NotesTypingCostTests: XCTestCase {
             let visits = engine.outlineViewportVisitCount
             let viewportMS = milliseconds { XCTAssertEqual(engine.headings(in: NSRange(location: start, length: 1)).count, 1) }
             print("P1_OUTLINE size=\(count) rebuilds=\(engine.outlineRebuildCount - builds) heading_visits=\(engine.outlineParagraphVisitCount - paragraphs) viewport_visits=\(engine.outlineViewportVisitCount - visits) attributes_ms=\(attributeMS) viewport_ms=\(viewportMS)")
+            XCTAssertEqual(engine.outlineRebuildCount, builds)
+            XCTAssertEqual(engine.outlineParagraphVisitCount, paragraphs)
+            XCTAssertEqual(engine.outlineViewportVisitCount - visits, count == 50 ? 11 : 17)
             engine.detachView()
         }
     }
@@ -89,6 +92,7 @@ final class NotesTypingCostTests: XCTestCase {
             engine.find.close(); engine.detachView()
         }
     }
+
     func testNumberCacheSurvivesStructureAndReplay() {
         var first = NoteBlock.text("parent", style: "number"); first.start = 12
         var child = NoteBlock.text("child", style: "number"); child.indent = 1
@@ -111,6 +115,44 @@ final class NotesTypingCostTests: XCTestCase {
         XCTAssertTrue(engine.history.redo()); verify("14.")
         XCTAssertTrue(engine.setListStart(20, at: at("peer")))
         XCTAssertEqual(engine.listMarker(at: at("peer")), .number("22."))
+    }
+
+    func testOutlineMetadataChangesStillRebuildAndFold() throws {
+        var heading = NoteBlock.text("Section", id: UUID(), style: "heading"); heading.level = 2
+        let (engine, _) = editor([.text("Title"), heading, .text("body words"), .text("Next")])
+        defer { engine.detachView() }
+        let section = try XCTUnwrap(engine.headingSections.first)
+        let id = try XCTUnwrap(section.id)
+        engine.setHeadingFold(id: id, folded: true)
+        XCTAssertTrue(engine.isRangeFolded(section.content))
+        engine.textStorage.addAttribute(.noteBlockLevel, value: 3, range: section.heading)
+        XCTAssertEqual(engine.headingSections.first?.level, 3)
+        engine.textStorage.removeAttribute(.noteBlockStyle, range: section.heading)
+        XCTAssertTrue(engine.headingSections.isEmpty)
+        let next = (engine.textStorage.string as NSString).range(of: "Next")
+        engine.textStorage.addAttribute(.noteBlockStyle, value: "heading", range: next)
+        XCTAssertEqual(engine.headingSections.count, 1)
+        XCTAssertEqual(engine.headingSections.first?.heading.location, next.location)
+    }
+
+    func testTypingRebasesOutlineWithoutRebuilding() {
+        for trailingBody in [false, true] {
+            var heading = NoteBlock.text("Section", id: UUID(), style: "heading"); heading.level = 2
+            let (engine, view) = editor([.text("Title"), heading, .text("body"), heading] + (trailingBody ? [.text("")] : []))
+            defer { engine.detachView() }
+            _ = engine.headingSections
+            for location in [0, 6, 16, engine.textStorage.length] {
+                let builds = engine.outlineRebuildCount
+                view.setSelectedRange(NSRange(location: min(location, engine.textStorage.length), length: 0))
+                view.insertText("x", replacementRange: view.selectedRange())
+                let incremental = engine.headingSections
+                XCTAssertEqual(engine.outlineRebuildCount, builds)
+                let fresh = NoteEditorEngine(noteID: UUID(), document: engine.document()).headingSections
+                XCTAssertEqual(incremental.map(\.heading), fresh.map(\.heading))
+                XCTAssertEqual(incremental.map(\.content), fresh.map(\.content))
+                XCTAssertEqual(incremental.map(\.id), fresh.map(\.id))
+            }
+        }
     }
 
 }

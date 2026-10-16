@@ -1870,7 +1870,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         ordinalCheckpointCount = ordinalCheckpointIndex(paragraphRange(at: editedRange.location).location)
         let textOnly = pendingListTextOnlyEdit
         if editedMask.contains(.editedCharacters) { pendingListTextOnlyEdit = false }
-        headingSectionsCache = nil
+        if editedMask.contains(.editedCharacters) {
+            if textOnly, let edit = pendingImportEdit {
+                rebaseOutlineForTextEdit(NSRange(location: edit.range.location, length: edit.replacementLength), delta: delta)
+            } else { headingSectionsCache = nil }
+        } else { invalidateOutlineIfNeeded(in: editedRange) }
         guard editedMask.contains(.editedCharacters) else { return }
         documentEditGeneration &+= 1
         textView?.cancelCalloutIconSession(reason: "document characters edited")
@@ -2038,6 +2042,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let start = DispatchTime.now().uptimeNanoseconds
         let around = paragraphs(around: editedRange)
         restyle(around)
+        // Filling or emptying a pending heading can change membership even
+        // without a separator. Compare its local semantics after normalization.
+        if textOnly { invalidateOutlineIfNeeded(in: editedRange) }
         if !textOnly, needsRenumbering(around) {
             // Numbers further down the list change: their fragments are
             // made again once this edit has been processed.

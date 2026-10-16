@@ -786,6 +786,7 @@ struct NoteHeadingSection {
     let content: NSRange
     let level: Int
     let id: UUID?
+    let sourceID: UUID?
 }
 
 extension NoteEditorEngine {
@@ -793,7 +794,7 @@ extension NoteEditorEngine {
         if let cached = headingSectionsCache { return cached }
         outlineRebuildCount += 1
         let string = textStorage.string as NSString
-        var headings: [(NSRange, Int, UUID?)] = []
+        var headings: [(NSRange, Int, UUID?, UUID?)] = []
         var seen = Set<Int>()
         var usedIDs = Set<UUID>()
         textStorage.enumerateAttribute(.noteBlockStyle, in: NSRange(location: 0, length: string.length)) { value, run, _ in
@@ -803,16 +804,17 @@ extension NoteEditorEngine {
                 outlineParagraphVisitCount += 1
                 let paragraph = string.paragraphRange(for: NSRange(location: offset, length: 0))
                 if paragraph.location > 0, seen.insert(paragraph.location).inserted {
-                    var id: UUID?
+                    var id: UUID?, sourceID: UUID?
                     textStorage.enumerateAttribute(.noteBlockID, in: paragraph) { value, _, stop in
                         if let found = value as? UUID {
                             // A split can leave the same ID on both halves.
                             // Match the codec: only the first paragraph owns it.
+                            sourceID = found
                             id = usedIDs.insert(found).inserted ? found : nil
                             stop.pointee = true
                         }
                     }
-                    headings.append((paragraph, textStorage.attribute(.noteBlockLevel, at: offset, effectiveRange: nil) as? Int ?? 2, id))
+                    headings.append((paragraph, textStorage.attribute(.noteBlockLevel, at: offset, effectiveRange: nil) as? Int ?? 2, id, sourceID))
                 }
                 offset = NSMaxRange(paragraph)
             }
@@ -829,17 +831,84 @@ extension NoteEditorEngine {
             let start = NSMaxRange(headings[i].0)
             return NoteHeadingSection(heading: headings[i].0,
                 content: NSRange(location: start, length: max(0, ends[i] - start)),
-                level: headings[i].1, id: headings[i].2)
+                level: headings[i].1, id: headings[i].2, sourceID: headings[i].3)
         }
         headingSectionsCache = sections
         return sections
     }
 
-    func headings(in range: NSRange) -> [NoteHeadingSection] {
-        headingSections.filter {
+    /// The retained outline is sorted by storage offset. Only headings in
+    /// the viewport need controls, even when the note has hundreds more.
+    private func headingLowerBound(_ location: Int, in sections: [NoteHeadingSection]) -> Int {
+        var low = 0, high = sections.count
+        while low < high {
             outlineViewportVisitCount += 1
-            return $0.heading.location >= range.location && $0.heading.location < NSMaxRange(range)
+            let middle = low + (high - low) / 2
+            if sections[middle].heading.location < location { low = middle + 1 }
+            else { high = middle }
         }
+        return low
+    }
+
+    func headings(in range: NSRange) -> [NoteHeadingSection] {
+        let sections = headingSections
+        let first = headingLowerBound(range.location, in: sections)
+        let last = headingLowerBound(NSMaxRange(range), in: sections)
+        return Array(sections[first..<last])
+    }
+
+    /// A native edit without a paragraph break preserves the outline's
+    /// membership and levels. Move its retained ranges without rescanning
+    /// the note. Structural commands and replay use the rebuilding path.
+    func rebaseOutlineForTextEdit(_ edit: NSRange, delta: Int) {
+        guard let cached = headingSectionsCache, delta != 0 else { return }
+        let oldLength = textStorage.length - delta
+        func moved(_ range: NSRange, includesEOF: Bool = false) -> NSRange {
+            if range.location > edit.location {
+                return NSRange(location: range.location + delta, length: range.length)
+            }
+            if NSMaxRange(range) > edit.location || (includesEOF && NSMaxRange(range) == oldLength && edit.location == oldLength) {
+                return NSRange(location: range.location, length: max(0, range.length + delta))
+            }
+            return range
+        }
+        let string = textStorage.string as NSString
+        headingSectionsCache = cached.map {
+            let extendsHeading = edit.location == oldLength && oldLength > 0 && $0.content.length == 0
+                && NSMaxRange($0.heading) == oldLength && string.character(at: oldLength - 1) != 0x0A
+            let heading = moved($0.heading, includesEOF: extendsHeading)
+            let content = extendsHeading ? NSRange(location: NSMaxRange(heading), length: 0)
+                : moved($0.content, includesEOF: true)
+            return NoteHeadingSection(heading: heading, content: content, level: $0.level, id: $0.id, sourceID: $0.sourceID)
+        }
+    }
+
+    /// Ink, spelling and restyling passes cannot change the outline. Compare
+    /// only the affected paragraphs' semantic heading metadata; additions,
+    /// removals, level changes and identity changes still discard the cache.
+    func invalidateOutlineIfNeeded(in range: NSRange) {
+        guard let cached = headingSectionsCache, textStorage.length > 0 else { return }
+        let string = textStorage.string as NSString
+        let affected = string.paragraphRange(for: NSIntersectionRange(range, NSRange(location: 0, length: string.length)))
+        let first = headingLowerBound(affected.location, in: cached)
+        let last = headingLowerBound(NSMaxRange(affected), in: cached)
+        var current: [(NSRange, Int, UUID?)] = []
+        var location = affected.location
+        while location < NSMaxRange(affected) {
+            let paragraph = string.paragraphRange(for: NSRange(location: location, length: 0))
+            if location > 0, textStorage.attribute(.noteBlockStyle, at: location, effectiveRange: nil) as? String == "heading" {
+                var id: UUID?
+                textStorage.enumerateAttribute(.noteBlockID, in: paragraph) { value, _, stop in
+                    if let found = value as? UUID { id = found; stop.pointee = true }
+                }
+                current.append((paragraph, textStorage.attribute(.noteBlockLevel, at: location, effectiveRange: nil) as? Int ?? 2, id))
+            }
+            location = NSMaxRange(paragraph)
+        }
+        let previous = cached[first..<last]
+        if current.count != previous.count || !zip(current, previous).allSatisfy({
+            $0.0.0 == $0.1.heading && $0.0.1 == $0.1.level && $0.0.2 == $0.1.sourceID
+        }) { headingSectionsCache = nil }
     }
 
     func headingSection(at location: Int) -> NoteHeadingSection? {
