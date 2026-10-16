@@ -20,6 +20,7 @@ struct TagChangeSnapshot {
     }
 
     fileprivate let changesByRow: [PersistentIdentifier: Change]
+    var affectedItems: Set<AtticItemRef> = []
     var isEmpty: Bool { changesByRow.isEmpty }
     /// How many physical rows the operation changed.
     var rowCount: Int { changesByRow.count }
@@ -283,6 +284,7 @@ final class TagService {
                          _ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
         let context = ModelContext(container)
         var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
+        var affectedItems = Set<AtticItemRef>()
         func apply(_ raw: String, _ identifier: PersistentIdentifier) -> String? {
             let before = Set(AtticTag.decode(raw))
             guard let changed = transform(before) else { return nil }
@@ -295,13 +297,22 @@ final class TagService {
         do {
             try beforeRewrite(context)
             for task in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-                if let updated = apply(task.tagsRaw, task.persistentModelID) { task.tagsRaw = updated }
+                if let updated = apply(task.tagsRaw, task.persistentModelID) {
+                    task.tagsRaw = updated
+                    affectedItems.insert(AtticItemRef(.task, task.id))
+                }
             }
             for note in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-                if let updated = apply(note.tagsRaw, note.persistentModelID) { note.tagsRaw = updated }
+                if let updated = apply(note.tagsRaw, note.persistentModelID) {
+                    note.tagsRaw = updated
+                    affectedItems.insert(AtticItemRef(.note, note.id))
+                }
             }
             for board in try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-                if let updated = apply(board.tagsRaw, board.persistentModelID) { board.tagsRaw = updated }
+                if let updated = apply(board.tagsRaw, board.persistentModelID) {
+                    board.tagsRaw = updated
+                    affectedItems.insert(AtticItemRef(.canvas, board.id))
+                }
             }
         } catch {
             context.rollback()
@@ -310,7 +321,7 @@ final class TagService {
         }
         guard !previous.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
         guard save(context) else { return nil }
-        return TagChangeSnapshot(changesByRow: previous)
+        return TagChangeSnapshot(changesByRow: previous, affectedItems: affectedItems)
     }
 
     /// Tags of every live logical item, from the replica presentation shows.

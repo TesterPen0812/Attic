@@ -6,6 +6,28 @@ import XCTest
 
 @MainActor
 final class NoteHistoryBrowserTests: XCTestCase {
+    func testU17PermanentPurgeReleasesDisplacedVersionRestoreSession() async throws {
+        weak var displaced: NoteSession?
+        var noteID: UUID!
+        do {
+            let (original, _) = try await history()
+            noteID = original.noteID
+            displaced = original
+            await XCTAssertTrueAsync(await controller.restoreHistoryVersionDurably())
+        }
+        XCTAssertNotNil(displaced, "version-restore Undo owns the displaced session before purge")
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: noteID))
+        gate.shouldFail = true
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
+        XCTAssertNotNil(displaced, "failed purge must preserve the existing Undo snapshot")
+        XCTAssertNotNil(controller.versionRestoreUndoID)
+        gate.shouldFail = false
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).contains(noteID))
+        await controller.waitForRecoveryWork()
+        XCTAssertNil(displaced, "purged note snapshots must be released")
+        XCTAssertNil(controller.versionRestoreUndoID)
+    }
+
     func testU32OnlyTheShownVersionAndItsViewportRequestImages() async throws {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 160, pixelsHigh: 64,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,

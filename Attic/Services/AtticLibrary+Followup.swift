@@ -37,6 +37,7 @@ extension AtticLibrary {
             let after = scopeAfter.filter { changed.contains($0.id) }
             return UndoStep(
                 name: newParentID == nil ? "Make Standalone Task" : "Move to Task",
+                items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     let outcome = self.tasks.applyEditableTransition(from: after, to: before)
@@ -98,6 +99,7 @@ extension AtticLibrary {
             let progress = BulkRestoreProgress(items: restoredItems, attachments: restoredAttachments, owned: owned)
             return UndoStep(
                 name: count == 1 ? "Restore Item" : "Restore \(count) Items",
+                items: { Set(restoredItems + restoredAttachments.map(\.owner)) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.sendBack(progress)

@@ -239,6 +239,7 @@ final class NotesPageController: ObservableObject {
     /// previews work alone).
     private(set) var undoRoute = UndoRoute()
     private var undoRevisionSubscription: AnyCancellable?
+    private var purgeSubscription: AnyCancellable?
     let journal: NoteDraftJournaling?
     private let defaults: UserDefaults?
     private let saveDelay: Duration
@@ -530,6 +531,7 @@ final class NotesPageController: ObservableObject {
             }
         }
         attachUndoRoute(undoRoute)
+        purgeSubscription = store.purgedNoteIDs.sink { [weak self] ids in self?.forgetPurgedSnapshots(ids) }
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
         }
@@ -2990,6 +2992,33 @@ extension NotesPageController {
         return true
     }
 
+    private func forgetPurgedSnapshots(_ ids: Set<UUID>) {
+        if let restore = versionRestoreUndo, ids.contains(restore.noteID) {
+            restore.session?.engine.history.reset()
+            store.historyRetainedVersionIDs.remove(restore.versionID)
+            versionRestoreUndo = nil
+            versionHistoryCommandTask?.cancel()
+            versionHistoryCommandTask = nil
+        }
+        if let browser = historyBrowser, ids.contains(browser.noteID) { closeHistory() }
+        if let review = proposalReview, ids.contains(review.noteID) { proposalReview = nil }
+        for id in ids {
+            proposalStatusCache[id] = nil
+            // A pending local draft may still own the only unsaved bytes.
+            // Purge invalidates saved snapshots without discarding that draft.
+            if let session = cache[id], !NoteSessionPolicy.hasPendingWork(session.state), !session.isImporting {
+                session.saveTask?.cancel(); session.durabilityTask?.cancel(); session.pauseTask?.cancel()
+                session.engine.history.reset()
+                session.engine.detachView()
+                cache[id] = nil
+                recency.removeAll { $0 == id }
+                if active === session { active = nil; isLibraryPresented = true }
+            }
+        }
+        undoRoute.invalidate(Set(ids.map { AtticItemRef(.note, $0) }))
+        collectReleasedStaging()
+    }
+
     private func collectReleasedStaging() {
         guard let journal else { return }
         queueRecoveryWork { [weak self] in
@@ -3146,6 +3175,7 @@ extension NotesPageController {
     private func deleteStep(noteID: UUID, reopen: Bool) -> UndoStep {
         UndoStep(
             name: String(localized: "Delete Note"),
+            items: { [AtticItemRef(.note, noteID)] },
             undoOutcome: { [weak self] in
                 guard let self else { return .obsolete }
                 if self.restoreDeletedNote(noteID: noteID, reopen: reopen) { return .applied }
@@ -3163,6 +3193,7 @@ extension NotesPageController {
     private func pinStep(_ pinned: Bool, noteID: UUID) -> UndoStep {
         UndoStep(
             name: pinned ? String(localized: "Pin Note") : String(localized: "Unpin Note"),
+            items: { [AtticItemRef(.note, noteID)] },
             undoOutcome: { [weak self] in self?.pinOutcome(!pinned, noteID: noteID) ?? .obsolete },
             redoOutcome: { [weak self] in self?.pinOutcome(pinned, noteID: noteID) ?? .obsolete }
         )
@@ -3182,6 +3213,7 @@ extension NotesPageController {
     private func duplicateStep(newID: UUID) -> UndoStep {
         UndoStep(
             name: String(localized: "Duplicate Note"),
+            items: { [AtticItemRef(.note, newID)] },
             undoOutcome: { [weak self] in
                 guard let self else { return .obsolete }
                 guard self.store.note(withID: newID) != nil else { return .obsolete }

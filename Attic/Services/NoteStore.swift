@@ -171,6 +171,7 @@ final class NoteStore: ObservableObject {
 
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
+    let purgedNoteIDs = PassthroughSubject<Set<UUID>, Never>()
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 #if os(macOS)
     @Published private(set) var attachmentsByNoteID: [UUID: [NoteAttachment]] = [:]
@@ -775,6 +776,7 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
         removeMaterializationsAfterSuccessfulSave(references)
 #endif
+        purgedNoteIDs.send(purgedIDs)
         return purgedIDs
     }
 

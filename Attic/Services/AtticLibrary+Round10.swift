@@ -21,6 +21,7 @@ extension AtticLibrary {
             let owned = FamilyOwnership(liveFamilyMembers(of: newIDs))
             return UndoStep(
                 name: ids.count == 1 ? "Duplicate Task" : "Duplicate \(ids.count) Tasks",
+                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.deleteFamiliesFromHistory(newIDs, owning: owned)
@@ -61,6 +62,7 @@ extension AtticLibrary {
             guard before != after else { return nil }
             return UndoStep(
                 name: ids.count == 1 ? "Edit Task" : "Edit Tasks",
+                items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
                 redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
             )
@@ -80,6 +82,7 @@ extension AtticLibrary {
             let owned = FamilyOwnership(recordedMembers(of: ids))
             return UndoStep(
                 name: ids.count == 1 ? "Delete Task" : "Delete \(ids.count) Tasks",
+                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.restoreFamiliesFromHistory(ids, owning: owned)
@@ -109,6 +112,7 @@ extension AtticLibrary {
             guard before != after else { return nil }
             return UndoStep(
                 name: "Move Subtask",
+                items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     let outcome = self.tasks.applyEditableTransition(from: after, to: before)
