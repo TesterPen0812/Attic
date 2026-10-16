@@ -307,7 +307,7 @@ final class NotesFormattingRouteTests: XCTestCase {
                 let engine = NoteEditorEngine(noteID: UUID(), document: state.document)
                 let (scroll, view) = engine.makeView()
                 let controls = NoteFormatControls(engine: engine, textView: view, scrollView: scroll,
-                    design: .default, noteID: engine.noteID, isNewDraft: false)
+                    design: .default)
                 defer { controls.invalidate() }
                 view.setSelectedRange(state.selection)
                 type(query, into: view)
@@ -716,7 +716,7 @@ extension A38NotesRegressionTests {
         window.isReleasedWhenClosed = false
         window.contentView = scroll
         let controls = NoteFormatControls(engine: engine, textView: view, scrollView: scroll,
-            design: .default, noteID: engine.noteID, isNewDraft: false)
+            design: .default)
         defer { controls.invalidate(); engine.detachView(); window.close() }
         var rowClosed = false
         controls.isFormatBarOpen = true

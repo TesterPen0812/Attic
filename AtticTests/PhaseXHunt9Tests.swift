@@ -58,8 +58,7 @@ final class PhaseXHunt9Tests: XCTestCase {
         let window = window()
         scroll.frame = window.contentView!.bounds
         window.contentView = scroll
-        let controls = NoteFormatControls(engine: engine, textView: text, scrollView: scroll, design: light,
-                                          noteID: engine.noteID, isNewDraft: false)
+        let controls = NoteFormatControls(engine: engine, textView: text, scrollView: scroll, design: light)
         defer { controls.invalidate(); engine.detachView() }
         let range = (text.string as NSString).range(of: "example")
         XCTAssertTrue(engine.perform(.link("https://example.com"), selection: range))
