@@ -22,15 +22,15 @@ enum NoteTextExport {
             }
             if block.style == "mono" { return block.displayText }
             let prefix: String = switch block.style {
-            case "heading": String(repeating: "#", count: max(1, block.level ?? 2)) + " "
+            case "heading": String(repeating: "#", count: min(6, max(1, block.level ?? 2))) + " "
             case "bullet": "- "
             case "number": "1. "
             case "quote": "> "
             case "mono": "    "
             default: ""
             }
-            return String(repeating: "  ", count: block.indent ?? 0) + prefix + block.displayText
-        case .checklist: return String(repeating: "  ", count: block.indent ?? 0) + (block.checked ? "[x] " : "[ ] ") + block.displayText
+            return String(repeating: "  ", count: min(2, max(0, block.indent ?? 0))) + prefix + block.displayText
+        case .checklist: return String(repeating: "  ", count: min(2, max(0, block.indent ?? 0))) + (block.checked ? "[x] " : "[ ] ") + block.displayText
         case .image: return "[Image]"
         case .file: return "[File: \(block.filename ?? "file")]"
         case .divider: return "---"

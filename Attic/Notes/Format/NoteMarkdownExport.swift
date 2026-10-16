@@ -66,7 +66,7 @@ enum NoteMarkdownExport {
                 lines.append((text, false)); continue
             }
             let isList = block.kind == .checklist || block.style == "bullet" || block.style == "number"
-            let depth = block.indent ?? 0
+            let depth = min(2, max(0, block.indent ?? 0))
             if !isList { numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll() }
             let column = depth == 0 ? 0 : (listColumns[depth - 1] ?? (depth - 1) * 2) + (listWidths[depth - 1] ?? 2)
             let nesting = String(repeating: " ", count: column)

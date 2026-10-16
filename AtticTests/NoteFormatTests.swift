@@ -7,6 +7,24 @@ import XCTest
 /// kept as their original bytes, opaque unknown blocks (requirement 1).
 final class NoteFormatTests: XCTestCase {
 
+    func testU18PlainTextBoundsHeadingAndIndent() {
+        var heading = NoteBlock.text("x", style: "heading"); heading.level = 7
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "###### x")
+        heading.indent = 3
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "    ###### x")
+        heading.level = Int.max; heading.indent = Int.max
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "    ###### x")
+        heading.indent = Int.min
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "###### x")
+        var check = NoteBlock.checklist("x")
+        check.indent = 3
+        XCTAssertEqual(NoteTextExport.plainLine(check), "    [ ] x")
+        check.indent = Int.min
+        XCTAssertEqual(NoteTextExport.plainLine(check), "[ ] x")
+        check.indent = Int.max
+        XCTAssertEqual(NoteTextExport.plainLine(check), "    [ ] x")
+    }
+
     func testFix14MarkdownEscapesLiteralsInProseAndTables() throws {
         let literal = "*stars* _under_ [link](url) <br> &amp;"
         var table = NoteTable(texts: [["Header"], [literal], ["bold"]])
