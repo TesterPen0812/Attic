@@ -208,6 +208,7 @@ final class AtticLibrary {
             let owned = FamilyOwnership(liveFamilyMembers(of: ids))
             return UndoStep(
                 name: ids.count == 1 ? "Add Task" : "Add \(ids.count) Tasks",
+                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.deleteFamiliesFromHistory(ids, owning: owned)
@@ -281,6 +282,7 @@ final class AtticLibrary {
             let store = self.tasks
             return UndoStep(
                 name: "Change Task State",
+                items: { [AtticItemRef(.task, id)] },
                 undoOutcome: { store.undoReturnFromDoneLog(from: [after], to: [before], logging: [id: loggedAt]) },
                 redoOutcome: {
                     // Undo may restore fields but leave a changed family
@@ -389,6 +391,7 @@ final class AtticLibrary {
             let owned = FamilyOwnership(recordedMembers(of: ids))
             return UndoStep(
                 name: "Delete \(ids.count) Tasks",
+                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.restoreFamiliesFromHistory(ids, owning: owned)
@@ -429,6 +432,7 @@ final class AtticLibrary {
             let store = self.tasks
             return UndoStep(
                 name: ids.count == 1 ? "Restore Task" : "Restore \(ids.count) Tasks",
+                items: { Set(before.map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: {
                     store.undoReturnFromDoneLog(from: after, to: before, logging: logging)
                 },
@@ -463,6 +467,7 @@ final class AtticLibrary {
             guard !logged.isEmpty else { return editStep(name, before: before, after: after) }
             return UndoStep(
                 name: name,
+                items: { Set(before.map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: {
                     // Finished again and back in the log, families and all,
                     // in one save.
@@ -540,6 +545,7 @@ final class AtticLibrary {
             let owned = FamilyOwnership(ownedMembers(of: ref))
             return UndoStep(
                 name: "Delete \(Self.noun(for: ref.kind))",
+                items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
                 undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
@@ -559,6 +565,7 @@ final class AtticLibrary {
             guard performRestore(ref) else { return nil }
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
+                items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
                 undoOutcome: { [weak self] in self?.deleteOutcome(ref, owning: owned) ?? .obsolete },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
@@ -582,6 +589,7 @@ final class AtticLibrary {
             guard performRestoreAttachment(summary) else { return nil }
             return UndoStep(
                 name: "Restore Attachment",
+                items: { [summary.owner] },
                 undoOutcome: { [weak self] in self?.removeAttachmentOutcome(summary) ?? .obsolete },
                 redoOutcome: { [weak self] in self?.restoreAttachmentOutcome(summary) ?? .obsolete }
             )
@@ -601,6 +609,7 @@ final class AtticLibrary {
             guard let summary = removed else { return nil }
             return UndoStep(
                 name: "Remove Attachment",
+                items: { [summary.owner] },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     if self.performRestoreAttachment(summary) { return .applied }
@@ -720,6 +729,9 @@ final class AtticLibrary {
         if confirmed == nil {
             report.removedLinks += links.purgeRemovedLinks(before: cutoff)
         }
+        undo.invalidate(Set(report.taskIDs.map { AtticItemRef(.task, $0) }
+            + report.noteIDs.map { AtticItemRef(.note, $0) }
+            + report.canvasIDs.map { AtticItemRef(.canvas, $0) }))
         return report
     }
 
@@ -751,6 +763,7 @@ final class AtticLibrary {
             }
             return UndoStep(
                 name: "Change Tags",
+                items: { [ref] },
                 undoOutcome: { [weak self] in self?.moveTags(of: ref, from: after, to: before) ?? .obsolete },
                 redoOutcome: { [weak self] in self?.moveTags(of: ref, from: before, to: after) ?? .obsolete }
             )
@@ -788,6 +801,7 @@ final class AtticLibrary {
             record = created
             return UndoStep(
                 name: "Link",
+                items: { [source, target] },
                 undo: { [links = self.links] in links.unlink(created.id) },
                 redo: { [links = self.links] in links.restoreLink(created.id) }
             )
@@ -1030,6 +1044,7 @@ final class AtticLibrary {
     private func editStep(_ name: String, before: [TaskEditableState], after: [TaskEditableState]) -> UndoStep {
         UndoStep(
             name: name,
+            items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
             undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
             redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
         )
@@ -1098,6 +1113,7 @@ final class AtticLibrary {
             let changes = Changes(snapshot)
             return UndoStep(
                 name: name,
+                items: { changes.snapshot.affectedItems },
                 undo: { [tags = self.tags] in tags.revert(changes.snapshot) },
                 redo: { [tags = self.tags] in
                     guard let rerun = operation(tags) else { return false }

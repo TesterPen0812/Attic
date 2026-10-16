@@ -1,5 +1,21 @@
 import AppKit
 
+/// Typed and imported destinations share one explicit web-link policy.
+enum NoteLinkPolicy {
+    static func url(_ value: String) -> URL? {
+        guard let url = URL(string: value), let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http", url.host?.isEmpty == false else { return nil }
+        return url
+    }
+
+    @MainActor
+    @discardableResult
+    static func open(_ value: String, using opener: (URL) -> Bool = { NSWorkspace.shared.open($0) }) -> Bool {
+        guard let url = url(value) else { return false }
+        return opener(url)
+    }
+}
+
 extension NSAttributedString.Key {
     /// A text paragraph's optional identity (`NoteBlock.id`), as a UUID.
     static let noteBlockID = NSAttributedString.Key("com.taha.attic.note.blockID")
@@ -356,7 +372,7 @@ struct NoteTextStyle: Equatable {
                 : NSUnderlineStyle([.single, .patternDot]).rawValue
         }
         if marks[.strikethrough] != nil { result[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-        if let url = marks[.link] as? String, let value = URL(string: url) {
+        if let url = marks[.link] as? String, let value = NoteLinkPolicy.url(url) {
             result[.link] = value
             result[.foregroundColor] = linkColor
             result[.underlineColor] = linkUnderlineColor

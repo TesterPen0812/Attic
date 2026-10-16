@@ -411,7 +411,7 @@ final class NotesAuditTests: XCTestCase {
         // Readable anywhere.
         let markdown = try String(contentsOf: target.appendingPathComponent("note.md"), encoding: .utf8)
         XCTAssertTrue(markdown.contains("# Groceries"))
-        XCTAssertTrue(markdown.contains("[image: pixel.png]"))
+        XCTAssertTrue(try NoteMarkdownImport.document(markdown).blocks.contains { $0.text == "[image: pixel.png]" })
         let readme = try String(contentsOf: target.appendingPathComponent("README.txt"), encoding: .utf8)
         XCTAssertTrue(readme.contains("note.json"))
         // It is a copy: the note is exactly as it was, and says where the copy went.
@@ -433,7 +433,7 @@ final class NotesAuditTests: XCTestCase {
         let expected = engine.document()
         XCTAssertEqual(expected.attachmentIDs, [image.id], "the note starts with its image")
         let expectedMarkdown = try XCTUnwrap(controller.markdown(noteID: session.noteID))
-        XCTAssertTrue(expectedMarkdown.contains("[image: pixel.png]"))
+        XCTAssertTrue(try NoteMarkdownImport.document(expectedMarkdown).blocks.contains { $0.text == "[image: pixel.png]" })
 
         // Both the store and the journal refuse, so Writing Tools is refused
         // and the note is frozen at this snapshot.

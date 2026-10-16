@@ -239,6 +239,7 @@ final class NotesPageController: ObservableObject {
     /// previews work alone).
     private(set) var undoRoute = UndoRoute()
     private var undoRevisionSubscription: AnyCancellable?
+    private var purgeSubscription: AnyCancellable?
     let journal: NoteDraftJournaling?
     private let defaults: UserDefaults?
     private let saveDelay: Duration
@@ -268,6 +269,8 @@ final class NotesPageController: ObservableObject {
     private var startRequested = false
     private var didRecoverAtLaunch = false
     private var recoveryWork: Task<Void, Never>?
+    private var stagingCollectionWork: Task<Void, Never>?
+    private var stagingCollectionToken: UUID?
     private var recoveryLoading = false
     private var recoveryFailureCount = 0
     /// A verified retirement stays valid only until this note writes or adopts
@@ -280,9 +283,8 @@ final class NotesPageController: ObservableObject {
     /// Waits for durable recovery work; useful for headless callers and tests.
     /// Session replacement waits for this work; hide/page switch retain sessions.
     func waitForRecoveryWork() async {
-        while let work = recoveryWork {
+        while let work = recoveryWork ?? stagingCollectionWork {
             await work.value
-            if recoveryWork == nil { break }
         }
     }
 
@@ -530,6 +532,7 @@ final class NotesPageController: ObservableObject {
             }
         }
         attachUndoRoute(undoRoute)
+        purgeSubscription = store.purgedNoteIDs.sink { [weak self] ids in self?.forgetPurgedSnapshots(ids) }
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
         }
@@ -1081,15 +1084,15 @@ final class NotesPageController: ObservableObject {
         }
         engine.onRawImageBatchRequest = { [weak self, weak session] data, ext, range in
             guard let self, let session, self.active === session else { return }
+            guard !data.isEmpty, Int64(data.count) <= AttachmentLimits.maxBytesPerAttachment else {
+                session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The clipboard image is empty or exceeds the attachment size limit.")))
+                return
+            }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("AtticClipboard-\(UUID().uuidString).\(ext)")
-            do {
-                try data.write(to: url, options: .atomic)
-                self.importFiles([url], at: range, temporaryURLs: [url])
-            } catch {
-                session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The clipboard image could not be staged: \(error.localizedDescription)")))
-            }
+            self.importFiles([url], at: range, temporaryURLs: [url], clipboardData: data)
         }
+
         engine.onImportAdmission = { [weak self, weak session] payload in
             guard let self, let session else { return String(localized: "The note is no longer open.") }
             return self.importAdmissionFailure(payload, in: session)
@@ -2126,7 +2129,7 @@ final class NotesPageController: ObservableObject {
     /// away from the main actor, then inserted with the accepted text as one
     /// editor-history step. Its anchor belongs to the note, not the caret.
     func importFiles(_ urls: [URL], acceptedText: String = "", at selection: NSRange? = nil,
-                     temporaryURLs: [URL] = []) {
+                     temporaryURLs: [URL] = [], clipboardData: Data? = nil) {
         guard let session = active, !session.isReadOnly, !urls.isEmpty else {
             temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
             return
@@ -2151,6 +2154,17 @@ final class NotesPageController: ObservableObject {
         session.importTask = Task { @MainActor [weak self, session] in
             defer { temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) } }
             guard let self else { return }
+            if let clipboardData, let url = urls.first {
+                do { try await Self.stageClipboardImage(clipboardData, at: url) }
+                catch {
+                    session.importBatch = nil
+                    session.importTask = nil
+                    session.engine.cancelImageImport()
+                    session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The clipboard image could not be staged.")))
+                    return
+                }
+                guard !Task.isCancelled, session.importBatch?.id == batchID else { return }
+            }
             if self.journal != nil {
                 _ = self.checkpoint(session, silent: true)
                 await self.waitForRecoveryWork()
@@ -2334,6 +2348,34 @@ final class NotesPageController: ObservableObject {
         session.showNotice(notice)
     }
 
+    nonisolated static func stageClipboardImage(_ data: Data, at url: URL,
+        write: @escaping @Sendable (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) async throws {
+        guard !data.isEmpty, Int64(data.count) <= AttachmentLimits.maxBytesPerAttachment else {
+            throw AttachmentFileStoreError.attachmentTooLarge(url, Int64(data.count))
+        }
+        try await Task.detached(priority: .userInitiated) { try write(data, url) }.value
+    }
+
+    nonisolated static func readImportedBytes(_ url: URL,
+        maximumBytes: Int = Int(AttachmentLimits.maxBytesPerAttachment)) throws -> Data {
+        guard maximumBytes >= 0 else { throw AttachmentFileStoreError.changedDuringRead(url) }
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+        var data = Data()
+        while true {
+            try Task.checkCancellation()
+            // At the bound read one sentinel byte, never an unbounded tail.
+            let remaining = maximumBytes - data.count
+            let request = remaining >= 1024 * 1024 ? 1024 * 1024 : remaining + 1
+            let chunk = try input.read(upToCount: request) ?? Data()
+            if chunk.isEmpty { return data }
+            guard chunk.count <= remaining else {
+                throw AttachmentFileStoreError.attachmentTooLarge(url, Int64(maximumBytes) + 1)
+            }
+            data.append(chunk)
+        }
+    }
+
     nonisolated private static func loadImageFile(_ url: URL) async -> (StagedNoteAttachment, CGSize?)? {
         await Task.detached(priority: .userInitiated) {
             let scoped = url.startAccessingSecurityScopedResource()
@@ -2346,7 +2388,7 @@ final class NotesPageController: ObservableObject {
                   Int64(size) <= AttachmentLimits.maxBytesPerAttachment,
                   url.lastPathComponent.utf8.count <= AttachmentLimits.maxFilenameUTF8Bytes,
                   let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .image),
-                  let data = try? Data(contentsOf: url), data.count == size,
+                  let data = try? readImportedBytes(url), data.count == size,
                   let pixelSize = NoteImageDecoder.pixelSize(of: data) else { return nil }
             let digest = NotePayloadDigest.sha256(data)
             return (StagedNoteAttachment(id: UUID(), filename: url.lastPathComponent,
@@ -2376,7 +2418,7 @@ final class NotesPageController: ObservableObject {
                 return NoteImportedObject(filename: name, contentTypeIdentifier: type, byteCount: size,
                     failure: AttachmentFileStoreError.attachmentTooLarge(url, size).localizedDescription)
             }
-            guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            guard let data = try? readImportedBytes(url), !data.isEmpty else {
                 return NoteImportedObject(filename: name, contentTypeIdentifier: type, byteCount: size,
                     failure: String(localized: "The file could not be read."))
             }
@@ -2947,7 +2989,51 @@ extension NotesPageController {
             isLibraryPresented = true
         }
         session?.engine.detachView()
+        collectReleasedStaging()
         return true
+    }
+
+    private func forgetPurgedSnapshots(_ ids: Set<UUID>) {
+        if let restore = versionRestoreUndo, ids.contains(restore.noteID) {
+            restore.session?.engine.history.reset()
+            store.historyRetainedVersionIDs.remove(restore.versionID)
+            versionRestoreUndo = nil
+            versionHistoryCommandTask?.cancel()
+            versionHistoryCommandTask = nil
+        }
+        if let browser = historyBrowser, ids.contains(browser.noteID) { closeHistory() }
+        if let review = proposalReview, ids.contains(review.noteID) { proposalReview = nil }
+        for id in ids {
+            proposalStatusCache[id] = nil
+            // A pending local draft may still own the only unsaved bytes.
+            // Purge invalidates saved snapshots without discarding that draft.
+            if let session = cache[id], !NoteSessionPolicy.hasPendingWork(session.state), !session.isImporting {
+                session.saveTask?.cancel(); session.durabilityTask?.cancel(); session.pauseTask?.cancel()
+                session.engine.history.reset()
+                session.engine.detachView()
+                cache[id] = nil
+                recency.removeAll { $0 == id }
+                if active === session { active = nil; isLibraryPresented = true }
+            }
+        }
+        undoRoute.invalidate(Set(ids.map { AtticItemRef(.note, $0) }))
+        collectReleasedStaging()
+    }
+
+    private func collectReleasedStaging() {
+        guard let journal else { return }
+        // Collection is serialized by the journal IO actor, but it is not
+        // a pending checkpoint. It must not make synchronous Undo/Redo wait
+        // for an unrelated housekeeping pass.
+        let prior = stagingCollectionWork
+        let token = UUID()
+        stagingCollectionToken = token
+        stagingCollectionWork = Task { @MainActor [weak self] in
+            await prior?.value
+            do { try await journal.collectUnreferencedStaging() }
+            catch { self?.reportRecoveryRetentionWarning("Unused recovery files could not be checked. They are being kept for a later cleanup.") }
+            if self?.stagingCollectionToken == token { self?.stagingCollectionWork = nil }
+        }
     }
 
     /// The Undo toast after Delete Note: the note comes back from Recently
@@ -3098,6 +3184,7 @@ extension NotesPageController {
     private func deleteStep(noteID: UUID, reopen: Bool) -> UndoStep {
         UndoStep(
             name: String(localized: "Delete Note"),
+            items: { [AtticItemRef(.note, noteID)] },
             undoOutcome: { [weak self] in
                 guard let self else { return .obsolete }
                 if self.restoreDeletedNote(noteID: noteID, reopen: reopen) { return .applied }
@@ -3115,6 +3202,7 @@ extension NotesPageController {
     private func pinStep(_ pinned: Bool, noteID: UUID) -> UndoStep {
         UndoStep(
             name: pinned ? String(localized: "Pin Note") : String(localized: "Unpin Note"),
+            items: { [AtticItemRef(.note, noteID)] },
             undoOutcome: { [weak self] in self?.pinOutcome(!pinned, noteID: noteID) ?? .obsolete },
             redoOutcome: { [weak self] in self?.pinOutcome(pinned, noteID: noteID) ?? .obsolete }
         )
@@ -3134,6 +3222,7 @@ extension NotesPageController {
     private func duplicateStep(newID: UUID) -> UndoStep {
         UndoStep(
             name: String(localized: "Duplicate Note"),
+            items: { [AtticItemRef(.note, newID)] },
             undoOutcome: { [weak self] in
                 guard let self else { return .obsolete }
                 guard self.store.note(withID: newID) != nil else { return .obsolete }

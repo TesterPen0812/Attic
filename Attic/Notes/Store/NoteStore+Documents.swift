@@ -287,7 +287,7 @@ extension NoteStore {
             let history: [NoteVersion]
             do { history = try readVersions(noteID: noteID) }
             catch {
-                NSLog("Attic attachment placement read failed: %@", error.localizedDescription)
+                NSLog("Attic attachment placement read failed")
                 recordError("This attachment’s place in the note could not be read. Try again. Your note is kept.")
                 return false
             }
@@ -1193,7 +1193,7 @@ extension NoteStore {
 
     /// The owner-facing notice stays readable; database details belong in the log.
     func reportProposalReadFailure(_ error: Error) {
-        NSLog("Attic proposals read failed: %@", error.localizedDescription)
+        NSLog("Attic proposals read failed")
         reportAuxiliaryReadFailure("Proposals could not be read. Reopen Notes to try again. Your notes are kept.")
     }
 

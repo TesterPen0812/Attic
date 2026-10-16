@@ -171,6 +171,7 @@ final class NoteStore: ObservableObject {
 
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
+    let purgedNoteIDs = PassthroughSubject<Set<UUID>, Never>()
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 #if os(macOS)
     @Published private(set) var attachmentsByNoteID: [UUID: [NoteAttachment]] = [:]
@@ -775,6 +776,7 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
         removeMaterializationsAfterSuccessfulSave(references)
 #endif
+        purgedNoteIDs.send(purgedIDs)
         return purgedIDs
     }
 
@@ -1570,16 +1572,14 @@ final class NoteStore: ObservableObject {
                 for failure in report.failures + repairFailures {
                     reportAttachmentFailure(failure.attachmentID, message: failure.message)
                     NSLog(
-                        "Attic attachment reconciliation skipped %@: %@",
-                        failure.attachmentID.uuidString,
-                        failure.message
+                        "Attic attachment reconciliation skipped an attachment"
                     )
                 }
             } catch {
                 // Let the next revision try again rather than trusting a
                 // signature whose pass never completed.
                 reconciledAttachmentSignature = nil
-                NSLog("Attic attachment reconciliation failed: %@", error.localizedDescription)
+                NSLog("Attic attachment reconciliation failed")
             }
         }
     }

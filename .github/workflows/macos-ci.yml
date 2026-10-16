@@ -230,6 +230,7 @@ jobs:
           bundle exec ruby Scripts/verify_project_generation.rb
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_required_checks.py
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_input_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_content_privacy.py
 
       - name: Build macOS target
         id: mac_build

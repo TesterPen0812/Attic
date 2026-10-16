@@ -119,7 +119,7 @@ enum NoteTableText {
     /// A pipe table at the start of `lines`: its header, delimiter and body
     /// rows (an `attic:table` comment line before it is read too). Returns
     /// the table and how many lines it used.
-    static func parseMarkdown(lines: [String]) -> (table: NoteTable, consumed: Int, id: UUID?, headerOff: Bool)? {
+    static func parseMarkdown(lines: [String], onOversized: () -> Void = {}) -> (table: NoteTable, consumed: Int, id: UUID?, headerOff: Bool)? {
         var index = 0
         var headerOff = false
         var id: UUID?
@@ -130,9 +130,11 @@ enum NoteTableText {
         }
         guard index + 1 < lines.count, let header = pipeCells(lines[index], decodeHTML: false),
               let alignments = delimiterAlignments(lines[index + 1]), alignments.count == header.count else { return nil }
+        guard header.count <= NoteTable.maxColumns else { onOversized(); return nil }
         var rows = [header]
         var end = index + 2
         while end < lines.count, let cells = pipeCells(lines[end], decodeHTML: false) {
+            guard rows.count < NoteTable.maxRows, cells.count <= NoteTable.maxColumns else { onOversized(); return nil }
             rows.append(cells)
             end += 1
         }
@@ -187,8 +189,11 @@ enum NoteTableText {
                     if label.closed, matches("(", at: label.next) {
                         var cursor = label.next + 1, nesting = 1, url = ""
                         while cursor < input.count {
+                            guard remainingWork > 0 else { break }
+                            remainingWork -= 1
                             let character = input[cursor]
                             if character == "\\", cursor + 1 < input.count {
+                                remainingWork -= 1
                                 url.append(input[cursor + 1]); cursor += 2; continue
                             }
                             if character == "(" { nesting += 1 }
@@ -215,25 +220,43 @@ enum NoteTableText {
             flush(); return (cell, index, end == nil)
         }
         var cell = parse(from: 0).cell
-        cell.marks.sort { $0.kind.rawValue != $1.kind.rawValue ? $0.kind.rawValue < $1.kind.rawValue : $0.offset < $1.offset }
-        // Export splits marks at overlap boundaries; join their adjacent runs.
-        var merged: [NoteMark] = []
-        for mark in cell.marks {
-            if let last = merged.last, last.kind == mark.kind, last.payload == mark.payload,
-               last.offset + last.length == mark.offset {
-                merged[merged.count - 1] = NoteMark(last.kind, offset: last.offset, length: last.length + mark.length,
-                                                    url: last.url, colour: last.colour)
-            } else { merged.append(mark) }
-        }
-        cell.marks = merged
+        cell.marks = canonicalMarks(cell.marks)
         return cell
     }
 
+    /// Inner marks are appended first by the parser. At an overlap they
+    /// keep their payload, with outer marks filling the surrounding spans.
+    private static func canonicalMarks(_ marks: [NoteMark]) -> [NoteMark] {
+        var result: [NoteMark] = []
+        for kind in NoteMark.Kind.allCases.sorted(by: { $0.rawValue < $1.rawValue }) {
+            var starts: [Int: [Int]] = [:], ends: [Int: [Int]] = [:]
+            for (index, mark) in marks.enumerated() where mark.kind == kind {
+                starts[mark.offset, default: []].append(index)
+                ends[mark.offset + mark.length, default: []].append(index)
+            }
+            let points = Set(starts.keys).union(ends.keys).sorted()
+            var active = Set<Int>()
+            for (start, end) in zip(points, points.dropFirst()) {
+                active.subtract(ends[start] ?? [])
+                active.formUnion(starts[start] ?? [])
+                guard let index = active.min() else { continue }
+                let mark = marks[index]
+                if let last = result.last, last.kind == kind, last.payload == mark.payload,
+                   last.offset + last.length == start {
+                    result[result.count - 1].length += end - start
+                } else {
+                    result.append(NoteMark(kind, offset: start, length: end - start, url: mark.url, colour: mark.colour))
+                }
+            }
+        }
+        return result
+    }
+
     /// The whole text is one pipe table (a paste, Markdown's `| a | b |`).
-    static func parseMarkdown(_ text: String) -> NoteTable? {
+    static func parseMarkdown(_ text: String, onOversized: () -> Void = {}) -> NoteTable? {
         let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        guard let parsed = parseMarkdown(lines: lines), parsed.consumed == lines.count else { return nil }
+        guard let parsed = parseMarkdown(lines: lines, onOversized: onOversized), parsed.consumed == lines.count else { return nil }
         return parsed.table
     }
 

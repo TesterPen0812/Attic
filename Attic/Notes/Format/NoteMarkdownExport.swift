@@ -66,7 +66,7 @@ enum NoteMarkdownExport {
                 lines.append((text, false)); continue
             }
             let isList = block.kind == .checklist || block.style == "bullet" || block.style == "number"
-            let depth = block.indent ?? 0
+            let depth = min(2, max(0, block.indent ?? 0))
             if !isList { numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll() }
             let column = depth == 0 ? 0 : (listColumns[depth - 1] ?? (depth - 1) * 2) + (listWidths[depth - 1] ?? 2)
             let nesting = String(repeating: " ", count: column)
@@ -101,8 +101,8 @@ enum NoteMarkdownExport {
                     .replacingOccurrences(of: "\u{2028}", with: "\\\n" + continuation)
                 if isList || !text.trimmingCharacters(in: .whitespaces).isEmpty { lines.append((nesting + prefix + text, isList)) }
             case .image:
-                lines.append(("[image: \(block.attachmentID.flatMap(filename) ?? String(localized: "image"))]", false))
-            case .file: lines.append(("[file: \(block.filename ?? "file")]", false))
+                lines.append((attachmentLabel("image", filename: block.attachmentID.flatMap(filename) ?? String(localized: "image")), false))
+            case .file: lines.append((attachmentLabel("file", filename: block.filename ?? "file"), false))
             case .divider: lines.append(("---", false))
             case .table:
                 if let table = block.table { lines.append((NoteTableText.markdown(table) { inlineMarkdown($0.block, calendar: calendar, locale: locale) }, false)) }
@@ -115,6 +115,16 @@ enum NoteMarkdownExport {
             result += line.text
         }
         return result
+    }
+
+    private static func attachmentLabel(_ kind: String, filename: String) -> String {
+        // A filename is one literal label even when it contains line breaks
+        // or control characters. Show those scalars explicitly in the label.
+        let visible = filename.unicodeScalars.map { scalar in
+            scalar.value < 32 || scalar.value == 127 || scalar.value == 0x2028 || scalar.value == 0x2029
+                ? "\\u{" + String(scalar.value, radix: 16) + "}" : String(scalar)
+        }.joined()
+        return escapeInlineText("[\(kind): \(visible)]")
     }
 
     /// A date as the note shows it, with the year: "Thu, 1 Oct 2026".
@@ -153,9 +163,15 @@ enum NoteMarkdownExport {
         var result = ""
         let text = block.text as NSString
         var boundaries: Set<Int> = [0, text.length]
-        for mark in block.marks {
+        var starts: [Int: [Int]] = [:]
+        var ends: [Int: [Int]] = [:]
+        for (index, mark) in block.marks.enumerated() {
             boundaries.insert(mark.offset)
             boundaries.insert(mark.offset + mark.length)
+            if includeMarks {
+                starts[mark.offset, default: []].append(index)
+                ends[mark.offset + mark.length, default: []].append(index)
+            }
         }
         for offset in 0..<text.length where text.character(at: offset) == NoteDocument.objectUnit {
             boundaries.insert(offset)
@@ -163,9 +179,14 @@ enum NoteMarkdownExport {
         }
         let points = boundaries.sorted()
         let objectOffsets = (0..<text.length).filter { text.character(at: $0) == NoteDocument.objectUnit }
+        var objectIndex = 0
+        var active: [Int: NoteMark] = [:]
         for pair in zip(points, points.dropFirst()) where pair.0 < pair.1 {
+            for index in ends[pair.0] ?? [] { active[index] = nil }
+            for index in starts[pair.0] ?? [] { active[index] = block.marks[index] }
+            while objectIndex < objectOffsets.count, objectOffsets[objectIndex] < pair.0 { objectIndex += 1 }
             let range = NSRange(location: pair.0, length: pair.1 - pair.0)
-            if let objectIndex = objectOffsets.firstIndex(of: pair.0), range.length == 1 {
+            if objectIndex < objectOffsets.count, objectOffsets[objectIndex] == pair.0, range.length == 1 {
                 if objectIndex < block.inlines.count {
                     switch block.inlines[objectIndex].kind {
                     case let .date(day): result += dateText(day, calendar: calendar, locale: locale)
@@ -175,7 +196,10 @@ enum NoteMarkdownExport {
                 continue
             }
             var value = text.substring(with: range)
-            let marks = includeMarks ? block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 } : []
+            let marks = active.sorted {
+                $0.value.kind.rawValue != $1.value.kind.rawValue
+                    ? $0.value.kind.rawValue < $1.value.kind.rawValue : $0.key < $1.key
+            }.map(\.value)
             if marks.contains(where: { $0.kind == .code }) {
                 let longest = value.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
                 let fence = String(repeating: "`", count: longest + 1)
@@ -183,7 +207,7 @@ enum NoteMarkdownExport {
                     (value.hasPrefix(" ") && value.hasSuffix(" ") && value.contains(where: { $0 != " " }))
                 value = fence + (pad ? " " : "") + value + (pad ? " " : "") + fence
             } else if escapeLiterals { value = escapeInlineText(value) }
-            for mark in marks.sorted(by: { $0.kind.rawValue < $1.kind.rawValue }).reversed() {
+            for mark in marks.reversed() {
                 switch mark.kind {
                 case .bold: value = "**" + value + "**"
                 case .italic: value = "*" + value + "*"

@@ -523,8 +523,9 @@ final class NotesSlice2ControllerTests: XCTestCase {
 
         Plain \\*stars\\* stay
 
-        [image: pricing-v2.png]
+        \\[image&#58; pricing\\-v2.png\\]
         """)
+        XCTAssertEqual(try NoteMarkdownImport.document(markdown).blocks.last?.text, "[image: pricing-v2.png]")
     }
 
     func testDeletePolicyTable() async {

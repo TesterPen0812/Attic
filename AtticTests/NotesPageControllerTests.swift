@@ -25,6 +25,86 @@ final class NotesPageControllerTests: XCTestCase {
 
     }
 
+    func testU05OversizedClipboardImageNeverCreatesAFileOrImport() async throws {
+        let controller = makeController()
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        let fm = FileManager.default
+        func clipboardFiles() throws -> Set<String> {
+            Set(try fm.contentsOfDirectory(atPath: fm.temporaryDirectory.path).filter { $0.hasPrefix("AtticClipboard-") })
+        }
+        let before = try clipboardFiles()
+        let data = Data(repeating: 0, count: Int(AttachmentLimits.maxBytesPerAttachment) + 1)
+        session.engine.onRawImageBatchRequest?(data, "tiff", NSRange(location: 0, length: 0))
+        XCTAssertEqual(try clipboardFiles(), before, "admission must precede every staging write")
+        XCTAssertFalse(session.isImporting)
+        XCTAssertEqual(session.noticeValue?.kind, .notAdded)
+        await controller.waitForImportWork()
+    }
+
+    func testU05ClipboardStagingRunsOffMainAndPreservesBytes() async throws {
+        let url = directory.appendingPathComponent("clipboard.png")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = Data("clipboard fixture".utf8)
+        try await NotesPageController.stageClipboardImage(data, at: url) { bytes, destination in
+            XCTAssertFalse(Thread.isMainThread)
+            try bytes.write(to: destination)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), data)
+    }
+
+    func testU08ActualReadIsBoundedEvenWhenSourceGrowsAfterMetadata() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("growing.bin")
+        let limit = 64 * 1024
+        try Data([1]).write(to: url)
+        XCTAssertEqual(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, 1)
+        let writer = try FileHandle(forWritingTo: url)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data(repeating: 2, count: limit * 2))
+        try writer.close()
+        XCTAssertThrowsError(try NotesPageController.readImportedBytes(url, maximumBytes: limit))
+        let payload = Data(repeating: 3, count: limit)
+        try payload.write(to: url)
+        XCTAssertEqual(try NotesPageController.readImportedBytes(url, maximumBytes: limit), payload)
+    }
+
+    func testU16DeleteAndPurgeCollectRecoveryStagingAfterSessionRelease() async throws {
+        let journal = NoteDraftJournal(directory: directory)
+        let controller = makeController(journal: journal)
+        await controller.startAndWait()
+        let peer = NoteDraftJournal(directory: directory)
+        let other = try realImage()
+        let entry = NoteDraftJournalEntry(noteID: UUID(), isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Other draft"), .image(attachmentID: other.id)])),
+            selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: other.id, filename: other.filename, contentTypeIdentifier: other.contentTypeIdentifier,
+                           byteCount: other.byteCount, digest: other.digest)], savedAt: Date())
+        _ = try await peer.writeDurably(entry, staged: [other])
+        let session = try XCTUnwrap(controller.active)
+        type("Private note", into: session)
+        let image = try realImage()
+        XCTAssertTrue(session.engine.insertImage(image, pixelSize: CGSize(width: 2, height: 2)))
+        gate.shouldFail = true
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        let staged = directory.appendingPathComponent("staged/\(image.id.uuidString)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+        gate.shouldFail = false
+        await XCTAssertTrueAsync(await controller.preserveAllDurably())
+        gate.shouldFail = true
+        await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path), "failed deletion keeps live bytes")
+        gate.shouldFail = false
+        await XCTAssertTrueAsync(await controller.deleteNoteDurably(noteID: session.noteID))
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).contains(session.noteID))
+        await controller.waitForRecoveryWork()
+        // Do not read recovery entries: reading runs collection itself.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("staged/\(other.id.uuidString)").path),
+                      "another recovery owner's bytes survive collection")
+        withExtendedLifetime(peer) {}
+    }
+
     private func makeController(journal: NoteDraftJournaling? = nil, delay: Duration = .seconds(60)) -> NotesPageController {
         NotesPageController(store: store, journal: journal ?? NoteDraftJournal(directory: directory),
                             saveDelay: delay, pauseVersionDelay: .seconds(600))

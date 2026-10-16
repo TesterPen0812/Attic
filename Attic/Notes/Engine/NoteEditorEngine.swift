@@ -1613,6 +1613,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         history.willChange(ranges: [recorded], strings: [replacement as String])
     }
 
+    /// Handle even refused destinations so AppKit cannot fall back to its
+    /// own scheme dispatcher for imported content or read-only previews.
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        if let value = (link as? URL)?.absoluteString ?? link as? String { NoteLinkPolicy.open(value) }
+        return true
+    }
+
     // MARK: NSTextViewDelegate
 
     func textView(_ textView: NSTextView, shouldChangeTextInRanges affectedRanges: [NSValue],
@@ -2259,8 +2266,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Plain text from another app, with line breaks made uniform.
     func pastePlainText(_ text: String, at selection: NSRange) -> Bool {
         if !isPastingAsPlainText, paragraphStyle(at: selection.location)?.isCode != true,
-           paragraphStyle(at: selection.location)?.isCallout != true, let table = NoteTablePaste.table(fromText: text) {
-            return pasteTable(table, at: selection, sourceText: text)
+           paragraphStyle(at: selection.location)?.isCallout != true {
+            var oversized = false
+            if let table = NoteTablePaste.table(fromText: text, onOversized: { oversized = true }) {
+                return pasteTable(table, at: selection, sourceText: text)
+            }
+            if oversized { return pasteOversizedTableAsText(text, at: selection) }
         }
         let normalized = NoteLineBreaks.normalizeLineBreaks(text).0
             .replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
@@ -2996,9 +3007,8 @@ extension NoteEditorEngine {
             return NoteCommandValidation(enabled: inBody && (kind != .link || captureLinkTarget(selection: selection) != nil),
                                          state: markState(kind, selection: selection))
         case let .link(url):
-            let parsed = URL(string: url)
             return NoteCommandValidation(enabled: captureLinkTarget(selection: selection) != nil &&
-                                         (parsed?.scheme == "https" || parsed?.scheme == "http") && parsed?.host != nil,
+                                         NoteLinkPolicy.url(url) != nil,
                                          state: markState(.link, selection: selection))
         case .removeLink:
             return NoteCommandValidation(enabled: markState(.link, selection: selection) != .off,
@@ -3722,7 +3732,7 @@ extension NoteEditorEngine {
         let before = (textStorage.string as NSString).substring(with: NSRange(location: line.location, length: caret - line.location))
         let token = before.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
         let url = token.trimmingCharacters(in: CharacterSet(charactersIn: ".,;!?"))
-        guard (url.hasPrefix("https://") || url.hasPrefix("http://")), URL(string: url)?.host != nil else { return }
+        guard NoteLinkPolicy.url(url) != nil else { return }
         let length = (url as NSString).length
         let location = caret - 1 - length
         guard location >= line.location else { return }

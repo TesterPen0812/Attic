@@ -1167,10 +1167,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         }
         // Tabular data (cells copied from a table, a spreadsheet, a web
         // page's table, a Markdown table) pastes as a table.
-        if !engine.isPastingAsPlainText, [NoteTablePaste.tableType, .rtf, .html, .string].contains(type) || type == NoteTablePaste.tsvType,
-           let table = NoteTablePaste.table(from: pboard) {
-            let source = pboard.string(forType: NoteTablePaste.tsvType) ?? pboard.string(forType: .string) ?? NoteTableText.tsv(table)
-            return engine.pasteTable(table, at: target, sourceText: source)
+        if !engine.isPastingAsPlainText, [NoteTablePaste.tableType, .rtf, .html, .string].contains(type) || type == NoteTablePaste.tsvType {
+            var oversized = false
+            if let table = NoteTablePaste.table(from: pboard, onOversized: { oversized = true }) {
+                let source = pboard.string(forType: NoteTablePaste.tsvType) ?? pboard.string(forType: .string) ?? NoteTableText.tsv(table)
+                return engine.pasteTable(table, at: target, sourceText: source)
+            }
+            if oversized {
+                let source = pboard.string(forType: NoteTablePaste.tsvType) ?? pboard.string(forType: .string)
+                    ?? pboard.string(forType: .html).map(NoteTablePaste.plainText(fromHTML:)) ?? ""
+                return engine.pasteOversizedTableAsText(source, at: target)
+            }
         }
         if type == .fileURL,
            let urls = pboard.readObjects(forClasses: [NSURL.self],

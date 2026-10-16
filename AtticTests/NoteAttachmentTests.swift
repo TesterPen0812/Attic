@@ -8,6 +8,19 @@ import XCTest
 
 @MainActor
 final class NoteAttachmentTests: XCTestCase {
+    func testU14RepairRetainsPrivateFilenameOnlyInOwnerFacingFailure() async throws {
+        let directory = try makeDirectory()
+        let payload = Data("private bytes".utf8)
+        let sentinel = "Medical diagnosis - sentinel.pdf"
+        let reference = AttachmentFileReference(id: UUID(),
+            digest: SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined(),
+            filename: sentinel, byteCount: Int64(payload.count + 1), payload: payload)
+        let failures = await AttachmentFileStore(rootURL: directory).repairMaterializations([reference])
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures.first?.message.contains(sentinel) == true,
+                      "the notice shown to the owner must remain useful")
+    }
+
     func testAttachmentLimitHelpersSaturateBytesAndRejectSortIndexOverflow() {
         XCTAssertEqual(
             AttachmentLimits.cappedByteCount([Int64.max, Int64.max]),

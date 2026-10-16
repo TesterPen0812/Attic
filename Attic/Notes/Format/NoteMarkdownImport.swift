@@ -112,6 +112,9 @@ enum NoteMarkdownImport {
                case let .tableCell(column) = cellIntent.kind {
                 var row = 0
                 for intent in intents { if case let .tableRow(index) = intent.kind { row = index } }
+                guard columns.count <= NoteTable.maxColumns, row < NoteTable.maxRows else {
+                    return NoteDocument(blocks: markdown.components(separatedBy: "\n").map { .text($0) })
+                }
                 let index: Int
                 if let existing = tableIndices[tableIntent.identity] { index = existing }
                 else {

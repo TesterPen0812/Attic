@@ -35,13 +35,15 @@ struct UndoStep {
     /// tell whether it is still the one an undo would reverse.
     let id = UUID()
     let name: String
+    let affectedItems: @MainActor () -> Set<AtticItemRef>
     let undo: @MainActor () -> UndoOutcome
     let redo: @MainActor () -> UndoOutcome
 
     /// A step whose closures only report whether the store confirmed its
     /// save; a refusal keeps the step.
-    init(name: String, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
+    init(name: String, items: @escaping @MainActor () -> Set<AtticItemRef> = { [] }, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
         self.name = name
+        self.affectedItems = items
         self.undo = { undo() ? .applied : .failed }
         self.redo = { redo() ? .applied : .failed }
     }
@@ -50,10 +52,12 @@ struct UndoStep {
     /// apply again.
     init(
         name: String,
+        items: @escaping @MainActor () -> Set<AtticItemRef> = { [] },
         undoOutcome: @escaping @MainActor () -> UndoOutcome,
         redoOutcome: @escaping @MainActor () -> UndoOutcome
     ) {
         self.name = name
+        self.affectedItems = items
         self.undo = undoOutcome
         self.redo = redoOutcome
     }
@@ -220,6 +224,35 @@ final class UndoRoute: ObservableObject {
         guard histories.removeValue(forKey: history) != nil else { return }
         recency.removeAll { $0 == history }
         revision &+= 1
+    }
+
+    /// A purge releases only histories/steps that retain the removed items.
+    /// Batch steps are indivisible; unrelated items' steps keep their order.
+    func invalidate(_ items: Set<AtticItemRef>) {
+        guard !items.isEmpty else { return }
+        var changed = false
+        for key in Array(histories.keys) {
+            let keyedItem: AtticItemRef? = switch key {
+            case let .note(id): AtticItemRef(.note, id)
+            case let .canvas(id): AtticItemRef(.canvas, id)
+            default: nil
+            }
+            guard var entry = histories[key] else { continue }
+            let count = entry.undo.count + entry.redo.count
+            if let keyedItem, items.contains(keyedItem) {
+                entry.undo.removeAll(); entry.redo.removeAll()
+            } else {
+                entry.undo.removeAll { !$0.affectedItems().isDisjoint(with: items) }
+                entry.redo.removeAll { !$0.affectedItems().isDisjoint(with: items) }
+            }
+            guard count != entry.undo.count + entry.redo.count else { continue }
+            changed = true
+            if entry.undo.isEmpty && entry.redo.isEmpty {
+                histories[key] = nil
+                recency.removeAll { $0 == key }
+            } else { histories[key] = entry }
+        }
+        if changed { revision &+= 1 }
     }
 
     private func touch(_ history: UndoHistoryID) {
