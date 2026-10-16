@@ -71,7 +71,7 @@ struct TasksPage: View {
     /// never redraws anything), so a right-click knows its row.
     @State private var pointer: TasksPointer
     /// The drag in progress, outside view state (round 4).
-    @State private var dragSession = TasksDragSession()
+    @State private var dragSession: TasksDragSession
     @State private var rightClickMonitor: Any?
     /// ⌘F on Done, before any menu sees it (CI run 3: the Edit menu's Find
     /// sent it to whichever text view had the keyboard, the add bar or a
@@ -3588,14 +3588,18 @@ final class TasksDragSession {
         controlOwners[row] = ObjectIdentifier(cell)
     }
 
+    /// A departing cell retires only the controls it last reported.
+    func removeControlFrames(for row: TasksRowID, of cell: TasksCellReports) {
+        guard controlOwners[row] == ObjectIdentifier(cell) else { return }
+        controlFrames[row] = nil
+        controlOwners[row] = nil
+    }
+
     /// A cell now draws another task (a Done row after a new query,
     /// `TasksDoneSlots`): its controls move to that task, and the task it
     /// drew keeps none of them unless another cell reported them since.
     func moveControlFrames(from old: TasksRowID, to new: TasksRowID, of cell: TasksCellReports) {
-        if controlOwners[old] == ObjectIdentifier(cell) {
-            controlFrames[old] = nil
-            controlOwners[old] = nil
-        }
+        removeControlFrames(for: old, of: cell)
         guard let frames = cell.controls else { return }
         setControlFrames(frames, for: new, from: cell)
     }
@@ -3754,7 +3758,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             reports.frame = frame
             pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
         }
-        .onDisappear { [pointer, tab, id, reports] in pointer.removeFrame(for: TasksRowID(tab: tab, id: id), of: reports) }
+        .onDisappear { [session, pointer, tab, id, reports] in
+            let row = TasksRowID(tab: tab, id: id)
+            session.removeControlFrames(for: row, of: reports)
+            pointer.removeFrame(for: row, of: reports)
+        }
         .onChange(of: translation == nil) { _, ended in
             guard ended else { return }
             // Released, cancelled by the system or by Esc: the lift goes
