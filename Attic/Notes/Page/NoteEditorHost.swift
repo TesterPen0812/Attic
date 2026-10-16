@@ -61,6 +61,37 @@ final class NotesPageChrome: ObservableObject {
 
     /// The note menu's commands for the note on screen (built by the page).
     var menuCommands: () -> [AtticMenuCommand] = { [] }
+    private var commandOwner: UUID?
+    private var keyMonitor: Any?
+    private var keyPressed: ((NSEvent) -> Bool)?
+
+    /// Callbacks belong to this mount. A retiring page cannot clear a newer
+    /// page's commands, even if both briefly share the chrome.
+    func claimPageCommands(owner: UUID, keyPressed: @escaping (NSEvent) -> Bool) {
+        commandOwner = owner
+        self.keyPressed = keyPressed
+        if keyMonitor == nil {
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                self?.keyPressed?(event) == true ? nil : event
+            }
+        }
+    }
+
+    func clearPageCommands(owner: UUID) {
+        guard commandOwner == owner else { return }
+        commandOwner = nil
+        menuCommands = { [] }
+        leaveEditor = nil
+        #if DEBUG
+        captureToggleLibrary = nil
+        captureImport = nil
+        #endif
+        keyPressed = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        cancelKeyboardReturn()
+    }
+
     fileprivate weak var accessories: NoteTitleAccessories?
     /// The format controls over the note on screen (bar, `/`, cards).
     fileprivate(set) weak var controls: NoteFormatControls?

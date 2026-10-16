@@ -12,6 +12,10 @@ import UniformTypeIdentifiers
 /// once the title has scrolled away. Everything goes through the page's
 /// controller and its session rules.
 struct NotesEditorPage: View {
+    #if DEBUG
+    /// Lifetime regression probes; never owns either observed object.
+    static var lifetimeProbe: ((NotesPageChrome, NotesLibraryModel) -> Void)?
+    #endif
     /// Save Recovery Copy… (⇧⌘S, the note's menu and the status details):
     /// offered only while the note's text is held only here.
     static let saveRecoveryCopyIdentifier = "notes-save-recovery-copy"
@@ -38,7 +42,7 @@ struct NotesEditorPage: View {
     @State private var bottomStops = false
     /// The stop to focus once the controls have become focusable.
     @State private var pendingStop: NotesKeyboardOrder.Stop?
-    @State private var keyMonitor: Any?
+    @State private var commandOwner = UUID()
     @State private var filePickerOwner: UUID?
     @State private var postedToastID: UUID?
     /// Whether this page has shown a note yet. The note that the page
@@ -146,21 +150,20 @@ struct NotesEditorPage: View {
         pageContent
         .atticTagColourOrigin(.page(.notesLibrary))
         .onAppear {
+            #if DEBUG
+            Self.lifetimeProbe?(chrome, library)
+            #endif
             hasShownNote = controller.active != nil
             controller.update(design: design)
             controller.start()
             controller.present()
+            chrome.claimPageCommands(owner: commandOwner, keyPressed: { bottomKeyPressed($0) })
             chrome.menuCommands = { noteMenuCommands() }
             chrome.leaveEditor = { forward in leaveEditor(forward: forward) }
             #if DEBUG
             chrome.captureToggleLibrary = { toggleLibrary() }
             chrome.captureImport = { [controller] urls in controller.importFiles(urls) }
             #endif
-            if keyMonitor == nil {
-                keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    bottomKeyPressed(event) ? nil : event
-                }
-            }
             library.failedDraftText = { [controller, noteStore] id in
                 guard noteStore.note(withID: id) == nil,
                       let draft = controller.failedDrafts.first(where: { $0.noteID == id }) else { return nil }
@@ -170,9 +173,7 @@ struct NotesEditorPage: View {
         .onDisappear {
             if let filePickerOwner { TaskAttachmentPickerSession.cancel(owner: filePickerOwner) }
             uiState.setInteractionLock(.notesFilePicker, isActive: false)
-            chrome.cancelKeyboardReturn()
-            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-            keyMonitor = nil
+            chrome.clearPageCommands(owner: commandOwner)
         }
         .onChange(of: bottomFocus) { _, stop in
             // Back in the text (a click, ⌃Tab round): the buttons stop

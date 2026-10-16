@@ -144,10 +144,18 @@ final class NoteTableAttachment: NoteObjectAttachment {
                                              table: table, cache: textCache, string: cellString(at:))
         }
         let table = self.table
+        let style = self.style
         let final = layout
-        return NSImage(size: CGSize(width: width, height: final.height), flipped: true) { [self] _ in
+        // The image can be stored on this attachment. Its deferred drawing
+        // owns only the print snapshot, never the attachment or its engine.
+        let strings = table.rows.indices.map { row in
+            table.columns.indices.map { column in
+                NSAttributedString(attributedString: cellString(at: .init(row: row, column: column)))
+            }
+        }
+        return NSImage(size: CGSize(width: width, height: final.height), flipped: true) { _ in
             NoteTableDrawing.draw(table: table, layout: final, design: design, style: style,
-                                  string: { cellString(at: $0) }, skipping: nil)
+                                  string: { strings[$0.row][$0.column] }, skipping: nil)
             return true
         }
     }

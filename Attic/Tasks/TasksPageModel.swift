@@ -864,7 +864,8 @@ final class TasksPageModel: ObservableObject {
     private var rowRetry: (() -> CommandOutcome)?
 
     /// Shows `outcome` under row `id` when it failed (and clears that row's
-    /// earlier failure when it applied). Returns the outcome.
+    /// earlier failure when it applied). Returns the outcome. The stored retry
+    /// must capture the model weakly and keep only the command's value inputs.
     @discardableResult
     func report(_ outcome: CommandOutcome, on id: UUID, retry: @escaping () -> CommandOutcome) -> CommandOutcome {
         if let failure = outcome.failure {
