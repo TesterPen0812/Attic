@@ -95,6 +95,20 @@ final class NotesTypingCostTests: XCTestCase {
             XCTAssertEqual(engine.find.searchedUTF16Count, navScan)
             XCTAssertEqual(engine.find.invalidatedUTF16Count, navInvalidation)
             XCTAssertEqual(engine.find.matches.count, count + 2)
+            let table = engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first!
+            let tableScanned = engine.find.searchedUTF16Count, tableInvalidated = engine.find.invalidatedUTF16Count
+            let tableMS = milliseconds {
+                XCTAssertTrue(engine.changeTable(table, name: "Typing", coalescing: .init(row: 0, column: 0)) {
+                    $0[.init(row: 0, column: 0)].text = "neexdle"
+                })
+            }
+            print("P1_FIND_TABLE size=\(count) scanned_utf16=\(engine.find.searchedUTF16Count - tableScanned) invalidated_utf16=\(engine.find.invalidatedUTF16Count - tableInvalidated) typing_ms=\(tableMS)")
+            let gridCharacters = table.table.rows.flatMap { $0 }.reduce(0) { $0 + $1.text.utf16.count }
+            XCTAssertEqual(engine.find.searchedUTF16Count - tableScanned, gridCharacters)
+            XCTAssertEqual(engine.find.invalidatedUTF16Count, tableInvalidated)
+            XCTAssertEqual(engine.find.matches.count, count + 1)
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.find.matches.count, count + 2)
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.find.matches.count, count + 1)
             engine.find.close(); engine.detachView()
         }
     }

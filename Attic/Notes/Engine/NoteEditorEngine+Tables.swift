@@ -157,7 +157,7 @@ extension NoteEditorEngine {
     /// The grid changed without a character edit: the saved document, the
     /// table's line and the page's chrome follow.
     func tableContentDidChange(_ attachment: NoteTableAttachment) {
-        find.refresh()
+        find.refresh(changedTable: attachment)
         invalidateDocumentCache()
         onTextChange?()
         onTableChromeChange?()

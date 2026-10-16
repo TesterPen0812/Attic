@@ -241,7 +241,7 @@ final class NoteFindController: ObservableObject {
         pendingSearchRange = affected
     }
 
-    func refresh(selectFirst: Bool = false) {
+    func refresh(selectFirst: Bool = false, changedTable: NoteTableAttachment? = nil) {
         guard isShown, let engine else { return }
         defer {
             pendingSearchRange = nil; pendingMatches = nil; pendingOldMatch = nil; pendingFullSearch = false
@@ -256,10 +256,17 @@ final class NoteFindController: ObservableObject {
             return
         }
         let old = pendingMatches != nil ? pendingOldMatch : index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
+        // A cell edit changes no note characters. Retain every other match
+        // and search only that grid, including table Undo/Redo notifications.
+        let tableScope = pendingMatches == nil && !pendingFullSearch && !selectFirst
+            ? changedTable.flatMap { engine.range(ofTable: $0) } : nil
         let incremental = !selectFirst && !pendingFullSearch && pendingSearchRange != nil
-        let scope = incremental ? pendingSearchRange! : NSRange(location: 0, length: engine.textStorage.length)
-        var found = incremental ? (pendingMatches ?? []) : []
-        found += ranges(in: engine.textStorage.string, within: scope).map { Match(noteRange: $0) }
+        let scope = tableScope ?? (incremental ? pendingSearchRange! : NSRange(location: 0, length: engine.textStorage.length))
+        var found = tableScope != nil ? matches.filter { $0.tableID != changedTable?.objectID || $0.noteRange != tableScope! }
+            : (incremental ? (pendingMatches ?? []) : [])
+        if tableScope == nil {
+            found += ranges(in: engine.textStorage.string, within: scope).map { Match(noteRange: $0) }
+        }
         objectSearchPassCount += 1
         var objects: [(NoteObjectAttachment, NSRange)] = []
         engine.textStorage.enumerateAttribute(.attachment, in: scope) { value, range, _ in
