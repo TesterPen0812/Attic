@@ -36,6 +36,17 @@ enum NoteFormatCaptureScene {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             textView.window?.makeFirstResponder(textView)
+            if scene.hasPrefix("g05") {
+                let sample = scene == "g05-empty" ? "T\n" : (scene == "g05-multi" ? "T\ntip\nmore\nbody" : "T\ntip\nbody")
+                type(sample, into: textView)
+                if let engine = textView.engine {
+                    let length = scene == "g05-empty" ? 0 : (scene == "g05-multi" ? 8 : 3)
+                    _ = engine.perform(.paragraph(.callout(icon: "💡")), selection: NSRange(location: 2, length: length))
+                    engine.history.reset()
+                    textView.setSelectedRange(NSRange(location: 2, length: scene == "g05-empty" ? 0 : 3))
+                }
+                return
+            }
             if scene == "hint" {
                 type("Launch sync\n", into: textView)
                 textView.needsDisplay = true
