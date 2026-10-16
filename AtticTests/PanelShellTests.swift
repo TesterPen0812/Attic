@@ -8,6 +8,47 @@ import XCTest
 /// the agent's `show` tool.
 @MainActor
 final class PanelShellTests: XCTestCase {
+    private final class NativeTrackingView: NSView {
+        var onDown: ((NSEvent) -> Void)?
+        override func mouseDown(with event: NSEvent) { onDown?(event) }
+    }
+
+    func testG06NativeTrackingConsumesReleaseAndFinalisesPanelPressExactlyOnce() throws {
+        let panel = AtticPanel(contentRect: NSRect(x: -6000, y: -6000, width: 300, height: 300),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        let tracker = NativeTrackingView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        panel.contentView = tracker
+        panel.orderFront(nil)
+        var presses = 0
+        var releases = 0
+        panel.onPressEnded = { releases += 1 }
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 150, y: 150), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+        }
+        let up = try event(.leftMouseUp)
+        tracker.onDown = { _ in
+            presses += 1
+            XCTAssertTrue(panel.isPressing)
+            XCTAssertEqual(releases, 0, "key appearance waits until tracking returns")
+            NSApp.postEvent(up, atStart: true)
+            let consumed = panel.nextEvent(matching: .leftMouseUp, until: Date().addingTimeInterval(1), inMode: .eventTracking, dequeue: true)
+            XCTAssertEqual(consumed?.type, .leftMouseUp, "the same dequeue used by the block handle")
+            XCTAssertTrue(panel.isPressing, "never finalise during mouseDown dispatch")
+            XCTAssertEqual(releases, 0)
+        }
+        panel.sendEvent(try event(.leftMouseDown))
+        XCTAssertEqual(presses, 1, "the native tracking callback must actually run")
+        XCTAssertFalse(panel.isPressing, "native tracking already released the button")
+        XCTAssertEqual(releases, 1, "the key appearance updates immediately")
+        panel.sendEvent(up)
+        panel.sendEvent(try event(.mouseMoved))
+        XCTAssertEqual(releases, 1, "late events cannot finalise the same press twice")
+    }
+
     // MARK: Pages and the header
 
     /// A20: every switch, the first and every later one, between every pair

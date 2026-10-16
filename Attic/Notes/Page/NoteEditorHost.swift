@@ -120,6 +120,7 @@ final class NotesPageChrome: ObservableObject {
     func returnKeyboardToText(pacing: NotesKeyboardReturn.Pacing = .init(), clock: NotesFrameClock? = nil) {
         cancelKeyboardReturn()
         guard let accessories else { return }
+        accessories.cancelCalloutIconForKeyboardReturn()
         let run = NotesKeyboardReturn(target: accessories, clock: clock ?? accessories.frameClock, pacing: pacing)
         keyboardReturn = run
         // A click anywhere (another control, the text, the panel's background)
@@ -365,10 +366,13 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
 
     var hasTags: Bool { !engine.tags.isEmpty }
 
-    /// The text has the keyboard: it is the window's first responder.
+    /// The note's current input client has the keyboard, including its
+    /// callout field while Emoji & Symbols is choosing an icon.
     var textHasKeyboard: Bool {
         guard let textView else { return false }
-        return textView.window?.firstResponder === textView
+        if textView.window?.firstResponder === textView { return true }
+        guard let session = textView.calloutIconSession else { return false }
+        return textView.window?.firstResponder === session.receiver
     }
 
     /// The caret and selection, kept by the text while a control has the keyboard.
@@ -717,9 +721,10 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         AtticNativeMenu.popUpContextMenu(commands, below: anchor, in: scrollView)
     }
 
-    func focusText() {
-        guard let textView else { return }
-        textView.window?.makeFirstResponder(textView)
+    func focusText() { textView?.restoreInputFocus() }
+
+    func cancelCalloutIconForKeyboardReturn() {
+        textView?.cancelCalloutIconSession(reason: "explicit keyboard return")
     }
 
     /// The selection bar's capsule and the link or date card while they
@@ -866,7 +871,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
                 textView.scrollRangeToVisible(textView.selectedRange())
             }
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            textView.window?.makeFirstResponder(textView)
+            textView.restoreInputFocus()
             context.coordinator.accessories?.layout()
         }
         return scrollView

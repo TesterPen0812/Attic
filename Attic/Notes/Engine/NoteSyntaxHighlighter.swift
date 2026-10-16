@@ -48,7 +48,9 @@ enum NoteSyntaxHighlighter {
 
     static func tokens(in text: String, language: String?) -> [(NSRange, NoteSyntaxToken)] {
         guard let language, let syntax = languages[language] else { return [] }
-        let units = Array(text.utf16)
+        // Shift-Return is one UTF-16 unit, like LF. Normalize only this
+        // transient scanner view so every line rule shares the same offsets.
+        let units = text.utf16.map { $0 == 0x2028 ? UInt16(10) : $0 }
         var tokens: [(NSRange, NoteSyntaxToken)] = []
         var index = 0
         func matches(_ value: String, at offset: Int) -> Bool {

@@ -330,6 +330,24 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         }
     }
 
+    func testJTableDefaultHighlightHasNoKeyAndGreyIsExplicit() throws {
+        let (engine, _) = makeEngine(blocks())
+        let attachment = try table(engine)
+        let view = try view(engine)
+        let position = P(row: 2, column: 1)
+        let router = NoteCommandRouter(engine: engine)
+        view.activate(position, caret: .range(NSRange(location: 0, length: 7)))
+        XCTAssertTrue(router.run(.mark(.highlight), from: .formatBar))
+        XCTAssertEqual(attachment.table[position].marks, [NoteMark(.highlight, offset: 0, length: 7)])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.applyCellMark(.highlight, in: view))
+        XCTAssertEqual(attachment.table[position].marks, [NoteMark(.highlight, offset: 0, length: 7)])
+        XCTAssertTrue(router.highlight(.grey, from: .formatBar))
+        XCTAssertEqual(attachment.table[position].marks, [NoteMark(.highlight, offset: 0, length: 7, colour: "grey")])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[position].marks, [NoteMark(.highlight, offset: 0, length: 7)])
+    }
+
     func testMarksApplyToACellsTextAndToEverySelectedCell() throws {
         let (engine, _) = makeEngine(blocks())
         let attachment = try table(engine)

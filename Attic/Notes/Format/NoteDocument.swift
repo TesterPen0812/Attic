@@ -268,7 +268,7 @@ struct NoteMark: Equatable, Sendable {
     var offset: Int
     var length: Int
     var url: String?
-    /// A highlight's colour key (`NoteHighlightColour`); nil is the grey
+    /// A highlight's colour key (`NoteHighlightColour`); nil is the yellow
     /// highlight. A key this build doesn't know is kept verbatim.
     var colour: String?
 
@@ -281,7 +281,7 @@ struct NoteMark: Equatable, Sendable {
     }
 
     /// A mark from its attribute value: a link's URL, a highlight's colour
-    /// key (a string; `true` is grey), nothing for the other marks.
+    /// key (a string; `true` is yellow), nothing for the other marks.
     init(_ kind: Kind, offset: Int, length: Int, value: Any?) {
         self.init(kind, offset: offset, length: length,
                   url: kind == .link ? value as? String : nil,
@@ -295,32 +295,27 @@ struct NoteMark: Equatable, Sendable {
     var payload: String? { url ?? colour }
 }
 
-/// A highlight's colour (N-2, owner 2026-10-11): grey, the normal one,
-/// which one click on the highlighter gives and which stores no colour, and
-/// colour set 1's clear hues (close to Apple Notes'). The tags use the same
-/// hues (`AtticTagHue`). The raw value is what a highlight stores.
+/// Highlight colours. A plain highlight stays yellow (owner 2026-10-16).
+/// Menu colours carry explicit keys; the one-click default carries none.
 enum NoteHighlightColour: String, CaseIterable, Sendable {
     case grey, yellow, green, blue, pink, purple
 
     /// The hues the highlighter's menu offers after Grey.
     static let hues: [NoteHighlightColour] = [.yellow, .green, .blue, .pink, .purple]
 
-    /// The one click's highlight, and the highlight command's (T-10, owner
-    /// 2026-10-15: yellow, was grey). It stores "yellow" explicitly, so a
-    /// note keeps the colour it was given; a stored grey (no key) still
-    /// reads grey.
+    /// The one-click appearance; its command writes no colour key so
+    /// the owner's October 10 build can still edit the note.
     static let oneClick: NoteHighlightColour = .yellow
 
     /// The highlighter's menu, the one click's colour first (T-10).
     static let menuOrder: [NoteHighlightColour] = [.yellow, .grey, .green, .blue, .pink, .purple]
 
-    /// What a highlight of this colour stores: nil for grey.
-    var storedKey: String? { self == .grey ? nil : rawValue }
+    /// The explicit key written by the colour menu.
+    var storedKey: String? { rawValue }
 
-    /// The colour a stored key shows: grey for none, or for a key this
-    /// build doesn't know.
+    /// No key means yellow. Unknown keys keep their existing grey fallback.
     init(storedKey: String?) {
-        self = storedKey.flatMap(NoteHighlightColour.init(rawValue:)) ?? .grey
+        self = storedKey.map { NoteHighlightColour(rawValue: $0) ?? .grey } ?? .yellow
     }
 
     var title: String {

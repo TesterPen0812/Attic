@@ -242,7 +242,12 @@ final class NotesFormattingRouteTests: XCTestCase {
                     let converted = engine.document().blocks
                     let convertedSelection = view.selectedRange()
                     XCTAssertTrue(engine.history.undo(), label)
-                    XCTAssertTrue(engine.textStorage.string.contains(prefix), "\(label) literal Undo")
+                    // Fix G-01's owner request restores the real bullet after
+                    // its shorthand, as recorded in phase2/owner-decisions.md.
+                    let wasBullet = prefix == "- [ ] " || prefix == "- [x] "
+                    let restoredPrefix = wasBullet ? String(prefix.dropFirst(2)) : prefix
+                    XCTAssertTrue(engine.textStorage.string.contains(restoredPrefix), "\(label) pre-conversion Undo")
+                    if wasBullet { XCTAssertEqual(engine.paragraphStyle(at: view.selectedRange().location), .bullet, label) }
                     XCTAssertTrue(engine.history.redo(), label)
                     XCTAssertEqual(engine.document().blocks, converted, label)
                     view.setSelectedRange(convertedSelection)

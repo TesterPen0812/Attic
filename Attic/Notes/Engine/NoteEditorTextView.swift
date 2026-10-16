@@ -14,7 +14,40 @@ import UniformTypeIdentifiers
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
-    weak var engine: NoteEditorEngine? { didSet { installCodeColouring() } }
+    weak var engine: NoteEditorEngine? {
+        didSet {
+            if engine !== oldValue { cancelCalloutIconSession(reason: "engine changed") }
+            installCodeColouring()
+        }
+    }
+    var calloutIconSession: NoteCalloutIconSession?
+
+    func cancelCalloutIconSession(reason: String) { calloutIconSession?.cancel(reason: reason) }
+
+    /// Page presentation restores the current input client. It must not
+    /// replace the palette receiver with the note body during a handoff.
+    func restoreInputFocus() {
+        window?.makeFirstResponder(calloutIconSession?.receiver ?? self)
+    }
+
+    override var isEditable: Bool {
+        didSet { if !isEditable { cancelCalloutIconSession(reason: "read only") } }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        cancelCalloutIconSession(reason: "editor keyboard or accessibility entry")
+        return super.becomeFirstResponder()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow !== window { cancelCalloutIconSession(reason: "leaving window") }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidHide() {
+        cancelCalloutIconSession(reason: "editor hidden")
+        super.viewDidHide()
+    }
     var marquee: NoteMarqueeSelection?
     override var shouldDrawInsertionPoint: Bool { marquee?.isEmpty != false && super.shouldDrawInsertionPoint }
     var proseTextCompletionEnabled = false
@@ -860,8 +893,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         scrollToVisible(rect)
     }
 
+    /// A palette request has its own input client. Unexpected body input
+    /// fails closed, without routing anything to the note or the callout.
+    private func refusesUnexpectedCalloutInput() -> Bool {
+        guard let session = calloutIconSession, session.state != .ended else { return false }
+        NSLog("Callout icon input refused unexpected note-body delivery (session %@)", session.id.uuidString)
+        return true
+    }
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
-        if pendingCalloutIconLocation != nil, takeCalloutIcon(string) { return }
+        if refusesUnexpectedCalloutInput() { return }
         let generation = engine?.history.recordingGeneration
         defer { engine?.history.completeSelection(since: generation) }
         guard let engine, !engine.isWritingToolsSessionActive else {
@@ -893,6 +934,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        if refusesUnexpectedCalloutInput() { return }
         if !hasMarkedText() {
             let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange
             engine?.history.beginComposition(replacing: replaced)
@@ -969,6 +1011,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// closes; then, with nothing left to close, the panel hides. The text
     /// view's own completion list is not used in notes.
     override func cancelOperation(_ sender: Any?) {
+        if let session = calloutIconSession {
+            session.cancel(reason: "editor Escape", returnFocus: true)
+            return
+        }
         if marquee?.isEmpty == false { marquee?.clear(); return }
         // NSTextView has no cancelOperation of its own (calling super would
         // raise): what it doesn't take goes up the responder chain.
@@ -1034,10 +1080,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         printNote(sender)
     }
     override func paste(_ sender: Any?) {
+        if refusesUnexpectedCalloutInput() { return }
         if engine?.handlePaste(.general) == true { return }
         asUserEdit { super.paste(sender) }
     }
     override func pasteAsPlainText(_ sender: Any?) {
+        if refusesUnexpectedCalloutInput() { return }
         engine?.isPastingAsPlainText = true
         defer { engine?.isPastingAsPlainText = false }
         asUserEdit { super.pasteAsPlainText(sender) }
@@ -1186,6 +1234,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: Checkbox clicks
 
     override func mouseDown(with event: NSEvent) {
+        calloutIconSession?.cancel(reason: "editor mouse down", returnFocus: true)
         guard let engine else { return super.mouseDown(with: event) }
         let point = convert(event.locationInWindow, from: nil)
         if event.clickCount == 2 {
@@ -1303,24 +1352,36 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         AtticNativeMenu.popUp(calloutIconCommands(forBlockAt: location), below: rect, in: self)
     }
 
-    /// The system palette inserts its pick as typed text: the next single
-    /// emoji typed while this is set becomes the callout's icon instead.
-    private(set) var pendingCalloutIconLocation: Int?
-
-    private func pickCalloutIconFromPalette(forBlockAt location: Int) {
-        pendingCalloutIconLocation = location
-        window?.makeFirstResponder(self)
-        NSApp.orderFrontCharacterPalette(self)
+    /// The palette gets a separate visible text system before it opens.
+    func pickCalloutIconFromPalette(forBlockAt location: Int, showPalette: (() -> Void)? = nil) {
+        cancelCalloutIconSession(reason: "another picker")
+        guard let engine, !engine.isReadOnly, engine.activity == .idle,
+              isEditable, !hasMarkedText(), !isHiddenOrHasHiddenAncestor, let window,
+              location >= 0, location <= engine.textStorage.length,
+              engine.paragraphStyle(at: location)?.isCallout == true else { return }
+        (window.firstResponder as? NoteCalloutIconInputView)?.session?.cancel(reason: "another picker")
+        let session = NoteCalloutIconSession(engine: engine, editor: self, window: window, location: location)
+        calloutIconSession = session
+        session.begin { if let showPalette { showPalette() } else { NSApp.orderFrontCharacterPalette(session.receiver) } }
     }
 
-    /// Takes the palette's pick for a pending callout icon (true: used).
-    func takeCalloutIcon(_ string: Any) -> Bool {
-        guard let location = pendingCalloutIconLocation, let engine else { return false }
-        pendingCalloutIconLocation = nil
-        let text = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
-        guard text.count == 1, text.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || $0.properties.isEmoji && $0.value > 0x238C }),
-              location < engine.textStorage.length, engine.paragraphStyle(at: location)?.isCallout == true else { return false }
-        return engine.setCalloutIcon(text, at: location)
+    /// The same layout slot that draws the callout icon, including a trailing
+    /// empty paragraph represented by the engine's paragraph model.
+    func calloutInputOrigin(at location: Int) -> NSPoint {
+        if let engine, let manager = textLayoutManager,
+           let start = engine.contentStorage.location(engine.contentStorage.documentRange.location, offsetBy: location) {
+            var origin: NSPoint?
+            manager.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+                if let block = fragment as? NoteBlockLayoutFragment, let slot = block.calloutIconRect {
+                    origin = NSPoint(x: slot.midX + fragment.layoutFragmentFrame.minX + self.textContainerOrigin.x - 16,
+                                     y: slot.midY + fragment.layoutFragmentFrame.minY + self.textContainerOrigin.y - 16)
+                }
+                return false
+            }
+            if let origin { return origin }
+        }
+        let caret = engine?.caretRect(at: location) ?? NSRect(x: textContainerOrigin.x + 28, y: textContainerOrigin.y, width: 1, height: 28)
+        return NSPoint(x: caret.minX - 32, y: caret.midY - 16)
     }
 
     func checkboxLocation(at point: NSPoint) -> Int? {
@@ -1351,7 +1412,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// the fallback for a text view without them.
     var contextMenuProvider: ((NSMenu, NSEvent) -> Void)?
 
+    override func rightMouseDown(with event: NSEvent) {
+        calloutIconSession?.cancel(reason: "editor right click", returnFocus: true)
+        super.rightMouseDown(with: event)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
+        calloutIconSession?.cancel(reason: "editor context menu", returnFocus: true)
         hideBlockHandle()
         // An image's or a file's own menu, read-only notes included.
         if let objectMenu = objectInteraction?.objectMenu(for: event) { return objectMenu }
@@ -1435,6 +1502,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let base = super.accessibilityChildren() ?? []
         guard let engine else { return base }
         var accessories = accessoryViews.filter { view in !view.isHidden && !base.contains { ($0 as AnyObject) === view } }
+        accessories += (calloutIconSession?.accessibilityControls ?? []).filter { control in
+            !base.contains { ($0 as AnyObject) === control }
+        }
         accessories += engine.headingControls.values.filter { button in
             !base.contains { ($0 as AnyObject) === button }
         }

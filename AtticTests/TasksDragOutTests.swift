@@ -111,6 +111,111 @@ final class TasksDragOutTests: XCTestCase {
 /// cancelled drop springs back to its row instead of sliding and fading.
 @MainActor
 final class TasksDragOutCardTests: XCTestCase {
+    private func exerciseG09Drag(_ hosted: Hosted, out: Bool) throws {
+        let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo })
+        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row.id)])
+        var exported = false, lifted = false
+        hosted.pointer.startDragOut = { _, _ in exported = true }
+        func post(_ type: NSEvent.EventType, x: CGFloat = 200, y: CGFloat) {
+            let event = NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: hosted.height - y), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
+                context: nil, eventNumber: 4, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)!
+            NSApp.postEvent(event, atStart: false)
+        }
+        post(.leftMouseDown, y: frame.midY)
+        for step in [CGFloat(6), 20, 40] { post(.leftMouseDragged, y: frame.midY + step) }
+        let action = Timer(timeInterval: 0.2, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                lifted = hosted.pointer.liftedCard.lift != nil
+                if out {
+                    for x in [CGFloat(330), 420, 520] { post(.leftMouseDragged, x: x, y: frame.midY + 40) }
+                } else {
+                    hosted.model.pageDidHide() // the panel's real cancellation route
+                }
+            }
+        }
+        let release = Timer(timeInterval: 0.6, repeats: false) { _ in
+            MainActor.assumeIsolated { post(.leftMouseUp, x: out ? 520 : 200, y: frame.midY + 40) }
+        }
+        RunLoop.main.add(action, forMode: .common)
+        RunLoop.main.add(release, forMode: .common)
+        let deadline = Date().addingTimeInterval(3)
+        // Posting a mouse event is not its delivery. A remounted host can
+        // return from native tracking after both timers have fired, leaving
+        // their outside motion and release queued for the next event turn.
+        while Date() < deadline, release.isValid || action.isValid
+                || hosted.pointer.liftedCard.lift != nil || (out && !exported) {
+            autoreleasepool {
+                // Let the drag timer observe each delivered position before
+                // the next queued event (especially mouse-up) is dispatched.
+                Hosted.pumpEvents(limit: 1)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
+        }
+        Hosted.pumpEvents(limit: 8)
+        XCTAssertTrue(lifted, "the native row gesture really lifted a card")
+        XCTAssertEqual(exported, out)
+        XCTAssertNil(hosted.pointer.liftedCard.lift)
+        hosted.pointer.startDragOut = nil
+    }
+
+    func testG09RemovedHostReleasesPointerLiftAndPageModelInEveryDragState() throws {
+        for mode in ["none", "out", "cancelled"] {
+            weak var pointer: TasksPointer?
+            weak var lift: TasksLiftedCard?
+            weak var model: TasksPageModel?
+            weak var hostView: NSView?
+            weak var hostWindow: NSWindow?
+            try autoreleasepool {
+                let hosted = try Hosted(height: 520)
+                pointer = hosted.pointer; lift = hosted.pointer.liftedCard; model = hosted.model
+                hostView = hosted.window.contentView; hostWindow = hosted.window
+                XCTAssertNotNil(hosted.pointer.liftedCard.snapshot, "the layer installed its renderer")
+                if mode != "none" { try exerciseG09Drag(hosted, out: mode == "out") }
+                hosted.window.contentView = nil
+                hosted.close()
+            }
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline, pointer != nil || lift != nil || model != nil || hostView != nil || hostWindow != nil {
+                autoreleasepool {
+                    Hosted.pumpEvents(limit: 8)
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                }
+            }
+            print("G09_RELEASE mode=\(mode) snapshot=\(lift?.snapshot != nil) view=\(hostView != nil) window=\(hostWindow != nil)")
+            XCTAssertNil(pointer, mode)
+            XCTAssertNil(lift, mode)
+            XCTAssertNil(model, mode)
+        }
+    }
+
+    func testG09ReattachedLivePageCanStillSnapshotAndDragOut() throws {
+        weak var originalView: NSView?
+        let hosted = try autoreleasepool {
+            let hosted = try Hosted(height: 520)
+            originalView = hosted.window.contentView
+            hosted.window.contentView = nil
+            return hosted
+        }
+        defer { autoreleasepool { hosted.window.contentView = nil; hosted.close() } }
+        let deadline = Date().addingTimeInterval(3)
+        while originalView != nil, Date() < deadline {
+            autoreleasepool {
+                Hosted.pumpEvents(limit: 8)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
+        }
+        XCTAssertNil(hosted.pointer.liftedCard.snapshot, "a detached layer releases its renderer")
+        hosted.window.contentView = NSHostingView(rootView: hosted.page
+            .atticDesign(AtticDesignContext(mode: .light)).frame(width: AtticLayout.panelSize.width, height: hosted.height))
+        hosted.spin(0.5)
+        let snapshot = try XCTUnwrap(hosted.pointer.liftedCard.snapshot)
+        let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo })
+        let origin = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row.id)])
+        XCTAssertNotNil(snapshot(.init(id: row.id, tab: .now, origin: origin, y: origin.minY), 2))
+        try exerciseG09Drag(hosted, out: true)
+    }
+
     func testThePanelsCardStaysUntilTheSystemsImageIsUp() {
         let card = TasksLiftedCard()
         card.begin(id: UUID(), tab: .now, origin: CGRect(x: 8, y: 100, width: 300, height: 34))

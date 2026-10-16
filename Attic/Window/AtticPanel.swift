@@ -21,6 +21,7 @@ final class AtticPanel: NSPanel {
     var onPressEnded: (() -> Void)?
     /// A press the panel received is still down (O14-01).
     private(set) var isPressing = false
+    private var trackingConsumedRelease = false
     /// Esc that nothing inside the panel used (a menu, a field, the list's
     /// own Esc all come first): the panel hides.
     var onUnhandledEscape: (() -> Void)?
@@ -245,13 +246,31 @@ final class AtticPanel: NSPanel {
         super.resignKey()
     }
 
+    override func nextEvent(matching mask: NSEvent.EventTypeMask) -> NSEvent? {
+        let event = super.nextEvent(matching: mask)
+        recordTrackedRelease(event)
+        return event
+    }
+
+    override func nextEvent(matching mask: NSEvent.EventTypeMask, until expiration: Date?, inMode mode: RunLoop.Mode, dequeue deqFlag: Bool) -> NSEvent? {
+        let event = super.nextEvent(matching: mask, until: expiration, inMode: mode, dequeue: deqFlag)
+        if deqFlag { recordTrackedRelease(event) }
+        return event
+    }
+
+    private func recordTrackedRelease(_ event: NSEvent?) {
+        if let event, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+            trackingConsumedRelease = true
+        }
+    }
+
     override func sendEvent(_ event: NSEvent) {
         // One click both activates the panel and acts (owner, 2026-10-01):
         // the panel becomes key before AppKit sees the press, so the press
         // is never spent on activation, whatever view is under it (SwiftUI's
         // own views in a list do not accept the first mouse). The panel is
         // non-activating, so Attic stays where it is.
-        if Self.takesFirstPress(event.type) { isPressing = true }
+        if Self.takesFirstPress(event.type) { isPressing = true; trackingConsumedRelease = false }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
            visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
             makeKey()
@@ -264,11 +283,14 @@ final class AtticPanel: NSPanel {
                 onDirectContentInteraction?()
             }
             super.sendEvent(event)
-            // The release, or (when a drag session ate it) the next move or
-            // key with no button down.
-            if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type)
-                || ([.mouseMoved, .keyDown].contains(event.type) && isPressing) {
+            // A native tracking loop can dequeue mouse-up inside mouseDown.
+            // Reconcile only after dispatch returns and all buttons are up;
+            // late releases/moves must not finalise the same press twice.
+            if isPressing, NSEvent.pressedMouseButtons == 0,
+               (Self.takesFirstPress(event.type) && trackingConsumedRelease)
+                || [.leftMouseUp, .rightMouseUp, .otherMouseUp, .mouseMoved, .keyDown].contains(event.type) {
                 isPressing = false
+                trackingConsumedRelease = false
                 onPressEnded?()
             }
             return
