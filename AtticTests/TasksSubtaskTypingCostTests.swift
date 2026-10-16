@@ -20,6 +20,8 @@ final class TasksSubtaskTypingCostTests: XCTestCase {
             }
             let store = TaskStore(container: container)
             let model = TasksPageModel(library: AtticLibrary(tasks: store))
+            // The second sample also retains the child committed in the first.
+            print("P1_SUBTASK_FIXTURE seed_limit=\(count) actual_tasks=\(store.tasks.count)")
             let parent = try XCTUnwrap(store.tasks.first { $0.parentID == nil && $0.status != .done })
             model.beginAddingSubtask(to: parent.id)
             let revision = store.revision
