@@ -825,9 +825,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             tagEditor: tagEditor)
         context.coordinator.accessories?.colouring = colouring.routed(to: .editor(session.engine.history))
         context.coordinator.accessories?.tagCounts = tagCounts
-        let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: scrollView, design: design,
-                                          noteID: session.noteID,
-                                          isNewDraft: !session.isPersisted && session.isUntouchedDraft)
+        let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: scrollView, design: design)
         let chrome = chrome
         controls.requestFormatBar = { [weak chrome] keyboard in chrome?.openFormatBar(keyboard: keyboard) }
         controls.leaveEditor = { [weak chrome] forward in chrome?.leaveEditor?(forward) }

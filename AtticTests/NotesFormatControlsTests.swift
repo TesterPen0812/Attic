@@ -34,8 +34,7 @@ final class NotesFormatControlsTests: XCTestCase {
         .text("Student pricing")
     ])
 
-    private func make(_ document: NoteDocument = sample, readOnly: Bool = false, topInset: CGFloat = 0,
-                      isNewDraft: Bool = false) -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
+    private func make(_ document: NoteDocument = sample, readOnly: Bool = false, topInset: CGFloat = 0) -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: document, readOnly: readOnly)
         let (scrollView, textView) = engine.makeView()
         scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
@@ -47,8 +46,7 @@ final class NotesFormatControlsTests: XCTestCase {
         window.contentView = scrollView
         windows.append(window)
         window.makeFirstResponder(textView)
-        let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: scrollView, design: .default,
-                                          noteID: engine.noteID, isNewDraft: isNewDraft)
+        let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: scrollView, design: .default)
         controlsList.append(controls)
         scrollView.layoutSubtreeIfNeeded()
         return (controls, engine, textView)

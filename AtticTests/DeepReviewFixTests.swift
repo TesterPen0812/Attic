@@ -103,7 +103,7 @@ final class DeepReviewFixTests: XCTestCase {
         // control (N-6 D). Compare two
         // actual scroll positions in each state, with visible body movement
         // as a positive control so an empty capture cannot pass.
-        func assertClear(bottom: CGFloat, state: String, negativeControl: Bool = false) throws {
+        func assertClear(bottom: CGFloat, state: String) throws {
             let content = try XCTUnwrap(hosted.window.contentView)
             func capture(_ y: CGFloat) throws -> NSBitmapImageRep {
                 list.contentView.scroll(to: CGPoint(x: 0, y: y))
@@ -173,11 +173,10 @@ final class DeepReviewFixTests: XCTestCase {
                 XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
                                      "\(state): rows run on under the bottom stack at phase \(phase)")
             }
-            _ = negativeControl
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
             XCTAssertEqual(frame(), resting, "\(state): controls change the mask, not the viewport")
         }
-        try assertClear(bottom: hosted.height - idle, state: "idle", negativeControl: true)
+        try assertClear(bottom: hosted.height - idle, state: "idle")
 
         hosted.model.setSearchQuery(" ", for: .now)
         hosted.spin(0.8)

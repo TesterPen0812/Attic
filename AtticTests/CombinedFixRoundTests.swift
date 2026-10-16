@@ -892,7 +892,7 @@ final class CombinedFixRoundTests: XCTestCase {
             title = NoteTitleAccessories(engine: engine, textView: text, scrollView: scroll, chrome: chrome,
                 design: .default, headerBottom: 40, isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
             format = NoteFormatControls(engine: engine, textView: text, scrollView: scroll,
-                design: .default, noteID: engine.noteID, isNewDraft: false)
+                design: .default)
             objects = NoteObjectControls(engine: engine, textView: text)
             XCTAssertEqual(Set(text.subviews.map(ObjectIdentifier.init)), before,
                            "no overlay attaches during construction in layout")

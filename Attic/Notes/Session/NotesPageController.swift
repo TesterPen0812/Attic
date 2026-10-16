@@ -275,6 +275,7 @@ final class NotesPageController: ObservableObject {
     private var retiredNoteIDs = Set<UUID>()
     private var checkpointKeys: [UUID: NoteDraftJournalEntry] = [:]
     private var verifiedCheckpointKeys: [UUID: NoteDraftJournalEntry] = [:]
+    private var verifiedCheckpointOwners: [UUID: (generation: UInt64, claim: NoteRecoveryClaim)] = [:]
 
     /// Waits for durable recovery work; useful for headless callers and tests.
     /// Session replacement waits for this work; hide/page switch retain sessions.
@@ -293,9 +294,11 @@ final class NotesPageController: ObservableObject {
     func preserveDurably(_ session: NoteSession) async -> Bool {
         guard await awaitRecoveryForUser() else { return false }
         let failures = recoveryFailureCount
+        let engine = session.engine, generation = session.editGeneration
         let result = preserve(session)
         guard await awaitRecoveryForUser() else { return false }
-        let durable = recoveryFailureCount == failures && (result || hasDurableCheckpoint(session))
+        let durable = recoveryFailureCount == failures && session.engine === engine
+            && session.editGeneration == generation && (result || hasDurableCheckpoint(session))
         checkpointKeys[session.id] = nil
         return durable
     }
@@ -308,7 +311,9 @@ final class NotesPageController: ObservableObject {
         return ok
     }
     private func hasDurableCheckpoint(_ session: NoteSession) -> Bool {
-        guard session.recoveryClaim != nil, var key = try? journalEntry(for: session,
+        guard let owner = verifiedCheckpointOwners[session.id],
+              session.recoveryClaim == owner.claim, session.editGeneration == owner.generation,
+              var key = try? journalEntry(for: session,
             document: checkpointDocument(for: session)) else { return false }
         key.savedAt = .distantPast
         return verifiedCheckpointKeys[session.id] == key
@@ -327,20 +332,27 @@ final class NotesPageController: ObservableObject {
             guard await preserveAllDurably() else { return false }
         }
         let wasVisible = isPageVisible
-        let result = await performAfterRecovery(requireDrainedRecovery: reason == .quit) { prepareToLeave(reason) }
+        let result = await performAfterRecovery(requireDrainedRecovery: reason == .quit,
+            finishAfterWrite: { self.prepareToLeave(reason, verifiedCheckpointsOnly: true) }) { prepareToLeave(reason) }
+        // A successful earlier pass cannot authorize leaving newer work behind.
+        let durable = result && (reason != .quit || journal?.requiresAsyncIO != true || cache.values.allSatisfy {
+            $0.recoverySourceNoteID != nil || (!NoteSessionPolicy.hasPendingWork($0.state) && !$0.isImporting)
+                || hasDurableCheckpoint($0)
+        })
         // Queued hide/switch preservation may optimistically mark the page
         // hidden. A durable refusal must keep its original agent disposition.
-        if !result { isPageVisible = wasVisible }
-        return result
+        if !durable { isPageVisible = wasVisible }
+        return durable
     }
     func newNoteDurably() async -> Bool {
-        await performAfterRecovery { newNote() }
+        await performAfterRecovery(finishAfterWrite: { self.newNote(verifiedCheckpointsOnly: true) }) { newNote() }
     }
     func recoverAtLaunchAndWait() async { recoverAtLaunch(); await waitForRecoveryWork() }
     func openDurably(noteID: UUID) async -> Bool {
         if !didRecoverAtLaunch && journal?.requiresAsyncIO == true { recoverAtLaunch() }
         guard await awaitRecoveryForUser() else { return false }
-        guard await performAfterRecovery({ open(noteID: noteID) }) else { return false }
+        guard await performAfterRecovery(finishAfterWrite: { self.open(noteID: noteID, verifiedCheckpointsOnly: true) },
+            { open(noteID: noteID) }) else { return false }
         if let session = active {
             let engine = session.engine
             // Text-only sessions have no bytes to hydrate. Inspect the
@@ -384,7 +396,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func performAfterRecovery(requireDrainedRecovery: Bool = false, reportCompletedAction: Bool = false,
-                                      _ operation: () -> Bool) async -> Bool {
+                                      finishAfterWrite: (() -> Bool)? = nil, _ operation: () -> Bool) async -> Bool {
         guard await awaitRecoveryForUser() else { return false }
         let failures = recoveryFailureCount
         let first = operation()
@@ -396,7 +408,10 @@ final class NotesPageController: ObservableObject {
         let second = operation()
         let secondWait = await awaitRecoveryForUser(completedAction: second && !requireDrainedRecovery)
         guard secondWait else { return second && !requireDrainedRecovery }
-        return second && (reportCompletedAction || recoveryFailureCount == failures)
+        guard reportCompletedAction || recoveryFailureCount == failures else { return false }
+        // The final write may have succeeded after the operation queued it.
+        // Prove current durability without consuming a ticket or queuing again.
+        return second || (finishAfterWrite?() ?? false)
     }
 
     /// Waiting never cancels the serialized write or releases its live owners.
@@ -405,9 +420,13 @@ final class NotesPageController: ObservableObject {
     /// The functional ordering test can pause this read; production uses the real clock.
     var recoveryClockNow: () -> ContinuousClock.Instant = { .now }
     var recoveryWaitDidStart: (() -> Void)?
+    /// Deterministic ordering seams; unset in the app.
+    var recoveryWaitDidDrain: (() async -> Void)?
+    var importCheckpointWillResume: (() async -> Void)?
     private func awaitRecoveryForUser(completedAction: Bool = false) async -> Bool {
         let deadline = recoveryClockNow() + recoveryResponseTimeout
-        if recoveryWork != nil { recoveryWaitDidStart?() }
+        let hadPendingWork = recoveryWork != nil
+        if hadPendingWork { recoveryWaitDidStart?() }
         while recoveryWork != nil {
             guard recoveryClockNow() < deadline, !Task.isCancelled else {
                 reportRecoveryRetentionWarning(completedAction
@@ -418,6 +437,7 @@ final class NotesPageController: ObservableObject {
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
+        if hadPendingWork { await recoveryWaitDidDrain?() }
         clearPendingRecoveryWarnings()
         return true
     }
@@ -911,13 +931,13 @@ final class NotesPageController: ObservableObject {
 
     /// Opens a stored document in the Notes editor.
     @discardableResult
-    func open(noteID: UUID) -> Bool {
+    func open(noteID: UUID, verifiedCheckpointsOnly: Bool = false) -> Bool {
         if let active, active.noteID == noteID {
             present()
             return true
         }
         guard let note = store.note(withID: noteID) else { return false }
-        guard prepareToLeave(.openNote) else { return false }
+        guard prepareToLeave(.openNote, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
         guard let session = session(for: note).flatMap(presentSession) else { return false }
         activate(session)
         return true
@@ -925,9 +945,9 @@ final class NotesPageController: ObservableObject {
 
     /// A new draft; the current one is preserved first.
     @discardableResult
-    func newNote() -> Bool {
+    func newNote(verifiedCheckpointsOnly: Bool = false) -> Bool {
         if let active, active.isUntouchedDraft { return true }
-        guard prepareToLeave(.newNote) else { return false }
+        guard prepareToLeave(.newNote, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
         let id = UUID()
         let session = NoteSession(noteID: id, isPersisted: false, baseRevisionID: nil,
                                   engine: makeEngine(noteID: id, document: .blank, readOnly: false),
@@ -1165,14 +1185,14 @@ final class NotesPageController: ObservableObject {
 
     /// The single boundary used by note navigation, the shell, hide and quit.
     @discardableResult
-    func prepareToLeave(_ reason: LeaveReason) -> Bool {
+    func prepareToLeave(_ reason: LeaveReason, verifiedCheckpointsOnly: Bool = false) -> Bool {
         if let active, !canLeaveComposition(in: active) { return false }
         let retainsSession = reason == .hide || reason == .pageSwitch
         if reason == .hide || reason == .quit {
-            guard preserveAll(allowQueued: retainsSession) else { return false }
+            guard preserveAll(allowQueued: retainsSession, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
         } else if let session = active {
             captureViewState(session)
-            guard preserve(session, allowQueued: retainsSession) else { return false }
+            guard preserve(session, allowQueued: retainsSession, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
         }
         endProposalReview()
         if let session = active {
@@ -1244,21 +1264,26 @@ final class NotesPageController: ObservableObject {
     /// unsaved text is saved or checkpointed. False only when some draft is
     /// in memory alone.
     @discardableResult
-    func preserveAll(allowQueued: Bool = false) -> Bool {
+    func preserveAll(allowQueued: Bool = false, verifiedCheckpointsOnly: Bool = false) -> Bool {
         if let active { captureViewState(active) }
         var ok = true
         for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
-            ok = preserve(session, allowQueued: allowQueued) && ok
+            ok = preserve(session, allowQueued: allowQueued, verifiedCheckpointsOnly: verifiedCheckpointsOnly) && ok
         }
         return ok
     }
 
     /// Save, else checkpoint, else keep in memory and say so.
     @discardableResult
-    func preserve(_ session: NoteSession, allowQueued: Bool = false) -> Bool {
+    func preserve(_ session: NoteSession, allowQueued: Bool = false, verifiedCheckpointsOnly: Bool = false) -> Bool {
         // This session already has a durable checkpoint, owned by its source.
         // Navigation must neither overwrite it nor adopt its missing payloads.
         if session.recoverySourceNoteID != nil { return true }
+        if verifiedCheckpointsOnly {
+            guard !session.cancellingImport else { return false }
+            return (!NoteSessionPolicy.hasPendingWork(session.state) && !session.isImporting)
+                || hasDurableCheckpoint(session)
+        }
         session.saveTask?.cancel()
         session.engine.refreshCompositionActivity()
         if session.isImporting { return checkpoint(session, silent: true, allowQueued: allowQueued) }
@@ -1294,7 +1319,7 @@ final class NotesPageController: ObservableObject {
                 // service commits. Retained-session navigation may proceed;
                 // replacement and quit wait for the verified checkpoint.
                 let bytes = journalStaged(for: session, document: document)
-                let noteID = session.noteID
+                let noteID = session.noteID, generation = session.editGeneration
                 queueRecoveryWork { [weak self, session] in
                     guard let self, session.noteID == noteID else { return }
                     if self.checkpointKeys[session.id] == key && session.recoveryClaim != nil { return }
@@ -1305,6 +1330,7 @@ final class NotesPageController: ObservableObject {
                         session.recoveryClaim = claim
                         self.checkpointKeys[session.id] = key
                         self.verifiedCheckpointKeys[session.id] = key
+                        self.verifiedCheckpointOwners[session.id] = (generation, claim)
                         if session.noticeValue?.kind == .saving || session.noticeValue?.kind == .stillSaving { session.notice = nil }
                         if session.isConflict { return }
                         if !silent { session.state = .notSaved(self.storeMessage()) }
@@ -1666,6 +1692,7 @@ final class NotesPageController: ObservableObject {
                     if let session {
                         self.checkpointKeys[session.id] = nil
                         self.verifiedCheckpointKeys[session.id] = nil
+                        self.verifiedCheckpointOwners[session.id] = nil
                     }
                 } catch {
                     self.recoveryFailureCount += 1
@@ -2127,6 +2154,7 @@ final class NotesPageController: ObservableObject {
             if self.journal != nil {
                 _ = self.checkpoint(session, silent: true)
                 await self.waitForRecoveryWork()
+                await self.importCheckpointWillResume?()
                 self.checkpointKeys[session.id] = nil
             }
             var loaded: [NoteImportedObject] = []

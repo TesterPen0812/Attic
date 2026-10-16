@@ -29,7 +29,6 @@ final class NoteFormatControls: NSObject {
     private let hintHost: AtticOverlayHostingView
     private let addressHost: AtticOverlayHostingView
     private(set) var design: AtticDesignContext
-    private let noteID: UUID
 
     /// ⌘T, and Aa's own button: the page's format row.
     var requestFormatBar: ((_ keyboard: Bool) -> Void)?
@@ -84,16 +83,13 @@ final class NoteFormatControls: NSObject {
     /// with nothing shown).
     private(set) var snapshotCount = 0
 
-    /// `isNewDraft` is no longer read: the empty-line hint (OD-14) shows on
-    /// every note, not only on the first new drafts.
     init(engine: NoteEditorEngine, textView: NoteEditorTextView, scrollView: NSScrollView,
-         design: AtticDesignContext, noteID: UUID, isNewDraft: Bool) {
+         design: AtticDesignContext) {
         self.engine = engine
         self.router = NoteCommandRouter(engine: engine)
         self.textView = textView
         self.scrollView = scrollView
         self.design = design
-        self.noteID = noteID
         barHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         slashHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         cardHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
