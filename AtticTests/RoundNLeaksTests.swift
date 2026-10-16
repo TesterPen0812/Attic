@@ -22,6 +22,22 @@ final class RoundNLeaksTests: XCTestCase {
         while !released(), Date() < end { settle(0.03) }
     }
 
+    /// UIFoundation keeps the last laid-out attachment in a temporary
+    /// attribute dictionary, including a plain NSTextAttachment. Lay out an
+    /// unrelated image attachment before testing the retired print graph.
+    private func retirePrintAttachmentCache() {
+        autoreleasepool {
+            let attachment = NSTextAttachment()
+            attachment.image = NSImage(size: NSSize(width: 20, height: 20))
+            let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 504, height: 684))
+            view.isEditable = false; view.isSelectable = false; view.isRichText = true
+            view.isVerticallyResizable = true; view.textContainerInset = .zero
+            view.textContainer?.lineFragmentPadding = 0
+            view.textStorage?.setAttributedString(NSAttributedString(attachment: attachment))
+            view.sizeToFit()
+        }
+    }
+
     private func pauseForTrace(_ objects: [(String, AnyObject?)]) {
         guard ProcessInfo.processInfo.environment["ATTIC_LEAK_PROBE"] == "1" else { return }
         let marker = FileManager.default.temporaryDirectory.appendingPathComponent("round-n-probe-\(ProcessInfo.processInfo.processIdentifier)-\(objects[0].0)")
@@ -127,6 +143,7 @@ final class RoundNLeaksTests: XCTestCase {
             }
             XCTAssertGreaterThan(darkPixels, 50, "the print snapshot actually draws text and the grid")
         }
+        retirePrintAttachmentCache()
         awaitRelease { probe.value == nil }
         pauseForTrace([("printTable", probe.value)])
         XCTAssertNil(probe.value)
@@ -182,7 +199,6 @@ final class RoundNLeaksTests: XCTestCase {
         XCTAssertNil(keys.handler); XCTAssertNil(keys.window)
     }
 
-
     func testL03RetryKeepsTheOriginalTargetsAfterSelectionChanges() throws {
         let gate = PersistenceGate()
         let store = try makeTestStore(persist: gate.save)
@@ -210,5 +226,41 @@ final class RoundNLeaksTests: XCTestCase {
         XCTAssertEqual(store.task(withID: other)?.status, .todo)
     }
 
+    func testL06ImageOwnsAnImmutableSnapshotAndDrawsAfterItsAttachmentGoes() throws {
+        let original = NoteTable(texts: [["Heading", "Value"], ["Kept", "Visible"]])
+        let probe = Weak<NoteTableAttachment>()
+        let image: NSImage = autoreleasepool {
+            let attachment = NoteTableAttachment(table: original)
+            probe.value = attachment
+            let image = attachment.renderImage(width: NotePrint.columnWidth, design: .default)
+            attachment.table = NoteTable(texts: [["Changed", "Changed"], ["Changed", "Changed"]])
+            return image
+        }
+        awaitRelease { probe.value == nil }
+        pauseForTrace([("snapshotTable", probe.value)])
+        XCTAssertNil(probe.value)
+        let reference = NoteTableAttachment(table: original).renderImage(width: NotePrint.columnWidth, design: .default)
+        func pixels(_ image: NSImage) throws -> Data {
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+            return Data(bytes: try XCTUnwrap(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        XCTAssertEqual(try pixels(image), try pixels(reference), "print remains the original snapshot")
+    }
+
+    func testL06CancelledPrintViewReleasesItsTableWithoutDrawing() throws {
+        let probe = Weak<NoteTableAttachment>()
+        autoreleasepool {
+            let view = NotePrint.printView(document: NoteDocument(blocks: [.text("Cancelled print"),
+                .table(NoteTable(texts: [["Heading", "Value"], ["Kept", "Visible"]]))]))
+            view.textStorage?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: view.string.utf16.count)) { value, _, _ in
+                if let table = value as? NoteTableAttachment { probe.value = table }
+            }
+            XCTAssertNotNil(probe.value)
+        }
+        retirePrintAttachmentCache()
+        awaitRelease { probe.value == nil }
+        pauseForTrace([("printCancel", probe.value)])
+        XCTAssertNil(probe.value)
+    }
 
 }
