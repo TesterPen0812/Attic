@@ -25,6 +25,34 @@ final class NotesPageControllerTests: XCTestCase {
 
     }
 
+    func testU05OversizedClipboardImageNeverCreatesAFileOrImport() async throws {
+        let controller = makeController()
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        let fm = FileManager.default
+        func clipboardFiles() throws -> Set<String> {
+            Set(try fm.contentsOfDirectory(atPath: fm.temporaryDirectory.path).filter { $0.hasPrefix("AtticClipboard-") })
+        }
+        let before = try clipboardFiles()
+        let data = Data(repeating: 0, count: Int(AttachmentLimits.maxBytesPerAttachment) + 1)
+        session.engine.onRawImageBatchRequest?(data, "tiff", NSRange(location: 0, length: 0))
+        XCTAssertEqual(try clipboardFiles(), before, "admission must precede every staging write")
+        XCTAssertFalse(session.isImporting)
+        XCTAssertEqual(session.noticeValue?.kind, .notAdded)
+        await controller.waitForImportWork()
+    }
+
+    func testU05ClipboardStagingRunsOffMainAndPreservesBytes() async throws {
+        let url = directory.appendingPathComponent("clipboard.png")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = Data("clipboard fixture".utf8)
+        try await NotesPageController.stageClipboardImage(data, at: url) { bytes, destination in
+            XCTAssertFalse(Thread.isMainThread)
+            try bytes.write(to: destination)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), data)
+    }
+
     private func makeController(journal: NoteDraftJournaling? = nil, delay: Duration = .seconds(60)) -> NotesPageController {
         NotesPageController(store: store, journal: journal ?? NoteDraftJournal(directory: directory),
                             saveDelay: delay, pauseVersionDelay: .seconds(600))

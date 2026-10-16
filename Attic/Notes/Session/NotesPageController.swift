@@ -1081,15 +1081,15 @@ final class NotesPageController: ObservableObject {
         }
         engine.onRawImageBatchRequest = { [weak self, weak session] data, ext, range in
             guard let self, let session, self.active === session else { return }
+            guard !data.isEmpty, Int64(data.count) <= AttachmentLimits.maxBytesPerAttachment else {
+                session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The clipboard image is empty or exceeds the attachment size limit.")))
+                return
+            }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("AtticClipboard-\(UUID().uuidString).\(ext)")
-            do {
-                try data.write(to: url, options: .atomic)
-                self.importFiles([url], at: range, temporaryURLs: [url])
-            } catch {
-                session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The clipboard image could not be staged: \(error.localizedDescription)")))
-            }
+            self.importFiles([url], at: range, temporaryURLs: [url], clipboardData: data)
         }
+
         engine.onImportAdmission = { [weak self, weak session] payload in
             guard let self, let session else { return String(localized: "The note is no longer open.") }
             return self.importAdmissionFailure(payload, in: session)
@@ -2126,7 +2126,7 @@ final class NotesPageController: ObservableObject {
     /// away from the main actor, then inserted with the accepted text as one
     /// editor-history step. Its anchor belongs to the note, not the caret.
     func importFiles(_ urls: [URL], acceptedText: String = "", at selection: NSRange? = nil,
-                     temporaryURLs: [URL] = []) {
+                     temporaryURLs: [URL] = [], clipboardData: Data? = nil) {
         guard let session = active, !session.isReadOnly, !urls.isEmpty else {
             temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
             return
@@ -2151,6 +2151,17 @@ final class NotesPageController: ObservableObject {
         session.importTask = Task { @MainActor [weak self, session] in
             defer { temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) } }
             guard let self else { return }
+            if let clipboardData, let url = urls.first {
+                do { try await Self.stageClipboardImage(clipboardData, at: url) }
+                catch {
+                    session.importBatch = nil
+                    session.importTask = nil
+                    session.engine.cancelImageImport()
+                    session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The clipboard image could not be staged.")))
+                    return
+                }
+                guard !Task.isCancelled, session.importBatch?.id == batchID else { return }
+            }
             if self.journal != nil {
                 _ = self.checkpoint(session, silent: true)
                 await self.waitForRecoveryWork()
@@ -2332,6 +2343,14 @@ final class NotesPageController: ObservableObject {
         session.importTask = nil
         session.engine.cancelImageImport()
         session.showNotice(notice)
+    }
+
+    nonisolated static func stageClipboardImage(_ data: Data, at url: URL,
+        write: @escaping @Sendable (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) async throws {
+        guard !data.isEmpty, Int64(data.count) <= AttachmentLimits.maxBytesPerAttachment else {
+            throw AttachmentFileStoreError.attachmentTooLarge(url, Int64(data.count))
+        }
+        try await Task.detached(priority: .userInitiated) { try write(data, url) }.value
     }
 
     nonisolated private static func loadImageFile(_ url: URL) async -> (StagedNoteAttachment, CGSize?)? {
