@@ -85,9 +85,8 @@ enum NoteFormatMotion {
         let statusReturns: Double
 
         init(_ tuning: AtticMotionTuning) {
-            let tuck = tuning.leave == .spring
-            let leaving = tuck ? tuning.leaveResponse : tuning.popover.response
-            leave = Spring(response: leaving, bounce: tuck ? 0 : tuning.popover.bounce)
+            let leaving = tuning.leaveResponse
+            leave = Spring(response: leaving, bounce: 0)
             comeBack = Spring(tuning.popover)
             let expand = tuning.expand.response
             openLeading = Spring(delay: 0, tuning.expand)

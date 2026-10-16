@@ -553,9 +553,9 @@ final class OwnerTasks1010Tests: XCTestCase {
             .contentMargins(.bottom, 48, for: .scrollContent)
             .contentMargins(.top, 100, for: .scrollIndicators)
             .contentMargins(.bottom, 64, for: .scrollIndicators)
-            .atticScrollEdgeEffect(.cleanCut)
+            .atticScrollEdgeEffect()
             .mask { Color.white })
-        let actual = AnyView(content.tasksListEdges(.cleanCut, top: 80, listTop: 100, bottomInset: 16,
+        let actual = AnyView(content.tasksListEdges(top: 80, listTop: 100, bottomInset: 16,
             bottomMargin: 48, bottomClearance: 64, stack: stack, mask: Color.white))
         var windows: [NSWindow] = []
         defer { for window in windows { window.contentView = nil; window.close() } }
@@ -590,7 +590,7 @@ final class OwnerTasks1010Tests: XCTestCase {
             VStack(spacing: 0) {
                 ForEach(0..<40) { index in Text(verbatim: "Mask row \(index)").frame(height: 34) }
             }
-        }.tasksListEdges(.cleanCut, top: 80, listTop: 100, bottomInset: 16,
+        }.tasksListEdges(top: 80, listTop: 100, bottomInset: 16,
             bottomMargin: 48, bottomClearance: 64, stack: stack, mask: Color.white)
             .frame(width: 340, height: 520))
         let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 520),
@@ -627,7 +627,7 @@ final class OwnerTasks1010Tests: XCTestCase {
         stack.height = TasksViewport.reservedStack
         let height: CGFloat = 520, inset: CGFloat = 16
         let host = NSHostingView(rootView:
-            Color(red: 1, green: 0, blue: 0).tasksListEdges(.cleanCut, top: 80, listTop: 100, bottomInset: inset,
+            Color(red: 1, green: 0, blue: 0).tasksListEdges(top: 80, listTop: 100, bottomInset: inset,
                                     bottomMargin: 48, bottomClearance: stack.height + inset + 16,
                                     stack: stack, mask: Color.white)
                 .frame(width: 340, height: height).background(Color.white))

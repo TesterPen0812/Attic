@@ -63,10 +63,10 @@ class CostRecheckTests(unittest.TestCase):
             self.assertEqual(calls, [])
             self.assertTrue(all(len(row['attempts']) == 1 for rows in report['families'].values() for row in rows.values()))
 
-    def test_one_off_fail_passes_once_recheck_passes_in_every_family(self):
+    def test_one_off_blip_passes_after_pooling_in_every_family(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            logs(root, candidate=12)
+            logs(root, candidate=10.3)
             calls = []
             def resample(family, directory):
                 calls.append(family)
@@ -76,11 +76,47 @@ class CostRecheckTests(unittest.TestCase):
             self.assertEqual(calls, ['frame-row', 'integration', 'done-query'])
             for rows in report['families'].values():
                 for row in rows.values():
+                    if len(row['attempts']) == 1:
+                        self.assertTrue(row['passed'])
+                        self.assertNotIn('pooled', row)
+                        continue
                     self.assertEqual([x['passed'] for x in row['attempts']], [False, True])
                     self.assertTrue(row['passed'])
+                    self.assertEqual(len(row['pooled']['after_ms']), 2 * len(row['attempts'][0].get('after_ms', row['attempts'][0].get('candidate_ms'))))
+                    self.assertAlmostEqual(row['pooled']['bound_ms'], row['attempts'][0]['bound_ms'])
             summary = (root / 'cost-gate-summary.md').read_text()
             self.assertIn('| 1 |', summary)
             self.assertIn('| 2 |', summary)
+            self.assertIn('| pooled |', summary)
+            self.assertIn('Raw reference samples', summary)
+
+    def test_passing_second_attempt_cannot_replace_a_pooled_borderline_failure(self):
+        for first, expected in [(10.4, 0), (10.5, 1), (12, 1)]:
+            with self.subTest(first=first), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                logs(root, candidate=first)
+                status, report = self.run_gate(root, lambda family, directory: logs(directory))
+                self.assertEqual(status, expected)
+                for rows in report['families'].values():
+                    for row in rows.values():
+                        if len(row['attempts']) == 2:
+                            self.assertTrue(row['attempts'][1]['passed'])
+                            import statistics
+                            self.assertEqual(row['passed'], statistics.median(row['pooled']['after_ms']) <= row['pooled']['bound_ms'])
+                self.assertEqual(report['families']['frame-row']['keystroke']['passed'], expected == 0)
+
+    def test_pooling_keeps_individual_samples_instead_of_attempt_medians(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            logs(root)
+            for sample, value in enumerate([10, 10.5, 30], 1):
+                path = root / f'candidate-cost-{sample}.log'
+                path.write_text(path.read_text().replace('median=10ms', f'median={value}ms'))
+            status, report = self.run_gate(root, lambda family, directory: logs(directory))
+            self.assertEqual(status, 0)
+            row = report['families']['frame-row']['keystroke']
+            self.assertEqual(row['pooled']['after_ms'], [10, 10.5, 30, 10, 10, 10])
+            self.assertTrue(row['passed'], 'pooled median 10 passes; median of attempt medians 10.25 would fail')
 
     def test_real_fail_fails_twice_without_a_third_attempt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -123,7 +159,7 @@ class CostRecheckTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertTrue(report['passed'])
 
-    def test_first_pass_stays_accepted_and_second_attempt_recalibrates(self):
+    def test_first_pass_stays_accepted_when_shared_fixture_repeats(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             logs(root, candidate=12)

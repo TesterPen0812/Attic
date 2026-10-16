@@ -100,7 +100,6 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
         static let animations = "animations"
-        static let motionLabFeel = "motionLabFeel"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
@@ -214,23 +213,18 @@ final class AppSettings: ObservableObject {
     /// Lively (the default) or Subtle springs, or Reduced motion (round 9,
     /// owner item 26; owner 2026-10-01). Reduced, like macOS Reduce Motion
     /// (which forces it whatever is chosen), turns every movement into a
-    /// crossfade or an instant change. A change here also drops any Motion
-    /// Lab feel or edit, so the last control touched wins.
+    /// crossfade or an instant change. Changing levels restores its spring recipe.
     @Published var animations: AtticAnimationLevel {
         didSet {
             defaults.set(animations.rawValue, forKey: Key.animations)
             AtticMotionPreference.level = animations
             guard oldValue != animations else { return }
-            clearMotionLabChoice()
+            applyAnimationLevel()
         }
     }
 
-    /// The feel in use and the values in use. They follow Animations
-    /// (Lively or Subtle) unless the Motion Lab (preview builds only, owner
-    /// 2026-09-30) has chosen a feel or edited the values. Outside the lab
-    /// nothing stored is read or written, so the release identity only ever
-    /// follows Animations.
-    @Published private(set) var motionFeel: AtticMotionFeel
+    /// Animations owns the spring recipe; the preview experiment only changes native popovers.
+    var motionFeel: AtticMotionFeel { animations.feel }
 
     @Published var motionTuning: AtticMotionTuning {
         didSet {
@@ -241,27 +235,16 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// True while Animations, not the lab, is setting the tuning.
     private var appliesLevelTuning = false
 
-    /// Back to the Animations level's feel, forgetting the lab's choice.
-    private func clearMotionLabChoice() {
-        if motionLabAvailable { defaults.removeObject(forKey: Key.motionLabFeel); defaults.removeObject(forKey: Key.motionLabTuning) }
+    private func applyAnimationLevel() {
+        if motionLabAvailable { defaults.removeObject(forKey: Key.motionLabTuning) }
         appliesLevelTuning = true
         defer { appliesLevelTuning = false }
-        motionFeel = animations.feel
         motionTuning = animations.feel.tuning
     }
 
     let motionLabAvailable: Bool
-
-    /// Chooses a feel in the Motion Lab: its values replace any edits.
-    func chooseMotionFeel(_ feel: AtticMotionFeel) {
-        guard motionLabAvailable else { return }
-        motionFeel = feel
-        defaults.set(feel.rawValue, forKey: Key.motionLabFeel)
-        motionTuning = feel.tuning
-    }
 
     @Published var panelCornerSize: Double {
         didSet {
@@ -330,8 +313,7 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable,
-         previewOverrides: AtticPreviewOverrides = .current) {
+    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable) {
         self.defaults = defaults
         self.motionLabAvailable = motionLabAvailable
         cloudSyncStartupErrorMessage = nil
@@ -405,19 +387,14 @@ final class AppSettings: ObservableObject {
         if defaults.string(forKey: Key.animations) == "full" {
             defaults.set(storedAnimations.rawValue, forKey: Key.animations)
         }
-        // A preview's A/B switch (`ATTIC_UI_TEST_MOTION`) forces the level and
-        // the feel for this launch and stores nothing.
-        let forcedMotion = previewOverrides.motion
-        let level = forcedMotion?.level ?? storedAnimations
-        animations = level
-        AtticMotionPreference.level = level
-        let storedFeel = forcedMotion?.feel
-            ?? (motionLabAvailable ? AtticMotionFeel(rawValue: defaults.string(forKey: Key.motionLabFeel) ?? "") : nil)
-        motionFeel = storedFeel ?? level.feel
-        let storedTuning = motionLabAvailable && forcedMotion == nil
+        animations = storedAnimations
+        AtticMotionPreference.level = storedAnimations
+        // Preserve the native-popover experiment from older lab data, ignoring retired tuning choices.
+        let storedTuning = motionLabAvailable
             ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }
             : nil
-        let tuning = storedTuning ?? (storedFeel ?? level.feel).tuning
+        var tuning = storedAnimations.feel.tuning
+        tuning.popsNativePopovers = storedTuning?.popsNativePopovers ?? false
         motionTuning = tuning
         AtticMotionTuning.current = tuning
         panelCornerSize = Self.clamp(

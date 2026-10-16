@@ -66,7 +66,7 @@ struct GeneralSettingsView: View {
             }
 
             // The Motion Lab: preview builds only (never the release
-            // identity), to feel the motion live and pick it.
+            // identity), for blur tuning and the native-popover experiment.
             if settings.motionLabAvailable {
                 MotionLabSettingsGroup(settings: settings)
             }

@@ -7,36 +7,9 @@ import SwiftUI
 /// 2026-10-04), including saved preview choices and environment overrides.
 /// Former soft-edge choices also resolve to Clean cut. Notes editor,
 /// All notes and E1 cards use clean edges too.
-enum AtticScrollEdgeStyle: String, CaseIterable, Sendable {
-    case systemSoft
-    case cleanCut
-
-    /// The developer panel's words (preview-only, not localized).
-}
-
-/// The app's edge policy: always initialize to Clean cut, without reading
-/// or rewriting a former preview A/B preference. No identity offers the
-/// switch. Even a choice injected in code stays on Clean cut.
-@MainActor
-final class AtticScrollEdgeLab: ObservableObject {
-    static let shared = AtticScrollEdgeLab(defaults: .standard,
-                                           environment: ProcessInfo.processInfo.environment,
-                                           isPreview: AtticPreviewOverrides.isPreviewIdentity(Bundle.main.bundleIdentifier))
-
-    @Published private var resolvedStyle: AtticScrollEdgeStyle = .cleanCut
-    var style: AtticScrollEdgeStyle {
-        get { resolvedStyle }
-        set { resolvedStyle = .cleanCut }
-    }
-    let offersChoice = false
-    static let styleKey = "AtticScrollEdgeStyle"
-
-    init(defaults: UserDefaults, environment: [String: String] = [:], isPreview: Bool) {}
-}
-
 extension View {
     /// Native effects stay hidden, including legacy geometry test injection.
-    func atticScrollEdgeEffect(_ style: AtticScrollEdgeStyle) -> some View {
+    func atticScrollEdgeEffect() -> some View {
         scrollEdgeEffectHidden(true, for: .all)
     }
 }
@@ -116,33 +89,5 @@ enum AtticScrollUnderFade {
             return a.opacity + (b.opacity - a.opacity) * min(max(t, 0), 1)
         }
         return stops.last?.opacity ?? 1
-    }
-}
-
-/// The scroll-under mask (`AtticScrollUnderFade`), sized to the view it masks.
-struct AtticScrollUnderMask: View {
-    let plainText: [ClosedRange<CGFloat>]
-    var topEdge: CGFloat = 0
-    var bottomEdge: CGFloat = 0
-
-    var body: some View {
-        GeometryReader { proxy in
-            LinearGradient(
-                stops: AtticScrollUnderFade.stops(height: proxy.size.height, plainText: plainText,
-                                                  topEdge: topEdge, bottomEdge: bottomEdge)
-                    .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
-                startPoint: .top, endPoint: .bottom
-            )
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-extension View {
-    /// This scrolling content runs under the fixed controls, faint only
-    /// behind lines of plain text (see `AtticScrollUnderFade`).
-    func atticScrollUnderFade(plainText: [ClosedRange<CGFloat>], topEdge: CGFloat = 0, bottomEdge: CGFloat = 0) -> some View {
-        mask { AtticScrollUnderMask(plainText: plainText, topEdge: topEdge, bottomEdge: bottomEdge) }
     }
 }

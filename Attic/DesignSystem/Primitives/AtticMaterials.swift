@@ -362,7 +362,7 @@ extension View {
 /// surface: the recessed fill and one 1 pt hairline (the selected-chip
 /// ink), no rim, sheen, shadow or glass. Since 2026-10-02 the corner buttons
 /// are Liquid Glass; this is their opaque look wherever the controls are not
-/// live glass, and the preview's Flat arm (`AtticCornerButtonStyle`). Hover lays the chip hover over the
+/// live glass. Hover lays the chip hover over the
 /// fill, press (and a selected toggle, the pinned pin) the selected chip.
 /// The keyboard's ring is drawn by the control, as before.
 struct AtticFlatSurface: ViewModifier {

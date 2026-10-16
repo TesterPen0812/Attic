@@ -8,7 +8,7 @@ import XCTest
 /// (owner, 2026-10-02: "I want liquid glass, make it happen without losing
 /// any performance"), replacing L3's flat surface: glass by default in one
 /// shared container, L3's opaque surface wherever the controls are not glass,
-/// a Flat switch only in preview identities, and a header that scrolling and
+/// and a header that scrolling and
 /// swiping never re-evaluate.
 @MainActor
 final class CornerGlassTests: XCTestCase {
@@ -49,19 +49,10 @@ final class CornerGlassTests: XCTestCase {
             .atticDesign(design)
     }
 
-    private func withCornerStyle(_ style: AtticCornerButtonStyle, _ body: () throws -> Void) rethrows {
-        let lab = AtticCornerButtonsLab.shared
-        let saved = lab.style
-        lab.style = style
-        defer { lab.style = saved }
-        try body()
-    }
-
     // MARK: - Glass by default
 
     func testTheCornerButtonsAreLiquidGlassByDefault() throws {
-        XCTAssertEqual(AtticCornerButtonsLab.shared.style, .liquidGlass, "the product (and this test host) is glass")
-        XCTAssertFalse(AtticCornerButtonStyle.liquidGlass.drawsFlat(in: .default))
+        XCTAssertEqual(AtticDesignContext.default.effectiveControls, .liquidGlass)
         for mode in AtticDesignContext.Mode.allCases {
             for increaseContrast in [false, true] {
                 let design = AtticDesignContext(mode: mode, increaseContrast: increaseContrast)
@@ -79,22 +70,19 @@ final class CornerGlassTests: XCTestCase {
         }
     }
 
-    /// The A/B arm and every place the controls are not live glass draw L3's
+    /// Every place the controls are not live glass draws L3's
     /// opaque surface: no glass at all.
-    func testReduceTransparencyTheCraftStyleAndFlatGiveTheOpaqueSurface() throws {
-        let opaque: [(String, AtticDesignContext, AtticCornerButtonStyle)] = [
-            ("Reduce Transparency", AtticDesignContext(reduceTransparency: true), .liquidGlass),
-            ("Reduce Transparency, Dark", AtticDesignContext(mode: .dark, reduceTransparency: true), .liquidGlass),
-            ("Craft (a Solid panel that is not key)", AtticDesignContext(controls: .craft), .liquidGlass),
-            ("Flat", AtticDesignContext(), .flat),
+    func testReduceTransparencyAndTheCraftStyleGiveTheOpaqueSurface() throws {
+        let opaque: [(String, AtticDesignContext)] = [
+            ("Reduce Transparency", AtticDesignContext(reduceTransparency: true)),
+            ("Reduce Transparency, Dark", AtticDesignContext(mode: .dark, reduceTransparency: true)),
+            ("Craft (a Solid panel that is not key)", AtticDesignContext(controls: .craft)),
         ]
-        for (name, design, style) in opaque {
-            XCTAssertTrue(style.drawsFlat(in: design), name)
-            try withCornerStyle(style) {
-                let (panel, view) = host(header(design, isPinned: true))
-                defer { panel.orderOut(nil); panel.close() }
-                XCTAssertTrue(backdrops(in: view).isEmpty, "\(name): the opaque flat surface, no glass")
-            }
+        for (name, design) in opaque {
+            XCTAssertNotEqual(design.effectiveControls, .liquidGlass, name)
+            let (panel, view) = host(header(design, isPinned: true))
+            defer { panel.orderOut(nil); panel.close() }
+            XCTAssertTrue(backdrops(in: view).isEmpty, "\(name): the opaque flat surface, no glass")
         }
     }
 
@@ -142,62 +130,6 @@ final class CornerGlassTests: XCTestCase {
             click(size.width - width + AtticPageButtonMetrics.inset + AtticPageButtonMetrics.segment * 1.5 + AtticPageButtonMetrics.gap)
             XCTAssertEqual(clicks.page, 1, "flat=\(flat): a page takes the click")
         }
-    }
-
-    // MARK: - The switch is preview-only
-
-    private func scratchDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
-        let suite = "AtticCornerButtonsLabTest-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        return (defaults, { defaults.removePersistentDomain(forName: suite) })
-    }
-
-    func testOnlyAPreviewIdentityCanChooseFlat() throws {
-        let identities: [String?] = [
-            "com.taha.Attic", "com.taha.Attic.UnitTestHost", "com.taha.Attic.perf.ui",
-            "com.taha.Attic.previewish", "com.taha.Attic.preview.", "com.taha.AtticUITests", "", nil,
-        ]
-        let flat = ["ATTIC_UI_TEST_CORNER_BUTTONS": "flat"]
-        for identity in identities {
-            let name = identity ?? "nil"
-            let isPreview = AtticPreviewOverrides.isPreviewIdentity(identity)
-            XCTAssertFalse(isPreview, name)
-            let overrides = AtticPreviewOverrides.resolve(environment: flat, bundleIdentifier: identity)
-            XCTAssertNil(overrides.cornerButtons, "\(name) ignores the environment")
-            let (defaults, cleanup) = try scratchDefaults()
-            defer { cleanup() }
-            // Even handed the override, a non-preview lab stays glass.
-            let lab = AtticCornerButtonsLab(defaults: defaults, overrides: AtticPreviewOverrides(cornerButtons: .flat), isPreview: isPreview)
-            XCTAssertEqual(lab.style, .liquidGlass, "\(name): the environment cannot choose Flat")
-            XCTAssertFalse(lab.offersChoice, "\(name): no switch")
-            defaults.set(AtticCornerButtonStyle.flat.rawValue, forKey: AtticCornerButtonsLab.styleKey)
-            XCTAssertEqual(AtticCornerButtonsLab(defaults: defaults, isPreview: isPreview).style, .liquidGlass,
-                           "\(name): a stored Flat is ignored")
-            defaults.removeObject(forKey: AtticCornerButtonsLab.styleKey)
-            AtticCornerButtonsLab(defaults: defaults, isPreview: isPreview).style = .flat
-            XCTAssertNil(defaults.string(forKey: AtticCornerButtonsLab.styleKey), "\(name): nothing is kept")
-        }
-
-        // A preview: glass by default, the environment forces either for the
-        // launch (over a stored choice, without storing it), the developer
-        // panel's choice is kept.
-        let preview = "com.taha.Attic.preview.glass"
-        XCTAssertEqual(AtticPreviewOverrides.resolve(environment: flat, bundleIdentifier: preview).cornerButtons, .flat)
-        XCTAssertEqual(AtticPreviewOverrides.resolve(environment: ["ATTIC_UI_TEST_CORNER_BUTTONS": "glass"], bundleIdentifier: preview).cornerButtons, .glass)
-        XCTAssertNil(AtticPreviewOverrides.resolve(environment: ["ATTIC_UI_TEST_CORNER_BUTTONS": "Flat"], bundleIdentifier: preview).cornerButtons,
-                     "an unknown word is ignored")
-        let (defaults, cleanup) = try scratchDefaults()
-        defer { cleanup() }
-        let lab = AtticCornerButtonsLab(defaults: defaults, isPreview: true)
-        XCTAssertEqual(lab.style, .liquidGlass, "glass by default in a preview too")
-        XCTAssertTrue(lab.offersChoice)
-        XCTAssertEqual(AtticCornerButtonsLab(defaults: defaults, overrides: AtticPreviewOverrides(cornerButtons: .flat), isPreview: true).style, .flat)
-        XCTAssertNil(defaults.string(forKey: AtticCornerButtonsLab.styleKey), "a forced launch stores nothing")
-        lab.style = .flat
-        XCTAssertEqual(AtticCornerButtonsLab(defaults: defaults, isPreview: true).style, .flat, "the developer panel's choice is kept")
-        XCTAssertEqual(AtticCornerButtonsLab(defaults: defaults, overrides: AtticPreviewOverrides(cornerButtons: .glass), isPreview: true).style,
-                       .liquidGlass, "the environment wins for its launch")
-        XCTAssertEqual(AtticCornerButtonStyle.allCases.map(\.title), ["Liquid Glass", "Flat"])
     }
 
     // MARK: - Scrolling and swiping never reach the header

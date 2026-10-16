@@ -47,7 +47,8 @@ def compare(before, after, quantum_ms=None, reference_samples=None):
     reference_range = max(before) - min(before)
     tolerance = max(reference_range, resolution) + 0.2
     bound = statistics.median(before) + tolerance
-    return dict(before_ms=before, after_ms=after, reference_range_ms=reference_range,
+    return dict(before_ms=before, after_ms=after, calibration_samples_ms=reference_samples,
+                reference_range_ms=reference_range,
                 resolution_ms=resolution, resolution_source=source, noise_ms=tolerance,
                 bound_ms=bound, passed=statistics.median(after) <= bound)
 
@@ -70,3 +71,27 @@ def compare_derived(before, after, components):
                bound_source="OD-17: sum of component OD-8/9 allowances")
     row['passed'] = statistics.median(after) <= row['bound_ms']
     return row
+
+
+def pool_comparisons(first, second):
+    """OD-15 amended: pool samples, retaining the OD-9/17 comparison rules."""
+    def readings(row, side):
+        return row.get(side, row.get({'before_ms': 'baseline_ms', 'after_ms': 'candidate_ms'}[side]))
+    before = readings(first, 'before_ms') + readings(second, 'before_ms')
+    after = readings(first, 'after_ms') + readings(second, 'after_ms')
+    if 'components' in first:
+        if set(first['components']) != set(second['components']):
+            raise ValueError('re-check components differ')
+        return compare_derived(before, after, {name: pool_comparisons(part, second['components'][name])
+                                              for name, part in first['components'].items()})
+    quantum = None
+    if first['resolution_source'] == 'fixture quantum' or second['resolution_source'] == 'fixture quantum':
+        if (first['resolution_source'], first['resolution_ms']) != (second['resolution_source'], second['resolution_ms']):
+            raise ValueError('re-check fixture timer quanta differ')
+        quantum = first['resolution_ms']
+    calibration = None
+    if first.get('calibration_samples_ms') is not None or second.get('calibration_samples_ms') is not None:
+        if first.get('calibration_samples_ms') is None or second.get('calibration_samples_ms') is None:
+            raise ValueError('re-check resolution samples differ')
+        calibration = first['calibration_samples_ms'] + second['calibration_samples_ms']
+    return compare(before, after, quantum, calibration)

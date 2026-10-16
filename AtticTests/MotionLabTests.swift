@@ -3,18 +3,15 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// The feel measured by the cost tests: `ATTIC_MOTION_FEEL` (calm, subtle,
-/// lively, playful; `TEST_RUNNER_ATTIC_MOTION_FEEL` through xcodebuild), else the
-/// default feel.
+/// Cost fixtures always measure the chosen default, Lively.
 enum MotionFeelUnderTest {
     nonisolated(unsafe) private static var saved: AtticMotionTuning?
 
     @discardableResult
     static func apply() -> String {
         saved = AtticMotionTuning.current
-        let feel = AtticMotionFeel(rawValue: ProcessInfo.processInfo.environment["ATTIC_MOTION_FEEL"] ?? "") ?? .recommended
-        AtticMotionTuning.current = feel.tuning
-        return feel.rawValue
+        AtticMotionTuning.current = .lively
+        return "lively"
     }
 
     static func restore() {
@@ -58,11 +55,7 @@ final class MotionLabTests: XCTestCase {
             // Hover is F/E in every feel.
             XCTAssertEqual(AtticMotionPreset.hover.animation(reduceMotion: false), AtticMotionScale.easeOut(AtticMotionScale.fast))
         }
-        // The lab's edits reach the presets too.
-        var edited = AtticMotionTuning.lively
-        edited.popover = AtticMotionSpring(response: 0.41, bounce: 0.33)
-        AtticMotionTuning.current = edited
-        XCTAssertEqual(AtticMotionPreset.popover.animation(reduceMotion: false), .spring(duration: 0.41, bounce: 0.33))
+        // The selected recipe reaches every preset.
         // A page switch is navigation (A20): the feel's slide. Hover
         // feedback is the same in every feel.
         for feel in AtticMotionFeel.allCases {
@@ -71,7 +64,7 @@ final class MotionLabTests: XCTestCase {
         }
     }
 
-    /// Calm is round 11 exactly, Playful round 9 exactly (the CHANGELOG),
+    /// The selected recipes retain their accepted timing scale.
     /// Lively the brief's shape: navigation about 0.3 s with a light
     /// bounce, things that appear bouncier and from 0.92, no fades.
     /// The one motion scale (A4, adopted 2026-10-11): every feel takes
@@ -98,10 +91,6 @@ final class MotionLabTests: XCTestCase {
         XCTAssertEqual(AtticMotionFeel.recommended, .lively)
         XCTAssertEqual(lively.slide.bounce, 0.12)
         XCTAssertEqual(AtticMotionTuning.subtle.slide.bounce, 0.04)
-        XCTAssertEqual(AtticMotionTuning.calm.slide.bounce, 0)
-        XCTAssertEqual(AtticMotionTuning.calm.appear, .fade)
-        XCTAssertEqual(lively.appear, .spring)
-        XCTAssertEqual(lively.leave, .spring)
         XCTAssertFalse(lively.popsNativePopovers, "the native pop-over spring is experimental: off until seen")
         XCTAssertEqual(lively.appearScale, 0.92, accuracy: 0.001)
         XCTAssertEqual(lively.leaveScale, 0.96, accuracy: 0.001)
@@ -120,22 +109,10 @@ final class MotionLabTests: XCTestCase {
         XCTAssertEqual(AtticSearchMotion.animation(shown: true, reduceMotion: true), AtticMotionScale.reducedFade)
     }
 
-    /// A lively spring starts faster than a critically damped one, so each
-    /// of Lively's springs reaches 95 % of its way within a frame and a
-    /// half (12 ms) of Calm's: the bounce adds no delay.
-    func testLivelyArrivesAsSoonAsCalm() {
-        for preset in feelPresets {
-            let calm = Self.arrival(preset.spring(in: .calm))
-            let lively = Self.arrival(preset.spring(in: .lively))
-            XCTAssertLessThanOrEqual(lively, calm + 0.012, "\(preset): \(lively) against \(calm)")
-        }
-    }
-
     /// Subtle: the scale with a 0.04 bounce (navigation and what appears
     /// alike), still springing in (no plain fades), quieter than Lively.
-    func testSubtleIsCalmsTimingsWithASmallBounce() {
+    func testSubtleKeepsTheTimingScaleWithASmallBounce() {
         let subtle = AtticMotionTuning.subtle
-        let calm = AtticMotionTuning.calm
         let lively = AtticMotionTuning.lively
         for spring in [subtle.slide, subtle.expand, subtle.doneSlide] {
             XCTAssertEqual(spring.bounce, 0.04, accuracy: 0.001)
@@ -143,10 +120,8 @@ final class MotionLabTests: XCTestCase {
         for spring in [subtle.popover, subtle.toast, subtle.complete] {
             XCTAssertEqual(spring.bounce, 0.04, accuracy: 0.001)
         }
-        XCTAssertEqual(subtle.slide.response, calm.slide.response)
-        XCTAssertEqual(subtle.popover.response, calm.popover.response)
-        XCTAssertEqual(subtle.appear, .spring)
-        XCTAssertEqual(subtle.leave, .spring)
+        XCTAssertEqual(subtle.slide.response, AtticMotionScale.spatial)
+        XCTAssertEqual(subtle.popover.response, AtticMotionScale.standard)
         XCTAssertFalse(subtle.popsNativePopovers)
         XCTAssertGreaterThan(subtle.appearScale, lively.appearScale, "a smaller pop")
         XCTAssertGreaterThan(subtle.leaveScale, lively.leaveScale, "a smaller tuck")
@@ -157,16 +132,6 @@ final class MotionLabTests: XCTestCase {
         }
         // No plain fades: in Full mode a popover is an animation with a hidden scale.
         XCTAssertLessThan(AtticMotionPreset.popover.hiddenScale(reduceMotion: false), 1)
-    }
-
-    /// Like Lively, each Subtle spring reaches 95 % of its way within a
-    /// frame and a half of Calm's.
-    func testSubtleArrivesAsSoonAsCalm() {
-        for preset in feelPresets {
-            let calm = Self.arrival(preset.spring(in: .calm))
-            let subtle = Self.arrival(preset.spring(in: .subtle))
-            XCTAssertLessThanOrEqual(subtle, calm + 0.012, "\(preset): \(subtle) against \(calm)")
-        }
     }
 
     // MARK: - Animations: Lively, Subtle, Reduced
@@ -214,6 +179,32 @@ final class MotionLabTests: XCTestCase {
         XCTAssertEqual(AtticAnimationLevel.subtle.feel, .subtle)
     }
 
+    func testRetiredLabTuningCannotOverrideAnimationsButKeepsTheNativePopoverExperiment() throws {
+        let (settings, defaults, cleanUp) = try makeSettings(lab: true)
+        defer { cleanUp() }
+        var retired = AtticMotionTuning.lively
+        retired.slide.response = 0.49
+        retired.appearScale = 0.81
+        retired.popsNativePopovers = true
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(retired)) as? [String: Any])
+        object["appear"] = "fade"
+        object["leave"] = "fade"
+        defaults.set(try JSONSerialization.data(withJSONObject: object), forKey: "motionLabTuning")
+        defaults.set("playful", forKey: "motionLabFeel")
+        let reopened = AppSettings(defaults: defaults, motionLabAvailable: true)
+        XCTAssertEqual(reopened.animations, .lively)
+        XCTAssertEqual(reopened.motionTuning.slide, AtticMotionTuning.lively.slide)
+        XCTAssertEqual(reopened.motionTuning.appearScale, 0.92)
+        XCTAssertTrue(reopened.motionTuning.popsNativePopovers)
+        reopened.motionTuning.popsNativePopovers = false
+        XCTAssertFalse(AppSettings(defaults: defaults, motionLabAvailable: true).motionTuning.popsNativePopovers)
+        settings.animations = .subtle
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true).motionTuning, .subtle)
+        settings.animations = .reduced
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true).animations, .reduced)
+        XCTAssertTrue(AtticMotionPreference.reducesMotion)
+    }
+
     func testOldSettingsMigrate() throws {
         let (full, fullDefaults, cleanUpFull) = try makeSettings { $0.set("full", forKey: "animations") }
         defer { cleanUpFull() }
@@ -242,23 +233,6 @@ final class MotionLabTests: XCTestCase {
         }
     }
 
-    /// A lab choice overrides Animations until Animations is changed; the
-    /// release identity has no lab to choose in.
-    func testTheLabChoiceAndTheAnimationsSettingAgree() throws {
-        let (settings, defaults, cleanUp) = try makeSettings(lab: true)
-        defer { cleanUp() }
-        settings.chooseMotionFeel(.subtle)
-        XCTAssertEqual(AtticMotionTuning.current, AtticMotionTuning.subtle)
-        XCTAssertEqual(settings.animations, .lively, "the setting is untouched")
-        settings.chooseMotionFeel(.playful)
-        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true).motionFeel, .playful)
-        settings.animations = .subtle
-        XCTAssertEqual(settings.motionFeel, .subtle, "changing Animations puts the feel back")
-        XCTAssertNil(defaults.object(forKey: "motionLabFeel"))
-        XCTAssertNil(defaults.object(forKey: "motionLabTuning"))
-        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true).motionFeel, .subtle)
-    }
-
     /// The release identity never writes lab keys, even when Animations changes.
     func testTheReleaseIdentityWritesNoLabKeys() throws {
         let (settings, defaults, cleanUp) = try makeSettings(lab: false)
@@ -269,27 +243,18 @@ final class MotionLabTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: "motionLabTuning"))
     }
 
-    /// Edges is gone: nothing stored, nothing copied.
-    func testEdgesIsGone() throws {
-        let (settings, defaults, cleanUp) = try makeSettings(lab: true)
-        defer { cleanUp() }
-        settings.chooseMotionFeel(.lively)
-        XCTAssertNil(defaults.object(forKey: "motionLabEdges"))
-        XCTAssertFalse(settings.motionTuning.copyText(feel: .lively).contains("Edges"))
-    }
-
     // MARK: - Reduced motion ignores the feel
 
     func testReducedMotionIgnoresTheFeel() {
-        AtticMotionTuning.current = .calm
+        AtticMotionTuning.current = .subtle
         let baseline = AtticMotionPreset.allCases.map {
-            [$0.animation(reduceMotion: true), $0.leaveAnimation(reduceMotion: true), $0.exit(reduceMotion: true),
+            [$0.animation(reduceMotion: true), $0.leaveAnimation(reduceMotion: true),
              $0.animation(reduceMotion: true, showing: false)]
         }
         for feel in AtticMotionFeel.allCases {
             AtticMotionTuning.current = feel.tuning
             let reduced = AtticMotionPreset.allCases.map {
-                [$0.animation(reduceMotion: true), $0.leaveAnimation(reduceMotion: true), $0.exit(reduceMotion: true),
+                [$0.animation(reduceMotion: true), $0.leaveAnimation(reduceMotion: true),
                  $0.animation(reduceMotion: true, showing: false)]
             }
             XCTAssertEqual(reduced, baseline, "\(feel) reached Reduced motion")
@@ -300,28 +265,25 @@ final class MotionLabTests: XCTestCase {
         // Still the round 9 fallbacks: fades, and instant for a page switch and an expand.
         XCTAssertNil(AtticMotionPreset.pageSwitch.animation(reduceMotion: true))
         XCTAssertNil(AtticMotionPreset.expand.animation(reduceMotion: true))
-        XCTAssertNil(AtticMotionPreset.expand.exit(reduceMotion: true))
+        XCTAssertNil(AtticMotionPreset.expand.leaveAnimation(reduceMotion: true))
         // One Reduced policy (A4 M-07): the F/E fade, in and out.
         XCTAssertEqual(AtticMotionPreset.popover.animation(reduceMotion: true), AtticMotionScale.reducedFade)
-        XCTAssertEqual(AtticMotionPreset.popover.exit(reduceMotion: true), AtticMotionScale.reducedFade)
+        XCTAssertEqual(AtticMotionPreset.popover.leaveAnimation(reduceMotion: true), AtticMotionScale.reducedFade)
         XCTAssertEqual(AtticMotionPreset.toast.leaveAnimation(reduceMotion: true), AtticMotionScale.reducedFade)
     }
 
     // MARK: - Appear and leave
 
-    /// Calm leaves as before the lab (the preset's own spring, the Done
-    /// search's short fade); the spring style tucks away with a quick,
-    /// unbouncy spring; Lively pops things in from 0.92 and Calm never
-    /// scales.
-    func testAppearAndLeaveFollowTheStyles() {
+    /// Subtle and Lively keep their scales and leave with the existing short fade.
+    func testAppearAndLeaveUseTheSelectedRecipe() {
         // Exits are F/E in every feel: they fade, never bounce.
-        AtticMotionTuning.current = .calm
+        AtticMotionTuning.current = .subtle
         XCTAssertEqual(AtticMotionPreset.toast.leaveAnimation(reduceMotion: false), AtticMotionScale.exit)
-        XCTAssertEqual(AtticMotionPreset.popover.exit(reduceMotion: false), AtticMotionScale.exit)
-        XCTAssertEqual(AtticMotionPreset.popover.hiddenScale(reduceMotion: false), 1)
+        XCTAssertEqual(AtticMotionPreset.popover.leaveAnimation(reduceMotion: false), AtticMotionScale.exit)
+        XCTAssertEqual(AtticMotionPreset.popover.hiddenScale(reduceMotion: false), 0.96, accuracy: 0.0001)
         AtticMotionTuning.current = .lively
         XCTAssertEqual(AtticMotionPreset.toast.leaveAnimation(reduceMotion: false), AtticMotionScale.exit)
-        XCTAssertEqual(AtticMotionPreset.popover.exit(reduceMotion: false), AtticMotionScale.exit)
+        XCTAssertEqual(AtticMotionPreset.popover.leaveAnimation(reduceMotion: false), AtticMotionScale.exit)
         XCTAssertEqual(AtticMotionPreset.popover.animation(reduceMotion: false, showing: true),
                        AtticMotionPreset.popover.animation(reduceMotion: false))
         XCTAssertEqual(AtticMotionPreset.popover.animation(reduceMotion: false, showing: false),
@@ -329,10 +291,7 @@ final class MotionLabTests: XCTestCase {
         XCTAssertEqual(AtticMotionPreset.popover.hiddenScale(reduceMotion: false), 0.92, accuracy: 0.0001)
         XCTAssertEqual(AtticMotionPreset.settle.hiddenScale(reduceMotion: false), 0.968, accuracy: 0.0001, "rows pop gently")
         XCTAssertEqual(AtticMotionPreset.pageSwitch.hiddenScale(reduceMotion: false), 1, "pages never scale")
-        var fading = AtticMotionTuning.lively
-        fading.appear = .fade
-        AtticMotionTuning.current = fading
-        XCTAssertEqual(AtticMotionPreset.popover.hiddenScale(reduceMotion: false), 1)
+
     }
 
     func testAPopOverGrowsFromTheEdgeItComesFrom() {
@@ -361,38 +320,6 @@ final class MotionLabTests: XCTestCase {
         XCTAssertEqual(moved.y, 180, accuracy: 0.001)
     }
 
-    // MARK: - The lab's knobs
-
-    func testTheGroupKnobsShiftEverySpringInTheGroup() {
-        var tuning = AtticMotionTuning.calm
-        tuning.expand.response = 0.25
-        tuning.navigationResponse = 0.30
-        XCTAssertEqual(tuning.slide.response, 0.30, accuracy: 0.0001)
-        XCTAssertEqual(tuning.expand.response, 0.27, accuracy: 0.0001, "the differences are kept")
-        XCTAssertEqual(tuning.doneSlide.response, 0.30, accuracy: 0.0001)
-        tuning.settle.bounce = 0.05
-        tuning.appearBounce = 0.25
-        XCTAssertEqual(tuning.popover.bounce, 0.25, accuracy: 0.0001)
-        XCTAssertEqual(tuning.settle.bounce, 0.30, accuracy: 0.0001)
-        XCTAssertEqual(tuning.slide.response, 0.30, accuracy: 0.0001, "only its group moved")
-        tuning.appearResponse = 5
-        XCTAssertEqual(tuning.failReturn.response, AtticMotionTuning.responseRange.upperBound, "clamped")
-        tuning.navigationBounce = -1
-        XCTAssertEqual(tuning.slide.bounce, 0, "clamped")
-        XCTAssertEqual(tuning.popover.bounce, 0.25, accuracy: 0.0001, "only its group moved")
-    }
-
-    func testCopyValuesCarriesEveryValueAsSwift() {
-        var tuning = AtticMotionTuning.lively
-        tuning.appearScale = 0.9
-        let text = tuning.copyText(feel: .lively)
-        XCTAssertTrue(text.hasPrefix("Attic motion: Lively (edited)"))
-        XCTAssertTrue(text.contains("popover: .init(response: 0.200, bounce: 0.120)"))
-        XCTAssertTrue(text.contains("appearScale: 0.900"))
-        XCTAssertTrue(text.contains("appear: .spring, leave: .spring"))
-        XCTAssertTrue(AtticMotionTuning.calm.copyText(feel: .calm).hasPrefix("Attic motion: Calm\n"))
-    }
-
     // MARK: - The lab is never in the release identity
 
     func testTheLabIsHiddenInTheReleaseIdentity() {
@@ -404,28 +331,6 @@ final class MotionLabTests: XCTestCase {
         XCTAssertFalse(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.dira", arguments: []))
         XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.preview.motion", arguments: []))
         XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.dira", arguments: [AtticMotionLab.argument]))
-    }
-
-    /// Outside the lab a stored feel is never read (nor written): the app
-    /// runs the recommended feel.
-    func testOutsideTheLabAStoredFeelIsIgnored() throws {
-        let suite = "MotionLabTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let lab = AppSettings(defaults: defaults, motionLabAvailable: true)
-        lab.chooseMotionFeel(.playful)
-        lab.motionTuning.appearScale = 0.85
-        XCTAssertEqual(AtticMotionTuning.current.appearScale, 0.85, "applies at once")
-        let reopened = AppSettings(defaults: defaults, motionLabAvailable: true)
-        XCTAssertEqual(reopened.motionFeel, .playful, "the preview keeps its choice")
-        XCTAssertEqual(reopened.motionTuning.appearScale, 0.85)
-        let release = AppSettings(defaults: defaults, motionLabAvailable: false)
-        XCTAssertEqual(release.motionFeel, .recommended)
-        XCTAssertEqual(release.motionTuning, AtticMotionFeel.recommended.tuning)
-        XCTAssertEqual(AtticMotionTuning.current, AtticMotionFeel.recommended.tuning)
-        release.chooseMotionFeel(.calm)
-        XCTAssertEqual(release.motionFeel, .recommended, "no lab, no choosing")
-        XCTAssertEqual(defaults.string(forKey: "motionLabFeel"), "playful", "and nothing written")
     }
 
     // MARK: - The pager's settle
@@ -488,9 +393,7 @@ final class MotionLabTests: XCTestCase {
             for preset in feelPresets {
                 parts.append("\(preset.rawValue) " + Self.describe(preset.spring(in: tuning)))
             }
-            parts.append("leave " + (tuning.leave == .spring
-                ? Self.describe(AtticMotionSpring(response: tuning.leaveResponse, bounce: 0))
-                : "fade \(Int(min(tuning.popover.response, 0.12) * 1000))ms"))
+            parts.append("leave " + Self.describe(AtticMotionSpring(response: tuning.leaveResponse, bounce: 0)))
             for speed in [CGFloat(0), 5] {
                 let pager = TasksPagerSpring(from: 0, to: 1, speed: speed, duration: tuning.slide.response, bounce: tuning.slide.bounce)
                 let (arrival, peak, rest) = Self.trace(pager)

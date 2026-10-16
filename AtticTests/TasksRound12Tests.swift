@@ -737,14 +737,14 @@ final class TasksRound12Tests: XCTestCase {
     /// tabs' plain-text line are never drawn at a readable strength there,
     /// and rows under the add bar's glass are drawn at full strength.
     func testRowsPassOnlyFaintlyUnderTheTabsAndRunOnUnderTheAddBar() throws {
-        let shares = try bandShares(.cleanCut)
+        let shares = try bandShares()
         XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
         XCTAssertLessThan(shares.strongTop, 0.002, "never readable behind the tabs' line (\(shares.strongTop))")
         // Floating controls (owner 2026-10-14, replacing N-6 D): rows run on
         // under the add bar's glass, into the blur behind it.
         XCTAssertGreaterThan(shares.bottom, 0.0005, "rows run on under the add bar (\(shares.bottom))")
         // Negative control: the same band clipped fails it.
-        let clipped = try bandShares(.cleanCut, clipBands: true)
+        let clipped = try bandShares(clipBands: true)
         XCTAssertLessThan(clipped.bottom, 0.0005, "a clipped add bar's band shows nothing (\(clipped.bottom))")
     }
 
@@ -754,12 +754,8 @@ final class TasksRound12Tests: XCTestCase {
 
     /// How much of the list's middle, the tabs' line (to a quarter of the
     /// gap under it) and the add bar's band differ between two scroll places.
-    private func bandShares(_ style: AtticScrollEdgeStyle, clipBands: Bool = false) throws
+    private func bandShares(clipBands: Bool = false) throws
         -> (moved: Double, top: Double, bottom: Double, strongTop: Double, strongBottom: Double) {
-        let lab = AtticScrollEdgeLab.shared
-        let saved = lab.style
-        lab.style = style
-        defer { lab.style = saved }
         let height: CGFloat = 520
         let hosted = try Hosted(height: height, long: true)
         defer { hosted.close() }

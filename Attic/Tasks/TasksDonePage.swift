@@ -34,8 +34,6 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     let bottomStack: TasksBottomStackHeight
     /// False while the page is kept built but not shown (round 11).
     var drawn = true
-    /// How the log meets the floating controls (`TasksPage.edgeStyle`).
-    var edges: AtticScrollEdgeStyle = .cleanCut
     /// Clean cut's fade, the default (the system soft edge needs none).
     let mask: Mask
     /// A row the keyboard moved to: brought into the visible area (review 8).
@@ -125,12 +123,12 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         .accessibilityIdentifier("tasks-done-search-count")
                 }
             }
-            .padding(.bottom, edges == .cleanCut ? bottomClearance - bottomMargin : 0)
+            .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,
                 focusSelection: focusSelection, drawn: drawn).accessibilityHidden(true))
         }
-        .tasksListEdges(edges, top: viewportTop, listTop: listTop, bottomInset: bottomInset,
+        .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
                         bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack, mask: mask)
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in

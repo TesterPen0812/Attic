@@ -33,10 +33,6 @@ struct TasksPage: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var tagColouring
-    /// How the lists meet the floating controls: Clean cut with the
-    /// scroll-under fade (A15, owner 2026-10-04, replacing D1's fade before
-    /// the controls); the native soft edge stays off everywhere.
-    @ObservedObject private var scrollEdges = AtticScrollEdgeLab.shared
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     /// The subtask lines' and strip buttons' own focus, reached by the
     /// page's Tab order (A10). Not observed.
@@ -738,7 +734,7 @@ struct TasksPage: View {
         // The search springs in and leaves at once (its field lets the
         // keyboard go with it).
         .animation(searchShown ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)
-                               : AtticMotionPreset.popover.exit(reduceMotion: design.reduceMotion), value: searchShown)
+                               : AtticMotionPreset.popover.leaveAnimation(reduceMotion: design.reduceMotion), value: searchShown)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: model.tab == .done),
                    value: model.tab == .done)
         .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
@@ -1222,7 +1218,6 @@ struct TasksPage: View {
     /// Where the lists' first row rests: under the tabs, as before.
     private var listTop: CGFloat { TasksViewport.listTop(tabsTop: tabsTop) }
 
-    private var edgeStyle: AtticScrollEdgeStyle { scrollEdges.style }
 
     /// The viewport ends below the tallest control on the tabs line (the
     /// Find field and the quiet buttons are taller than the tab labels).
@@ -1258,9 +1253,7 @@ struct TasksPage: View {
         let reveal = TasksViewport.reveal(frame: pointer.frames[TasksRowID(tab: tab, id: id)], height: rowHeight(id, in: tab),
                                           viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
                                           listTop: listTop,
-                                          bottomMargin: edgeStyle == .systemSoft
-                                            ? TasksViewport.controlsInset(stack: bottomStack.height, bottomInset: bottomInset) + AtticLayout.contentToAddBar
-                                            : bottomMargin,
+                                          bottomMargin: bottomMargin,
                                           bottomClearance: bottomClearance)
         switch reveal {
         case .none: return false
@@ -1305,7 +1298,7 @@ struct TasksPage: View {
                               results: drawn ? model.doneResults : TasksDoneResults.quiet, store: store,
                               listTop: listTop, bottomClearance: bottomClearance,
                               bottomMargin: bottomMargin, viewportTop: viewportTop, bottomInset: bottomInset, bottomStack: bottomStack, drawn: drawn,
-                              edges: edgeStyle, mask: viewportMask, reveal: $doneReveal,
+                              mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
                               cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
                               proxies: listProxies,
@@ -1424,10 +1417,10 @@ struct TasksPage: View {
                     focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
-                .padding(.bottom, edgeStyle == .cleanCut ? bottomClearance - bottomMargin : 0)
+                .padding(.bottom, bottomClearance - bottomMargin)
             }
             .scrollIndicators(.automatic)
-            .tasksListEdges(edgeStyle, top: viewportTop, listTop: listTop, bottomInset: bottomInset,
+            .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
                             bottomMargin: bottomMargin, bottomClearance: bottomClearance,
                             stack: bottomStack, mask: viewportMask)
             .onChange(of: focusedRow) { _, focus in
@@ -2293,9 +2286,8 @@ struct TasksPage: View {
         let fade = $reorderFade
         let timer = Timer(timeInterval: 0.04, repeats: false) { _ in
             MainActor.assumeIsolated {
-                // The feel's spring when things spring in; otherwise (Calm,
-                // Reduced) the short fade it always was.
-                let pops = !AtticMotionPreference.reducesMotion && AtticMotionTuning.current.appear == .spring
+                // The selected spring, or the existing short fade under Reduced.
+                let pops = !AtticMotionPreference.reducesMotion
                 withAnimation(pops ? AtticMotionPreset.settle.animation(reduceMotion: false) : AtticMotionScale.exit) {
                     fade.wrappedValue = []
                 }
@@ -4311,10 +4303,10 @@ private struct TasksDragOutStateProbe: View {
 
 extension View {
     /// The control layer remains outside the list's AppKit containers.
-    func tasksListEdges<Mask: View>(_ style: AtticScrollEdgeStyle, top: CGFloat, listTop: CGFloat,
+    func tasksListEdges<Mask: View>(top: CGFloat, listTop: CGFloat,
                                     bottomInset: CGFloat, bottomMargin: CGFloat, bottomClearance: CGFloat,
                                     stack: TasksBottomStackHeight, mask: Mask) -> some View {
-        modifier(TasksListEdges(style: style, top: top, listTop: listTop, bottomInset: bottomInset,
+        modifier(TasksListEdges(top: top, listTop: listTop, bottomInset: bottomInset,
                                 bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: stack, cleanMask: mask))
     }
 }
@@ -4322,7 +4314,6 @@ extension View {
 /// Observes control-height changes only. Scroll offsets stay in AppKit:
 /// neither the header, composer nor this modifier observes them.
 private struct TasksListEdges<Mask: View>: ViewModifier {
-    let style: AtticScrollEdgeStyle
     let top: CGFloat
     let listTop: CGFloat
     let bottomInset: CGFloat
@@ -4338,7 +4329,7 @@ private struct TasksListEdges<Mask: View>: ViewModifier {
                 .contentMargins(.bottom, bottomMargin, for: .scrollContent)
                 .contentMargins(.top, listTop, for: .scrollIndicators)
                 .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
-                .atticScrollEdgeEffect(style)
+                .atticScrollEdgeEffect()
                 .mask {
                     // Compose the masks before applying them to the native list:
                     // a second list mask adds another AppKit view and layer.

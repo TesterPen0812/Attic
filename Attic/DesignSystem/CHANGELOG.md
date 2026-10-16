@@ -1,3 +1,10 @@
+## 2026-10-16 · Settled comparisons retired
+
+- Native scroll edges use a parameterless, always-hidden policy. Former defaults and environment values have no reader; negative hosted/UI checks remain.
+- Corner buttons use Liquid Glass, with the existing Flat rendering for Reduce Transparency and non-glass/non-key controls. The Glass/Flat picker and override are retired. Row hover always tints.
+- Animations keeps Lively, Subtle and Reduced. Preview feel/style pickers, tuning sliders and motion overrides are retired. Blur strength/reach sliders, the native-popover experiment, scroller/lift overrides, gallery and glass lab routes remain.
+- Proposal previews keep their live scroll offset across document replacement without an unwritten binding. Duplicate exit-animation API, unused scroll-mask wrapper and unreferenced TaskStatusButton are removed.
+
 # Design system change log
 
 The design system was frozen when the owner signed off the Phase 0 gallery.
