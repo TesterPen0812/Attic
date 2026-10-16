@@ -25,15 +25,22 @@ final class NotesTypingCostTests: XCTestCase {
             var offsets: [Int] = []
             var offset = 6
             for i in 0..<count { offsets.append(offset); offset += "Item \(i) words\n".utf16.count }
+            engine.textStorage.addAttribute(.foregroundColor, value: NSColor.red, range: NSRange(location: 0, length: 1))
             let visits = engine.ordinalParagraphVisitCount
             let markerMS = milliseconds { for offset in offsets { _ = engine.listMarker(at: offset) } }
             let markerVisits = engine.ordinalParagraphVisitCount - visits
+            XCTAssertEqual(markerVisits, count - 1, "cold sequential markers cross each preceding item once")
+            let warmVisits = engine.ordinalParagraphVisitCount
+            for offset in offsets { _ = engine.listMarker(at: offset) }
+            XCTAssertEqual(engine.ordinalParagraphVisitCount, warmVisits, "unchanged markers use their checkpoints")
             let passes = engine.renumberPassCount, paragraphs = engine.renumberParagraphVisitCount
             view.setSelectedRange(NSRange(location: offsets[1] + 3, length: 0))
             let typingMS = milliseconds { view.insertText("x", replacementRange: view.selectedRange()) }
             // Drain the actual deferred renumber work without a screen.
             await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
             print("P1_LIST size=\(count) renumber_passes=\(engine.renumberPassCount - passes) tail_paragraphs=\(engine.renumberParagraphVisitCount - paragraphs) ordinal_visits=\(markerVisits) markers_ms=\(markerMS) typing_ms=\(typingMS)")
+            XCTAssertEqual(engine.renumberPassCount, passes, "an ordinary letter changes no later ordinal")
+            XCTAssertEqual(engine.renumberParagraphVisitCount, paragraphs)
             XCTAssertEqual(engine.listMarker(at: offsets.last! + 1), .number("\(count)."))
             engine.detachView()
         }
@@ -82,4 +89,28 @@ final class NotesTypingCostTests: XCTestCase {
             engine.find.close(); engine.detachView()
         }
     }
+    func testNumberCacheSurvivesStructureAndReplay() {
+        var first = NoteBlock.text("parent", style: "number"); first.start = 12
+        var child = NoteBlock.text("child", style: "number"); child.indent = 1
+        var deep = NoteBlock.text("deep", style: "number"); deep.indent = 2
+        let (engine, view) = editor([.text("Title"), first, child, deep, .text("peer", style: "number")])
+        defer { engine.detachView() }
+        func at(_ word: String) -> Int { (engine.textStorage.string as NSString).range(of: word).location }
+        func verify(_ last: String) {
+            // Cold, reverse and warm reads must agree for all three levels.
+            XCTAssertEqual(engine.listMarker(at: at("peer")), .number(last))
+            XCTAssertEqual(engine.listMarker(at: at("deep")), .roman("i."))
+            XCTAssertEqual(engine.listMarker(at: at("child")), .letter("a."))
+            XCTAssertEqual(engine.listMarker(at: at("parent")), .number("12."))
+            XCTAssertEqual(engine.listMarker(at: at("peer")), .number(last))
+        }
+        verify("13.")
+        view.setSelectedRange(NSRange(location: at("parent") + 6, length: 0)); view.insertNewline(nil)
+        verify("14.")
+        XCTAssertTrue(engine.history.undo()); verify("13.")
+        XCTAssertTrue(engine.history.redo()); verify("14.")
+        XCTAssertTrue(engine.setListStart(20, at: at("peer")))
+        XCTAssertEqual(engine.listMarker(at: at("peer")), .number("22."))
+    }
+
 }
