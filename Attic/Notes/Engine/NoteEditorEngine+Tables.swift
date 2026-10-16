@@ -418,8 +418,7 @@ extension NoteEditorEngine {
         guard let (attachment, _) = tableAttachment(id: target.tableID), attachment.table.contains(target.position),
               let view = attachment.hostedView else { return false }
         if let url {
-            let parsed = URL(string: url)
-            guard parsed?.scheme == "https" || parsed?.scheme == "http", parsed?.host != nil else { return false }
+            guard NoteLinkPolicy.url(url) != nil else { return false }
         }
         view.activate(target.position, caret: .range(target.range))
         let applied = applyCellMark(.link, in: view, url: url, on: url != nil)

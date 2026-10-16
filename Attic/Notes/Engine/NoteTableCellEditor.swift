@@ -14,6 +14,11 @@ import QuartzCore
 ///   ends, Tab, Return, ⌥Return (a line break), Esc, ⌘A.
 @MainActor
 final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        if let value = (link as? URL)?.absoluteString ?? link as? String { NoteLinkPolicy.open(value) }
+        return true
+    }
+
     weak var table: NoteTableView?
     /// True while the editor's own text is being written to the model (the
     /// model's echo must not reload the editor).

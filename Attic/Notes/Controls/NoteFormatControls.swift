@@ -1047,8 +1047,7 @@ final class NoteFormatControls: NSObject {
     /// while the card was open is dropped quietly (the engine refuses it).
     private func commitLink(_ url: String) -> Bool {
         if let target = cellLinkTarget {
-            let parsed = URL(string: url)
-            guard parsed?.scheme == "https" || parsed?.scheme == "http", parsed?.host != nil else { return false }
+            guard NoteLinkPolicy.url(url) != nil else { return false }
             cellLinkTarget = nil
             closeCard(refocus: false, restoring: nil)
             return engine.commitCellLink(url, target: target)
@@ -1113,8 +1112,8 @@ final class NoteFormatControls: NSObject {
             let system: Set<String> = ["Open Link", "Copy Link", "Edit Link…", "Remove Link"]
             for item in menu.items where system.contains(item.title) { menu.removeItem(item) }
             top += nativeItems([
-                AtticMenuCommand("Open Link", identifier: "notes-link-open") {
-                    if let value = URL(string: url) { NSWorkspace.shared.open(value) }
+                AtticMenuCommand("Open Link", isDisabled: NoteLinkPolicy.url(url) == nil, identifier: "notes-link-open") {
+                    NoteLinkPolicy.open(url)
                 },
                 AtticMenuCommand("Edit Link…", identifier: "notes-link-edit") { [weak self] in
                     guard let self else { return }

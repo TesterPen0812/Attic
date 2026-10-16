@@ -123,6 +123,34 @@ final class RoundUContentTests: XCTestCase {
         }
     }
 
+    func testU09ImportedLinksKeepTheirDestinationButOnlyWebLinksAreInteractive() throws {
+        for address in ["file:///System/Applications/Calculator.app", "mailto:review@example.com", "attic://note/123", "javascript:alert(1)", "https://example.com", "http://example.com"] {
+            var block = NoteBlock.text("Project reference")
+            block.marks = [NoteMark(.link, offset: 0, length: block.text.utf16.count, url: address)]
+            let doc = NoteDocument(blocks: [.text("T"), block])
+            let attributed = NoteTextCodec.attributedString(from: doc, style: NoteTextStyle())
+            let interactive = attributed.attribute(.link, at: 2, effectiveRange: nil)
+            XCTAssertEqual(interactive != nil, address.hasPrefix("http"), address)
+            XCTAssertEqual(attributed.attribute(.noteMark(.link), at: 2, effectiveRange: nil) as? String, address)
+            XCTAssertEqual(try NoteContentCodec.encode(NoteTextCodec.document(from: attributed)), try NoteContentCodec.encode(doc))
+        }
+    }
+
+    func testU09LinkPolicyDispatchesOnlyWebDestinations() {
+        var opened: [URL] = []
+        for address in ["file:///tmp/private", "mailto:a@example.com", "attic://note/123", "https://", "relative/path"] {
+            XCTAssertFalse(NoteLinkPolicy.open(address) { opened.append($0); return true })
+        }
+        for address in ["http://example.com", "https://example.com/path", "HTTPS://example.com"] {
+            XCTAssertTrue(NoteLinkPolicy.open(address) { opened.append($0); return true })
+        }
+        XCTAssertEqual(opened.count, 3)
+        let engine = NoteEditorEngine(noteID: UUID(), document: .blank)
+        let (_, view) = engine.makeView()
+        defer { engine.detachView() }
+        XCTAssertTrue(engine.textView(view, clickedOnLink: "file:///tmp/private", at: 0), "refusal must suppress AppKit's fallback")
+    }
+
     func testU04HTMLPasteMakesNoResourceRequests() async throws {
         let server = try RoundUHTTPServer()
         try await server.start()
