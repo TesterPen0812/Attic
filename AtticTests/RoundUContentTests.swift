@@ -151,6 +151,38 @@ final class RoundUContentTests: XCTestCase {
         XCTAssertTrue(engine.textView(view, clickedOnLink: "file:///tmp/private", at: 0), "refusal must suppress AppKit's fallback")
     }
 
+    func testU18PrivateFragmentSaveAndSelectionCopyStayBounded() throws {
+        let bytes = Data(#"{"format":1,"blocks":[{"kind":"text","text":"x","style":"heading","level":9223372036854775807}]}"#.utf8)
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("")]))
+        let (_, view) = engine.makeView()
+        defer { engine.detachView() }
+        XCTAssertTrue(engine.paste(fragmentData: bytes, at: NSRange(location: 2, length: 0)))
+        let document = engine.document()
+        let prepared = try PreparedNoteDocument(document)
+        XCTAssertEqual(prepared.body, "###### x")
+        XCTAssertEqual(prepared.plainText, "T\n###### x")
+        let board = NSPasteboard(name: .init("RoundU-\(UUID())"))
+        defer { board.releaseGlobally() }
+        view.setSelectedRange(NSRange(location: 2, length: 1))
+        XCTAssertTrue(view.writeSelection(to: board, types: [.string, TasksTextExport.markdownType]))
+        XCTAssertEqual(board.string(forType: .string), "###### x")
+        XCTAssertEqual(board.string(forType: TasksTextExport.markdownType), "###### x")
+    }
+
+    func testU03NestedLinksHaveOneDestinationPerSpanAndReopenInFreshContext() throws {
+        let cell = NoteTableText.inlineCell("[a[b](https://inner.example)c](https://outer.example)")
+        XCTAssertEqual(cell.text, "abc")
+        XCTAssertEqual(cell.marks.map(\.url), ["https://outer.example", "https://inner.example", "https://outer.example"])
+        var table = NoteTable(texts: [["abc"]]); table.rows[0].cells[0] = cell
+        let document = NoteDocument(blocks: [.text("T"), .table(table)])
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let created = try store.createDocumentNote(id: UUID(), document: document).get()
+        let fresh = trackAttachmentReconciliation(of: NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let loaded = try XCTUnwrap(fresh.loadDocument(noteID: created.noteID))
+        XCTAssertTrue(loaded.content.isEditable)
+        XCTAssertEqual(loaded.content.document?.blocks, document.blocks)
+    }
+
     func testU01ReportedRaggedFixtureFallsBackToIntactPlainText() {
         let source = String(repeating: "a\tb\n", count: 20_000)
             + Array(repeating: "x", count: 30_000).joined(separator: "\t")
