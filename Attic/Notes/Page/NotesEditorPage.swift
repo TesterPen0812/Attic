@@ -1076,7 +1076,6 @@ private struct NoteProposalComparison: View {
     let bottomInset: CGFloat
     let design: AtticDesignContext
     @State private var proposed = false
-    @State private var scrollOffset: CGFloat = 0
     @State private var busy = false
 
     private var document: NoteDocument {
@@ -1105,7 +1104,7 @@ private struct NoteProposalComparison: View {
                 }
             }.padding(.horizontal, columnInset)
             NoteComparisonPreview(document: document, noteID: review.noteID, design: design,
-                                  imageProvider: controller, columnInset: columnInset, scrollOffset: $scrollOffset)
+                                  imageProvider: controller, columnInset: columnInset)
                 .accessibilityIdentifier("notes-proposal-document")
             if let message = controller.proposalReviewNotice {
                 AtticText(verbatim: message, style: .helper, ink: .helper)
@@ -1158,7 +1157,6 @@ private struct NoteComparisonPreview: NSViewRepresentable {
     let design: AtticDesignContext
     let imageProvider: NoteImageProviding
     let columnInset: CGFloat
-    @Binding var scrollOffset: CGFloat
 
     final class Coordinator {
         var engine: NoteEditorEngine?
@@ -1167,7 +1165,7 @@ private struct NoteComparisonPreview: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView {
         let host = NSView()
-        install(in: host, coordinator: context.coordinator, offset: scrollOffset)
+        install(in: host, coordinator: context.coordinator, offset: 0)
         return host
     }
     func updateNSView(_ host: NSView, context: Context) {
@@ -1180,7 +1178,7 @@ private struct NoteComparisonPreview: NSViewRepresentable {
             }
             return
         }
-        let offset = (host.subviews.first as? NSScrollView)?.contentView.bounds.origin.y ?? scrollOffset
+        let offset = (host.subviews.first as? NSScrollView)?.contentView.bounds.origin.y ?? 0
         install(in: host, coordinator: context.coordinator, offset: offset)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {

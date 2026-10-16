@@ -32,18 +32,6 @@ on:
         default: false
         type: boolean
 
-      compare_tag_colour_costs:
-        description: Record paired AB/BA this revision and 76e4276 tag-open costs
-        required: false
-        default: false
-        type: boolean
-
-      compare_note_save_gates:
-        description: Record four interleaved d77ec80 and afebc3a save-gate runs
-        required: false
-        default: false
-        type: boolean
-
 permissions:
   contents: read
 
@@ -168,16 +156,6 @@ jobs:
             ${{ runner.temp }}/fka-*-summary.json
             ${{ runner.temp }}/attic-input-modes.log
 
-      - name: Measure int11 against integration base in paired AB/BA runs
-        if: always() && inputs.compare_tag_colour_costs
-        run: python3 Scripts/compare_tag_colour_costs.py "$RUNNER_TEMP/TagColourComparison" --candidate-ref "$GITHUB_SHA"
-      - name: Upload int11 tag timing comparison
-        if: always() && inputs.compare_tag_colour_costs
-        uses: actions/upload-artifact@v4
-        with:
-          name: tag-colour-comparison-${{ github.sha }}
-          path: ${{ runner.temp }}/TagColourComparison/*.json
-          retention-days: 7
 
   macos:
     needs: validate-inputs
@@ -279,18 +257,6 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             SWIFT_STRICT_CONCURRENCY=complete \
             clean build
-
-      - name: Measure pinned colour1 against integration base in paired AB/BA runs
-        if: inputs.compare_tag_colour_costs
-        run: python3 Scripts/compare_tag_colour_costs.py "$RUNNER_TEMP/TagColourComparison" --candidate-ref "$GITHUB_SHA"
-
-      - name: Upload pinned tag-colour timing comparison
-        if: always() && inputs.compare_tag_colour_costs
-        uses: actions/upload-artifact@v4
-        with:
-          name: tag-colour-comparison-${{ github.sha }}
-          path: ${{ runner.temp }}/TagColourComparison/*.json
-          retention-days: 7
 
       - name: Preflight the pinned integration cost host with current fixtures
         if: inputs.inspect_dropdown_sampling
@@ -459,24 +425,6 @@ jobs:
           path: ${{ runner.temp }}/AtticFullKeyboardAccessTests.xcresult
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Compare baseline and Fix 2 save gates on this runner
-        if: inputs.compare_note_save_gates && inputs.lane != 'fast'
-        timeout-minutes: 20
-        run: |
-          python3 Scripts/compare_note_save_gates.py "$RUNNER_TEMP/NoteSaveGateComparison" --unsigned
-
-      - name: Upload baseline and Fix 2 save-gate evidence
-        if: always() && inputs.compare_note_save_gates && inputs.lane != 'fast'
-        uses: actions/upload-artifact@v4
-        with:
-          name: note-save-gate-comparison-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/NoteSaveGateComparison/results.json
-            ${{ runner.temp }}/NoteSaveGateComparison/*.log
-            ${{ runner.temp }}/NoteSaveGateComparison/*.xcresult
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Run seeded macOS performance UI tests
         id: perf_ui_tests
@@ -775,7 +723,6 @@ jobs:
             for side in "${sides[@]}"; do
               source="$GITHUB_WORKSPACE"
               build=candidate
-              rendered=()
               keystroke=()
               if [ "${{ inputs.headless_costs }}" != true ]; then
                 keystroke=(-only-testing:AtticTests/TasksKeystrokeCostTests/testTheFirstKeystrokeCostsAboutWhatTheOthersDo)
@@ -799,8 +746,7 @@ jobs:
                 -only-testing:AtticTests/NoteSlice3bTests/testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport \
                 -only-testing:AtticTests/TaskPerformanceGateTests/testFamilySummaryPassAtSixThousandTasksIsMilliseconds \
                 -only-testing:AtticTests/TaskPerformanceGateTests/testStatusToggleAtSixThousandTasksStaysBounded \
-                "${keystroke[@]}" \
-                "${rendered[@]}") \
+                "${keystroke[@]}") \
                 > "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log" 2>&1 \
                 || { tail -n 100 "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"; exit 1; }
               grep -E 'ATTIC_INTEGRATION_COST|ATTIC_DONE_RESULTS|ATTIC_DONE_KEY' "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"

@@ -13,19 +13,6 @@ import XCTest
 /// key and mouse events through the app's queue, real menus.
 @MainActor
 final class DeepReviewFixTests: XCTestCase {
-    private var savedEdge: AtticScrollEdgeStyle?
-
-    override func tearDown() async throws {
-        if let savedEdge { AtticScrollEdgeLab.shared.style = savedEdge }
-        savedEdge = nil
-        try await super.tearDown()
-    }
-
-    private func useCleanCut() {
-        if savedEdge == nil { savedEdge = AtticScrollEdgeLab.shared.style }
-        AtticScrollEdgeLab.shared.style = .cleanCut
-    }
-
     private func layout(_ hosted: Hosted) -> PanelPageLayout {
         PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: hosted.height))
     }
@@ -95,7 +82,6 @@ final class DeepReviewFixTests: XCTestCase {
     // MARK: - Revised scroll-under: full ink under glass, faint at labels and edges
 
     func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
-        useCleanCut()
         let hosted = try Hosted(height: 520, long: true, keyWindow: false)
         defer { hosted.close() }
         XCTAssertFalse(hosted.window.isKeyWindow)

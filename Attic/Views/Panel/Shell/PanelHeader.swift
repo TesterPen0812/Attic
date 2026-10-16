@@ -11,12 +11,11 @@ import SwiftUI
 /// `GlassEffectContainer` (`AtticControlGroup`). Wherever the controls are
 /// not live glass (Reduce Transparency, the Craft style, a Solid panel that
 /// is not key) they keep L3's opaque flat surface
-/// (`AtticCornerButtonStyle.drawsFlat`).
+/// according to the effective control material.
 ///
 /// Cost: the rows scroll under the header, so the glass samples moving
 /// content. The window server does that sampling; the header's own view
-/// graph depends only on the pin, the page, the design context and the
-/// corner lab, so scrolling and swiping never re-evaluate it (checked by
+/// graph depends only on the pin, the page and the design context, so scrolling and swiping never re-evaluate it (checked by
 /// `CornerGlassTests`). The glass at rest is the same material whether it is
 /// interactive or not; the press response runs only while it is pressed.
 struct PanelHeader: View {
@@ -32,7 +31,6 @@ struct PanelHeader: View {
     var onSearch: () -> Void = { AppCoordinator.shared?.showSearch() }
 
     @Environment(\.atticDesign) private var design
-    @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared
 
     #if DEBUG
     /// Test seam: how many times the header's body has run
@@ -44,7 +42,7 @@ struct PanelHeader: View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
         #endif
-        let flat = cornerButtons.style.drawsFlat(in: design)
+        let flat = design.effectiveControls != .liquidGlass
         AtticControlGroup {
             HStack(alignment: .top, spacing: 0) {
                 // O14-05 (owner, 2026-10-14): the outline pin, filled when

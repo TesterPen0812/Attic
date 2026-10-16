@@ -1468,7 +1468,7 @@ enum AtticPopoverPop {
 
     static func play(in window: NSWindow, arrowEdge: Edge) {
         let tuning = AtticMotionTuning.current
-        guard tuning.popsNativePopovers, tuning.appear == .spring, !AtticMotionPreference.reducesMotion,
+        guard tuning.popsNativePopovers, !AtticMotionPreference.reducesMotion,
               let view = window.contentView?.superview ?? window.contentView,
               let layer = view.layer, CATransform3DIsIdentity(layer.transform) else { return }
         let bounds = layer.bounds

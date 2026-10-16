@@ -57,7 +57,7 @@ final class TasksFrameCostTests: XCTestCase {
     func testMeasuresWhatEachInteractionCostsTheMainThread() throws {
         let host = try FrameCostHost()
         hosted = host
-        // The Motion Lab: the feel measured (ATTIC_MOTION_FEEL, else the default).
+        // Measure the chosen default, Lively.
         let feel = MotionFeelUnderTest.apply()
         defer { MotionFeelUnderTest.restore() }
         var report: [String] = ["feel=\(feel)"]

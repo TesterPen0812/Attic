@@ -437,7 +437,7 @@ enum AtticSearchMotion {
 
     static func animation(shown: Bool, reduceMotion: Bool) -> Animation? {
         shown ? AtticMotionPreset.popover.animation(reduceMotion: reduceMotion)
-              : AtticMotionPreset.popover.exit(reduceMotion: reduceMotion)
+              : AtticMotionPreset.popover.leaveAnimation(reduceMotion: reduceMotion)
     }
 }
 
@@ -447,17 +447,8 @@ enum AtticSearchMotion {
 /// Only transforms (position, scale) and opacity animate; `reduceMotion`
 /// swaps in the fallback.
 ///
-/// Round 9 (owner item 26) made motion springy; round 11 made it crisp
-/// (about a quarter of a second, no bounce on navigation). The Motion Lab
-/// (owner, 2026-09-30: "I much more prefer the bounciness, even if it's
-/// slight") keeps every value in one `AtticMotionTuning`, chosen by a feel
-/// (`AtticMotionFeel`): Calm is round 11, Lively (the default) springs
-/// things in from their anchor and tucks them away, Playful is round 9.
-/// The feels are data: every preset reads its response and bounce from
-/// the current tuning, and nothing else branches on the feel.
-/// Settings › General › Animations (`AtticAnimationLevel.reduced`) and
-/// macOS Reduce Motion both set `design.reduceMotion`, which swaps every
-/// preset for its fallback, whatever the feel.
+/// Settings › Animations selects Lively (default) or Subtle. Reduced and
+/// macOS Reduce Motion swap every preset for its existing fallback.
 enum AtticMotionPreset: String, CaseIterable, Sendable {
     /// Switch page: the feel's navigation spring (as `slide`), every time,
     /// the pages travelling sideways as they crossfade (`PanelPageMotion`).
@@ -575,51 +566,28 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         showing ? animation(reduceMotion: reduceMotion) : leaveAnimation(reduceMotion: reduceMotion)
     }
 
-    /// Leaving at once (a search field that ends must let the keyboard go
-    /// at once, not linger while a spring settles): a short fade-out, or
-    /// the spring leave style's quick tuck, which has no bounce either.
-    /// Reduce Motion: the same fade, or instant for the instant presets.
-    func exit(reduceMotion: Bool) -> Animation? {
-        if reduceMotion { return reducedAnimation }
-        return AtticMotionScale.exit
-    }
-
-    /// The insertion/removal transition.
-    ///
-    /// - Fade style (Calm), and always under Reduce Motion: opacity plus,
-    ///   unless Reduce Motion is on, a short move (from below for
-    ///   `.bottom`, above for `.top`, the side for `.leading` and
-    ///   `.trailing`; none for a nil edge).
-    /// - Spring appear style: the same move plus a scale-up from the
-    ///   feel's `appearScale`, anchored where the thing comes from
-    ///   (`anchor`, else the edge it rises from), so a spring's bounce is
-    ///   seen as a small pop rather than a fade.
-    /// - Spring leave style: it tucks toward its anchor (`leaveScale`) as
-    ///   it fades, with half the move.
+    /// Spring in from the anchor and tuck away with the selected recipe.
+    /// Reduce Motion uses opacity only.
     func transition(reduceMotion: Bool, edge: Edge? = .bottom, anchor: UnitPoint? = nil,
                     distance: CGFloat? = nil) -> AnyTransition {
         if reduceMotion { return .opacity }
         let travel = distance ?? rise
         let fade = move(edge, by: travel, doublesSideways: distance == nil)
         let tuning = AtticMotionTuning.current
-        guard scaleWeight > 0, tuning.appear == .spring || tuning.leave == .spring else { return fade }
+        guard scaleWeight > 0 else { return fade }
         let anchor = anchor ?? edge.map(Self.anchor(for:)) ?? .center
-        let insertion = tuning.appear == .spring
-            ? fade.combined(with: .scale(scale: scale(from: tuning.appearScale), anchor: anchor))
-            : fade
-        let removal = tuning.leave == .spring
-            ? move(edge, by: travel / 2, doublesSideways: distance == nil)
-                .combined(with: .scale(scale: scale(from: tuning.leaveScale), anchor: anchor))
-            : fade
+        let insertion = fade.combined(with: .scale(scale: scale(from: tuning.appearScale), anchor: anchor))
+        let removal = move(edge, by: travel / 2, doublesSideways: distance == nil)
+            .combined(with: .scale(scale: scale(from: tuning.leaveScale), anchor: anchor))
         return .asymmetric(insertion: insertion, removal: removal)
     }
 
     /// The scale something shown and hidden in place (not inserted: the
     /// strip, the add bar's send button) takes while hidden: the appear
-    /// scale in the spring style, else 1 (none).
+    /// scale in the selected recipe, or 1 under Reduce Motion.
     func hiddenScale(reduceMotion: Bool) -> CGFloat {
         let tuning = AtticMotionTuning.current
-        guard !reduceMotion, tuning.appear == .spring else { return 1 }
+        guard !reduceMotion else { return 1 }
         return scale(from: tuning.appearScale)
     }
 
@@ -662,23 +630,7 @@ struct AtticMotionSpring: Hashable, Codable, Sendable {
     var bounce: Double
 }
 
-/// Appear and Leave: spring in with a small scale-up (spring back with a
-/// quick tuck), or today's fade.
-enum AtticMotionStyle: String, CaseIterable, Codable, Sendable {
-    case spring
-    case fade
-
-    /// The Motion Lab's words (a preview-only tool: not localized).
-    var title: String {
-        switch self {
-        case .spring: "Spring"
-        case .fade: "Fade"
-        }
-    }
-}
-
-/// Every value the motion is made of (the Motion Lab, owner 2026-09-30).
-/// A feel is one of these; the lab edits a copy. Navigation is the slide
+/// Values for the selected Lively or Subtle recipe. Navigation is the slide
 /// (and the Tasks pager's own settle), the quick look and the done row's
 /// slide; the things that appear are the pop-overs, the strip, the bars,
 /// the Done search, the toast, a completion and the rows that settle.
@@ -698,116 +650,27 @@ struct AtticMotionTuning: Hashable, Codable, Sendable {
     /// The leave style's tuck: its response and the scale it tucks to.
     var leaveResponse: Double
     var leaveScale: Double
-    var appear: AtticMotionStyle
-    var leave: AtticMotionStyle
     /// Native pop-overs (the pickers, the date and tag pop-overs) spring
     /// in from their arrow as well as the system's own fade. Experimental:
     /// off in every feel until the owner has seen it.
     var popsNativePopovers = false
 
     /// The current tuning. Written only on the main thread, by
-    /// `AppSettings` (a feel, or the Motion Lab's values); read wherever
+    /// `AppSettings` (Animations and the native-popover experiment); read wherever
     /// an animation is made, off the main actor too, like the presets.
     nonisolated(unsafe) static var current: AtticMotionTuning = AtticMotionFeel.recommended.tuning
-
-    static let navigation: [WritableKeyPath<AtticMotionTuning, AtticMotionSpring>] = [\.slide, \.expand, \.doneSlide]
-    static let appearing: [WritableKeyPath<AtticMotionTuning, AtticMotionSpring>] = [\.popover, \.toast, \.complete, \.settle, \.failReturn]
-
-    static let responseRange: ClosedRange<Double> = 0.10...0.50
-    static let bounceRange: ClosedRange<Double> = 0...0.45
-    static let scaleRange: ClosedRange<Double> = 0.80...1
-    static let leaveRange: ClosedRange<Double> = 0.08...0.30
-
-    /// The group's knobs (the lab's sliders): the first spring of the
-    /// group stands for it, and moving a knob shifts every spring in the
-    /// group by the same amount, so their differences are kept.
-    var navigationResponse: Double {
-        get { slide.response }
-        set { shift(Self.navigation, \.response, by: newValue - slide.response, in: Self.responseRange) }
-    }
-    var navigationBounce: Double {
-        get { slide.bounce }
-        set { shift(Self.navigation, \.bounce, by: newValue - slide.bounce, in: Self.bounceRange) }
-    }
-    var appearResponse: Double {
-        get { popover.response }
-        set { shift(Self.appearing, \.response, by: newValue - popover.response, in: Self.responseRange) }
-    }
-    var appearBounce: Double {
-        get { popover.bounce }
-        set { shift(Self.appearing, \.bounce, by: newValue - popover.bounce, in: Self.bounceRange) }
-    }
-
-    private mutating func shift(_ springs: [WritableKeyPath<AtticMotionTuning, AtticMotionSpring>],
-                                _ value: WritableKeyPath<AtticMotionSpring, Double>, by delta: Double,
-                                in range: ClosedRange<Double>) {
-        for spring in springs {
-            let moved = self[keyPath: spring][keyPath: value] + delta
-            self[keyPath: spring][keyPath: value] = min(max((moved * 1000).rounded() / 1000, range.lowerBound), range.upperBound)
-        }
-    }
-
-    /// The Motion Lab's "Copy values": readable, then as Swift to bake in.
-    func copyText(feel: AtticMotionFeel) -> String {
-        func pair(_ spring: AtticMotionSpring) -> String { String(format: "%.2f s / %.2f", spring.response, spring.bounce) }
-        func swift(_ spring: AtticMotionSpring) -> String {
-            String(format: ".init(response: %.3f, bounce: %.3f)", spring.response, spring.bounce)
-        }
-        let edited = self == feel.tuning ? "" : " (edited)"
-        return """
-        Attic motion: \(feel.title)\(edited)
-        Navigation: slide \(pair(slide)), expand \(pair(expand)), done slide \(pair(doneSlide))
-        Appear: pop-over \(pair(popover)), toast \(pair(toast)), complete \(pair(complete)), settle \(pair(settle)), fail return \(pair(failReturn))
-        Appear style \(appear.rawValue), scale \(String(format: "%.2f", appearScale)); leave style \(leave.rawValue), \(String(format: "%.2f s", leaveResponse)), scale \(String(format: "%.2f", leaveScale)); native pop-overs \(popsNativePopovers ? "spring" : "system")
-
-        AtticMotionTuning(
-            slide: \(swift(slide)), expand: \(swift(expand)), doneSlide: \(swift(doneSlide)),
-            popover: \(swift(popover)), toast: \(swift(toast)), complete: \(swift(complete)),
-            settle: \(swift(settle)), failReturn: \(swift(failReturn)),
-            appearScale: \(String(format: "%.3f", appearScale)), leaveResponse: \(String(format: "%.3f", leaveResponse)), leaveScale: \(String(format: "%.3f", leaveScale)),
-            appear: .\(appear.rawValue), leave: .\(leave.rawValue), popsNativePopovers: \(popsNativePopovers)
-        )
-        """
-    }
 }
 
-/// The feels the Motion Lab offers. Each is only data (`tuning`). The user
-/// setting (`AtticAnimationLevel`) offers two of them, Lively and Subtle.
-enum AtticMotionFeel: String, CaseIterable, Codable, Sendable {
-    /// Round 11: crisp, no bounce on navigation, a light one on small
-    /// things that appear; things fade in and out.
-    case calm
-    /// The quiet spring feel (Settings › General › Animations › Subtle):
-    /// Calm's timings with a small bounce, springing in and tucking away
-    /// from close to full size. No plain fades.
+/// The two spring recipes used by Settings › Animations.
+enum AtticMotionFeel: String, CaseIterable, Sendable {
     case subtle
-    /// The default (Settings › General › Animations › Lively): navigation lands in about the same time as Calm's
-    /// with a hint of bounce; things that appear spring in from about
-    /// 0.92 of their size, from where they come from, and tuck away
-    /// quickly. No plain fades.
     case lively
-    /// Round 9's springs, with a bigger pop and tuck.
-    case playful
-
-    /// What every build starts with.
     static let recommended: AtticMotionFeel = .lively
-
-    /// The Motion Lab's words (a preview-only tool: not localized).
-    var title: String {
-        switch self {
-        case .calm: "Calm"
-        case .subtle: "Subtle"
-        case .lively: "Lively"
-        case .playful: "Playful"
-        }
-    }
 
     var tuning: AtticMotionTuning {
         switch self {
-        case .calm: .calm
         case .subtle: .subtle
         case .lively: .lively
-        case .playful: .playful
         }
     }
 }
@@ -817,34 +680,26 @@ extension AtticMotionTuning {
     /// quick look, the done row's slide, settling and a failed drop's
     /// return take L (280 ms); pop-overs, toasts and completions take M
     /// (200 ms). Feels differ only in bounce and in how much things grow.
-    private static func scaled(bounce: Double, appearScale: Double, leaveScale: Double,
-                               appear: AtticMotionStyle, leave: AtticMotionStyle) -> AtticMotionTuning {
+    private static func scaled(bounce: Double, appearScale: Double, leaveScale: Double) -> AtticMotionTuning {
         let spatial = AtticMotionSpring(response: AtticMotionScale.spatial, bounce: bounce)
         let standard = AtticMotionSpring(response: AtticMotionScale.standard, bounce: bounce)
         return AtticMotionTuning(
             slide: spatial, expand: spatial, doneSlide: spatial,
             popover: standard, toast: standard, complete: standard, settle: spatial, failReturn: spatial,
-            appearScale: appearScale, leaveResponse: AtticMotionScale.fast, leaveScale: leaveScale,
-            appear: appear, leave: leave
+            appearScale: appearScale, leaveResponse: AtticMotionScale.fast, leaveScale: leaveScale
         )
     }
 
-    /// No bounce, fades (the Motion Lab's quiet reference).
-    static let calm = scaled(bounce: 0, appearScale: 1, leaveScale: 1, appear: .fade, leave: .fade)
-
     /// Bounce 0.04, growing from 0.96 of their size.
-    static let subtle = scaled(bounce: 0.04, appearScale: 0.96, leaveScale: 0.98, appear: .spring, leave: .spring)
+    static let subtle = scaled(bounce: 0.04, appearScale: 0.96, leaveScale: 0.98)
 
     /// The default: bounce 0.12, growing from 0.92 of their size.
-    static let lively = scaled(bounce: 0.12, appearScale: 0.92, leaveScale: 0.96, appear: .spring, leave: .spring)
+    static let lively = scaled(bounce: 0.12, appearScale: 0.92, leaveScale: 0.96)
 
-    /// The Motion Lab's lively extreme (preview builds only): bounce 0.2,
-    /// growing from 0.88.
-    static let playful = scaled(bounce: 0.2, appearScale: 0.88, leaveScale: 0.94, appear: .spring, leave: .spring)
 }
 
-/// The Motion Lab (preview builds only): whether this process may show it
-/// and use a stored feel. Never under the release identity.
+/// Whether this preview may show blur tuning and the native-popover experiment.
+/// Never under the release identity.
 enum AtticMotionLab {
     static let officialBundleIdentifier = "com.taha.Attic"
     static let previewPrefix = "com.taha.Attic.preview."

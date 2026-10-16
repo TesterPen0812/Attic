@@ -553,7 +553,7 @@ final class OwnerTasks1010Tests: XCTestCase {
             .contentMargins(.bottom, 48, for: .scrollContent)
             .contentMargins(.top, 100, for: .scrollIndicators)
             .contentMargins(.bottom, 64, for: .scrollIndicators)
-            .atticScrollEdgeEffect(.cleanCut)
+            .atticScrollEdgeEffect()
             .mask { Color.white })
         let actual = AnyView(content.tasksListEdges(.cleanCut, top: 80, listTop: 100, bottomInset: 16,
             bottomMargin: 48, bottomClearance: 64, stack: stack, mask: Color.white))
