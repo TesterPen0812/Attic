@@ -68,7 +68,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
         XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 13.5)
         XCTAssertEqual(AtticControlSize.settingsHeaderHeight, 34)
-        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 84, "T-04 B: icon and name, the switcher's width")
+        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 32)
         XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 84)
         // Compact round (owner): rows 36 / 50, highlights 30 / 44.
         XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [34, 30, 48, 44])
@@ -549,7 +549,7 @@ final class AtticDesignSystemTests: XCTestCase {
                 .atticDesign(.default))
             tabSizes.insert("\(tabs.fittingSize)")
         }
-        XCTAssertEqual(buttonSizes, ["\(CGSize(width: AtticPageButton<Int>.width(open: false, count: 3), height: AtticControlSize.headerControl))"])
+        XCTAssertEqual(buttonSizes, ["\(CGSize(width: AtticControlSize.headerControl, height: AtticControlSize.headerControl))"])
         XCTAssertEqual(tabSizes.count, 1, "The tabs keep their width whichever page is selected: \(tabSizes)")
         XCTAssertEqual(AtticTextStyle.pageTabSelected.spec.weight, .semibold)
         XCTAssertEqual(AtticTextStyle.pageTab.spec.weight, .medium)

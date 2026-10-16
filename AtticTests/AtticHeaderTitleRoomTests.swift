@@ -34,40 +34,34 @@ final class AtticHeaderTitleRoomTests: XCTestCase {
         }
     }
 
-    /// T-04 B (owner, 2026-10-15): the page button is the switcher's width
-    /// shut and open, so the title keeps one place: no slide on hover.
-    func testTheTitleKeepsOnePlaceShutAndOpen() {
-        for panel in panelWidths {
-            for inset in chromeInsets {
-                for title in titleWidths {
-                    XCTAssertEqual(placement(title, panel, inset, open: true), placement(title, panel, inset, open: false),
-                                   "panel \(panel) inset \(inset) title \(title)")
-                }
-            }
-        }
+    func testOpenTitleLeftAlignsAndATitleThatFitsKeepsItsWidth() {
+        let panel: CGFloat = 320, inset: CGFloat = 24
+        let left = inset + AtticControlSize.headerControl + AtticHeaderTitleSlot.gap
+        let short = placement(60, panel, inset, open: true)
+        XCTAssertEqual(short.x, left)
+        XCTAssertEqual(short.width, 60)
+        // Long: it fills exactly the space the switcher leaves.
+        let long = placement(4000, panel, inset, open: true)
+        XCTAssertEqual(long.x, left)
+        XCTAssertEqual(long.maxX, panel - inset - switcher - AtticHeaderTitleSlot.gap, accuracy: 0.001)
     }
 
-    /// Balanced: a title that fits sits on the panel's centre; a longer one
-    /// stays as near it as the pin and the switcher allow, filling the room
-    /// between them before it truncates.
-    func testTheTitleIsCentredWhenItFitsAndFillsTheRoomWhenLong() {
+    func testShutTitleReturnsToItsFullWidthAndTheCentre() {
         for panel in panelWidths {
             for inset in chromeInsets {
-                let left = inset + AtticControlSize.headerControl + AtticHeaderTitleSlot.gap
-                let right = max(left, panel - inset - switcher - AtticHeaderTitleSlot.gap)
+                let side = inset + AtticControlSize.headerControl + AtticHeaderTitleSlot.gap
+                let room = max(0, panel - side * 2)
                 for title in titleWidths {
+                    let open = placement(title, panel, inset, open: true)
                     let shut = placement(title, panel, inset, open: false)
                     let label = "panel \(panel) inset \(inset) title \(title)"
-                    XCTAssertEqual(shut.width, min(title, right - left), accuracy: 0.001, label)
-                    if (panel - title) / 2 >= left, (panel + title) / 2 <= right {
-                        XCTAssertEqual(shut.x + shut.width / 2, panel / 2, accuracy: 0.001, label)
-                    }
+                    // Shut is the title's whole width, as before this change.
+                    XCTAssertEqual(shut.width, min(title, room), accuracy: 0.001, label)
+                    XCTAssertEqual(shut.x + shut.width / 2, panel / 2, accuracy: 0.001, label)
+                    XCTAssertGreaterThanOrEqual(shut.width, open.width - 0.001, label)
                 }
             }
         }
-        let long = placement(4000, 320, 24, open: false)
-        XCTAssertEqual(long.x, 24 + AtticControlSize.headerControl + AtticHeaderTitleSlot.gap, accuracy: 0.001)
-        XCTAssertEqual(long.maxX, 320 - 24 - switcher - AtticHeaderTitleSlot.gap, accuracy: 0.001)
     }
 
     func testRoomIsNeverNegativeInAPanelTooNarrowForTheControls() {
@@ -110,26 +104,29 @@ final class AtticHeaderTitleRoomTests: XCTestCase {
         return frame
     }
 
-    func testHostedLongTitleStopsBeforeTheSwitcherShutAndOpen() throws {
+    func testHostedLongTitleStopsBeforeTheOpenSwitcherAndFillsTheSpaceShut() throws {
         let longTitle = String(repeating: "Network fundamentals ", count: 12)
         for panel in [320, 420] as [CGFloat] {
             let switcherLeft = AtticHeaderTitleSlot.switcherFrame(
                 panelWidth: panel, chromeInset: 24, switcherWidth: PanelHeaderLayout.pageSwitchWidth).lowerBound
             let open = try XCTUnwrap(hostedFrame(title: longTitle, open: true, panelWidth: panel))
+            XCTAssertLessThanOrEqual(open.maxX, switcherLeft - AtticHeaderTitleSlot.gap + 0.5, "open, panel \(panel)")
             let shut = try XCTUnwrap(hostedFrame(title: longTitle, open: false, panelWidth: panel))
-            for (frame, name) in [(open, "open"), (shut, "shut")] {
-                XCTAssertLessThanOrEqual(frame.maxX, switcherLeft - AtticHeaderTitleSlot.gap + 0.5, "\(name), panel \(panel)")
-                XCTAssertGreaterThanOrEqual(frame.minX, 24 + AtticControlSize.headerControl + AtticHeaderTitleSlot.gap - 0.5)
-            }
-            XCTAssertEqual(open.minX, shut.minX, accuracy: 0.5, "no slide, panel \(panel)")
+            let side = 24 + AtticControlSize.headerControl + AtticHeaderTitleSlot.gap
+            // The button hugs its truncated text, so it can fall a few points
+            // short of the room (a word's last letter does not fit).
+            let room = panel - side * 2
+            XCTAssertLessThanOrEqual(shut.width, room + 0.5, "shut, panel \(panel)")
+            XCTAssertGreaterThan(shut.width, room - 10, "shut, panel \(panel)")
+            XCTAssertGreaterThan(shut.width, open.width, "the width comes back, panel \(panel)")
         }
     }
 
-    func testHostedShortTitleKeepsItsPlaceShutAndOpen() throws {
+    func testHostedShortTitleKeepsItsWidthShutAndOpen() throws {
         let open = try XCTUnwrap(hostedFrame(title: "Notes", open: true, panelWidth: 360))
         let shut = try XCTUnwrap(hostedFrame(title: "Notes", open: false, panelWidth: 360))
         XCTAssertEqual(open.width, shut.width, accuracy: 0.5)
-        XCTAssertEqual(open.minX, shut.minX, accuracy: 0.5, "it stays put")
+        XCTAssertLessThan(open.minX, shut.minX, "it slid left")
         XCTAssertEqual(shut.midX, 180, accuracy: 0.5)
     }
 

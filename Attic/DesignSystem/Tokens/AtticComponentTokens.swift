@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 // Per-component measurements: every size, gap, stroke, shadow and fixed
@@ -241,19 +240,6 @@ enum AtticPageButtonMetrics {
     static let iconSize: CGFloat = 13
     /// Phase 0's hairline around an accented current page.
     static let accentStrokeWidth: CGFloat = 0.75
-    /// Shut (T-04 B): the current page's icon and name, centred, at least
-    /// this far inside the inset on each side.
-    static let labelGap: CGFloat = AtticSmallControlMetrics.iconLabelGap
-    static let labelSidePadding: CGFloat = 6
-    static let labelStyle: AtticTextStyle = .controlLabel
-
-    /// The room a page's icon and `title` take shut, inset included.
-    @MainActor static func labelledWidth(title: String) -> CGFloat {
-        let spec = labelStyle.spec
-        let font = NSFont.systemFont(ofSize: spec.size, weight: spec.weight == .medium ? .medium : .regular)
-        let text = (title as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
-        return inset * 2 + labelSidePadding * 2 + iconSize + labelGap + text
-    }
 }
 
 /// The add bar (chrome B: 32 tall, radius 13.5; the send button inside).
