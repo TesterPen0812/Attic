@@ -53,6 +53,22 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), data)
     }
 
+    func testU08ActualReadIsBoundedEvenWhenSourceGrowsAfterMetadata() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("growing.bin")
+        let limit = 64 * 1024
+        try Data([1]).write(to: url)
+        XCTAssertEqual(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, 1)
+        let writer = try FileHandle(forWritingTo: url)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data(repeating: 2, count: limit * 2))
+        try writer.close()
+        XCTAssertThrowsError(try NotesPageController.readImportedBytes(url, maximumBytes: limit))
+        let payload = Data(repeating: 3, count: limit)
+        try payload.write(to: url)
+        XCTAssertEqual(try NotesPageController.readImportedBytes(url, maximumBytes: limit), payload)
+    }
+
     private func makeController(journal: NoteDraftJournaling? = nil, delay: Duration = .seconds(60)) -> NotesPageController {
         NotesPageController(store: store, journal: journal ?? NoteDraftJournal(directory: directory),
                             saveDelay: delay, pauseVersionDelay: .seconds(600))

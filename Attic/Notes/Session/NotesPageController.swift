@@ -2353,6 +2353,26 @@ final class NotesPageController: ObservableObject {
         try await Task.detached(priority: .userInitiated) { try write(data, url) }.value
     }
 
+    nonisolated static func readImportedBytes(_ url: URL,
+        maximumBytes: Int = Int(AttachmentLimits.maxBytesPerAttachment)) throws -> Data {
+        guard maximumBytes >= 0 else { throw AttachmentFileStoreError.changedDuringRead(url) }
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+        var data = Data()
+        while true {
+            try Task.checkCancellation()
+            // At the bound read one sentinel byte, never an unbounded tail.
+            let remaining = maximumBytes - data.count
+            let request = remaining >= 1024 * 1024 ? 1024 * 1024 : remaining + 1
+            let chunk = try input.read(upToCount: request) ?? Data()
+            if chunk.isEmpty { return data }
+            guard chunk.count <= remaining else {
+                throw AttachmentFileStoreError.attachmentTooLarge(url, Int64(maximumBytes) + 1)
+            }
+            data.append(chunk)
+        }
+    }
+
     nonisolated private static func loadImageFile(_ url: URL) async -> (StagedNoteAttachment, CGSize?)? {
         await Task.detached(priority: .userInitiated) {
             let scoped = url.startAccessingSecurityScopedResource()
@@ -2365,7 +2385,7 @@ final class NotesPageController: ObservableObject {
                   Int64(size) <= AttachmentLimits.maxBytesPerAttachment,
                   url.lastPathComponent.utf8.count <= AttachmentLimits.maxFilenameUTF8Bytes,
                   let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .image),
-                  let data = try? Data(contentsOf: url), data.count == size,
+                  let data = try? readImportedBytes(url), data.count == size,
                   let pixelSize = NoteImageDecoder.pixelSize(of: data) else { return nil }
             let digest = NotePayloadDigest.sha256(data)
             return (StagedNoteAttachment(id: UUID(), filename: url.lastPathComponent,
@@ -2395,7 +2415,7 @@ final class NotesPageController: ObservableObject {
                 return NoteImportedObject(filename: name, contentTypeIdentifier: type, byteCount: size,
                     failure: AttachmentFileStoreError.attachmentTooLarge(url, size).localizedDescription)
             }
-            guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            guard let data = try? readImportedBytes(url), !data.isEmpty else {
                 return NoteImportedObject(filename: name, contentTypeIdentifier: type, byteCount: size,
                     failure: String(localized: "The file could not be read."))
             }
