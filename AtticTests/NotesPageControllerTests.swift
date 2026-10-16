@@ -3119,12 +3119,14 @@ private final class CountingDeadlineJournal: NoteDraftJournaling {
     let base: NoteDraftJournal
     private(set) var writeCount = 0
     var beforeWrite: (() async -> Void)?
+    var failWriteNumber: Int?
     init(directory: URL) { base = NoteDraftJournal(directory: directory) }
     var requiresAsyncIO: Bool { true }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                       replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         writeCount += 1
         await beforeWrite?()
+        if writeCount == failWriteNumber { throw CocoaError(.fileWriteOutOfSpace) }
         return try await base.writeDurably(entry, staged: staged, replacing: claim)
     }
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
@@ -3193,5 +3195,170 @@ extension NotesPageControllerTests {
         XCTAssertEqual(NoteMarkdownExport.markdown(live), NoteMarkdownExport.markdown(saved))
         XCTAssertTrue(session.engine.history.undo())
         XCTAssertEqual(session.engine.document(), before)
+    }
+}
+
+/// A continuation barrier, with no clock or scheduler-order assumption.
+@MainActor
+private final class QuitImportBarrier {
+    private(set) var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    func pause() async {
+        entered = true
+        if !released { await withCheckedContinuation { continuation = $0 } }
+    }
+    func waitUntilEntered() async throws {
+        let deadline = ContinuousClock.now + .seconds(20)
+        while !entered {
+            guard ContinuousClock.now < deadline else { throw CocoaError(.userCancelled) }
+            await Task.yield()
+        }
+    }
+    func release() { released = true; continuation?.resume(); continuation = nil }
+}
+
+extension NotesPageControllerTests {
+    func testS17QuitAcceptsDurableImportWhenImportClearsTicketBeforeFinalCheck() async throws {
+        try await assertQuitDuringImport(importResumesFirst: true)
+    }
+
+    func testS17QuitAcceptsDurableImportWhenImportClearsTicketAfterFinalCheck() async throws {
+        try await assertQuitDuringImport(importResumesFirst: false)
+    }
+
+    func testS17QuitRefusesAFailedFinalImportCheckpoint() async throws {
+        try await assertQuitDuringImport(importResumesFirst: true, refusal: .failedWrite)
+    }
+
+    func testS17QuitRefusesANewerGenerationEvenWhenUndoRestoresTheSameEntry() async throws {
+        try await assertQuitDuringImport(importResumesFirst: true, refusal: .newerGeneration)
+    }
+
+    func testS17QuitRefusesAClaimReplacedByImportCancellation() async throws {
+        try await assertQuitDuringImport(importResumesFirst: true, refusal: .replacedClaim)
+    }
+
+    private enum QuitImportRefusal { case failedWrite, newerGeneration, replacedClaim }
+
+    private func assertQuitDuringImport(importResumesFirst: Bool, refusal: QuitImportRefusal? = nil) async throws {
+        let journal = CountingDeadlineJournal(directory: directory)
+        let write = QuitImportBarrier(), importResume = QuitImportBarrier()
+        let quitCheck = QuitImportBarrier(), loader = QuitImportBarrier()
+        journal.beforeWrite = { await write.pause() }
+        let image = try realImage()
+        let controller = NotesPageController(store: store, journal: journal,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+            imageLoader: { _ in await loader.pause(); return (image, NSSize(width: 2, height: 2)) })
+        let frozen = ContinuousClock.now
+        controller.recoveryClockNow = { frozen }
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        type("Pending", into: session)
+        controller.importCheckpointWillResume = { await importResume.pause() }
+        controller.importFiles([URL(fileURLWithPath: "/tmp/round-l-image.png")])
+        try await write.waitUntilEntered()
+        if refusal == .failedWrite { journal.failWriteNumber = 3 }
+        var drains = 0
+        controller.recoveryWaitDidDrain = {
+            drains += 1
+            if drains == 2 { await quitCheck.pause() }
+            if drains == 3 {
+                if refusal == .newerGeneration {
+                    let before = session.engine.checkpointDocument()
+                    self.type(" newer", into: session)
+                    XCTAssertTrue(session.engine.history.undo())
+                    XCTAssertEqual(session.engine.checkpointDocument(), before)
+                } else if refusal == .replacedClaim {
+                    controller.cancelActiveImport()
+                    await controller.waitForRecoveryWork()
+                }
+            }
+        }
+        var waiting = false
+        controller.recoveryWaitDidStart = { waiting = true }
+        let quit = Task { @MainActor in await controller.prepareToLeaveDurably(.quit) }
+        let waitDeadline = ContinuousClock.now + .seconds(20)
+        while !waiting {
+            guard ContinuousClock.now < waitDeadline else { throw CocoaError(.userCancelled) }
+            await Task.yield()
+        }
+        write.release()
+        try await importResume.waitUntilEntered()
+        try await quitCheck.waitUntilEntered()
+        if importResumesFirst {
+            importResume.release()
+            try await loader.waitUntilEntered() // the ticket clear precedes the loader
+        }
+        quitCheck.release()
+        let result = await quit.value
+        XCTAssertEqual(result, refusal == nil,
+            "quit accepts only a current, owned, durable import checkpoint")
+        XCTAssertEqual(journal.writeCount, refusal == .replacedClaim ? 4 : importResumesFirst ? 3 : 2,
+            "the final proof must not enqueue another write")
+        XCTAssertEqual(controller.recoveryResponseTimeout, .seconds(2))
+        if refusal == nil {
+            XCTAssertEqual(session.engine.activity, .idle)
+            XCTAssertNil(session.notice)
+        }
+        let entries = try await journal.base.entriesDurably()
+        let saved = try XCTUnwrap(entries.first?.0)
+        XCTAssertEqual(NoteContentCodec.decode(saved.content).document, session.engine.checkpointDocument())
+        if refusal == .replacedClaim { XCTAssertNil(saved.pendingImport) }
+        else { XCTAssertNotNil(saved.pendingImport) }
+        XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state))
+        XCTAssertTrue(controller.active === session)
+        importResume.release()
+        try await loader.waitUntilEntered()
+        loader.release()
+        await controller.waitForImportWork()
+    }
+}
+
+extension NotesPageControllerTests {
+    func testS17OpenAcceptsTheFinalImportWriteAfterItsTicketWasCleared() async throws {
+        try await assertNavigationDuringImport(newDraft: false)
+    }
+
+    func testS17NewNoteAcceptsTheFinalImportWriteAfterItsTicketWasCleared() async throws {
+        try await assertNavigationDuringImport(newDraft: true)
+    }
+
+    private func assertNavigationDuringImport(newDraft: Bool) async throws {
+        let journal = CountingDeadlineJournal(directory: directory)
+        let importResume = QuitImportBarrier(), navigationCheck = QuitImportBarrier(), loader = QuitImportBarrier()
+        let image = try realImage()
+        let other = try XCTUnwrap(store.create(title: "Other", body: "Saved"))
+        let controller = NotesPageController(store: store, journal: journal,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600),
+            imageLoader: { _ in await loader.pause(); return (image, NSSize(width: 2, height: 2)) })
+        let frozen = ContinuousClock.now
+        controller.recoveryClockNow = { frozen }
+        await controller.startAndWait()
+        await XCTAssertTrueAsync(await controller.newNoteDurably())
+        let session = try XCTUnwrap(controller.active)
+        type("Pending", into: session)
+        controller.importCheckpointWillResume = { await importResume.pause() }
+        controller.importFiles([URL(fileURLWithPath: "/tmp/round-l-navigation.png")])
+        try await importResume.waitUntilEntered()
+        await XCTAssertTrueAsync(await controller.preserveDurably(session))
+        controller.recoveryWaitDidDrain = { await navigationCheck.pause() }
+        let navigation = Task { @MainActor in
+            if newDraft { return await controller.newNoteDurably() }
+            return await controller.openDurably(noteID: other.id)
+        }
+        try await navigationCheck.waitUntilEntered()
+        importResume.release()
+        try await loader.waitUntilEntered()
+        navigationCheck.release()
+        await XCTAssertTrueAsync(await navigation.value)
+        XCTAssertFalse(controller.active === session)
+        if !newDraft { XCTAssertEqual(controller.active?.noteID, other.id) }
+        XCTAssertEqual(journal.writeCount, 3, "proof cannot queue an extra write")
+        let entries = try await journal.base.entriesDurably()
+        XCTAssertEqual(entries.first?.0.noteID, session.noteID)
+        XCTAssertNotNil(entries.first?.0.pendingImport)
+        loader.release()
+        await controller.waitForImportWork()
     }
 }
