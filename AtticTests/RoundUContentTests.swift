@@ -98,6 +98,17 @@ final class RoundUContentTests: XCTestCase {
         }
     }
 
+    func testU01OversizedRawTablesAreRejectedBeforeConstruction() {
+        let wide = Array(repeating: "x", count: NoteTable.maxColumns + 1).joined(separator: "\t")
+        let ragged = "a\tb\na\tb\na\tb\n" + wide
+        XCTAssertNil(NoteTablePaste.table(fromText: ragged))
+        let tall = String(repeating: "a\tb\n", count: NoteTable.maxRows + 1)
+        XCTAssertNil(NoteTablePaste.table(fromText: tall))
+        let markdown = "| " + Array(repeating: "x", count: 31).joined(separator: " | ") + " |\n|" + String(repeating: " --- |", count: 31)
+        XCTAssertNil(NoteTableText.parseMarkdown(markdown))
+        XCTAssertNil(NoteTablePaste.table(fromHTML: "<table><tr>" + String(repeating: "<td>x</td>", count: 31) + "</tr></table>"))
+    }
+
     func testU04HTMLPasteMakesNoResourceRequests() async throws {
         let server = try RoundUHTTPServer()
         try await server.start()

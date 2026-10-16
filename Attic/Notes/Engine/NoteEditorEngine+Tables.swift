@@ -920,7 +920,10 @@ enum NoteTablePaste {
 
     /// Tabular plain text: tab-separated rows, or a Markdown pipe table.
     static func table(fromText text: String) -> NoteTable? {
-        if let rows = NoteTableText.parseTSV(text) { return NoteTable(texts: rows, headerRow: true) }
+        if let rows = NoteTableText.parseTSV(text) {
+            guard NoteTable.admits(rows) else { return nil }
+            return NoteTable(texts: rows, headerRow: true)
+        }
         return NoteTableText.parseMarkdown(text)
     }
 
@@ -928,7 +931,7 @@ enum NoteTablePaste {
     /// table copied from a web page); a page with prose around a table
     /// stays rich text.
     static func table(fromHTML html: String) -> NoteTable? {
-        guard let parsed = NoteTableText.parseHTML(html) else { return nil }
+        guard let parsed = NoteTableText.parseHTML(html), NoteTable.admits(parsed.rows) else { return nil }
         guard let start = html.range(of: "<table", options: .caseInsensitive),
               let end = html.range(of: "</table>", options: [.caseInsensitive, .backwards]) else { return nil }
         let outside = NoteTableText.htmlText(String(html[..<start.lowerBound]) + String(html[end.upperBound...]))
@@ -944,6 +947,7 @@ enum NoteTablePaste {
         }
         if let html = pasteboard.string(forType: .html), let table = table(fromHTML: html) { return table }
         if let tsv = pasteboard.string(forType: tsvType), let rows = NoteTableText.parseTSV(tsv) {
+            guard NoteTable.admits(rows) else { return nil }
             return NoteTable(texts: rows, headerRow: true)
         }
         if let text = pasteboard.string(forType: .string) { return table(fromText: text) }

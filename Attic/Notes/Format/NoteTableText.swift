@@ -129,10 +129,12 @@ enum NoteTableText {
             index += 1
         }
         guard index + 1 < lines.count, let header = pipeCells(lines[index], decodeHTML: false),
-              let alignments = delimiterAlignments(lines[index + 1]), alignments.count == header.count else { return nil }
+              let alignments = delimiterAlignments(lines[index + 1]), alignments.count == header.count,
+              header.count <= NoteTable.maxColumns else { return nil }
         var rows = [header]
         var end = index + 2
         while end < lines.count, let cells = pipeCells(lines[end], decodeHTML: false) {
+            guard rows.count < NoteTable.maxRows, cells.count <= NoteTable.maxColumns else { return nil }
             rows.append(cells)
             end += 1
         }

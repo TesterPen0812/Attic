@@ -114,6 +114,12 @@ struct NoteTable: Equatable, Sendable {
                          rows: (0..<max(1, rows)).map { _ in Row(cells: Array(repeating: .empty, count: columnCount)) })
     }
 
+    /// Admit external rows before padding a ragged source into a rectangle.
+    static func admits(_ texts: [[String]]) -> Bool {
+        !texts.isEmpty && texts.count <= maxRows && texts.allSatisfy { $0.count <= maxColumns }
+            && texts.contains { !$0.isEmpty }
+    }
+
     /// A table from plain cell texts (paste, agents, Markdown).
     init(texts: [[String]], headerRow: Bool = true, alignments: [Alignment] = []) {
         let width = max(1, texts.map(\.count).max() ?? 1)
