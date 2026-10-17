@@ -175,6 +175,20 @@ final class RoundO3NotesTests: XCTestCase {
         XCTAssertEqual(joined.minY, try XCTUnwrap(fragment.quoteBar).minY, accuracy: 0.01, "one bar through both lines")
     }
 
+    /// After a table or an image, the empty line's format shows too, and
+    /// the object keeps its hosted view.
+    func testAFormatPickedBelowATableShowsAndTheTableStaysHosted() throws {
+        let (engine, text) = editor([.text("Title"), .table(NoteTable(texts: [["One", "Two"], ["Cell", "Text"]])), .text("")])
+        settle(engine, text)
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.perform(.paragraph(.quote)))
+        settle(engine, text)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        let table = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        XCTAssertNotNil(table.hostedView, "TextKit still hosts the table's view")
+        XCTAssertEqual((lastFragment(engine) as? NoteBlockLayoutFragment)?.lastLine, .quote(x: 0, joinsAbove: false))
+    }
+
     /// Leaving the empty line keeps its format, on screen too, even when
     /// TextKit lays the line out again while the caret is elsewhere.
     func testLeavingTheEmptyLineKeepsItsFormat() throws {

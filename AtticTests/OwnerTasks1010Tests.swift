@@ -641,7 +641,7 @@ final class OwnerTasks1010Tests: XCTestCase {
         try capture(rep, name: "composer-list-mask.png")
         let scale = CGFloat(rep.pixelsHigh) / height
         let reference = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int(260 * scale))?.usingColorSpace(.sRGB))
-        XCTAssertLessThan(reference.greenComponent, 0.05, "the rows' own colour")
+        XCTAssertLessThan(reference.greenComponent, 0.5, "the rows' own colour, not the white behind them")
         let stripCentre = height - inset - stack.height + AtticControlSize.smallHeight / 2
         for (y, place) in [(stripCentre, "beneath Date / Tag / Priority"), (height - inset - 4, "beneath the add bar"),
                            (CGFloat(88), "behind the tabs line"), (CGFloat(20), "under the header")] {

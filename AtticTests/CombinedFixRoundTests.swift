@@ -452,10 +452,10 @@ final class CombinedFixRoundTests: XCTestCase {
         }
     }
 
-    /// The fade reaches the AppKit editor: SwiftUI masks the platform view
-    /// (the edge veils it replaces were drawn over the text, which stayed
-    /// readable under the controls).
-    func testTheNoteEditorIsMaskedByTheFade() throws {
+    /// The fade reached the AppKit editor through a SwiftUI mask; the
+    /// owner's 10-17 decision removes it: the note stays visible under the
+    /// controls, blurred, so no mask covers the editor's viewport.
+    func testTheNoteEditorIsNoLongerMaskedByAFade() throws {
         let harness = try makeHarness()
         XCTAssertTrue(harness.controller.requestNewNote())
         spin(0.5)
@@ -464,15 +464,12 @@ final class CombinedFixRoundTests: XCTestCase {
         var masked = false
         var view: NSView? = textView.superview
         while let current = view, current !== harness.host {
-            // Owner F-13 (owner-feedback-1010.md): the viewport now ends above
-            // the footer. Its fade must cover that viewport, not the old 500 pt
-            // full-page height. H13's page tests separately require clearance.
             if let mask = current.layer?.mask,
                mask.bounds.height >= scroll.bounds.height - 0.5,
                mask.bounds.width >= scroll.bounds.width - 0.5 { masked = true }
             view = current.superview
         }
-        XCTAssertTrue(masked, "the fade mask covers the note's entire scroll viewport on both axes")
+        XCTAssertFalse(masked, "no fade mask over the note's scroll viewport")
     }
 
     // MARK: P1-01: inserting a file after an image froze the app
