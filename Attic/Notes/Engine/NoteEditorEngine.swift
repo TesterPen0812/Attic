@@ -870,7 +870,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     isChecklist: checklistBox(inParagraphAt: paragraph.location) != nil, isBlockObject: blockObject,
                     isDivider: blockObject && object(at: paragraph.location) is NoteDividerAttachment,
                     monoHang: name == "mono" ? style.monoHang(for: string.substring(with: paragraph)) : 0,
-                    monoExitsAtEnd: (name == "mono" || metadata[.noteCalloutIcon] != nil) && boxExitsAtEnd(paragraph),
                     callout: metadata[.noteCalloutIcon] as? String)
                 if let name, ["bullet", "number"].contains(name) {
                     let marker: NSTextList.MarkerFormat = name == "number" ? .decimal : .disc
@@ -1380,12 +1379,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if let id = block.id { attributes[.noteBlockID] = id }
                 if !block.extras.isEmpty { attributes[.noteBlockExtras] = NoteBlockExtras(block.extras) }
             }
-            if pending.location == textStorage.length { addEmptyLastLineBoxInsets(to: &attributes, style: pending.state.style) }
+            if pending.location == textStorage.length {
+                addEmptyLastLineBoxInsets(to: &attributes, style: pending.state.style)
+                addEmptyLastLineSpacing(to: &attributes)
+            }
             return attributes
         }
         guard paragraph.location > 0 else { return style.titleAttributes }
         guard paragraph.location < textStorage.length else {
-            return style.paragraphAttributes(style: nil, level: nil, indent: nil, previous: previous)
+            var attributes = style.paragraphAttributes(style: nil, level: nil, indent: nil, previous: previous)
+            addEmptyLastLineSpacing(to: &attributes)
+            return attributes
         }
         let attributes = textStorage.attributes(at: paragraph.location, effectiveRange: nil)
         let name = attributes[.noteBlockStyle] as? String
@@ -2034,6 +2038,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             var attributes = textStorage.attributes(at: min(index, textStorage.length - 1), effectiveRange: nil)
             for key in NSAttributedString.Key.noteBookkeeping { attributes[key] = nil }
             attributes[.attachment] = nil
+            // At the note's end after a line break (⇧Return), TextKit lays
+            // the empty line out with these: as the line it becomes (O18-03).
+            if selection.length == 0, selection.location == textStorage.length,
+               (textStorage.string as NSString).character(at: selection.location - 1) == 0x2028,
+               let own = attributes[.paragraphStyle] as? NSParagraphStyle {
+                attributes[.paragraphStyle] = Self.lineAfterBreakStyle(own)
+            }
             textView.typingAttributes = attributes
         }
         // O17-07: while the caret is on the note's empty last line, TextKit
@@ -3636,12 +3647,21 @@ extension NoteEditorEngine {
                 guard before != styleValue else { continue }
                 let oldDepth = pendingParagraphStyle?.location == line.location ? pendingParagraphStyle!.state.indent : (indentAt(line.location) ?? 0)
                 let newDepth = [.bullet, .number, .checklist, .quote].contains(styleValue) ? oldDepth : 0
+                var metadata = pendingParagraphStyle?.state.block
+                if styleValue.isCallout || metadata?.calloutStart == true {
+                    let separate = styleValue.isCallout && calloutIconAbove(line.location) == styleValue.calloutIcon
+                    if separate || metadata != nil {
+                        if metadata == nil { metadata = .text("", style: styleValue.storageName) }
+                        metadata?.calloutStart = separate
+                    }
+                }
                 history.recordParagraphStyleChange(location: line.location,
                     before: pendingParagraphStyle?.state ?? .init(style: before, indent: oldDepth),
-                    after: .init(style: styleValue, indent: newDepth, block: pendingParagraphStyle?.state.block))
-                setPendingParagraphStyle(styleValue, indent: newDepth, at: line.location)
+                    after: .init(style: styleValue, indent: newDepth, block: metadata))
+                setPendingParagraphStyle(styleValue, indent: newDepth, at: line.location, metadata: metadata)
                 continue
             }
+            let wasCallout = paragraphStyle(at: line.location)?.isCallout == true
             let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
             if checklistBox(inParagraphAt: line.location) != nil {
                 replacement.deleteCharacters(in: NSRange(location: 0, length: 1))
@@ -3658,16 +3678,62 @@ extension NoteEditorEngine {
             if let language = styleValue.language { replacement.addAttribute(.noteCodeLanguage, value: language, range: all) }
             if let icon = styleValue.calloutIcon { replacement.addAttribute(.noteCalloutIcon, value: icon, range: all) }
             // Remove hints from the extras box too when deliberately changing style.
+            var hadBox = false
             replacement.enumerateAttribute(.noteBlockExtras, in: all) { value, range, _ in
                 guard let box = value as? NoteBlockExtras else { return }
+                hadBox = true
                 var fields = box.fields
-                for key in ["language", "callout", "start"] { fields[key] = nil }
+                for key in ["language", "callout", "start", "calloutStart"] { fields[key] = nil }
                 replacement.addAttribute(.noteBlockExtras, value: NoteBlockExtras(fields), range: range)
             }
+            // OD callout-new: a callout picked on a line outside a callout is
+            // its own box, even under a callout with the same icon. Picking
+            // a callout's icon inside one (the whole box) is not a new box.
+            let startsBox = styleValue.isCallout && !wasCallout && calloutIconAbove(line.location) == styleValue.calloutIcon
+            if startsBox {
+                if hadBox {
+                    replacement.enumerateAttribute(.noteBlockExtras, in: all) { value, range, _ in
+                        guard var fields = (value as? NoteBlockExtras)?.fields else { return }
+                        fields["calloutStart"] = .bool(true)
+                        replacement.addAttribute(.noteBlockExtras, value: NoteBlockExtras(fields), range: range)
+                    }
+                } else {
+                    replacement.addAttribute(.noteBlockExtras, value: NoteBlockExtras(["calloutStart": .bool(true)]), range: all)
+                }
+            }
             if !performEdit(range, with: replacement, name: NoteFormatCommand.paragraph(styleValue).title) { return false }
+            // A same-icon callout right below the new one stays its own box.
+            if styleValue.isCallout, !wasCallout, line.location == lines.last?.location {
+                let next = NSMaxRange(paragraphRange(at: line.location))
+                if next < textStorage.length, paragraphStyle(at: next) == styleValue, !startsSeparateCallout(paragraphAt: next) {
+                    markCalloutStart(paragraphAt: next, name: NoteFormatCommand.paragraph(styleValue).title)
+                }
+            }
         }
         textView?.setSelectedRange(newSelection)
         return true
+    }
+
+    /// The icon of the callout paragraph directly above `location`'s
+    /// paragraph (nil: none, or not a callout).
+    func calloutIconAbove(_ location: Int) -> String? {
+        let start = location == textStorage.length ? location : paragraphRange(at: location).location
+        guard start > 0 else { return nil }
+        let above = paragraphRange(at: start - 1)
+        guard above.location > 0 else { return nil }
+        return textStorage.attribute(.noteCalloutIcon, at: above.location, effectiveRange: nil) as? String
+    }
+
+    /// Gives the paragraph at `location` its own callout box (OD callout-new).
+    private func markCalloutStart(paragraphAt location: Int, name: String) {
+        let range = paragraphRange(at: location)
+        guard range.length > 0 else { return }
+        let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
+        let all = NSRange(location: 0, length: replacement.length)
+        var fields = (replacement.attribute(.noteBlockExtras, at: 0, effectiveRange: nil) as? NoteBlockExtras)?.fields ?? [:]
+        fields["calloutStart"] = .bool(true)
+        replacement.addAttribute(.noteBlockExtras, value: NoteBlockExtras(fields), range: all)
+        _ = performEdit(range, with: replacement, name: name, selection: textView?.selectedRange())
     }
 
     private func block(for state: NoteUndoHistory.ParagraphState) -> NoteBlock {
@@ -3724,6 +3790,7 @@ extension NoteEditorEngine {
         }
         if location == textStorage.length {
             addEmptyLastLineBoxInsets(to: &typing, style: value)
+            addEmptyLastLineSpacing(to: &typing)
             refreshEmptyLastLine()
         }
         if let name = value.storageName { typing[.noteBlockStyle] = name }
@@ -3733,6 +3800,7 @@ extension NoteEditorEngine {
         if let start = block?.start { typing[.noteListStart] = start }
         if indent > 0 { typing[.noteBlockIndent] = indent }
         textView?.typingAttributes = typing
+        (textView as? NoteEditorTextView)?.revealCaretAfterLayout()
         updateTextChecking()
         onTextChange?()
     }
@@ -4769,6 +4837,9 @@ extension NoteEditorEngine {
     func paragraphKindBefore(at location: Int) -> NoteParagraphKind? {
         guard location > 0 else { return nil }
         let previous = paragraphKind(at: location - 1)
+        // A callout picked as a new box keeps the block gap from the
+        // same-icon callout above (OD callout-new).
+        if previous.isCallout, startsSeparateCallout(paragraphAt: paragraphRange(at: location).location) { return .blockObject }
         if previous == .mono, paragraphStyle(at: location)?.isCode == true,
            !codeRunContinues(from: location - 1, to: location) { return .blockObject }
         return previous

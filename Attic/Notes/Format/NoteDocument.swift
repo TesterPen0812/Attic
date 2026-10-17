@@ -202,6 +202,14 @@ struct NoteBlock: Equatable, Sendable {
         get { extras["callout"]?.stringValue }
         set { extras["callout"] = newValue.map(NoteJSON.string) }
     }
+    /// OD callout-new (owner, 2026-10-17): this callout starts its own box
+    /// although the block above is a callout with the same icon (it was
+    /// picked as a new callout, not continued with Return). Absent unless
+    /// set, so untouched notes stay byte-identical.
+    var calloutStart: Bool {
+        get { extras["calloutStart"]?.boolValue == true }
+        set { extras["calloutStart"] = newValue ? .bool(true) : nil }
+    }
 
     static func text(_ text: String, id: UUID? = nil, style: String? = nil) -> NoteBlock {
         NoteBlock(kind: .text, id: id, text: text, style: style)

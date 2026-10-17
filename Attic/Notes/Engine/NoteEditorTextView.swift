@@ -49,6 +49,24 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         super.viewDidHide()
     }
     var marquee: NoteMarqueeSelection?
+
+    /// TextKit lays the note's empty last line (its extra line) out with
+    /// the typing attributes while the caret is on it, at whatever moment
+    /// it lays the paragraph out, which can be before the editor gives the
+    /// line its own attributes (Return, a click below the last block, a
+    /// format picked). When they change there, the line is laid out again
+    /// at once, so it never keeps a stale place (O18-04, K-02). Only then:
+    /// one paragraph, never per keystroke on a typed line.
+    override var typingAttributes: [NSAttributedString.Key: Any] {
+        didSet {
+            guard let engine, let storage = textStorage, storage.length > 0, storage.editedMask.isEmpty,
+                  selectedRange() == NSRange(location: storage.length, length: 0),
+                  [0x0A, 0x2028].contains((storage.string as NSString).character(at: storage.length - 1)),
+                  (oldValue[.paragraphStyle] as? NSParagraphStyle) != (typingAttributes[.paragraphStyle] as? NSParagraphStyle)
+            else { return }
+            engine.refreshEmptyLastLine()
+        }
+    }
     override var shouldDrawInsertionPoint: Bool { marquee?.isEmpty != false && super.shouldDrawInsertionPoint }
     var proseTextCompletionEnabled = false
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
@@ -482,18 +500,19 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         return engine.moveBlock(source, to: NSMaxRange(below))
     }
 
-    // MARK: A Mono block at the note's end
+    // MARK: A block at the note's end
 
     private var isSizingForTrailingBlock = false
 
     /// AppKit sizes the text view to its last line, without the bottom
-    /// padding a Mono block at the note's end keeps below that line: the
-    /// view is made tall enough for the block's whole fragment.
+    /// padding a block at the note's end keeps below that line (a code
+    /// block, a callout, an empty last line's box): the view is made tall
+    /// enough for the block's whole fragment and what it paints (O18-01).
     override func setFrameSize(_ newSize: NSSize) {
         var size = newSize
         if isVerticallyResizable, !isSizingForTrailingBlock, let engine {
             isSizingForTrailingBlock = true
-            if let bottom = engine.trailingMonoBlockBottom() {
+            if let bottom = engine.trailingBlockBottom() {
                 size.height = max(size.height, ceil(bottom + textContainerOrigin.y + textContainerInset.height))
             }
             isSizingForTrailingBlock = false
@@ -652,18 +671,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     private var monoCopyPlacementScheduled = false
 
-    /// The caret, fitted to the glyphs (F-03).
-    private(set) lazy var caretFitter = NoteCaretFitter(textView: self)
+    /// The caret is AppKit's own; this only hides it under a marquee (O18-03).
+    private(set) lazy var caretVisibility = NoteCaretVisibility(textView: self)
 
     override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
         super.updateInsertionPointStateAndRestartTimer(restartFlag)
-        caretFitter.refresh()
+        caretVisibility.refresh()
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         if marquee?.isSettingNativeSelection == false { marquee?.clear() }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
-        caretFitter.refresh()
+        caretVisibility.refresh()
         guard engine != nil, !stillSelecting else { return }
         // After the text system has finished with this change (placing
         // Copy reads the block's layout).
@@ -817,7 +836,46 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             engine?.updateHeadingControls()
             onLayout?()
         }
-        caretFitter.refresh()
+        caretVisibility.refresh()
+        if revealsCaretAfterLayout {
+            revealsCaretAfterLayout = false
+            revealCaretClearOfBands()
+        }
+    }
+
+    // MARK: The caret's line in view (V-02)
+
+    private var revealsCaretAfterLayout = false
+
+    /// After an edit or a format picked here, the caret's line is brought
+    /// into view clear of the floating controls once the edit is laid out
+    /// (the note may only grow then).
+    func revealCaretAfterLayout() {
+        guard window?.firstResponder === self else { return }
+        // Now, and again after the next layout pass AppKit runs anyway
+        // (no extra pass is asked for: typing costs nothing more).
+        revealsCaretAfterLayout = true
+        revealCaretClearOfBands()
+    }
+
+    /// V-02 (owner recording, 10-17): content runs under the floating
+    /// controls (10-17), so the scroll view's content insets cover them,
+    /// and the clip view counts what is under them as visible. The line
+    /// being typed on is scrolled to clear them: above the bottom row,
+    /// below the header. The insets are the bands; nothing fades.
+    func revealCaretClearOfBands() {
+        guard let engine, let scroll = enclosingScrollView, selectedRange().length == 0,
+              let rect = engine.caretRect(at: selectedRange().location) else { return }
+        let clip = scroll.contentView
+        let insets = scroll.contentInsets
+        let visible = convert(clip.bounds, from: clip)
+        let low = visible.maxY - insets.bottom, high = visible.minY + insets.top
+        let shift = rect.maxY > low ? rect.maxY - low : (rect.minY < high ? rect.minY - high : 0)
+        guard abs(shift) > 0.5 else { return }
+        var bounds = clip.bounds
+        bounds.origin.y += clip.isFlipped == isFlipped ? shift : -shift
+        clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+        scroll.reflectScrolledClipView(clip)
     }
 
     // MARK: The title's placeholder
@@ -853,6 +911,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     override func didChangeText() {
         super.didChangeText()
         updatePlaceholder()
+        revealCaretAfterLayout()
     }
 
     override func unmarkText() {
@@ -1278,6 +1337,35 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if event.clickCount == 1, point.y > finalTextBottom(), engine.startLineBelowFinalBlock() { return }
         hideBlockHandle()
         super.mouseDown(with: event)
+        settleCaretBesideObject(clickedAt: point)
+    }
+
+    /// K-03 (owner recording, 10-17): a click beside a table, image or file
+    /// (in the gap above it, or past its side) puts the caret on the nearest
+    /// text line, never on the object's own line, where AppKit's caret is
+    /// the object's whole height (a 124 pt bar down a table's edge). Above
+    /// the object's middle: the end of the line above; below: the start of
+    /// the line after. The caret stays AppKit's own (O18-03); only where it
+    /// goes changes. Keyboard moves are left alone.
+    func settleCaretBesideObject(clickedAt point: NSPoint) {
+        guard let engine, let storage = textStorage else { return }
+        let selection = selectedRange()
+        guard selection.length == 0 else { return }
+        let string = storage.string as NSString
+        var object = selection.location
+        if !(object < string.length && engine.isBlockObject(at: object)) {
+            object = selection.location - 1
+            guard object >= 0, object < string.length, engine.isBlockObject(at: object),
+                  selection.location == string.length || string.character(at: selection.location) == 0x0A else { return }
+        }
+        guard !(engine.object(at: object) is NoteDividerAttachment),
+              let rect = engine.rect(for: NSRange(location: object, length: 1)) else { return }
+        let line = engine.lineRange(at: object)
+        if point.y < rect.midY, line.location > 0 {
+            setSelectedRange(NSRange(location: line.location - 1, length: 0))
+        } else if NSMaxRange(line) < string.length {
+            setSelectedRange(NSRange(location: NSMaxRange(line) + (string.character(at: NSMaxRange(line)) == 0x0A ? 1 : 0), length: 0))
+        }
     }
 
     // MARK: Code language and callout icon menus (R14)

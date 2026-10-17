@@ -97,7 +97,9 @@ enum NoteParagraphKind: Equatable, Sendable {
 /// `AtticNoteType`, inks from the resolved tokens).
 ///
 /// Notes v2, text direction 5 (owner, 2026-10-08): SF Pro throughout, one
-/// near-black ink. Every line box is exactly its role's line height; the
+/// near-black ink. Lines are exactly their role's line height apart: each
+/// is the font's natural box with the rest of the pitch as line spacing
+/// above it (`setLines`, O18-03), so AppKit's caret is the natural one; the
 /// space between two blocks is the lower paragraph's
 /// `paragraphSpacingBefore` (`paragraphSpacing` stays 0, so nothing is
 /// counted twice), from `gap(above:after:)`. TextKit sets a line's glyphs on
@@ -292,7 +294,7 @@ struct NoteTextStyle: Equatable {
     /// paragraph and its neighbours with the real one).
     func paragraphAttributes(style name: String?, level: Int?, indent: Int?, previous: NoteParagraphKind? = .body,
                              isChecklist: Bool = false, isBlockObject: Bool = false, isDivider: Bool = false,
-                             monoHang: CGFloat = 0, monoExitsAtEnd: Bool = false, callout: String? = nil) -> [NSAttributedString.Key: Any] {
+                             monoHang: CGFloat = 0, callout: String? = nil) -> [NSAttributedString.Key: Any] {
         let kind: NoteParagraphKind = isBlockObject ? (isDivider ? .divider : .blockObject)
             : NoteParagraphKind.of(style: name, level: level, callout: callout, isChecklist: isChecklist)
         var result = bodyAttributes
@@ -300,22 +302,19 @@ struct NoteTextStyle: Equatable {
         result[.foregroundColor] = kind == .quote ? quoteColor : bodyColor
         let paragraph = NSMutableParagraphStyle()
         if kind != .blockObject, kind != .divider {
-            paragraph.minimumLineHeight = kind.role.lineHeight
-            paragraph.maximumLineHeight = kind.role.lineHeight
+            Self.setLines(of: paragraph, font: font(for: kind), pitch: kind.role.lineHeight)
         }
         paragraph.paragraphSpacingBefore = Self.spacingBefore(kind, after: previous)
         let depth = CGFloat(indent ?? 0) * T.listLevelStep
         switch kind {
         case .mono:
-            paragraph.firstLineHeadIndent = 0
-            paragraph.headIndent = monoHang
-            if monoExitsAtEnd {
-                // The block's bottom padding goes before the note's empty
-                // last line, which TextKit lays out in this paragraph
-                // (`NoteBlockLayoutFragment` then adds no margin); that line
-                // keeps its own space before, as any paragraph below a block.
-                paragraph.paragraphSpacing = T.monoPaddingV + Self.baselineShift(T.mono)
-            }
+            // The box's sides: its text 12 in from each edge, as paragraph
+            // indents (not the fragment's padding), so the note's empty last
+            // line laid out in a final code block's fragment keeps its own
+            // format's x (O18-04: the hint under a code block sat 12 pt in).
+            paragraph.firstLineHeadIndent = T.monoPaddingH
+            paragraph.headIndent = T.monoPaddingH + monoHang
+            paragraph.tailIndent = -T.monoPaddingH
         case .quote:
             paragraph.firstLineHeadIndent = depth + T.quoteTextInset
             paragraph.headIndent = depth + T.quoteTextInset
@@ -326,7 +325,6 @@ struct NoteTextStyle: Equatable {
             paragraph.firstLineHeadIndent = inset
             paragraph.headIndent = inset
             paragraph.tailIndent = -T.calloutPaddingH
-            if monoExitsAtEnd { paragraph.paragraphSpacing = T.calloutPaddingV + Self.baselineShift(T.body) }
         default:
             let list = name == "bullet" || name == "number"
             paragraph.firstLineHeadIndent = depth + (list ? T.listTextInset : 0)
@@ -412,8 +410,7 @@ struct NoteTextStyle: Equatable {
 
     var titleParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = Self.titleLineHeight
-        style.maximumLineHeight = Self.titleLineHeight
+        Self.setLines(of: style, font: titleFont, pitch: Self.titleLineHeight)
         style.paragraphSpacing = titleParagraphSpacing
         style.tailIndent = -titleTrailingReserve
         return style
@@ -421,10 +418,60 @@ struct NoteTextStyle: Equatable {
 
     var bodyParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = Self.bodyLineHeight
-        style.maximumLineHeight = Self.bodyLineHeight
+        Self.setLines(of: style, font: bodyFont, pitch: Self.bodyLineHeight)
         style.paragraphSpacingBefore = Self.spacingBefore(.body, after: .body)
         return style
+    }
+
+    // MARK: Native line boxes (O18-03, owner 2026-10-17)
+
+    /// AppKit's own line box for `font`: the height TextKit 2 gives a line
+    /// of it with no line-height settings, as TextEdit lays it out. Measured
+    /// once per font (AppKit rounds the font's metrics its own way: 15 for
+    /// the 12.5 pt body, whose ascender plus descender is 14.72, but 19 for
+    /// the 16.5 pt heading at 19.43), never derived from a formula.
+    static func naturalLineHeight(_ font: NSFont) -> CGFloat {
+        if let cached = lineCache.value[font] { return cached }
+        let storage = NSTextContentStorage()
+        let layout = NSTextLayoutManager()
+        storage.addTextLayoutManager(layout)
+        let container = NSTextContainer(size: CGSize(width: 10_000, height: 0))
+        container.lineFragmentPadding = 0
+        layout.textContainer = container
+        storage.textStorage?.setAttributedString(NSAttributedString(string: "Hxgj", attributes: [.font: font]))
+        layout.ensureLayout(for: layout.documentRange)
+        var height = (font.ascender - font.descender + font.leading).rounded()
+        layout.enumerateTextLayoutFragments(from: layout.documentRange.location, options: [.ensuresLayout]) { fragment in
+            if let line = fragment.textLineFragments.first { height = line.typographicBounds.height }
+            return false
+        }
+        lineCache.value[font] = height
+        return height
+    }
+
+    private final class LineCache: @unchecked Sendable { var value: [NSFont: CGFloat] = [:] }
+    private static let lineCache = LineCache()
+
+    /// A paragraph's lines at `pitch` apart, each in the font's own line box
+    /// (`naturalLineHeight`) with the rest of the pitch as line spacing,
+    /// which TextKit 2 puts above every line after the first. So AppKit's
+    /// insertion point, which spans a line's box and never its spacing, is
+    /// the font's natural height and sits on the text as TextEdit's does
+    /// (O18-03, owner 2026-10-17), while the glyphs keep the baselines and
+    /// pitch of the fixed boxes they had (R14). The box is fixed at the
+    /// natural height, so an emoji, inline code or a bigger pasted run
+    /// never changes a line's height (mixed content keeps the pitch).
+    static func setLines(of paragraph: NSMutableParagraphStyle, font: NSFont, pitch: CGFloat) {
+        let natural = min(naturalLineHeight(font), pitch)
+        paragraph.minimumLineHeight = natural
+        paragraph.maximumLineHeight = natural
+        paragraph.lineSpacing = pitch - natural
+    }
+
+    /// A role's line spacing: the part of its pitch above each natural line
+    /// box (`setLines`). 3.5 for the body, 2 for H1/H2, 0 for the title.
+    static func lineLeading(_ role: T.Role) -> CGFloat {
+        max(0, role.lineHeight - naturalLineHeight(font(for: role)))
     }
 
     /// Extra space between lines that brings the font's own line to `lineHeight`.
@@ -442,8 +489,7 @@ struct NoteTextStyle: Equatable {
     /// its column's alignment; the header row is semibold.
     func tableCellAttributes(header: Bool, alignment: NoteTable.Alignment = .left) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.minimumLineHeight = AtticNoteType.body.lineHeight
-        paragraph.maximumLineHeight = AtticNoteType.body.lineHeight
+        Self.setLines(of: paragraph, font: header ? tableHeaderFont : bodyFont, pitch: AtticNoteType.body.lineHeight)
         paragraph.alignment = switch alignment {
         case .left: .natural
         case .center: .center

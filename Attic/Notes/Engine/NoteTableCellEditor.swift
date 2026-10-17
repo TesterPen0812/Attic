@@ -20,6 +20,11 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     weak var table: NoteTableView?
+    /// The cell's lines: the first one keeps its line spacing above it too
+    /// (TextKit 2 gives a text's first line none), so every line sits where
+    /// the drawn cell has it and AppKit's caret is the font's natural height
+    /// (O18-03).
+    let lines = NoteCellLineLayout()
     /// True while the editor's own text is being written to the model (the
     /// model's echo must not reload the editor).
     var isApplyingOwnEdit = false
@@ -37,6 +42,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         content.addTextLayoutManager(layoutManager)
         content.primaryTextLayoutManager = layoutManager
         let editor = NoteTableCellEditor(frame: NSRect(x: 0, y: 0, width: 200, height: 21), textContainer: container)
+        layoutManager.delegate = editor.lines
         editor.table = table
         editor.configure()
         return editor
@@ -393,24 +399,6 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         return became
     }
 
-    /// The caret, fitted to the glyphs (F-03).
-    private(set) lazy var caretFitter = NoteCaretFitter(textView: self)
-
-    override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
-        super.updateInsertionPointStateAndRestartTimer(restartFlag)
-        caretFitter.refresh()
-    }
-
-    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
-        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
-        caretFitter.refresh()
-    }
-
-    override func layout() {
-        super.layout()
-        caretFitter.refresh()
-    }
-
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned, let table {
@@ -444,5 +432,27 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     override func accessibilityParent() -> Any? {
         guard let table, let cell = table.activeCell else { return super.accessibilityParent() }
         return table.axCell(cell) ?? super.accessibilityParent()
+    }
+}
+
+
+/// A table cell editor's fragments: its text's first line keeps the line
+/// spacing above it, as every later line has (O18-03), so the live cell's
+/// baselines are the drawn cell's (`NoteTableLayout.drawnTextRect`).
+@MainActor
+final class NoteCellLineLayout: NSObject, NSTextLayoutManagerDelegate {
+    final class Fragment: NSTextLayoutFragment {
+        var leading: CGFloat = 0
+        override var topMargin: CGFloat { super.topMargin + leading }
+    }
+
+    func textLayoutManager(_ textLayoutManager: NSTextLayoutManager, textLayoutFragmentFor location: any NSTextLocation,
+                           in textElement: NSTextElement) -> NSTextLayoutFragment {
+        let fragment = Fragment(textElement: textElement, range: nil)
+        if let content = textLayoutManager.textContentManager,
+           content.offset(from: content.documentRange.location, to: location) == 0 {
+            fragment.leading = NoteTextStyle.lineLeading(AtticNoteType.body)
+        }
+        return fragment
     }
 }

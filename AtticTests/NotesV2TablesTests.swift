@@ -148,7 +148,8 @@ final class NotesV2TablesTests: XCTestCase {
                     var drawn: [(NSRange, CGFloat)] = []
                     manager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: manager.numberOfGlyphs)) { rect, _, _, glyphs, _ in
                         let characters = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-                        drawn.append((characters, rect.minY + manager.location(forGlyphAt: glyphs.location).y))
+                        // Drawn from `drawnTextRect`, its line spacing above the first line (O18-03).
+                        drawn.append((characters, NoteTextStyle.lineLeading(AtticNoteType.body) + rect.minY + manager.location(forGlyphAt: glyphs.location).y))
                     }
                     // The cell editor (TextKit 2).
                     let editor = view.editor
