@@ -51,6 +51,8 @@ struct TasksPage: View {
     }
     @State private var drag: TasksDrag?
     @State private var fileDropRow: TasksRowID?
+    /// Files dragged over the add bar (O17-06): it shows its ring.
+    @State private var composerDropTargeted = false
     /// A row's date or tag list that is open (owner fix 5 C and D).
     @State private var metaPopover: TasksMetaPopover?
     /// The selection bar's Date or Tags picker (round 10).
@@ -212,7 +214,15 @@ struct TasksPage: View {
                 let row = id.map { TasksRowID(tab: model.tab, id: $0) }
                 if fileDropRow != row { fileDropRow = row }
             },
-            perform: { content, providers, id in attachDroppedFiles(content, providers, to: id) }
+            perform: { content, providers, id in attachDroppedFiles(content, providers, to: id) },
+            composer: TasksFileDropDelegate.Composer(
+                contains: { point in composerDropZone(contains: point) },
+                setTargeted: { on in if composerDropTargeted != on { composerDropTargeted = on } },
+                perform: { providers in
+                    model.addComposerFiles(providers)
+                    addBarFocused = true
+                }
+            )
         ))
         // The bottom stack owns its whole band (round 7, R4): a row scrolled
         // under the strip, the gaps between its buttons, a selection bar or
@@ -489,7 +499,7 @@ struct TasksPage: View {
         }
         // The shell's toast and notices sit above everything in the bottom
         // stack, so a selection bar or paste offer never hides under them.
-        .background(TasksNoticeClearance(stack: bottomStack, footerZone: footerZone))
+        .background(TasksNoticeClearance(stack: bottomStack, bottomInset: bottomInset, contentBottom: layout.contentInsets.bottom))
     }
 
     /// Tab or Shift-Tab moved the keyboard into a row of a page kept built
@@ -1611,6 +1621,7 @@ struct TasksPage: View {
                     renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
                         (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
                                                      cancel: { model.cancelSubtaskRename() },
+                                                     submit: { model.submitSubtaskRename() },
                                                      accessibilityLabel: String(localized: "Rename subtask"),
                                                      emptyBackspace: { model.backspaceEmptySubtask() },
                                             pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
@@ -2815,6 +2826,13 @@ struct TasksPage: View {
         return Self.row(at: point, frames: pointer.frames, tab: model.tab, among: Set(model.rows(for: model.tab).map(\.id)))
     }
 
+    /// The add bar's band (O17-06): from the panel's bottom edge to the top
+    /// of the bottom stack, where files dropped wait for the new task.
+    private func composerDropZone(contains point: CGPoint) -> Bool {
+        guard let height = pointer.view?.bounds.height else { return false }
+        return point.y >= height - TasksBottomBand.height(stack: bottomStack.height, bottomInset: bottomInset) && point.y <= height
+    }
+
     /// Whether the task can take what is dragged over it: files from
     /// outside, or another task's file row (copied; its own task refuses
     /// it, so releasing a row over its list never duplicates it).
@@ -2908,7 +2926,7 @@ struct TasksPage: View {
     /// suggestions belong to it (review 14).
     private var addBar: some View {
         TasksAddBar(model: model, text: model.addBarState, isFocused: $addBarFocused, editor: addBarEditor,
-                    showsStrip: model.pasteOffer == nil,
+                    showsStrip: model.pasteOffer == nil, dropTargeted: composerDropTargeted,
                     pickerOpen: $composerPickerOpen, leave: leaveAddBar,
                     added: { _ in })
     }
@@ -3148,6 +3166,8 @@ private struct TasksAddBar: View {
     let editor: AtticTokenFieldEditor
     /// A paste offer owns the area over the bar while it asks.
     let showsStrip: Bool
+    /// Files are dragged over it (O17-06): its ring shows where they land.
+    var dropTargeted = false
     @Binding var pickerOpen: Bool
     let leave: () -> Bool
     let added: (UUID) -> Void
@@ -3156,6 +3176,8 @@ private struct TasksAddBar: View {
     @State private var datePresented = false
     @State private var tagsPresented = false
     @State private var priorityPresented = false
+    /// Files dragged over the field itself (its text view takes the drag).
+    @State private var fieldDropTargeted = false
 
     private var hasDraft: Bool { !text.text.text.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -3178,7 +3200,10 @@ private struct TasksAddBar: View {
     var body: some View {
         let suggestion = suggestion
         let anyPicker = datePresented || tagsPresented || priorityPresented
-        let stripShown = showsStrip && (hasDraft || anyPicker)
+        // Files waiting for the new task keep the strip, where they show
+        // on its Attach button (O17-06).
+        let hasFiles = !text.files.isEmpty || text.stagingFiles > 0
+        let stripShown = showsStrip && (hasDraft || anyPicker || hasFiles)
         // What the new task will get, typed or picked (owner item 18): the
         // strip's buttons show it, and its pickers tick it.
         let parts = text.text.parts(parser: model.parser)
@@ -3223,7 +3248,10 @@ private struct TasksAddBar: View {
                             priorityPresented = false
                             model.pickPriority(priority, editor: editor)
                         })
-                    }
+                    },
+                    files: model.composerFilesValue,
+                    onAttach: model.services.chooseComposerFiles == nil ? nil : { model.services.chooseComposerFiles?() },
+                    onClearFiles: { model.clearComposerFiles(); editor.focus() }
                 )
                 // On the bar's edge (U-21): an open or set button's fill
                 // stays inside the bar's column (it stood 3.5 pt out when the
@@ -3278,12 +3306,20 @@ private struct TasksAddBar: View {
                         // Spec § Undo: typing first, then the page (the
                         // task just added, round 5's CI).
                         undoFallback: { model.undo() },
-                        redoFallback: { model.redo() }
+                        redoFallback: { model.redo() },
+                        // A pasted file or image waits for the new task
+                        // (O17-06).
+                        pasteFiles: { providers in
+                            model.addComposerFiles(providers)
+                            return true
+                        },
+                        fileDragTargeted: { on in if fieldDropTargeted != on { fieldDropTargeted = on } }
                     ),
                     editor: editor
                 ),
                 onSubmit: { submit(openingPage: false) }
             )
+            .atticFocusRing(dropTargeted || fieldDropTargeted, cornerRadius: AtticRadius.control(height: AtticControlSize.addBarHeight))
         }
         .atticDropdown(isPresented: Binding(get: { suggestion != nil }, set: { shown in
             if !shown, let suggestion { text.hiddenSuggestion = suggestion.range }
@@ -4145,8 +4181,8 @@ private struct TasksFileDropDestination: ViewModifier {
     let delegate: TasksFileDropDelegate
     func body(content: Content) -> some View {
         content.onDrop(of: TaskDropContent.dropTypes, delegate: delegate)
-            .onTaskFileDropEnded { delegate.setTargeted(nil) }
-            .onDisappear { delegate.setTargeted(nil) }
+            .onTaskFileDropEnded { delegate.clearTargets() }
+            .onDisappear { delegate.clearTargets() }
     }
 }
 
@@ -4164,6 +4200,27 @@ struct TasksFileDropDelegate: DropDelegate {
     let canAccept: (TaskDropContent, UUID) -> Bool
     let setTargeted: (UUID?) -> Void
     let perform: (TaskDropContent, [NSItemProvider], UUID) -> Void
+    /// The add bar (O17-06): files dropped on it wait for the task being
+    /// written. Files from outside only; a file row dragged from another
+    /// task's list stays a row-to-row copy.
+    var composer: Composer? = nil
+
+    struct Composer {
+        let contains: (CGPoint) -> Bool
+        let setTargeted: (Bool) -> Void
+        let perform: ([NSItemProvider]) -> Void
+    }
+
+    /// Whether the drop is over the add bar and the bar takes it.
+    private func onComposer(_ info: DropInfo) -> Bool {
+        guard let composer, composer.contains(info.location) else { return false }
+        return TaskDropContent.classify(info) == .files
+    }
+
+    func clearTargets() {
+        setTargeted(nil)
+        composer?.setTargeted(false)
+    }
 
     private func row(for info: DropInfo) -> (content: TaskDropContent, id: UUID)? {
         let content = TaskDropContent.classify(info)
@@ -4181,22 +4238,30 @@ struct TasksFileDropDelegate: DropDelegate {
     }
 
     func dropEntered(info: DropInfo) {
-        setTargeted(row(for: info)?.id)
+        _ = dropUpdated(info: info)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         let found = row(for: info)
         setTargeted(found?.id)
-        return DropProposal(operation: found == nil ? .forbidden : .copy)
+        let composerTakes = found == nil && onComposer(info)
+        composer?.setTargeted(composerTakes)
+        return DropProposal(operation: found == nil && !composerTakes ? .forbidden : .copy)
     }
 
     func dropExited(info: DropInfo) {
-        setTargeted(nil)
+        clearTargets()
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        setTargeted(nil)
-        guard let found = row(for: info) else { return false }
+        clearTargets()
+        guard let found = row(for: info) else {
+            guard let composer, onComposer(info) else { return false }
+            let providers = TaskDropContent.providers(for: .files, in: info)
+            guard !providers.isEmpty else { return false }
+            composer.perform(providers)
+            return true
+        }
         let providers = TaskDropContent.providers(for: found.content, in: info)
         guard !providers.isEmpty else { return false }
         perform(found.content, providers, found.id)
@@ -4290,17 +4355,33 @@ struct TasksBottomBand: View {
     }
 }
 
-/// Tells the shell how high its toast and notices must sit (above the
-/// bottom stack as it is), from its own small view.
-private struct TasksNoticeClearance: View {
+/// Tells the shell how high its toast and notices must sit, from its own
+/// small view (O17-02): one gap above the bottom stack as it is drawn (the
+/// add bar, and its date and tags row, a selection bar or a paste offer
+/// only while they show), so a toast sits close over a lone bar and rises
+/// only with what the stack shows. The shell moves it with the strip's
+/// spring, so it never jumps.
+struct TasksNoticeClearance: View {
     @ObservedObject var stack: TasksBottomStackHeight
-    let footerZone: CGFloat
+    /// The stack's bottom margin (`TasksPage.bottomInset`).
+    let bottomInset: CGFloat
+    /// The panel's content inset the shell already adds under its notices.
+    let contentBottom: CGFloat
+
+    /// The gap between a toast and the top of the bottom stack: the
+    /// stack's own spacing between its controls.
+    static let gap = AtticSpacing.s8
+
+    /// The clearance above the panel's content inset (pure, tested).
+    nonisolated static func clearance(stack: CGFloat, bottomInset: CGFloat, contentBottom: CGFloat) -> CGFloat {
+        max(0, bottomInset + max(stack, AtticControlSize.addBarHeight) + gap - contentBottom)
+    }
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .preference(key: PanelPageNoticeClearancePreferenceKey.self,
-                        value: footerZone + max(0, stack.height - AtticControlSize.addBarHeight))
+                        value: Self.clearance(stack: stack.height, bottomInset: bottomInset, contentBottom: contentBottom))
             .accessibilityHidden(true)
     }
 }

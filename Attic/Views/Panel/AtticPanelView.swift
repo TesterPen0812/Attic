@@ -139,7 +139,14 @@ struct AtticPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
-            if noticeClearance != clearance { noticeClearance = clearance }
+            guard noticeClearance != clearance else { return }
+            // A page's bottom controls grow or shrink with a spring (the
+            // composer's date and tags row): the notices ride it, never
+            // jump (O17-02). Reduce Motion moves them at once.
+            let reduced = reduceMotion || settings.animations == .reduced
+            withAnimation(AtticMotionPreset.popover.animation(reduceMotion: reduced, showing: clearance > noticeClearance)) {
+                noticeClearance = clearance
+            }
         }
     }
 

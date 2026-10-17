@@ -575,7 +575,10 @@ struct AtticHeaderTitleRoom<Content: View>: View {
 /// lives inside it and appears only when there is text. Its slot is always
 /// reserved, so the field never changes width: the button only fades in
 /// with a short rise (opacity and position). Return adds; the bar keeps
-/// focus for the next one.
+/// focus for the next one. Its live field wraps long text onto more lines
+/// (O17-05): the bar grows upward a line at a time, up to
+/// `AtticComposerMetrics.maxLines`, with its plus and send button resting
+/// on its last line, and shrinks back when the text is added or cleared.
 struct AtticAddBar: View {
     /// The chip-drawing field (Phase 1, logged in `CHANGELOG.md`): what it
     /// draws as chips, its focus and what it reports.
@@ -614,6 +617,8 @@ struct AtticAddBar: View {
     @State private var hovered = false
     @State private var probeID = UUID()
     @State private var fieldProbeID = UUID()
+    /// The live field's height: one line, or more as it wraps (O17-05).
+    @State private var fieldHeight = AtticTokenFieldMetrics.height
 
     init(placeholder: String.LocalizationValue, text: Binding<String>, onSubmit: @escaping () -> Void) {
         self.placeholder = String(localized: placeholder)
@@ -661,10 +666,16 @@ struct AtticAddBar: View {
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false,
                                        isFocused: isFieldFocused && keyboardFocusVisible).state
         let send = AtticControlSize.sendButton
-        HStack(spacing: m.gap) {
+        // Grown by the lines the live field wraps onto; the plus and the send
+        // button rest on the last line (the bar grows upward, so they never
+        // move while typing).
+        let grown = max(0, fieldHeight - AtticTokenFieldMetrics.height)
+        HStack(alignment: .bottom, spacing: m.gap) {
             AtticIcon(systemName: systemImage, size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
-                .frame(width: m.iconSlot)
+                .frame(width: m.iconSlot, height: height)
             field(disabled: state == .disabled)
+                .frame(height: AtticTokenFieldMetrics.height + grown)
+                .padding(.vertical, (height - AtticTokenFieldMetrics.height) / 2)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             // Built with the bar and only shown when there is text: the
             // first keystroke changes an opacity and an offset instead of
@@ -683,14 +694,17 @@ struct AtticAddBar: View {
                 }
             }
             .frame(width: send.width, height: send.height)
+            .padding(.vertical, (height - send.height) / 2)
         }
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, AtticControlSize.sendInset)
-        .frame(height: height)
+        .frame(height: height + grown)
         .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: hasText), value: hasText)
+        // A line more or less: the bar's own spring, its text kept in view.
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: grown > 0), value: grown)
         .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius,
                            expectedRadius: AtticRadius.control(height: AtticControlSize.addBarHeight))
     }
@@ -705,9 +719,9 @@ struct AtticAddBar: View {
                 accessibilityLabel: placeholder,
                 isEnabled: !disabled,
                 actions: tokens.actions,
-                editor: tokens.editor
+                editor: tokens.editor,
+                growth: AtticTokenFieldGrowth(height: $fieldHeight, minHeight: AtticTokenFieldMetrics.height)
             )
-            .frame(height: AtticTokenFieldMetrics.height)
             .overlay(alignment: .leading) {
                 if text.isEmpty {
                     AtticText(verbatim: placeholder, style: .listBody, ink: disabled ? .disabledText : .placeholder)

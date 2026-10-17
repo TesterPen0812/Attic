@@ -243,6 +243,13 @@ enum AtticPageButtonMetrics {
 }
 
 /// The add bar (chrome B: 32 tall, radius 13.5; the send button inside).
+/// Composers that grow with their text (O17-05): the add bar and a
+/// subtask's entry wrap onto more lines up to this many, then scroll
+/// inside, and shrink back when the text is cleared or added.
+enum AtticComposerMetrics {
+    static let maxLines = 6
+}
+
 enum AtticAddBarMetrics {
     /// With the bar 16 from the panel's edge, the plus is centred on the
     /// status circles' centre line (36 = 16 + 8 + 24 / 2) and the text
@@ -304,6 +311,10 @@ enum AtticSubtaskChecklistMetrics {
 enum AtticRowActionsMetrics {
     static let width: CGFloat = 22
     static let iconSize: CGFloat = 12
+    /// The ellipsis symbol's weight (O17-10): heavy enough that its three
+    /// dots sit closer than they are wide and read as one glyph, as the
+    /// typeset "…" does, not three spaced dots.
+    static let iconWeight: Font.Weight = .black
     /// After the date (or the title when there is none).
     static let gap: CGFloat = 4
 }

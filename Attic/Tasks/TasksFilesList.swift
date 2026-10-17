@@ -12,7 +12,8 @@ import UniformTypeIdentifiers
 /// Every action the old window had stays: a click or Space previews the
 /// file (Quick Look), a double-click or Return opens it in its app, Delete
 /// or the × removes it (one Undo step, a toast), a drag copies it out, and
-/// the right-click menu and VoiceOver offer all three. Dropping files on
+/// the right-click menu and VoiceOver offer all three. A click already
+/// previews, so the line has no preview (eye) button of its own (O17-11). Dropping files on
 /// the task attaches them (the page's one drop destination).
 struct TasksFilesList: View {
     let files: [TaskImageReference]
@@ -76,9 +77,9 @@ struct TasksFilesList: View {
 }
 
 /// One file: its type icon (a thumbnail for an image), name and size. The
-/// size gives way to Quick Look and Remove while the pointer or the
-/// keyboard is on the line.
-private struct TasksFileRow: View {
+/// size gives way to Remove while the pointer or the keyboard is on the
+/// line; the line itself previews (a click, Space, VoiceOver's Quick Look).
+struct TasksFileRow: View {
     let file: TaskImageReference
     let store: TaskStore
     let owner: UUID
@@ -86,6 +87,7 @@ private struct TasksFileRow: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticForcedState) private var forced
     @FocusState private var focused: Bool
     @State private var hovered = false
 
@@ -94,7 +96,7 @@ private struct TasksFileRow: View {
 
     var body: some View {
         let m = AtticSubtaskMetrics.self
-        let showsControls = hovered || (focused && keyboardFocusVisible)
+        let showsControls = hovered || forced == .hover || (focused && keyboardFocusVisible)
         HStack(spacing: m.titleGap) {
             Group {
                 if file.isImage {
@@ -114,11 +116,8 @@ private struct TasksFileRow: View {
             AtticText(verbatim: file.filename, style: .listBody, ink: .body, truncates: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if showsControls {
-                HStack(spacing: 2) {
-                    control("eye", help: String(localized: "Quick Look"), action: preview)
-                    control("xmark", help: String(localized: "Remove"), action: remove)
-                }
-                .transition(.opacity)
+                control("xmark", help: String(localized: "Remove"), action: remove)
+                    .transition(.opacity)
             } else {
                 AtticText(verbatim: size, style: .rowMeta, ink: .helper)
             }
@@ -164,8 +163,9 @@ private struct TasksFileRow: View {
         .accessibilityHint(String(localized: "Shows a Quick Look preview"))
         .accessibilityAction(.default, preview)
         .accessibilityActions {
-            if canOpen { Button(String(localized: "Open"), action: open) }
-            Button(String(localized: "Remove"), action: remove)
+            ForEach(Self.voiceOverActions(canOpen: canOpen), id: \.self) { action in
+                Button(action.title) { perform(action) }
+            }
         }
         .accessibilityIdentifier("task-attachment-\(file.id.uuidString)")
     }
@@ -193,6 +193,33 @@ private struct TasksFileRow: View {
         if type.conforms(to: .text) || type.conforms(to: .compositeContent) { return "doc.text" }
         if type.conforms(to: .archive) { return "doc.zipper" }
         return "doc"
+    }
+
+    /// What VoiceOver offers on the line, beyond its default (a preview):
+    /// Quick Look by name too, now that the line has no eye button
+    /// (O17-11), then Open and Remove.
+    enum Action: Hashable {
+        case quickLook, open, remove
+
+        var title: String {
+            switch self {
+            case .quickLook: String(localized: "Quick Look")
+            case .open: String(localized: "Open")
+            case .remove: String(localized: "Remove")
+            }
+        }
+    }
+
+    static func voiceOverActions(canOpen: Bool) -> [Action] {
+        canOpen ? [.quickLook, .open, .remove] : [.quickLook, .remove]
+    }
+
+    private func perform(_ action: Action) {
+        switch action {
+        case .quickLook: preview()
+        case .open: open()
+        case .remove: remove()
+        }
     }
 
     private func preview() { TaskAttachmentActions.preview(file, store: store, owner: owner) }

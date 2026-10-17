@@ -45,6 +45,9 @@ struct TasksPageServices {
     /// "Attach file…": the host's file picker for the task (it keeps the
     /// panel open while the picker is up). Nil where the page has none.
     var chooseFiles: ((UUID) -> Void)?
+    /// The add bar's Attach (O17-06): the same picker, for the task being
+    /// written. Nil where the page has none.
+    var chooseComposerFiles: (() -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -114,6 +117,11 @@ final class TasksAddBarState: ObservableObject {
     @Published var hiddenSuggestion: NSRange?
     /// The draft's undo history, text and pieces together (round 4).
     var history = TaskDraftHistory()
+    /// Files waiting for the new task (O17-06), and batches still being
+    /// staged. Kept when the text is cleared; they go with the task added,
+    /// or the strip's × removes them.
+    @Published var files: [TasksComposerFiles] = []
+    @Published var stagingFiles = 0
 
     /// The owner's side of the token field's undo: text and pieces step
     /// back together; nil when the draft has nothing to undo.
@@ -1741,6 +1749,8 @@ final class TasksPageModel: ObservableObject {
         guard let draft = finished.draft(parser: parser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
         addBarState.clearDraft()
+        // Files added while it was written go onto it (O17-06).
+        attachComposerFiles(to: task.id)
         if openingPage { expandedFiles.insert(task.id) }
         selectOnly(nil)
         addedRequest = ScrollRequest(id: task.id)

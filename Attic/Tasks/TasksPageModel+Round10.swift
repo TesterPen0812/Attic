@@ -115,6 +115,21 @@ extension TasksPageModel {
         return true
     }
 
+    /// Return in a subtask's field (O17-04): saved as one step, then a new
+    /// empty subtask opens below its siblings (where new subtasks go), so
+    /// the next one can be typed straight away. Return on an emptied title
+    /// only ends the rename (the title is kept). Returns whether the rename
+    /// is finished.
+    @discardableResult
+    func submitSubtaskRename() -> Bool {
+        guard let id = renamingSubtaskID else { return true }
+        let parent = renamingSubtaskParentID ?? store.task(withID: id)?.parentID
+        let emptied = subtaskRename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard commitSubtaskRename() else { return false }
+        if !emptied, let parent, store.task(withID: parent) != nil { beginAddingSubtask(to: parent) }
+        return true
+    }
+
     func cancelSubtaskRename() {
         renamingSubtaskID = nil
         renamingSubtaskParentID = nil

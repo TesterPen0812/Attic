@@ -1071,7 +1071,7 @@ private struct AtticOptionalDropdownList: ViewModifier {
 struct AtticStripFocusID: Hashable {
     let identifier: String
 
-    static let all = ["composer-date", "composer-tag", "composer-priority"].map(AtticStripFocusID.init)
+    static let all = ["composer-date", "composer-tag", "composer-priority", "composer-files"].map(AtticStripFocusID.init)
 }
 
 /// The labelled buttons above the add bar (owner fix 5 A2, v17a): Date ·
@@ -1099,6 +1099,11 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
     @ViewBuilder let datePicker: () -> DateContent
     @ViewBuilder let tagPicker: () -> TagContent
     @ViewBuilder let priorityPicker: () -> PriorityContent
+    /// Attach (O17-06): the files waiting for the new task, the picker that
+    /// adds more, and the × that removes them. nil: no Attach button.
+    var files: Value? = nil
+    var onAttach: (() -> Void)? = nil
+    var onClearFiles: () -> Void = {}
 
     /// The width the strip may take (the bar's), as laid out.
     @State private var available: CGFloat = .infinity
@@ -1106,7 +1111,12 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
     /// The buttons' names, and the values' words and styles, for the widths.
     private var faces: [(title: String, value: Value?)] {
         [(String(localized: "Date"), date), (String(localized: "Tag"), tags), (String(localized: "Priority"), priority)]
+            + (onAttach == nil ? [] : [(String(localized: "Attach"), files)])
     }
+
+    /// Attach is the strip's quiet extra: its paperclip alone until files
+    /// wait (its name stays its tooltip and VoiceOver label).
+    private var attachIconOnly: Set<Int> { onAttach != nil && files == nil ? [3] : [] }
 
     var body: some View {
         // Common values in full (deep review P3-01: "Tomorr…", "#q…"):
@@ -1116,7 +1126,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
         // name stays its tooltip and VoiceOver label), Priority first, so a
         // value is never cut short beside an empty button's name (CU review
         // P3: "#cuqa" showed as "#c…" beside "Priority").
-        let iconOnly = Self.iconOnlyButtons(faces, available: available)
+        let iconOnly = Self.iconOnlyButtons(faces, available: available, fixed: attachIconOnly)
         let compact = Self.needsCompactGaps(faces, available: available, iconOnly: iconOnly)
         HStack(spacing: AtticPickerMetrics.stripSpacing) {
             AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
@@ -1145,6 +1155,14 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
                                contentHeight: AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4) {
                     priorityPicker()
                 }
+            if let onAttach {
+                AtticStripButton(systemName: "paperclip", title: String(localized: "Attach"), value: files, isOpen: false,
+                                 identifier: "composer-files", compact: compact, showsTitle: !iconOnly.contains(3),
+                                 keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
+                                 clearLabel: String(localized: "Remove files"), open: onAttach, clear: onClearFiles)
+                    // A long file name gives way first.
+                    .layoutPriority(-1.5)
+            }
         }
         .frame(height: AtticControlSize.smallHeight)
         // The room it has: the bar's width, whatever the buttons take.
@@ -1153,7 +1171,8 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
             if abs(width - available) > 0.5 { available = width }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Date, tag and priority"))
+        .accessibilityLabel(onAttach == nil ? String(localized: "Date, tag and priority")
+                            : String(localized: "Date, tag, priority and files"))
     }
 
     /// The width the three buttons take at their usual padding: each
@@ -1183,9 +1202,10 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
     /// `available`: none while it fits; then from the last (Priority)
     /// back, until it fits or every unset button is an icon. Only when a
     /// value is set: three empty buttons keep their names.
-    nonisolated static func iconOnlyButtons(_ faces: [(title: String, value: AtticStripValue?)], available: CGFloat) -> Set<Int> {
-        guard available.isFinite, faces.contains(where: { $0.value != nil }) else { return [] }
-        var iconOnly: Set<Int> = []
+    nonisolated static func iconOnlyButtons(_ faces: [(title: String, value: AtticStripValue?)], available: CGFloat,
+                                            fixed: Set<Int> = []) -> Set<Int> {
+        guard available.isFinite, faces.contains(where: { $0.value != nil }) else { return fixed }
+        var iconOnly = fixed
         for index in faces.indices.reversed() where faces[index].value == nil {
             if usualWidth(faces, iconOnly: iconOnly) <= available + 0.5 { break }
             iconOnly.insert(index)
