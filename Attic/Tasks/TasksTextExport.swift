@@ -96,6 +96,11 @@ struct TasksTextExport: Equatable {
         return item
     }
 
+    /// A native drag offers the text as a promised file as well as inline
+    /// text. Finder can receive every item as a file; text editors can keep
+    /// using the plain text, Markdown or RTF on this same item.
+    func dragWriter() -> NSPasteboardWriting { TasksTextFilePromise(export: self) }
+
     /// What ⌘C puts on the pasteboard: the titles as plain text (the add
     /// bar's round trip), the full text as Markdown and RTF.
     func write(to pasteboard: NSPasteboard) {
@@ -124,5 +129,68 @@ struct TasksTextExport: Equatable {
             result.append(character)
         }
         return result
+    }
+}
+
+/// The leading task item must have a file representation too: a bare text
+/// item beside attachment promises does not promise Finder the task text.
+/// Snapshot the representations before the drag; fulfilling the promise
+/// neither consults the task store nor exposes any private file URL.
+private final class TasksTextFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate, @unchecked Sendable {
+    private let plain: String
+    private let markdown: String
+    private let richText: Data?
+    private let filename: String
+    private static let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Attic task text promises"
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
+
+    init(export: TasksTextExport) {
+        plain = export.plain
+        markdown = export.markdown
+        richText = export.rtf
+        let title = export.items.count == 1 ? export.items[0].title : String(localized: "Tasks")
+        filename = AttachmentFileStore.sanitizedFilename(title) + ".txt"
+        super.init()
+        fileType = UTType.utf8PlainText.identifier
+        delegate = self
+    }
+
+    private var textTypes: [NSPasteboard.PasteboardType] {
+        [.string, TasksTextExport.markdownType] + (richText == nil ? [] : [.rtf])
+    }
+
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        super.writableTypes(for: pasteboard) + textTypes
+    }
+
+    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        textTypes.contains(type) ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
+    }
+
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        switch type {
+        case .string: plain
+        case TasksTextExport.markdownType: markdown
+        case .rtf: richText
+        default: super.pasteboardPropertyList(forType: type)
+        }
+    }
+
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType type: String) -> String { filename }
+
+    func operationQueue(for provider: NSFilePromiseProvider) -> OperationQueue { Self.queue }
+
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL,
+                             completionHandler: @escaping (Error?) -> Void) {
+        do {
+            try Data(plain.utf8).write(to: url, options: .withoutOverwriting)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
     }
 }
