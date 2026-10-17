@@ -99,8 +99,8 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(resting.minY, 0, accuracy: 0.5)
         XCTAssertEqual(resting.maxY, hosted.height, accuracy: 0.5)
         XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: tabsTop), accuracy: 0.5)
-        // Clean cut keeps a full viewport; content fades out before every
-        // control (N-6 D). Compare two
+        // Clean cut keeps a full viewport; content runs on under every
+        // control (owner, 2026-10-17). Compare two
         // actual scroll positions in each state, with visible body movement
         // as a positive control so an empty capture cannot pass.
         func assertClear(bottom: CGFloat, state: String) throws {
@@ -161,20 +161,20 @@ final class DeepReviewFixTests: XCTestCase {
             }
             XCTAssertGreaterThan(difference(top: bodyTop, bottom: bodyBottom), 0.02,
                                  "\(state): rows actually moved between captures")
-            // Floating controls (owner 2026-10-14, replacing N-6 D): nothing
-            // moves under the header or behind the tabs' plain line (part of
-            // the top controls), and the rows run on under the bottom stack,
-            // into the blur behind it. The body's movement above is the positive
-            // control.
+            // Floating controls (owner 2026-10-17, superseding 10-14 and
+            // N-6 D): the rows run on under the header, the tabs' plain line
+            // and the bottom stack, visible through the blur behind them
+            // (which an in-process capture does not draw). The body's
+            // movement above is the positive control.
             for phase in [CGFloat(0), AtticLayout.rowPitch / 3, AtticLayout.rowPitch * 2 / 3] {
                 if phase > 0 { first = try capture(260 - phase); second = try capture(200 - phase) }
-                XCTAssertLessThan(difference(top: 0, bottom: TasksViewport.plainLine(tabsTop: tabsTop).upperBound), 0.0005,
-                                  "\(state): no ink under the header or behind the tabs at phase \(phase)")
+                XCTAssertGreaterThan(difference(top: 0, bottom: TasksViewport.plainLine(tabsTop: tabsTop).upperBound), 0.0005,
+                                     "\(state): rows run on under the header and the tabs at phase \(phase)")
                 XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
                                      "\(state): rows run on under the bottom stack at phase \(phase)")
             }
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
-            XCTAssertEqual(frame(), resting, "\(state): controls change the mask, not the viewport")
+            XCTAssertEqual(frame(), resting, "\(state): controls never change the viewport")
         }
         try assertClear(bottom: hosted.height - idle, state: "idle")
 

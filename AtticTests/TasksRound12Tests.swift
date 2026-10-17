@@ -714,13 +714,14 @@ final class TasksRound12Tests: XCTestCase {
 
     /// The page drawn with a long list scrolled to two places (a hosted
     /// stand-in for the round's UI test, which no runner could make find the
-    /// panel). Owner, 2026-10-06 (revising A15): rows that pass behind the
-    /// tabs' plain-text line are never drawn at a readable strength there,
-    /// and rows under the add bar's glass are drawn at full strength.
-    func testRowsPassOnlyFaintlyUnderTheTabsAndRunOnUnderTheAddBar() throws {
+    /// panel). Owner, 2026-10-17 (superseding 2026-10-06's "never readable
+    /// behind the tabs' line"): rows run on under the tabs' plain-text line
+    /// and the add bar, visible through the blur (which an in-process
+    /// capture does not draw).
+    func testRowsRunOnUnderTheTabsAndUnderTheAddBar() throws {
         let shares = try bandShares()
         XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
-        XCTAssertLessThan(shares.strongTop, 0.002, "never readable behind the tabs' line (\(shares.strongTop))")
+        XCTAssertGreaterThan(shares.strongTop, 0.002, "rows show behind the tabs' line (\(shares.strongTop))")
         // Floating controls (owner 2026-10-14, replacing N-6 D): rows run on
         // under the add bar's glass, into the blur behind it.
         XCTAssertGreaterThan(shares.bottom, 0.0005, "rows run on under the add bar (\(shares.bottom))")
