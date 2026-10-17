@@ -62,6 +62,7 @@ extension NoteEditorEngine {
         }
         guard format.isCode || format.isCallout || format == .quote else { return range }
         func matches(_ at: Int) -> Bool {
+            blockRangeParagraphVisits += 1
             guard let other = paragraphStyle(at: at) else { return false }
             return other == format
         }

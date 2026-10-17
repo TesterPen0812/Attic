@@ -273,6 +273,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Diagnostic: time spent in the last per-edit upkeep (ms).
     private(set) var lastUpkeepMilliseconds: Double = 0
+    var blockRangeParagraphVisits = 0
     private(set) var documentExtractionCount = 0
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
     private var pendingImageLoads = Set<ObjectIdentifier>()

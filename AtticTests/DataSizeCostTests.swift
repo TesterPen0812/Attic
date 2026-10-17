@@ -1,0 +1,198 @@
+import AppKit
+import SwiftUI
+import SwiftData
+import XCTest
+@testable import Attic
+
+@MainActor
+final class DataSizeCostTests: XCTestCase {
+    func milliseconds(_ work: () throws -> Void) rethrows -> Double {
+        let start = DispatchTime.now().uptimeNanoseconds
+        try work()
+        return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+    }
+
+    func testP07DragWork() throws {
+        for count in [500, 6000] {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let context = ModelContext(container)
+            for i in 0..<count { context.insert(TaskItem(title: "Row \(i)")) }
+            try context.save()
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store))
+            let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 344, height: 520)), addBarFocused: .constant(false))
+            let group = model.rows(for: .now).map(\.id)
+            XCTAssertEqual(group.count, count)
+            TasksPage.dragHeightLookupVisits = 0
+            var geometry: TasksDragGeometry?
+            let setupMS = milliseconds { geometry = page.prepareDragGeometry(group: group, tab: .now) }
+            TasksDragGeometry.comparisonCount = 0
+            let ms = milliseconds {
+                _ = TasksReorderCell<EmptyView, EmptyView>.target(start: 0, translation: 120, group: group, heights: { page.rowHeight($0, in: .now) }, geometry: geometry)
+                _ = TasksReorderCell<EmptyView, EmptyView>.pushesPastGroup(start: 0, translation: 120, group: group, heights: { page.rowHeight($0, in: .now) }, geometry: geometry)
+            }
+            print("P2_DRAG size=\(count) lookup_visits=\(TasksPage.dragHeightLookupVisits) comparisons=\(TasksDragGeometry.comparisonCount) setup_ms=\(setupMS) update_ms=\(ms)")
+            XCTAssertEqual(TasksPage.dragHeightLookupVisits, 0)
+            XCTAssertEqual(TasksDragGeometry.comparisonCount, count == 500 ? 9 : 13)
+        }
+    }
+    func testP07ScrollViewCache() throws {
+        for count in [500, 6000] {
+            let page = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 500))
+            let scroll = NSScrollView(frame: page.bounds)
+            let document = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 20000))
+            for _ in 0..<count { document.addSubview(NSView(frame: .zero)) }
+            scroll.documentView = document; page.addSubview(scroll)
+            let window = NSWindow(contentRect: page.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.contentView = page
+            defer { window.close() }
+            let session = TasksDragSession()
+            let beforeMS = milliseconds {
+                for _ in 0..<30 { session.cachedScrollView = nil; XCTAssertTrue(session.scrollView(at: CGPoint(x: 100, y: 100), in: page) === scroll) }
+            }
+            let visits = session.scrollViewVisitCount
+            let afterMS = milliseconds {
+                for _ in 0..<30 { XCTAssertTrue(session.scrollView(at: CGPoint(x: 100, y: 100), in: page) === scroll) }
+            }
+            print("P2_SCROLL size=\(count) uncached_visits=\(visits) cached_visits=\(session.scrollViewVisitCount - visits) uncached_ms=\(beforeMS) cached_ms=\(afterMS)")
+            XCTAssertEqual(session.scrollViewVisitCount, visits)
+            scroll.isHidden = true
+            XCTAssertNil(session.scrollView(at: CGPoint(x: 100, y: 100), in: page))
+            session.end(); XCTAssertNil(session.cachedScrollView)
+        }
+    }
+
+    func testP07PrefixGeometryAgreesWithWalkingThresholds() {
+        let group = (0..<17).map { _ in UUID() }
+        let heights = Dictionary(uniqueKeysWithValues: group.enumerated().map { ($0.element, CGFloat(34 + ($0.offset % 4) * 17)) })
+        let geometry = TasksDragGeometry(group: group) { heights[$0]! }
+        for start in group.indices {
+            for translation in stride(from: CGFloat(-1500), through: 1500, by: 0.5) {
+                let expected = TasksReorderCell<EmptyView, EmptyView>.target(start: start, translation: translation, group: group, heights: { heights[$0]! })
+                XCTAssertEqual(geometry.target(start: start, translation: translation), expected)
+                XCTAssertEqual(geometry.pushesPastGroup(start: start, translation: translation), TasksReorderCell<EmptyView, EmptyView>.pushesPastGroup(start: start, translation: translation, group: group, heights: { heights[$0]! }))
+                var drag = TasksDrag(id: group[start], tab: .now, group: group, startIndex: start, targetIndex: expected)
+                let landing = TasksLiftedCard.landing(of: drag, originY: 23, heights: { heights[$0]! })
+                drag.geometry = geometry
+                XCTAssertEqual(TasksLiftedCard.landing(of: drag, originY: 23, heights: { heights[$0]! }), landing)
+            }
+        }
+    }
+
+    func testP09DonePagesAndReveal() throws {
+        for count in [500, 5000] {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let context = ModelContext(container)
+            var lastID = UUID()
+            for i in 0..<count {
+                let task = TaskItem(title: "Finished \(i)")
+                task.statusRaw = TaskStatus.done.rawValue
+                task.completedAt = Date(timeIntervalSince1970: Double(count - i))
+                task.doneLoggedAt = task.completedAt
+                context.insert(task)
+                let child = TaskItem(title: "Child \(i)"); child.parentID = task.id
+                child.doneLoggedAt = task.completedAt; child.statusRaw = TaskStatus.done.rawValue
+                context.insert(child)
+                lastID = task.id
+            }
+            try context.save()
+            let store = TaskStore(container: container)
+            let model = TasksPageModel(library: AtticLibrary(tasks: store))
+            let reads = store.doneFamilyParentReadCount, pages = store.donePageReadCount
+            let ms = milliseconds {
+                model.loadDoneLogIfNeeded()
+                while model.doneLogTasks.count < count, model.doneLogFailure == nil { model.loadMoreDoneLog() }
+            }
+            XCTAssertEqual(model.doneLogTasks.count, count)
+            print("P2_DONE size=\(count) parents=\(store.doneFamilyParentReadCount - reads) pages=\(store.donePageReadCount - pages) ms=\(ms)")
+            let reveal = TasksPageModel(library: AtticLibrary(tasks: store))
+            let r = store.doneFamilyParentReadCount, p = store.donePageReadCount
+            let revealMS = milliseconds { XCTAssertEqual(reveal.show(lastID), .shown) }
+            print("P2_REVEAL size=\(count) parents=\(store.doneFamilyParentReadCount - r) pages=\(store.donePageReadCount - p) ms=\(revealMS)")
+            XCTAssertTrue(reveal.selection.contains(lastID))
+        }
+    }
+
+    func testP02WarmCodeRanges() {
+        for count in [1000, 5000] {
+            let blocks = [NoteBlock.text("Title")] + (0..<count).map { .text("let value\($0) = \($0)", style: "mono") }
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
+            let (_, view) = engine.makeView()
+            var offsets: [Int] = []; var at = 6
+            for i in 0..<count { offsets.append(at); at += "let value\(i) = \(i)\n".utf16.count }
+            _ = engine.blockRange(at: offsets[count / 2])
+            let before = engine.blockRangeParagraphVisits
+            let ms = milliseconds { for offset in offsets[(count / 2)..<(count / 2 + 30)] { _ = engine.blockRange(at: offset) } }
+            print("P2_CODE size=\(count) warm_visits=\(engine.blockRangeParagraphVisits - before) warm_ms=\(ms)")
+            view.setSelectedRange(NSRange(location: offsets[count / 2] + 4, length: 0)); view.insertText("x", replacementRange: view.selectedRange())
+            let edited = engine.blockRangeParagraphVisits
+            let nextMS = milliseconds { for offset in offsets[(count / 2)..<(count / 2 + 30)] { _ = engine.blockRange(at: offset + 1) } }
+            print("P2_CODE_EDIT size=\(count) visits=\(engine.blockRangeParagraphVisits - edited) ms=\(nextMS)")
+            engine.detachView()
+        }
+    }
+
+    func testP12FixedWidthTableEdit() throws {
+        for rows in [100, 500] {
+            var table = NoteTable(texts: (0..<rows).map { i in (0..<20).map { "Cell \(i) \($0)" } })
+            for column in table.columns.indices { table.columns[column].width = 100 }
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .table(table)]))
+            let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+            _ = attachment.layout(width: 340)
+            let visits = NoteTableLayout.heightVisitCount
+            let ms = milliseconds {
+                XCTAssertTrue(engine.changeTable(attachment, name: "Typing", coalescing: .init(row: rows / 2, column: 3)) { $0[.init(row: rows / 2, column: 3)].text += " new wrapped words" })
+                _ = attachment.layout(width: 340)
+            }
+            print("P2_TABLE rows=\(rows) columns=20 height_visits=\(NoteTableLayout.heightVisitCount - visits) ms=\(ms)")
+        }
+    }
+
+    func testP10LibraryRemount() throws {
+        for count in [30, 300] {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let context = ModelContext(container)
+            let document = NoteDocument(blocks: [.text("Title")] + (0..<1000).map { .text("Long line \($0) with enough text for a preview", style: $0 % 10 == 0 ? "checklist" : "body") })
+            let bytes = try NoteContentCodec.encode(document)
+            for i in 0..<count {
+                let note = NoteItem(title: "Note \(i)"); note.content = bytes; note.plainText = NoteTextExport.plainText(document)
+                note.revisionID = UUID(); context.insert(note)
+            }
+            try context.save()
+            let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+            let controller = NotesPageController(store: store, journal: nil)
+            let first = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+            var groups: [NotesLibraryModel.Group] = []
+            let coldMS = milliseconds { groups = first.groups(store: store, drafts: []) }
+            let remount = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+            let warmMS = milliseconds { XCTAssertEqual(remount.groups(store: store, drafts: []).flatMap(\.rows), groups.flatMap(\.rows)) }
+            print("P2_LIBRARY size=\(count) cold_decodes=\(first.bodyDecodeCount) remount_decodes=\(remount.bodyDecodeCount) cold_ms=\(coldMS) remount_ms=\(warmMS)")
+        }
+    }
+
+    func testP05MiddleEditProjection() throws {
+        for count in [1000, 5000] {
+            var blocks: [NoteBlock] = [.text("Title")]
+            for i in 0..<count { blocks.append(.text("Mixed line \(i) with more words", style: i % 5 == 0 ? "bullet" : "body")) }
+            let document = NoteDocument(blocks: blocks)
+            let bytes = try NoteContentCodec.encode(document)
+            var decoded: NoteDocument?
+            let decodeMS = milliseconds { decoded = NoteContentCodec.decode(bytes).document }
+            XCTAssertEqual(try NoteContentCodec.encode(XCTUnwrap(decoded)), bytes)
+            let engine = NoteEditorEngine(noteID: UUID(), document: document)
+            let (_, view) = engine.makeView()
+            XCTAssertEqual(try NoteContentCodec.encode(engine.document()), bytes)
+            let middle = (engine.textStorage.string as NSString).range(of: "Mixed line \(count / 2) ").location + 12
+            view.setSelectedRange(NSRange(location: middle, length: 0)); view.insertText("x", replacementRange: view.selectedRange())
+            var projected = document
+            let extractionMS = milliseconds { projected = engine.document() }
+            var prepared: PreparedNoteDocument?
+            let prepareMS = try milliseconds { prepared = try PreparedNoteDocument(projected) }
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let commitMS = milliseconds { _ = store.createDocumentNote(id: UUID(), document: projected, prepared: prepared) }
+            print("P2_SAVE size=\(count) decode_ms=\(decodeMS) extraction_ms=\(extractionMS) preparation_ms=\(prepareMS) commit_ms=\(commitMS)")
+            XCTAssertEqual(projected, NoteTextCodec.document(from: engine.textStorage, template: document))
+            engine.detachView()
+        }
+    }
+}

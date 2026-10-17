@@ -107,6 +107,7 @@ struct NoteTableLayout: Equatable {
     /// but their longest words would fit, the wider columns give up width
     /// (their text wraps) until the table fits: a table scrolls only when
     /// it can't fit without breaking words (or its widths were set by hand).
+    nonisolated(unsafe) static var heightVisitCount = 0
     static func make(_ table: NoteTable, viewport: CGFloat,
                      natural: (NoteTable.Position) -> CGFloat,
                      minimum: (NoteTable.Position) -> CGFloat = { _ in 0 },
@@ -149,6 +150,7 @@ struct NoteTableLayout: Equatable {
         let heights: [CGFloat] = table.rows.indices.map { row in
             var tallest = lineHeight
             for column in table.columns.indices {
+                heightVisitCount += 1
                 let text = max(1, widths[column] - 2 * M.cellPaddingH)
                 tallest = max(tallest, height(NoteTable.Position(row: row, column: column), text))
             }
