@@ -388,6 +388,7 @@ final class AtticTokenFieldView: NSView {
 
     let textView: AtticTokenTextView
     private let scrollView = NSScrollView()
+    private let clip = AtticLineClipView()
     private let layoutManager = AtticChipLayoutManager()
     private var style: Style?
     private var chips: [AtticTokenChip] = []
@@ -433,6 +434,7 @@ final class AtticTokenFieldView: NSView {
         scrollView.hasVerticalScroller = false
         scrollView.horizontalScrollElasticity = .none
         scrollView.verticalScrollElasticity = .none
+        scrollView.contentView = clip
         scrollView.documentView = textView
         scrollView.focusRingType = .none
         addSubview(scrollView)
@@ -448,6 +450,9 @@ final class AtticTokenFieldView: NSView {
     private var lineHeight: CGFloat {
         ceil(layoutManager.defaultLineHeight(for: style?.font ?? .systemFont(ofSize: 13)))
     }
+
+    /// The clip the text scrolls in (tests).
+    var textClip: NSClipView { clip }
 
     /// Makes the field wrap (O17-05): the text breaks at the field's width
     /// and the field asks for one more line each time it does.
@@ -488,23 +493,29 @@ final class AtticTokenFieldView: NSView {
         isInLayout = true
         defer { isInLayout = false }
         super.layout()
-        scrollView.frame = bounds
         let lineHeight = lineHeight
         if let wrapping {
-            // The text keeps the one-line field's top and bottom room; the
-            // clip keeps the insertion point in view while the field is
-            // shorter than its text (past the last line, or growing).
+            // The text keeps the one-line field's top and bottom room, as
+            // room around the clip, not inside the text (V-12): the clip
+            // is whole lines tall at the most lines and scrolls by whole
+            // lines, so no line is ever cut and no sliver of the line
+            // above shows. It keeps the insertion point in view while the
+            // field is shorter than its text (past the last line, or
+            // growing).
             let pad = max(0, (wrapping.minHeight - lineHeight) / 2)
-            textView.textContainerInset = NSSize(width: 0, height: pad)
-            textView.minSize = NSSize(width: bounds.width, height: bounds.height)
+            scrollView.frame = bounds.insetBy(dx: 0, dy: pad)
+            clip.lineHeight = lineHeight
+            let visible = scrollView.frame.height
+            textView.textContainerInset = .zero
+            textView.minSize = NSSize(width: bounds.width, height: visible)
             textView.maxSize = NSSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
             textView.frame.size.width = bounds.width
             measureWrappedHeight()
             if let container = textView.textContainer {
-                let content = layoutManager.usedRect(for: container).height + pad * 2
-                textView.frame.size.height = max(bounds.height, ceil(content))
+                let content = layoutManager.usedRect(for: container).height
+                textView.frame.size.height = max(visible, ceil(content))
             }
-            if textView.frame.height <= bounds.height + 0.5 {
+            if textView.frame.height <= visible + 0.5 {
                 scrollView.contentView.scroll(to: .zero)
                 scrollView.reflectScrolledClipView(scrollView.contentView)
             } else {
@@ -512,6 +523,8 @@ final class AtticTokenFieldView: NSView {
             }
             return
         }
+        scrollView.frame = bounds
+        clip.lineHeight = nil
         let top = max(0, (bounds.height - lineHeight) / 2)
         textView.textContainerInset = NSSize(width: 0, height: top)
         textView.minSize = NSSize(width: bounds.width, height: bounds.height)
@@ -621,6 +634,62 @@ extension NSAttributedString.Key {
     static let atticChip = NSAttributedString.Key("AtticChip")
     /// On a date's first character: its calendar icon's progress (0...1).
     static let atticDateIcon = NSAttributedString.Key("AtticDateIcon")
+}
+
+/// A wrapping composer's clip (V-12): it scrolls by whole lines, so a
+/// grown field never shows half a line at its bottom or a sliver of the
+/// line above at its top. Sideways (one line) it scrolls freely.
+final class AtticLineClipView: NSClipView {
+    var lineHeight: CGFloat?
+
+    /// Every scroll comes here (the insertion point kept in view, a wheel,
+    /// `scroll(to:)`): it lands on a whole line.
+    override func scroll(to newOrigin: NSPoint) {
+        super.scroll(to: snapped(newOrigin))
+    }
+
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        rect.origin = snapped(rect.origin, height: rect.height)
+        return rect
+    }
+
+    /// A clip resized by the bar's spring keeps its origin wherever the
+    /// spring left it: it settles back on a line.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        let origin = snapped(bounds.origin)
+        if origin != bounds.origin { super.scroll(to: origin) }
+    }
+
+    private func snapped(_ origin: NSPoint, height: CGFloat? = nil) -> NSPoint {
+        guard let lineHeight, lineHeight > 0 else { return origin }
+        let limit = (documentView?.frame.height ?? 0) - (height ?? bounds.height)
+        return NSPoint(x: origin.x, y: AtticLineSnap.offset(origin.y, line: lineHeight, limit: limit))
+    }
+}
+
+/// Whole-line scrolling for the growing composers (V-12, pure): the
+/// nearest whole line, never past the last one.
+@MainActor
+enum AtticLineSnap {
+    /// A font's line pitch as the composers lay it out (rounded up), kept
+    /// for the last font asked about: drawing asks on every frame.
+    private static var cached: (font: NSFont, line: CGFloat)?
+
+    static func lineHeight(of font: NSFont) -> CGFloat {
+        if let cached, cached.font == font { return cached.line }
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        cached = (font, line)
+        return line
+    }
+
+    nonisolated static func offset(_ y: CGFloat, line: CGFloat, limit: CGFloat) -> CGFloat {
+        guard line > 0 else { return y }
+        let snapped = (y / line).rounded() * line
+        let last = (max(0, limit) / line).rounded(.down) * line
+        return max(0, min(snapped, last))
+    }
 }
 
 /// Draws a date's calendar icon in the room kept before it (owner item 15,

@@ -108,6 +108,45 @@ final class FloatingControlsTests: XCTestCase {
         XCTAssertEqual(strip.bottom, TasksViewport.reservedStack + inset, "the strip is part of the bottom controls")
     }
 
+    /// S3-01: a plain row over the composer (Date, Tag, Priority) lies on
+    /// the blur at full strength: the mask is opaque `plateau` points in
+    /// from the edge, then eases to clear over the rest, as it always has.
+    /// No plateau is the approved mask, unchanged.
+    func testAPlateauKeepsTheBlurFullUnderAPlainRow() throws {
+        func alphas(_ edge: VerticalEdge, plateau: CGFloat) throws -> [UInt8] {
+            let image = try XCTUnwrap(AtticVariableBlurView.maskImage(height: 60, edge: edge, plateau: plateau))
+            let data = try XCTUnwrap(image.dataProvider?.data as Data?)
+            return (0..<image.height).map { data[$0 * image.bytesPerRow + 3] }
+        }
+        let plain = try alphas(.bottom, plateau: 0)
+        XCTAssertEqual(plain, try XCTUnwrap(AtticVariableBlurView.maskImage(height: 60, edge: .bottom)).alphaRows(),
+                       "no plateau: the approved mask")
+        let bottom = try alphas(.bottom, plateau: 24)
+        XCTAssertEqual(bottom.suffix(25), Array(repeating: 255, count: 25), "full strength across the row")
+        XCTAssertEqual(bottom.first, 0, "clear at the inner end, as before")
+        XCTAssertEqual(bottom, bottom.sorted(), "it only eases towards the edge")
+        XCTAssertEqual(try alphas(.top, plateau: 24), bottom.reversed())
+    }
+
+    /// S3-01: the plateau rises with the composer's strip (Date, Tag,
+    /// Priority) and covers the whole stack once it shows; idle it is the
+    /// approved blur's (none).
+    func testTheBlurIsFullUnderTheComposersStripWhileItShows() {
+        let inset: CGFloat = 12
+        let idle = TasksViewport.reservedStack - AtticControlSize.smallHeight
+        XCTAssertEqual(TasksViewport.controlsPlateau(stack: idle, bottomInset: inset), 0)
+        XCTAssertEqual(TasksViewport.controlsPlateau(stack: AtticControlSize.addBarHeight, bottomInset: inset), 0)
+        let shown = TasksViewport.controlsPlateau(stack: TasksViewport.reservedStack, bottomInset: inset)
+        XCTAssertEqual(shown, TasksViewport.controlsInset(stack: TasksViewport.reservedStack, bottomInset: inset),
+                       "full up to the strip's top")
+        let half = TasksViewport.controlsPlateau(stack: idle + AtticControlSize.smallHeight / 2, bottomInset: inset)
+        XCTAssertGreaterThan(half, 0)
+        XCTAssertLessThan(half, shown, "it moves with the strip as it rises")
+        let grown = TasksViewport.reservedStack + 32
+        XCTAssertEqual(TasksViewport.controlsPlateau(stack: grown, bottomInset: inset),
+                       TasksViewport.controlsInset(stack: grown, bottomInset: inset), "a grown bar keeps it to the top")
+    }
+
     /// U-02: with no blur (Reduce Transparency) the surface is solid under
     /// the controls, out to their inner edge, and gone 12 pt past it, so no
     /// text shows sharp behind a control and the title's rest (16 below
@@ -131,5 +170,30 @@ final class FloatingControlsTests: XCTestCase {
         let base = try XCTUnwrap(opaque.base)
         XCTAssertEqual(base.alpha, 1)
         XCTAssertEqual(opaque.fill, design.tokens.raised.fill)
+    }
+}
+
+private extension CGImage {
+    /// Each row's alpha (a one-column mask).
+    func alphaRows() -> [UInt8] {
+        guard let data = dataProvider?.data as Data? else { return [] }
+        return (0..<height).map { data[$0 * bytesPerRow + 3] }
+    }
+}
+
+/// V-10: what opens under a task row is uncovered from its top as the rows
+/// below make room: never drawn over them mid-spring.
+@MainActor
+final class TopRevealTests: XCTestCase {
+    func testTheRevealUncoversFromTheTopOnly() {
+        let rect = CGRect(x: 0, y: 40, width: 300, height: 120)
+        let shut = AtticTopRevealShape(fraction: 0).path(in: rect).boundingRect
+        XCTAssertEqual(shut.maxY, rect.minY, accuracy: 0.01, "nothing below the row shows")
+        let half = AtticTopRevealShape(fraction: 0.5).path(in: rect).boundingRect
+        XCTAssertEqual(half.maxY, rect.minY + 60, accuracy: 0.01, "as far down as the rows below have moved")
+        XCTAssertLessThan(half.minX, rect.minX, "only the bottom edge cuts")
+        XCTAssertLessThan(half.minY, rect.minY)
+        let rest = AtticTopRevealShape(fraction: 1).path(in: rect).boundingRect
+        XCTAssertTrue(rest.contains(rect.insetBy(dx: -20, dy: -20)), "at rest it cuts nothing")
     }
 }

@@ -1500,6 +1500,48 @@ struct AtticAnchoredPopover {
     let content: () -> AnyView
 }
 
+/// What opens under a row (its subtasks, its files) is uncovered from the
+/// top as the rows below make room, on the same spring (V-10): it never
+/// shows at its final place over rows still sliding down, nor stays over
+/// them as they come back up. A clip, not a mask: no layer is drawn
+/// offscreen, and at rest it cuts nothing.
+struct AtticTopRevealShape: Shape {
+    /// 0: nothing shown; 1: at rest, nothing cut.
+    var fraction: CGFloat
+
+    var animatableData: CGFloat {
+        get { fraction }
+        set { fraction = newValue }
+    }
+
+    /// Room around the content its clip leaves alone (focus rings, a
+    /// lifted subtask's shadow): only the bottom edge moves.
+    static let room: CGFloat = 10_000
+
+    func path(in rect: CGRect) -> Path {
+        let open = rect.insetBy(dx: -Self.room, dy: -Self.room)
+        guard fraction < 1 else { return Path(open) }
+        let bottom = rect.minY + rect.height * max(0, fraction)
+        return Path(CGRect(x: open.minX, y: open.minY, width: open.width, height: max(0, bottom - open.minY)))
+    }
+}
+
+private struct AtticTopReveal: ViewModifier {
+    let fraction: CGFloat
+
+    func body(content: Content) -> some View {
+        content.clipShape(AtticTopRevealShape(fraction: fraction))
+    }
+}
+
+extension AnyTransition {
+    /// Uncovered from the top as it opens, covered back up as it closes
+    /// (`AtticTopRevealShape`).
+    static var atticTopReveal: AnyTransition {
+        .modifier(active: AtticTopReveal(fraction: 0), identity: AtticTopReveal(fraction: 1))
+    }
+}
+
 /// A row's date and tags as controls (owner fix 5 C): their clicks and the
 /// pickers they open, which the page supplies.
 struct AtticRowMeta {
@@ -2463,7 +2505,7 @@ private struct AtticTagColourMenu: ViewModifier {
 /// NSTextField's editor consumes an empty Backspace before SwiftUI's key
 /// handlers. Its delegate exposes that one command without intercepting
 /// app-wide keys or changing typing, selection, input methods or Undo.
-private struct AtticSubtaskTitleField: NSViewRepresentable {
+struct AtticSubtaskTitleField: NSViewRepresentable {
     let editing: AtticTitleEditing
     let color: NSColor
     func makeCoordinator() -> Coordinator { Coordinator(editing) }
@@ -2588,15 +2630,50 @@ private struct AtticSubtaskTitleField: NSViewRepresentable {
     }
 }
 
-private final class AtticSubtaskTitleCell: NSTextFieldCell {
+final class AtticSubtaskTitleCell: NSTextFieldCell {
     let editor = AtticSubtaskFieldEditor()
     override func fieldEditor(for controlView: NSView) -> NSTextView? { editor }
+
+    /// V-12: the text sits in whole lines, with the row's spare height
+    /// (18 pt title line, 16 pt text line) split evenly above and below,
+    /// drawn and edited alike: grown to its most lines, the field shows
+    /// exactly that many, never half a line at its bottom or a sliver of
+    /// the line above at its top.
+    static func textRect(forBounds rect: NSRect, font: NSFont?) -> NSRect {
+        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.rowTitle.nsFont)
+        guard line > 0, rect.height > line else { return rect }
+        let whole = (rect.height / line).rounded(.down) * line
+        return rect.insetBy(dx: 0, dy: (rect.height - whole) / 2)
+    }
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        super.drawingRect(forBounds: Self.textRect(forBounds: rect, font: font))
+    }
+
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: Self.textRect(forBounds: rect, font: font), in: controlView, editor: textObj, delegate: delegate, event: event)
+    }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?,
+                         start selStart: Int, length selLength: Int) {
+        super.select(withFrame: Self.textRect(forBounds: rect, font: font), in: controlView, editor: textObj, delegate: delegate,
+                     start: selStart, length: selLength)
+    }
 }
 
 /// Typing stays in AppKit's undo manager. A newer Tasks step (such as
 /// deleting an empty sibling) answers Undo before the older typing.
-private final class AtticSubtaskFieldEditor: NSTextView {
+final class AtticSubtaskFieldEditor: NSTextView {
     var editing: AtticTitleEditing?
+    /// V-12: grown past its most lines, it scrolls to the insertion point
+    /// by whole lines (its clip is whole lines tall).
+    override func adjustScroll(_ newVisible: NSRect) -> NSRect {
+        var rect = super.adjustScroll(newVisible)
+        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.rowTitle.nsFont)
+        rect.origin.y = AtticLineSnap.offset(rect.origin.y - textContainerOrigin.y, line: line,
+                                             limit: frame.height - rect.height - textContainerOrigin.y) + textContainerOrigin.y
+        return rect
+    }
     @objc func undo(_ sender: Any?) {
         guard !hasMarkedText() else { return }
         if editing?.pageUndo?(undoManager?.canUndo == true) != true { undoManager?.undo() }
