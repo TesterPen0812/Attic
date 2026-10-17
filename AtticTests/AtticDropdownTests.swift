@@ -1706,11 +1706,52 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(Round(new: [.priorityOpen: 1], legacy: [:]).ratio(.priorityOpen).isNaN)
     }
 
-    /// Opens, filters and closes the dropdowns and the components they
-    /// replaced, the same way, in `rounds` interleaved rounds. With
-    /// `readAccessibility`, each sample also reads the shown list's
-    /// accessibility tree, as VoiceOver does when a menu opens or changes
-    /// (that is when SwiftUI builds each row's accessibility element).
+    private enum PickerSample: Int, CaseIterable {
+        case legacy, tag, priority
+    }
+
+    /// Six permutations, with the same two warmups and 16 retained samples.
+    /// Each pair's order and each immediate predecessor occur equally often.
+    /// Rotate identities by round to distribute the unavoidable position remainder.
+    private func pickerSchedule(round: Int) -> [[PickerSample]] {
+        let l = PickerSample.legacy, t = PickerSample.tag, p = PickerSample.priority
+        let schedule = [[p,l,t], [l,p,t], // discarded warmups
+                        [l,t,p], [l,p,t], [p,t,l], [t,p,l], [p,t,l], [t,p,l], [t,l,p], [l,t,p],
+                        [l,p,t], [p,l,t], [l,t,p], [t,l,p], [t,p,l], [p,t,l], [p,l,t], [l,p,t]]
+        return schedule.map { $0.map { PickerSample(rawValue: ($0.rawValue + round) % 3)! } }
+    }
+
+    func testFLPickerScheduleBalancesOrderPredecessorsAndSampleIdentity() {
+        var positions = Dictionary(uniqueKeysWithValues: PickerSample.allCases.map { ($0, [0, 0, 0]) })
+        for round in 0..<8 {
+            let schedule = pickerSchedule(round: round)
+            let retained = Array(schedule.dropFirst(2))
+            XCTAssertEqual(schedule.count, 18)
+            for component in PickerSample.allCases {
+                XCTAssertEqual(retained.flatMap { $0 }.filter { $0 == component }.count, 16)
+            }
+            var predecessors: [String: Int] = [:]
+            var previous = schedule[1].last!
+            for triplet in retained {
+                XCTAssertEqual(Set(triplet), Set(PickerSample.allCases))
+                for (position, component) in triplet.enumerated() {
+                    positions[component]![position] += 1
+                    predecessors["\(previous.rawValue)\(component.rawValue)", default: 0] += 1
+                    previous = component
+                }
+            }
+            for a in PickerSample.allCases {
+                for b in PickerSample.allCases where a != b {
+                    XCTAssertEqual(predecessors["\(a.rawValue)\(b.rawValue)"], 8)
+                    XCTAssertEqual(retained.filter { $0.firstIndex(of: a)! < $0.firstIndex(of: b)! }.count, 8)
+                }
+            }
+        }
+        XCTAssertTrue(positions.values.flatMap { $0 }.allSatisfy { (42...44).contains($0) })
+    }
+
+    /// Opens, filters and closes the dropdowns and replaced components in
+    /// interleaved rounds. AX samples include the full shown tree traversal.
     private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0, paired: Bool = true) -> [Round] {
         verifyCIInputModes(readAccessibility: readAccessibility)
         let diagnostic = ProcessInfo.processInfo.environment["ATTIC_DROPDOWN_DIAGNOSTICS"] == "1"
@@ -1745,7 +1786,7 @@ final class AtticDropdownTests: XCTestCase {
         let anchor = NSView(frame: NSRect(x: 40, y: 60, width: 60, height: 28))
         window.contentView?.addSubview(anchor)
         defer { anchor.removeFromSuperview() }
-        func pickerTimings(reversed: Bool) -> (legacyTag: [Double], tag: [Double], priority: [Double]) {
+        func pickerTimings(round: Int) -> (legacyTag: [Double], tag: [Double], priority: [Double]) {
             var legacyTag: [Double] = [], tag: [Double] = [], priority: [Double] = []
             func legacy() -> Double {
                 let popover = NSPopover()
@@ -1793,15 +1834,33 @@ final class AtticDropdownTests: XCTestCase {
                 prio.close(restoreFocus: false, immediately: true)
                 return elapsed
             }
-            // Two discarded warm-ups, then 16 samples: eight AB and eight BA.
-            for sample in 0..<(paired ? 18 : 16) {
-                let reverse = paired && ((sample % 2 == 1) != reversed)
-                let operations: [() -> Double] = reverse ? [currentPriority, currentTag, legacy] : [legacy, currentTag, currentPriority]
-                let values = operations.map { $0() }
-                if sample >= (paired ? 2 : 1) {
-                    legacyTag.append(values[reverse ? 2 : 0])
-                    tag.append(values[1])
-                    priority.append(values[reverse ? 0 : 2])
+            let schedule = paired ? pickerSchedule(round: round) : Array(repeating: [.legacy, .tag, .priority], count: 16)
+            for (sample, operations) in schedule.enumerated() {
+                for component in operations {
+                    // A removed overlay dirties the shared window and leaves
+                    // a Core Animation transaction. Commit that prior work
+                    // before timing another opening; otherwise an AppKit
+                    // reentrant flush can charge several old cards to it.
+                    if diagnostic {
+                        let cleanup = ms { window.displayIfNeeded(); CATransaction.flush() }
+                        openingDiagnostics.append("DROPDOWN_PREVIOUS_CLOSE ms=\(cleanup)")
+                    } else {
+                        window.displayIfNeeded()
+                        CATransaction.flush()
+                    }
+                    let value: Double
+                    switch component {
+                    case .legacy: value = legacy()
+                    case .tag: value = currentTag()
+                    case .priority: value = currentPriority()
+                    }
+                    if sample >= (paired ? 2 : 1) {
+                        switch component {
+                        case .legacy: legacyTag.append(value)
+                        case .tag: tag.append(value)
+                        case .priority: priority.append(value)
+                        }
+                    }
                 }
             }
             return (legacyTag, tag, priority)
@@ -1820,7 +1879,7 @@ final class AtticDropdownTests: XCTestCase {
                 slash = slashTimings { NoteSlashListView(model: $0) }
                 legacy = slashTimings { LegacySlashList(model: $0) }
             }
-            let pickers = pickerTimings(reversed: index % 2 == 1)
+            let pickers = pickerTimings(round: index)
             round.legacy[.slashOpen] = median(legacy.open); round.new[.slashOpen] = median(slash.open)
             round.legacy[.slashNarrow] = median(legacy.narrow); round.new[.slashNarrow] = median(slash.narrow)
             round.legacy[.slashWiden] = median(legacy.widen); round.new[.slashWiden] = median(slash.widen)
