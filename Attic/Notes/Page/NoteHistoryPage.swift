@@ -21,8 +21,7 @@ struct NoteHistoryPage: View {
 
     /// The page's floating edges.
     static func edges(_ layout: PanelPageLayout) -> AtticFloatingEdges {
-        AtticFloatingEdges(top: versionLineBottom(layout), bottom: bottomControls(layout),
-                           topPlain: versionLine(layout), topRamp: 24 - AtticEdgeBlurMetrics.plainClearance)
+        AtticFloatingEdges(top: versionLineBottom(layout), bottom: bottomControls(layout))
     }
 
     /// The bottom row's top, up from the panel's bottom edge.
@@ -42,9 +41,8 @@ struct NoteHistoryPage: View {
                     scrollOverride: browser.scrollOffset - layout.headerBottom - 76)
                     .id(session.id)
                     // Floating controls (owner, 2026-10-14): the preview runs on
-                    // under the version line and the bottom row, into the
-                    // variable blur; gone above the version line's lower edge.
-                    .atticFloatingEdgesMask(Self.edges(layout))
+                    // under the version line and the bottom row, visible
+                    // through the variable blur (owner, 2026-10-17).
                     .overlay { AtticFloatingControlsBand(height: Self.bottomControls(layout)) }
                     .accessibilityIdentifier("notes-history-preview")
             }

@@ -8,7 +8,7 @@ import SwiftUI
 /// matches highlighted, with a quiet "N of M done tasks"; each task restorable to
 /// Now (its circle, or right-click). Loaded a page at a time as it scrolls,
 /// so 5,000 finished tasks never load at once.
-struct TasksDonePage<Cell: View, Mask: View>: View {
+struct TasksDonePage<Cell: View>: View {
     let model: TasksPageModel
     /// Every change to the model while the page is drawn; nothing while it
     /// is kept built but not drawn (round 11, `TasksCellUpdates`).
@@ -34,8 +34,6 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     let bottomStack: TasksBottomStackHeight
     /// False while the page is kept built but not shown (round 11).
     var drawn = true
-    /// Clean cut's fade, the default (the system soft edge needs none).
-    let mask: Mask
     /// A row the keyboard moved to: brought into the visible area (review 8).
     @Binding var reveal: TasksPageModel.ScrollRequest?
     /// Brings a row into the uncovered part of the list (the page's rule).
@@ -129,7 +127,7 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                 focusSelection: focusSelection, drawn: drawn).accessibilityHidden(true))
         }
         .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
-                        bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack, mask: mask)
+                        bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack)
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in
             guard let request else { return }

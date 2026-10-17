@@ -537,8 +537,9 @@ final class OwnerTasks1010Tests: XCTestCase {
         XCTAssertEqual(state.frames, originalFrames, "ending rename keeps the same geometry")
     }
 
-    /// An idle plain-controls mask is fully opaque. It must not create
-    /// another native graphics/layer wrapper around the scrolling content.
+    /// The lists carry no mask at all (owner, 2026-10-17): no native
+    /// graphics or layer wrapper is added around the scrolling content,
+    /// fewer than a single full-opacity mask makes.
     func testIdleComposerMaskUsesOnlyTheExistingNativeMaskLayer() throws {
         let stack = TasksBottomStackHeight()
         let content = ScrollView {
@@ -556,7 +557,7 @@ final class OwnerTasks1010Tests: XCTestCase {
             .atticScrollEdgeEffect()
             .mask { Color.white })
         let actual = AnyView(content.tasksListEdges(top: 80, listTop: 100, bottomInset: 16,
-            bottomMargin: 48, bottomClearance: 64, stack: stack, mask: Color.white))
+            bottomMargin: 48, bottomClearance: 64, stack: stack))
         var windows: [NSWindow] = []
         defer { for window in windows { window.contentView = nil; window.close() } }
         func counts(_ root: AnyView) throws -> (layers: Int, graphics: Int) {
@@ -591,7 +592,7 @@ final class OwnerTasks1010Tests: XCTestCase {
                 ForEach(0..<40) { index in Text(verbatim: "Mask row \(index)").frame(height: 34) }
             }
         }.tasksListEdges(top: 80, listTop: 100, bottomInset: 16,
-            bottomMargin: 48, bottomClearance: 64, stack: stack, mask: Color.white)
+            bottomMargin: 48, bottomClearance: 64, stack: stack)
             .frame(width: 340, height: 520))
         let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 520),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -621,27 +622,32 @@ final class OwnerTasks1010Tests: XCTestCase {
     }
 
     /// Run the real list modifier over coloured rows, rather than merely
-    /// asserting a constant that the rendered list might never use.
-    func testComposerStripExcludesRowsBehindItsPlainControls() throws {
+    /// asserting a constant that the rendered list might never use. The
+    /// owner's 10-17 decision: rows stay visible beneath the composer's
+    /// plain strip (Date / Tag / Priority) and under the tabs, blurred by
+    /// the page's backdrop, never faded out (was o16: invisible there).
+    func testComposerStripAndTabsKeepTheRowsBehindThemVisible() throws {
         let stack = TasksBottomStackHeight()
         stack.height = TasksViewport.reservedStack
         let height: CGFloat = 520, inset: CGFloat = 16
         let host = NSHostingView(rootView:
             Color(red: 1, green: 0, blue: 0).tasksListEdges(top: 80, listTop: 100, bottomInset: inset,
                                     bottomMargin: 48, bottomClearance: stack.height + inset + 16,
-                                    stack: stack, mask: Color.white)
+                                    stack: stack)
                 .frame(width: 340, height: height).background(Color.white))
         host.frame = CGRect(x: 0, y: 0, width: 340, height: height)
         spin()
         let rep = try bitmap(host)
         try capture(rep, name: "composer-list-mask.png")
         let scale = CGFloat(rep.pixelsHigh) / height
+        let reference = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int(260 * scale))?.usingColorSpace(.sRGB))
+        XCTAssertLessThan(reference.greenComponent, 0.05, "the rows' own colour")
         let stripCentre = height - inset - stack.height + AtticControlSize.smallHeight / 2
-        let pixel = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int(stripCentre * scale))?.usingColorSpace(.sRGB))
-        XCTAssertGreaterThan(pixel.greenComponent, 0.95, "rows must be invisible beneath Date / Tag / Priority")
-        let above = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int((stripCentre - 40) * scale))?.usingColorSpace(.sRGB))
-        let reference = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int((stripCentre - 80) * scale))?.usingColorSpace(.sRGB))
-        XCTAssertEqual(above.greenComponent, reference.greenComponent, accuracy: 0.01, "rows above the strip retain the unmasked row colour")
+        for (y, place) in [(stripCentre, "beneath Date / Tag / Priority"), (height - inset - 4, "beneath the add bar"),
+                           (CGFloat(88), "behind the tabs line"), (CGFloat(20), "under the header")] {
+            let pixel = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int(y * scale))?.usingColorSpace(.sRGB))
+            XCTAssertEqual(pixel.greenComponent, reference.greenComponent, accuracy: 0.01, "rows stay visible \(place)")
+        }
     }
 
     func testOpenDropdownRefitsWhenItsWindowGetsShorter() throws {

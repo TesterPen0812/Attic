@@ -122,14 +122,15 @@ final class TasksRound11Tests: XCTestCase {
         }
     }
 
-    /// N-6 D: no overlay behind the tabs; rows behind the tab labels are
-    /// gone, and whole from the first row's rest.
-    func testRowsAreGoneUnderTheTabs() {
-        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
-        for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), 0, accuracy: 0.001, "gone behind the tab labels at \(y)")
-        }
-        XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: 118, height: 520), 1, accuracy: 0.001, "fully there from the first row's words")
+    /// N-6 D, superseded by the owner's 10-17 decision: rows are no
+    /// longer gone behind the tab labels; they run on under them, visible
+    /// through the blur (`RoundO3ControlsTests`). Still: no overlay behind
+    /// the tabs, and the first row rests clear of them.
+    func testRowsRunOnUnderTheTabsAndRestClearOfThem() {
+        let top = TasksViewport.topEdges(tabsTop: 80)
+        XCTAssertEqual(top.top, TasksViewport.controlsBottom(tabsTop: 80), "the blur covers the tabs line")
+        XCTAssertGreaterThan(TasksViewport.listTop(tabsTop: 80), TasksViewport.plainLine(tabsTop: 80).upperBound,
+                             "the first row rests below the tab labels")
     }
 
     /// Files over the page land on the row under them, never on another.

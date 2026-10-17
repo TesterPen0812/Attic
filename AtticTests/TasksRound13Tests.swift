@@ -443,23 +443,16 @@ final class TasksRound13Tests: XCTestCase {
 
     // MARK: - Item 5, revised by A15: faint under the controls, whole at rest
 
-    /// N-6 D (owner 2026-10-11, replacing 2026-10-06's "full strength under
-    /// the glass"): rows are gone under the header and the tabs line, whole
-    /// from the first row's words at rest down to the bottom stack, whose
-    /// own mask fades them before it.
-    func testTheListsMaskHidesRowsBeforeTheTabsAndKeepsThemWholeAtRest() {
-        let height: CGFloat = 520
-        let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
-        func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
-        // Floating controls (owner 2026-10-14): the tabs' plain line (its
-        // underline included) is part of the top controls.
-        for y in stride(from: CGFloat(0), through: TasksViewport.plainLine(tabsTop: 80).upperBound, by: 1) {
-            XCTAssertEqual(opacity(y), 0, accuracy: 0.001, "gone under the header and the tabs at \(y)")
-        }
+    /// N-6 D hid rows under the header and the tabs line; the owner's
+    /// 10-17 decision supersedes it (rows run on under them, visible
+    /// through the blur: `RoundO3ControlsTests`). Still: the tabs' plain
+    /// line (its underline included) is part of the top controls, and the
+    /// first row's words rest below it.
+    func testTheFirstRowsWordsRestBelowTheTabsLine() {
         let rest = TasksViewport.listTop(tabsTop: 80) + AtticTaskRowMetrics.titleTop(twoLine: false)
-        for y in stride(from: rest, through: height, by: 1) {
-            XCTAssertEqual(opacity(y), 1, accuracy: 0.001, "whole from the first row's words at \(y)")
-        }
+        XCTAssertGreaterThan(rest, TasksViewport.plainLine(tabsTop: 80).upperBound)
+        XCTAssertGreaterThanOrEqual(TasksViewport.topEdges(tabsTop: 80).top, TasksViewport.plainLine(tabsTop: 80).upperBound,
+                                    "the blur covers the whole line")
     }
 
     // MARK: - Item 6: the new-subtask field says what it is

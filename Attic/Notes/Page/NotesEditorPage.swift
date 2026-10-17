@@ -297,12 +297,11 @@ struct NotesEditorPage: View {
                 .id(ObjectIdentifier(session.engine))
                 // Floating controls (owner, 2026-10-14): the note runs on to
                 // the panel's edges, under the header and the bottom row,
-                // into the variable blur behind them. The scroll insets keep
-                // the title's and the last line's resting places clear.
-                // F-13 stays fixed: the blur (`pageBackdrops`) and the band
-                // sit above the text view and its attachment views, below
-                // the controls.
-                .atticFloatingEdgesMask(editorEdges)
+                // visible through the variable blur behind them (owner,
+                // 2026-10-17: no fade). The scroll insets keep the title's
+                // and the last line's resting places clear. F-13 stays
+                // fixed: the blur (`pageBackdrops`) and the band sit above
+                // the text view and its attachment views, below the controls.
                 .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)

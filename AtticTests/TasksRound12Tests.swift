@@ -631,35 +631,16 @@ final class TasksRound12Tests: XCTestCase {
 
     // MARK: - Bug 5: rows are not readable under the tabs or the add bar
 
-    /// The mask's opacity at `y` (the gradient's linear interpolation).
-    private func maskOpacity(_ stops: [(location: CGFloat, opacity: Double)], at y: CGFloat, height: CGFloat) -> Double {
-        let x = y / height
-        guard let first = stops.first, let last = stops.last else { return 1 }
-        if x <= first.location { return first.opacity }
-        if x >= last.location { return last.opacity }
-        for (a, b) in zip(stops, stops.dropFirst()) where x <= b.location {
-            let t = Double((x - a.location) / (b.location - a.location))
-            return a.opacity + (b.opacity - a.opacity) * t
-        }
-        return last.opacity
-    }
-
-    /// N-6 D (owner 2026-10-11, replacing 2026-10-06): rows scrolled behind
-    /// the tabs are gone; the resting rows are whole. The bottom stack's fade
-    /// is its own mask (`TasksPlainControlsMask`), so this one is whole there.
-    func testRowsAreGoneUnderTheTabsAndWholeAtRest() {
-        let height: CGFloat = 520
-        let stops = TasksViewport.maskStops(height: height, tabsTop: 80)
-        XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
-        for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "gone behind the tabs at \(y)")
-        }
+    /// N-6 D (owner 2026-10-11) hid rows scrolled behind the tabs; the
+    /// owner's 10-17 decision supersedes it: rows run on under the tabs and
+    /// the bottom stack, visible through the blur (`RoundO3ControlsTests`).
+    /// Still: a resting row is clear of both, whatever the stack shows.
+    func testRestingRowsAreClearOfTheTabsAndTheStack() {
+        XCTAssertGreaterThanOrEqual(TasksViewport.listTop(tabsTop: 80), TasksViewport.controlsBottom(tabsTop: 80))
         for stack in [CGFloat(36), 60, 96, 136] {
-            for y in stride(from: height - stack, through: height, by: 1) {
-                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 1, accuracy: 0.001, "the stack's own mask fades it at \(y)")
-            }
+            XCTAssertGreaterThan(TasksViewport.bottomClearance(stackHeight: stack, bottomInset: 12),
+                                 TasksViewport.controlsInset(stack: stack, bottomInset: 12), "stack \(stack)")
         }
-        XCTAssertEqual(maskOpacity(stops, at: 110, height: height), 1, accuracy: 0.001, "the resting row is whole")
     }
 
     // MARK: - Astra P2: a page kept behind another section takes no mouse

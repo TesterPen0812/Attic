@@ -144,38 +144,25 @@ final class TastePicksTests: XCTestCase {
         XCTAssertEqual(AtticPanelRim.lightHairlineWidth, 0.5)
     }
 
-    // MARK: T-03 C: a short fade of the content behind the controls on see-through panels
+    // MARK: T-03 C, superseded (owner, 2026-10-17): content shows under every control, blurred
 
-    func testT03SeeThroughContentIsGoneBehindTheControlsAndBackAShortFadePast() {
-        let edges = AtticFloatingEdges(top: 80, bottom: 60)
-        let height: CGFloat = 500
-        let fade = AtticEdgeBlurMetrics.translucentFade
-        let stops = edges.stops(height: height, translucent: true)
-        func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(stops, at: y, height: height) }
-        for y in stride(from: CGFloat(0), through: 80, by: 2) {
-            XCTAssertEqual(opacity(y), 0, accuracy: 0.001, "gone behind the header at \(y)")
+    /// T-03 C's fade of the content behind the controls on see-through
+    /// panels is gone: the content stays visible under the controls,
+    /// through the blur, on every surface (`RoundO3ControlsTests` checks
+    /// the pixels). The resting lines keep their insets.
+    func testT03SupersededContentIsNeverFadedBehindTheControls() {
+        for surface in PanelSurfaceStyle.allCases {
+            let design = AtticDesignContext(surface: surface)
+            XCTAssertFalse(AtticEdgeBlurBackdrop.drawsSolidSurface(design, available: true), "\(surface)")
         }
-        for y in stride(from: height - 60, through: height, by: 2) {
-            XCTAssertEqual(opacity(y), 0, accuracy: 0.001, "gone behind and between the bottom buttons at \(y)")
-        }
-        XCTAssertEqual(opacity(80 + fade), 1, accuracy: 0.001)
-        XCTAssertEqual(opacity(height - 60 - fade), 1, accuracy: 0.001)
-        let ramp = stride(from: CGFloat(80), through: 80 + fade, by: 1).map(opacity)
-        XCTAssertEqual(ramp, ramp.sorted(), "it eases in, never back")
-        // Opaque panels keep their surface fade: the content stays whole.
-        let opaque = edges.stops(height: height, translucent: false)
-        XCTAssertEqual(AtticScrollUnderFade.opacity(opaque, at: 40, height: height), 1, accuracy: 0.001)
     }
 
-    func testT03TheFadeNeverReachesARestingLine() {
-        let fade = AtticEdgeBlurMetrics.translucentFade
+    func testT03TheRestingLinesStayClearOfTheControls() {
         // Notes: the title rests 16 below the header, the last line 12 above the bottom row.
-        XCTAssertLessThanOrEqual(fade, AtticNoteMetrics.titleTopGap)
-        XCTAssertLessThanOrEqual(fade, AtticSpacing.s12)
-        // Tasks and All notes: the first row rests where the plain line's ramp ends.
-        let tabsTop: CGFloat = 60, height: CGFloat = 600
-        let stops = TasksViewport.maskStops(height: height, tabsTop: tabsTop, translucent: true)
-        XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: TasksViewport.listTop(tabsTop: tabsTop), height: height), 1, accuracy: 0.001)
+        XCTAssertGreaterThan(AtticNoteMetrics.titleTopGap, 0)
+        // Tasks and All notes: the first row rests below the tabs and Find's field.
+        let tabsTop: CGFloat = 60
+        XCTAssertGreaterThanOrEqual(TasksViewport.listTop(tabsTop: tabsTop), TasksViewport.topEdges(tabsTop: tabsTop).top)
     }
 
     // MARK: T-10: the default highlight is yellow

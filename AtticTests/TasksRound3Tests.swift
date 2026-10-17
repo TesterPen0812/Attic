@@ -335,18 +335,8 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36 + 8 + 28, bottomInset: 24), 112, "the strip adds its room")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12),
                        AtticControlSize.addBarHeight + 12 + AtticLayout.contentToAddBar, "never less than the bar")
-        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80)
-        // Floating controls (owner 2026-10-14, replacing N-6 D): the tabs'
-        // plain line counts as part of the top controls, so rows are gone
-        // above its lower edge and whole from the first row's rest; the add
-        // bar's edge is the stack's mask.
-        XCTAssertEqual(stops.first?.opacity ?? 1, 0, accuracy: 0.001, "nothing under the header")
-        XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
-        XCTAssertEqual(stops.last?.opacity ?? 0, 1, accuracy: 0.001, "this mask is whole at the bottom")
-        XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
-        for y in stride(from: CGFloat(80), through: 96, by: 1) {
-            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), 0, accuracy: 0.001, "gone behind the tabs")
-        }
+        // The owner's 10-17 decision: rows are no longer masked under the
+        // header, the tabs or the add bar (`RoundO3ControlsTests`).
     }
 
     // MARK: - The quiet open ring (owner fix 1, review 12)

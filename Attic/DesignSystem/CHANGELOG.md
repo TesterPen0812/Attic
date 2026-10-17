@@ -1,3 +1,8 @@
+## 2026-10-17 · Content shows under every floating control (owner, O17-01)
+
+- Content scrolls all the way under the Tasks tabs line, the composer, the corner buttons and the Notes header and footer rows, and stays visible through the 1.5 pt / 28 pt variable blur. No fade hides it: T-03 C's content fade on see-through panels, the opaque panel's surface fade over the blur, and the plain-line rules (content gone above a plain top line and 3 pt below it, or behind the composer's strip) are removed, with `AtticFloatingEdgesMask`, `atticFloatingEdgesMask`, `TasksViewport.maskStops` and the lists' masks. The scroll insets are unchanged.
+- With no blur (Reduce Transparency, or no filter), an opaque panel keeps the solid surface under the controls and a 12 pt fade past them (U-02).
+
 ## 2026-10-16 · Settled comparisons retired
 
 - Native scroll edges use a parameterless, always-hidden policy. Former defaults and environment values have no reader; negative hosted/UI checks remain.

@@ -50,8 +50,8 @@ struct NotesLibraryView: View {
     /// The label line's text top: the tabs' line, as on Tasks.
     private var labelsTop: CGFloat { layout.headerBottom + AtticLayout.pageTabsTop }
 
-    /// The library's floating edges:
-    /// the label line is plain text, part of the top controls.
+    /// The library's floating edges: the label line is part of the top
+    /// controls.
     static func edges(layout: PanelPageLayout, bottomControls: CGFloat) -> AtticFloatingEdges {
         TasksViewport.topEdges(tabsTop: layout.headerBottom + AtticLayout.pageTabsTop).with(bottom: bottomControls)
     }
@@ -371,10 +371,9 @@ struct NotesLibraryView: View {
             .contentMargins(.bottom, bottomControls, for: .scrollIndicators)
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
-            // Floating controls (owner, 2026-10-14), as on Tasks: the label
-            // line is plain text, so rows are gone above its lower edge and
-            // blur in below it; they run on under the bottom row.
-            .atticFloatingEdgesMask(Self.edges(layout: layout, bottomControls: bottomControls))
+            // Floating controls (owner, 2026-10-14), as on Tasks: rows run
+            // on under the label line and the bottom row, visible through
+            // the variable blur (owner, 2026-10-17).
             .overlay { AtticFloatingControlsBand(height: bottomControls) }
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):
