@@ -223,7 +223,11 @@ private struct TasksPagePreviewRoot: View {
                     .padding(.horizontal, layout.chromeInsets.leading)
                     .padding(.bottom, layout.contentInsets.bottom + noticeClearance)
             }
-            .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { noticeClearance = $0 }
+            .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
+                withAnimation(AtticMotionPreset.popover.animation(reduceMotion: false, showing: clearance > noticeClearance)) {
+                    noticeClearance = clearance
+                }
+            }
         }
         .atticDesign(AtticDesignContext(mode: mode))
         .atticWindowAppearance(mode)

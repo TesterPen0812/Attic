@@ -76,9 +76,19 @@ enum TaskDropContent: Equatable {
 struct TaskAttachmentStaging: Sendable {
     var urls: [URL] = []
     private(set) var ownedDirectory: URL?
+    /// Owned directories of stagings merged into this one (the add bar's
+    /// batches, imported as one): `discard` removes them too.
+    private var mergedDirectories: [URL] = []
 
     init(urls: [URL] = []) {
         self.urls = urls
+    }
+
+    /// Several stagings imported as one (O17-06): their files in order,
+    /// and every directory they own, which `discard` removes.
+    init(merging parts: [TaskAttachmentStaging]) {
+        urls = parts.flatMap(\.urls)
+        mergedDirectories = parts.flatMap { [$0.ownedDirectory].compactMap { $0 } + $0.mergedDirectories }
     }
 
     static let ownedRootName = "AtticTaskDrops"
@@ -96,8 +106,9 @@ struct TaskAttachmentStaging: Sendable {
     }
 
     func discard() {
-        guard let ownedDirectory else { return }
-        try? FileManager.default.removeItem(at: ownedDirectory)
+        for directory in [ownedDirectory].compactMap({ $0 }) + mergedDirectories {
+            try? FileManager.default.removeItem(at: directory)
+        }
     }
 
     /// Owned drop directories that a quit or crash left behind; an import

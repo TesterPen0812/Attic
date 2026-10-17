@@ -419,6 +419,10 @@ struct AtticTitleEditing {
     /// text and Return can try again.
     let commit: () -> Bool
     let cancel: () -> Void
+    /// Return, when it means more than saving (O17-04: a subtask's Return
+    /// saves it and moves on to a new one); nil: Return saves (`commit`).
+    /// Leaving the field always only saves.
+    var submit: (() -> Bool)? = nil
     /// The title editor understands the add bar's shorthand (owner fix 4):
     /// what it draws as chips and what the field reports. nil keeps a
     /// plain field (the new-subtask line).
@@ -495,8 +499,9 @@ struct AtticRowTitleEditor: View {
             .onChange(of: tokenFocused) { _, now in lost(now) { tokenFocused = true } }
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
         } else if editing.emptyBackspace != nil {
+            // A subtask's entry wraps and grows with its text (O17-05).
             AtticSubtaskTitleField(editing: editing, color: NSColor(design.tokens.color(.heading)))
-                .frame(height: AtticTaskRowMetrics.titleLineHeight)
+                .frame(minHeight: AtticTaskRowMetrics.titleLineHeight)
         } else {
             TextField("", text: editing.text,
                       prompt: editing.placeholder.map { Text($0).foregroundStyle(design.tokens.color(.placeholder)) })
@@ -1450,7 +1455,7 @@ struct AtticRowActionsButton: View {
     var body: some View {
         let m = AtticRowActionsMetrics.self
         Button { action(anchor.view) } label: {
-            AtticIcon(systemName: "ellipsis", size: m.iconSize, weight: .semibold, ink: .icon)
+            AtticIcon(systemName: "ellipsis", size: m.iconSize, weight: m.iconWeight, ink: .icon)
                 .frame(width: m.width, height: AtticTaskRowMetrics.metaPillHeight)
                 .background(AtticMetaPill(visible: hovered || forced == .hover).padding(.horizontal, AtticTaskRowMetrics.metaPillOutset))
                 .contentShape(Rectangle())
@@ -1876,7 +1881,10 @@ struct AtticSubtaskRow: View {
     var body: some View {
         let m = AtticSubtaskMetrics.self
         let managed = capture == nil && !commands.isEmpty
-        HStack(spacing: m.titleGap) {
+        // Its title being edited can wrap onto more lines (O17-05): the box
+        // stays on the first line, and the line grows downward.
+        let editing = renaming != nil && capture == nil
+        HStack(alignment: editing ? .top : .center, spacing: m.titleGap) {
             Button(action: onToggle) {
                 AtticSubtaskCheckbox(isDone: subtask.isDone)
                     .frame(width: m.hitSize, height: m.hitSize)
@@ -1884,8 +1892,10 @@ struct AtticSubtaskRow: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, -(m.hitSize - AtticControlSize.subtaskCheckbox) / 2)
+            .frame(height: AtticLayout.subtaskPitch)
             if let renaming, capture == nil {
                 AtticRowTitleEditor(editing: renaming)
+                    .padding(.vertical, (AtticLayout.subtaskPitch - AtticTaskRowMetrics.titleLineHeight) / 2)
             } else {
                 // T-06 B (owner, 2026-10-15): a done subtask's title is grey.
                 AtticText(verbatim: subtask.title, style: .listBody, ink: Self.titleInk(isDone: subtask.isDone), truncates: true)
@@ -1901,7 +1911,8 @@ struct AtticSubtaskRow: View {
                     .transition(.opacity)
             }
         }
-        .frame(height: AtticLayout.subtaskPitch)
+        .frame(height: editing ? nil : AtticLayout.subtaskPitch)
+        .frame(minHeight: AtticLayout.subtaskPitch)
         .background(alignment: .leading) {
             if managed, focused, keyboardFocusVisible, renaming == nil {
                 Color.clear
@@ -1973,6 +1984,17 @@ private struct AtticSubtaskCommands: ViewModifier {
     var focused: FocusState<Bool>.Binding
     let showActions: () -> Void
 
+    /// The line's Rename (Return, the edit-title shortcut, as on a row).
+    static func rename(in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+        commands.first { $0.shortcut == AtticTaskShortcut.editTitle && !$0.isDisabled }
+    }
+
+    /// The second press of a double-click (or more).
+    static func isDoubleClick(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseDown || event.type == .leftMouseUp else { return false }
+        return event.clickCount >= 2
+    }
+
     func body(content: Content) -> some View {
         if commands.isEmpty {
             content
@@ -1982,8 +2004,17 @@ private struct AtticSubtaskCommands: ViewModifier {
                 .focused(focused)
                 .focusEffectDisabled()
                 // A click on the line gives it the keyboard (its box keeps
-                // its own click).
-                .onTapGesture { focused.wrappedValue = true }
+                // its own click); a double-click edits its title in place,
+                // as a task's does (O17-03). The second click of a pair
+                // arrives as a click of its own, so a single click is never
+                // held back waiting for a second.
+                .onTapGesture {
+                    if Self.isDoubleClick(NSApp.currentEvent), let rename = Self.rename(in: commands) {
+                        rename.action()
+                    } else {
+                        focused.wrappedValue = true
+                    }
+                }
                 .onKeyPress(phases: .down) { press in
                     guard !AtticTextInput.hasKeyboard else { return .ignored }
                     return AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
@@ -2049,11 +2080,14 @@ struct AtticQuickLook: View {
                     .zIndex(drag?.id == subtask.id ? 1 : 0)
             }
             if let newSubtask, capture == nil {
-                HStack(spacing: AtticSubtaskMetrics.titleGap) {
+                // It grows with its text (O17-05), the box on its first line.
+                HStack(alignment: .top, spacing: AtticSubtaskMetrics.titleGap) {
                     AtticSubtaskCheckbox(isDone: false)
+                        .frame(height: AtticLayout.subtaskPitch)
                     AtticRowTitleEditor(editing: newSubtask)
+                        .padding(.vertical, (AtticLayout.subtaskPitch - AtticTaskRowMetrics.titleLineHeight) / 2)
                 }
-                .frame(height: AtticLayout.subtaskPitch)
+                .frame(minHeight: AtticLayout.subtaskPitch)
             } else {
                 AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
             }
@@ -2105,6 +2139,13 @@ struct AtticQuietAction: View {
     var body: some View {
         let m = AtticQuietActionMetrics.self
         let hover = forced == .hover || hovered
+        // The fill's inner padding is the same on both sides of what it
+        // holds (O17-14): a leading icon's ink sits inside its slot, so the
+        // fill starts that much later; the icon and the label stay where
+        // they are, on the text column.
+        let leading = m.horizontalPadding - (systemName.map(Self.iconInset) ?? 0)
+        // And the label's last letter stops short of its advance.
+        let trailing = m.horizontalPadding - (trailingChevron ? 0 : Self.trailingBearing(title, style: emphasised ? .controlLabel : .body))
         Button(action: action) {
             HStack(spacing: m.gap) {
                 if let systemName {
@@ -2117,19 +2158,66 @@ struct AtticQuietAction: View {
                         .padding(.leading, -m.chevronPullIn)
                 }
             }
-            .padding(.horizontal, m.horizontalPadding)
+            .padding(.leading, leading)
+            .padding(.trailing, trailing)
             .frame(height: m.height)
             .background(
                 RoundedRectangle(cornerRadius: AtticRadius.control(height: m.height), style: .continuous)
                     .fill((hover ? design.tokens.chipHover : .clear).color)
             )
-            .padding(.horizontal, -m.horizontalPadding)
+            .padding(.leading, -leading)
+            .padding(.trailing, -trailing)
             .frame(height: AtticLayout.subtaskPitch)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
     }
+
+    /// How far a leading symbol's ink starts inside its slot (the slot is
+    /// wider than most symbols, and a symbol's own box is wider than its
+    /// ink): measured from the drawn symbol, once per symbol.
+    static func iconInset(_ systemName: String) -> CGFloat {
+        if let known = iconInsets[systemName] { return known }
+        let m = AtticQuietActionMetrics.self
+        let configuration = NSImage.SymbolConfiguration(pointSize: m.iconSize, weight: .medium)
+        guard let image = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)?.withSymbolConfiguration(configuration),
+              image.size.width > 0, image.size.height > 0 else { return 0 }
+        let scale: CGFloat = 4
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(image.size.width * scale)),
+                                         pixelsHigh: Int(ceil(image.size.height * scale)), bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return 0 }
+        rep.size = image.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+        NSGraphicsContext.restoreGraphicsState()
+        let firstInk = (0..<rep.pixelsWide).first { x in
+            (0..<rep.pixelsHigh).contains { (rep.colorAt(x: x, y: $0)?.alphaComponent ?? 0) > 0.3 }
+        } ?? 0
+        let inset = max(0, (m.iconSlot - image.size.width) / 2 + CGFloat(firstInk) / scale)
+        iconInsets[systemName] = inset
+        return inset
+    }
+
+    private static var iconInsets: [String: CGFloat] = [:]
+
+    /// The room after a label's last letter's ink inside the label's laid
+    /// out width (its advance, rounded up to a whole point as a text view
+    /// lays it out), measured once per label.
+    static func trailingBearing(_ title: String, style: AtticTextStyle) -> CGFloat {
+        let key = "\(style)|\(title)"
+        if let known = trailingBearings[key] { return known }
+        let text = NSAttributedString(string: title, attributes: [.font: style.nsFont])
+        let ink = text.boundingRect(with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                                    options: [.usesDeviceMetrics, .usesLineFragmentOrigin])
+        let bearing = ink.isEmpty ? 0 : min(AtticQuietActionMetrics.horizontalPadding, max(0, ceil(text.size().width) - ink.maxX))
+        trailingBearings[key] = bearing
+        return bearing
+    }
+
+    private static var trailingBearings: [String: CGFloat] = [:]
 }
 
 // MARK: - Task card
@@ -2386,7 +2474,12 @@ private struct AtticSubtaskTitleField: NSViewRepresentable {
         field.cell = cell
         field.isEditable = true
         field.isSelectable = true
-        cell.usesSingleLineMode = true
+        // It wraps and grows with its text (O17-05); Return still saves.
+        cell.usesSingleLineMode = false
+        cell.wraps = true
+        cell.isScrollable = false
+        cell.lineBreakMode = .byWordWrapping
+        field.maximumNumberOfLines = 0
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -2394,6 +2487,29 @@ private struct AtticSubtaskTitleField: NSViewRepresentable {
         field.delegate = context.coordinator
         return field
     }
+    /// As tall as its wrapped text, from one line up to the composers'
+    /// most lines; past that it scrolls inside.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView field: NSTextField, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        return CGSize(width: width, height: Self.height(of: editing.text.wrappedValue, width: width,
+                                                       font: field.font ?? AtticTextStyle.rowTitle.nsFont))
+    }
+
+    /// The field's height for `text` wrapped at `width` (pure, tested).
+    static func height(of text: String, width: CGFloat, font: NSFont) -> CGFloat {
+        let measure = NSTextFieldCell(textCell: text.isEmpty ? " " : text)
+        measure.font = font
+        measure.wraps = true
+        measure.usesSingleLineMode = false
+        measure.isBordered = false
+        measure.lineBreakMode = .byWordWrapping
+        let used = measure.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)).height
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        let lines = max(1, Int((used / line - 0.01).rounded(.up)))
+        return AtticTokenFieldGrowth.height(lines: lines, lineHeight: line,
+                                            minHeight: AtticTaskRowMetrics.titleLineHeight, maxLines: AtticComposerMetrics.maxLines)
+    }
+
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.editing = editing
         if context.coordinator.lastText != editing.text.wrappedValue {
@@ -2422,6 +2538,14 @@ private struct AtticSubtaskTitleField: NSViewRepresentable {
         init(_ editing: AtticTitleEditing) { self.editing = editing }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
+            // One title: a pasted line break becomes a space (the field
+            // wraps, so it would take one).
+            if field.stringValue.rangeOfCharacter(from: .newlines) != nil {
+                let editor = field.currentEditor() as? NSTextView
+                let caret = editor?.selectedRange()
+                field.stringValue = field.stringValue.components(separatedBy: .newlines).joined(separator: " ")
+                if let caret { editor?.setSelectedRange(caret) }
+            }
             editing.text.wrappedValue = field.stringValue
             editing.didEdit?()
             lastText = field.stringValue
@@ -2450,7 +2574,7 @@ private struct AtticSubtaskTitleField: NSViewRepresentable {
                 return false
             }
             if command == #selector(NSResponder.insertNewline(_:)) {
-                let saved = editing.commit()
+                let saved = (editing.submit ?? editing.commit)()
                 finished = saved && editing.text.wrappedValue == textView.string
                 return true
             }
