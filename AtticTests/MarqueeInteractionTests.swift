@@ -269,6 +269,74 @@ final class MarqueeInteractionTests: XCTestCase {
         XCTAssertTrue(selection.isEmpty)
     }
 
+    /// V-04 (recording 1937): a margin marquee over a code block, a table
+    /// and a diagram selects them live, as it covers them, and the box is
+    /// gone the moment the button comes up. The tint is the system's
+    /// accent, so it shows on blocks that have their own fill.
+    func testV04MarqueeSelectsBoxedBlocksLiveAndItsBoxGoesOnRelease() throws {
+        let table = NoteBlock.table(NoteTable(texts: [["Name", "Value"], ["Alpha", "One"]]))
+        let (engine, text, selection) = editor([.text("Title"), .text("let x = 1", style: "mono"), table,
+                                                .text("flowchart LR", style: "mono"), .text("End")])
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let items = selection.items()
+        let controller = try XCTUnwrap(selection.controller)
+        let last = try XCTUnwrap(items.last)
+        let start = CGPoint(x: 4, y: min(last.rect.maxY, text.visibleRect.maxY) - 4)
+        _ = controller.handle(event(.leftMouseDown, point: start, in: text))
+        let second = items[1].rect
+        _ = controller.handle(event(.leftMouseDragged, point: CGPoint(x: 120, y: second.midY), in: text))
+        XCTAssertNotNil(controller.box, "the box shows while dragging")
+        let selected = Set(selection.ranges.map(\.location))
+        for item in items.dropFirst() {
+            XCTAssertTrue(selected.contains(item.id.base as! Int), "block at \(item.id) highlights as the box covers it")
+        }
+        XCTAssertEqual(controller.highlightInk(), .controlAccentColor)
+        _ = controller.handle(event(.leftMouseUp, point: CGPoint(x: 120, y: second.midY), in: text))
+        XCTAssertNil(controller.box, "the box is gone the moment the drag ends")
+        XCTAssertFalse(controller.isDragging)
+        XCTAssertEqual(Set(selection.ranges.map(\.location)), selected, "the blocks stay selected")
+    }
+
+    /// V-04: hover UI (the page button's switcher) never opens while a mouse
+    /// button is down.
+    func testV04HoverUIOpensOnlyWithNoButtonDown() {
+        XCTAssertTrue(AtticHoverGate.opens(pressedButtons: 0))
+        XCTAssertFalse(AtticHoverGate.opens(pressedButtons: 1), "a drag passing over it")
+        XCTAssertFalse(AtticHoverGate.opens(pressedButtons: 2))
+    }
+
+    /// V-06 (recording 1937): a block dragged by its handle lifts onto a
+    /// card with a backing (no text shows through it), and its own place
+    /// dims until the drop, then draws as before.
+    func testV06ABlockDragLiftsOntoABackedCardAndDimsItsPlace() throws {
+        let table = NoteBlock.table(NoteTable(texts: [["Name", "Value"], ["Alpha", "One"]]))
+        let (engine, text, _) = editor([.text("Title"), .text("A quote", style: "quote"), table, .text("End")])
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let quote = engine.blockRange(at: (engine.textStorage.string as NSString).range(of: "A quote").location)
+        let rect = try XCTUnwrap(engine.rect(for: quote))
+        let card = NoteDragLiftView(snapshot: NoteDragLiftView.snapshot(of: rect, in: text), size: rect.size,
+                                    padding: CGSize(width: 6, height: 4), tokens: engine.style.tokens)
+        let fill = try XCTUnwrap(card.layer?.backgroundColor.flatMap { NSColor(cgColor: $0) })
+        XCTAssertGreaterThan(fill.alphaComponent, 0.85, "an opaque backing: the text under the card never shows through")
+        XCTAssertNotNil((card.layer?.sublayers?.first)?.contents, "the block's snapshot")
+        XCTAssertEqual(card.frame.size, CGSize(width: rect.width + 12, height: rect.height + 8))
+
+        let dim = NoteBlockDragDim(textView: text, block: quote, rect: rect)
+        XCTAssertEqual(text.dragDimRange, quote, "its place dims while it is lifted")
+        dim.restore()
+        XCTAssertNil(text.dragDimRange)
+
+        // A table block dims through its hosted view.
+        let tableLocation = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first?.hostedView)
+        let tableRect = text.convert(tableLocation.bounds, from: tableLocation)
+        let tableDim = NoteBlockDragDim(textView: text, block: engine.blockRange(at: quote.location + quote.length), rect: tableRect.insetBy(dx: -2, dy: -2))
+        XCTAssertEqual(tableLocation.alphaValue, NoteBlockDragDim.viewOpacity, accuracy: 0.01)
+        tableDim.restore()
+        XCTAssertEqual(tableLocation.alphaValue, 1)
+    }
+
     func testDiscontiguousDeleteAndUndoPreserveUnselectedBlocksAndMarks() throws {
         let (engine, _, selection) = editor([.text("Title"), .text("Alpha", style: "quote"), .text("Beta"), .checklist("Gamma")])
         let original = engine.document()

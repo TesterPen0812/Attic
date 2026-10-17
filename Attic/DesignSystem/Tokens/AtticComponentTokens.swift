@@ -856,6 +856,10 @@ enum AtticNoteMetrics {
 /// panel; it floats 6 above the selection (below when there is no room).
 enum AtticNoteFormatMetrics {
     static let barHeight: CGFloat = AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
+    /// V-03: a showing bar glides to a new selection's place on its side,
+    /// and fades in when it changes sides (never crossing the selection).
+    static let barMoveDuration: Double = AtticMotionScale.standard
+    static let barFadeDuration: Double = AtticMotionScale.fast
     static let barToggleWidth: CGFloat = 24
     /// The highlighter's chevron (N-2 option A): a narrow second half of
     /// the highlight cell, its glyph 7 pt.

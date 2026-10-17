@@ -55,6 +55,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// After each layout pass: the page keeps the title's accessories (the
     /// note menu button and the tag line) on the title's lines.
     var onLayout: (() -> Void)?
+    /// A mouse selection is being made: AppKit's own tracking of a press in
+    /// the text (a drag-select, with its autoscroll) runs until the button
+    /// comes up. The selection bar waits it out (V-03), as Apple's apps do.
+    var isTrackingMouseSelection = false {
+        didSet { if isTrackingMouseSelection != oldValue { onMouseSelectionTracking?(isTrackingMouseSelection) } }
+    }
+    var onMouseSelectionTracking: ((Bool) -> Void)?
     /// Views laid over the text (the title's accessories), read by
     /// VoiceOver after the text.
     var accessoryViews: [NSView] = []
@@ -170,10 +177,30 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// done style everywhere; the filled box stays). Rendering attributes
     /// only, so the note's text and its Undo never change.
     private func colourFragment(_ fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {
+        if let dim = dragDimRange, let engine {
+            let content = engine.contentStorage
+            let start = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+            if NSLocationInRange(start, dim) {
+                manager.removeRenderingAttribute(.foregroundColor, for: fragment.rangeInElement)
+                manager.addRenderingAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, for: fragment.rangeInElement)
+                return
+            }
+        }
         if let block = fragment as? NoteBlockLayoutFragment, block.monoBlockRect != nil {
             colourCode(in: fragment, manager: manager)
         } else {
             colourChecklistLine(fragment, manager: manager)
+        }
+    }
+
+    /// A dragged block's place (V-06): its text draws dimmed until the drop.
+    var dragDimRange: NSRange? {
+        didSet {
+            guard dragDimRange != oldValue, let engine, let manager = textLayoutManager else { return }
+            for range in [oldValue, dragDimRange].compactMap({ $0 }) {
+                if let textRange = engine.textRange(for: range) { manager.invalidateRenderingAttributes(for: textRange) }
+            }
+            needsDisplay = true
         }
     }
 
@@ -400,6 +427,12 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     /// A click on the handle selects the block; a drag moves it (Esc or a
     /// drop where it started cancels; the move is one Undo step).
+    ///
+    /// V-06: the block lifts onto a card (the dropdowns' surface, so nothing
+    /// shows through it) while its place in the text dims. The card hangs
+    /// from the drop line, gliding from gap to gap, so the line runs along
+    /// its top edge and never through its text; with no drop (over the
+    /// block itself) it settles back over its source.
     private func trackBlockHandle(with event: NSEvent) {
         guard let engine, let window, let location = handleBlockLocation else { return }
         let source = engine.blockRange(at: location)
@@ -407,13 +440,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let start = convert(event.locationInWindow, from: nil)
         var dragging = false
         var target: NoteBlockDropPosition?
-        var snapshot: NSImageView?
+        var lift: NoteDragLiftView?
+        var dim: NoteBlockDragDim?
         NSCursor.closedHand.push()
         defer {
             NSCursor.pop()
-            snapshot?.removeFromSuperview()
+            lift?.removeFromSuperview()
+            dim?.restore()
             dropLine.isHidden = true
         }
+        let animated = !engine.style.design.reduceMotion
         tracking: while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
                                                     until: .distantFuture, inMode: .eventTracking, dequeue: true) {
             switch next.type {
@@ -423,24 +459,32 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 let point = convert(next.locationInWindow, from: nil)
                 if !dragging, hypot(point.x - start.x, point.y - start.y) > 3 {
                     dragging = true
-                    snapshot = makeBlockSnapshot(sourceRect)
+                    lift = makeBlockLift(sourceRect)
+                    dim = NoteBlockDragDim(textView: self, block: source, rect: sourceRect)
                     hideBlockHandle()
                 }
-                guard dragging else { continue }
-                snapshot?.frame.origin = CGPoint(x: sourceRect.minX, y: sourceRect.minY + point.y - start.y)
+                guard dragging, let card = lift else { continue }
                 autoscroll(with: next)
+                var frame = card.frame
                 if let (position, line) = dropTarget(at: point, moving: source) {
                     target = position
                     dropLine.ink = engine.style.tokens.focusRing.nsColor
                     dropLine.frame = line
                     dropLine.isHidden = false
                     dropLine.needsDisplay = true
+                    frame.origin.y = line.maxY + Self.liftGapBelowDropLine
                 } else {
                     target = nil
                     dropLine.isHidden = true
+                    frame.origin.y = sourceRect.minY - card.padding.height
                 }
+                card.move(to: frame, animated: animated)
             case .leftMouseUp:
                 if dragging {
+                    // Undimmed before the edit: the dim names the block's
+                    // place as it was.
+                    dim?.restore()
+                    dim = nil
                     if let target { engine.moveBlock(source, to: target.location) }
                 } else {
                     window.makeFirstResponder(self)
@@ -453,18 +497,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         }
     }
 
-    private func makeBlockSnapshot(_ rect: CGRect) -> NSImageView? {
-        guard let bitmap = bitmapImageRepForCachingDisplay(in: rect) else { return nil }
-        cacheDisplay(in: rect, to: bitmap)
-        let image = NSImage(size: rect.size)
-        image.addRepresentation(bitmap)
-        let view = NSImageView(frame: rect)
-        view.image = image
-        view.imageScaling = .scaleNone
-        view.alphaValue = 0.6
-        view.unregisterDraggedTypes()
-        addSubview(view)
-        return view
+    /// The lifted card's top edge under the drop line.
+    static let liftGapBelowDropLine: CGFloat = 3
+
+    private func makeBlockLift(_ rect: CGRect) -> NoteDragLiftView? {
+        guard let engine else { return nil }
+        let image = NoteDragLiftView.snapshot(of: rect, in: self)
+        let padding = CGSize(width: 6, height: 4)
+        let card = NoteDragLiftView(snapshot: image, size: rect.size, padding: padding, tokens: engine.style.tokens)
+        card.frame.origin = CGPoint(x: rect.minX - padding.width, y: rect.minY - padding.height)
+        card.unregisterDraggedTypes()
+        addSubview(card)
+        return card
     }
 
     /// VoiceOver's Move Block Up / Down: past the block above or below.
@@ -1277,6 +1321,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         // on (`NoteMarqueeSelection`); this covers the rest.
         if event.clickCount == 1, point.y > finalTextBottom(), engine.startLineBelowFinalBlock() { return }
         hideBlockHandle()
+        // AppKit tracks the press until the button comes up.
+        isTrackingMouseSelection = true
+        defer { isTrackingMouseSelection = false }
         super.mouseDown(with: event)
     }
 
@@ -1618,4 +1665,38 @@ protocol NoteObjectInteraction: AnyObject {
     func fileDragUpdated(_ info: any NSDraggingInfo, entered: Bool) -> NSDragOperation?
     func fileDragEnded()
     func performFileDrop(_ info: any NSDraggingInfo) -> Bool?
+}
+
+/// V-06: a dragged block's own place dims while its card is lifted (its
+/// text through the editor's rendering attributes, which change no layout;
+/// hosted views such as a table by their opacity), and comes back on drop.
+@MainActor
+final class NoteBlockDragDim {
+    private weak var textView: NoteEditorTextView?
+    private var views: [(NSView, CGFloat)] = []
+
+    init(textView: NoteEditorTextView, block: NSRange, rect: CGRect) {
+        self.textView = textView
+        textView.dragDimRange = block
+        // Hosted views (tables, images and files) in the block's rectangle,
+        // wherever TextKit keeps them under the text view.
+        let hosted = (textView.engine?.tableViews() ?? []) as [NSView]
+        var seen = Set<ObjectIdentifier>()
+        for view in hosted + textView.subviews where seen.insert(ObjectIdentifier(view)).inserted {
+            guard !view.isHidden, view.window === textView.window, !(view is NoteDragLiftView), !(view is NoteDropLineView),
+                  view !== textView.blockHandle, view.isDescendant(of: textView) else { continue }
+            let frame = view.superview === textView ? view.frame : textView.convert(view.bounds, from: view)
+            guard rect.contains(CGPoint(x: frame.midX, y: frame.midY)) else { continue }
+            views.append((view, view.alphaValue))
+            view.alphaValue = Self.viewOpacity
+        }
+    }
+
+    static let viewOpacity: CGFloat = 0.35
+
+    func restore() {
+        textView?.dragDimRange = nil
+        for (view, alpha) in views { view.alphaValue = alpha }
+        views = []
+    }
 }

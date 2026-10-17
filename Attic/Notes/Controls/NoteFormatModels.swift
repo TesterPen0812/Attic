@@ -400,6 +400,9 @@ final class NoteSlashListModel: ObservableObject {
     @Published var query = ""
     /// It opened above the caret (no room below).
     @Published var above = false
+    /// The list scrolled at some point in this showing: it keeps the
+    /// scrolling structure until it closes (V-07, `AtticDropdownCard.scrolls`).
+    @Published var scrolls = false
     var onPick: ((NoteSlashItem.Kind) -> Void)?
 
     func show(_ items: [NoteSlashItem]) {

@@ -34,12 +34,13 @@ final class NotesFormatControlsTests: XCTestCase {
         .text("Student pricing")
     ])
 
-    private func make(_ document: NoteDocument = sample, readOnly: Bool = false, topInset: CGFloat = 0) -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
+    private func make(_ document: NoteDocument = sample, readOnly: Bool = false, topInset: CGFloat = 0,
+                      bottomInset: CGFloat = 0) -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: document, readOnly: readOnly)
         let (scrollView, textView) = engine.makeView()
         scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: 0, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
         textView.textContainerInset = NSSize(width: 28, height: 0)
         let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -401,6 +402,64 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(top.barFrame.minX, 0)
     }
 
+    /// V-03 (recording 1937): while a drag-select is being made (AppKit's
+    /// tracking of the press, with its autoscroll) the bar stays away; it
+    /// comes once the button is up, for the settled selection.
+    func testV03TheBarWaitsForADragSelectionToSettle() throws {
+        let (controls, _, textView) = make()
+        textView.isTrackingMouseSelection = true
+        textView.setSelectedRange(range("Student pricing", textView))
+        controls.refresh()
+        XCTAssertFalse(controls.formatModel.barShown, "no bar while the drag is live")
+        textView.setSelectedRange(range("Annual plan", textView))
+        controls.refresh()
+        XCTAssertFalse(controls.formatModel.barShown, "still none as the selection grows")
+        textView.isTrackingMouseSelection = false
+        settle { controls.formatModel.barShown }
+        XCTAssertTrue(controls.formatModel.barShown, "the bar comes when the button is up")
+        let selection = try XCTUnwrap(engine(of: textView).rect(for: range("Annual plan", textView)))
+        XCTAssertLessThanOrEqual(controls.barFrame.maxY, selection.minY, "beside the settled selection, not on it")
+        // A new press hides a showing bar at once.
+        textView.isTrackingMouseSelection = true
+        XCTAssertFalse(controls.formatModel.barShown)
+        textView.isTrackingMouseSelection = false
+    }
+
+    /// V-03: the bar never covers the selection. A selection taller than
+    /// the view has no room on either side, so no bar shows; scrolled so an
+    /// end has room beside it, the bar comes back on that side.
+    func testV03TheBarNeverCoversASelectionTallerThanTheView() throws {
+        let long = NoteDocument(blocks: Self.sample.blocks + (0..<60).map { .text("Further body line \($0)") })
+        let (controls, engine, textView) = make(long, topInset: 60)
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        let start = range("Lead", textView).location
+        let end = NSMaxRange(range("Further body line 59", textView))
+        let selection = NSRange(location: start, length: end - start)
+        textView.setSelectedRange(selection)
+        let first = try XCTUnwrap(engine.rect(for: NSRange(location: start, length: 1)))
+        let last = try XCTUnwrap(engine.rect(for: NSRange(location: end - 1, length: 1)))
+        var shown = 0
+        for y in stride(from: -60, through: textView.frame.height - 200, by: 37) {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            guard let placed = controls.barPlacement(selection: selection) else { continue }
+            shown += 1
+            let visible = textView.visibleRect
+            let covered = NSRect(x: 0, y: max(first.minY, visible.minY), width: textView.bounds.width,
+                                 height: max(0, min(last.maxY, visible.maxY) - max(first.minY, visible.minY)))
+            XCTAssertFalse(placed.frame.intersects(covered), "at \(y): \(placed.frame) over the selection \(covered)")
+        }
+        XCTAssertGreaterThan(shown, 0, "an end with room beside it brings the bar back")
+        // In the middle of the selection neither end shows: no bar.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: (first.maxY + last.minY) / 2 - scroll.contentView.bounds.height / 2))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        XCTAssertNil(controls.barPlacement(selection: selection))
+    }
+
+    private func engine(of textView: NoteEditorTextView) -> NoteEditorEngine { textView.engine! }
+
     func testEscHidesTheBarUntilTheSelectionChangesAndReadOnlyShowsNone() {
         let (controls, _, textView) = make()
         textView.setSelectedRange(range("most people", textView))
@@ -694,6 +753,84 @@ final class NotesFormatControlsTests: XCTestCase {
         type("\n/", textView)
         XCTAssertTrue(controls.slashModel.shown)
         XCTAssertFalse(controls.slashModel.above, "a list that opens anew takes its side afresh")
+    }
+
+    /// V-01 (recording 1937): `/` → Diagram on the note's last line puts
+    /// the block and its template on screen together: in the same pass the
+    /// template's lines are inside TextKit's laid-out viewport (drawn), even
+    /// where they run on under the floating bottom controls.
+    func testV01DiagramTemplateIsLaidOutWithItsBlockAtOnce() throws {
+        let bottomInset: CGFloat = 58
+        let document = NoteDocument(blocks: [.text("Title")] + (0..<30).map { .text("Line \($0)") } + [.text("")])
+        let (controls, engine, textView) = make(document, topInset: 60, bottomInset: bottomInset)
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        // The empty last line rests on the bottom inset, as the page leaves it.
+        let clip = scroll.contentView
+        clip.scroll(to: NSPoint(x: 0, y: textView.frame.height - clip.bounds.height + bottomInset))
+        scroll.reflectScrolledClipView(clip)
+        textView.layoutSubtreeIfNeeded()
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("/diagram", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.diagram])
+        controls.pickSlash(.diagram)
+        // One pass, as the next frame would make it.
+        textView.layoutSubtreeIfNeeded()
+        textView.displayIfNeeded()
+        let end = engine.textStorage.length
+        XCTAssertTrue(engine.textStorage.string.hasSuffix("B --> C[Done]"), "the template is in the text")
+        let layout = try XCTUnwrap(engine.layoutManager)
+        let viewport = try XCTUnwrap(layout.textViewportLayoutController.viewportRange, "laid out for display")
+        let viewportEnd = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: viewport.endLocation)
+        let caret = try XCTUnwrap(engine.caretRect(at: end))
+        XCTAssertTrue(textView.visibleRect.intersects(caret), "the template's last line is within the visible text")
+        XCTAssertGreaterThanOrEqual(viewportEnd, end, "the template's lines are drawn with the block, not later")
+    }
+
+    /// V-08 (recording 1937): the `/` list never sits under or over the
+    /// note's floating controls. Opened downward it stops above the bottom
+    /// row (the scroll view's bottom inset: the row and the 12 pt the last
+    /// line keeps); opened upward it stops below the header's controls (the
+    /// top inset less the title's gap), with the panel's margin to spare.
+    func testV08TheSlashListStaysClearOfTheFloatingControls() throws {
+        func hosts(_ view: NSView) -> [AtticOverlayHostingView] {
+            ((view as? AtticOverlayHostingView).map { [$0] } ?? []) + view.subviews.flatMap { hosts($0) }
+        }
+        let header: CGFloat = 52, bottomRow: CGFloat = 46
+        let topInset = header + AtticNoteMetrics.titleTopGap, bottomInset = bottomRow + AtticSpacing.s12
+        func listFrame(lines: Int, scrolledToEnd: Bool) throws -> (CGRect, CGRect, Bool) {
+            let document = NoteDocument(blocks: [.text("Title")] + (lines > 0 ? (0..<lines).map { _ in .text("Line") } : [.text("")]))
+            let (controls, engine, textView) = make(document, topInset: topInset, bottomInset: bottomInset)
+            let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+            if scrolledToEnd {
+                engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+                textView.layoutSubtreeIfNeeded()
+                let clip = scrollView.contentView
+                clip.scroll(to: NSPoint(x: 0, y: max(-topInset, textView.frame.height - clip.bounds.height + bottomInset)))
+                scrollView.reflectScrolledClipView(clip)
+            }
+            textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            type(lines > 0 ? "\n/" : "/", textView)
+            XCTAssertTrue(controls.slashModel.shown)
+            let parent = try XCTUnwrap(scrollView.window?.contentView?.superview)
+            let host = try XCTUnwrap(hosts(parent).first { $0.menuLabel == "Insert" && !$0.isHidden })
+            let room = AtticDropdownMetrics.shadowRoom
+            let card = parent.convert(host.frame.insetBy(dx: room, dy: room), to: scrollView)
+            return (card, scrollView.bounds, controls.slashModel.above)
+        }
+        // A caret low in a long note: the list opens above it.
+        let (above, panel, opensAbove) = try listFrame(lines: 30, scrolledToEnd: true)
+        XCTAssertTrue(opensAbove)
+        // The scroll view is unflipped: its top is its bounds' maxY.
+        let headerEdge = panel.maxY - header
+        XCTAssertLessThanOrEqual(above.maxY, headerEdge - AtticDropdownMetrics.panelMargin + 0.5,
+                                 "upward, it stops below the header's controls: \(above) in \(panel)")
+        // A caret high in the note: the list opens below it, down to the bottom row.
+        let (below, panel2, opensBelow) = try listFrame(lines: 0, scrolledToEnd: false)
+        XCTAssertFalse(opensBelow)
+        XCTAssertGreaterThanOrEqual(below.minY, panel2.minY + bottomInset - 0.5,
+                                    "downward, it stops above the bottom row: \(below) in \(panel2)")
     }
 
     /// P3-B4: the title's tag suggestions follow their `#` as the note
@@ -2320,4 +2457,178 @@ final class HeadingsBehaviourTests: XCTestCase {
         XCTAssertEqual(NSMaxRange(engine.headingSections[0].content), second.location)
     }
 
+}
+
+/// F4a in the real panel (recording 1937). V-08: the `/` list opened downward
+/// stops above the bottom row's buttons, and opened upward stops below the
+/// header's, measured against the buttons themselves.
+@MainActor
+final class F4aPanelNotesTests: XCTestCase {
+    private func elements(_ root: AnyObject) -> [AnyObject] {
+        let children = (root.accessibilityChildren?() ?? nil) ?? []
+        return [root] + children.flatMap { elements($0 as AnyObject) }
+    }
+
+    private func views<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+        ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views(type, in: $0) }
+    }
+
+    /// The real panel on its Notes page, with a fresh note's editor; `body`
+    /// runs with the panel up.
+    private func withNotesPanel(_ body: (AtticPanel, AtticPanelContentContainer, AtticPanelHostingView, NoteEditorTextView) throws -> Void) throws {
+        let suite = "F4aPanel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        // SwiftUI builds its accessibility tree for an assistive client.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        state.selectSection(.notes)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        content.layoutSubtreeIfNeeded()
+        let textView = try XCTUnwrap(views(NoteEditorTextView.self, in: content).first, "the note's editor")
+        panel.makeFirstResponder(textView)
+        try body(panel, content, host, textView)
+    }
+
+    private func type(_ text: String, into textView: NoteEditorTextView, content: NSView) {
+        for character in text {
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        content.layoutSubtreeIfNeeded()
+    }
+
+    /// V-01 in the real panel (recording 1937): `/` → Diagram on the last
+    /// line of a note that fills the panel. The template goes in with its
+    /// block in one step and is laid out in the same pass; the whole block
+    /// (its label to the template's last line) is then in view above the
+    /// floating bottom controls at once, not under them until a scroll.
+    func testV01TheDiagramAppearsWithItsTemplateAboveTheBottomControls() throws {
+        try withNotesPanel { _, content, _, textView in
+            type("Title\n" + String(repeating: "Line\n", count: 24) + "/diagram", into: textView, content: content)
+            let controls = try XCTUnwrap(NoteFormatControls.active)
+            XCTAssertEqual(controls.slashModel.items.map(\.kind), [.diagram])
+            let engine = try XCTUnwrap(textView.engine)
+            let blockStart = try XCTUnwrap(engine.slashSession).range.location
+            controls.pickSlash(.diagram)
+            // The next frame's pass.
+            content.layoutSubtreeIfNeeded()
+            let end = engine.textStorage.length
+            XCTAssertTrue(engine.textStorage.string.hasSuffix("B --> C[Done]"), "the template is in, with its block")
+            let viewport = try XCTUnwrap(engine.layoutManager?.textViewportLayoutController.viewportRange)
+            let viewportEnd = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: viewport.endLocation)
+            XCTAssertGreaterThanOrEqual(viewportEnd, end, "laid out for drawing in the same pass")
+            let scroll = try XCTUnwrap(textView.enclosingScrollView)
+            let clip = scroll.contentView.bounds
+            let readable = CGRect(x: clip.minX, y: clip.minY + scroll.contentInsets.top, width: clip.width,
+                                  height: clip.height - scroll.contentInsets.top - scroll.contentInsets.bottom)
+            let top = try XCTUnwrap(engine.rect(for: NSRange(location: blockStart, length: 1)))
+            let caret = try XCTUnwrap(engine.caretRect(at: end))
+            XCTAssertGreaterThanOrEqual(top.minY, readable.minY - 0.5, "the block's label is in view: \(top) in \(readable)")
+            XCTAssertLessThanOrEqual(caret.maxY, readable.maxY + 0.5, "its last line is above the bottom controls: \(caret) in \(readable)")
+        }
+    }
+
+    func testTheSlashListStaysClearOfThePanelsButtons() throws {
+        let suite = "V08Panel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        // SwiftUI builds its accessibility tree for an assistive client.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        state.selectSection(.notes)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        content.layoutSubtreeIfNeeded()
+        let textView = try XCTUnwrap(views(NoteEditorTextView.self, in: content).first, "the note's editor")
+        panel.makeFirstResponder(textView)
+        func type(_ text: String) {
+            for character in text {
+                textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            content.layoutSubtreeIfNeeded()
+        }
+        func frame(of identifier: String) throws -> CGRect {
+            let element = try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? "") == identifier }, identifier)
+            let screen = try XCTUnwrap(element.accessibilityFrame?(), identifier)
+            return content.convert(panel.convertFromScreen(screen), from: nil)
+        }
+        func card() throws -> CGRect {
+            let overlay = content.overlayLayer
+            let list = try XCTUnwrap(views(AtticOverlayHostingView.self, in: overlay).first { $0.menuLabel == "Insert" && !$0.isHidden })
+            let room = AtticDropdownMetrics.shadowRoom
+            return content.convert(list.frame.insetBy(dx: room, dy: room), from: list.superview)
+        }
+        // A caret high in the note: the list opens downward.
+        type("Title\n/")
+        let controls = try XCTUnwrap(NoteFormatControls.active)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertFalse(controls.slashModel.above)
+        let allNotes = try frame(of: "notes-all-notes")
+        let below = try card()
+        XCTAssertFalse(below.intersects(allNotes), "downward: \(below) over the bottom row's button \(allNotes)")
+        let clearBelow = content.isFlipped ? allNotes.minY - below.maxY : below.minY - allNotes.maxY
+        XCTAssertGreaterThanOrEqual(clearBelow, 0, "it ends above the bottom row")
+        // A caret low in a long note: the list opens upward.
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type(String(repeating: "Line\n", count: 30) + "/")
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertTrue(controls.slashModel.above)
+        let pin = try frame(of: "panel-pin-button")
+        let above = try card()
+        XCTAssertFalse(above.intersects(pin), "upward: \(above) over the header's pin \(pin)")
+        let clearAbove = content.isFlipped ? above.minY - pin.maxY : pin.minY - above.maxY
+        XCTAssertGreaterThanOrEqual(clearAbove, 0, "it starts below the header")
+    }
 }
