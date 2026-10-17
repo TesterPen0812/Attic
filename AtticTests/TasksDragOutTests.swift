@@ -1,6 +1,7 @@
 import AppKit
 import SwiftData
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import Attic
 
@@ -247,7 +248,7 @@ final class TasksDragOutCardTests: XCTestCase {
         card.settled = { settled += 1 }
         let source = TasksDragOut.Source(ended: { ended += 1 })
         source.card = card
-        source.imageSize = home.size
+        source.grip = AtticDragGrip(offset: .zero, size: home.size)
         TasksDragOut.Source.current = source
         let windows = Set(NSApp.windows.map(ObjectIdentifier.init))
         source.ended(at: CGPoint(x: -5_400, y: -5_300), operation: [])
@@ -283,3 +284,354 @@ final class TasksDragOutCardTests: XCTestCase {
     }
 }
 
+
+/// Round O2 (owner feedback 2026-10-17, O17-12/13/15/16): a cancelled card
+/// starts home from exactly where it was let go, a dropped file lands in
+/// its task, a dragged task takes its files along, and a file leaves on
+/// its own.
+@MainActor
+final class TasksDragO2Tests: XCTestCase {
+    private func images() -> TasksDragOut.Card.Images {
+        TasksDragOut.Card.Images(card: Color.gray.frame(height: 34), width: 300, environment: EnvironmentValues(), scale: 2)!
+    }
+
+    // MARK: O17-12, the cancelled drag's start
+
+    func testTheGripPlacesThePictureWhereItWasLetGoOnScreen() {
+        let image = CGRect(x: 1_210, y: 640, width: 340, height: 74)
+        let grip = AtticDragGrip(image: image, pointer: CGPoint(x: 1_300, y: 690))
+        XCTAssertEqual(grip.frame(at: CGPoint(x: 1_300, y: 690)), image, "at the press, the picture is where it lay")
+        let release = CGPoint(x: 220, y: 1_040)
+        let start = grip.frame(at: release)
+        XCTAssertEqual(start.size, image.size)
+        XCTAssertEqual(start.minX - release.x, image.minX - 1_300)
+        XCTAssertEqual(start.minY - release.y, image.minY - 690)
+    }
+
+    /// The card's frame is in the page's flipped view; the pointer arrives
+    /// in the window's space and on screen. Whichever space the release is
+    /// read in, the start is the card moved by exactly the pointer's travel.
+    func testTheStartFollowsThePointerInEverySpace() throws {
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -3_000, width: 400, height: 500),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let page = Flipped(frame: CGRect(x: 12, y: 30, width: 380, height: 460))
+        window.contentView?.addSubview(page)
+        let card = CGRect(x: -20, y: 100, width: 340, height: 74)
+        let pressInPage = CGPoint(x: 150, y: 137)
+        let imageOnScreen = window.convertToScreen(page.convert(card, to: nil))
+        let pressOnScreen = window.convertPoint(toScreen: page.convert(pressInPage, to: nil))
+        let grip = AtticDragGrip(image: imageOnScreen, pointer: pressOnScreen)
+        // Released 60 pt right and 200 pt down the page.
+        let releaseInPage = CGPoint(x: pressInPage.x + 60, y: pressInPage.y + 200)
+        let releaseOnScreen = window.convertPoint(toScreen: page.convert(releaseInPage, to: nil))
+        let start = grip.frame(at: releaseOnScreen)
+        let expected = window.convertToScreen(page.convert(card.offsetBy(dx: 60, dy: 200), to: nil))
+        XCTAssertEqual(start.minX, expected.minX, accuracy: 0.001)
+        XCTAssertEqual(start.minY, expected.minY, accuracy: 0.001)
+        XCTAssertEqual(start.size, expected.size)
+        // Back in the page, the start is the card where the pointer let go.
+        let back = page.convert(window.convertFromScreen(start), from: nil)
+        XCTAssertEqual(back.minX, card.minX + 60, accuracy: 0.001)
+        XCTAssertEqual(back.minY, card.minY + 200, accuracy: 0.001)
+    }
+
+    /// The corner jump (O17-12): the session's own frame for its image at
+    /// the end is not where it was drawn. A cancelled card starts home from
+    /// the release point and its grip, whatever the session reports, and
+    /// the picture that springs lies exactly there on screen.
+    func testACancelledCardStartsHomeFromTheReleasePointNotTheSessionsFrame() {
+        let home = CGRect(x: -5_000, y: -5_000, width: 340, height: 74)
+        var settled = 0
+        let card = TasksDragOut.Card(images: images(), frame: CGRect(x: 0, y: 0, width: 340, height: 74), home: { home },
+                                     reduceMotion: false, handOff: {}, settled: { settled += 1 })
+        let source = TasksDragOut.Source(ended: {})
+        source.card = card
+        source.grip = AtticDragGrip(image: home, pointer: CGPoint(x: home.minX + 150, y: home.minY + 37))
+        TasksDragOut.Source.current = source
+        defer { TasksDragOut.Source.current = nil }
+        let release = CGPoint(x: -5_600, y: -5_420)
+        let corner = CGRect(x: 0, y: 0, width: 340, height: 74)
+        source.ended(at: release, operation: [], reported: corner)
+        let expected = CGRect(x: release.x - 150, y: release.y - 37, width: 340, height: 74)
+        XCTAssertEqual(TasksDragOut.Probe.shared.lastStart, expected, "from where it was let go")
+        XCTAssertEqual(TasksDragOut.Probe.shared.lastReported, corner, "the session's frame is kept as evidence only")
+        XCTAssertEqual(source.dragReturnForTesting?.startOnScreen, expected, "the springing picture lies there on screen")
+        XCTAssertEqual(settled, 0, "the row's place stays empty until the card lands")
+        let deadline = Date().addingTimeInterval(3)
+        while settled == 0, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(settled, 1, "then the row takes its place, once")
+    }
+
+    // MARK: O17-13, a dropped file lands
+
+    func testADroppedPictureSettlesIntoTheSlotKeepingItsShape() {
+        let slot = CGRect(x: 100, y: 50, width: 14, height: 14)
+        XCTAssertEqual(AtticDropLanding.frame(for: CGSize(width: 140, height: 70), in: slot),
+                       CGRect(x: 100, y: 53.5, width: 14, height: 7))
+        XCTAssertEqual(AtticDropLanding.frame(for: CGSize(width: 64, height: 64), in: slot), slot)
+        XCTAssertEqual(AtticDropLanding.frame(for: .zero, in: slot), slot)
+    }
+
+    func testTheSlotIsTheFilesListsIconColumn() {
+        let row = CGRect(x: 8, y: 200, width: 360, height: 34)
+        let closed = TasksPage.dropLandingSlot(rowFrame: row, filesExpanded: false)
+        XCTAssertEqual(closed.minX, 8 + AtticLayout.textX)
+        XCTAssertEqual(closed.size, CGSize(width: AtticQuietActionMetrics.iconSlot, height: AtticQuietActionMetrics.iconSlot))
+        XCTAssertTrue(row.contains(closed), "closed, it lands in the row itself")
+        // Open: two files, then "Attach file…", where the new file goes.
+        let open = CGRect(x: 8, y: 200, width: 360, height: 34 + 3 * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding)
+        let slot = TasksPage.dropLandingSlot(rowFrame: open, filesExpanded: true)
+        let attachLine = open.maxY - AtticQuickLookMetrics.bottomPadding - AtticLayout.subtaskPitch
+        XCTAssertEqual(slot.midY, attachLine + AtticLayout.subtaskPitch / 2, accuracy: 0.001)
+    }
+
+    func testTheHostAsksTheShownSourceInItsWindowAndConvertsTheSlot() {
+        final class Source: AtticDropLandingSource {
+            weak var landingView: NSView?
+            var asked: CGPoint?
+            func landingSlot(at point: CGPoint) -> CGRect? {
+                asked = point
+                return CGRect(x: point.x - 7, y: point.y - 7, width: 14, height: 14)
+            }
+        }
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -3_000, width: 400, height: 500),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSView(frame: CGRect(x: 0, y: 0, width: 400, height: 500))
+        window.contentView = host
+        let page = Flipped(frame: CGRect(x: 10, y: 20, width: 380, height: 460))
+        host.addSubview(page)
+        let source = Source()
+        source.landingView = page
+        AtticDropLanding.register(source)
+        let windowPoint = CGPoint(x: 110, y: 300)
+        let slot = AtticDropLanding.slot(at: windowPoint, in: host)
+        XCTAssertEqual(source.asked, page.convert(windowPoint, from: nil))
+        XCTAssertEqual(slot?.midX ?? 0, windowPoint.x, accuracy: 0.001)
+        XCTAssertEqual(slot?.midY ?? 0, windowPoint.y, accuracy: 0.001)
+        page.isHidden = true
+        XCTAssertNil(AtticDropLanding.slot(at: windowPoint, in: host), "a hidden page takes nothing")
+        page.isHidden = false
+        let other = NSView()
+        XCTAssertNil(AtticDropLanding.slot(at: windowPoint, in: other), "another window asks nobody here")
+    }
+
+    /// The panel's host: a drop SwiftUI takes over a place that knows where
+    /// it lands animates there; one it refuses is left to the system.
+    func testTheHostLandsAnAcceptedDropAndLeavesARefusedOne() throws {
+        AtticHostDragHooks.install()
+        for name in ["prepareForDragOperation:", "performDragOperation:"] {
+            let selector = NSSelectorFromString(name)
+            XCTAssertNotNil(class_getInstanceMethod(AtticPanelHostingView.self, selector))
+            XCTAssertNotEqual(class_getMethodImplementation(AtticPanelHostingView.self, selector),
+                              class_getMethodImplementation(class_getSuperclass(AtticPanelHostingView.self), selector),
+                              "\(name) runs after SwiftUI's own")
+        }
+        final class Source: AtticDropLandingSource {
+            weak var landingView: NSView?
+            func landingSlot(at point: CGPoint) -> CGRect? { CGRect(x: 40, y: 60, width: 14, height: 14) }
+        }
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -3_000, width: 400, height: 500),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSView(frame: CGRect(x: 0, y: 0, width: 400, height: 500))
+        window.contentView = host
+        let page = NSView(frame: host.bounds)
+        host.addSubview(page)
+        let source = Source()
+        source.landingView = page
+        AtticDropLanding.register(source)
+        let info = FakeDraggingInfo(window: window, location: CGPoint(x: 100, y: 100),
+                                    items: [CGRect(x: 80, y: 80, width: 128, height: 64)])
+        let slot = AtticDropLanding.prepare(info, accepted: true, in: host)
+        XCTAssertTrue(info.animatesToDestination)
+        AtticDropLanding.perform(info, accepted: true, slot: slot, in: host)
+        let landed = host.convert(page.convert(CGRect(x: 40, y: 60, width: 14, height: 14), to: nil), from: nil)
+        XCTAssertEqual(info.items[0].draggingFrame, AtticDropLanding.frame(for: CGSize(width: 128, height: 64), in: landed))
+
+        let refused = FakeDraggingInfo(window: window, location: CGPoint(x: 100, y: 100),
+                                       items: [CGRect(x: 80, y: 80, width: 128, height: 64)])
+        let none = AtticDropLanding.prepare(refused, accepted: false, in: host)
+        XCTAssertNil(none)
+        AtticDropLanding.perform(refused, accepted: false, slot: none, in: host)
+        XCTAssertFalse(refused.animatesToDestination)
+        XCTAssertEqual(refused.items[0].draggingFrame, CGRect(x: 80, y: 80, width: 128, height: 64))
+    }
+
+    // MARK: O17-15, a task's files go with it
+
+    private func pngFile(in root: URL, named name: String = "Receipt.png") throws -> URL {
+        let url = root.appendingPathComponent(name)
+        let context = try XCTUnwrap(CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.9, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return url
+    }
+
+    func testADraggedTaskCarriesItsFilesAsPromisesBesideItsText() async throws {
+        let root = ownedTemporaryDirectory(prefix: "TasksDragO2")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container, taskImageFiles: files)
+        let task = try XCTUnwrap(store.create(title: "Expense the trip"))
+        let notes = root.appendingPathComponent("Notes.txt")
+        try Data("Hotel and train".utf8).write(to: notes)
+        let attached = await store.attachFiles([try pngFile(in: root), notes], to: task.id)
+        XCTAssertTrue(attached)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let export = try XCTUnwrap(model.export([task.id]))
+        XCTAssertEqual(export.items.first?.files.map(\.filename), ["Receipt.png", "Notes.txt"])
+        XCTAssertFalse(export.plain.contains("Receipt"), "the text itself does not name them")
+
+        let frame = CGRect(x: 0, y: 0, width: 340, height: 74)
+        let items = TasksDragOut.attachmentItems(for: export, files: files, frame: frame)
+        XCTAssertEqual(items.count, 2)
+        let promises = items.compactMap { $0.item as? TaskAttachmentFilePromise }
+        XCTAssertEqual(promises.map(\.fileType), [UTType.png.identifier, UTType.plainText.identifier])
+        XCTAssertTrue(promises.allSatisfy { $0.delegate === $0 }, "each keeps its own delegate for the drag's life")
+        XCTAssertTrue(items.allSatisfy { ($0.imageComponents ?? []).allSatisfy { $0.contents == nil } }, "the card alone is drawn")
+        XCTAssertEqual(promises[0].filePromiseProvider(promises[0], fileNameForType: UTType.png.identifier), "Receipt.png")
+
+        // On a pasteboard they are promised files under their own types.
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("AtticDragO2-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([export.dragItem()] + promises))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 3)
+        XCTAssertEqual(pasteboard.pasteboardItems?.first?.string(forType: .string), export.plain)
+        let promised = (pasteboard.pasteboardItems ?? []).dropFirst().map { $0.types.map(\.rawValue) }
+        XCTAssertTrue(promised.allSatisfy { $0.contains("com.apple.NSFilePromiseItemMetaData") }, "\(promised)")
+
+        // A receiver gets its own copy, byte for byte.
+        let destination = root.appendingPathComponent("Dropped", isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        for promise in promises {
+            let url = destination.appendingPathComponent(promise.reference.filename)
+            try await TaskAttachmentFilePromise.write(promise.reference, from: files, to: url)
+            let original = try await XCTUnwrapAsync(try await files.verifiedURL(for: promise.reference))
+            XCTAssertEqual(try Data(contentsOf: url), try Data(contentsOf: original))
+            XCTAssertNotEqual(url.standardizedFileURL, original.standardizedFileURL, "never the private copy in place")
+        }
+    }
+
+    /// Within Attic a task is moved, not copied: its files stay its own.
+    func testMovingATaskKeepsItsFiles() async throws {
+        let root = ownedTemporaryDirectory(prefix: "TasksDragO2")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container, taskImageFiles: files)
+        let first = try XCTUnwrap(store.create(title: "First"))
+        _ = try XCTUnwrap(store.create(title: "Second"))
+        let attached = await store.attachFiles([try pngFile(in: root)], to: first.id)
+        XCTAssertTrue(attached)
+        let before = try XCTUnwrap(store.listedTask(withID: first.id)).attachments
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let group = model.rows(for: .now).map(\.id)
+        let index = try XCTUnwrap(group.firstIndex(of: first.id))
+        XCTAssertTrue(model.move(first.id, toGroupIndex: index == 0 ? 1 : 0).isApplied)
+        XCTAssertNotEqual(model.rows(for: .now).map(\.id), group, "it moved")
+        XCTAssertEqual(store.listedTask(withID: first.id)?.attachments, before)
+        let verified = try await files.verifiedURL(for: before[0])
+        XCTAssertNotNil(verified)
+    }
+
+    // MARK: O17-16, a file leaves on its own
+
+    func testAFileLeavesAsItselfWithItsOwnPicture() throws {
+        let reference = TaskImageReference(id: UUID(), filename: "Floor plan.pdf", digest: "d1",
+                                           contentTypeIdentifier: UTType.pdf.identifier, byteCount: 2_048)
+        let provider = TaskAttachmentDragItem(reference: reference, files: TaskImageFiles(rootURL: ownedTemporaryDirectory(prefix: "TasksDragO2")))
+            .itemProvider()
+        XCTAssertEqual(provider.registeredTypeIdentifiers, [UTType.pdf.identifier, TaskDropContent.attachmentCardType.identifier])
+        XCTAssertEqual(provider.suggestedName, "Floor plan")
+        // Its picture: the kind's icon and the name, nothing of the row.
+        let renderer = ImageRenderer(content: TaskFileDragPreview(file: reference))
+        renderer.scale = 2
+        let picture = try XCTUnwrap(renderer.nsImage)
+        XCTAssertEqual(picture.size.height, TaskFileDragPreview.iconSide + 10, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(picture.size.width, 6 + TaskFileDragPreview.iconSide + 8 + 220 + 12 + 0.5)
+
+        // An image shows the thumbnail its row already drew.
+        let image = TaskImageReference(id: UUID(), filename: "Sketch.png", digest: "d2-\(UUID().uuidString)",
+                                       contentTypeIdentifier: UTType.png.identifier, byteCount: 512)
+        let thumbnail = NSImage(size: CGSize(width: 8, height: 8), flipped: false) { rect in
+            NSColor.systemRed.setFill(); rect.fill(); return true
+        }
+        TaskThumbnailMemory.remember(thumbnail, for: image.digest)
+        XCTAssertTrue(TaskThumbnailMemory.image(for: image.digest) === thumbnail)
+        XCTAssertNotNil(ImageRenderer(content: TaskFileDragPreview(file: image)).nsImage)
+
+        // Evidence renders for the round's report, on request only.
+        if let directory = ProcessInfo.processInfo.environment["ATTIC_O2_RENDERS"] {
+            let folder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (name, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
+                for (kind, file) in [("pdf", reference), ("image", image)] {
+                    let appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)!
+                    var data: Data?
+                    appearance.performAsCurrentDrawingAppearance {
+                        let renderer = ImageRenderer(content: TaskFileDragPreview(file: file).padding(12)
+                            .background(scheme == .dark ? Color.black : Color.white).environment(\.colorScheme, scheme))
+                        renderer.scale = 2
+                        data = renderer.cgImage.map { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) } ?? nil
+                    }
+                    try XCTUnwrap(data).write(to: folder.appendingPathComponent("file-drag-\(kind)-\(name).png"))
+                }
+            }
+        }
+    }
+}
+
+/// A drop as AppKit hands it to a destination, for the host's landing.
+private final class FakeDraggingInfo: NSObject, NSDraggingInfo {
+    let window: NSWindow
+    let location: CGPoint
+    let items: [NSDraggingItem]
+    var animatesToDestination = false
+    var draggingFormation: NSDraggingFormation = .none
+    var numberOfValidItemsForDrop = 1
+
+    init(window: NSWindow, location: CGPoint, items frames: [CGRect]) {
+        self.window = window
+        self.location = location
+        items = frames.map { frame in
+            let item = NSDraggingItem(pasteboardWriter: NSPasteboardItem())
+            item.setDraggingFrame(frame, contents: NSImage(size: frame.size))
+            return item
+        }
+    }
+
+    var draggingDestinationWindow: NSWindow? { window }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingLocation: NSPoint { location }
+    var draggedImageLocation: NSPoint { location }
+    var draggedImage: NSImage? { nil }
+    var draggingPasteboard: NSPasteboard { NSPasteboard(name: .drag) }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
+                                classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {
+        var stop = ObjCBool(false)
+        for (index, item) in items.enumerated() {
+            block(item, index, &stop)
+            if stop.boolValue { break }
+        }
+    }
+}

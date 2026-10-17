@@ -146,6 +146,10 @@ struct TasksFileRow: View {
         .onDrag {
             MainActor.assumeIsolated { TaskAttachmentCardDrag.begin(file, store: store) }
             return TaskAttachmentDragItem(reference: file, files: store.taskImageFiles).itemProvider()
+        } preview: {
+            // O17-16: the file itself as it leaves (its picture or icon, and
+            // its name), never the row's hover fill and buttons.
+            TaskFileDragPreview(file: file)
         }
         .contextMenu {
             Button(String(localized: "Quick Look"), systemImage: "eye", action: preview)
@@ -224,4 +228,47 @@ struct TasksFileRow: View {
 
     private func preview() { TaskAttachmentActions.preview(file, store: store, owner: owner) }
     private func open() { TaskAttachmentActions.open(file, store: store, owner: owner) }
+}
+
+/// What a file dragged out of a task looks like under the pointer (O17-16):
+/// its thumbnail (an image) or its kind's icon, and its name, on a quiet
+/// label like a dragged task's. Drawn once, as the drag begins, so it uses
+/// only what is at hand: the thumbnail its row already loaded.
+struct TaskFileDragPreview: View {
+    let file: TaskImageReference
+
+    static let iconSide: CGFloat = 28
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Group {
+                if file.isImage, let thumbnail = TaskThumbnailMemory.image(for: file.digest) {
+                    Image(nsImage: thumbnail).resizable().scaledToFill()
+                        .frame(width: Self.iconSide, height: Self.iconSide)
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                } else {
+                    Image(nsImage: NSWorkspace.shared.icon(for: file.contentType)).resizable()
+                        .frame(width: Self.iconSide, height: Self.iconSide)
+                }
+            }
+            Text(verbatim: file.filename)
+                .font(.system(size: NSFont.systemFontSize, weight: .medium))
+                .foregroundStyle(Color(nsColor: .labelColor))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 220, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 12)
+        .padding(.vertical, 5)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.95))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                }
+        }
+    }
 }

@@ -103,6 +103,14 @@ final class TasksCellUpdates: ObservableObject {
     static let quiet = TasksCellUpdates()
 }
 
+/// Only the quick look with the active editor observes its draft keys.
+@MainActor
+final class TasksSubtaskDraftState: ObservableObject {
+    static let quiet = TasksSubtaskDraftState()
+    @Published var newTitle = ""
+    @Published var rename = ""
+}
+
 /// The add bar's text and insertion point. Only the add bar observes it.
 @MainActor
 final class TasksAddBarState: ObservableObject {
@@ -250,14 +258,21 @@ final class TasksPageModel: ObservableObject {
         case paste
     }
     @Published private(set) var newSubtaskParentID: UUID?
-    @Published var newSubtaskTitle = ""
+    let subtaskDraft = TasksSubtaskDraftState()
+    var newSubtaskTitle: String {
+        get { subtaskDraft.newTitle }
+        set { subtaskDraft.newTitle = newValue }
+    }
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
     @Published var renamingSubtaskID: UUID?
     /// A rename belongs to the quick look it opened in. A move elsewhere
     /// cannot leave its editor holding that original page's keys.
     var renamingSubtaskParentID: UUID?
-    @Published var subtaskRename = ""
+    var subtaskRename: String {
+        get { subtaskDraft.rename }
+        set { subtaskDraft.rename = newValue }
+    }
     @Published var subtaskRenameFailed = false
     /// The subtask line that has the keyboard (round 10b). Not published: it
     /// only steers which row a shortcut targets, and never redraws.
@@ -729,7 +744,11 @@ final class TasksPageModel: ObservableObject {
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
         let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "")
-        setDoneLog(doneLogTasks + page.tasks)
+        doneCountCache = nil
+        // The indexed cursor supplies canonical IDs in completion order.
+        // Existing families remain valid for this store revision.
+        doneLogTasks.append(contentsOf: page.tasks)
+        doneLogChildren.merge(store.doneLogSubtasks(ofParents: page.tasks.map(\.id))) { _, new in new }
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = page.failure
@@ -1091,9 +1110,7 @@ final class TasksPageModel: ObservableObject {
     /// counted in rows, so the browsing page size never shortens it
     /// (GPT-6.1's PR prep review, P3: 40-row pages halved it to 8,040).
     static let doneRevealReach = 80 + 200 * 80
-    /// A reveal reads in 80-row steps, as before the 40-row pages: each
-    /// step re-reads the loaded rows' families, so smaller steps would
-    /// double the reads for the same reach.
+    /// Keep the established reveal page boundary when seeking directly.
     static let doneRevealStep = 80
 
     /// Loads the Done log until `id`'s page is in, and says whether it is.
@@ -1103,9 +1120,12 @@ final class TasksPageModel: ObservableObject {
         isRevealing = true
         defer { isRevealing = false }
         loadDoneLogIfNeeded()
-        while !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
-              doneLogTasks.count < Self.doneRevealReach {
-            loadMoreDoneLog(limit: min(Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
+        if !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
+           doneLogTasks.count < Self.doneRevealReach {
+            let offset = store.indexedDoneLogOffset(of: id, matching: doneLogQuery ?? "") ?? (Self.doneRevealReach - 1)
+            let remaining = max(0, offset + 1 - doneLogTasks.count)
+            let pages = max(1, (remaining + Self.doneRevealStep - 1) / Self.doneRevealStep)
+            loadMoreDoneLog(limit: min(pages * Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
         }
         return doneLogTasks.contains { $0.id == id }
     }

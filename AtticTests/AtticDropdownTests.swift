@@ -1272,6 +1272,70 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertFalse(presenter.isOpen)
     }
 
+    func testRoundFPriorityPickerHasOneHintLifetimeAndPreservesItsAccessibility() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = makeWindow()
+        defer { window.close() }
+        let anchor = NSView(frame: CGRect(x: 20, y: 300, width: 60, height: 28))
+        window.contentView?.addSubview(anchor)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.contentHeight = AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4
+        var picked: [TaskPriority] = []
+        presenter.content = AnyView(TaskPriorityPickerView(current: .high) { picked.append($0) })
+        let retains = AtticDropdownDiagnostics.hintRetains
+        AtticDropdownDiagnostics.enabled = true
+        presenter.present(from: anchor)
+        defer {
+            presenter.close(restoreFocus: false, immediately: true)
+            AtticDropdownDiagnostics.enabled = false
+        }
+        spin(0.2)
+        let host = try XCTUnwrap(presenter.host)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(AtticDropdownDiagnostics.hintRetains - retains, 1, "the picker owns one shared hint lifetime")
+        func items() -> [AtticDropdownMenuItem.ItemView] {
+            accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
+        }
+        let labels = TaskPriority.choices.map { "\($0.choiceTitle), \($0.shortcutHint)" }
+        let rows = items()
+        XCTAssertEqual(rows.count, 4)
+        XCTAssertEqual(rows.compactMap { $0.accessibilityLabel() }, labels)
+        XCTAssertEqual(rows.map { Self.markChar($0) }, [nil, nil, nil, "✓"])
+        XCTAssertEqual(rows.compactMap { $0.accessibilityValue() as? String }, ["1 of 4", "2 of 4", "3 of 4", "4 of 4"])
+        XCTAssertEqual(rows.map { $0.accessibilityIndex() }, [0, 1, 2, 3])
+        XCTAssertEqual(rows.filter { $0.isAccessibilitySelected() }.count, 0)
+        // Use the actual focused picker to move the highlight, without selecting a priority.
+        window.sendEvent(key("\u{F701}", code: 125, in: window))
+        spin()
+        XCTAssertEqual(items().filter { $0.isAccessibilitySelected() }.compactMap { $0.accessibilityLabel() }, [labels[0]])
+        let responder = window.firstResponder
+        XCTAssertNotNil(responder)
+        let widths = items().map { $0.accessibilityFrame().width }
+        XCTAssertTrue(widths.allSatisfy { $0 > 0 }, "measure the real row frames")
+        let cardWidth = host.frame.width
+        for flags: NSEvent.ModifierFlags in [.option, []] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 58))
+            NSApp.sendEvent(event)
+            spin()
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(AtticOptionHints.shared.shown, flags.contains(.option))
+            XCTAssertIdentical(window.firstResponder, responder, "Option never moves focus")
+            XCTAssertEqual(items().map { $0.accessibilityFrame().width }, widths)
+            XCTAssertEqual(host.frame.width, cardWidth)
+            XCTAssertEqual(items().compactMap { $0.accessibilityLabel() }, labels)
+            XCTAssertEqual(items().map { Self.markChar($0) }, [nil, nil, nil, "✓"])
+            XCTAssertEqual(items().filter { $0.isAccessibilitySelected() }.compactMap { $0.accessibilityLabel() }, [labels[0]])
+        }
+        for row in items() { XCTAssertTrue(row.accessibilityPerformPress()) }
+        XCTAssertEqual(picked, TaskPriority.choices)
+    }
+
     func testPriorityChordsInvokeTheOpenPickersAction() throws {
         let window = makeWindow()
         defer { window.close() }
@@ -1649,6 +1713,11 @@ final class AtticDropdownTests: XCTestCase {
     /// (that is when SwiftUI builds each row's accessibility element).
     private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0, paired: Bool = true) -> [Round] {
         verifyCIInputModes(readAccessibility: readAccessibility)
+        let diagnostic = ProcessInfo.processInfo.environment["ATTIC_DROPDOWN_DIAGNOSTICS"] == "1"
+        AtticDropdownDiagnostics.enabled = diagnostic
+        defer { AtticDropdownDiagnostics.enabled = false }
+        var openingDiagnostics: [String] = []
+        defer { openingDiagnostics.forEach { print($0) } }
         let design = AtticDesignContext()
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let filtered = all.filter { $0.title.lowercased().contains("li") }
@@ -1709,11 +1778,17 @@ final class AtticDropdownTests: XCTestCase {
                 prio.design = design
                 prio.contentHeight = AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4
                 prio.content = AnyView(TaskPriorityPickerView(current: .high, onPick: { _ in }))
+                let layouts = AtticDropdownDiagnostics.layouts
+                let retains = AtticDropdownDiagnostics.hintRetains
+                let reveals = AtticDropdownDiagnostics.reveals
                 let elapsed = ms {
                     prio.present(from: anchor)
                     prio.host?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
                     if readAccessibility, let host = prio.host { _ = accessibilityElements(host) }
                     if priorityDelay > 0 { Thread.sleep(forTimeInterval: priorityDelay) }
+                }
+                if diagnostic {
+                    openingDiagnostics.append("DROPDOWN_OPEN_DIAGNOSTIC ax=\(readAccessibility) ms=\(elapsed) layouts=\(AtticDropdownDiagnostics.layouts - layouts) hint_retains=\(AtticDropdownDiagnostics.hintRetains - retains) reveals_inside_timer=\(AtticDropdownDiagnostics.reveals - reveals)")
                 }
                 prio.close(restoreFocus: false, immediately: true)
                 return elapsed

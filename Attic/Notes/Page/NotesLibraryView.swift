@@ -74,7 +74,7 @@ struct NotesLibraryView: View {
     }
 
     var body: some View {
-        let groups = model.groups(store: store, drafts: controller.failedDrafts)
+        let groups = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         let selected = controller.librarySelectionID
         let shown = Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query)
         // A15 (owner, 2026-10-04): the rows run under the label line and the
@@ -200,7 +200,7 @@ struct NotesLibraryView: View {
         // monitor) outlives that slide by a moment: a key pressed in the
         // note is the note's, never the library's.
         guard controller.isLibraryPresented, !moreTagsShown else { return false }
-        let groups = model.groups(store: store, drafts: controller.failedDrafts)
+        let groups = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         let selected = controller.librarySelectionID
         let editor = keys.window?.firstResponder as? NSTextView
         let action = Self.keyAction(keyCode: event.keyCode, modifiers: EventModifiers(event.modifierFlags),
@@ -348,11 +348,11 @@ struct NotesLibraryView: View {
                     ForEach(groups) { group in
                         AtticNoteGroupHeading(title: group.title)
                         ForEach(group.rows) { row in
-                            AtticNoteRow(model: row, isSelected: row.id == selected && model.highlightedID == nil,
-                                         isHighlighted: row.id == model.highlightedID,
-                                         commands: { rowCommands(row.id) }, anchors: anchors,
-                                         onShowActions: { showActions(for: row.id) },
-                                         onOpen: { onOpen(row.id) })
+                            PreparedNotesLibraryRow(library: model, store: store, revision: store.revision, row: row,
+                                isSelected: row.id == selected && model.highlightedID == nil,
+                                isHighlighted: row.id == model.highlightedID,
+                                commands: { rowCommands(row.id) }, anchors: anchors,
+                                onShowActions: { showActions(for: row.id) }, onOpen: { onOpen(row.id) })
                                 .id(row.id)
                                 .contextMenu { AtticMenuItems(commands: rowCommands(row.id)) }
                                 // Delete and restore: the row folds away or springs back.
@@ -520,5 +520,22 @@ extension EventModifiers {
         if flags.contains(.option) { result.insert(.option) }
         if flags.contains(.shift) { result.insert(.shift) }
         self = result
+    }
+}
+
+private struct PreparedNotesLibraryRow: View {
+    let library: NotesLibraryModel
+    let store: NoteStore
+    let revision: UInt64
+    let row: AtticNoteRowModel
+    let isSelected: Bool
+    let isHighlighted: Bool
+    let commands: () -> [AtticMenuCommand]
+    let anchors: AtticNoteRowAnchors
+    let onShowActions: () -> Void
+    let onOpen: () -> Void
+    var body: some View {
+        AtticNoteRow(model: library.preparedRow(row, store: store), isSelected: isSelected, isHighlighted: isHighlighted,
+                     commands: commands, anchors: anchors, onShowActions: onShowActions, onOpen: onOpen)
     }
 }
