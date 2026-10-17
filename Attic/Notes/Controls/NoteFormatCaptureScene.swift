@@ -80,6 +80,10 @@ enum NoteFormatCaptureScene {
                 writeCaretSample(controls: controls, textView: textView)
                 return
             }
+            if scene.hasPrefix("f3-") {
+                writeF3Sample(scene, controls: controls, textView: textView)
+                return
+            }
             if scene == "codex" {
                 writeCodexTestPage(textView: textView)
                 return
@@ -375,6 +379,61 @@ enum NoteFormatCaptureScene {
     /// an empty last line (the "Type / for" hint). The caret then visits the
     /// start of each line in turn, `ATTIC_UI_TEST_CARET_DWELL` seconds
     /// (default 1.6) on each, for on-screen pixel measurement.
+    /// Round F3's on-screen states (O18-01…04, K-01…03, V-02): `f3-body`,
+    /// `f3-heading`, `f3-hint` (an empty line with the hint), `f3-callout`
+    /// (the caret inside one), `f3-callout-return` (Return inside it),
+    /// `f3-callout-end` (a long note ending with a callout, scrolled to its
+    /// end), `f3-code-return`, `f3-return-long` (Return twice at the end of
+    /// a note that fills the panel) and `f3-table` (a click beside a table).
+    private static func writeF3Sample(_ scene: String, controls: NoteFormatControls, textView: NoteEditorTextView) {
+        let engine = controls.engine
+        type("Caret check\n", into: textView)
+        let long = scene == "f3-callout-end" || scene == "f3-return-long"
+        if long { for index in 1...24 { type("Line \(index) of a note that fills the panel\n", into: textView) } }
+        switch scene {
+        case "f3-heading":
+            controls.router.run(.paragraph(.heading(1)), from: .shortcut)
+            type("Heading py", into: textView)
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length - 4, length: 0))
+        case "f3-hint":
+            type("Body text py\n", into: textView)
+        case "f3-callout", "f3-callout-return", "f3-callout-end":
+            controls.router.run(.paragraph(.callout(icon: "💡")), from: .shortcut)
+            type("Callout text py", into: textView)
+            if scene == "f3-callout" { textView.setSelectedRange(NSRange(location: (textView.string as NSString).length - 7, length: 0)) }
+            if scene == "f3-callout-return" { textView.insertNewline(nil) }
+        case "f3-code-return":
+            controls.router.run(.paragraph(.mono(language: "swift")), from: .shortcut)
+            type("let x = 1", into: textView)
+            textView.insertNewline(nil)
+        case "f3-return-long":
+            type("Last line", into: textView)
+            textView.insertNewline(nil)
+            textView.insertNewline(nil)
+        case "f3-table":
+            type("Quote text py", into: textView)
+            controls.router.run(.paragraph(.quote), from: .shortcut)
+            textView.insertNewline(nil); textView.insertNewline(nil)
+            engine.insertTable(NoteTable(texts: [["Head", "B"], ["c", "d"], ["e", "f"]]), replacing: textView.selectedRange(), name: "Insert Table", entering: false)
+            // What AppKit gives a click in the gap above the table, settled
+            // as a real click is.
+            let start = (textView.string as NSString).range(of: "Quote text py").location + 14
+            if let rect = engine.rect(for: NSRange(location: start, length: 1)) {
+                textView.setSelectedRange(NSRange(location: start, length: 0))
+                textView.settleCaretBesideObject(clickedAt: NSPoint(x: rect.minX + 2, y: rect.minY - 2))
+            }
+        default:
+            type("Body text py", into: textView)
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length - 4, length: 0))
+        }
+        engine.history.reset()
+        if long {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if scene == "f3-callout-end" { textView.scrollToEndOfDocument(nil) } else { textView.scrollRangeToVisible(textView.selectedRange()) }
+            }
+        }
+    }
+
     private static func writeCaretSample(controls: NoteFormatControls, textView: NoteEditorTextView) {
         let engine = controls.engine
         let kinds: [NoteParagraphStyle] = [.body, .body, .heading(1), .heading(2), .heading(3), .bullet, .number,
