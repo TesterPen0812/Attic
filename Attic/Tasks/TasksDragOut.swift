@@ -4,13 +4,14 @@ import SwiftUI
 
 /// A drag of tasks out of the panel into another app (owner-approved,
 /// 2026-10-01): an AppKit dragging session carrying `TasksTextExport`'s
-/// text, Markdown and RTF. Always a copy; the panel's data never changes.
+/// text, Markdown and RTF, plus promised text and attachment files for
+/// Finder. Always a copy; the panel's data never changes.
 @MainActor
 enum TasksDragOut {
     static func begin(_ export: TasksTextExport, count: Int, from view: NSView, at location: CGPoint,
                       card: Card? = nil, files: TaskImageFiles = .shared, ended: @escaping () -> Void) {
         guard let window = view.window else { card?.handOff(); card?.settled(); ended(); return }
-        let item = NSDraggingItem(pasteboardWriter: export.dragItem())
+        let item = NSDraggingItem(pasteboardWriter: export.dragWriter())
         // O14-11: the lifted card itself, where it lies, so the hand-off
         // from the panel's lift to the system's drag does not move or
         // change what is under the pointer; without one, a quiet label.
@@ -433,6 +434,9 @@ final class AtticDragReturn {
         let to = CGPoint(x: home.minX - window.frame.minX, y: home.minY - window.frame.minY)
         let from = CGPoint(x: start.minX - window.frame.minX, y: start.minY - window.frame.minY)
         CATransaction.begin()
+        // Only the release-point springs animate. Model writes must not
+        // add an implicit position/bounds action from the hidden overlay.
+        CATransaction.setDisableActions(true)
         CATransaction.setCompletionBlock { [weak self] in
             MainActor.assumeIsolated {
                 // Home: the item takes over the picture's place.

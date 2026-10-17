@@ -526,6 +526,95 @@ final class TasksDragO2Tests: XCTestCase {
         }
     }
 
+    /// The complete native payload, including the task text, is receivable as files.
+    func testFinderCanReceiveEveryTaskDragItemAsAFile() throws {
+        let references = [("Receipt.png", UTType.png), ("Notes.txt", UTType.plainText)].map { name, type in
+            TaskImageReference(id: UUID(), filename: name, digest: "unused", contentTypeIdentifier: type.identifier, byteCount: 1)
+        }
+        let export = TasksTextExport(items: [.init(title: "Expense the trip", files: references)])
+        let attachments = TasksDragOut.attachmentItems(for: export, files: .shared, frame: CGRect(x: 0, y: 0, width: 340, height: 74))
+        let writers: [NSPasteboardWriting] = [export.dragWriter()] + attachments.compactMap { $0.item as? NSPasteboardWriting }
+        let pasteboard = NSPasteboard(name: .init("AtticDragF2-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertTrue(pasteboard.writeObjects(writers))
+        let items = try XCTUnwrap(pasteboard.pasteboardItems)
+        XCTAssertEqual(items.count, 3)
+        XCTAssertEqual(items.first?.string(forType: .string), export.plain)
+        XCTAssertEqual(items.first?.string(forType: TasksTextExport.markdownType), export.markdown)
+        XCTAssertNotNil(items.first?.data(forType: .rtf))
+        XCTAssertTrue(items.allSatisfy { $0.types.contains(.init("com.apple.NSFilePromiseItemMetaData")) },
+                      "Finder must be able to receive the task text as a file alongside every attachment")
+        let receivers = pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver] ?? []
+        XCTAssertEqual(receivers.flatMap(\.fileTypes), [UTType.utf8PlainText.identifier, UTType.png.identifier, UTType.plainText.identifier])
+        XCTAssertEqual(writers.compactMap { $0 as? NSFilePromiseProvider }.count, 3)
+    }
+
+    func testFinderGetsTaskTextAndTwoAttachmentsThroughThePromiseDelegates() async {
+        do {
+            let root = ownedTemporaryDirectory(prefix: "TasksDragF2")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let files = TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
+            let notes = root.appendingPathComponent("Notes.txt")
+            try Data("Hotel and train".utf8).write(to: notes)
+            let references = try await files.importAttachments([try pngFile(in: root), notes], existing: [])
+            let export = TasksTextExport(items: [.init(title: "Expense the trip", due: "Today",
+                subtasks: [.init(title: "Submit receipts", isDone: false)], files: references)])
+            let attachments = TasksDragOut.attachmentItems(for: export, files: files, frame: CGRect(x: 0, y: 0, width: 340, height: 74))
+            let writers: [NSPasteboardWriting] = [export.dragWriter()] + attachments.compactMap { $0.item as? NSPasteboardWriting }
+            let promises = writers.compactMap { $0 as? NSFilePromiseProvider }
+            XCTAssertEqual(promises.count, 3)
+            guard promises.count == 3 else { return }
+            let destination = root.appendingPathComponent("Dropped", isDirectory: true)
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            var delivered: [URL] = []
+            for promise in promises {
+                let delegate = try XCTUnwrap(promise.delegate)
+                let name = delegate.filePromiseProvider(promise, fileNameForType: promise.fileType)
+                let url = destination.appendingPathComponent(name)
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    delegate.filePromiseProvider(promise, writePromiseTo: url) { error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                    }
+                }
+                delivered.append(url)
+            }
+            XCTAssertEqual(delivered.map(\.lastPathComponent), ["Expense the trip.txt", "Receipt.png", "Notes.txt"])
+            XCTAssertEqual(try String(contentsOf: delivered[0], encoding: .utf8), export.plain)
+            for (reference, url) in zip(references, delivered.dropFirst()) {
+                let original = try await XCTUnwrapAsync(try await files.verifiedURL(for: reference))
+                XCTAssertEqual(try Data(contentsOf: url), try Data(contentsOf: original))
+                XCTAssertNotEqual(url.standardizedFileURL, original.standardizedFileURL)
+            }
+        } catch {
+            XCTFail("Promise delivery failed: \(error)")
+        }
+    }
+
+    func testPromisedTaskTextWritesLongTitlesWithoutTruncatingTheirContents() async {
+        do {
+            let root = ownedTemporaryDirectory(prefix: "TasksDragF2Names")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            for title in [String(repeating: "A", count: 600), String(repeating: "🗂️", count: 300),
+                          "e" + String(repeating: "\u{0301}", count: 200)] {
+                let export = TasksTextExport(items: [.init(title: title)])
+                let promise = try XCTUnwrap(export.dragWriter() as? NSFilePromiseProvider)
+                let delegate = try XCTUnwrap(promise.delegate)
+                let name = delegate.filePromiseProvider(promise, fileNameForType: promise.fileType)
+                XCTAssertLessThanOrEqual(name.utf8.count, 255, "A task title is not bounded like an existing filesystem filename")
+                XCTAssertFalse(name.hasPrefix("."), "An oversized grapheme must not leave only a hidden .txt filename")
+                let url = root.appendingPathComponent(name)
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    delegate.filePromiseProvider(promise, writePromiseTo: url) { error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                    }
+                }
+                XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), export.plain)
+            }
+        } catch {
+            XCTFail("Long-title promise could not be written: \(error)")
+        }
+    }
+
     /// Within Attic a task is moved, not copied: its files stay its own.
     func testMovingATaskKeepsItsFiles() async throws {
         let root = ownedTemporaryDirectory(prefix: "TasksDragO2")
@@ -718,6 +807,27 @@ final class RoundD1DragTests: XCTestCase {
                     returning.windowForTesting.orderOut(nil)
                     TasksDragOut.Source.current = nil
                 }
+            }
+        }
+    }
+
+    func testFileReturnUsesOnlyExplicitSpringsWhenItsSizeChanges() throws {
+        try withReturnWindowsOffscreen {
+            let image = NSImage(size: CGSize(width: 240, height: 40))
+            let home = CGRect(x: 1200, y: 700, width: 240, height: 40)
+            let returning = AtticDragReturn(shadowed: nil, plain: image, home: { home }, level: .floating, reduceMotion: false)
+            defer { returning.windowForTesting.orderOut(nil) }
+            CATransaction.flush()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let start = CGRect(x: -900, y: 300, width: 180, height: 30)
+            returning.moved(drawn: start)
+            RunLoop.main.run(until: Date().addingTimeInterval(AtticDragReturn.restDelay + 0.05))
+            let layers = try XCTUnwrap(returning.windowForTesting.contentView?.layer?.sublayers)
+            XCTAssertTrue(layers.allSatisfy { ($0.animationKeys() ?? []).isEmpty }, "Resting placement has no implicit travel or fade")
+            returning.ended(operation: [], drawn: start, done: {})
+            for layer in layers {
+                XCTAssertEqual(Set(layer.animationKeys() ?? []), ["position.x", "position.y", "bounds.size"])
+                XCTAssertEqual((layer.animation(forKey: "bounds.size") as? CASpringAnimation)?.fromValue as? NSValue, NSValue(size: start.size))
             }
         }
     }
