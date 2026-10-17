@@ -1,0 +1,182 @@
+[
+  {
+    "role": "body",
+    "fixture": "typed",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      62,
+      70
+    ]
+  },
+  {
+    "role": "body",
+    "fixture": "wrapped-first",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      62,
+      70
+    ]
+  },
+  {
+    "role": "body",
+    "fixture": "wrapped-middle",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      58,
+      66
+    ]
+  },
+  {
+    "role": "h1",
+    "fixture": "typed",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      68,
+      76
+    ]
+  },
+  {
+    "role": "h1",
+    "fixture": "wrapped-first",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      68,
+      76
+    ]
+  },
+  {
+    "role": "h1",
+    "fixture": "wrapped-middle",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      56,
+      64
+    ]
+  },
+  {
+    "role": "h2",
+    "fixture": "typed",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      66,
+      74
+    ]
+  },
+  {
+    "role": "h2",
+    "fixture": "wrapped-first",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      66,
+      74
+    ]
+  },
+  {
+    "role": "h2",
+    "fixture": "wrapped-middle",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      55,
+      63
+    ]
+  },
+  {
+    "role": "h3",
+    "fixture": "typed",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      64,
+      72
+    ]
+  },
+  {
+    "role": "h3",
+    "fixture": "wrapped-first",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      64,
+      72
+    ]
+  },
+  {
+    "role": "h3",
+    "fixture": "wrapped-middle",
+    "changedInkPixelsOutsideCaretStrip": 0,
+    "comparedPixelRect": [
+      0,
+      0,
+      520,
+      480
+    ],
+    "excludedX": [
+      59,
+      67
+    ]
+  }
+]

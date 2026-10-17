@@ -1,0 +1,14 @@
+Test Suite 'AtticTests.xctest' passed at 2026-10-17 20:28:12.033.
+	 Executed 25 tests, with 0 failures (0 unexpected) in 37.728 (37.737) seconds
+Test Suite 'Selected tests' passed at 2026-10-17 20:28:12.033.
+	 Executed 25 tests, with 0 failures (0 unexpected) in 37.728 (37.738) seconds
+2026-10-17 20:28:12.310 xcodebuild[5032:9244325] [MT] IDETestOperationsObserverDebug: 39.198 elapsed -- Testing started completed.
+2026-10-17 20:28:12.310 xcodebuild[5032:9244325] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-10-17 20:28:12.310 xcodebuild[5032:9244325] [MT] IDETestOperationsObserverDebug: 39.198 sec, +39.198 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/taha/Projects/attic/attic-px-d2/.build/d3-verified.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started

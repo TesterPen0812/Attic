@@ -1,0 +1,2522 @@
+{
+  "d3-body-A-fixed-empty.png": {
+    "exportedFile": "173978A1-55B9-4D2E-8512-FB4268782DEE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.331
+  },
+  "d3-body-A-fixed-isolated-empty.png": {
+    "exportedFile": "D77E43AF-57ED-4F2C-9BED-0631F4582094.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.414
+  },
+  "d3-body-A-fixed-selection.png": {
+    "exportedFile": "63422262-2819-407A-8003-6337D2C2689D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.625
+  },
+  "d3-body-A-fixed-trailing-empty.png": {
+    "exportedFile": "615D4B96-6933-4498-BFB9-68F6807618C7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.494
+  },
+  "d3-body-A-fixed-typed.png": {
+    "exportedFile": "BA6425F1-527E-42A7-8155-70F74F2BB0DE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.254
+  },
+  "d3-body-A-fixed-wrapped-first.png": {
+    "exportedFile": "26BCBF8B-41F1-4254-80AD-9C7ACD855D1B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.578
+  },
+  "d3-body-A-fixed-wrapped-middle.png": {
+    "exportedFile": "20A79677-2FB9-46DB-A17C-EDAA4E8ECF57.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.671
+  },
+  "d3-body-B-calibrated-empty.png": {
+    "exportedFile": "1DEA8E5D-C961-4AFE-938F-B7A722828F9B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.333
+  },
+  "d3-body-B-calibrated-isolated-empty.png": {
+    "exportedFile": "793C5B96-CAEF-4A0E-82F1-7BFC48ECFC2B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.406
+  },
+  "d3-body-B-calibrated-selection.png": {
+    "exportedFile": "29B58819-1F4E-4E4A-A17D-CE13B5314686.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.609
+  },
+  "d3-body-B-calibrated-trailing-empty.png": {
+    "exportedFile": "DA522150-95C3-4D56-AD59-E5F6E91FC29D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.48
+  },
+  "d3-body-B-calibrated-typed.png": {
+    "exportedFile": "2EFBAF74-0277-4E71-A035-CAE4C4F6FAEA.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.255
+  },
+  "d3-body-B-calibrated-wrapped-first.png": {
+    "exportedFile": "3003F61F-914F-46D7-BB8A-2FA2690D53D1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.562
+  },
+  "d3-body-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "7E841491-44A4-4BC9-861C-9969D92689C3.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.656
+  },
+  "d3-body-B-spacing-empty.png": {
+    "exportedFile": "1CF83787-0B12-4488-A2B4-871B59AE540F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.838
+  },
+  "d3-body-B-spacing-isolated-empty.png": {
+    "exportedFile": "9E3B735B-AEB9-4B97-83CC-5C384E7ADAE9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.916
+  },
+  "d3-body-B-spacing-selection.png": {
+    "exportedFile": "0D7B56BD-3EE5-4284-AF93-0A18A0AB4207.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.123
+  },
+  "d3-body-B-spacing-trailing-empty.png": {
+    "exportedFile": "63C4E353-BCE1-40D2-BC83-64A08BD12E7A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.993
+  },
+  "d3-body-B-spacing-typed.png": {
+    "exportedFile": "00D28789-F806-4DA0-ABFA-16418EF6E54B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265263.757
+  },
+  "d3-body-B-spacing-wrapped-first.png": {
+    "exportedFile": "873881F1-E56A-48C6-83C8-441B44681E4C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.075
+  },
+  "d3-body-B-spacing-wrapped-middle.png": {
+    "exportedFile": "781A6072-7A1C-4632-8D3C-BC77E109019A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.167
+  },
+  "d3-body-C-baseline-empty.png": {
+    "exportedFile": "BE1F32BE-7DDD-4C04-8483-D12149AD3D58.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.832
+  },
+  "d3-body-C-baseline-isolated-empty.png": {
+    "exportedFile": "F3AEC949-3E0E-4A4B-9B01-201BA9B0437C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.916
+  },
+  "d3-body-C-baseline-selection.png": {
+    "exportedFile": "A928BCCB-153D-4E92-B9B9-6C6AD3BC9DBF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.125
+  },
+  "d3-body-C-baseline-trailing-empty.png": {
+    "exportedFile": "9B965CA8-2967-4688-8223-F44F995DD7F2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.996
+  },
+  "d3-body-C-baseline-typed.png": {
+    "exportedFile": "3293B9C5-5660-470D-AB0C-BA21D3448F78.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265264.751
+  },
+  "d3-body-C-baseline-wrapped-first.png": {
+    "exportedFile": "12FEFA7E-1F30-40C1-B150-301249329310.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.078
+  },
+  "d3-body-C-baseline-wrapped-middle.png": {
+    "exportedFile": "7D7C5D7F-66E4-4EFC-A049-2CEE257CDA59.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.177
+  },
+  "d3-body-D-multiple-empty.png": {
+    "exportedFile": "B5352062-A829-4ECE-A1F8-6D63F7635D06.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.349
+  },
+  "d3-body-D-multiple-isolated-empty.png": {
+    "exportedFile": "2B58E0F9-B3D9-4FDF-B72D-EF03E20C3A0F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.431
+  },
+  "d3-body-D-multiple-selection.png": {
+    "exportedFile": "65F31C1F-3040-43AC-8230-6A21B8CB24F0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.646
+  },
+  "d3-body-D-multiple-trailing-empty.png": {
+    "exportedFile": "9817F93A-FFC6-4E3D-87DC-FDE316252A78.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.516
+  },
+  "d3-body-D-multiple-typed.png": {
+    "exportedFile": "6DBDCD12-9ADD-4CAA-87A6-101FCD19E1F7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.266
+  },
+  "d3-body-D-multiple-wrapped-first.png": {
+    "exportedFile": "2744CD5E-C44C-4C07-8779-44C3586C6E03.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.601
+  },
+  "d3-body-D-multiple-wrapped-middle.png": {
+    "exportedFile": "34A3F5D0-9A9B-48F5-9577-73BCCAF8F771.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.69
+  },
+  "d3-body-E-before-empty.png": {
+    "exportedFile": "7DCC54B9-A989-40B5-BFE7-1D71D29056BB.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.932
+  },
+  "d3-body-E-before-isolated-empty.png": {
+    "exportedFile": "99FD67B0-2E59-4283-8133-D8F28FBFD343.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.007
+  },
+  "d3-body-E-before-selection.png": {
+    "exportedFile": "C505626E-C66F-4B5D-8CEC-D0E476A28CB3.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.216
+  },
+  "d3-body-E-before-trailing-empty.png": {
+    "exportedFile": "24318286-DCD4-49BA-898B-87E2EC5111DE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.09
+  },
+  "d3-body-E-before-typed.png": {
+    "exportedFile": "8F0AB19F-B578-41B1-958F-CC208DEB438B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.843
+  },
+  "d3-body-E-before-wrapped-first.png": {
+    "exportedFile": "03F33106-19F4-476E-A31A-93EC32799080.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.174
+  },
+  "d3-body-E-before-wrapped-middle.png": {
+    "exportedFile": "700230C9-D116-4E33-86C9-EF91B1D91A85.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.264
+  },
+  "d3-body-E-fixed-spacing-empty.png": {
+    "exportedFile": "FB616FCB-64D7-4B4F-949A-5F7CFBDAD554.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.882
+  },
+  "d3-body-E-fixed-spacing-isolated-empty.png": {
+    "exportedFile": "E2BC68A3-EBB5-4BD0-9122-B6B5CCBFAFC5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.965
+  },
+  "d3-body-E-fixed-spacing-selection.png": {
+    "exportedFile": "4E5E14C3-44E9-4B81-A92E-633773887100.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.171
+  },
+  "d3-body-E-fixed-spacing-trailing-empty.png": {
+    "exportedFile": "29770C8C-AC19-4B0C-B922-27AC4DE647F2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.044
+  },
+  "d3-body-E-fixed-spacing-typed.png": {
+    "exportedFile": "BD93B964-C996-4F38-8C53-055F0EFA0749.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.799
+  },
+  "d3-body-E-fixed-spacing-wrapped-first.png": {
+    "exportedFile": "462B98FE-C4A9-41AF-82A7-56CC6384887C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.126
+  },
+  "d3-body-E-fixed-spacing-wrapped-middle.png": {
+    "exportedFile": "065CF440-AC94-4118-841C-E56292673A07.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.217
+  },
+  "d3-body-E-hybrid-empty.png": {
+    "exportedFile": "9FD89A1C-D07C-4E4D-9EC5-6D8362BFE5E0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.406
+  },
+  "d3-body-E-hybrid-isolated-empty.png": {
+    "exportedFile": "81E48C97-6480-4857-BAA5-C9C65A816514.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.491
+  },
+  "d3-body-E-hybrid-selection.png": {
+    "exportedFile": "38F8EEFF-745F-402E-8A44-F6348CEABCF1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.706
+  },
+  "d3-body-E-hybrid-trailing-empty.png": {
+    "exportedFile": "BDE69E0C-D258-4138-9762-70BD60A0CAE2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.572
+  },
+  "d3-body-E-hybrid-typed.png": {
+    "exportedFile": "2E29D9B5-9E04-4CC1-BCAA-6D17413BCB70.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.331
+  },
+  "d3-body-E-hybrid-wrapped-first.png": {
+    "exportedFile": "8003C77D-FBCC-4371-B29B-DF6DAEC6D3C6.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.659
+  },
+  "d3-body-E-hybrid-wrapped-middle.png": {
+    "exportedFile": "1B61B0B3-941C-48C3-9616-54D51623BD8A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.752
+  },
+  "d3-body-E-natural-baseline-empty.png": {
+    "exportedFile": "E6027E17-5793-46FB-BCA3-1B3E617F6EC1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.907
+  },
+  "d3-body-E-natural-baseline-isolated-empty.png": {
+    "exportedFile": "C48C6B78-A53D-4CE4-B9A1-3645ED80F088.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.989
+  },
+  "d3-body-E-natural-baseline-selection.png": {
+    "exportedFile": "857CE1EB-9900-48E5-A33D-8838A5844BB2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.195
+  },
+  "d3-body-E-natural-baseline-trailing-empty.png": {
+    "exportedFile": "25223E58-C9AC-4E7C-A3FF-4B42D3C88EC9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.07
+  },
+  "d3-body-E-natural-baseline-typed.png": {
+    "exportedFile": "1CB0E148-3744-4C66-926C-FB936986EF76.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.822
+  },
+  "d3-body-E-natural-baseline-wrapped-first.png": {
+    "exportedFile": "AFBDA181-C0EF-4915-AA4F-B7F3FE8F6766.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.151
+  },
+  "d3-body-E-natural-baseline-wrapped-middle.png": {
+    "exportedFile": "E09C99E5-877D-4EF9-B60F-2B2A750A2C04.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265268.243
+  },
+  "d3-body-E-no-leading-empty.png": {
+    "exportedFile": "6297CD92-BEA1-47FF-A431-E4ACE2F1D716.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.865
+  },
+  "d3-body-E-no-leading-isolated-empty.png": {
+    "exportedFile": "313835C3-EDFA-4ECA-8A4C-FB3E7B436EF2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.947
+  },
+  "d3-body-E-no-leading-selection.png": {
+    "exportedFile": "16BA1F12-9587-4A56-9A5D-324124CD2A6C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.155
+  },
+  "d3-body-E-no-leading-trailing-empty.png": {
+    "exportedFile": "1D75A759-88EC-459F-A2CB-38FB99EBE6D6.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.026
+  },
+  "d3-body-E-no-leading-typed.png": {
+    "exportedFile": "5EFBD7F4-4514-43FB-9C18-55DA83DE958C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265265.784
+  },
+  "d3-body-E-no-leading-wrapped-first.png": {
+    "exportedFile": "7F0667A1-8BF8-49AD-8C92-3DCE4A13B94C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.109
+  },
+  "d3-body-E-no-leading-wrapped-middle.png": {
+    "exportedFile": "37577F0B-A048-40BE-B142-935939A3091D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.199
+  },
+  "d3-body-E-paragraph-empty.png": {
+    "exportedFile": "C9107870-A535-46F9-B92D-451A3D8F5C84.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.367
+  },
+  "d3-body-E-paragraph-isolated-empty.png": {
+    "exportedFile": "C9B0F8E2-6C0D-46ED-93BC-ACF5059E04B2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.449
+  },
+  "d3-body-E-paragraph-selection.png": {
+    "exportedFile": "69767A70-15D0-4AFA-BBDF-D39FE4CF7AD1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.659
+  },
+  "d3-body-E-paragraph-trailing-empty.png": {
+    "exportedFile": "7CB1A0F3-0F4D-4CDB-9531-24D01924B052.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.527
+  },
+  "d3-body-E-paragraph-typed.png": {
+    "exportedFile": "F13E3189-9A1F-4EAF-8FBB-C88482B4623D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.29
+  },
+  "d3-body-E-paragraph-wrapped-first.png": {
+    "exportedFile": "451DA42A-7400-437A-8AF3-73BA429DF396.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.612
+  },
+  "d3-body-E-paragraph-wrapped-middle.png": {
+    "exportedFile": "42A3003B-C278-4C9C-90FC-8EE3E06FB7ED.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265266.704
+  },
+  "d3-body-E-shell-empty.png": {
+    "exportedFile": "DEC0F055-04D6-451F-ACB7-82023EE24BFF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.427
+  },
+  "d3-body-E-shell-isolated-empty.png": {
+    "exportedFile": "74485BDA-2F24-452D-9446-C0E352568ED8.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.508
+  },
+  "d3-body-E-shell-selection.png": {
+    "exportedFile": "422F8284-DBE6-4ED1-89E4-D40419B1A3E1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.71
+  },
+  "d3-body-E-shell-trailing-empty.png": {
+    "exportedFile": "328CF675-97D8-4B81-90A6-2E3ECC7B7052.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.586
+  },
+  "d3-body-E-shell-typed.png": {
+    "exportedFile": "261FC915-BB67-49CE-9D59-4DADCACDA270.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.351
+  },
+  "d3-body-E-shell-wrapped-first.png": {
+    "exportedFile": "ABEED946-A896-4AA2-B8CF-43880EC42153.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.669
+  },
+  "d3-body-E-shell-wrapped-middle.png": {
+    "exportedFile": "541D03A6-008F-42FF-A737-0140F5C2245D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.756
+  },
+  "d3-body-E-typographic-empty.png": {
+    "exportedFile": "29471996-60C3-4A85-97CD-BDFF367B592E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.39
+  },
+  "d3-body-E-typographic-isolated-empty.png": {
+    "exportedFile": "6EF70A6A-5B68-4F36-B0CD-9ACDF0E52A62.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.471
+  },
+  "d3-body-E-typographic-selection.png": {
+    "exportedFile": "595EA404-0AC4-4D92-80DD-812D2D7E8E58.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.684
+  },
+  "d3-body-E-typographic-trailing-empty.png": {
+    "exportedFile": "24AD7F41-6DA7-4997-8CE6-5726034185CD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.553
+  },
+  "d3-body-E-typographic-typed.png": {
+    "exportedFile": "A9289ECD-7879-4BD6-9639-3B79E0F7656F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.307
+  },
+  "d3-body-E-typographic-wrapped-first.png": {
+    "exportedFile": "18B13D10-4642-43DC-BA65-3482AA4F563C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.638
+  },
+  "d3-body-E-typographic-wrapped-middle.png": {
+    "exportedFile": "B1FB7BC5-2EE3-4F35-A60C-806E0B2BEECE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265267.729
+  },
+  "d3-body-F-default-empty.png": {
+    "exportedFile": "CF30DCC3-8B72-4DAE-B29D-389A31433B37.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.933
+  },
+  "d3-body-F-default-isolated-empty.png": {
+    "exportedFile": "E380D8F4-67EB-4F94-8F46-C3D2F3D339CD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.012
+  },
+  "d3-body-F-default-selection.png": {
+    "exportedFile": "BC009B92-0B53-4655-BE8A-E3373069E3FF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.226
+  },
+  "d3-body-F-default-trailing-empty.png": {
+    "exportedFile": "68B0C2D0-D050-4C58-9C56-5DD4B5E519C0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.098
+  },
+  "d3-body-F-default-typed.png": {
+    "exportedFile": "F00AF156-F35A-4BD6-BD9E-812823C2C086.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265269.849
+  },
+  "d3-body-F-default-wrapped-first.png": {
+    "exportedFile": "6331ACCB-FBE9-4EBE-A014-839CC7C25824.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.18
+  },
+  "d3-body-F-default-wrapped-middle.png": {
+    "exportedFile": "CB48E31A-5EC7-4701-9BD9-FD2DA79D653D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.271
+  },
+  "d3-h1-A-fixed-empty.png": {
+    "exportedFile": "EB9083B2-1B87-4675-8DC8-8D84FA3CB7AD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.48
+  },
+  "d3-h1-A-fixed-isolated-empty.png": {
+    "exportedFile": "3C740714-9A09-4D4D-BC3A-1100DBAF8EFC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.564
+  },
+  "d3-h1-A-fixed-selection.png": {
+    "exportedFile": "8994F094-5CED-4275-9A1B-5D5AD42240AD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.78
+  },
+  "d3-h1-A-fixed-trailing-empty.png": {
+    "exportedFile": "60942547-24D2-425F-AB4E-159EDCED9B7C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.646
+  },
+  "d3-h1-A-fixed-typed.png": {
+    "exportedFile": "440FE8D1-4C9A-4D57-B587-6104CF198B93.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.4
+  },
+  "d3-h1-A-fixed-wrapped-first.png": {
+    "exportedFile": "A4D1D094-A130-4E7B-9163-6F1CB9B5EB13.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.734
+  },
+  "d3-h1-A-fixed-wrapped-middle.png": {
+    "exportedFile": "A2EC0217-F0D3-4676-8879-43EC1E1BE9EB.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.828
+  },
+  "d3-h1-B-calibrated-empty.png": {
+    "exportedFile": "FE67912C-19BF-4174-B9C3-4FE4C1B0199F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.509
+  },
+  "d3-h1-B-calibrated-isolated-empty.png": {
+    "exportedFile": "A18EFE91-D282-4902-91E3-7C642756EC89.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.583
+  },
+  "d3-h1-B-calibrated-selection.png": {
+    "exportedFile": "D163E358-9237-4B39-BA3D-E4A43D722BAE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.79
+  },
+  "d3-h1-B-calibrated-trailing-empty.png": {
+    "exportedFile": "0FCFE317-4B75-42E9-969F-CBA608E21C86.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.661
+  },
+  "d3-h1-B-calibrated-typed.png": {
+    "exportedFile": "8B17D94D-E9E4-44E7-AC03-D13EDE5487F5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.435
+  },
+  "d3-h1-B-calibrated-wrapped-first.png": {
+    "exportedFile": "F6CDAE93-CDEE-4E5E-BF79-9E6869A798F8.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.748
+  },
+  "d3-h1-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "CC24D017-1FC0-47A3-9DAD-373567AFEC1A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.838
+  },
+  "d3-h1-B-spacing-empty.png": {
+    "exportedFile": "410A85DB-8971-44CD-BA49-CF28973D65C3.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.998
+  },
+  "d3-h1-B-spacing-isolated-empty.png": {
+    "exportedFile": "261567D9-3F07-4E61-A256-B71D21E8B8CF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.082
+  },
+  "d3-h1-B-spacing-selection.png": {
+    "exportedFile": "5494E6EE-B717-4D7E-89FA-72293B9353A0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.302
+  },
+  "d3-h1-B-spacing-trailing-empty.png": {
+    "exportedFile": "F1A14D11-F928-44FC-830C-02391D372B76.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.165
+  },
+  "d3-h1-B-spacing-typed.png": {
+    "exportedFile": "3C25C9DF-2126-47FF-B02C-178D4BF72019.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265270.915
+  },
+  "d3-h1-B-spacing-wrapped-first.png": {
+    "exportedFile": "CD59777D-3EC0-4881-9B23-15563EABD4F4.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.254
+  },
+  "d3-h1-B-spacing-wrapped-middle.png": {
+    "exportedFile": "58CFC94D-E337-4B82-B58F-EF464BCF4083.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.346
+  },
+  "d3-h1-C-baseline-empty.png": {
+    "exportedFile": "A0E4F07A-96EB-40A0-AE4B-D0FB6F1504D9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.009
+  },
+  "d3-h1-C-baseline-isolated-empty.png": {
+    "exportedFile": "9854871D-FC1B-44C9-B990-3934717DB930.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.088
+  },
+  "d3-h1-C-baseline-selection.png": {
+    "exportedFile": "D71E37B1-D6A6-4D6B-A39C-B91863514768.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.302
+  },
+  "d3-h1-C-baseline-trailing-empty.png": {
+    "exportedFile": "86ACF6ED-9B51-427F-BD7C-0A6B57BCF6B2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.174
+  },
+  "d3-h1-C-baseline-typed.png": {
+    "exportedFile": "C80A47E9-7A59-4900-9CB8-FBDE7D9A455F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265271.932
+  },
+  "d3-h1-C-baseline-wrapped-first.png": {
+    "exportedFile": "4DB568C1-789E-4E11-BD11-A96C93C6EC39.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.258
+  },
+  "d3-h1-C-baseline-wrapped-middle.png": {
+    "exportedFile": "5DD2D432-708A-4AF0-9383-0906C29876AE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.345
+  },
+  "d3-h1-D-multiple-empty.png": {
+    "exportedFile": "CA707F86-75C2-422C-AED1-BE8F82CC17CA.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.515
+  },
+  "d3-h1-D-multiple-isolated-empty.png": {
+    "exportedFile": "E2888A5F-FB50-4861-BC45-92ECF9D1D683.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.595
+  },
+  "d3-h1-D-multiple-selection.png": {
+    "exportedFile": "92D68EF3-9B93-4BF1-90B4-1CD465018706.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.803
+  },
+  "d3-h1-D-multiple-trailing-empty.png": {
+    "exportedFile": "DE37F841-6D30-4828-8C95-BF4551176C49.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.676
+  },
+  "d3-h1-D-multiple-typed.png": {
+    "exportedFile": "2D0AA6D4-C11B-48F9-A45D-5DEF7755CFC9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.433
+  },
+  "d3-h1-D-multiple-wrapped-first.png": {
+    "exportedFile": "FAB13232-2248-47DA-80E3-B2809378CA71.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.758
+  },
+  "d3-h1-D-multiple-wrapped-middle.png": {
+    "exportedFile": "8653E4CE-0A68-4F54-86ED-89A7AC7DB8F0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.85
+  },
+  "d3-h1-E-before-empty.png": {
+    "exportedFile": "11E6C42C-1E8F-4C2B-8B56-8CF80B67B7F9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.052
+  },
+  "d3-h1-E-before-isolated-empty.png": {
+    "exportedFile": "357A6487-307E-412A-8656-1D6239359D76.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.124
+  },
+  "d3-h1-E-before-selection.png": {
+    "exportedFile": "B6AC4537-826B-448A-92A5-A5383848B8E2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.332
+  },
+  "d3-h1-E-before-trailing-empty.png": {
+    "exportedFile": "B1EFB0E8-7DE1-4880-9507-D3D261F3F96B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.202
+  },
+  "d3-h1-E-before-typed.png": {
+    "exportedFile": "9BB5F468-7D96-40F7-AACE-5C0009AB4B83.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.974
+  },
+  "d3-h1-E-before-wrapped-first.png": {
+    "exportedFile": "C0C28BF4-766B-4781-AD5B-7198C0314AAC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.284
+  },
+  "d3-h1-E-before-wrapped-middle.png": {
+    "exportedFile": "2F8D4338-D55D-4A39-A2B2-7EEC6C8E81E7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.374
+  },
+  "d3-h1-E-fixed-spacing-empty.png": {
+    "exportedFile": "F1E6327B-C593-4D6F-A2A3-5EA0FF552436.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.047
+  },
+  "d3-h1-E-fixed-spacing-isolated-empty.png": {
+    "exportedFile": "82E6CDBC-032D-4E89-9873-F5517956E3EE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.128
+  },
+  "d3-h1-E-fixed-spacing-selection.png": {
+    "exportedFile": "57FEA8C0-11E1-416B-B309-1AC68F13EDA8.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.331
+  },
+  "d3-h1-E-fixed-spacing-trailing-empty.png": {
+    "exportedFile": "28093BD4-A518-46B2-A084-4F38EEBFA6FC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.204
+  },
+  "d3-h1-E-fixed-spacing-typed.png": {
+    "exportedFile": "7C78A800-7FC0-4707-8EC9-4CCBE5CBF838.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.969
+  },
+  "d3-h1-E-fixed-spacing-wrapped-first.png": {
+    "exportedFile": "AA2370D3-E6A9-41BC-9C65-584F3D8A0EAC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.291
+  },
+  "d3-h1-E-fixed-spacing-wrapped-middle.png": {
+    "exportedFile": "FB030478-917C-4F15-8493-826FCD370462.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.372
+  },
+  "d3-h1-E-hybrid-empty.png": {
+    "exportedFile": "78DE9A39-7368-479D-9B04-87F53329D494.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.54
+  },
+  "d3-h1-E-hybrid-isolated-empty.png": {
+    "exportedFile": "F6A8343B-D475-4B78-A8A2-F41A9BAC4A57.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.62
+  },
+  "d3-h1-E-hybrid-selection.png": {
+    "exportedFile": "589548D1-6C27-4833-9A80-56D168ADE803.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.835
+  },
+  "d3-h1-E-hybrid-trailing-empty.png": {
+    "exportedFile": "B246566E-6120-4EAF-9407-7E80E01966CC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.703
+  },
+  "d3-h1-E-hybrid-typed.png": {
+    "exportedFile": "4F613B1E-8E59-4626-9C4E-FA0183CE0609.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.457
+  },
+  "d3-h1-E-hybrid-wrapped-first.png": {
+    "exportedFile": "4934ED43-8688-475D-B6FF-2051F8D8CD11.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.79
+  },
+  "d3-h1-E-hybrid-wrapped-middle.png": {
+    "exportedFile": "97C812C0-CCA2-4D33-88DD-DF70C70B0AA1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.884
+  },
+  "d3-h1-E-natural-baseline-empty.png": {
+    "exportedFile": "2253A734-E576-421E-B5E8-360079A61B0A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.03
+  },
+  "d3-h1-E-natural-baseline-isolated-empty.png": {
+    "exportedFile": "4C4E285A-AA5C-4993-A53C-ABDA51C1177D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.113
+  },
+  "d3-h1-E-natural-baseline-selection.png": {
+    "exportedFile": "DAC12C14-CCFA-4B6C-B340-A9E8926BBDA7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.326
+  },
+  "d3-h1-E-natural-baseline-trailing-empty.png": {
+    "exportedFile": "8560ED09-9B31-42CF-90BE-139BA6747428.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.194
+  },
+  "d3-h1-E-natural-baseline-typed.png": {
+    "exportedFile": "7EDF725B-45F6-40A7-8492-11C1877F9067.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.95
+  },
+  "d3-h1-E-natural-baseline-wrapped-first.png": {
+    "exportedFile": "A1FFDF18-E61D-4CA9-9CBD-B5ECE552CE21.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.279
+  },
+  "d3-h1-E-natural-baseline-wrapped-middle.png": {
+    "exportedFile": "1B3E95AE-D3CF-4121-875A-922E362C3471.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265275.371
+  },
+  "d3-h1-E-no-leading-empty.png": {
+    "exportedFile": "1FBBFFA9-EDB8-4A8F-B19B-D2A88AFFF9E1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.018
+  },
+  "d3-h1-E-no-leading-isolated-empty.png": {
+    "exportedFile": "29D035D6-CEC8-426F-95F4-366893A36BA2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.099
+  },
+  "d3-h1-E-no-leading-selection.png": {
+    "exportedFile": "D01FE64E-DEB7-4C5A-90D7-4145F92C4AC3.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.309
+  },
+  "d3-h1-E-no-leading-trailing-empty.png": {
+    "exportedFile": "C0AFFA12-EE59-49BE-BE8F-86EE07686B39.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.181
+  },
+  "d3-h1-E-no-leading-typed.png": {
+    "exportedFile": "763807E7-B3BE-4291-86C0-0BFF853C98D6.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265272.939
+  },
+  "d3-h1-E-no-leading-wrapped-first.png": {
+    "exportedFile": "D4F1D5A5-6193-4798-BC2C-F8B2B4A7A7F1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.264
+  },
+  "d3-h1-E-no-leading-wrapped-middle.png": {
+    "exportedFile": "18C65FF0-9176-4991-9634-31436D3F4CD1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.356
+  },
+  "d3-h1-E-paragraph-empty.png": {
+    "exportedFile": "B9E75FAF-4C9C-474D-9895-D10F3E99C4C0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.531
+  },
+  "d3-h1-E-paragraph-isolated-empty.png": {
+    "exportedFile": "E5F6ECC7-0625-4C4D-9D4F-04BB63F14EEC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.612
+  },
+  "d3-h1-E-paragraph-selection.png": {
+    "exportedFile": "DFFDAC9A-568B-4A29-AAAC-7015FF70215C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.826
+  },
+  "d3-h1-E-paragraph-trailing-empty.png": {
+    "exportedFile": "80FB1A5B-6C34-434A-96C0-A057CF815365.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.695
+  },
+  "d3-h1-E-paragraph-typed.png": {
+    "exportedFile": "AACD124B-457D-40E6-959B-3A5F2F79E1DD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.449
+  },
+  "d3-h1-E-paragraph-wrapped-first.png": {
+    "exportedFile": "6CBE2BD1-FA8B-469E-93E4-A0FA81CCDFCA.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.781
+  },
+  "d3-h1-E-paragraph-wrapped-middle.png": {
+    "exportedFile": "733C0095-5B6B-4BA2-96C2-964637AFEE13.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265273.875
+  },
+  "d3-h1-E-shell-empty.png": {
+    "exportedFile": "6FBA9F03-C56B-4411-AE6E-EBF7FA58CBB4.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.545
+  },
+  "d3-h1-E-shell-isolated-empty.png": {
+    "exportedFile": "32909BCB-83A7-4BEC-B618-FBEBB4EEDBAF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.635
+  },
+  "d3-h1-E-shell-selection.png": {
+    "exportedFile": "72CD593F-F54F-47C3-A91C-B977EE1AB763.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.848
+  },
+  "d3-h1-E-shell-trailing-empty.png": {
+    "exportedFile": "F33C2959-1921-404A-A9D9-CF86D8E6DE1E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.715
+  },
+  "d3-h1-E-shell-typed.png": {
+    "exportedFile": "A68A4ECC-3799-4FE4-9706-98CDCB7D2F12.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.468
+  },
+  "d3-h1-E-shell-wrapped-first.png": {
+    "exportedFile": "408931FA-3742-42E9-B9C4-514BFE7920BC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.8
+  },
+  "d3-h1-E-shell-wrapped-middle.png": {
+    "exportedFile": "D2B39D7E-8446-4CB5-A669-C0786AC35357.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.898
+  },
+  "d3-h1-E-typographic-empty.png": {
+    "exportedFile": "676367ED-31D3-4431-BEB3-E417ABBED66A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.532
+  },
+  "d3-h1-E-typographic-isolated-empty.png": {
+    "exportedFile": "D5BC7C0B-9FAC-4BFA-BF8D-FB698D15109D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.607
+  },
+  "d3-h1-E-typographic-selection.png": {
+    "exportedFile": "2EF9AD44-31F8-4B56-AE4E-3EB2240490C5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.812
+  },
+  "d3-h1-E-typographic-trailing-empty.png": {
+    "exportedFile": "88808444-20AF-4BED-B8E5-AD950979427E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.689
+  },
+  "d3-h1-E-typographic-typed.png": {
+    "exportedFile": "564CF570-3F65-4B7E-9D45-6FC1C5F1206A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.46
+  },
+  "d3-h1-E-typographic-wrapped-first.png": {
+    "exportedFile": "EA5EC839-8748-466F-A8BC-68CA23A5A9D1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.77
+  },
+  "d3-h1-E-typographic-wrapped-middle.png": {
+    "exportedFile": "6FB3A6F1-188F-4FEA-9693-A58DA8742703.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265274.858
+  },
+  "d3-h1-F-default-empty.png": {
+    "exportedFile": "AD2F257F-588F-4161-A136-A3B593EE044C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.075
+  },
+  "d3-h1-F-default-isolated-empty.png": {
+    "exportedFile": "2B9AB6E8-3F50-4A0F-B222-03ED9C6F1ED1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.157
+  },
+  "d3-h1-F-default-selection.png": {
+    "exportedFile": "FEC202F5-2FE1-4CD8-9748-AD82FD558392.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.366
+  },
+  "d3-h1-F-default-trailing-empty.png": {
+    "exportedFile": "9790E3E7-AE24-4684-8F4A-A8FB03C37A42.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.237
+  },
+  "d3-h1-F-default-typed.png": {
+    "exportedFile": "8F15B7FD-1CD5-4B65-983D-AADCB963E31D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265276.993
+  },
+  "d3-h1-F-default-wrapped-first.png": {
+    "exportedFile": "DEB9A149-5B00-45F4-B0A8-AC75A9384151.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.325
+  },
+  "d3-h1-F-default-wrapped-middle.png": {
+    "exportedFile": "E5114584-117E-4BA3-A9AD-8E3D54BA4512.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.409
+  },
+  "d3-h2-A-fixed-empty.png": {
+    "exportedFile": "96D4B1E7-FEA1-4A87-9A97-AA9D072A0C37.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.625
+  },
+  "d3-h2-A-fixed-isolated-empty.png": {
+    "exportedFile": "33D02AB7-6F8C-4CC6-A8C7-96312D9AC204.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.706
+  },
+  "d3-h2-A-fixed-selection.png": {
+    "exportedFile": "676DAD9F-86DA-4CE0-BB2C-91964F8D030A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.918
+  },
+  "d3-h2-A-fixed-trailing-empty.png": {
+    "exportedFile": "1D42DF2C-903C-4F92-9D85-A7931F025335.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.786
+  },
+  "d3-h2-A-fixed-typed.png": {
+    "exportedFile": "2851D096-3177-4C3D-9E53-33BCA05A6BC9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.541
+  },
+  "d3-h2-A-fixed-wrapped-first.png": {
+    "exportedFile": "ADD291D7-26A8-4E69-9471-9EC64AF7A5F3.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.871
+  },
+  "d3-h2-A-fixed-wrapped-middle.png": {
+    "exportedFile": "96A8512E-B5AB-45C7-B166-7FE1E608EFC4.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265277.963
+  },
+  "d3-h2-B-calibrated-empty.png": {
+    "exportedFile": "2A55663C-8402-4BD8-91C1-5823BB3EBF53.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.627
+  },
+  "d3-h2-B-calibrated-isolated-empty.png": {
+    "exportedFile": "1ADA6DCF-8EBB-4FF8-A2C2-BF202A44A48B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.699
+  },
+  "d3-h2-B-calibrated-selection.png": {
+    "exportedFile": "CA19CFA2-1217-4310-AA6F-37F3AF6D0E7F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.904
+  },
+  "d3-h2-B-calibrated-trailing-empty.png": {
+    "exportedFile": "32050D9E-8AA9-457A-9A56-9C784D481BBC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.774
+  },
+  "d3-h2-B-calibrated-typed.png": {
+    "exportedFile": "8DFD452D-4EC7-4722-949F-B88AD03D7E8F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.554
+  },
+  "d3-h2-B-calibrated-wrapped-first.png": {
+    "exportedFile": "6FC01CA5-EB8E-46FB-8111-8834FDC37325.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.857
+  },
+  "d3-h2-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "9212B05B-9391-4BC8-8333-E168F14E82AF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.949
+  },
+  "d3-h2-B-spacing-empty.png": {
+    "exportedFile": "AB1FD3C8-5CB9-4812-B097-E7FBE4243AE9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.131
+  },
+  "d3-h2-B-spacing-isolated-empty.png": {
+    "exportedFile": "DEC4B5B1-E761-4C6A-9AF3-7EB1D0A0179E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.21
+  },
+  "d3-h2-B-spacing-selection.png": {
+    "exportedFile": "B0E17CA6-7085-4993-AC68-E6D7A0402D41.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.422
+  },
+  "d3-h2-B-spacing-trailing-empty.png": {
+    "exportedFile": "A1855052-ACBB-4E83-B6AE-0F0E7EC13900.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.29
+  },
+  "d3-h2-B-spacing-typed.png": {
+    "exportedFile": "F1248E70-6B8A-4E57-A27D-A68223A49B17.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.05
+  },
+  "d3-h2-B-spacing-wrapped-first.png": {
+    "exportedFile": "E01442C4-D968-4F81-82B6-8432BE271093.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.375
+  },
+  "d3-h2-B-spacing-wrapped-middle.png": {
+    "exportedFile": "6AFAEFE3-073E-4E2D-A53C-9123765F1DD2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265278.47
+  },
+  "d3-h2-C-baseline-empty.png": {
+    "exportedFile": "7A24D290-6285-421D-A45D-5FA1D4D27EC7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.116
+  },
+  "d3-h2-C-baseline-isolated-empty.png": {
+    "exportedFile": "EBC7C525-3D7B-49E6-8F85-A2970DDEE59F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.196
+  },
+  "d3-h2-C-baseline-selection.png": {
+    "exportedFile": "7F2187B9-60F1-45E7-9081-ADE94A5AF1C9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.415
+  },
+  "d3-h2-C-baseline-trailing-empty.png": {
+    "exportedFile": "FFC43E4A-1FD5-4C03-9885-5D9FFAC662E5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.281
+  },
+  "d3-h2-C-baseline-typed.png": {
+    "exportedFile": "230BA48C-BCEC-4C06-BCB4-CAD1042D8A99.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.038
+  },
+  "d3-h2-C-baseline-wrapped-first.png": {
+    "exportedFile": "9FD227E2-0F81-434A-A00E-E86652342BE6.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.369
+  },
+  "d3-h2-C-baseline-wrapped-middle.png": {
+    "exportedFile": "71582722-20FE-419A-BF29-966701ED09A5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.457
+  },
+  "d3-h2-D-multiple-empty.png": {
+    "exportedFile": "FD6D5F1C-6920-4B36-B1A8-9D54713840AB.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.626
+  },
+  "d3-h2-D-multiple-isolated-empty.png": {
+    "exportedFile": "52FD785D-0A06-4836-B2B8-3B05ED62D68B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.706
+  },
+  "d3-h2-D-multiple-selection.png": {
+    "exportedFile": "9F314AD3-92BF-4C7B-A0E7-1A956B2E2062.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.919
+  },
+  "d3-h2-D-multiple-trailing-empty.png": {
+    "exportedFile": "B9747F1E-6DBB-47CB-99E2-F0F14D0AE6D5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.786
+  },
+  "d3-h2-D-multiple-typed.png": {
+    "exportedFile": "C8806985-8816-44E3-8616-647788A4777D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.548
+  },
+  "d3-h2-D-multiple-wrapped-first.png": {
+    "exportedFile": "36B59386-BBF3-4FF2-A8E9-ADC765A1F2B3.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.874
+  },
+  "d3-h2-D-multiple-wrapped-middle.png": {
+    "exportedFile": "45EE4723-2A24-4307-8F52-3229C874DD37.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265279.966
+  },
+  "d3-h2-E-before-empty.png": {
+    "exportedFile": "CA31E73F-6C12-411E-83DB-DFB8DC9D5CD8.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.191
+  },
+  "d3-h2-E-before-isolated-empty.png": {
+    "exportedFile": "112638A1-0A8E-4089-A5CC-EF4842E1168D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.274
+  },
+  "d3-h2-E-before-selection.png": {
+    "exportedFile": "27426269-1FA6-4F21-80B3-16CEBDE23E8A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.489
+  },
+  "d3-h2-E-before-trailing-empty.png": {
+    "exportedFile": "D1C2ECDC-17BB-48BC-91FF-0BC268EF3432.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.354
+  },
+  "d3-h2-E-before-typed.png": {
+    "exportedFile": "83BF5B04-FEFA-456C-80D7-10BE4A30C07F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.109
+  },
+  "d3-h2-E-before-wrapped-first.png": {
+    "exportedFile": "BF630109-5892-4D7E-A6CB-9B7ED264415A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.442
+  },
+  "d3-h2-E-before-wrapped-middle.png": {
+    "exportedFile": "365411E9-75A8-4274-A7D8-D5ADE8757BF7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.529
+  },
+  "d3-h2-E-fixed-spacing-empty.png": {
+    "exportedFile": "0F78E426-36AD-4961-8F41-33787E8BE7B2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.156
+  },
+  "d3-h2-E-fixed-spacing-isolated-empty.png": {
+    "exportedFile": "1D48BFAE-7237-4699-B0B5-4149E341A86F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.235
+  },
+  "d3-h2-E-fixed-spacing-selection.png": {
+    "exportedFile": "E636FC53-64F4-464F-BE9F-0CE0E88DA26B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.441
+  },
+  "d3-h2-E-fixed-spacing-trailing-empty.png": {
+    "exportedFile": "A0BDBDC2-6439-414D-9D81-79B244FF9611.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.312
+  },
+  "d3-h2-E-fixed-spacing-typed.png": {
+    "exportedFile": "AFA17DD3-4610-4551-A98E-4AEA2240234A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.079
+  },
+  "d3-h2-E-fixed-spacing-wrapped-first.png": {
+    "exportedFile": "5A1EE7AD-6B1A-4A71-9669-BFB0B11B7169.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.394
+  },
+  "d3-h2-E-fixed-spacing-wrapped-middle.png": {
+    "exportedFile": "00A56130-F859-436E-9DC2-40D3C9CB7839.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.491
+  },
+  "d3-h2-E-hybrid-empty.png": {
+    "exportedFile": "49C27B7D-A177-4948-B25B-FBD6A247FC03.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.679
+  },
+  "d3-h2-E-hybrid-isolated-empty.png": {
+    "exportedFile": "A16AA495-2CEC-4EE3-AEEA-702847DDA8EA.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.759
+  },
+  "d3-h2-E-hybrid-selection.png": {
+    "exportedFile": "8165F20A-175E-4161-8DD7-A3E06F1234EF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.972
+  },
+  "d3-h2-E-hybrid-trailing-empty.png": {
+    "exportedFile": "93FFD66F-B9A9-46C8-B7D8-B821C2B14424.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.842
+  },
+  "d3-h2-E-hybrid-typed.png": {
+    "exportedFile": "AA70F141-EB3D-4D81-9A5D-AA38008194E9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.598
+  },
+  "d3-h2-E-hybrid-wrapped-first.png": {
+    "exportedFile": "8BCB1E6D-12FD-4613-AE6E-91C57A70D0B0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.928
+  },
+  "d3-h2-E-hybrid-wrapped-middle.png": {
+    "exportedFile": "C4692977-0EFB-4497-A5C6-560E979F6D02.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.017
+  },
+  "d3-h2-E-natural-baseline-empty.png": {
+    "exportedFile": "DC537451-C661-4B5C-8DF7-2C36A0C97125.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.174
+  },
+  "d3-h2-E-natural-baseline-isolated-empty.png": {
+    "exportedFile": "E66E85A3-5C2F-4D81-B997-F1A8F0CE8A86.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.254
+  },
+  "d3-h2-E-natural-baseline-selection.png": {
+    "exportedFile": "5D6C7ED4-FFA4-4EFC-BB23-8FD6A3AC3009.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.461
+  },
+  "d3-h2-E-natural-baseline-trailing-empty.png": {
+    "exportedFile": "DBE94717-78DB-49F1-B386-5D90318C507B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.335
+  },
+  "d3-h2-E-natural-baseline-typed.png": {
+    "exportedFile": "A76C49AD-CAE1-4DA0-8584-21068B1AE587.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.091
+  },
+  "d3-h2-E-natural-baseline-wrapped-first.png": {
+    "exportedFile": "126D37E6-C2B2-4245-9DCD-20E2067AFC84.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.422
+  },
+  "d3-h2-E-natural-baseline-wrapped-middle.png": {
+    "exportedFile": "4DE95805-D5E3-4DA9-8A3B-B5E8AEBDE603.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265282.507
+  },
+  "d3-h2-E-no-leading-empty.png": {
+    "exportedFile": "7F175451-F260-44A0-9A2A-0E5304C4B804.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.132
+  },
+  "d3-h2-E-no-leading-isolated-empty.png": {
+    "exportedFile": "A8B2B0F7-621D-4633-99F1-20147B6BA04C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.213
+  },
+  "d3-h2-E-no-leading-selection.png": {
+    "exportedFile": "C540D8D1-6CF3-4E28-BCF0-6F573C9B0114.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.427
+  },
+  "d3-h2-E-no-leading-trailing-empty.png": {
+    "exportedFile": "D2A1C03B-35D6-45F4-BA2F-C1CC83DC6FE5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.295
+  },
+  "d3-h2-E-no-leading-typed.png": {
+    "exportedFile": "F4D319B7-64D1-4606-B531-2425FC3E97B6.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.055
+  },
+  "d3-h2-E-no-leading-wrapped-first.png": {
+    "exportedFile": "0FF61BCB-9EE1-492B-B24B-3A0F35707316.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.382
+  },
+  "d3-h2-E-no-leading-wrapped-middle.png": {
+    "exportedFile": "A057E074-C12C-4D3A-A01C-E5D87107C802.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.472
+  },
+  "d3-h2-E-paragraph-empty.png": {
+    "exportedFile": "2BAF82C1-CA6A-445C-8BAB-1ABF400B5A6C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.649
+  },
+  "d3-h2-E-paragraph-isolated-empty.png": {
+    "exportedFile": "F5E93506-8CDB-4B28-A098-748D39F9D2CE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.732
+  },
+  "d3-h2-E-paragraph-selection.png": {
+    "exportedFile": "7CE10A75-BC91-4D7E-8075-3D70BDCED9FB.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.941
+  },
+  "d3-h2-E-paragraph-trailing-empty.png": {
+    "exportedFile": "7E835E9D-2E94-41CF-B0BA-D1F0A4ECBB8D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.813
+  },
+  "d3-h2-E-paragraph-typed.png": {
+    "exportedFile": "02D76ACC-47B0-4D79-B70B-5B8952D0E7E2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.566
+  },
+  "d3-h2-E-paragraph-wrapped-first.png": {
+    "exportedFile": "28BD8102-2EF6-4F5B-8C52-371A664509B8.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.896
+  },
+  "d3-h2-E-paragraph-wrapped-middle.png": {
+    "exportedFile": "487BF55C-AD0A-4E22-B7A2-F030762AF30C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265280.99
+  },
+  "d3-h2-E-shell-empty.png": {
+    "exportedFile": "F9F10301-1CA6-4930-ABD8-1A37B9EEECC2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.699
+  },
+  "d3-h2-E-shell-isolated-empty.png": {
+    "exportedFile": "CDF7183E-9E5B-460E-AF6F-19941DB3607F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.779
+  },
+  "d3-h2-E-shell-selection.png": {
+    "exportedFile": "BD6513F0-86F7-4828-B51D-D040A1033B46.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.994
+  },
+  "d3-h2-E-shell-trailing-empty.png": {
+    "exportedFile": "67BB4C20-C71D-4FA3-A51B-E61CCDE6DC15.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.861
+  },
+  "d3-h2-E-shell-typed.png": {
+    "exportedFile": "82F96639-952B-453A-89AA-D57AC9544FD2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.616
+  },
+  "d3-h2-E-shell-wrapped-first.png": {
+    "exportedFile": "474B3EAE-44AC-4647-8059-9E2A4CB046D4.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265283.947
+  },
+  "d3-h2-E-shell-wrapped-middle.png": {
+    "exportedFile": "27D246E5-041A-412A-8FF3-C69635171B0B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.036
+  },
+  "d3-h2-E-typographic-empty.png": {
+    "exportedFile": "FB4BB8BE-F04D-4356-ACB7-62349607676D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.658
+  },
+  "d3-h2-E-typographic-isolated-empty.png": {
+    "exportedFile": "5D463A03-9D38-4DC3-B651-ADA529FC3DB0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.737
+  },
+  "d3-h2-E-typographic-selection.png": {
+    "exportedFile": "0EBC4CDC-6665-46C5-969D-F97890F8CBCA.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.955
+  },
+  "d3-h2-E-typographic-trailing-empty.png": {
+    "exportedFile": "AF66D448-3189-4FC2-A3A8-0C6E654F7174.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.823
+  },
+  "d3-h2-E-typographic-typed.png": {
+    "exportedFile": "2FBB2DB1-7599-4E89-98C3-4615D077C10E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.576
+  },
+  "d3-h2-E-typographic-wrapped-first.png": {
+    "exportedFile": "9C90E9F4-E157-4050-9C7C-0A3CEC297B7F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.907
+  },
+  "d3-h2-E-typographic-wrapped-middle.png": {
+    "exportedFile": "A8594E82-36AA-4F33-8B55-D4EFE5AECA45.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265281.999
+  },
+  "d3-h2-F-default-empty.png": {
+    "exportedFile": "4D006089-737E-4B55-A377-6A8745E0C0BF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.206
+  },
+  "d3-h2-F-default-isolated-empty.png": {
+    "exportedFile": "E117A216-DBB4-4870-BC47-FC25378476CF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.287
+  },
+  "d3-h2-F-default-selection.png": {
+    "exportedFile": "8B2505C9-60DE-498B-A928-3D434E60DFA9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.494
+  },
+  "d3-h2-F-default-trailing-empty.png": {
+    "exportedFile": "C929A090-44C3-4170-891B-5CDE9ED21638.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.369
+  },
+  "d3-h2-F-default-typed.png": {
+    "exportedFile": "24BD8EAE-D6BA-4039-9AF8-D69B954CCA6A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.128
+  },
+  "d3-h2-F-default-wrapped-first.png": {
+    "exportedFile": "ACCD0848-7581-4604-BCC3-CDA67FFE3553.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.453
+  },
+  "d3-h2-F-default-wrapped-middle.png": {
+    "exportedFile": "14F3B62A-177B-433F-B2F3-A70B44FE4D75.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.541
+  },
+  "d3-h3-A-fixed-empty.png": {
+    "exportedFile": "5D069210-C15F-4533-9C50-12A2F96BD44D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.752
+  },
+  "d3-h3-A-fixed-isolated-empty.png": {
+    "exportedFile": "5A2BF1E3-2BAA-49FF-ACE6-9B132F6BD3B5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.83
+  },
+  "d3-h3-A-fixed-selection.png": {
+    "exportedFile": "E33C95F8-FE88-421F-B5E9-0159E380AB98.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.041
+  },
+  "d3-h3-A-fixed-trailing-empty.png": {
+    "exportedFile": "5B619984-92CA-4EB6-8B87-816A5F352144.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.914
+  },
+  "d3-h3-A-fixed-typed.png": {
+    "exportedFile": "46EB1C42-2D4E-4621-9855-CE250CEADDBB.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.675
+  },
+  "d3-h3-A-fixed-wrapped-first.png": {
+    "exportedFile": "1350317A-42BD-4619-90B5-0733CA6EF22F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265284.996
+  },
+  "d3-h3-A-fixed-wrapped-middle.png": {
+    "exportedFile": "AEBFAD27-6A19-41C7-A3ED-919D245A3FB0.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.082
+  },
+  "d3-h3-B-calibrated-empty.png": {
+    "exportedFile": "32F6545C-8BC4-4205-A11E-E74B3D06B481.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.744
+  },
+  "d3-h3-B-calibrated-isolated-empty.png": {
+    "exportedFile": "6573CAF4-16B9-4255-97EC-B204035B06A9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.816
+  },
+  "d3-h3-B-calibrated-selection.png": {
+    "exportedFile": "51045633-F35E-46F1-A5C7-C6176C9FC1EB.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.017
+  },
+  "d3-h3-B-calibrated-trailing-empty.png": {
+    "exportedFile": "8FD55F86-6F25-4402-B3C4-43127CCEEBD7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.891
+  },
+  "d3-h3-B-calibrated-typed.png": {
+    "exportedFile": "0E0B5277-BFC6-49B4-8FC3-A28154EB5B2C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.666
+  },
+  "d3-h3-B-calibrated-wrapped-first.png": {
+    "exportedFile": "C17C4FE0-38B4-4575-95A2-F5690CB0157D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.977
+  },
+  "d3-h3-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "BDC9971E-646A-4CA1-8076-F9B7FD076317.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.059
+  },
+  "d3-h3-B-spacing-empty.png": {
+    "exportedFile": "B688B3DE-B34E-412A-A006-41DDAD09266D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.247
+  },
+  "d3-h3-B-spacing-isolated-empty.png": {
+    "exportedFile": "8BEED81A-77B3-4C8D-8C2F-9F914F5DD91F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.325
+  },
+  "d3-h3-B-spacing-selection.png": {
+    "exportedFile": "4ED9DDA2-91B6-45ED-87B0-A0107CE111C5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.536
+  },
+  "d3-h3-B-spacing-trailing-empty.png": {
+    "exportedFile": "AB527FFF-377F-4785-AAAA-525BED7FA02B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.41
+  },
+  "d3-h3-B-spacing-typed.png": {
+    "exportedFile": "119642BC-BB38-44E1-B1EB-C422989ABE64.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.172
+  },
+  "d3-h3-B-spacing-wrapped-first.png": {
+    "exportedFile": "B753377E-AC5A-497F-AE41-5522BE362F34.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.492
+  },
+  "d3-h3-B-spacing-wrapped-middle.png": {
+    "exportedFile": "B8724062-196B-4008-BD3F-3637801EB10A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265285.58
+  },
+  "d3-h3-C-baseline-empty.png": {
+    "exportedFile": "A6C41F22-1C1E-4EC7-9251-E06C0B4AA2DD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.225
+  },
+  "d3-h3-C-baseline-isolated-empty.png": {
+    "exportedFile": "D5AA9298-5396-418B-B3B5-DD7383F816A1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.306
+  },
+  "d3-h3-C-baseline-selection.png": {
+    "exportedFile": "2DDB992C-A935-4D7C-889C-21AB3A43EFB5.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.517
+  },
+  "d3-h3-C-baseline-trailing-empty.png": {
+    "exportedFile": "C1A3DD6E-354D-47F3-8929-A06BCCD1AB35.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.389
+  },
+  "d3-h3-C-baseline-typed.png": {
+    "exportedFile": "3C11C23C-AC72-4A67-B853-1839217A5DAE.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.145
+  },
+  "d3-h3-C-baseline-wrapped-first.png": {
+    "exportedFile": "C599AF13-05B0-4839-A5E9-DB213E8C354F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.473
+  },
+  "d3-h3-C-baseline-wrapped-middle.png": {
+    "exportedFile": "F2556706-E14C-4CCE-8F50-0C376ECDF08B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.564
+  },
+  "d3-h3-D-multiple-empty.png": {
+    "exportedFile": "7B68ADB0-7F1A-4148-B0DD-FE5F51B529DA.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.735
+  },
+  "d3-h3-D-multiple-isolated-empty.png": {
+    "exportedFile": "EC054463-7F7E-4FBE-B473-CA029D1A580C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.815
+  },
+  "d3-h3-D-multiple-selection.png": {
+    "exportedFile": "F882E752-0CED-49DE-8153-62FB5F482F07.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.029
+  },
+  "d3-h3-D-multiple-trailing-empty.png": {
+    "exportedFile": "79F4137B-9447-4F97-A6FC-AC50FF7A6E49.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.896
+  },
+  "d3-h3-D-multiple-typed.png": {
+    "exportedFile": "86FB77FC-1F6D-45E2-AD91-F1C8173BDD1C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.652
+  },
+  "d3-h3-D-multiple-wrapped-first.png": {
+    "exportedFile": "064957C1-8DA8-43EA-A0DD-32DDA8267B53.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265286.984
+  },
+  "d3-h3-D-multiple-wrapped-middle.png": {
+    "exportedFile": "CB9AEF04-B532-4194-9605-4BA5155EAAC2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.077
+  },
+  "d3-h3-E-before-empty.png": {
+    "exportedFile": "6CA28412-C586-44BC-8FD8-01C85F9E1E0A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.189
+  },
+  "d3-h3-E-before-isolated-empty.png": {
+    "exportedFile": "13C9EF7E-85C6-4D15-81AB-0B5D42571D35.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.27
+  },
+  "d3-h3-E-before-selection.png": {
+    "exportedFile": "FE02E7FF-1AFE-4ED1-A5F1-9FBA5FEAB72B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.468
+  },
+  "d3-h3-E-before-trailing-empty.png": {
+    "exportedFile": "8BA53A3F-A5A7-4CF5-BB95-A104FF4185A6.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.344
+  },
+  "d3-h3-E-before-typed.png": {
+    "exportedFile": "413B9111-7E8B-469D-A6A3-BAAEAFF69062.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.116
+  },
+  "d3-h3-E-before-wrapped-first.png": {
+    "exportedFile": "F464DB68-BAC1-4F85-AEB8-2884E1936EAD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.427
+  },
+  "d3-h3-E-before-wrapped-middle.png": {
+    "exportedFile": "0A24E14C-4067-405D-97DD-9733CE76A087.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.512
+  },
+  "d3-h3-E-fixed-spacing-empty.png": {
+    "exportedFile": "CC4B8C0F-09A2-42BF-9F59-07B030AA293B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.245
+  },
+  "d3-h3-E-fixed-spacing-isolated-empty.png": {
+    "exportedFile": "69791ACA-9565-46CA-B8BB-0D9FCA409C4E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.321
+  },
+  "d3-h3-E-fixed-spacing-selection.png": {
+    "exportedFile": "9C46DF6D-8B52-4831-969C-BF241BEDEE02.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.519
+  },
+  "d3-h3-E-fixed-spacing-trailing-empty.png": {
+    "exportedFile": "9B21CFAF-6D01-43B5-ADE3-FCF9090A8301.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.401
+  },
+  "d3-h3-E-fixed-spacing-typed.png": {
+    "exportedFile": "236AA427-7357-40A0-9127-9784BCF5EE90.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.164
+  },
+  "d3-h3-E-fixed-spacing-wrapped-first.png": {
+    "exportedFile": "E36608F1-0B1F-49AC-9B27-043844D0225F.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.478
+  },
+  "d3-h3-E-fixed-spacing-wrapped-middle.png": {
+    "exportedFile": "52C093C9-DE27-45AE-B504-430C593D725E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.558
+  },
+  "d3-h3-E-hybrid-empty.png": {
+    "exportedFile": "D61D5468-3850-4C17-ACBC-797BDF539B03.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.699
+  },
+  "d3-h3-E-hybrid-isolated-empty.png": {
+    "exportedFile": "8F1CFB2F-89D7-4EAB-B60B-76D4267BA02E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.776
+  },
+  "d3-h3-E-hybrid-selection.png": {
+    "exportedFile": "F146E0BD-E83C-44D7-B995-7AD0C64389F7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.979
+  },
+  "d3-h3-E-hybrid-trailing-empty.png": {
+    "exportedFile": "F943E3CB-70B7-4922-A620-B911F3F7C46C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.855
+  },
+  "d3-h3-E-hybrid-typed.png": {
+    "exportedFile": "90560C52-63B4-4DC1-A024-D178F7983818.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.621
+  },
+  "d3-h3-E-hybrid-wrapped-first.png": {
+    "exportedFile": "CD31FCF7-8488-42D2-8055-B9D2EB7BB761.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.937
+  },
+  "d3-h3-E-hybrid-wrapped-middle.png": {
+    "exportedFile": "35411C60-30F0-405E-BC65-F7178146AFB1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.025
+  },
+  "d3-h3-E-natural-baseline-empty.png": {
+    "exportedFile": "79B4DBDB-D316-4E22-B214-B12460AC29BC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.213
+  },
+  "d3-h3-E-natural-baseline-isolated-empty.png": {
+    "exportedFile": "5C297DB4-998F-42AF-BDE4-86223C109728.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.287
+  },
+  "d3-h3-E-natural-baseline-selection.png": {
+    "exportedFile": "1FB9E29E-7F16-4A1D-A872-ED14C967BF2C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.49
+  },
+  "d3-h3-E-natural-baseline-trailing-empty.png": {
+    "exportedFile": "25CF9AC0-3871-4246-91A3-76F043DA2471.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.365
+  },
+  "d3-h3-E-natural-baseline-typed.png": {
+    "exportedFile": "6B348CD1-5B15-4A70-B336-A7EC0FE60D7A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.132
+  },
+  "d3-h3-E-natural-baseline-wrapped-first.png": {
+    "exportedFile": "F98B055B-329C-4156-B1FA-5BBFA12531FF.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.445
+  },
+  "d3-h3-E-natural-baseline-wrapped-middle.png": {
+    "exportedFile": "351E502E-D6AF-493A-8B20-D63C48AA882A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.534
+  },
+  "d3-h3-E-no-leading-empty.png": {
+    "exportedFile": "6EBCF84A-AAB2-4EAE-A184-BBC261CD0AD7.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.242
+  },
+  "d3-h3-E-no-leading-isolated-empty.png": {
+    "exportedFile": "6EBD6C35-B37E-4A48-8050-E3BB3B1904A8.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.319
+  },
+  "d3-h3-E-no-leading-selection.png": {
+    "exportedFile": "A3EDF03B-AB58-46A0-9E1C-CAE0CD84D133.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.525
+  },
+  "d3-h3-E-no-leading-trailing-empty.png": {
+    "exportedFile": "214A20C4-3827-4E51-BF88-FF104CA44B48.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.399
+  },
+  "d3-h3-E-no-leading-typed.png": {
+    "exportedFile": "D3CC097A-AEDB-49A8-98F3-3DACC9D61668.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.163
+  },
+  "d3-h3-E-no-leading-wrapped-first.png": {
+    "exportedFile": "FF32AA93-D736-4AAE-A8E3-84D5D0E0395C.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.481
+  },
+  "d3-h3-E-no-leading-wrapped-middle.png": {
+    "exportedFile": "EC64C872-B150-447F-8985-BB6E68941992.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.573
+  },
+  "d3-h3-E-paragraph-empty.png": {
+    "exportedFile": "04D3A067-16CB-48E5-9A1B-C236BF512107.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.744
+  },
+  "d3-h3-E-paragraph-isolated-empty.png": {
+    "exportedFile": "014E07BB-2643-47A2-9078-DEDA911C46AA.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.825
+  },
+  "d3-h3-E-paragraph-selection.png": {
+    "exportedFile": "0D8E4489-AA53-4FCF-9CFA-4A526958C584.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.031
+  },
+  "d3-h3-E-paragraph-trailing-empty.png": {
+    "exportedFile": "BBE5CC01-29D6-45A5-BBF8-111627CACD9A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.906
+  },
+  "d3-h3-E-paragraph-typed.png": {
+    "exportedFile": "A1DC3066-B950-4C4B-82B2-35E57A1BAD67.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.663
+  },
+  "d3-h3-E-paragraph-wrapped-first.png": {
+    "exportedFile": "BEB339CF-FB4E-48DA-870E-183715AAD082.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265287.99
+  },
+  "d3-h3-E-paragraph-wrapped-middle.png": {
+    "exportedFile": "A57328A4-C0F8-428F-87D7-8BA46CC8ECA9.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.074
+  },
+  "d3-h3-E-shell-empty.png": {
+    "exportedFile": "5724B7FD-96A3-4C69-8A4E-63CE46B98B93.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.677
+  },
+  "d3-h3-E-shell-isolated-empty.png": {
+    "exportedFile": "C4459F8F-7364-4B0D-AFEB-A37E46E493F2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.749
+  },
+  "d3-h3-E-shell-selection.png": {
+    "exportedFile": "C7C73D42-E0EF-4B57-8E57-E3E8776DD626.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.958
+  },
+  "d3-h3-E-shell-trailing-empty.png": {
+    "exportedFile": "E8E29158-3B02-431A-9F85-8E12853B5B6E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.83
+  },
+  "d3-h3-E-shell-typed.png": {
+    "exportedFile": "D2AF5B9E-BD91-40FE-9456-157F9B30AEE2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.598
+  },
+  "d3-h3-E-shell-wrapped-first.png": {
+    "exportedFile": "005C5A1A-AD1D-401D-8077-696CF471AACC.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265290.913
+  },
+  "d3-h3-E-shell-wrapped-middle.png": {
+    "exportedFile": "F43E3ED7-2A30-4F15-8F25-4FE9612E8527.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.004
+  },
+  "d3-h3-E-typographic-empty.png": {
+    "exportedFile": "AFAD6396-7FAF-41B3-8A7A-2707BA4BA571.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.723
+  },
+  "d3-h3-E-typographic-isolated-empty.png": {
+    "exportedFile": "AC0D5956-6174-496F-BC52-E91B549E373B.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.801
+  },
+  "d3-h3-E-typographic-selection.png": {
+    "exportedFile": "19A21EDF-D6B8-423A-96CF-A8D62DB32302.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.005
+  },
+  "d3-h3-E-typographic-trailing-empty.png": {
+    "exportedFile": "0EA4F8D7-DDFC-4963-8F6F-82F0894E040D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.882
+  },
+  "d3-h3-E-typographic-typed.png": {
+    "exportedFile": "0C33374B-A545-4AF9-82A6-EAFA2A343F7A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.643
+  },
+  "d3-h3-E-typographic-wrapped-first.png": {
+    "exportedFile": "C1167E69-2924-4910-9037-1B244720EA1E.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265288.961
+  },
+  "d3-h3-E-typographic-wrapped-middle.png": {
+    "exportedFile": "0845664D-EF18-4EFD-81DA-DEC27899DDC2.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265289.048
+  },
+  "d3-h3-F-default-empty.png": {
+    "exportedFile": "F0B336D1-6EEB-4CBA-A314-0B29977325C1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.179
+  },
+  "d3-h3-F-default-isolated-empty.png": {
+    "exportedFile": "BA21CAF0-FD1B-412D-B734-EB2CE5B33841.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.257
+  },
+  "d3-h3-F-default-selection.png": {
+    "exportedFile": "BB30739D-2FCB-4895-A601-DF793946B94D.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.46
+  },
+  "d3-h3-F-default-trailing-empty.png": {
+    "exportedFile": "7684796D-21EF-4F1E-AEE7-427E12197D81.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.338
+  },
+  "d3-h3-F-default-typed.png": {
+    "exportedFile": "E6C0EEC3-D442-4CBF-9A8B-988473E53DBD.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.099
+  },
+  "d3-h3-F-default-wrapped-first.png": {
+    "exportedFile": "E37272ED-2B67-403C-96EB-F1E1C62B195A.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.418
+  },
+  "d3-h3-F-default-wrapped-middle.png": {
+    "exportedFile": "E230F4B4-8C4F-4F98-B75B-E5E5E73A32A1.png",
+    "test": "RoundD3CaretGeometryTests/testParagraphGeometryMatrix()",
+    "timestamp": 1792265291.503
+  },
+  "d3-h4-h6-A-fixed-empty.png": {
+    "exportedFile": "CBA1AA19-7A6D-4F20-92B5-B3685FBFC813.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.414
+  },
+  "d3-h4-h6-A-fixed-isolated-empty.png": {
+    "exportedFile": "1D83F7E7-1EFF-4A26-A735-9778955C4D8A.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.489
+  },
+  "d3-h4-h6-A-fixed-selection.png": {
+    "exportedFile": "A0688A82-42DA-44D8-82BD-291A7628B3E1.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.682
+  },
+  "d3-h4-h6-A-fixed-trailing-empty.png": {
+    "exportedFile": "E5C1817B-5A13-4036-A204-D4B8A908070A.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.566
+  },
+  "d3-h4-h6-A-fixed-typed.png": {
+    "exportedFile": "DB312B53-1453-4A12-BA4F-E92697F7CC72.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.335
+  },
+  "d3-h4-h6-A-fixed-wrapped-first.png": {
+    "exportedFile": "87EA019C-84E9-477A-925E-AE10DFCE4DAA.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.642
+  },
+  "d3-h4-h6-A-fixed-wrapped-middle.png": {
+    "exportedFile": "38C9D068-DA3B-466C-A937-8C0E24234CE9.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.726
+  },
+  "d3-h4-h6-B-calibrated-empty.png": {
+    "exportedFile": "5CD001F3-11E8-41FC-9CD5-F7FC11280EA3.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.887
+  },
+  "d3-h4-h6-B-calibrated-isolated-empty.png": {
+    "exportedFile": "20871F17-356F-4A41-909D-79222D395979.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.961
+  },
+  "d3-h4-h6-B-calibrated-selection.png": {
+    "exportedFile": "95816B78-980A-43DF-848A-A9A5750B8C0B.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.161
+  },
+  "d3-h4-h6-B-calibrated-trailing-empty.png": {
+    "exportedFile": "CE0ED46A-C10E-48EE-B855-31BC4281D76F.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.037
+  },
+  "d3-h4-h6-B-calibrated-typed.png": {
+    "exportedFile": "67E1BB3C-2046-4F64-89D9-B9F359F46EF1.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.808
+  },
+  "d3-h4-h6-B-calibrated-wrapped-first.png": {
+    "exportedFile": "7B0C9E95-0AC5-456D-9878-8735729A6CF4.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.122
+  },
+  "d3-h4-h6-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "2855FACC-33DA-4EF1-81A6-1ABEB2CFF0A4.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.201
+  },
+  "d3-h4-h6-E-shell-empty.png": {
+    "exportedFile": "999761DE-8C71-4340-9DF0-F9A26BEB66F2.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.367
+  },
+  "d3-h4-h6-E-shell-isolated-empty.png": {
+    "exportedFile": "C86405B3-24C1-440F-A99F-F037F6C25A4A.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.441
+  },
+  "d3-h4-h6-E-shell-selection.png": {
+    "exportedFile": "8956B063-4D4B-4488-890F-0D6636C27655.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.622
+  },
+  "d3-h4-h6-E-shell-trailing-empty.png": {
+    "exportedFile": "D3217638-B748-49E1-9ED7-DD5BF8B7BA72.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.512
+  },
+  "d3-h4-h6-E-shell-typed.png": {
+    "exportedFile": "4C13EFD8-A2CF-40EC-ACF4-6A9F39DA10A2.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.29
+  },
+  "d3-h4-h6-E-shell-wrapped-first.png": {
+    "exportedFile": "830CE9C8-9EF7-4212-9EE6-05781E540630.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.584
+  },
+  "d3-h4-h6-E-shell-wrapped-middle.png": {
+    "exportedFile": "0D81F832-C0D4-4E91-9CD0-53456CC9280A.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.663
+  },
+  "d3-h4-h6-F-default-empty.png": {
+    "exportedFile": "4EDEB58D-5114-42C8-8EDD-0103111980BD.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.824
+  },
+  "d3-h4-h6-F-default-isolated-empty.png": {
+    "exportedFile": "B52D7063-7552-46C0-A6AE-23D69671E7E4.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.9
+  },
+  "d3-h4-h6-F-default-selection.png": {
+    "exportedFile": "9785F2A0-ED90-43D0-BB5E-ED6F31D2C119.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.096
+  },
+  "d3-h4-h6-F-default-trailing-empty.png": {
+    "exportedFile": "AC53B5DF-C0D1-4654-A75F-9AF21C8380D8.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.978
+  },
+  "d3-h4-h6-F-default-typed.png": {
+    "exportedFile": "FFE7ECA4-3B35-40BC-841C-5D5F7785CE31.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265258.749
+  },
+  "d3-h4-h6-F-default-wrapped-first.png": {
+    "exportedFile": "118C5545-A0E8-4DAE-9264-F6FD872DF015.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.054
+  },
+  "d3-h4-h6-F-default-wrapped-middle.png": {
+    "exportedFile": "5B858950-29A9-461F-9F43-2AD3C90A90E7.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.137
+  },
+  "d3-mono-A-fixed-empty.png": {
+    "exportedFile": "E395EA65-965C-48CC-A8DB-104E5671B374.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.328
+  },
+  "d3-mono-A-fixed-isolated-empty.png": {
+    "exportedFile": "BE85D678-F8A2-4C6D-AE5D-1C4728E8E3C3.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.405
+  },
+  "d3-mono-A-fixed-selection.png": {
+    "exportedFile": "B7A9A859-9407-46BF-AC86-C894F0BE7656.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.595
+  },
+  "d3-mono-A-fixed-trailing-empty.png": {
+    "exportedFile": "30062C5C-B501-4CE7-8E07-9111CA7A83CA.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.48
+  },
+  "d3-mono-A-fixed-typed.png": {
+    "exportedFile": "10726E17-6812-433E-91C1-E3E2F318B18D.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.255
+  },
+  "d3-mono-A-fixed-wrapped-first.png": {
+    "exportedFile": "A8673138-0B2D-487D-BE25-7A35BFF68013.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.555
+  },
+  "d3-mono-A-fixed-wrapped-middle.png": {
+    "exportedFile": "FE180B58-DE63-4419-86B0-DCD2504CEBA9.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.634
+  },
+  "d3-mono-B-calibrated-empty.png": {
+    "exportedFile": "591B0D9B-35D8-462E-847E-6F89A0CC9B60.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.786
+  },
+  "d3-mono-B-calibrated-isolated-empty.png": {
+    "exportedFile": "50B5ED1F-E793-46DC-8ECB-57502D6ECCB4.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.866
+  },
+  "d3-mono-B-calibrated-selection.png": {
+    "exportedFile": "0CC488C1-D5F0-4A20-B859-E7CB23C44155.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.063
+  },
+  "d3-mono-B-calibrated-trailing-empty.png": {
+    "exportedFile": "110F8DB1-08E2-4F39-9B16-02050A7BF5F3.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.941
+  },
+  "d3-mono-B-calibrated-typed.png": {
+    "exportedFile": "A1B9CD23-57D3-4D3B-BC2C-42E2AF4A15D0.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265259.712
+  },
+  "d3-mono-B-calibrated-wrapped-first.png": {
+    "exportedFile": "8A6CCB56-6488-4F5F-9574-6B47760D92FF.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.023
+  },
+  "d3-mono-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "BE31870C-133F-4AAC-A153-F2D87A03A7CB.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.105
+  },
+  "d3-mono-E-shell-empty.png": {
+    "exportedFile": "45E108DA-0B7E-4AD7-AB6A-A8086A041406.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.261
+  },
+  "d3-mono-E-shell-isolated-empty.png": {
+    "exportedFile": "7EE0CD3F-8D00-4D7C-AFF5-B9FCD7A5A390.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.333
+  },
+  "d3-mono-E-shell-selection.png": {
+    "exportedFile": "0D403D32-61DC-4B05-A0DE-546C44072B22.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.52
+  },
+  "d3-mono-E-shell-trailing-empty.png": {
+    "exportedFile": "A9AC7BBB-4847-4CCE-BED0-996F1793B160.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.408
+  },
+  "d3-mono-E-shell-typed.png": {
+    "exportedFile": "98B2E17C-62DA-45A8-8A5D-A4CBB766432E.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.186
+  },
+  "d3-mono-E-shell-wrapped-first.png": {
+    "exportedFile": "753E50B9-0874-42AE-B0C8-C518301948D0.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.482
+  },
+  "d3-mono-E-shell-wrapped-middle.png": {
+    "exportedFile": "CC28F407-EC6E-4E2A-B9B1-B46F8CD1333C.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.559
+  },
+  "d3-mono-F-default-empty.png": {
+    "exportedFile": "A987BC96-C842-499B-99FA-500F1CBC4B67.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.72
+  },
+  "d3-mono-F-default-isolated-empty.png": {
+    "exportedFile": "0CDD05A7-C3BF-4D45-A5AD-B29E0DA5ADC7.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.795
+  },
+  "d3-mono-F-default-selection.png": {
+    "exportedFile": "3B473548-46E0-4B1D-86B9-3E182A894102.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.991
+  },
+  "d3-mono-F-default-trailing-empty.png": {
+    "exportedFile": "79BFA984-021A-4C96-9B48-DB33A7C0771C.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.87
+  },
+  "d3-mono-F-default-typed.png": {
+    "exportedFile": "1CA0E967-2018-4022-9598-3F9B92E078BD.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.641
+  },
+  "d3-mono-F-default-wrapped-first.png": {
+    "exportedFile": "A5A9CE17-50D6-482F-BC55-938AF4EF4DF4.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265260.946
+  },
+  "d3-mono-F-default-wrapped-middle.png": {
+    "exportedFile": "11DF09AD-1054-4834-BEF3-5F2354B7075E.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.036
+  },
+  "d3-table-header-A-fixed-empty.png": {
+    "exportedFile": "3B48AFD3-9A10-4920-9617-D34E86C76073.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.241
+  },
+  "d3-table-header-A-fixed-isolated-empty.png": {
+    "exportedFile": "3C81BC92-2685-4FC8-A7C7-0C15F633E862.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.32
+  },
+  "d3-table-header-A-fixed-selection.png": {
+    "exportedFile": "493E8478-2653-4073-AE16-2D13BD67CA67.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.534
+  },
+  "d3-table-header-A-fixed-trailing-empty.png": {
+    "exportedFile": "B27CEF9B-727E-4ED4-AF46-D86ACE94137C.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.404
+  },
+  "d3-table-header-A-fixed-typed.png": {
+    "exportedFile": "0C398EA5-9505-4942-A406-27F8BF3209BA.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.16
+  },
+  "d3-table-header-A-fixed-wrapped-first.png": {
+    "exportedFile": "711F813F-D5BB-4393-8927-6EC3929A7C17.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.49
+  },
+  "d3-table-header-A-fixed-wrapped-middle.png": {
+    "exportedFile": "82B3BCFA-2CC9-4B2E-AEDB-CCAEFDEC40AE.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.58
+  },
+  "d3-table-header-B-calibrated-empty.png": {
+    "exportedFile": "FA35CE81-B29E-4F06-8967-4C9F672733CA.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.745
+  },
+  "d3-table-header-B-calibrated-isolated-empty.png": {
+    "exportedFile": "F7924BA8-60FA-4485-9173-A307B3D24D52.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.825
+  },
+  "d3-table-header-B-calibrated-selection.png": {
+    "exportedFile": "4227FFF9-282D-4CB5-81BA-FB4715B93367.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.034
+  },
+  "d3-table-header-B-calibrated-trailing-empty.png": {
+    "exportedFile": "B5CAB6C9-A32D-4B7A-BE51-723260F6356F.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.903
+  },
+  "d3-table-header-B-calibrated-typed.png": {
+    "exportedFile": "C550E47D-7F21-417D-95B2-AA7C0AEB5A8B.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.667
+  },
+  "d3-table-header-B-calibrated-wrapped-first.png": {
+    "exportedFile": "58D99795-9B3C-458B-9BCB-2D55A3CBDAA2.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265261.992
+  },
+  "d3-table-header-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "1FE300C5-D53F-4A77-A204-E31F642C7B58.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.076
+  },
+  "d3-table-header-E-shell-empty.png": {
+    "exportedFile": "3C1B0B12-5C4B-42AE-AB14-650735D7831A.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.239
+  },
+  "d3-table-header-E-shell-isolated-empty.png": {
+    "exportedFile": "C317DF0F-012B-4C75-8B6B-4F9B6FEDE879.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.313
+  },
+  "d3-table-header-E-shell-selection.png": {
+    "exportedFile": "7D504314-6187-45B4-BB46-25EDA5A06A51.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.523
+  },
+  "d3-table-header-E-shell-trailing-empty.png": {
+    "exportedFile": "59ACAC42-2D03-4858-AE14-20FD0722078E.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.39
+  },
+  "d3-table-header-E-shell-typed.png": {
+    "exportedFile": "979F6694-EE11-4D08-B70F-D18FCC241446.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.161
+  },
+  "d3-table-header-E-shell-wrapped-first.png": {
+    "exportedFile": "7C17A6DF-32A6-4445-8E04-499E4E5C13DF.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.477
+  },
+  "d3-table-header-E-shell-wrapped-middle.png": {
+    "exportedFile": "98FD014A-0C4B-45B4-A1D3-F8156CE4B81C.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.569
+  },
+  "d3-table-header-F-default-empty.png": {
+    "exportedFile": "21EA7485-1465-4AE6-9EF8-2EE792F9AC49.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.742
+  },
+  "d3-table-header-F-default-isolated-empty.png": {
+    "exportedFile": "7B457FD6-AD0A-4A4A-AA3E-C01A13F02B8D.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.822
+  },
+  "d3-table-header-F-default-selection.png": {
+    "exportedFile": "E8FCBA2C-3DD5-4AD4-A151-2BFDE7D710D5.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265263.035
+  },
+  "d3-table-header-F-default-trailing-empty.png": {
+    "exportedFile": "D0E21450-2600-4411-BF73-51EC5F8ADC16.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.907
+  },
+  "d3-table-header-F-default-typed.png": {
+    "exportedFile": "A4B30C98-89E3-4757-8E2D-EC7023C7A889.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.659
+  },
+  "d3-table-header-F-default-wrapped-first.png": {
+    "exportedFile": "4BAFCC79-3494-4CF4-BB40-5B0450E57B16.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265262.991
+  },
+  "d3-table-header-F-default-wrapped-middle.png": {
+    "exportedFile": "03F4C0A1-42C8-465A-BE39-B4281184A904.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265263.078
+  },
+  "d3-title-A-fixed-empty.png": {
+    "exportedFile": "088639B4-057D-4F2E-BBFE-88BD9F47140B.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.607
+  },
+  "d3-title-A-fixed-isolated-empty.png": {
+    "exportedFile": "0CBF3D5A-8DF2-448F-9FCD-4964547B7AAF.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.676
+  },
+  "d3-title-A-fixed-selection.png": {
+    "exportedFile": "165BBD9B-3506-49D1-B9EE-C97E69B328F9.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.846
+  },
+  "d3-title-A-fixed-trailing-empty.png": {
+    "exportedFile": "42A52997-99C3-46CA-B6B5-B00A88CB6E36.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.745
+  },
+  "d3-title-A-fixed-typed.png": {
+    "exportedFile": "4C9E0C3E-4478-44FA-A715-FBCCD5843E40.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.539
+  },
+  "d3-title-A-fixed-wrapped-first.png": {
+    "exportedFile": "9A30BA6D-A3BD-4D41-98A4-E200CAD4A38F.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.813
+  },
+  "d3-title-A-fixed-wrapped-middle.png": {
+    "exportedFile": "3980C2D3-D85C-42B9-ACCE-FD0435A762D8.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.879
+  },
+  "d3-title-B-calibrated-empty.png": {
+    "exportedFile": "1DE3E640-EDC9-4CD2-9BCC-60BA3BA3F169.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.01
+  },
+  "d3-title-B-calibrated-isolated-empty.png": {
+    "exportedFile": "A4CEA894-81A9-47CB-82A3-9C37E8E42A20.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.078
+  },
+  "d3-title-B-calibrated-selection.png": {
+    "exportedFile": "D8B6E8C8-69A1-4188-A001-9F97CF2C816F.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.257
+  },
+  "d3-title-B-calibrated-trailing-empty.png": {
+    "exportedFile": "A64FDBB9-5358-456B-B0B3-3AA6736ADA13.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.148
+  },
+  "d3-title-B-calibrated-typed.png": {
+    "exportedFile": "CA23AB7B-8B3A-441E-992C-C74ACC3E1E1B.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265255.946
+  },
+  "d3-title-B-calibrated-wrapped-first.png": {
+    "exportedFile": "74817CC4-8D5A-42C7-9DBD-38E0BAF7851D.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.22
+  },
+  "d3-title-B-calibrated-wrapped-middle.png": {
+    "exportedFile": "9EE5DF68-3D8B-4FF9-94B0-75A11EB5D337.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.297
+  },
+  "d3-title-E-shell-empty.png": {
+    "exportedFile": "9DBCA002-972A-4ADF-85F9-CB3BDA741562.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.446
+  },
+  "d3-title-E-shell-isolated-empty.png": {
+    "exportedFile": "68141C80-1581-4A28-8F16-2CAF1DAC05A7.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.519
+  },
+  "d3-title-E-shell-selection.png": {
+    "exportedFile": "256B1BB1-9E7E-4E74-B4A0-C3298D7C9554.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.702
+  },
+  "d3-title-E-shell-trailing-empty.png": {
+    "exportedFile": "8B8D0289-B37F-4527-BD2F-41BF969CAB3D.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.592
+  },
+  "d3-title-E-shell-typed.png": {
+    "exportedFile": "B7C8E626-C7C5-4DA5-8313-392FC268637B.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.374
+  },
+  "d3-title-E-shell-wrapped-first.png": {
+    "exportedFile": "2B49BD97-0DF9-406F-8F02-35CF893850F3.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.665
+  },
+  "d3-title-E-shell-wrapped-middle.png": {
+    "exportedFile": "C87A46A8-02C6-4D6C-B08C-15C1E93BEAAB.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.739
+  },
+  "d3-title-F-default-empty.png": {
+    "exportedFile": "E6441800-EFAD-4BDF-A812-A2BB3F2426A7.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.894
+  },
+  "d3-title-F-default-isolated-empty.png": {
+    "exportedFile": "74A7AFD4-D908-483E-9F12-DD207516C68D.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.97
+  },
+  "d3-title-F-default-selection.png": {
+    "exportedFile": "7C7CBEAE-1E41-488F-9ADE-3FB9714F78DB.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.17
+  },
+  "d3-title-F-default-trailing-empty.png": {
+    "exportedFile": "195CC182-920C-4AA5-8ADB-92B026F303AA.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.049
+  },
+  "d3-title-F-default-typed.png": {
+    "exportedFile": "B0F01272-0192-43E3-9503-F3650B8036F9.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265256.815
+  },
+  "d3-title-F-default-wrapped-first.png": {
+    "exportedFile": "FBAA30CF-99F7-429A-AAA3-E949EDE291D3.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.128
+  },
+  "d3-title-F-default-wrapped-middle.png": {
+    "exportedFile": "EF46566C-847C-49F8-AFB5-B6BF0EA8D5C3.png",
+    "test": "RoundD3CaretGeometryTests/testCompanionFontsForOffsetDesign()",
+    "timestamp": 1792265257.213
+  }
+}
