@@ -1,0 +1,326 @@
+[
+  {
+    "test": "RoundD2DiagnosisTests/testO1801EmptyPickedCalloutDecorationFitsDocumentBounds()",
+    "render": "renders/o18-01-empty-picked-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1801EmptyPickedCalloutDecorationFitsDocumentBounds()",
+    "render": "renders/o18-01-empty-picked-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1801FinalCalloutDecorationFitsDocumentBounds()",
+    "render": "renders/o18-01-final-typed-callout-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1801FinalCalloutDecorationFitsDocumentBounds()",
+    "render": "renders/o18-01-final-typed-callout-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1801FinalCalloutDecorationFitsDocumentBounds()",
+    "render": "renders/o18-01-final-typed-callout-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1802ReturnContinuationBoxContainsEmptyLineAndPadding()",
+    "render": "renders/o18-02-return-continuation-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1802ReturnContinuationBoxContainsEmptyLineAndPadding()",
+    "render": "renders/o18-02-return-continuation-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1802ReturnContinuationBoxContainsEmptyLineAndPadding()",
+    "render": "renders/o18-02-return-continuation-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803GreyBarBelowHeadingIsQuoteDecorationWithOneIndicator()",
+    "render": "renders/o18-03-heading-then-body.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803GreyBarBelowHeadingIsQuoteDecorationWithOneIndicator()",
+    "render": "renders/o18-03-heading-then-quote.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-empty-placeholder-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-empty-placeholder-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-quote-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-quote-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-list-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-list-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-callout-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-callout-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h6-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h6-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h5-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h5-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h4-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h4-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h3-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h3-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h2-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h2-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h1-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-h1-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-body-stock.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+    "render": "renders/o18-03-body-ours.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804ContextualRestyleRestoresLoadedExitPaddingWithoutTyping()",
+    "render": "renders/o18-04-restyled-without-typing-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804ContextualRestyleRestoresLoadedExitPaddingWithoutTyping()",
+    "render": "renders/o18-04-restyled-without-typing-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804ContextualRestyleRestoresLoadedExitPaddingWithoutTyping()",
+    "render": "renders/o18-04-restyled-without-typing-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-reopen-typed.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-reopen-typed-box-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-reopen-typed-box-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-reopen-typed-box-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-reopen-empty-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-reopen-empty-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-reopen-empty-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-pick-body-typed.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-pick-body-typed-box-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-pick-body-typed-box-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-pick-body-typed-box-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-pick-body-empty-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-pick-body-empty-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-pick-body-empty-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-double-return-typed.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-double-return-typed-box-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-double-return-typed-box-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-double-return-typed-box-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-double-return-empty-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-double-return-empty-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-double-return-empty-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-below-click-typed.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-below-click-typed-box-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-below-click-typed-box-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-below-click-typed-box-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-below-click-empty-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-below-click-empty-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+    "render": "renders/o18-04-below-click-empty-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-reopen-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-reopen-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-reopen-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-reopen-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-reopen-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-reopen-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-body-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-body-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-body-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-body-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-body-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-body-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-return-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-return-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/pre-o3-policy-return-viewport.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-return-full-fragment.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-return-document.png"
+  },
+  {
+    "test": "RoundD2DiagnosisTests/testPreO3CalloutDisplayPolicyStillHasTheContinuationAndBodyGapDefects()",
+    "render": "renders/o3-current-return-viewport.png"
+  }
+]

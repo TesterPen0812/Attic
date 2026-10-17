@@ -1,0 +1,86 @@
+[
+  {
+    "render": "o18-03-body-ours.png",
+    "pixelSize": [
+      680,
+      440
+    ],
+    "blueInkBoundsPixels": [
+      46,
+      74,
+      50,
+      97
+    ],
+    "blueWidthPoints": 2.0
+  },
+  {
+    "render": "o18-03-body-stock.png",
+    "pixelSize": [
+      680,
+      800
+    ],
+    "blueInkBoundsPixels": [
+      46,
+      61,
+      50,
+      98
+    ],
+    "blueWidthPoints": 2.0
+  },
+  {
+    "render": "o18-03-h1-ours.png",
+    "pixelSize": [
+      680,
+      440
+    ],
+    "blueInkBoundsPixels": [
+      46,
+      74,
+      50,
+      105
+    ],
+    "blueWidthPoints": 2.0
+  },
+  {
+    "render": "o18-03-h1-stock.png",
+    "pixelSize": [
+      680,
+      800
+    ],
+    "blueInkBoundsPixels": [
+      46,
+      62,
+      50,
+      103
+    ],
+    "blueWidthPoints": 2.0
+  },
+  {
+    "render": "o18-03-heading-then-quote.png",
+    "pixelSize": [
+      680,
+      440
+    ],
+    "blueInkBoundsPixels": [
+      46,
+      74,
+      50,
+      105
+    ],
+    "blueWidthPoints": 2.0
+  },
+  {
+    "render": "o18-04-reopen-empty-document.png",
+    "pixelSize": [
+      680,
+      480
+    ],
+    "blueInkBoundsPixels": [
+      46,
+      201,
+      50,
+      224
+    ],
+    "blueWidthPoints": 2.0
+  }
+]

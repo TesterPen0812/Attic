@@ -1,0 +1,88 @@
+{
+  "devicesAndConfigurations" : [
+    {
+      "device" : {
+        "architecture" : "arm64",
+        "deviceId" : "00008132-001258143ED9801C",
+        "deviceName" : "My Mac",
+        "modelName" : "MacBook Pro",
+        "osBuildNumber" : "26A5425a",
+        "osVersion" : "27.0",
+        "platform" : "macOS"
+      },
+      "expectedFailures" : 0,
+      "failedTests" : 5,
+      "passedTests" : 23,
+      "skippedTests" : 0,
+      "testPlanConfiguration" : {
+        "configurationId" : "1",
+        "configurationName" : "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription" : "Attic · Built with macOS 27.0",
+  "expectedFailures" : 0,
+  "failedTests" : 5,
+  "finishTime" : 1792263808.575,
+  "passedTests" : 23,
+  "result" : "Failed",
+  "runtimeWarnings" : [
+
+  ],
+  "skippedTests" : 0,
+  "startTime" : 1792263790.27,
+  "statistics" : [
+
+  ],
+  "testFailures" : [
+    {
+      "failureText" : "XCTAssertLessThanOrEqual failed: (\"66.50830078125\") is greater than (\"57.5\") - new empty callout keeps its bottom padding too",
+      "targetName" : "AtticTests",
+      "testIdentifier" : 6,
+      "testIdentifierString" : "RoundD2DiagnosisTests/testO1801EmptyPickedCalloutDecorationFitsDocumentBounds()",
+      "testIdentifierURL" : "test://com.apple.xcode/Attic/AtticTests/RoundD2DiagnosisTests/testO1801EmptyPickedCalloutDecorationFitsDocumentBounds",
+      "testName" : "testO1801EmptyPickedCalloutDecorationFitsDocumentBounds()"
+    },
+    {
+      "failureText" : "XCTAssertLessThanOrEqual failed: (\"66.50830078125\") is greater than (\"57.5\") - final callout bottom padding must fit in the document",
+      "targetName" : "AtticTests",
+      "testIdentifier" : 7,
+      "testIdentifierString" : "RoundD2DiagnosisTests/testO1801FinalCalloutDecorationFitsDocumentBounds()",
+      "testIdentifierURL" : "test://com.apple.xcode/Attic/AtticTests/RoundD2DiagnosisTests/testO1801FinalCalloutDecorationFitsDocumentBounds",
+      "testName" : "testO1801FinalCalloutDecorationFitsDocumentBounds()"
+    },
+    {
+      "failureText" : "XCTAssertGreaterThanOrEqual failed: (\"83.982421875\") is less than (\"93.00830078125\") - Return's empty continuation needs the same bottom padding as typed text",
+      "targetName" : "AtticTests",
+      "testIdentifier" : 8,
+      "testIdentifierString" : "RoundD2DiagnosisTests/testO1802ReturnContinuationBoxContainsEmptyLineAndPadding()",
+      "testIdentifierURL" : "test://com.apple.xcode/Attic/AtticTests/RoundD2DiagnosisTests/testO1802ReturnContinuationBoxContainsEmptyLineAndPadding",
+      "testName" : "testO1802ReturnContinuationBoxContainsEmptyLineAndPadding()"
+    },
+    {
+      "failureText" : "XCTAssertEqualWithAccuracy failed: (\"11.989501953125\") is not equal to (\"18.5\") +/- (\"0.5\") - body: allow AppKit to size its caret",
+      "targetName" : "AtticTests",
+      "testIdentifier" : 10,
+      "testIdentifierString" : "RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()",
+      "testIdentifierURL" : "test://com.apple.xcode/Attic/AtticTests/RoundD2DiagnosisTests/testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline",
+      "testName" : "testO1803RealNativeIndicatorsMatchStockRelativeToLineBaseline()"
+    },
+    {
+      "failureText" : "XCTAssertEqualWithAccuracy failed: (\"101.00830078125\") is not equal to (\"103.482421875\") +/- (\"0.5\") - below-click: hint/empty line must occupy the same paragraph baseline as the first letter",
+      "targetName" : "AtticTests",
+      "testIdentifier" : 12,
+      "testIdentifierString" : "RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()",
+      "testIdentifierURL" : "test://com.apple.xcode/Attic/AtticTests/RoundD2DiagnosisTests/testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts",
+      "testName" : "testO1804EmptyBodyAfterCalloutDoesNotJumpWhenTypingStarts()"
+    }
+  ],
+  "title" : "Test - Attic",
+  "topInsights" : [
+    {
+      "category" : "Longest Test Runs",
+      "impact" : "26% of duration",
+      "text" : "1 longest test run with outlier durations exceeding 1.17s (three standard deviations)"
+    }
+  ],
+  "totalTestCount" : 28
+}

@@ -1,0 +1,2325 @@
+[
+  {
+    "box": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "case": "o18-01-empty-picked",
+    "document": {
+      "bottom": 57,
+      "height": 57,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "surface": {
+      "bottom": 67.50830078125,
+      "height": 67.50830078125,
+      "width": 304,
+      "x": -12,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 9.52587890625,
+    "box": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 56.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 118.709716796875,
+      "y": 38.482421875
+    },
+    "case": "o18-01-final-typed-callout",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: true, exitsAtEnd: false)",
+    "document": {
+      "bottom": 57,
+      "height": 57,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 66.50830078125,
+      "height": 44.50830078125,
+      "width": 58.709716796875,
+      "x": 36,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": -24,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 58.709716796875,
+          "x": 0,
+          "y": 16.482421875
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 47.0341796875,
+      "height": 47.0341796875,
+      "width": 292,
+      "x": -36,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 55,
+      "height": 55,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 83.482421875,
+      "height": 51.47412109375,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 83.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 64.982421875
+    },
+    "case": "o18-02-return-continuation",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: false, exitsAtEnd: false)",
+    "document": {
+      "bottom": 83.5,
+      "height": 83.5,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 83.482421875,
+      "height": 61.482421875,
+      "width": 43.29833984375,
+      "x": 36,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": -24,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 9}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 43.29833984375,
+          "x": 0,
+          "y": 16.482421875
+        }
+      },
+      {
+        "baseline": 58.482421875,
+        "range": "{9, 0}",
+        "rect": {
+          "bottom": 61.482421875,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 42.982421875
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 64.00830078125,
+      "height": 64.00830078125,
+      "width": 292,
+      "x": -36,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 80,
+      "height": 80,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bar": {
+      "bottom": 74.357421875,
+      "height": 11.057373046875,
+      "width": 3,
+      "x": 24,
+      "y": 63.300048828125
+    },
+    "case": "o18-03-heading-then-quote",
+    "indicatorCount": 1,
+    "indicatorFrames": [
+      {
+        "bottom": 52.695419921875,
+        "height": 15.898652343750001,
+        "width": 0,
+        "x": 24,
+        "y": 36.796767578125
+      }
+    ],
+    "textInset": 20
+  },
+  {
+    "bar": null,
+    "case": "o18-03-heading-then-body",
+    "indicatorCount": 1,
+    "indicatorFrames": [
+      {
+        "bottom": 52.695419921875,
+        "height": 15.898652343750001,
+        "width": 0,
+        "x": 24,
+        "y": 36.796767578125
+      }
+    ],
+    "textInset": 0
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "body",
+    "descender": -2.63671875,
+    "font": ".AppleSystemUIFont",
+    "fontSize": 12.5,
+    "ourBaseline": 45.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.755126953125, 0.0, 11.989501953125) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (15.0, 22.0, 116.0, 28.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 48.74462890625,
+      "height": 11.989501953125,
+      "width": 0,
+      "x": 24,
+      "y": 36.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockBaseline": 45.982421875,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 15.9521484375,
+    "case": "h1",
+    "descender": -3.48046875,
+    "font": ".SFNS-Semibold",
+    "fontSize": 16.5,
+    "ourBaseline": 48.744140625,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 51.744140625,
+      "height": 21,
+      "width": 0,
+      "x": 24,
+      "y": 30.744140625
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteHeadingButton (81.90324926376343, 34.0, 20.0, 20.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.796767578125, 0.0, 15.898652343750001) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (13.0, 22.0, 110.0, 32.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 52.695419921875,
+      "height": 15.898652343750001,
+      "width": 0,
+      "x": 24,
+      "y": 36.796767578125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -11.947373046875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 51.744140625,
+      "height": 21,
+      "width": 0,
+      "x": 24,
+      "y": 30.744140625
+    },
+    "stockBaseline": 48.744140625,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 51.744140625,
+      "height": 21,
+      "width": 0,
+      "x": 24,
+      "y": 30.744140625
+    },
+    "stockTopFromBaseline": -18
+  },
+  {
+    "ascender": 14.501953125,
+    "case": "h2",
+    "descender": -3.1640625,
+    "font": ".SFNS-Semibold",
+    "fontSize": 15,
+    "ourBaseline": 47.67724609375,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 50.67724609375,
+      "height": 20,
+      "width": 0,
+      "x": 24,
+      "y": 30.67724609375
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteHeadingButton (77.3570909500122, 34.0, 20.0, 20.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.90615234375, 0.0, 14.453320312500004) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (14.0, 22.0, 101.0, 30.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 51.359472656250006,
+      "height": 14.453320312500004,
+      "width": 0,
+      "x": 24,
+      "y": 36.90615234375
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -10.771093749999999,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 50.67724609375,
+      "height": 20,
+      "width": 0,
+      "x": 24,
+      "y": 30.67724609375
+    },
+    "stockBaseline": 47.67724609375,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 50.67724609375,
+      "height": 20,
+      "width": 0,
+      "x": 24,
+      "y": 30.67724609375
+    },
+    "stockTopFromBaseline": -17
+  },
+  {
+    "ascender": 13.0517578125,
+    "case": "h3",
+    "descender": -2.84765625,
+    "font": ".SFNS-Semibold",
+    "fontSize": 13.5,
+    "ourBaseline": 46.3603515625,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 49.3603515625,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.8603515625
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteHeadingButton (72.71352052688599, 33.0, 20.0, 20.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.515537109375, 0.0, 13.00798828125) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (15.0, 22.0, 92.0, 29.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 49.523525390625004,
+      "height": 13.00798828125,
+      "width": 0,
+      "x": 24,
+      "y": 36.515537109375
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.844814453124997,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 49.3603515625,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.8603515625
+    },
+    "stockBaseline": 46.3603515625,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 49.3603515625,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.8603515625
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "h4",
+    "descender": -2.63671875,
+    "font": ".SFNS-Semibold",
+    "fontSize": 12.5,
+    "ourBaseline": 45.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteHeadingButton (69.5750823020935, 33.0, 20.0, 20.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.755126953125, 0.0, 12.04443359375) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (15.0, 22.0, 86.0, 28.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 48.799560546875,
+      "height": 12.04443359375,
+      "width": 0,
+      "x": 24,
+      "y": 36.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockBaseline": 45.982421875,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "h5",
+    "descender": -2.63671875,
+    "font": ".SFNS-Semibold",
+    "fontSize": 12.5,
+    "ourBaseline": 45.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteHeadingButton (69.5750823020935, 33.0, 20.0, 20.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.755126953125, 0.0, 12.04443359375) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (15.0, 22.0, 86.0, 28.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 48.799560546875,
+      "height": 12.04443359375,
+      "width": 0,
+      "x": 24,
+      "y": 36.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockBaseline": 45.982421875,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "h6",
+    "descender": -2.63671875,
+    "font": ".SFNS-Semibold",
+    "fontSize": 12.5,
+    "ourBaseline": 45.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteHeadingButton (69.5750823020935, 33.0, 20.0, 20.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.755126953125, 0.0, 12.04443359375) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (15.0, 22.0, 86.0, 28.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 48.799560546875,
+      "height": 12.04443359375,
+      "width": 0,
+      "x": 24,
+      "y": 36.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockBaseline": 45.982421875,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "callout",
+    "descender": -2.63671875,
+    "font": ".AppleSystemUIFont",
+    "fontSize": 12.5,
+    "ourBaseline": 53.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 56.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 38.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (60.0, 44.755126953125, 0.0, 11.989501953125) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (24.0, 22.0, 292.0, 48.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 56.74462890625,
+      "height": 11.989501953125,
+      "width": 0,
+      "x": 60,
+      "y": 44.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 50.50830078125,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 32.00830078125
+    },
+    "stockBaseline": 47.50830078125,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 50.50830078125,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 32.00830078125
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "list",
+    "descender": -2.63671875,
+    "font": ".AppleSystemUIFont",
+    "fontSize": 12.5,
+    "ourBaseline": 45.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 44,
+      "y": 30.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (44.0, 36.755126953125, 0.0, 11.989501953125) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (-16.0, 22.0, 130.0, 28.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 48.74462890625,
+      "height": 11.989501953125,
+      "width": 0,
+      "x": 44,
+      "y": 36.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 44,
+      "y": 30.482421875
+    },
+    "stockBaseline": 45.982421875,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 44,
+      "y": 30.482421875
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "quote",
+    "descender": -2.63671875,
+    "font": ".AppleSystemUIFont",
+    "fontSize": 12.5,
+    "ourBaseline": 45.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 44,
+      "y": 30.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (44.0, 36.755126953125, 0.0, 11.989501953125) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 24.0) hidden=false",
+      "_NSTextViewportElementView (24.0, 22.0, 127.0, 28.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 48.74462890625,
+      "height": 11.989501953125,
+      "width": 0,
+      "x": 44,
+      "y": 36.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": {
+      "bottom": 25.357421875,
+      "height": 11.057373046875,
+      "width": 3,
+      "x": -20,
+      "y": 14.300048828125
+    },
+    "stock": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 44,
+      "y": 30.482421875
+    },
+    "stockBaseline": 45.982421875,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 44,
+      "y": 30.482421875
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "ascender": 12.0849609375,
+    "case": "empty-placeholder",
+    "descender": -2.63671875,
+    "font": ".AppleSystemUIFont",
+    "fontSize": 12.5,
+    "ourBaseline": 45.982421875,
+    "ourIndicatorClass": "NSTextInsertionIndicator",
+    "ourIndicatorColor": "Catalog color: System textInsertionPointColor",
+    "ourIndicatorMode": 0,
+    "ourSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "ourTree": [
+      "_NSTextSelectionView (0.0, 0.0, 340.0, 220.0) hidden=true",
+      "_NSTextRenderingSurfacesGroupView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "_NSTextContentView (0.0, 0.0, 340.0, 220.0) hidden=false",
+      "NoteMonoCopyButton (0.0, 0.0, 0.0, 0.0) hidden=true",
+      "NSTextInsertionIndicator (24.0, 36.755126953125, 0.0, 11.989501953125) hidden=false",
+      "_NSTextViewportElementView (12.0, 0.0, 97.0, 49.0) hidden=false"
+    ],
+    "ours": {
+      "bottom": 48.74462890625,
+      "height": 11.989501953125,
+      "width": 0,
+      "x": 24,
+      "y": 36.755126953125
+    },
+    "oursCount": 1,
+    "oursTopFromBaseline": -9.227294921875,
+    "quoteBar": null,
+    "stock": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockBaseline": 45.982421875,
+    "stockCount": 1,
+    "stockSegment": {
+      "bottom": 48.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 30.482421875
+    },
+    "stockTopFromBaseline": -15.5
+  },
+  {
+    "after": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "before": {
+      "bottom": 112.45654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 93.95654296875
+    },
+    "case": "o18-04-restyle-control",
+    "restoredSpace": 9.52587890625,
+    "typedReference": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-restyled-without-typing",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 121.982421875,
+      "height": 65,
+      "width": 97.81640625,
+      "x": 0,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 36,
+          "y": 8
+        }
+      },
+      {
+        "baseline": 62,
+        "range": "{10, 0}",
+        "rect": {
+          "bottom": 65,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 46.5
+        }
+      }
+    ],
+    "paragraphSpacing": 9.52587890625,
+    "surface": {
+      "bottom": 65,
+      "height": 67.52587890625,
+      "width": 292,
+      "x": 0,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 119.50830078125,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 101.00830078125
+    },
+    "case": "o18-04-below-click-empty",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 119.50830078125,
+      "height": 62.52587890625,
+      "width": 97.81640625,
+      "x": 0,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 36,
+          "y": 8
+        }
+      },
+      {
+        "baseline": 59.52587890625,
+        "range": "{10, 0}",
+        "rect": {
+          "bottom": 62.52587890625,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 44.02587890625
+        }
+      }
+    ],
+    "paragraphSpacing": 9.52587890625,
+    "surface": {
+      "bottom": 62.52587890625,
+      "height": 65.0517578125,
+      "width": 292,
+      "x": 0,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "caret": {
+      "bottom": 119.50830078125,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 101.00830078125
+    },
+    "case": "o18-04-below-click-empty",
+    "gapFromBox": 8,
+    "hintVisible": true,
+    "overlays": [
+      {
+        "bottom": 120,
+        "height": 16,
+        "width": 205,
+        "x": 24,
+        "y": 104
+      }
+    ],
+    "typingParagraph": "Optional(Alignment Natural, LineSpacing 0, ParagraphSpacing 0, ParagraphSpacingBefore 10.4741, HeadIndent 0, TailIndent 0, FirstLineHeadIndent 0, LineHeight 18.5/18.5, LineHeightMultiple 0 LineBreakMode WordWrapping, Tabs (\n    28L,\n    56L,\n    84L,\n    112L,\n    140L,\n    168L,\n    196L,\n    224L,\n    252L,\n    280L,\n    308L,\n    336L\n), DefaultTabInterval 0, Blocks (\n), Lists (\n), BaseWritingDirection Natural, HyphenationFactor 0, TighteningForTruncation YES, HeaderLevel 0 LineBreakStrategy 0 PresentationIntents (\n) ListIntentOrdinal 0 CodeBlockIntentLanguageHint '')"
+  },
+  {
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-below-click-typed",
+    "jump": 2.47412109375
+  },
+  {
+    "bottomMargin": 9.52587890625,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 30.5185546875,
+      "y": 103.482421875
+    },
+    "case": "o18-04-below-click-typed-box",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: false)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 61.81640625,
+      "x": 36,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 0,
+          "y": 8
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 38.5517578125,
+      "height": 41.07763671875,
+      "width": 292,
+      "x": -36,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-double-return-empty",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 121.982421875,
+      "height": 65,
+      "width": 97.81640625,
+      "x": 0,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 36,
+          "y": 8
+        }
+      },
+      {
+        "baseline": 62,
+        "range": "{10, 0}",
+        "rect": {
+          "bottom": 65,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 46.5
+        }
+      }
+    ],
+    "paragraphSpacing": 9.52587890625,
+    "surface": {
+      "bottom": 65,
+      "height": 67.52587890625,
+      "width": 292,
+      "x": 0,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-double-return-empty",
+    "gapFromBox": 10.47412109375,
+    "hintVisible": true,
+    "overlays": [
+      {
+        "bottom": 122,
+        "height": 16,
+        "width": 205,
+        "x": 24,
+        "y": 106
+      }
+    ],
+    "typingParagraph": "Optional(Alignment Natural, LineSpacing 0, ParagraphSpacing 0, ParagraphSpacingBefore 10.4741, HeadIndent 0, TailIndent 0, FirstLineHeadIndent 0, LineHeight 18.5/18.5, LineHeightMultiple 0 LineBreakMode WordWrapping, Tabs (\n    28L,\n    56L,\n    84L,\n    112L,\n    140L,\n    168L,\n    196L,\n    224L,\n    252L,\n    280L,\n    308L,\n    336L\n), DefaultTabInterval 0, Blocks (\n), Lists (\n), BaseWritingDirection Natural, HyphenationFactor 0, TighteningForTruncation YES, HeaderLevel 0 LineBreakStrategy 0 PresentationIntents (\n) ListIntentOrdinal 0 CodeBlockIntentLanguageHint '')"
+  },
+  {
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-double-return-typed",
+    "jump": 0
+  },
+  {
+    "bottomMargin": 9.52587890625,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 30.5185546875,
+      "y": 103.482421875
+    },
+    "case": "o18-04-double-return-typed-box",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: false)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 61.81640625,
+      "x": 36,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 0,
+          "y": 8
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 38.5517578125,
+      "height": 41.07763671875,
+      "width": 292,
+      "x": -36,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-pick-body-empty",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 121.982421875,
+      "height": 65,
+      "width": 97.81640625,
+      "x": 0,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 36,
+          "y": 8
+        }
+      },
+      {
+        "baseline": 62,
+        "range": "{10, 0}",
+        "rect": {
+          "bottom": 65,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 46.5
+        }
+      }
+    ],
+    "paragraphSpacing": 9.52587890625,
+    "surface": {
+      "bottom": 65,
+      "height": 67.52587890625,
+      "width": 292,
+      "x": 0,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-pick-body-empty",
+    "gapFromBox": 10.47412109375,
+    "hintVisible": true,
+    "overlays": [
+      {
+        "bottom": 122,
+        "height": 16,
+        "width": 205,
+        "x": 24,
+        "y": 106
+      }
+    ],
+    "typingParagraph": "Optional(Alignment Natural, LineSpacing 0, ParagraphSpacing 0, ParagraphSpacingBefore 10.4741, HeadIndent 0, TailIndent 0, FirstLineHeadIndent 0, LineHeight 18.5/18.5, LineHeightMultiple 0 LineBreakMode WordWrapping, Tabs (\n    28L,\n    56L,\n    84L,\n    112L,\n    140L,\n    168L,\n    196L,\n    224L,\n    252L,\n    280L,\n    308L,\n    336L\n), DefaultTabInterval 0, Blocks (\n), Lists (\n), BaseWritingDirection Natural, HyphenationFactor 0, TighteningForTruncation YES, HeaderLevel 0 LineBreakStrategy 0 PresentationIntents (\n) ListIntentOrdinal 0 CodeBlockIntentLanguageHint '')"
+  },
+  {
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-pick-body-typed",
+    "jump": 0
+  },
+  {
+    "bottomMargin": 9.52587890625,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 30.5185546875,
+      "y": 103.482421875
+    },
+    "case": "o18-04-pick-body-typed-box",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: false)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 61.81640625,
+      "x": 36,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 0,
+          "y": 8
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 38.5517578125,
+      "height": 41.07763671875,
+      "width": 292,
+      "x": -36,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 112.45654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 93.95654296875
+    },
+    "case": "o18-04-reopen-empty",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 112.45654296875,
+      "height": 55.47412109375,
+      "width": 97.81640625,
+      "x": 0,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 36,
+          "y": 8
+        }
+      },
+      {
+        "baseline": 52.47412109375,
+        "range": "{10, 0}",
+        "rect": {
+          "bottom": 55.47412109375,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 36.97412109375
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 55.47412109375,
+      "height": 58,
+      "width": 292,
+      "x": 0,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "caret": {
+      "bottom": 112.45654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 93.95654296875
+    },
+    "case": "o18-04-reopen-empty",
+    "gapFromBox": 0.9482421875,
+    "hintVisible": true,
+    "overlays": [
+      {
+        "bottom": 113,
+        "height": 16,
+        "width": 205,
+        "x": 24,
+        "y": 97
+      }
+    ],
+    "typingParagraph": "Optional(Alignment Natural, LineSpacing 0, ParagraphSpacing 0, ParagraphSpacingBefore 10.4741, HeadIndent 0, TailIndent 0, FirstLineHeadIndent 0, LineHeight 18.5/18.5, LineHeightMultiple 0 LineBreakMode WordWrapping, Tabs (\n    28L,\n    56L,\n    84L,\n    112L,\n    140L,\n    168L,\n    196L,\n    224L,\n    252L,\n    280L,\n    308L,\n    336L\n), DefaultTabInterval 0, Blocks (\n), Lists (\n), BaseWritingDirection Natural, HyphenationFactor 0, TighteningForTruncation YES, HeaderLevel 0 LineBreakStrategy 0 PresentationIntents (\n) ListIntentOrdinal 0 CodeBlockIntentLanguageHint '')"
+  },
+  {
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 103.482421875
+    },
+    "case": "o18-04-reopen-typed",
+    "jump": 9.52587890625
+  },
+  {
+    "bottomMargin": 9.52587890625,
+    "box": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 292,
+      "x": 24,
+      "y": 56.982421875
+    },
+    "caret": {
+      "bottom": 121.982421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 30.5185546875,
+      "y": 103.482421875
+    },
+    "case": "o18-04-reopen-typed-box",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: false, ends: true, exitsAtEnd: false)",
+    "document": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 93.00830078125,
+      "height": 36.02587890625,
+      "width": 61.81640625,
+      "x": 36,
+      "y": 56.982421875
+    },
+    "icon": null,
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 23.5,
+        "range": "{0, 10}",
+        "rect": {
+          "bottom": 26.5,
+          "height": 18.5,
+          "width": 61.81640625,
+          "x": 0,
+          "y": 8
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 38.5517578125,
+      "height": 41.07763671875,
+      "width": 292,
+      "x": -36,
+      "y": -2.52587890625
+    },
+    "topMargin": 0,
+    "visible": {
+      "bottom": 240,
+      "height": 240,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 83.482421875,
+      "height": 51.47412109375,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 83.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 64.982421875
+    },
+    "case": "o3-current-return",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: false, exitsAtEnd: false)",
+    "document": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 83.482421875,
+      "height": 61.482421875,
+      "width": 43.29833984375,
+      "x": 36,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": -24,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 9}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 43.29833984375,
+          "x": 0,
+          "y": 16.482421875
+        }
+      },
+      {
+        "baseline": 58.482421875,
+        "range": "{9, 0}",
+        "rect": {
+          "bottom": 61.482421875,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 42.982421875
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 64.00830078125,
+      "height": 64.00830078125,
+      "width": 292,
+      "x": -36,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 83.482421875,
+      "height": 51.47412109375,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 83.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 64.982421875
+    },
+    "case": "pre-o3-policy-return",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: false, exitsAtEnd: false)",
+    "document": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 83.482421875,
+      "height": 61.482421875,
+      "width": 43.29833984375,
+      "x": 36,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": -24,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 9}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 43.29833984375,
+          "x": 0,
+          "y": 16.482421875
+        }
+      },
+      {
+        "baseline": 58.482421875,
+        "range": "{9, 0}",
+        "rect": {
+          "bottom": 61.482421875,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 42.982421875
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 64.00830078125,
+      "height": 64.00830078125,
+      "width": 292,
+      "x": -36,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "case": "o3-attribution-return",
+    "currentBox": {
+      "bottom": 83.482421875,
+      "height": 51.47412109375,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "currentCaret": {
+      "bottom": 83.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 64.982421875
+    },
+    "freshCurrentCaret": {
+      "bottom": 83.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 64.982421875
+    },
+    "preO3PolicyBox": {
+      "bottom": 83.482421875,
+      "height": 51.47412109375,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "preO3PolicyCaret": {
+      "bottom": 83.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 60,
+      "y": 64.982421875
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 101.49072265625,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 82.99072265625
+    },
+    "case": "o3-current-body",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 101.5,
+      "height": 101.5,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 101.49072265625,
+      "height": 79.49072265625,
+      "width": 79.29833984375,
+      "x": 0,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": 12,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 9}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 43.29833984375,
+          "x": 36,
+          "y": 16.482421875
+        }
+      },
+      {
+        "baseline": 76.49072265625,
+        "range": "{9, 0}",
+        "rect": {
+          "bottom": 79.49072265625,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 60.99072265625
+        }
+      }
+    ],
+    "paragraphSpacing": 9.52587890625,
+    "surface": {
+      "bottom": 79.49072265625,
+      "height": 79.49072265625,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 95.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 76.982421875
+    },
+    "case": "pre-o3-policy-body",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 95.482421875,
+      "height": 73.482421875,
+      "width": 79.29833984375,
+      "x": 0,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": 12,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 9}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 43.29833984375,
+          "x": 36,
+          "y": 16.482421875
+        }
+      },
+      {
+        "baseline": 70.482421875,
+        "range": "{9, 0}",
+        "rect": {
+          "bottom": 73.482421875,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 54.982421875
+        }
+      }
+    ],
+    "paragraphSpacing": 9.52587890625,
+    "surface": {
+      "bottom": 73.482421875,
+      "height": 73.482421875,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "case": "o3-attribution-body",
+    "currentBox": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "currentCaret": {
+      "bottom": 101.49072265625,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 82.99072265625
+    },
+    "freshCurrentCaret": {
+      "bottom": 95.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 76.982421875
+    },
+    "preO3PolicyBox": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "preO3PolicyCaret": {
+      "bottom": 95.482421875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 76.982421875
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 85.95654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 67.45654296875
+    },
+    "case": "o3-current-reopen",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 85.95654296875,
+      "height": 63.95654296875,
+      "width": 79.29833984375,
+      "x": 0,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": 12,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 9}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 43.29833984375,
+          "x": 36,
+          "y": 16.482421875
+        }
+      },
+      {
+        "baseline": 60.95654296875,
+        "range": "{9, 0}",
+        "rect": {
+          "bottom": 63.95654296875,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 45.45654296875
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 63.95654296875,
+      "height": 63.95654296875,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "bottomMargin": 0,
+    "box": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "caret": {
+      "bottom": 85.95654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 67.45654296875
+    },
+    "case": "pre-o3-policy-reopen",
+    "container": {
+      "bottom": 1.7976931348623157e+308,
+      "height": 1.7976931348623157e+308,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "decoration": "callout(icon: \"\ud83d\udca1\", starts: true, ends: true, exitsAtEnd: true)",
+    "document": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    },
+    "fragment": {
+      "bottom": 85.95654296875,
+      "height": 63.95654296875,
+      "width": 79.29833984375,
+      "x": 0,
+      "y": 22
+    },
+    "icon": {
+      "bottom": 36.8287353515625,
+      "height": 18.5,
+      "width": 16,
+      "x": 12,
+      "y": 18.3287353515625
+    },
+    "lastLine": "nil",
+    "lines": [
+      {
+        "baseline": 31.982421875,
+        "range": "{0, 9}",
+        "rect": {
+          "bottom": 34.982421875,
+          "height": 18.5,
+          "width": 43.29833984375,
+          "x": 36,
+          "y": 16.482421875
+        }
+      },
+      {
+        "baseline": 60.95654296875,
+        "range": "{9, 0}",
+        "rect": {
+          "bottom": 63.95654296875,
+          "height": 18.5,
+          "width": 0,
+          "x": 0,
+          "y": 45.45654296875
+        }
+      }
+    ],
+    "paragraphSpacing": 0,
+    "surface": {
+      "bottom": 63.95654296875,
+      "height": 63.95654296875,
+      "width": 292,
+      "x": 0,
+      "y": 0
+    },
+    "topMargin": 6.47412109375,
+    "visible": {
+      "bottom": 100,
+      "height": 100,
+      "width": 340,
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "case": "o3-attribution-reopen",
+    "currentBox": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "currentCaret": {
+      "bottom": 85.95654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 67.45654296875
+    },
+    "freshCurrentCaret": {
+      "bottom": 85.95654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 67.45654296875
+    },
+    "preO3PolicyBox": {
+      "bottom": 66.50830078125,
+      "height": 34.5,
+      "width": 292,
+      "x": 24,
+      "y": 32.00830078125
+    },
+    "preO3PolicyCaret": {
+      "bottom": 85.95654296875,
+      "height": 18.5,
+      "width": 0,
+      "x": 24,
+      "y": 67.45654296875
+    }
+  }
+]
