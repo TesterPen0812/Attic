@@ -383,3 +383,236 @@ final class RoundO3NotesTests: XCTestCase {
         XCTAssertEqual(engine.textStorage.string, "Title\nAlpha\nBeta")
     }
 }
+
+// D1 diagnosis only. No window is ordered onto a display.
+@MainActor
+final class RoundD1CrashTests: XCTestCase {
+    func testDeletingTheLastCalloutCharacterThenDrawingKeepsTextKitConsistent() throws {
+        var callout = NoteBlock.text("x", style: "quote")
+        callout.callout = "💡"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), callout]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = CGRect(x: 0, y: 0, width: 340, height: 400)
+        let window = NSWindow(contentRect: CGRect(x: -12000, y: -12000, width: 340, height: 400),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); withExtendedLifetime(engine) {} }
+        window.contentView = scroll
+        window.makeFirstResponder(text)
+        scroll.layoutSubtreeIfNeeded()
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+
+        // Observe the production setter at the exact stack frame in the owner's
+        // log. AppKit can omit its font-panel query in a non-key test window;
+        // the selection invariant must hold independently of that UI state.
+        let selector = #selector(setter: NSTextView.typingAttributes)
+        let method = try XCTUnwrap(class_getInstanceMethod(NSTextView.self, selector))
+        typealias Setter = @convention(c) (NSTextView, Selector, NSDictionary) -> Void
+        let original = method_getImplementation(method)
+        let invoke = unsafeBitCast(original, to: Setter.self)
+        var invalidSelections: [String] = []
+        let observer: @convention(block) (NSTextView, NSDictionary) -> Void = { view, attributes in
+            if view === text, NSMaxRange(view.selectedRange()) > engine.textStorage.length {
+                invalidSelections.append("selection=\(view.selectedRange()), storageLength=\(engine.textStorage.length), editedMask=\(engine.textStorage.editedMask.rawValue)")
+            }
+            invoke(view, selector, attributes)
+        }
+        let replacement = imp_implementationWithBlock(observer)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        text.deleteBackward(nil)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        // Exercise drawing without screenshots, files, or an ordered window.
+        let bitmap = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: text.bounds))
+        text.cacheDisplay(in: text.bounds, to: bitmap)
+        XCTAssertEqual(text.string, "Title\n")
+        XCTAssertEqual(engine.document().blocks.last?.callout, "💡")
+        XCTAssertTrue(invalidSelections.isEmpty,
+                      "O18-05: typing attributes queried before AppKit repaired the deleted selection: \(invalidSelections)")
+        XCTAssertFalse(window.isVisible)
+    }
+}
+
+
+/// F1 edit-timing regressions. Windows remain off screen and are never ordered.
+@MainActor
+final class RoundF1EditTimingTests: XCTestCase {
+    private var engine: NoteEditorEngine!
+    private var text: NoteEditorTextView!
+    private var window: NSWindow!
+
+    private func editor(_ blocks: [NoteBlock]) {
+        engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
+        let (scroll, view) = engine.makeView()
+        text = view
+        scroll.frame = CGRect(x: 0, y: 0, width: 340, height: 400)
+        window = NSWindow(contentRect: CGRect(x: -12000, y: -12000, width: 340, height: 400),
+                          styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        window.makeFirstResponder(view)
+        scroll.layoutSubtreeIfNeeded()
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        view.textLayoutManager?.textViewportLayoutController.layoutViewport()
+    }
+
+    override func tearDown() async throws {
+        engine?.detachView()
+        window?.close()
+        text = nil; window = nil; engine = nil
+        try await super.tearDown()
+    }
+
+    private func nextMainTurn() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    private func assertSafeTypingUpdates(in trackedView: NSTextView? = nil, during edit: () -> Void,
+                                         file: StaticString = #filePath, line: UInt = #line) throws {
+        let trackedView = trackedView ?? text!
+        let selector = #selector(setter: NSTextView.typingAttributes)
+        let method = try XCTUnwrap(class_getInstanceMethod(NSTextView.self, selector))
+        typealias Setter = @convention(c) (NSTextView, Selector, NSDictionary) -> Void
+        let original = method_getImplementation(method)
+        let invoke = unsafeBitCast(original, to: Setter.self)
+        var violations: [String] = []
+        let observer: @convention(block) (NSTextView, NSDictionary) -> Void = { [self] view, attributes in
+            if view === trackedView, !engine.textStorage.editedMask.isEmpty || (view === text && NSMaxRange(view.selectedRange()) > engine.textStorage.length) {
+                violations.append("selection=\(view.selectedRange()), length=\(engine.textStorage.length), mask=\(engine.textStorage.editedMask.rawValue)")
+            }
+            invoke(view, selector, attributes)
+        }
+        let replacement = imp_implementationWithBlock(observer)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        edit()
+        XCTAssertTrue(violations.isEmpty, "View typing update during storage processing: \(violations)", file: file, line: line)
+    }
+
+    func testDeletingSelectedSlashCalloutAtAirRangeThenDrawing() async throws {
+        editor([.text("Launch sync"), .text("")])
+        text.setSelectedRange(NSRange(location: 12, length: 0))
+        for character in "/callout" { text.insertText(String(character), replacementRange: text.selectedRange()) }
+        XCTAssertNotNil(engine.slashSession)
+        XCTAssertFalse(text.hasMarkedText(), "The S3 drawing frame alone does not imply an IME session")
+        text.setSelectedRange(NSRange(location: 12, length: 8))
+        try assertSafeTypingUpdates { text.deleteBackward(nil) }
+        // Semantic restoration must already be visible to history, before a main-queue callback.
+        XCTAssertEqual(engine.document().blocks.map(\.text), ["Launch sync", ""])
+        XCTAssertEqual(text.selectedRange(), NSRange(location: 12, length: 0))
+        await nextMainTurn()
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        let bitmap = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: text.bounds))
+        text.cacheDisplay(in: text.bounds, to: bitmap)
+        XCTAssertNil(engine.slashSession)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(text.string, "Launch sync\n/callout")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(text.string, "Launch sync\n")
+    }
+
+    func testSlashPresentationAfterAnOutsideEditSeesRepairedStorage() async {
+        editor([.text("Title"), .text("prefix /callout")])
+        text.setSelectedRange(NSRange(location: text.string.utf16.count, length: 0))
+        engine.slashSession = NoteSlashSession(noteID: engine.noteID, range: NSRange(location: 13, length: 8), query: "callout")
+        var processingCallbacks = 0
+        var dismissals = 0
+        engine.onSlashSessionChange = { [self] session in
+            if !engine.textStorage.editedMask.isEmpty { processingCallbacks += 1 }
+            if session == nil { dismissals += 1 }
+        }
+        engine.textStorage.deleteCharacters(in: NSRange(location: 6, length: 7))
+        XCTAssertNil(engine.slashSession, "Semantic invalidation is synchronous")
+        text.setSelectedRange(NSRange(location: 6, length: 0))
+        await nextMainTurn()
+        XCTAssertEqual(processingCallbacks, 0)
+        XCTAssertGreaterThan(dismissals, 0)
+    }
+
+    func testCalloutReceiverTeardownWaitsForStorageProcessingToFinish() async throws {
+        var callout = NoteBlock.text("body", style: "quote"); callout.callout = "💡"
+        editor([.text("Title"), callout])
+        text.pickCalloutIconFromPalette(forBlockAt: 6, showPalette: {})
+        let session = try XCTUnwrap(text.calloutIconSession)
+        var endedDuringProcessing = false
+        let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification,
+                                                             object: engine.textStorage, queue: nil) { _ in
+            MainActor.assumeIsolated { endedDuringProcessing = session.state == .ended }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        engine.textStorage.deleteCharacters(in: NSRange(location: 9, length: 1))
+        await nextMainTurn()
+        XCTAssertFalse(endedDuringProcessing, "Teardown discards marked text and changes first responder")
+        XCTAssertEqual(session.state, .ended)
+        XCTAssertNil(text.calloutIconSession)
+    }
+
+    func testHostedTableRestyleWaitsForStorageProcessing() async throws {
+        editor([.text("Title"), .table(NoteTable(texts: [["cell", "other"]])), .text("after")])
+        let table = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        let hosted = try XCTUnwrap(table.hostedView)
+        hosted.activate(.init(row: 0, column: 0), caret: .start)
+        XCTAssertTrue(hosted.hasEditor)
+        let range = try XCTUnwrap(engine.range(ofTable: table))
+        let replacement = engine.textStorage.attributedSubstring(from: range)
+        // An imported attachment can retain a hosted view from a different look.
+        table.style = NoteTextStyle(design: AtticDesignContext(mode: .dark))
+        try assertSafeTypingUpdates(in: hosted.editor) {
+            engine.textStorage.replaceCharacters(in: range, with: replacement)
+        }
+        await nextMainTurn()
+        XCTAssertEqual(table.style, engine.style)
+        XCTAssertTrue(hosted.hasEditor)
+        XCTAssertEqual(hosted.editor.string, "cell")
+    }
+
+    func testMonoSpellingUpdatesWaitForStorageProcessing() async throws {
+        editor([.text("Title"), .text("code", style: "mono")])
+        text.setSelectedRange(NSRange(location: 10, length: 0))
+        let selector = #selector(NSTextView.setSpellingState(_:range:))
+        let method = try XCTUnwrap(class_getInstanceMethod(NSTextView.self, selector))
+        typealias Setter = @convention(c) (NSTextView, Selector, Int, NSRange) -> Void
+        let original = method_getImplementation(method)
+        let invoke = unsafeBitCast(original, to: Setter.self)
+        var processingUpdates = 0
+        var updates = 0
+        let observer: @convention(block) (NSTextView, Int, NSRange) -> Void = { [self] view, state, range in
+            if view === text {
+                updates += 1
+                if !engine.textStorage.editedMask.isEmpty { processingUpdates += 1 }
+            }
+            invoke(view, selector, state, range)
+        }
+        let replacement = imp_implementationWithBlock(observer)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        text.insertText("x", replacementRange: text.selectedRange())
+        await nextMainTurn()
+        XCTAssertEqual(processingUpdates, 0)
+        XCTAssertGreaterThan(updates, 0, "Code still clears spelling after editing")
+    }
+
+    func testDeferredRestoreCannotOverwriteANewerFormatOrDetachedView() async throws {
+        for detach in [false, true] {
+            editor([.text("Title"), .text("x", style: "quote")])
+            text.setSelectedRange(NSRange(location: 7, length: 0))
+            text.deleteBackward(nil)
+            XCTAssertTrue(engine.perform(.paragraph(.heading(2))))
+            let attributes = text.typingAttributes
+            if detach { engine.detachView() }
+            await nextMainTurn()
+            XCTAssertEqual(NSDictionary(dictionary: text.typingAttributes), NSDictionary(dictionary: attributes))
+            if !detach {
+                text.insertText("new", replacementRange: text.selectedRange())
+                XCTAssertEqual(engine.document().blocks.last?.level, 2)
+            }
+            engine.detachView(); window.close()
+        }
+    }
+}

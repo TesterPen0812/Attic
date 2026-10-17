@@ -635,3 +635,90 @@ private final class FakeDraggingInfo: NSObject, NSDraggingInfo {
         }
     }
 }
+
+// D1 diagnosis: native source completion and Core Animation, no screen input.
+@MainActor
+final class RoundD1DragTests: XCTestCase {
+    /// The production return helper orders a transparent, display-spanning
+    /// panel. Redirect only this test's ordering to a position off every screen
+    /// so Core Animation makes a real presentation tree without visible UI.
+    private func withReturnWindowsOffscreen(_ body: () throws -> Void) throws {
+        let selector = #selector(NSWindow.orderFrontRegardless)
+        let method = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, selector))
+        let original = method_getImplementation(method)
+        typealias Order = @convention(c) (NSWindow, Selector) -> Void
+        let invoke = unsafeBitCast(original, to: Order.self)
+        let redirect: @convention(block) (NSWindow) -> Void = { window in
+            window.setFrameOrigin(CGPoint(x: -100000, y: -100000))
+            precondition(NSScreen.screens.allSatisfy { !window.frame.intersects($0.frame) })
+            invoke(window, selector)
+        }
+        let replacement = imp_implementationWithBlock(redirect)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        try body()
+    }
+
+    private func source() throws -> TasksDragOut.Source {
+        let images = try XCTUnwrap(TasksDragOut.Card.Images(card: Color.gray.frame(height: 34),
+            width: 300, environment: EnvironmentValues(), scale: 2))
+        let source = TasksDragOut.Source(ended: {})
+        source.card = TasksDragOut.Card(images: images,
+            frame: CGRect(x: 0, y: 0, width: 340, height: 74),
+            home: { CGRect(x: 1200, y: 700, width: 340, height: 74) },
+            reduceMotion: false, handOff: {}, settled: {})
+        source.grip = AtticDragGrip(offset: CGPoint(x: -20, y: -37), size: CGSize(width: 340, height: 74))
+        TasksDragOut.Source.current = source
+        source.handOffOnce()
+        return source
+    }
+
+    func testCancelledReturnDoesNotAddAnImplicitPositionAnimationFromTheScreenEdge() throws {
+        try withReturnWindowsOffscreen {
+            let source = try source()
+            defer {
+                source.dragReturnForTesting?.windowForTesting.orderOut(nil)
+                TasksDragOut.Source.current = nil
+            }
+            let returning = try XCTUnwrap(source.dragReturnForTesting)
+            CATransaction.flush()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let layers = try XCTUnwrap(returning.windowForTesting.contentView?.layer?.sublayers)
+            XCTAssertTrue(layers.allSatisfy { $0.presentation()?.position == .zero },
+                          "The hidden image has a presentation at the overlay origin")
+            let release = CGPoint(x: 900, y: 600)
+            source.ended(at: release, operation: []) // no destination or a refused/cancelled drop
+            let expected = source.grip.frame(at: release)
+            XCTAssertEqual(returning.startOnScreen, expected, "O2's model-frame assertion still passes")
+            for layer in layers {
+                let position = layer.animation(forKey: "position") as? CABasicAnimation
+                let x = layer.animation(forKey: "position.x") as? CASpringAnimation
+                let y = layer.animation(forKey: "position.y") as? CASpringAnimation
+                print("D1 return keys=\(layer.animationKeys() ?? []) implicitFrom=\(String(describing: position?.fromValue)) explicitXFrom=\(String(describing: x?.fromValue)) overlayOrigin=\(returning.windowForTesting.frame.origin)")
+                XCTAssertNotNil(x)
+                XCTAssertNotNil(y)
+                XCTAssertNil(position, "O18-06: implicit position starts at the overlay origin and competes with release-point springs")
+                XCTAssertNil(layer.animation(forKey: "bounds"), "Size must use only the explicit bounds.size spring")
+            }
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !returning.windowForTesting.frame.intersects($0.frame) })
+        }
+    }
+
+    func testEveryCompletedSourceOperationUsesTheSuppliedGlobalPointWithoutClamping() throws {
+        try withReturnWindowsOffscreen {
+            // x=0 and negative coordinates are valid on real multi-display
+            // desktops. Do not introduce a blanket zero/negative-point fallback.
+            for release in [CGPoint.zero, CGPoint(x: -1800, y: 400), CGPoint(x: 900, y: -600)] {
+                for operation: NSDragOperation in [[], .copy, .delete] {
+                    let source = try source()
+                    let returning = try XCTUnwrap(source.dragReturnForTesting)
+                    source.ended(at: release, operation: operation)
+                    XCTAssertEqual(returning.startOnScreen,
+                        operation.isEmpty ? source.grip.frame(at: release) : nil)
+                    returning.windowForTesting.orderOut(nil)
+                    TasksDragOut.Source.current = nil
+                }
+            }
+        }
+    }
+}

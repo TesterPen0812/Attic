@@ -102,7 +102,9 @@ final class NoteCalloutIconSession {
         observe(NSWindow.didChangeOcclusionStateNotification, object: window) { session in
             if session.window?.isVisible != true { session.cancel(reason: "window hidden") }
         }
-        observe(NSTextStorage.didProcessEditingNotification, object: engine?.textStorage) { $0.validateAfterStorageEdit() }
+        observe(NSTextStorage.didProcessEditingNotification, object: engine?.textStorage) { session in
+            session.engine?.afterStorageEdit { [weak session] _ in session?.validateAfterStorageEdit() }
+        }
         guard window.makeFirstResponder(receiver), window.firstResponder === receiver else {
             return end(.expired, reason: "receiver focus refused")
         }

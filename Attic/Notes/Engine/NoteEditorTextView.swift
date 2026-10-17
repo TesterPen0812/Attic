@@ -145,10 +145,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         guard let engine, edited.location != NSNotFound else { return }
         let location = min(edited.location, max(0, engine.textStorage.length - 1))
         guard engine.textStorage.length > 0, engine.paragraphStyle(at: location)?.isCode == true else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let engine = self.engine, let manager = self.textLayoutManager,
-                  location < engine.textStorage.length, engine.paragraphStyle(at: location)?.isCode == true,
-                  let range = engine.textRange(for: engine.blockRange(at: location)) else { return }
+        engine.afterStorageEdit { [weak self] current in
+            guard let self, self.engine === current, let manager = self.textLayoutManager,
+                  location < current.textStorage.length, current.paragraphStyle(at: location)?.isCode == true,
+                  let range = current.textRange(for: current.blockRange(at: location)) else { return }
             manager.invalidateRenderingAttributes(for: range)
         }
     }
