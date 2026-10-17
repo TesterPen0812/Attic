@@ -255,8 +255,10 @@ final class NotesV2TypographyTests: XCTestCase {
         let firstLine = try XCTUnwrap(blocks.first?.textLineFragments.first)
         let lastFragment = try XCTUnwrap(blocks.last)
         let lastLine = try XCTUnwrap(lastFragment.textLineFragments.last)
+        // O18-03 (10-17): a line's box is the font's natural one, with its
+        // line spacing above it; the R14 box starts that spacing higher.
         XCTAssertEqual(firstLine.typographicBounds.minY + blocks[0].layoutFragmentFrame.minY - block.minY,
-                       NoteBlockLayoutFragment.monoTopInset - NoteTextStyle.baselineShift(T.mono), accuracy: 0.01)
+                       NoteBlockLayoutFragment.monoTopInset - NoteTextStyle.baselineShift(T.mono) + NoteTextStyle.lineLeading(T.mono), accuracy: 0.01)
         XCTAssertEqual(block.maxY - (lastFragment.layoutFragmentFrame.minY + lastLine.typographicBounds.maxY),
                        T.monoPaddingV + NoteTextStyle.baselineShift(T.mono), accuracy: 0.01)
         // 6 above the block after "Sources:" (a heading binds to it).
@@ -350,7 +352,7 @@ final class NotesV2TypographyTests: XCTestCase {
         }
         let emptyLine = try XCTUnwrap(extra)
         XCTAssertEqual(emptyLine.characterRange.length, 0)
-        XCTAssertEqual(emptyLine.typographicBounds.minY - rect.maxY, NoteTextStyle.spacingBefore(.body, after: .mono), accuracy: 0.01,
+        XCTAssertEqual(emptyLine.typographicBounds.minY - NoteTextStyle.lineLeading(T.body) - rect.maxY, NoteTextStyle.spacingBefore(.body, after: .mono), accuracy: 0.01,
                        "the empty line sits below the block as a paragraph after it would")
     }
 
@@ -528,7 +530,10 @@ final class NotesV2TypographyTests: XCTestCase {
         let fragment = try XCTUnwrap(fragments(engine).last as? NoteBlockLayoutFragment)
         XCTAssertEqual(fragment.decoration, .plain)
         XCTAssertNotNil(fragment.chipFill)
-        XCTAssertEqual(fragment.textLineFragments.first?.typographicBounds.height ?? 0, T.body.lineHeight, accuracy: 0.01,
+        // O18-03: the line's box is the body font's natural one (the caret's
+        // height); the chip's 11 pt mono never changes it or the pitch.
+        XCTAssertEqual(fragment.textLineFragments.first?.typographicBounds.height ?? 0,
+                       T.body.lineHeight - NoteTextStyle.lineLeading(T.body), accuracy: 0.01,
                        "the chip never changes the line's height")
     }
 
@@ -595,7 +600,7 @@ final class NotesV2TypographyTests: XCTestCase {
         // Optical padding: first line box 8 under the box top, last 8 above its bottom.
         let first = try XCTUnwrap(frags[2].textLineFragments.first)
         let top = frags[2].layoutFragmentFrame.minY + first.typographicBounds.minY
-        XCTAssertEqual(top + NoteTextStyle.baselineShift(T.body) - (try box(frags[2]).minY), T.calloutPaddingV, accuracy: 0.01)
+        XCTAssertEqual(top - NoteTextStyle.lineLeading(T.body) + NoteTextStyle.baselineShift(T.body) - (try box(frags[2]).minY), T.calloutPaddingV, accuracy: 0.01)
         let bottom = frags[2].layoutFragmentFrame.minY + first.typographicBounds.maxY + NoteTextStyle.baselineShift(T.body)
         XCTAssertEqual((try box(frags[2]).maxY) - bottom, T.calloutPaddingV, accuracy: 0.01)
     }

@@ -26,7 +26,7 @@ final class NoteFormatControls: NSObject {
     private let barHost: AtticOverlayHostingView
     private let slashHost: AtticOverlayHostingView
     private let cardHost: AtticOverlayHostingView
-    private let hintHost: AtticOverlayHostingView
+    private let hintHost: NoteSlashHintLabel
     private let addressHost: AtticOverlayHostingView
     private(set) var design: AtticDesignContext
 
@@ -94,11 +94,10 @@ final class NoteFormatControls: NSObject {
         barHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         slashHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         cardHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
-        hintHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        hintHost = NoteSlashHintLabel()
         addressHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         super.init()
         formatModel.router = router
-        hintHost.contentInset = 0
         cardHost.acceptsKeyboard = true
         // The `/` list and the cards are dropdowns: their room is the card's
         // shadow's, and VoiceOver hears a menu.
@@ -238,7 +237,7 @@ final class NoteFormatControls: NSObject {
                 self.placeCard()
             })
             .atticDesign(design))
-        hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design))
+        hintHost.ink = AtticColorTokens.resolve(design).hintInk.nsColor
         // The address can stay under the pointer across a change of look.
         // Keep its host and placement; refreshing must not require rehovering.
         if let hoverURL {
@@ -1359,15 +1358,16 @@ final class NoteFormatControls: NSObject {
             && engine.focusedTable == nil && !textView.hasMarkedText() && engine.slashSession == nil && cardModel.card == nil
         if show, let rect = caretRect() {
             let size = hintHost.fittingSize
-            // F-03b: the hint sits on the line's own baseline, as typed text
-            // would, so the caret (fitted to that baseline) matches its
-            // height and centre. Centred in the line box it sat lower.
+            // O18-04: the hint's first baseline is the line's own, as
+            // TextKit laid the line out (typed text lands there), measured
+            // from the hint itself rather than estimated from font metrics.
             var y = rect.minY + (rect.height - size.height) / 2
-            if let line = NoteCaretFitter.line(at: rect, in: textView) {
-                let font = AtticTextStyle.noteBody.nsFont
-                y = line.baseline - font.ascender - max(0, size.height - (font.ascender - font.descender)) / 2
+            if let line = NoteLineGeometry.line(at: rect, in: textView) {
+                // On the device pixel the line's glyphs are drawn on, so
+                // the hint is crisp and its letters share their row.
+                y = NoteLineGeometry.drawnBaseline(line.baseline, in: textView) - hintBaselineOffset(height: size.height)
             }
-            let frame = NSRect(x: rect.minX, y: y, width: size.width, height: size.height).integral
+            let frame = NSRect(x: rect.minX, y: y, width: size.width, height: size.height)
             if hintHost.frame != frame { hintHost.frame = frame }
             if !hintShown {
                 hintHost.isHidden = false
@@ -1379,6 +1379,12 @@ final class NoteFormatControls: NSObject {
             hideHint()
         }
     }
+
+    /// The hint's first text baseline below its view's top: it draws its
+    /// letters on exactly that baseline (`NoteSlashHintLabel`), so the hint
+    /// stands on the line's own baseline on every OS (a hosting view's
+    /// reported baseline differed between macOS 26 and 27).
+    private func hintBaselineOffset(height: CGFloat) -> CGFloat { hintHost.baselineOffset }
 
     private func hideHint() {
         hintHost.isHidden = true

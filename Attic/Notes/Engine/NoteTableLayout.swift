@@ -64,6 +64,16 @@ struct NoteTableLayout: Equatable {
                       height: max(1, cell.height - 2 * M.cellPaddingV + shift))
     }
 
+    /// Where a cell's text is drawn when it is not being edited: its lines'
+    /// spacing sits above each line (`NoteTextStyle.setLines`), which
+    /// string drawing puts under each line instead, so the drawing starts
+    /// that much lower and ends where the text rect does (O18-03).
+    func drawnTextRect(_ position: NoteTable.Position) -> CGRect {
+        let rect = textRect(position)
+        let leading = NoteTextStyle.lineLeading(AtticNoteType.body)
+        return CGRect(x: rect.minX, y: rect.minY + leading, width: rect.width, height: max(1, rect.height - leading))
+    }
+
     /// The text width inside a column.
     func textWidth(column: Int) -> CGFloat {
         columnWidths.indices.contains(column) ? max(1, columnWidths[column] - 2 * M.cellPaddingH) : 1

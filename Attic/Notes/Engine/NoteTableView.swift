@@ -74,7 +74,7 @@ enum NoteTableDrawing {
                 guard position != skipping else { continue }
                 let rect = layout.cellRect(position)
                 guard rect.intersects(visible), !table[position].isEmpty else { continue }
-                string(position).draw(with: layout.textRect(position), options: [.usesLineFragmentOrigin, .usesFontLeading])
+                string(position).draw(with: layout.drawnTextRect(position), options: [.usesLineFragmentOrigin, .usesFontLeading])
             }
         }
         tokens.tableGrid.nsColor.setFill()

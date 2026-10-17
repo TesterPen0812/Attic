@@ -188,6 +188,10 @@ final class MarqueeInteractionTests: XCTestCase {
         container.widthTracksTextView = false
         container.size.width = 140
         engine.invalidateLayout(NSRange(location: 0, length: engine.textStorage.length))
+        // Lay the whole note out first: TextKit only estimates an invalidated
+        // paragraph's height, and with natural line boxes (O18-03) that
+        // estimate no longer happens to move "After" down by itself.
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         let ink = try XCTUnwrap(engine.rect(for: after))
         text.viewWillDraw() // TextKit's pre-draw layout path, with unchanged view bounds.
         let refreshed = try XCTUnwrap(selection.items().first { $0.id == AnyHashable(after.location) })
@@ -429,7 +433,7 @@ final class MarqueeInteractionTests: XCTestCase {
             text.addSubview(indicator)
             indicator.displayMode = mode
             selection.select(offsets: [6])
-            text.caretFitter.refresh()
+            text.caretVisibility.refresh()
             XCTAssertEqual(indicator.displayMode, .hidden)
             selection.clear()
             XCTAssertEqual(indicator.displayMode, mode)
