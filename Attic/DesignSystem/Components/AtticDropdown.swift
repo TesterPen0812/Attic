@@ -393,54 +393,31 @@ final class AtticOptionHints: ObservableObject {
     }
 }
 
-private struct AtticShortcutHintsShownKey: EnvironmentKey {
-    static let defaultValue: Bool? = nil
-}
-
-extension EnvironmentValues {
-    var atticShortcutHintsShown: Bool? {
-        get { self[AtticShortcutHintsShownKey.self] }
-        set { self[AtticShortcutHintsShownKey.self] = newValue }
-    }
-}
-
-/// Opt in only around menus with shortcuts: one observation and lifetime
-/// for the rows, while the leaves keep their room and their own fade.
+/// Opt in only around menus with shortcuts: one observation and lifetime.
+/// Leaves receive a plain value rather than observing shared or environment state.
 struct AtticShortcutHintScope<Content: View>: View {
     @ObservedObject private var hints = AtticOptionHints.shared
-    let content: Content
+    let content: (Bool) -> Content
 
-    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    init(@ViewBuilder content: @escaping (Bool) -> Content) { self.content = content }
 
     var body: some View {
-        content
-            .environment(\.atticShortcutHintsShown, hints.shown)
+        content(hints.shown)
             .onAppear { hints.retain() }
             .onDisappear { hints.release() }
     }
 }
 
-/// A menu row's shortcut, shown while ⌥ is held. Leaves inside a scope
-/// take its value without observing or retaining the shared watcher.
+/// Standalone hints retain their existing observation and lifetime.
 struct AtticShortcutHint: View {
-    let text: String
-    @Environment(\.atticShortcutHintsShown) private var shown
-
-    var body: some View {
-        if let shown {
-            AtticShortcutHintText(text: text, shown: shown)
-        } else {
-            AtticStandaloneShortcutHint(text: text)
-        }
-    }
-}
-
-private struct AtticStandaloneShortcutHint: View {
     let text: String
     @ObservedObject private var hints = AtticOptionHints.shared
 
     var body: some View {
-        AtticShortcutHintText(text: text, shown: hints.shown)
+        AtticText(verbatim: text, style: .shortcut, ink: .helper)
+            .fixedSize()
+            .opacity(hints.shown ? 1 : 0)
+            .animation(AtticMotionScale.easeOut(AtticMotionScale.fast), value: hints.shown)
             .onAppear { hints.retain() }
             .onDisappear { hints.release() }
     }
@@ -472,6 +449,8 @@ struct AtticDropdownRow: View {
     /// A priority's mark column (`.none` keeps the column empty).
     var mark: AtticPriority?
     var detail: String?
+    /// Only a shortcut menu's shared scope supplies this value.
+    var shortcutHintsShown: Bool?
     /// Typed text to embolden in the name (the `/` list's filter).
     var match: String?
     var scrollID: String?
@@ -489,7 +468,7 @@ struct AtticDropdownRow: View {
 
     init(title: String, systemName: String? = nil, check: AtticCheckState? = nil, dot: AtticInk? = nil, checkGlyph: String? = nil,
          mark: AtticPriority? = nil,
-         detail: String? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
+         detail: String? = nil, shortcutHintsShown: Bool? = nil, match: String? = nil, isHighlighted: Bool = false, titleInk: AtticInk = .body,
          titleFont: Font? = nil, onHover: ((Bool) -> Void)? = nil, position: Int? = nil, itemCount: Int? = nil, scrollID: String? = nil, action: @escaping () -> Void) {
         self.scrollID = scrollID
         self.position = position
@@ -501,6 +480,7 @@ struct AtticDropdownRow: View {
         self.checkGlyph = checkGlyph
         self.mark = mark
         self.detail = detail
+        self.shortcutHintsShown = shortcutHintsShown
         self.match = match
         self.isHighlighted = isHighlighted
         self.titleInk = titleInk
@@ -550,7 +530,11 @@ struct AtticDropdownRow: View {
                 if let detail {
                     if AtticOptionHints.isShortcut(detail) {
                         // O14-08: shortcuts show while ⌥ is held.
-                        AtticShortcutHint(text: detail)
+                        if let shortcutHintsShown {
+                            AtticShortcutHintText(text: detail, shown: shortcutHintsShown)
+                        } else {
+                            AtticShortcutHint(text: detail)
+                        }
                     } else {
                         AtticText(verbatim: detail, style: .shortcut, ink: .helper)
                             .fixedSize()
