@@ -139,6 +139,30 @@ final class DataSizeCostTests: XCTestCase {
         }
     }
 
+    func testP02RunCacheTracksStyleSplitAndReplay() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("first", style: "mono"), .text("middle", style: "mono"), .text("last", style: "mono"), .text("body")]))
+        let (_, view) = engine.makeView()
+        defer { engine.detachView() }
+        func verify() {
+            let at = (view.string as NSString).range(of: "middle").location
+            let cached = engine.blockRange(at: at)
+            engine.blockRunIntervals = []
+            XCTAssertEqual(cached, engine.blockRange(at: at))
+        }
+        verify()
+        let middle = (view.string as NSString).range(of: "middle")
+        XCTAssertTrue(engine.perform(.paragraph(.body), selection: middle)); verify()
+        XCTAssertTrue(engine.history.undo()); verify()
+        XCTAssertTrue(engine.history.redo()); verify()
+        XCTAssertTrue(engine.perform(.paragraph(.mono), selection: middle)); verify()
+        view.setSelectedRange(NSRange(location: middle.location + 2, length: 0))
+        view.insertText("\n", replacementRange: view.selectedRange())
+        let at = (view.string as NSString).range(of: "first").location
+        let cached = engine.blockRange(at: at)
+        engine.blockRunIntervals = []
+        XCTAssertEqual(cached, engine.blockRange(at: at))
+    }
+
     func testP12FixedWidthTableEdit() throws {
         for rows in [100, 500] {
             var table = NoteTable(texts: (0..<rows).map { i in (0..<20).map { "Cell \(i) \($0)" } })
@@ -194,55 +218,6 @@ final class DataSizeCostTests: XCTestCase {
         }
     }
 
-    func testP05MiddleEditProjection() throws {
-        for count in [1000, 5000] {
-            var blocks: [NoteBlock] = [.text("Title")]
-            for i in 0..<count { blocks.append(.text("Mixed line \(i) with more words", style: i % 5 == 0 ? "bullet" : "body")) }
-            let document = NoteDocument(blocks: blocks)
-            let bytes = try NoteContentCodec.encode(document)
-            var decoded: NoteDocument?
-            let decodeMS = milliseconds { decoded = NoteContentCodec.decode(bytes).document }
-            XCTAssertEqual(try NoteContentCodec.encode(XCTUnwrap(decoded)), bytes)
-            let engine = NoteEditorEngine(noteID: UUID(), document: document)
-            let (_, view) = engine.makeView()
-            XCTAssertEqual(try NoteContentCodec.encode(engine.document()), bytes)
-            let middle = (engine.textStorage.string as NSString).range(of: "Mixed line \(count / 2) ").location + 12
-            view.setSelectedRange(NSRange(location: middle, length: 0)); view.insertText("x", replacementRange: view.selectedRange())
-            var projected = document
-            let extractionMS = milliseconds { projected = engine.document() }
-            var prepared: PreparedNoteDocument?
-            let prepareMS = try milliseconds { prepared = try PreparedNoteDocument(projected) }
-            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-            let commitMS = milliseconds { _ = store.createDocumentNote(id: UUID(), document: projected, prepared: prepared) }
-            print("P2_SAVE size=\(count) decode_ms=\(decodeMS) extraction_ms=\(extractionMS) preparation_ms=\(prepareMS) commit_ms=\(commitMS)")
-            XCTAssertEqual(projected, NoteTextCodec.document(from: engine.textStorage, template: document))
-            engine.detachView()
-        }
-    }
-    func testP02RunCacheTracksStyleSplitAndReplay() {
-        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("first", style: "mono"), .text("middle", style: "mono"), .text("last", style: "mono"), .text("body")]))
-        let (_, view) = engine.makeView()
-        defer { engine.detachView() }
-        func verify() {
-            let at = (view.string as NSString).range(of: "middle").location
-            let cached = engine.blockRange(at: at)
-            engine.blockRunIntervals = []
-            XCTAssertEqual(cached, engine.blockRange(at: at))
-        }
-        verify()
-        let middle = (view.string as NSString).range(of: "middle")
-        XCTAssertTrue(engine.perform(.paragraph(.body), selection: middle)); verify()
-        XCTAssertTrue(engine.history.undo()); verify()
-        XCTAssertTrue(engine.history.redo()); verify()
-        XCTAssertTrue(engine.perform(.paragraph(.mono), selection: middle)); verify()
-        view.setSelectedRange(NSRange(location: middle.location + 2, length: 0))
-        view.insertText("\n", replacementRange: view.selectedRange())
-        let at = (view.string as NSString).range(of: "first").location
-        let cached = engine.blockRange(at: at)
-        engine.blockRunIntervals = []
-        XCTAssertEqual(cached, engine.blockRange(at: at))
-    }
-
     func testP10DemandSummariesPreserveCountsAndRejectChangedContentWithSameToken() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let document = NoteDocument(blocks: [.text("Title"), .checklist("Checked", checked: true), .checklist("Open"), .text("Preview words")])
@@ -272,4 +247,130 @@ final class DataSizeCostTests: XCTestCase {
         XCTAssertTrue(changed.preview.contains("Changed preview"))
     }
 
+    func testP05ProjectionAgreesWithFullCodecAcrossEditsAndReplay() throws {
+        var special = NoteBlock.text("Keep identity")
+        special.id = UUID(); special.extras["unknown"] = .string("retain")
+        let document = NoteDocument(blocks: [.text("Title"), special, .text("Middle emoji 🪴 words", style: "bullet"), .text("Other body"), .text("Tail")])
+        let engine = NoteEditorEngine(noteID: UUID(), document: document)
+        let (_, view) = engine.makeView()
+        defer { engine.detachView() }
+        func verify() throws {
+            let actual = try NoteContentCodec.encode(engine.document())
+            let expected = try NoteContentCodec.encode(NoteTextCodec.document(from: engine.textStorage, template: document))
+            XCTAssertTrue(actual == expected, "partial projection must be byte-identical to a full extraction")
+            XCTAssertTrue(try NoteContentCodec.encode(engine.checkpointDocument()) == expected)
+        }
+        try verify()
+        func edit(_ text: String, at phrase: String, length: Int = 0) throws {
+            let at = (view.string as NSString).range(of: phrase).location
+            XCTAssertNotEqual(at, NSNotFound)
+            view.setSelectedRange(NSRange(location: at, length: length))
+            view.insertText(text, replacementRange: view.selectedRange())
+        }
+        try edit("α", at: "emoji"); try edit("β", at: "emoji"); try verify()
+        try edit("x", at: "Middle"); try edit("y", at: "Other"); try verify()
+        try edit("\n", at: "words"); try verify()
+        XCTAssertTrue(engine.history.undo()); try verify()
+        XCTAssertTrue(engine.history.redo()); try verify()
+        let range = (view.string as NSString).range(of: "emoji")
+        XCTAssertTrue(engine.perform(.mark(.bold), selection: range)); try verify()
+        try edit("z", at: "emoji"); try verify()
+        XCTAssertTrue(engine.history.undo()); try verify()
+        XCTAssertTrue(engine.history.redo()); try verify()
+        try edit("p", at: "emoji")
+        let pendingMark = (view.string as NSString).range(of: "Other")
+        XCTAssertTrue(engine.perform(.mark(.italic), selection: pendingMark)); try verify()
+    }
+
+    func testP05LateDecodeCannotReplaceNavigationOrChangedBytes() async throws {
+        for changedBytes in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored"), .text("Body")])) else { return XCTFail("fixture save") }
+            let gate = OpenDecodeGate()
+            let controller = NotesPageController(store: store, journal: nil, decodeOpenDocument: { bytes in await gate.decode(bytes) })
+            let opening = Task { await controller.openDurably(noteID: id) }
+            while !(await gate.waiting) { await Task.yield() }
+            if changedBytes {
+                // A fresh-context/import writer can retain the revision token.
+                store.note(withID: id)?.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Newer"), .text("Changed bytes")]))
+            } else { XCTAssertTrue(controller.newNote()) }
+            let activeID = controller.active?.id
+            await gate.release()
+            let opened = await opening.value
+            XCTAssertFalse(opened)
+            XCTAssertEqual(controller.active?.id, activeID)
+        }
+    }
+
+    func testP05ColdDurableOpenDecodesOffMainAndKeepsExactBytes() async throws {
+        for count in [1000, 5000] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let document = NoteDocument(blocks: [.text("Title")] + (0..<count).map { .text("Mixed line \($0)", style: $0 % 5 == 0 ? "bullet" : "body") })
+            let id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: document) else { return XCTFail("fixture save") }
+            let bytes = try XCTUnwrap(store.note(withID: id)?.content)
+            let controller = NotesPageController(store: store, journal: nil)
+            let start = DispatchTime.now().uptimeNanoseconds
+            let opened = await controller.openDurably(noteID: id)
+            XCTAssertTrue(opened)
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+            XCTAssertEqual(controller.coldDecodeCount, 1)
+            XCTAssertEqual(controller.coldDecodeOnMainCount, 0)
+            let session = try XCTUnwrap(controller.active)
+            XCTAssertTrue(try NoteContentCodec.encode(session.engine.document()) == bytes)
+            session.engine.onTextChange?()
+            XCTAssertTrue(controller.save(session))
+            XCTAssertEqual(store.note(withID: id)?.content, bytes)
+            let reopened = await controller.openDurably(noteID: id)
+            XCTAssertTrue(reopened); XCTAssertEqual(controller.coldDecodeCount, 1)
+            print("P2_COLD_OPEN size=\(count) decodes=\(controller.coldDecodeCount) main_decodes=\(controller.coldDecodeOnMainCount) total_ms=\(ms)")
+        }
+    }
+
+    func testP05MiddleEditProjection() throws {
+        for count in [1000, 5000] {
+            var blocks: [NoteBlock] = [.text("Title")]
+            for i in 0..<count { blocks.append(.text("Mixed line \(i) with more words", style: i % 5 == 0 ? "bullet" : "body")) }
+            let document = NoteDocument(blocks: blocks)
+            let bytes = try NoteContentCodec.encode(document)
+            var decoded: NoteDocument?
+            let decodeMS = milliseconds { decoded = NoteContentCodec.decode(bytes).document }
+            XCTAssertEqual(try NoteContentCodec.encode(XCTUnwrap(decoded)), bytes)
+            let engine = NoteEditorEngine(noteID: UUID(), document: document)
+            let (_, view) = engine.makeView()
+            XCTAssertEqual(try NoteContentCodec.encode(engine.document()), bytes)
+            let middle = (engine.textStorage.string as NSString).range(of: "Mixed line \(count / 2) ").location + 12
+            view.setSelectedRange(NSRange(location: middle, length: 0)); view.insertText("x", replacementRange: view.selectedRange())
+            var projected = document
+            var fullProjection: NoteDocument?
+            let fullMS = milliseconds { fullProjection = NoteTextCodec.document(from: engine.textStorage, template: document) }
+            let projectionUnits = engine.documentProjectionUTF16Count
+            let extractionMS = milliseconds { projected = engine.document() }
+            let extractedUnits = engine.documentProjectionUTF16Count - projectionUnits
+            XCTAssertEqual(extractedUnits, engine.paragraphRange(at: middle).length)
+            var prepared: PreparedNoteDocument?
+            let prepareMS = try milliseconds { prepared = try PreparedNoteDocument(projected) }
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let savedID = UUID()
+            let commitMS = milliseconds {
+                guard case .success = store.createDocumentNote(id: savedID, document: projected, prepared: prepared) else { return XCTFail("prepared commit") }
+            }
+            XCTAssertEqual(store.note(withID: savedID)?.content, prepared?.content)
+            print("P2_SAVE size=\(count) decode_ms=\(decodeMS) full_utf16=\(engine.textStorage.length) full_extraction_ms=\(fullMS) projection_utf16=\(extractedUnits) extraction_ms=\(extractionMS) preparation_ms=\(prepareMS) commit_ms=\(commitMS)")
+            XCTAssertTrue(projected == fullProjection)
+            engine.detachView()
+        }
+    }
+}
+
+private actor OpenDecodeGate {
+    private(set) var waiting = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func decode(_ bytes: Data) async -> (content: NoteContent, onMainThread: Bool) {
+        waiting = true
+        await withCheckedContinuation { continuation = $0 }
+        return (NoteContentCodec.decode(bytes), Thread.isMainThread)
+    }
+    func release() { continuation?.resume(); continuation = nil }
 }

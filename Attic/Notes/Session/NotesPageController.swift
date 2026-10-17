@@ -249,6 +249,10 @@ final class NotesPageController: ObservableObject {
     private let now: () -> Date
     let imageLoader: @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)?
     private let decodeRecoveryDocument: @Sendable (Data) async -> NoteDocument?
+    private var openRequestGeneration: UInt64 = 0
+    private let decodeOpenDocument: @Sendable (Data) async -> (content: NoteContent, onMainThread: Bool)
+    private(set) var coldDecodeCount = 0
+    private(set) var coldDecodeOnMainCount = 0
     private let prepareDocument: @Sendable (NoteDocument) async -> PreparedNoteDocument?
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []
@@ -354,8 +358,34 @@ final class NotesPageController: ObservableObject {
     func openDurably(noteID: UUID) async -> Bool {
         if !didRecoverAtLaunch && journal?.requiresAsyncIO == true { recoverAtLaunch() }
         guard await awaitRecoveryForUser() else { return false }
-        guard await performAfterRecovery(finishAfterWrite: { self.open(noteID: noteID, verifiedCheckpointsOnly: true) },
-            { open(noteID: noteID) }) else { return false }
+        openRequestGeneration &+= 1
+        let generation = openRequestGeneration
+        var preparedLoad: NoteDocumentLoad?
+        var preparedBytes: Data?
+        if cache[noteID] == nil, let note = store.note(withID: noteID), note.usesDocumentFormat, let bytes = note.content {
+            let revision = note.revisionID
+            let decoded = await decodeOpenDocument(bytes)
+            coldDecodeCount += 1
+            if decoded.onMainThread { coldDecodeOnMainCount += 1 }
+            guard !Task.isCancelled, generation == openRequestGeneration,
+                  let current = store.note(withID: noteID), current.revisionID == revision,
+                  current.content == bytes else { return false }
+            preparedLoad = NoteDocumentLoad(noteID: noteID, content: decoded.content, revisionID: revision)
+            preparedBytes = bytes
+        }
+        func stillCurrent() -> Bool {
+            guard !Task.isCancelled, generation == openRequestGeneration else { return false }
+            guard let preparedLoad else { return true }
+            guard let current = store.note(withID: noteID) else { return false }
+            return current.revisionID == preparedLoad.revisionID && current.content == preparedBytes
+        }
+        guard await performAfterRecovery(finishAfterWrite: {
+            guard stillCurrent() else { return false }
+            return self.open(noteID: noteID, verifiedCheckpointsOnly: true, preparedLoad: preparedLoad)
+        }, {
+            guard stillCurrent() else { return false }
+            return open(noteID: noteID, preparedLoad: preparedLoad)
+        }) else { return false }
         if let session = active {
             let engine = session.engine
             // Text-only sessions have no bytes to hydrate. Inspect the
@@ -514,6 +544,9 @@ final class NotesPageController: ObservableObject {
          prepareDocument: @escaping @Sendable (NoteDocument) async -> PreparedNoteDocument? = { document in
              await Task.detached { try? PreparedNoteDocument(document) }.value
          },
+         decodeOpenDocument: @escaping @Sendable (Data) async -> (content: NoteContent, onMainThread: Bool) = { bytes in
+             await Task.detached(priority: .userInitiated) { (NoteContentCodec.decode(bytes), Thread.isMainThread) }.value
+         },
          decodeRecoveryDocument: @escaping @Sendable (Data) async -> NoteDocument? = { bytes in
              await Task.detached(priority: .userInitiated) { NoteContentCodec.decode(bytes).document }.value
          }) {
@@ -527,6 +560,7 @@ final class NotesPageController: ObservableObject {
         self.imageLoader = imageLoader
         self.prepareDocument = prepareDocument
         self.decodeRecoveryDocument = decodeRecoveryDocument
+        self.decodeOpenDocument = decodeOpenDocument
         if let diskJournal = journal as? NoteDraftJournal {
             diskJournal.liveReferencedIDs = { [weak self] in
                 Set(self?.cache.values.flatMap { Array($0.engine.staged.keys) + (self?.liveAttachmentIDs(in: $0) ?? []) } ?? [])
@@ -935,14 +969,14 @@ final class NotesPageController: ObservableObject {
 
     /// Opens a stored document in the Notes editor.
     @discardableResult
-    func open(noteID: UUID, verifiedCheckpointsOnly: Bool = false) -> Bool {
+    func open(noteID: UUID, verifiedCheckpointsOnly: Bool = false, preparedLoad: NoteDocumentLoad? = nil) -> Bool {
         if let active, active.noteID == noteID {
             present()
             return true
         }
         guard let note = store.note(withID: noteID) else { return false }
         guard prepareToLeave(.openNote, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
-        guard let session = session(for: note).flatMap(presentSession) else { return false }
+        guard let session = session(for: note, preparedLoad: preparedLoad).flatMap(presentSession) else { return false }
         activate(session)
         return true
     }
@@ -960,9 +994,9 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
-    private func session(for note: NoteItem) -> NoteSession? {
+    private func session(for note: NoteItem, preparedLoad: NoteDocumentLoad? = nil) -> NoteSession? {
         if let cached = cache[note.id] { return cached }
-        let load = store.loadDocument(noteID: note.id)
+        let load = preparedLoad ?? store.loadDocument(noteID: note.id)
         let document = load?.content.document ?? .blank
         let readOnlyReason: NoteReadOnlyReason? = if let load {
             if case let .readOnly(_, reason, _) = load.content { reason } else { nil }
@@ -998,6 +1032,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func activate(_ session: NoteSession) {
+        openRequestGeneration &+= 1
         closeHistory()
         wire(session)
         cache[session.noteID] = session
@@ -1036,6 +1071,7 @@ final class NotesPageController: ObservableObject {
     }
 
     func present() {
+        openRequestGeneration &+= 1
         isPageVisible = true
         presentationCount &+= 1
         if let current = active {
@@ -1190,6 +1226,7 @@ final class NotesPageController: ObservableObject {
     /// The single boundary used by note navigation, the shell, hide and quit.
     @discardableResult
     func prepareToLeave(_ reason: LeaveReason, verifiedCheckpointsOnly: Bool = false) -> Bool {
+        if reason != .openNote { openRequestGeneration &+= 1 }
         if let active, !canLeaveComposition(in: active) { return false }
         let retainsSession = reason == .hide || reason == .pageSwitch
         if reason == .hide || reason == .quit {
@@ -1248,12 +1285,14 @@ final class NotesPageController: ObservableObject {
     }
 
     func showLibrary() -> Bool {
+        openRequestGeneration &+= 1
         guard prepareToLeave(.library) else { return false }
         isLibraryPresented = true
         return true
     }
 
     func dismissLibrary() {
+        openRequestGeneration &+= 1
         isLibraryPresented = false
         guard active != nil else {
             // The note on screen was deleted: the last note visited, else a new draft.

@@ -573,8 +573,12 @@ struct NotesEditorPage: View {
     private func openFromLibrary(_ id: UUID) {
         if let draft = controller.failedDrafts.first(where: { $0.noteID == id }), noteStore.note(withID: id) == nil {
             controller.openFailedDraft(sessionID: draft.id)
-        } else if controller.open(noteID: id) {
-            controller.dismissLibrary()
+        } else {
+            Task { @MainActor in
+                if await controller.openDurably(noteID: id) { controller.dismissLibrary() }
+                library.clearSearch()
+            }
+            return
         }
         library.clearSearch()
     }
