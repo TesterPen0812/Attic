@@ -575,7 +575,7 @@ struct NotesEditorPage: View {
             controller.openFailedDraft(sessionID: draft.id)
         } else {
             Task { @MainActor in
-                if await controller.openDurably(noteID: id) { controller.dismissLibrary() }
+                if await controller.openFromLibrary(noteID: id) { controller.dismissLibrary() }
                 library.clearSearch()
             }
             return

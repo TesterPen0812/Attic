@@ -250,7 +250,7 @@ final class DataSizeCostTests: XCTestCase {
     func testP05ProjectionAgreesWithFullCodecAcrossEditsAndReplay() throws {
         var special = NoteBlock.text("Keep identity")
         special.id = UUID(); special.extras["unknown"] = .string("retain")
-        let document = NoteDocument(blocks: [.text("Title"), special, .text("Middle emoji 🪴 words", style: "bullet"), .text("Other body"), .text("Tail")])
+        let document = NoteDocument(blocks: [.text("Title"), special, .text("Middle emoji 🪴 words", style: "bullet"), .text("Other body"), .text("Carriage\rseparated\u{2029}text"), .text("Tail")])
         let engine = NoteEditorEngine(noteID: UUID(), document: document)
         let (_, view) = engine.makeView()
         defer { engine.detachView() }
@@ -312,7 +312,7 @@ final class DataSizeCostTests: XCTestCase {
             let bytes = try XCTUnwrap(store.note(withID: id)?.content)
             let controller = NotesPageController(store: store, journal: nil)
             let start = DispatchTime.now().uptimeNanoseconds
-            let opened = await controller.openDurably(noteID: id)
+            let opened = await controller.openFromLibrary(noteID: id)
             XCTAssertTrue(opened)
             let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
             XCTAssertEqual(controller.coldDecodeCount, 1)

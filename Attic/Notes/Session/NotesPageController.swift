@@ -355,7 +355,13 @@ final class NotesPageController: ObservableObject {
         await performAfterRecovery(finishAfterWrite: { self.newNote(verifiedCheckpointsOnly: true) }) { newNote() }
     }
     func recoverAtLaunchAndWait() async { recoverAtLaunch(); await waitForRecoveryWork() }
-    func openDurably(noteID: UUID) async -> Bool {
+    /// Library navigation prepares only document bytes. Full byte ownership
+    /// hydration remains part of the existing explicit durable-open API.
+    func openFromLibrary(noteID: UUID) async -> Bool {
+        await openDecoded(noteID: noteID)
+    }
+
+    private func openDecoded(noteID: UUID) async -> Bool {
         if !didRecoverAtLaunch && journal?.requiresAsyncIO == true { recoverAtLaunch() }
         guard await awaitRecoveryForUser() else { return false }
         openRequestGeneration &+= 1
@@ -386,6 +392,11 @@ final class NotesPageController: ObservableObject {
             guard stillCurrent() else { return false }
             return open(noteID: noteID, preparedLoad: preparedLoad)
         }) else { return false }
+        return true
+    }
+
+    func openDurably(noteID: UUID) async -> Bool {
+        guard await openDecoded(noteID: noteID) else { return false }
         if let session = active {
             let engine = session.engine
             // Text-only sessions have no bytes to hydrate. Inspect the

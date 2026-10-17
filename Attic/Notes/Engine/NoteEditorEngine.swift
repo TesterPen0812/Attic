@@ -448,13 +448,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let finalStart = newline.location == NSNotFound ? 0 : newline.location + 1
         middleProjection = nil
         projectionParagraphs = []
+        // Match the codec's literal separators, including its final empty
+        // paragraph. Cocoa also recognizes CR/U+2029 as paragraph breaks.
         var at = 0
-        while at < textStorage.length {
-            let range = string.paragraphRange(for: NSRange(location: at, length: 0))
-            projectionParagraphs.append(range)
-            at = NSMaxRange(range)
-        }
-        if textStorage.length == 0 || textStorage.string.hasSuffix("\n") { projectionParagraphs.append(NSRange(location: textStorage.length, length: 0)) }
+        repeat {
+            let newline = string.range(of: "\n", options: .literal, range: NSRange(location: at, length: string.length - at))
+            let end = newline.location == NSNotFound ? string.length : newline.location
+            projectionParagraphs.append(NSRange(location: at, length: min(string.length, end + 1) - at))
+            at = end + 1
+        } while at <= string.length
         if projectionParagraphs.count != result.blocks.count { projectionParagraphs = [] }
         documentCache = (result, finalStart, false)
         documentExtractionCount += 1
