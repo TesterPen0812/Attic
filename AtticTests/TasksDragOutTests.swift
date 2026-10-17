@@ -589,6 +589,32 @@ final class TasksDragO2Tests: XCTestCase {
             XCTFail("Promise delivery failed: \(error)")
         }
     }
+
+    func testPromisedTaskTextWritesLongTitlesWithoutTruncatingTheirContents() async {
+        do {
+            let root = ownedTemporaryDirectory(prefix: "TasksDragF2Names")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            for title in [String(repeating: "A", count: 600), String(repeating: "🗂️", count: 300),
+                          "e" + String(repeating: "\u{0301}", count: 200)] {
+                let export = TasksTextExport(items: [.init(title: title)])
+                let promise = try XCTUnwrap(export.dragWriter() as? NSFilePromiseProvider)
+                let delegate = try XCTUnwrap(promise.delegate)
+                let name = delegate.filePromiseProvider(promise, fileNameForType: promise.fileType)
+                XCTAssertLessThanOrEqual(name.utf8.count, 255, "A task title is not bounded like an existing filesystem filename")
+                XCTAssertFalse(name.hasPrefix("."), "An oversized grapheme must not leave only a hidden .txt filename")
+                let url = root.appendingPathComponent(name)
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    delegate.filePromiseProvider(promise, writePromiseTo: url) { error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                    }
+                }
+                XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), export.plain)
+            }
+        } catch {
+            XCTFail("Long-title promise could not be written: \(error)")
+        }
+    }
+
     /// Within Attic a task is moved, not copied: its files stay its own.
     func testMovingATaskKeepsItsFiles() async throws {
         let root = ownedTemporaryDirectory(prefix: "TasksDragO2")

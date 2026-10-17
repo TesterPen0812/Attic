@@ -153,7 +153,13 @@ private final class TasksTextFilePromise: NSFilePromiseProvider, NSFilePromisePr
         markdown = export.markdown
         richText = export.rtf
         let title = export.items.count == 1 ? export.items[0].title : String(localized: "Tasks")
-        filename = AttachmentFileStore.sanitizedFilename(title) + ".txt"
+        let suffix = ".txt"
+        var name = AttachmentFileStore.sanitizedFilename(title)
+        // Task titles can exceed a filesystem filename. Reserve the suffix
+        // within a 255-byte name, without cutting a Unicode character.
+        while name.utf8.count + suffix.utf8.count > 255 { name.removeLast() }
+        if name.isEmpty { name = "Task" }
+        filename = name + suffix
         super.init()
         fileType = UTType.utf8PlainText.identifier
         delegate = self
