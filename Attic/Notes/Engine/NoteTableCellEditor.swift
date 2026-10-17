@@ -440,7 +440,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 /// spacing above it, as every later line has (O18-03), so the live cell's
 /// baselines are the drawn cell's (`NoteTableLayout.drawnTextRect`).
 @MainActor
-final class NoteCellLineLayout: NSObject, NSTextLayoutManagerDelegate {
+final class NoteCellLineLayout: NSObject, @preconcurrency NSTextLayoutManagerDelegate {
     final class Fragment: NSTextLayoutFragment {
         var leading: CGFloat = 0
         override var topMargin: CGFloat { super.topMargin + leading }

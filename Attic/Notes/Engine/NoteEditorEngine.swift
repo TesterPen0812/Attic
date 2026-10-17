@@ -3800,7 +3800,7 @@ extension NoteEditorEngine {
         if let start = block?.start { typing[.noteListStart] = start }
         if indent > 0 { typing[.noteBlockIndent] = indent }
         textView?.typingAttributes = typing
-        (textView as? NoteEditorTextView)?.revealCaretAfterLayout()
+        textView?.revealCaretAfterLayout()
         updateTextChecking()
         onTextChange?()
     }
