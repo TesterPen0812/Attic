@@ -1279,8 +1279,13 @@ enum AtticDropdownReveal {
         let t = Double(max(0, min(1, time)))
         if closing ? t <= 0 : t >= 1 { return .rest }
         if closing {
+            // V-11: the card leaves as one piece, the native way: whole,
+            // fading with its shadow, 0.98 and 3 pt towards its anchor. It
+            // never folds back to its first row (the tag card's "Find or
+            // add a tag" field stood alone for frames), as a removed card
+            // never has (`AtticUnfoldPresence`).
             let e = CGFloat(curve.y(at: t))
-            return Frame(reveal: 1 - e, opacity: opacity(progress: 1 - e), scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
+            return Frame(reveal: 1, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
                          contentBlur: 0, shadow: 1 - e)
         }
         let e = CGFloat(curve.y(at: t))
@@ -1547,8 +1552,8 @@ struct AtticUnfoldContent: ViewModifier {
 }
 
 /// The card on screen, with the dropdowns' motion (`AtticDropdownReveal`):
-/// it unfolds from the edge by its anchor as it opens and folds back as it
-/// closes; Reduced, it fades. Only this host moves.
+/// it unfolds from the edge by its anchor as it opens and fades away whole
+/// as it closes (V-11); Reduced, it fades. Only this host moves.
 struct AtticDropdownStage: View {
     @ObservedObject var model: AtticDropdownStageModel
     let content: AnyView

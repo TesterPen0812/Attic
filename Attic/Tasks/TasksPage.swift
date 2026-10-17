@@ -1653,8 +1653,10 @@ struct TasksPage: View {
                         }
                     )
                 }
-                // It opens from under its row (a fade in Calm).
-                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
+                // It opens from under its row (a fade in Calm), uncovered
+                // as the rows below make room (V-10).
+                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top)
+                    .combined(with: .atticTopReveal))
                 if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
                    row.subtasks.contains(where: { $0.id == renaming }) {
                     AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitSubtaskRename() })
@@ -1678,7 +1680,8 @@ struct TasksPage: View {
                     }
                 )
                 // It opens from under its row, as the quick look does.
-                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
+                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top)
+                    .combined(with: .atticTopReveal))
             }
         }
         // Files dropped on a row: one drop destination for the page
@@ -4545,7 +4548,8 @@ struct TasksEdgeBackdrops: View {
     let bottomInset: CGFloat
 
     var body: some View {
-        AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset))
+        AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset),
+                               bottomPlateau: TasksViewport.controlsPlateau(stack: stack.height, bottomInset: bottomInset))
     }
 }
 
@@ -4570,6 +4574,19 @@ enum TasksViewport {
         let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
         let visible = stack <= idle + 0.5 ? AtticControlSize.addBarHeight : stack
         return max(visible, AtticControlSize.addBarHeight) + bottomInset
+    }
+
+    /// How deep the bottom blur stays at full strength (S3-01): with a row
+    /// over the add bar (the composer's Date, Tag and Priority, plain
+    /// labels with no surface of their own) the content under it is
+    /// blurred as much as at the panel's edge, so the labels read; the blur
+    /// then eases out over its usual reach past the row. It rises with the
+    /// row as it opens (the stack's measured height follows its spring) and
+    /// goes with it; the bar alone keeps the approved blur (none).
+    static func controlsPlateau(stack: CGFloat, bottomInset: CGFloat) -> CGFloat {
+        let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
+        let risen = min(1, max(0, (stack - idle) / AtticControlSize.smallHeight))
+        return risen * controlsInset(stack: stack, bottomInset: bottomInset)
     }
 
     /// The tabs' plain text line, its underline included, down from the

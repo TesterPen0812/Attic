@@ -106,12 +106,18 @@ struct AtticFloatingEdges: Equatable, Sendable {
 struct AtticEdgeBlurBackdrop: View {
     let edge: VerticalEdge
     let extent: CGFloat
+    /// How far in from the edge the blur stays at full strength before it
+    /// eases out (S3-01: under a plain row of controls, such as the Tasks
+    /// composer's Date, Tag and Priority, so they read over the content).
+    /// 0 is the approved blur, easing from the edge itself.
+    var plateau: CGFloat = 0
     @ObservedObject private var lab = AtticEdgeBlurLab.shared
     @Environment(\.atticDesign) private var design
 
-    init(edge: VerticalEdge, extent: CGFloat) {
+    init(edge: VerticalEdge, extent: CGFloat, plateau: CGFloat = 0) {
         self.edge = edge
         self.extent = extent
+        self.plateau = plateau
     }
 
     /// With no blur: solid to the controls' inner edge, clear `solidFade`
@@ -139,7 +145,7 @@ struct AtticEdgeBlurBackdrop: View {
         let alignment: Alignment = edge == .top ? .top : .bottom
         ZStack(alignment: alignment) {
             if Self.blurs(design) {
-                AtticVariableBlur(radius: CGFloat(lab.radius), edge: edge)
+                AtticVariableBlur(radius: CGFloat(lab.radius), edge: edge, plateau: min(plateau, height))
             } else if Self.drawsSolidSurface(design) {
                 solidSurface(height: height)
             }
@@ -169,10 +175,13 @@ struct AtticEdgeBlurBackdrop: View {
 struct AtticEdgeBlurBackdrops: View {
     let top: CGFloat
     let bottom: CGFloat
+    /// The bottom blur's full-strength depth (`AtticEdgeBlurBackdrop.plateau`).
+    var bottomPlateau: CGFloat = 0
 
-    init(top: CGFloat, bottom: CGFloat) {
+    init(top: CGFloat, bottom: CGFloat, bottomPlateau: CGFloat = 0) {
         self.top = top
         self.bottom = bottom
+        self.bottomPlateau = bottomPlateau
     }
 
     init(_ edges: AtticFloatingEdges) {
@@ -182,7 +191,7 @@ struct AtticEdgeBlurBackdrops: View {
     var body: some View {
         ZStack {
             if top > 0 { AtticEdgeBlurBackdrop(edge: .top, extent: top) }
-            if bottom > 0 { AtticEdgeBlurBackdrop(edge: .bottom, extent: bottom) }
+            if bottom > 0 { AtticEdgeBlurBackdrop(edge: .bottom, extent: bottom, plateau: bottomPlateau) }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -218,16 +227,20 @@ struct AtticFloatingControlsBand: View {
 struct AtticVariableBlur: NSViewRepresentable {
     var radius: CGFloat = AtticEdgeBlurMetrics.radius
     var edge: VerticalEdge = .top
+    var plateau: CGFloat = 0
 
     nonisolated static var isAvailable: Bool { AtticVariableBlurView.makeFilter() != nil && AtticVariableBlurView.backdropClass != nil }
 
     func makeNSView(context: Context) -> AtticVariableBlurView {
-        AtticVariableBlurView(radius: radius, edge: edge)
+        let view = AtticVariableBlurView(radius: radius, edge: edge)
+        view.plateau = plateau
+        return view
     }
 
     func updateNSView(_ view: AtticVariableBlurView, context: Context) {
         view.radius = radius
         view.edge = edge
+        view.plateau = plateau
     }
 }
 
@@ -240,9 +253,16 @@ final class AtticVariableBlurView: NSView {
     var edge: VerticalEdge {
         didSet { if edge != oldValue { applyFilter() } }
     }
+    /// Full strength this far in from `edge` (points). It changes with
+    /// the frame as a row of controls comes and goes, so the next layout
+    /// makes the one new mask for both.
+    var plateau: CGFloat = 0 {
+        didSet { if abs(plateau - oldValue) > 0.25 { needsLayout = true } }
+    }
 
     private let backdrop: CALayer?
     private var maskSize: CGSize = .zero
+    private var maskPlateau: CGFloat = 0
 
     init(radius: CGFloat, edge: VerticalEdge) {
         self.radius = radius
@@ -271,8 +291,8 @@ final class AtticVariableBlurView: NSView {
         CATransaction.setDisableActions(true)
         backdrop?.frame = bounds
         CATransaction.commit()
-        // Only a new size makes a new mask: scrolling never does.
-        if bounds.size != maskSize { applyFilter() }
+        // Only a new size (or plateau) makes a new mask: scrolling never does.
+        if bounds.size != maskSize || abs(plateau - maskPlateau) > 0.25 { applyFilter() }
     }
 
     override func viewDidChangeBackingProperties() {
@@ -290,8 +310,9 @@ final class AtticVariableBlurView: NSView {
 
     private func applyFilter() {
         guard let backdrop, bounds.width > 0, bounds.height > 0,
-              let filter = Self.makeFilter(), let mask = Self.maskImage(height: bounds.height, edge: edge) else { return }
+              let filter = Self.makeFilter(), let mask = Self.maskImage(height: bounds.height, edge: edge, plateau: plateau) else { return }
         maskSize = bounds.size
+        maskPlateau = plateau
         filter.setValue(radius, forKey: "inputRadius")
         filter.setValue(mask, forKey: "inputMaskImage")
         filter.setValue(true, forKey: "inputNormalizeEdges")
@@ -299,17 +320,20 @@ final class AtticVariableBlurView: NSView {
     }
 
     /// One column, opaque at `edge` (full blur) easing to clear at the
-    /// other end (no blur). The filter stretches it across the width.
-    nonisolated static func maskImage(height: CGFloat, edge: VerticalEdge = .top) -> CGImage? {
+    /// other end (no blur), opaque all the way for its first `plateau`
+    /// points. The filter stretches it across the width.
+    nonisolated static func maskImage(height: CGFloat, edge: VerticalEdge = .top, plateau: CGFloat = 0) -> CGImage? {
         let rows = max(2, Int(height.rounded(.up)))
         guard let context = CGContext(data: nil, width: 1, height: rows, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
               let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
         // Bitmap rows run top to bottom in memory; black at the eased alpha.
+        let full = min(max(0, Double(plateau)), Double(rows - 1))
+        let span = Double(rows - 1) - full
         for row in 0..<rows {
-            let t = Double(row) / Double(rows - 1)        // 0 top … 1 bottom
-            let strength = edge == .top ? 1 - t : t
+            let fromEdge = edge == .top ? Double(row) : Double(rows - 1 - row)
+            let strength = span <= 0 || fromEdge <= full ? 1 : max(0, 1 - (fromEdge - full) / span)
             let eased = strength * strength * (3 - 2 * strength)
             let offset = row * context.bytesPerRow
             data[offset] = 0; data[offset + 1] = 0; data[offset + 2] = 0

@@ -207,6 +207,57 @@ final class RoundO1Tests: XCTestCase {
         XCTAssertEqual(field.frame.height, oneLine, accuracy: 0.5)
     }
 
+    // MARK: - V-12 · a grown composer shows whole lines only
+
+    /// V-12: the add bar at its most lines shows exactly that many whole
+    /// lines between its top and bottom room, scrolled to the insertion
+    /// point by whole lines: never half a line at the bottom, nor a sliver
+    /// of the line above at the top.
+    func testV12TheAddBarShowsWholeLinesOnly() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let field = try XCTUnwrap(tokenFields(in: content).first { $0.textView.accessibilityLabel() == hosted.model.addPlaceholder })
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: AtticTextStyle.listBody.nsFont))
+        hosted.model.addBarState.text.text = String(repeating: "A very long task title that keeps going ", count: 12)
+        hosted.spin(0.6)
+        field.textView.setSelectedRange(NSRange(location: (field.textView.string as NSString).length, length: 0))
+        field.textView.scrollRangeToVisible(field.textView.selectedRange())
+        hosted.spin(0.2)
+        let clip = field.textClip.bounds
+        XCTAssertEqual(clip.height, CGFloat(AtticComposerMetrics.maxLines) * line, accuracy: 0.01, "whole lines, its room outside them")
+        XCTAssertGreaterThan(clip.minY, 0, "scrolled to the insertion point")
+        XCTAssertEqual(clip.minY.truncatingRemainder(dividingBy: line), 0, accuracy: 0.01, "scrolled by whole lines")
+        let clipFrame = field.convert(field.textClip.bounds, from: field.textClip)
+        XCTAssertEqual(clipFrame.minY, field.bounds.height - clipFrame.maxY, accuracy: 0.01, "the same room above and below")
+        XCTAssertEqual(clipFrame.minY, (AtticTokenFieldMetrics.height - line) / 2, accuracy: 0.01)
+        // A scroll that would stop mid-line stops on a line.
+        field.textClip.scroll(to: NSPoint(x: 0, y: line * 1.4))
+        XCTAssertEqual(field.textClip.bounds.minY.truncatingRemainder(dividingBy: line), 0, accuracy: 0.01)
+    }
+
+    /// V-12: a subtask's entry draws and edits its text in whole lines,
+    /// with equal room above and below, at every height it grows to; its
+    /// editor scrolls by whole lines.
+    func testV12ASubtaskEntryShowsWholeLinesOnly() {
+        let font = AtticTextStyle.rowTitle.nsFont
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        let cell = AtticSubtaskTitleCell()
+        cell.font = font
+        for words in [1, 12, 30, 60, 200] {
+            let text = Array(repeating: "word", count: words).joined(separator: " ")
+            let height = AtticSubtaskTitleField.height(of: text, width: 220, font: font)
+            let rect = cell.drawingRect(forBounds: NSRect(x: 0, y: 0, width: 220, height: height))
+            XCTAssertEqual(rect.height.truncatingRemainder(dividingBy: line), 0, accuracy: 0.01, "\(words) words: whole lines")
+            XCTAssertEqual(rect.minY, height - rect.maxY, accuracy: 0.01, "\(words) words: the same room above and below")
+            XCTAssertLessThanOrEqual(rect.height, CGFloat(AtticComposerMetrics.maxLines) * line + 0.01)
+        }
+        let editor = AtticSubtaskFieldEditor(frame: NSRect(x: 0, y: 0, width: 220, height: line * 12))
+        editor.font = font
+        let snapped = editor.adjustScroll(NSRect(x: 0, y: line * 2.6, width: 220, height: line * 6))
+        XCTAssertEqual(snapped.minY, line * 3, accuracy: 0.01, "it scrolls by whole lines")
+    }
+
     // MARK: - O17-06 · files in the composer
 
     private func makeFile(_ name: String, bytes: Int = 12) throws -> URL {

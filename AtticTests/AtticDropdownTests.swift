@@ -2370,7 +2370,7 @@ extension AtticDropdownTests {
         }
         XCTAssertEqual(r.frame(time: 0, closing: true), .rest, "closing starts from the open card")
         let gone = r.frame(time: 1, closing: true)
-        XCTAssertEqual(gone.reveal, 0)
+        XCTAssertEqual(gone.reveal, 1, "V-11: it leaves whole, never folded to its first row")
         XCTAssertEqual(gone.opacity, 0)
         XCTAssertEqual(gone.travel, 3, accuracy: 1e-6, "it folds 3 pt back towards its anchor")
         XCTAssertEqual(gone.scale, 0.98, accuracy: 1e-6)
@@ -2518,10 +2518,25 @@ extension AtticDropdownTests {
         for step in 1...40 {
             let open = r.frame(time: CGFloat(step) / 40, closing: false)
             if open.reveal >= r.opaqueBy { XCTAssertEqual(open.opacity, 1, accuracy: 1e-9, "opening, step \(step)") }
-            let closing = r.frame(time: CGFloat(step) / 40, closing: true)
-            if closing.reveal >= r.opaqueBy { XCTAssertEqual(closing.opacity, 1, accuracy: 1e-9, "closing, step \(step)") }
         }
         XCTAssertEqual(r.opacity(progress: 0.15), 0.5, accuracy: 1e-9)
+    }
+
+    /// V-11: a card closes as one piece, the native way: the whole card
+    /// fades (with the 3 pt and the 0.98 towards its anchor), never folding
+    /// to its first row (the tag card's "Find or add a tag" field stood
+    /// alone for frames), and never brighter again once it has started.
+    func testV11ACardClosesAsOnePiece() {
+        let r = AtticDropdownReveal.self
+        var last = r.frame(time: 0, closing: true)
+        for step in 1...40 {
+            let f = r.frame(time: CGFloat(step) / 40, closing: true)
+            XCTAssertEqual(f.reveal, 1, "whole, step \(step)")
+            XCTAssertLessThanOrEqual(f.opacity, last.opacity + 1e-9, "step \(step)")
+            XCTAssertLessThanOrEqual(f.scale, last.scale + 1e-9, "step \(step)")
+            last = f
+        }
+        XCTAssertEqual(last.opacity, 0)
     }
 
     /// U-22: a list cut short says so: the edge with rows past it fades.
