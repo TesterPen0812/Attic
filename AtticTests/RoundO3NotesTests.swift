@@ -383,3 +383,55 @@ final class RoundO3NotesTests: XCTestCase {
         XCTAssertEqual(engine.textStorage.string, "Title\nAlpha\nBeta")
     }
 }
+
+// D1 diagnosis only. No window is ordered onto a display.
+@MainActor
+final class RoundD1CrashTests: XCTestCase {
+    func testDeletingTheLastCalloutCharacterThenDrawingKeepsTextKitConsistent() throws {
+        var callout = NoteBlock.text("x", style: "quote")
+        callout.callout = "💡"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), callout]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = CGRect(x: 0, y: 0, width: 340, height: 400)
+        let window = NSWindow(contentRect: CGRect(x: -12000, y: -12000, width: 340, height: 400),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); withExtendedLifetime(engine) {} }
+        window.contentView = scroll
+        window.makeFirstResponder(text)
+        scroll.layoutSubtreeIfNeeded()
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+
+        // Observe the production setter at the exact stack frame in the owner's
+        // log. AppKit can omit its font-panel query in a non-key test window;
+        // the selection invariant must hold independently of that UI state.
+        let selector = #selector(setter: NSTextView.typingAttributes)
+        let method = try XCTUnwrap(class_getInstanceMethod(NSTextView.self, selector))
+        typealias Setter = @convention(c) (NSTextView, Selector, NSDictionary) -> Void
+        let original = method_getImplementation(method)
+        let invoke = unsafeBitCast(original, to: Setter.self)
+        var invalidSelections: [String] = []
+        let observer: @convention(block) (NSTextView, NSDictionary) -> Void = { view, attributes in
+            if view === text, NSMaxRange(view.selectedRange()) > engine.textStorage.length {
+                invalidSelections.append("selection=\(view.selectedRange()), storageLength=\(engine.textStorage.length), editedMask=\(engine.textStorage.editedMask.rawValue)")
+            }
+            invoke(view, selector, attributes)
+        }
+        let replacement = imp_implementationWithBlock(observer)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        text.deleteBackward(nil)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        // Exercise drawing without screenshots, files, or an ordered window.
+        let bitmap = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: text.bounds))
+        text.cacheDisplay(in: text.bounds, to: bitmap)
+        XCTAssertEqual(text.string, "Title\n")
+        XCTAssertEqual(engine.document().blocks.last?.callout, "💡")
+        XCTAssertTrue(invalidSelections.isEmpty,
+                      "O18-05: typing attributes queried before AppKit repaired the deleted selection: \(invalidSelections)")
+        XCTAssertFalse(window.isVisible)
+    }
+}
