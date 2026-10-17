@@ -17,6 +17,29 @@ protocol NoteImageProviding: AnyObject {
     func locatePlacement(_ block: NoteBlock, noteID: UUID, at url: URL) async -> Bool
 }
 
+/// The two asynchronous reads used for a viewport preview, including staged bytes.
+@MainActor
+protocol NotePreviewDecoding {
+    func header(id: UUID, data: Data?, url: URL?) async -> CGSize?
+    func thumbnail(id: UUID, data: Data?, url: URL?, maxPixel: Int) async -> CGImage?
+}
+
+struct NotePreviewDecoder: NotePreviewDecoding {
+    func header(id: UUID, data: Data?, url: URL?) async -> CGSize? {
+        await Task.detached(priority: .userInitiated) {
+            if let data { return NoteImageDecoder.pixelSize(of: data) }
+            return url.flatMap { NoteImageDecoder.pixelSize(at: $0) }
+        }.value
+    }
+
+    func thumbnail(id: UUID, data: Data?, url: URL?, maxPixel: Int) async -> CGImage? {
+        await Task.detached(priority: .userInitiated) {
+            if let data { return NoteImageDecoder.thumbnail(of: data, maxPixel: maxPixel) }
+            return url.flatMap { NoteImageDecoder.thumbnail(at: $0, maxPixel: maxPixel) }
+        }.value
+    }
+}
+
 /// One accepted source in an import batch. A failed source has no stored
 /// bytes; it remains an inline card with Retry and Remove actions.
 struct NoteImportedObject: Sendable {
@@ -280,9 +303,88 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var middleProjection: (index: Int, delta: Int)?
     private(set) var documentExtractionCount = 0
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
-    private var pendingImageLoads = Set<ObjectIdentifier>()
+    var previewDecoder: any NotePreviewDecoding = NotePreviewDecoder()
+    #if DEBUG
+    enum ImageLoadEvent {
+        case viewportSettled
+        case installed(ObjectIdentifier)
+        case detached
+    }
+    var onImageLoadEvent: ((ImageLoadEvent) -> Void)?
+    var onImageLoadTrace: ((String) -> Void)?
+    var imageAdmissionViewport: (() -> NSTextRange?)?
+    #endif
+
+    private func traceImageLoads(_ action: String, image: NoteImageAttachment? = nil) {
+        #if DEBUG
+        guard let trace = onImageLoadTrace else { return }
+        let viewport = layoutManager?.textViewportLayoutController.viewportRange.map {
+            let start = contentStorage.documentRange.location
+            return "\(contentStorage.offset(from: start, to: $0.location))..\(contentStorage.offset(from: start, to: $0.endLocation))"
+        } ?? "nil"
+        let target = image.map { "\($0.filename)@\(String(describing: range(of: $0)))" } ?? "-"
+        trace("\(action) image=\(target) viewport=\(viewport) dirty=\(imageViewportDirty) scheduled=\(scheduledImageReconciliation != nil) pending=\(pendingImageLoads.count) ready=\(readyImagePreviews.count) visible=\(String(describing: textView?.visibleRect)) frame=\(String(describing: textView?.frame)) needsLayout=\(String(describing: textView?.needsLayout)) clip=\(String(describing: scrollView?.contentView.bounds))")
+        #endif
+    }
+
+    private struct ImageLoadRequest {
+        let token = UUID()
+        let generation: UUID
+        let image: NoteImageAttachment
+        let stagedData: Data?
+        let requireViewport: Bool
+    }
+
+    private struct ReadyImagePreview {
+        let request: ImageLoadRequest
+        let image: NoteImageAttachment
+        let pixels: CGImage?
+        let header: CGSize?
+    }
+
+    private enum ImageAdmission { case eligible, ineligible, deferred }
+
+    private var pendingImageLoads: [ObjectIdentifier: ImageLoadRequest] = [:]
+    private var readyImagePreviews: [ObjectIdentifier: ReadyImagePreview] = [:]
+    private var imageViewGeneration = UUID()
+    private var imageReads: [UUID: Int] = [:]
+    private var detachedImageReads = Set<UUID>()
+    private var imageViewportDirty = false
+    /// Keep storage offsets across paragraph rebuilds. The expected bounds
+    /// acknowledge native height clamps while the original text anchor stays put.
+    private struct ImageViewportAnchor {
+        let range: NSRange
+        let fragmentY: CGFloat
+        let bounds: CGRect
+        var expectedBounds: CGRect
+        let documentGeneration: Int
+    }
+    private var imageViewportAnchor: ImageViewportAnchor?
+    private var scheduledImageReconciliation: DispatchWorkItem?
     private var imageViewportSubscription: AnyCancellable?
     private var hasImageAttachments = false
+
+    private func imageViewportSettled() {
+        #if DEBUG
+        if pendingImageLoads.isEmpty, readyImagePreviews.isEmpty, !imageViewportDirty,
+           scheduledImageReconciliation == nil, textView?.needsLayout == false,
+           layoutManager?.textViewportLayoutController.viewportRange != nil {
+            onImageLoadEvent?(.viewportSettled)
+        }
+        #endif
+    }
+
+    private func imageReadCompleted(in generation: UUID) {
+        let remaining = (imageReads[generation] ?? 1) - 1
+        imageReads[generation] = remaining > 0 ? remaining : nil
+        if remaining == 0, detachedImageReads.remove(generation) != nil {
+            #if DEBUG
+            onImageLoadEvent?(.detached)
+            #endif
+        }
+        imageViewportSettled()
+    }
+
     private var importAnchor: Int?
     private var importReplacementLength = 0
     private var importIsBoundary = false
@@ -560,14 +662,33 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         imageViewportSubscription = NotificationCenter.default.publisher(
             for: NSView.boundsDidChangeNotification, object: scrollView.contentView
         ).sink { [weak self] _ in
-            // TextKit updates its viewport after the clip bounds move.
-            DispatchQueue.main.async { [weak self] in self?.refreshViewportImages() }
+            self?.traceImageLoads("bounds-changed")
+            if let self, let anchor = self.imageViewportAnchor {
+                if self.imageAnchorMatchesBounds(anchor), let bounds = self.scrollView?.contentView.bounds {
+                    var updated = anchor
+                    updated.expectedBounds = bounds
+                    self.imageViewportAnchor = updated
+                } else { self.imageViewportAnchor = nil }
+            }
+            // Bounds move before TextKit's viewport does. One later viewport
+            // pass owns reconciliation for all outstanding images.
+            self?.requestImageReconciliation(needsViewportLayout: true)
         }
         return (scrollView, textView)
     }
 
     func detachView() {
+        traceImageLoads("detach")
         imageViewportSubscription = nil
+        scheduledImageReconciliation?.cancel()
+        scheduledImageReconciliation = nil
+        let departedGeneration = imageViewGeneration
+        imageViewGeneration = UUID()
+        pendingImageLoads.values.forEach { $0.image.renderedImage = nil }
+        pendingImageLoads.removeAll()
+        readyImagePreviews.removeAll()
+        imageViewportDirty = false
+        imageViewportAnchor = nil
         find.detach()
         textView?.marquee = nil
         let wasComposing = activity == .composing
@@ -579,6 +700,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         scrollView = nil
         history.textView = nil
         if wasComposing { setActivity(.idle) }
+        if imageReads[departedGeneration] != nil {
+            detachedImageReads.insert(departedGeneration)
+        } else {
+            #if DEBUG
+            onImageLoadEvent?(.detached)
+            #endif
+        }
     }
 
     private func configure(_ textView: NoteEditorTextView) {
@@ -852,31 +980,160 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Images
 
+    /// Coalesce bounds changes and completed pixels outside native layout.
+    /// Attribute edits can move TextKit's estimated fragment positions; preserve
+    /// the same text anchor before admitting more results from the viewport.
+    /// Keep unresolved dirty state for the next native pass without spinning.
+    private func requestImageReconciliation(needsViewportLayout: Bool = false) {
+        guard hasImageAttachments, layoutManager != nil, textView != nil else { return }
+        if needsViewportLayout { imageViewportDirty = true }
+        traceImageLoads("request-reconciliation")
+        guard scheduledImageReconciliation == nil else { return }
+        let generation = imageViewGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.imageViewGeneration == generation else { return }
+            self.traceImageLoads("scheduled-reconcile-begin")
+            if self.imageViewportAnchor != nil, let manager = self.layoutManager, let view = self.textView,
+               let scroll = self.scrollView {
+                view.layoutSubtreeIfNeeded()
+                guard self.imageViewGeneration == generation else { return }
+                if let anchor = self.imageViewportAnchor, self.imageAnchorMatchesBounds(anchor),
+                   self.documentEditGeneration == anchor.documentGeneration,
+                   !self.isRangeFolded(anchor.range),
+                   let range = self.textRange(for: anchor.range) {
+                    manager.ensureLayout(for: range)
+                    guard self.imageViewGeneration == generation else { return }
+                    // Consume the new usage bounds before comparing positions.
+                    view.needsLayout = true
+                    view.layoutSubtreeIfNeeded()
+                    guard self.imageViewGeneration == generation else { return }
+                    if let confirmed = self.imageViewportAnchor, self.imageAnchorMatchesBounds(confirmed),
+                       self.documentEditGeneration == anchor.documentGeneration,
+                       !self.isRangeFolded(anchor.range),
+                       let fragment = manager.textLayoutFragment(for: range.location) {
+                        let delta = fragment.layoutFragmentFrame.minY - anchor.fragmentY
+                        self.imageViewportAnchor = nil
+                        scroll.contentView.scroll(to: NSPoint(x: anchor.bounds.minX, y: anchor.bounds.minY + delta))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        self.traceImageLoads("restore-anchor old=\(anchor.fragmentY) new=\(fragment.layoutFragmentFrame.minY) delta=\(delta)")
+                    }
+                }
+                self.imageViewportAnchor = nil
+            }
+            guard self.imageViewGeneration == generation else { return }
+            if self.imageViewportDirty || self.layoutManager?.textViewportLayoutController.viewportRange == nil {
+                self.layoutManager?.textViewportLayoutController.layoutViewport()
+            }
+            self.traceImageLoads("scheduled-reconcile-end")
+            guard self.imageViewGeneration == generation else { return }
+            self.scheduledImageReconciliation = nil
+            self.refreshViewportImages()
+        }
+        scheduledImageReconciliation = work
+        DispatchQueue.main.async(execute: work)
+    }
+
     /// TextKit's active viewport includes its small overdraw region. Never
     /// force whole-note layout to discover images; only inspect that range.
     func refreshViewportImages() {
-        guard hasImageAttachments, let viewport = layoutManager?.textViewportLayoutController.viewportRange else { return }
+        traceImageLoads("refresh")
+        guard hasImageAttachments, textView != nil, scheduledImageReconciliation == nil else { return }
+        if imageViewportAnchor != nil {
+            requestImageReconciliation(needsViewportLayout: true)
+            return
+        }
+        guard let viewport = layoutManager?.textViewportLayoutController.viewportRange else {
+            imageViewportDirty = true
+            return
+        }
+        imageViewportDirty = false
+        traceImageLoads("usable-viewport")
         let start = contentStorage.documentRange.location
         let location = contentStorage.offset(from: start, to: viewport.location)
         let end = contentStorage.offset(from: start, to: viewport.endLocation)
         let range = NSIntersectionRange(NSRange(location: max(0, location), length: max(0, end - location)),
                                         NSRange(location: 0, length: textStorage.length))
-        guard range.length > 0 else { return }
-        textStorage.enumerateAttribute(.attachment, in: range) { value, run, _ in
-            guard let image = value as? NoteImageAttachment, image.renderedImage == nil, !isRangeFolded(run) else { return }
-            loadImage(image, requireViewport: true)
+
+        // Decide every ready result against this one usable snapshot before
+        // any installation sends editedAttributes and invalidates layout.
+        var admitted: [ObjectIdentifier: ReadyImagePreview] = [:]
+        for (key, result) in readyImagePreviews {
+            let admission = imageAdmission(result.image, request: result.request, viewport: viewport)
+            if admission == .deferred {
+                imageViewportDirty = true
+                continue
+            }
+            readyImagePreviews[key] = nil
+            if pendingImageLoads[key]?.token == result.request.token {
+                if admission == .eligible { admitted[key] = result }
+                else {
+                    pendingImageLoads[key] = nil
+                    result.image.renderedImage = nil
+                }
+            }
         }
+        if range.length > 0 {
+            textStorage.enumerateAttribute(.attachment, in: range) { value, run, _ in
+                guard let image = value as? NoteImageAttachment, image.renderedImage == nil,
+                      !isRangeFolded(run), admitted[ObjectIdentifier(image)] == nil else { return }
+                loadImage(image, requireViewport: true)
+            }
+        }
+        if !admitted.isEmpty, let bounds = scrollView?.contentView.bounds,
+           let fragment = layoutManager?.textLayoutFragment(for: viewport.location) {
+            imageViewportAnchor = ImageViewportAnchor(range: range,
+                fragmentY: fragment.layoutFragmentFrame.minY, bounds: bounds,
+                expectedBounds: bounds,
+                documentGeneration: documentEditGeneration)
+            imageViewportDirty = true
+        }
+        for (key, result) in admitted {
+            defer {
+                if pendingImageLoads[key]?.token == result.request.token { pendingImageLoads[key] = nil }
+            }
+            // A callback from an earlier sibling can detach or replace the payload.
+            guard result.request.generation == imageViewGeneration,
+                  let currentRange = self.range(of: result.image), !isRangeFolded(currentRange),
+                  staged[result.image.attachmentID]?.data == result.request.stagedData else { continue }
+            finishImageLoad(result.image, cgImage: result.pixels, pixelSize: result.header)
+        }
+        if !admitted.isEmpty { requestImageReconciliation() }
+        imageViewportSettled()
     }
 
-    private func imageIsInViewport(_ image: NoteImageAttachment) -> Bool {
-        guard let viewport = layoutManager?.textViewportLayoutController.viewportRange,
-              let range = range(of: image), !isRangeFolded(range), let imageRange = textRange(for: range) else { return false }
-        return viewport.intersects(imageRange)
+    private func imageAnchorMatchesBounds(_ anchor: ImageViewportAnchor) -> Bool {
+        guard let clip = scrollView?.contentView, clip.bounds.size == anchor.bounds.size else { return false }
+        // Compare legal positions: NSTextView can keep an outset beyond the
+        // document frame, and a native height change can clamp that position.
+        return clip.constrainBoundsRect(clip.bounds) == clip.constrainBoundsRect(anchor.expectedBounds)
+    }
+
+    private func imageContinuationViewport() -> NSTextRange? {
+        #if DEBUG
+        if let imageAdmissionViewport { return imageAdmissionViewport() }
+        #endif
+        return layoutManager?.textViewportLayoutController.viewportRange
+    }
+
+    private func imageAdmission(_ image: NoteImageAttachment, request: ImageLoadRequest,
+                                viewport: NSTextRange?) -> ImageAdmission {
+        guard request.generation == imageViewGeneration, let range = range(of: image),
+              staged[image.attachmentID]?.data == request.stagedData else { return .ineligible }
+        guard request.requireViewport else { return .eligible }
+        guard textView != nil, layoutManager != nil, !isRangeFolded(range) else { return .ineligible }
+        guard let viewport, let imageRange = textRange(for: range) else { return .deferred }
+        return viewport.intersects(imageRange) ? .eligible : .ineligible
+    }
+
+    private func continuationAdmission(_ image: NoteImageAttachment, request: ImageLoadRequest) -> ImageAdmission {
+        let viewport = imageContinuationViewport()
+        return imageAdmission(image, request: request, viewport: imageViewportDirty ? nil : viewport)
     }
 
     private func loadImage(_ image: NoteImageAttachment, requireViewport: Bool = false) {
         let key = ObjectIdentifier(image)
-        guard !pendingImageLoads.contains(key) else { return }
+        traceImageLoads(pendingImageLoads[key] == nil ? "admit" : "already-pending", image: image)
+        guard pendingImageLoads[key] == nil else { return }
         if let reserved = staged[image.attachmentID], reserved.byteCount == 0, reserved.digest.isEmpty {
             image.isMissing = false
             image.renderedImage = renderer.placeholder(
@@ -885,53 +1142,61 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             )
             return
         }
-        pendingImageLoads.insert(key)
+        let request = ImageLoadRequest(generation: imageViewGeneration, image: image,
+            stagedData: staged[image.attachmentID]?.data, requireViewport: requireViewport)
+        pendingImageLoads[key] = request
+        imageReads[request.generation, default: 0] += 1
         image.filename = staged[image.attachmentID]?.filename
             ?? imageProvider?.filename(forAttachment: image.attachmentID) ?? image.filename
-        let stagedData = staged[image.attachmentID]?.data
         let provider = imageProvider
         let attachmentID = image.attachmentID
         let maxPixel = 1400
+        let decoder = previewDecoder
         Task { [weak self, weak image] in
+            defer { self?.imageReadCompleted(in: request.generation) }
             var url: URL?
-            if stagedData == nil { url = await provider?.fileURL(forAttachment: attachmentID) }
-            let header = await Task.detached(priority: .userInitiated) {
-                if let stagedData { return NoteImageDecoder.pixelSize(of: stagedData) }
-                guard let url else { return nil }
-                return NoteImageDecoder.pixelSize(at: url)
-            }.value
-            guard let image else { self?.pendingImageLoads.remove(key); return }
-            guard self?.range(of: image) != nil,
-                  !requireViewport || self?.imageIsInViewport(image) == true else {
-                self?.pendingImageLoads.remove(key)
-                return
+            if request.stagedData == nil { url = await provider?.fileURL(forAttachment: attachmentID) }
+            let header = await decoder.header(id: attachmentID, data: request.stagedData, url: url)
+            guard let image, self?.pendingImageLoads[key]?.token == request.token else { return }
+            if let self {
+                let admission = self.continuationAdmission(image, request: request)
+                self.traceImageLoads("header-\(admission)", image: image)
+                if admission == .ineligible {
+                    self.pendingImageLoads[key] = nil
+                    self.requestImageReconciliation()
+                    return
+                }
+                if image.pixelSize == nil, let header {
+                    image.pixelSize = header
+                    image.renderedImage = self.renderer.placeholder(
+                        size: image.displaySize(columnWidth: self.textView?.textContainer?.size.width ?? 320),
+                        text: String(localized: "Loading image…"))
+                    if let range = self.range(of: image) { self.invalidateLayout(range) }
+                    self.requestImageReconciliation(needsViewportLayout: true)
+                }
             }
-            if image.pixelSize == nil, let header, let self {
-                image.pixelSize = header
-                image.renderedImage = self.renderer.placeholder(
-                    size: image.displaySize(columnWidth: self.textView?.textContainer?.size.width ?? 320),
-                    text: String(localized: "Loading image…"))
-                if let range = self.range(of: image) { self.invalidateLayout(range) }
-            }
-            let decoded = await Task.detached(priority: .userInitiated) {
-                if let stagedData { return NoteImageDecoder.thumbnail(of: stagedData, maxPixel: maxPixel) }
-                guard let url else { return nil }
-                return NoteImageDecoder.thumbnail(at: url, maxPixel: maxPixel)
-            }.value
-            guard let self else { return }
-            self.pendingImageLoads.remove(key)
-            guard self.range(of: image) != nil,
-                  !requireViewport || self.imageIsInViewport(image) else {
-                // An unknown-size image may now hold a Loading placeholder.
-                // Clear it so returning to this viewport can request again.
+            let decoded = await decoder.thumbnail(id: attachmentID, data: request.stagedData, url: url, maxPixel: maxPixel)
+            guard let self, self.pendingImageLoads[key]?.token == request.token else { return }
+            let admission = self.continuationAdmission(image, request: request)
+            self.traceImageLoads("thumbnail-\(admission)", image: image)
+            if admission == .ineligible {
+                self.pendingImageLoads[key] = nil
+                // Clear an unknown-size loading placeholder before a future admission.
                 image.renderedImage = nil
+                // A replacement payload may need new work; the viewport pass owns it.
+                self.requestImageReconciliation()
                 return
             }
-            if self.staged[attachmentID]?.data != stagedData {
-                self.loadImage(image, requireViewport: requireViewport)
+            if !requireViewport {
+                self.pendingImageLoads[key] = nil
+                self.finishImageLoad(image, cgImage: decoded, pixelSize: header)
+                self.requestImageReconciliation()
                 return
             }
-            self.finishImageLoad(image, cgImage: decoded, pixelSize: header)
+            // Eligible and deferred completions both retain their pixels until
+            // a usable viewport pass decides their disposition.
+            self.readyImagePreviews[key] = ReadyImagePreview(request: request, image: image, pixels: decoded, header: header)
+            self.requestImageReconciliation()
         }
     }
 
@@ -963,12 +1228,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let range = range(of: image) else { return }
         // A size learnt from the file is stored with the next real save;
         // opening a note never writes it.
-        if sizeChanged { documentCache = nil }
+        if sizeChanged {
+            documentCache = nil
+            imageViewportDirty = true
+        }
         // The attachment's image changed in place. Notify TextKit so its
         // cached viewport layers redraw too (history's comparison fragments
         // can otherwise keep the empty image after decoding completes).
         textStorage.edited(.editedAttributes, range: range, changeInLength: 0)
         invalidateLayout(range)
+        traceImageLoads("installed", image: image)
+        #if DEBUG
+        onImageLoadEvent?(.installed(ObjectIdentifier(image)))
+        #endif
     }
 
     func range(of attachment: NSTextAttachment) -> NSRange? {
