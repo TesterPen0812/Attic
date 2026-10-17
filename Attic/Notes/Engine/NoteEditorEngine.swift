@@ -274,6 +274,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Diagnostic: time spent in the last per-edit upkeep (ms).
     private(set) var lastUpkeepMilliseconds: Double = 0
     var blockRangeParagraphVisits = 0
+    var blockRunIntervals: [NSRange] = []
     private(set) var documentExtractionCount = 0
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
     private var pendingImageLoads = Set<ObjectIdentifier>()
@@ -1868,6 +1869,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
+        blockRunIntervals.removeAll(keepingCapacity: true)
         ordinalCheckpointCount = ordinalCheckpointIndex(paragraphRange(at: editedRange.location).location)
         let textOnly = pendingListTextOnlyEdit
         if editedMask.contains(.editedCharacters) { pendingListTextOnlyEdit = false }

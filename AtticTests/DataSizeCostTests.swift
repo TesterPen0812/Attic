@@ -127,10 +127,14 @@ final class DataSizeCostTests: XCTestCase {
             let before = engine.blockRangeParagraphVisits
             let ms = milliseconds { for offset in offsets[(count / 2)..<(count / 2 + 30)] { _ = engine.blockRange(at: offset) } }
             print("P2_CODE size=\(count) warm_visits=\(engine.blockRangeParagraphVisits - before) warm_ms=\(ms)")
-            view.setSelectedRange(NSRange(location: offsets[count / 2] + 4, length: 0)); view.insertText("x", replacementRange: view.selectedRange())
+            XCTAssertEqual(engine.blockRangeParagraphVisits - before, 0)
+            view.setSelectedRange(NSRange(location: offsets[count / 2] + 4, length: 0))
+            let editingVisits = engine.blockRangeParagraphVisits
+            let editMS = milliseconds { view.insertText("x", replacementRange: view.selectedRange()) }
             let edited = engine.blockRangeParagraphVisits
             let nextMS = milliseconds { for offset in offsets[(count / 2)..<(count / 2 + 30)] { _ = engine.blockRange(at: offset + 1) } }
-            print("P2_CODE_EDIT size=\(count) visits=\(engine.blockRangeParagraphVisits - edited) ms=\(nextMS)")
+            print("P2_CODE_EDIT size=\(count) edit_visits=\(edited - editingVisits) next_frame_visits=\(engine.blockRangeParagraphVisits - edited) edit_ms=\(editMS) next_frame_ms=\(nextMS)")
+            XCTAssertEqual(engine.blockRangeParagraphVisits - editingVisits, count - 1)
             engine.detachView()
         }
     }
@@ -198,4 +202,28 @@ final class DataSizeCostTests: XCTestCase {
             engine.detachView()
         }
     }
+    func testP02RunCacheTracksStyleSplitAndReplay() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("first", style: "mono"), .text("middle", style: "mono"), .text("last", style: "mono"), .text("body")]))
+        let (_, view) = engine.makeView()
+        defer { engine.detachView() }
+        func verify() {
+            let at = (view.string as NSString).range(of: "middle").location
+            let cached = engine.blockRange(at: at)
+            engine.blockRunIntervals = []
+            XCTAssertEqual(cached, engine.blockRange(at: at))
+        }
+        verify()
+        let middle = (view.string as NSString).range(of: "middle")
+        XCTAssertTrue(engine.perform(.paragraph(.body), selection: middle)); verify()
+        XCTAssertTrue(engine.history.undo()); verify()
+        XCTAssertTrue(engine.history.redo()); verify()
+        XCTAssertTrue(engine.perform(.paragraph(.mono), selection: middle)); verify()
+        view.setSelectedRange(NSRange(location: middle.location + 2, length: 0))
+        view.insertText("\n", replacementRange: view.selectedRange())
+        let at = (view.string as NSString).range(of: "first").location
+        let cached = engine.blockRange(at: at)
+        engine.blockRunIntervals = []
+        XCTAssertEqual(cached, engine.blockRange(at: at))
+    }
+
 }
