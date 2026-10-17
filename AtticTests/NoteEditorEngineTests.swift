@@ -1456,6 +1456,7 @@ final class NoteEditorEngineTests: XCTestCase {
         engine.layoutManager?.textViewportLayoutController.layoutViewport()
         view.viewWillDraw()
         await fulfillment(of: [initial], timeout: 5)
+        XCTAssertFalse(view.needsLayout, "initial settlement includes the native layout invalidated by image installation")
         print("ROUND_F_IMAGE_SETTLED native_layout_pending=\(view.needsLayout)")
         let images = engine.objects().compactMap { $0.0 as? NoteImageAttachment }
         let loaded = images.filter { $0.renderedImage != nil && !$0.isMissing }
@@ -1519,7 +1520,10 @@ final class NoteEditorEngineTests: XCTestCase {
         let (engine, view) = makeEngine(document, window: true, staged: items)
         let decoder = HeldPreviewDecoder(heldIDs: Set(items.suffix(3).map(\.id)))
         engine.previewDecoder = decoder
+        var imageTrace: [String] = []
+        engine.onImageLoadTrace = { imageTrace.append($0) }
         defer {
+            engine.onImageLoadTrace = nil
             engine.onImageLoadEvent = nil
             decoder.onHeld = nil
             engine.detachView()
@@ -1545,7 +1549,10 @@ final class NoteEditorEngineTests: XCTestCase {
         var targetInstalled = false
         engine.onImageLoadEvent = { event in
             switch event {
-            case .installed(let key) where key == ObjectIdentifier(sibling): decoder.release(target.attachmentID)
+            case .installed(let key) where key == ObjectIdentifier(sibling):
+                // CI can run the pending native layout before the target resumes.
+                view.layoutSubtreeIfNeeded()
+                decoder.release(target.attachmentID)
             case .installed(let key) where key == ObjectIdentifier(target):
                 targetInstalled = true
                 installed.fulfill()
@@ -1561,12 +1568,135 @@ final class NoteEditorEngineTests: XCTestCase {
         decoder.release(items[47].id)
         decoder.release(sibling.attachmentID)
         await fulfillment(of: [installed, settled], timeout: 5)
+        if target.renderedImage == nil { print("ROUND_F_TAIL_TRACE\n" + imageTrace.joined(separator: "\n")) }
         XCTAssertNotNil(target.renderedImage)
         XCTAssertFalse(target.isMissing)
         XCTAssertEqual(decoder.requests[target.attachmentID], 1, "the held target is not decoded again")
         let viewport = try XCTUnwrap(engine.layoutManager?.textViewportLayoutController.viewportRange)
         let targetRange = try XCTUnwrap(engine.textRange(for: try XCTUnwrap(engine.range(of: target))))
         XCTAssertTrue(viewport.intersects(targetRange), "sibling presentation changes must not move the viewport away from the requested tail")
+        XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs)
+        XCTAssertFalse(engine.history.canUndo)
+    }
+
+    private func roundFViewportFixture() throws -> (NoteDocument, [StagedNoteAttachment]) {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let items = (0..<50).map { index in
+            StagedNoteAttachment(id: UUID(), filename: "interleaving-\(index).png", contentTypeIdentifier: "public.png",
+                byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        }
+        return (NoteDocument(blocks: [.text("Viewport images")] + items.map {
+            .image(attachmentID: $0.id, pixelWidth: 800, pixelHeight: 400)
+        }), items)
+    }
+
+    func testRoundFImageReconciliationRespectsNavigationAwayFromTheHeldTail() async throws {
+        let (document, items) = try roundFViewportFixture()
+        let (engine, view) = makeEngine(document, window: true, staged: items)
+        let decoder = HeldPreviewDecoder(heldIDs: Set(items.suffix(3).map(\.id)))
+        engine.previewDecoder = decoder
+        defer {
+            engine.onImageLoadEvent = nil; decoder.onHeld = nil
+            engine.detachView(); decoder.releaseAll()
+        }
+        let initial = expectation(description: "initial image layout settled")
+        initial.assertForOverFulfill = false
+        engine.onImageLoadEvent = { if case .viewportSettled = $0 { initial.fulfill() } }
+        view.layoutSubtreeIfNeeded(); engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        await fulfillment(of: [initial], timeout: 5)
+        let images = engine.objects().compactMap { $0.0 as? NoteImageAttachment }
+        let target = try XCTUnwrap(images.last)
+        let held = expectation(description: "tail images pending")
+        held.expectedFulfillmentCount = 3
+        held.assertForOverFulfill = false
+        decoder.onHeld = { _ in held.fulfill() }
+        let settled = expectation(description: "navigation and pending images settled")
+        settled.assertForOverFulfill = false
+        var navigated = false
+        var targetInstalled = false
+        engine.onImageLoadEvent = { event in
+            switch event {
+            case .installed(let key) where key == ObjectIdentifier(images[48]) && !navigated:
+                navigated = true
+                view.scrollRangeToVisible(NSRange(location: 0, length: 0))
+                view.layoutSubtreeIfNeeded()
+                decoder.release(target.attachmentID)
+            case .installed(let key) where key == ObjectIdentifier(target): targetInstalled = true
+            case .viewportSettled where navigated: settled.fulfill()
+            default: break
+            }
+        }
+        view.scrollRangeToVisible(try XCTUnwrap(engine.range(of: target)))
+        engine.layoutManager?.textViewportLayoutController.layoutViewport(); view.viewWillDraw()
+        await fulfillment(of: [held], timeout: 5)
+        engine.refreshViewportImages()
+        decoder.release(items[47].id); decoder.release(items[48].id)
+        await fulfillment(of: [settled], timeout: 5)
+        XCTAssertFalse(targetInstalled, "a real navigation cancels the previous image anchor")
+        XCTAssertNil(target.renderedImage)
+        let viewport = try XCTUnwrap(engine.layoutManager?.textViewportLayoutController.viewportRange)
+        XCTAssertEqual(engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: viewport.location), 0)
+        XCTAssertEqual(decoder.requests[target.attachmentID], 1)
+        XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs)
+        XCTAssertFalse(engine.history.canUndo)
+    }
+
+    func testRoundFMountedExplicitRetryPreservesThePendingViewport() async throws {
+        let (document, items) = try roundFViewportFixture()
+        let (engine, view) = makeEngine(document, window: true, staged: items)
+        let decoder = HeldPreviewDecoder(heldIDs: Set(items.suffix(3).map(\.id)))
+        engine.previewDecoder = decoder
+        defer {
+            engine.onImageLoadEvent = nil; decoder.onHeld = nil
+            engine.detachView(); decoder.releaseAll()
+        }
+        let initial = expectation(description: "initial image layout settled")
+        initial.assertForOverFulfill = false
+        engine.onImageLoadEvent = { if case .viewportSettled = $0 { initial.fulfill() } }
+        view.layoutSubtreeIfNeeded(); engine.layoutManager?.textViewportLayoutController.layoutViewport()
+        view.viewWillDraw()
+        await fulfillment(of: [initial], timeout: 5)
+        let images = engine.objects().compactMap { $0.0 as? NoteImageAttachment }
+        let target = try XCTUnwrap(images.last)
+        let first = try XCTUnwrap(images.first)
+        let held = expectation(description: "tail images pending during explicit retry")
+        held.expectedFulfillmentCount = 3
+        held.assertForOverFulfill = false
+        decoder.onHeld = { _ in held.fulfill() }
+        let retried = expectation(description: "explicit retry installed")
+        let installed = expectation(description: "pending tail installed after explicit retry redraw")
+        let settled = expectation(description: "pending viewport settled after retry")
+        settled.assertForOverFulfill = false
+        var targetInstalled = false
+        engine.onImageLoadEvent = { event in
+            switch event {
+            case .installed(let key) where key == ObjectIdentifier(first):
+                view.layoutSubtreeIfNeeded()
+                items.suffix(3).forEach { decoder.release($0.id) }
+                retried.fulfill()
+            case .installed(let key) where key == ObjectIdentifier(target):
+                targetInstalled = true; installed.fulfill()
+            case .viewportSettled where targetInstalled: settled.fulfill()
+            default: break
+            }
+        }
+        view.scrollRangeToVisible(try XCTUnwrap(engine.range(of: target)))
+        engine.layoutManager?.textViewportLayoutController.layoutViewport(); view.viewWillDraw()
+        await fulfillment(of: [held], timeout: 5)
+        engine.markPreviewUnavailable(first.objectID)
+        let accepted = await engine.perform(.retryPreview, objectID: first.objectID)
+        XCTAssertTrue(accepted)
+        await fulfillment(of: [retried, installed, settled], timeout: 5)
+        XCTAssertNotNil(target.renderedImage)
+        XCTAssertFalse(target.isMissing)
+        XCTAssertEqual(decoder.requests[first.attachmentID], 2)
+        XCTAssertEqual(decoder.requests[target.attachmentID], 1)
+        let viewport = try XCTUnwrap(engine.layoutManager?.textViewportLayoutController.viewportRange)
+        XCTAssertTrue(viewport.intersects(try XCTUnwrap(engine.textRange(for: try XCTUnwrap(engine.range(of: target))))))
         XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs)
         XCTAssertFalse(engine.history.canUndo)
     }

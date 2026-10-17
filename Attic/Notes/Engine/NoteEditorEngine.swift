@@ -335,6 +335,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var imageReads: [UUID: Int] = [:]
     private var detachedImageReads = Set<UUID>()
     private var imageViewportDirty = false
+    /// Keep storage offsets across paragraph rebuilds. The expected bounds
+    /// acknowledge native height clamps while the original text anchor stays put.
+    private struct ImageViewportAnchor {
+        let range: NSRange
+        let fragmentY: CGFloat
+        let bounds: CGRect
+        var expectedBounds: CGRect
+        let documentGeneration: Int
+    }
+    private var imageViewportAnchor: ImageViewportAnchor?
     private var scheduledImageReconciliation: DispatchWorkItem?
     private var imageViewportSubscription: AnyCancellable?
     private var hasImageAttachments = false
@@ -342,6 +352,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private func imageViewportSettled() {
         #if DEBUG
         if pendingImageLoads.isEmpty, readyImagePreviews.isEmpty, !imageViewportDirty,
+           scheduledImageReconciliation == nil, textView?.needsLayout == false,
            layoutManager?.textViewportLayoutController.viewportRange != nil {
             onImageLoadEvent?(.viewportSettled)
         }
@@ -596,6 +607,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             for: NSView.boundsDidChangeNotification, object: scrollView.contentView
         ).sink { [weak self] _ in
             self?.traceImageLoads("bounds-changed")
+            if let self, let anchor = self.imageViewportAnchor {
+                if self.imageAnchorMatchesBounds(anchor), let bounds = self.scrollView?.contentView.bounds {
+                    var updated = anchor
+                    updated.expectedBounds = bounds
+                    self.imageViewportAnchor = updated
+                } else { self.imageViewportAnchor = nil }
+            }
             // Bounds move before TextKit's viewport does. One later viewport
             // pass owns reconciliation for all outstanding images.
             self?.requestImageReconciliation(needsViewportLayout: true)
@@ -614,6 +632,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         pendingImageLoads.removeAll()
         readyImagePreviews.removeAll()
         imageViewportDirty = false
+        imageViewportAnchor = nil
         find.detach()
         textView?.marquee = nil
         let wasComposing = activity == .composing
@@ -905,9 +924,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Images
 
-    /// Coalesce bounds changes and completed pixels. Only changed geometry or
-    /// an unavailable viewport needs layout; bitmap-only changes use the usable
-    /// snapshot instead of disturbing TextKit's estimated scroll positions.
+    /// Coalesce bounds changes and completed pixels outside native layout.
+    /// Attribute edits can move TextKit's estimated fragment positions; preserve
+    /// the same text anchor before admitting more results from the viewport.
     /// Keep unresolved dirty state for the next native pass without spinning.
     private func requestImageReconciliation(needsViewportLayout: Bool = false) {
         guard hasImageAttachments, layoutManager != nil, textView != nil else { return }
@@ -918,6 +937,34 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.imageViewGeneration == generation else { return }
             self.traceImageLoads("scheduled-reconcile-begin")
+            if self.imageViewportAnchor != nil, let manager = self.layoutManager, let view = self.textView,
+               let scroll = self.scrollView {
+                view.layoutSubtreeIfNeeded()
+                guard self.imageViewGeneration == generation else { return }
+                if let anchor = self.imageViewportAnchor, self.imageAnchorMatchesBounds(anchor),
+                   self.documentEditGeneration == anchor.documentGeneration,
+                   !self.isRangeFolded(anchor.range),
+                   let range = self.textRange(for: anchor.range) {
+                    manager.ensureLayout(for: range)
+                    guard self.imageViewGeneration == generation else { return }
+                    // Consume the new usage bounds before comparing positions.
+                    view.needsLayout = true
+                    view.layoutSubtreeIfNeeded()
+                    guard self.imageViewGeneration == generation else { return }
+                    if let confirmed = self.imageViewportAnchor, self.imageAnchorMatchesBounds(confirmed),
+                       self.documentEditGeneration == anchor.documentGeneration,
+                       !self.isRangeFolded(anchor.range),
+                       let fragment = manager.textLayoutFragment(for: range.location) {
+                        let delta = fragment.layoutFragmentFrame.minY - anchor.fragmentY
+                        self.imageViewportAnchor = nil
+                        scroll.contentView.scroll(to: NSPoint(x: anchor.bounds.minX, y: anchor.bounds.minY + delta))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        self.traceImageLoads("restore-anchor old=\(anchor.fragmentY) new=\(fragment.layoutFragmentFrame.minY) delta=\(delta)")
+                    }
+                }
+                self.imageViewportAnchor = nil
+            }
+            guard self.imageViewGeneration == generation else { return }
             if self.imageViewportDirty || self.layoutManager?.textViewportLayoutController.viewportRange == nil {
                 self.layoutManager?.textViewportLayoutController.layoutViewport()
             }
@@ -935,6 +982,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func refreshViewportImages() {
         traceImageLoads("refresh")
         guard hasImageAttachments, textView != nil, scheduledImageReconciliation == nil else { return }
+        if imageViewportAnchor != nil {
+            requestImageReconciliation(needsViewportLayout: true)
+            return
+        }
         guard let viewport = layoutManager?.textViewportLayoutController.viewportRange else {
             imageViewportDirty = true
             return
@@ -972,6 +1023,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 loadImage(image, requireViewport: true)
             }
         }
+        if !admitted.isEmpty, let bounds = scrollView?.contentView.bounds,
+           let fragment = layoutManager?.textLayoutFragment(for: viewport.location) {
+            imageViewportAnchor = ImageViewportAnchor(range: range,
+                fragmentY: fragment.layoutFragmentFrame.minY, bounds: bounds,
+                expectedBounds: bounds,
+                documentGeneration: documentEditGeneration)
+            imageViewportDirty = true
+        }
         for (key, result) in admitted {
             defer {
                 if pendingImageLoads[key]?.token == result.request.token { pendingImageLoads[key] = nil }
@@ -984,6 +1043,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         if !admitted.isEmpty { requestImageReconciliation() }
         imageViewportSettled()
+    }
+
+    private func imageAnchorMatchesBounds(_ anchor: ImageViewportAnchor) -> Bool {
+        guard let clip = scrollView?.contentView, clip.bounds.size == anchor.bounds.size else { return false }
+        // Compare legal positions: NSTextView can keep an outset beyond the
+        // document frame, and a native height change can clamp that position.
+        return clip.constrainBoundsRect(clip.bounds) == clip.constrainBoundsRect(anchor.expectedBounds)
     }
 
     private func imageContinuationViewport() -> NSTextRange? {
