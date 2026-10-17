@@ -24,6 +24,9 @@ struct TasksTextExport: Equatable {
         /// The priority's name, or nil for none.
         var priority: String?
         var subtasks: [Subtask] = []
+        /// The task's files (O17-15): a drag out carries them beside the
+        /// text, as file promises; the text itself never names them.
+        var files: [TaskImageReference] = []
 
         /// Date, tags and priority, in that order, as one line.
         var details: String? {
