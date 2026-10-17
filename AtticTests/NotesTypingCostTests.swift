@@ -214,4 +214,20 @@ final class NotesTypingCostTests: XCTestCase {
         }
     }
 
+    func testDeletingFinalHeadingTextDropsItsCachedSection() {
+        var heading = NoteBlock.text("Section", id: UUID(), style: "heading"); heading.level = 2
+        let (engine, view) = editor([.text("Title"), heading])
+        defer { engine.detachView() }
+        XCTAssertEqual(engine.headingSections.count, 1)
+        let range = engine.lineRange(at: 6)
+        view.setSelectedRange(range)
+        view.insertText("", replacementRange: range)
+        XCTAssertEqual(view.string, "Title\n")
+        XCTAssertTrue(engine.headingSections.isEmpty)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.headingSections.count, 1)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertTrue(engine.headingSections.isEmpty)
+    }
+
 }

@@ -873,13 +873,16 @@ extension NoteEditorEngine {
             return range
         }
         let string = textStorage.string as NSString
-        headingSectionsCache = cached.map {
-            let extendsHeading = edit.location == oldLength && oldLength > 0 && $0.content.length == 0
-                && NSMaxRange($0.heading) == oldLength && string.character(at: oldLength - 1) != 0x0A
-            let heading = moved($0.heading, includesEOF: extendsHeading)
+        headingSectionsCache = cached.compactMap { section -> NoteHeadingSection? in
+            let extendsHeading = edit.location == oldLength && oldLength > 0 && section.content.length == 0
+                && NSMaxRange(section.heading) == oldLength && string.character(at: oldLength - 1) != 0x0A
+            let heading = moved(section.heading, includesEOF: extendsHeading)
+            // A final heading has no separator to retain when all its text
+            // is deleted. Match a fresh outline: pending style is not a section.
+            guard heading.length > 0 else { return nil }
             let content = extendsHeading ? NSRange(location: NSMaxRange(heading), length: 0)
-                : moved($0.content, includesEOF: true)
-            return NoteHeadingSection(heading: heading, content: content, level: $0.level, id: $0.id, sourceID: $0.sourceID)
+                : moved(section.content, includesEOF: true)
+            return NoteHeadingSection(heading: heading, content: content, level: section.level, id: section.id, sourceID: section.sourceID)
         }
     }
 
