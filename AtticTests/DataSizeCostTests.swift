@@ -151,7 +151,12 @@ final class DataSizeCostTests: XCTestCase {
                 XCTAssertTrue(engine.changeTable(attachment, name: "Typing", coalescing: .init(row: rows / 2, column: 3)) { $0[.init(row: rows / 2, column: 3)].text += " new wrapped words" })
                 _ = attachment.layout(width: 340)
             }
-            print("P2_TABLE rows=\(rows) columns=20 height_visits=\(NoteTableLayout.heightVisitCount - visits) ms=\(ms)")
+            let editVisits = NoteTableLayout.heightVisitCount - visits
+            XCTAssertEqual(editVisits, 1)
+            let incremental = attachment.layout(width: 340)
+            attachment.invalidateLayout()
+            XCTAssertEqual(incremental, attachment.layout(width: 340))
+            print("P2_TABLE rows=\(rows) columns=20 height_visits=\(editVisits) ms=\(ms)")
         }
     }
 

@@ -19,8 +19,10 @@ final class NoteTableAttachment: NoteObjectAttachment {
     var table: NoteTable {
         didSet {
             guard table != oldValue else { return }
-            layoutCache = nil
-            MainActor.assumeIsolated { hostedView?.modelDidChange() }
+            MainActor.assumeIsolated {
+                updateLayout(from: oldValue)
+                hostedView?.modelDidChange()
+            }
         }
     }
     let extras: [String: NoteJSON]
@@ -46,6 +48,7 @@ final class NoteTableAttachment: NoteObjectAttachment {
 
     @MainActor let textCache = NoteTableTextCache()
     private var layoutCache: NoteTableLayout?
+    private var cellHeights: [[CGFloat]] = []
 
     /// The last row's height as last laid out (the caret after the table is
     /// centred on it, D-24); nil before the first layout.
@@ -57,6 +60,7 @@ final class NoteTableAttachment: NoteObjectAttachment {
             return layoutCache
         }
         let table = self.table
+        cellHeights = Array(repeating: Array(repeating: 0, count: table.columnCount), count: table.rowCount)
         let layout = NoteTableLayout.make(table, viewport: width, natural: { position in
             let header = table.headerRow && position.row == 0
             let cell = table[position]
@@ -67,10 +71,36 @@ final class NoteTableAttachment: NoteObjectAttachment {
         }, height: { position, width in
             let header = table.headerRow && position.row == 0
             let cell = table[position]
-            return textCache.height(cell, header: header, width: width) { cellString(at: position) }
+            let height = textCache.height(cell, header: header, width: width) { cellString(at: position) }
+            cellHeights[position.row][position.column] = height
+            return height
         })
         layoutCache = layout
         return layout
+    }
+
+    /// Fixed-width columns cannot change their widths after a cell edit.
+    /// Reuse other cells' wrapped heights and update only affected rows.
+    @MainActor private func updateLayout(from old: NoteTable) {
+        guard let cached = layoutCache, old.columns == table.columns,
+              old.headerRow == table.headerRow, old.rows.count == table.rows.count,
+              table.columns.allSatisfy({ $0.width != nil }),
+              cellHeights.count == table.rowCount else { layoutCache = nil; return }
+        var heights = cached.rowHeights
+        for row in table.rows.indices where old.rows[row] != table.rows[row] {
+            guard old.rows[row].id == table.rows[row].id,
+                  old.rows[row].cells.count == table.columnCount else { layoutCache = nil; return }
+            for column in table.columns.indices where old.rows[row].cells[column] != table.rows[row].cells[column] {
+                let position = NoteTable.Position(row: row, column: column)
+                let header = table.headerRow && row == 0
+                NoteTableLayout.heightVisitCount += 1
+                cellHeights[row][column] = textCache.height(table[position], header: header, width: cached.textWidth(column: column)) { cellString(at: position) }
+            }
+            heights[row] = ceil(max(AtticNoteType.body.lineHeight, cellHeights[row].max() ?? 0)) + 2 * AtticNoteTableMetrics.cellPaddingV
+        }
+        if heights != cached.rowHeights {
+            layoutCache = NoteTableLayout(columnWidths: cached.columnWidths, rowHeights: heights, viewportWidth: cached.viewportWidth)
+        }
     }
 
     /// Forgets the layout (a cell's live text changed its height, or the
