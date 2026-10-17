@@ -890,6 +890,11 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         #endif
         let selection = session.selection
         DispatchQueue.main.async {
+            // A note switch can leave the old session's view attached for
+            // its outgoing transition. Its queued work no longer owns chrome.
+            guard let accessories = context.coordinator.accessories,
+                  chrome.accessories === accessories,
+                  engine.textView === textView, engine.scrollView === scrollView else { return }
             let length = engine.textStorage.length
             textView.setSelectedRange(NSRange(location: min(selection.location, length),
                                               length: min(selection.length, max(0, length - selection.location))))

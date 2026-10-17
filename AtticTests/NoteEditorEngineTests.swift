@@ -476,6 +476,21 @@ final class NoteEditorEngineTests: XCTestCase {
         withExtendedLifetime(accessories) {}
     }
 
+    func testFLDetachedEditorsCannotRestoreFocusOverTheirReplacement() throws {
+        let (engine, old) = makeEngine(window: true)
+        let window = try XCTUnwrap(old.window)
+        // Keep the outgoing view attached, as SwiftUI can until dismantle.
+        let (scroll, live) = engine.makeView()
+        window.contentView?.addSubview(scroll)
+        XCTAssertTrue(window.makeFirstResponder(live))
+        XCTAssertNil(old.engine)
+        old.restoreInputFocus() // the outgoing presentation's queued callback
+        XCTAssertTrue(window.firstResponder === live)
+        live.restoreInputFocus()
+        XCTAssertTrue(window.firstResponder === live, "the live editor can still restore focus")
+        engine.detachView()
+    }
+
     private func g05Engine() -> (NoteEditorEngine, NoteEditorTextView) {
         var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
         return makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]), window: true)

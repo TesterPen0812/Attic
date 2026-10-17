@@ -24,6 +24,13 @@ final class NotesKeyboardUndoTests: XCTestCase {
         override func sendEvent(_ event: NSEvent) {}
 
         var traceFocusChanges = false
+        var focusTransitions: [ObjectIdentifier?] = []
+        var keyLosses = 0
+
+        override func resignKey() {
+            if traceFocusChanges { keyLosses += 1 }
+            super.resignKey()
+        }
 
         static func identity(_ responder: NSResponder?) -> String {
             guard let responder else { return "nil" }
@@ -34,6 +41,7 @@ final class NotesKeyboardUndoTests: XCTestCase {
             let before = firstResponder
             let result = super.makeFirstResponder(responder)
             if traceFocusChanges, before !== firstResponder {
+                focusTransitions.append(firstResponder.map(ObjectIdentifier.init))
                 print("ROUND11B_FOCUS time=\(ProcessInfo.processInfo.systemUptime) from=\(Self.identity(before)) requested=\(Self.identity(responder)) to=\(Self.identity(firstResponder)) result=\(result)")
                 print("ROUND11B_FOCUS_STACK " + Thread.callStackSymbols.joined(separator: " | "))
             }
@@ -216,7 +224,9 @@ final class NotesKeyboardUndoTests: XCTestCase {
     private func openAndFocus(_ id: UUID, in harness: Harness) throws -> NoteEditorTextView {
         XCTAssertTrue(harness.controller.open(noteID: id))
         harness.controller.dismissLibrary()
-        spin(0.4)
+        waitForTestOperation("the live editor joining the Undo harness") {
+            harness.controller.active?.engine.textView?.window === harness.window
+        }
         let textView = try XCTUnwrap(harness.controller.active?.engine.textView)
         XCTAssertTrue(harness.window.makeFirstResponder(textView))
         textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
@@ -281,6 +291,9 @@ final class NotesKeyboardUndoTests: XCTestCase {
         print("ROUND11B_TOAST after-show responder=\(KeyWindow.identity(harness.window.firstResponder))")
         spin()
         assertTextUndoReady(textView, in: harness)
+        XCTAssertTrue(harness.window.focusTransitions.allSatisfy { $0 == ObjectIdentifier(textView) },
+                      "a toast must not even transiently transfer the editor's first responder")
+        XCTAssertEqual(harness.window.keyLosses, 0, "showing a toast must keep the key window throughout")
         XCTAssertNotNil(harness.toasts.current)
         XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
         XCTAssertEqual(fired, 0, "the toast's action did not run")
@@ -293,6 +306,8 @@ final class NotesKeyboardUndoTests: XCTestCase {
         harness.toasts.show("Task deleted") { fired += 1 }
         spin()
         assertTextUndoReady(textView, in: harness)
+        XCTAssertTrue(harness.window.focusTransitions.allSatisfy { $0 == ObjectIdentifier(textView) })
+        XCTAssertEqual(harness.window.keyLosses, 0)
         XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
         XCTAssertEqual(fired, 0, "no toast's action ran on ⌘Z")
         XCTAssertFalse(editorText(harness).contains("again"), "the text's own typing was undone")
