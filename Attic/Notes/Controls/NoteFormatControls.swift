@@ -26,7 +26,7 @@ final class NoteFormatControls: NSObject {
     private let barHost: AtticOverlayHostingView
     private let slashHost: AtticOverlayHostingView
     private let cardHost: AtticOverlayHostingView
-    private let hintHost: AtticOverlayHostingView
+    private let hintHost: NoteSlashHintLabel
     private let addressHost: AtticOverlayHostingView
     private(set) var design: AtticDesignContext
 
@@ -93,11 +93,10 @@ final class NoteFormatControls: NSObject {
         barHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         slashHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         cardHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
-        hintHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
+        hintHost = NoteSlashHintLabel()
         addressHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         super.init()
         formatModel.router = router
-        hintHost.contentInset = 0
         cardHost.acceptsKeyboard = true
         // The `/` list and the cards are dropdowns: their room is the card's
         // shadow's, and VoiceOver hears a menu.
@@ -228,7 +227,7 @@ final class NoteFormatControls: NSObject {
                 self.placeCard()
             })
             .atticDesign(design))
-        hintHost.rootView = AnyView(NoteSlashHintView().atticDesign(design))
+        hintHost.ink = AtticColorTokens.resolve(design).hintInk.nsColor
         // The address can stay under the pointer across a change of look.
         // Keep its host and placement; refreshing must not require rehovering.
         if let hoverURL {
@@ -1297,16 +1296,11 @@ final class NoteFormatControls: NSObject {
         }
     }
 
-    /// The hint's first text baseline below its host's top, as SwiftUI
-    /// lays it out (the host reports it); the body font's ascender centred
-    /// in the host only if it reports none.
-    private func hintBaselineOffset(height: CGFloat) -> CGFloat {
-        hintHost.layoutSubtreeIfNeeded()
-        let reported = hintHost.firstBaselineOffsetFromTop
-        if reported > 0, reported < height { return reported }
-        let font = AtticTextStyle.noteBody.nsFont
-        return font.ascender + max(0, height - (font.ascender - font.descender)) / 2
-    }
+    /// The hint's first text baseline below its view's top: it draws its
+    /// letters on exactly that baseline (`NoteSlashHintLabel`), so the hint
+    /// stands on the line's own baseline on every OS (a hosting view's
+    /// reported baseline differed between macOS 26 and 27).
+    private func hintBaselineOffset(height: CGFloat) -> CGFloat { hintHost.baselineOffset }
 
     private func hideHint() {
         hintHost.isHidden = true

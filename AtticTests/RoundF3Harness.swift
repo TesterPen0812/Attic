@@ -68,7 +68,16 @@ class RoundF3TestCase: XCTestCase {
 
     /// AppKit's own insertion indicators in `text`, in its coordinates.
     func indicatorFrames(_ text: NSTextView) -> [CGRect] {
-        descendants(text).compactMap { $0 as? NSTextInsertionIndicator }.map { text.convert($0.frame, from: $0.superview) }
+        // This text view's own, shown indicators: not a hidden cell
+        // editor's, nor one AppKit keeps hidden after a re-layout.
+        func owner(_ view: NSView) -> NSTextView? {
+            var v = view.superview
+            while let current = v, !(current is NSTextView) { v = current.superview }
+            return v as? NSTextView
+        }
+        return descendants(text).compactMap { $0 as? NSTextInsertionIndicator }
+            .filter { owner($0) === text && !$0.isHiddenOrHasHiddenAncestor && $0.displayMode != .hidden && $0.alphaValue > 0 }
+            .map { text.convert($0.frame, from: $0.superview) }
     }
 
     /// The caret at the selection: AppKit's indicator (exactly one), and the

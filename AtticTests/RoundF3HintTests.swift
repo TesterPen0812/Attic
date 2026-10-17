@@ -31,7 +31,7 @@ final class RoundF3HintTests: RoundF3TestCase {
         controls.append(format)
         format.refresh(); settle(text)
         XCTAssertTrue(format.isHintVisible)
-        return try XCTUnwrap(descendants(text).first { !$0.isHidden && $0 is AtticOverlayHostingView && $0.frame.height < 40 && $0.frame.width > 60 })
+        return try XCTUnwrap(descendants(text).first { !$0.isHidden && $0 is NoteSlashHintLabel })
     }
 
     func testTheHintStandsOnTheLinesBaselineLiveAndAfterReopening() throws {

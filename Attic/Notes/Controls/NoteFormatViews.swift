@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 
@@ -1178,6 +1179,56 @@ struct NoteFormatCardView: View {
 /// Draft 7's hint (OD-14): "Type / for headings, lists, quotes…" on an
 /// empty body line with the caret in it, faint, gone with the first
 /// keystroke. Drawn only; VoiceOver hears it as the text's help.
+/// The "Type /" hint, drawn by AppKit on an exact baseline (O18-04): its
+/// letters stand `baselineOffset` below its top, wherever it is placed, so
+/// they share the empty line's baseline with the first typed letter. The
+/// same text and faces as `NoteSlashHintView`; never hit-tested or read
+/// (the text view's help carries it for VoiceOver).
+@MainActor
+final class NoteSlashHintLabel: NSView {
+    var ink: NSColor = .secondaryLabelColor { didSet { rebuild() } }
+    private var line: CTLine?
+    private(set) var baselineOffset: CGFloat = 0
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        rebuild()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
+
+    private func rebuild() {
+        let font = AtticTextStyle.noteBody.nsFont
+        let slash = NSFont.monospacedSystemFont(ofSize: font.pointSize - 0.5, weight: .regular)
+        let text = NSMutableAttributedString(string: String(localized: "Type "), attributes: [.font: font, .foregroundColor: ink])
+        text.append(NSAttributedString(string: "/", attributes: [.font: slash, .foregroundColor: ink]))
+        text.append(NSAttributedString(string: String(localized: " for headings, lists, quotes…"), attributes: [.font: font, .foregroundColor: ink]))
+        let line = CTLineCreateWithAttributedString(text)
+        var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+        let width = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+        self.line = line
+        baselineOffset = ceil(ascent)
+        setFrameSize(NSSize(width: ceil(width), height: baselineOffset + ceil(descent)))
+        needsDisplay = true
+    }
+
+    override var fittingSize: NSSize { frame.size }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let line, let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        context.textMatrix = .identity
+        context.translateBy(x: 0, y: baselineOffset)
+        context.scaleBy(x: 1, y: -1)
+        context.textPosition = .zero
+        CTLineDraw(line, context)
+        context.restoreGState()
+    }
+}
+
 struct NoteSlashHintView: View {
     static let text = String(localized: "Type / for headings, lists, quotes…")
 
