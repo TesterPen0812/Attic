@@ -1044,7 +1044,7 @@ struct NoteSlashListView: View {
         ZStack(alignment: model.above ? .bottomLeading : .topLeading) {
             // The dropdowns' one motion, the unfold (O14-02), under the `/`.
             AtticUnfoldPresence(value: model.shown && !model.items.isEmpty ? true : nil, fromTop: !model.above) { _ in
-                AtticDropdownCard(width: model.width) {
+                AtticDropdownCard(width: model.width, scrolls: model.scrolls) {
                     rows
                 }
                 .environment(\.atticDropdownHeight, model.viewportHeight)
@@ -1074,9 +1074,12 @@ extension NoteSlashListView {
                              }, position: index + 1, itemCount: model.items.count) {
                 model.onPick?(item.kind)
             }
-            .id(index)
             .accessibilityIdentifier("notes-slash-\(item.kind.rawValue)")
         }
+        // V-07: typing narrows the list in place. Each row keeps its own
+        // identity (its kind), the rows that go are gone at once, and no
+        // filtering step animates, so two lists never show together.
+        .transaction(value: model.items.map(\.kind)) { $0.animation = nil }
     }
 
     static func styleFont(_ kind: NoteSlashItem.Kind) -> Font? {

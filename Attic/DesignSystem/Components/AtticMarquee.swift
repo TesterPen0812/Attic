@@ -57,6 +57,12 @@ final class AtticMarqueeController: NSObject {
     var selectionEnded: (CGPoint) -> Void = { _ in }
     var enabled: () -> Bool = { true }
     var drawsHighlights = true
+    /// The selected blocks' tint, drawn over them (V-04): the system's
+    /// accent, as a selection reads everywhere on the Mac, strong enough to
+    /// show on blocks with their own fill (code, diagrams, tables).
+    var highlightInk: () -> NSColor = { .controlAccentColor }
+    /// The tint's opacity in light and dark.
+    var highlightOpacity: (light: CGFloat, dark: CGFloat) = (0.16, 0.28)
     /// Notes clears its block selection here; Tasks owns a close-before-clear
     /// Escape chain. Both still cancel an in-progress marquee first.
     var consumesSelectionEscape = true
@@ -73,7 +79,6 @@ final class AtticMarqueeController: NSObject {
     private var link: CADisplayLink?
     private var frameWatch: AtticFrameWatch?
     private var previousFrame: CFTimeInterval?
-    private var released: CFTimeInterval?
     private var highlights: [AnyHashable: (rect: CGRect, alpha: CGFloat, target: CGFloat)] = [:]
     private let overlay = MarqueeOverlay()
     private lazy var ticker = MarqueeTicker(owner: self)
@@ -112,7 +117,6 @@ final class AtticMarqueeController: NSObject {
         box = nil
         insertion = nil
         isDragging = false
-        released = nil
         highlights = [:]
         stopClock()
         overlay.needsDisplay = true
@@ -140,11 +144,8 @@ final class AtticMarqueeController: NSObject {
             guard origin != nil || focus?.isDescendant(of: scroll) == true else { return event }
             if event.keyCode == 53, origin != nil || (consumesSelectionEscape && !selection().isEmpty) {
                 clear()
-                origin = nil; isDragging = false; insertion = nil
-                released = box == nil ? nil : CACurrentMediaTime()
                 frameWatch?.stop(); frameWatch = nil
-                refresh()
-                if released != nil { startClock() }
+                endGesture()
                 return nil
             }
             return event
@@ -178,7 +179,6 @@ final class AtticMarqueeController: NSObject {
             originalWindowPoint = windowPoint
             additive = event.modifierFlags.contains(.shift) ? selection() : []
             moving = disposition == .move
-            released = nil
             return nil
         case .leftMouseDragged:
             guard origin != nil else { return event }
@@ -198,16 +198,25 @@ final class AtticMarqueeController: NSObject {
                 updateSelection()
                 if moving { move(point) }
                 else { selectionEnded(point) }
-                released = CACurrentMediaTime()
                 frameWatch?.stop(); frameWatch = nil
                 PerformanceSignposts.noteInput("marquee-end selected=\(selection().count)")
             } else { click(point) }
-            origin = nil
-            isDragging = false
-            refresh()
+            endGesture()
             return nil
         default: return event
         }
+    }
+
+    /// The gesture is over: its box and insertion line go in this frame
+    /// (V-04: nothing lingers once the button is up); the blocks' tint
+    /// keeps its short fade.
+    private func endGesture() {
+        origin = nil
+        isDragging = false
+        moving = false
+        box = nil
+        insertion = nil
+        refresh()
     }
 
     private func updateSelection() {
@@ -253,6 +262,13 @@ final class AtticMarqueeController: NSObject {
     fileprivate func frame(_ link: CADisplayLink) {
         let delta = previousFrame.map { link.timestamp - $0 } ?? (link.targetTimestamp - link.timestamp)
         previousFrame = link.timestamp
+        if isDragging, NSEvent.pressedMouseButtons & 1 == 0 {
+            // The button came up where this monitor never saw it (another
+            // window took the release): the gesture ends as a release would.
+            if !moving { selectionEnded(scrollView?.documentView?.convert(windowPoint, from: nil) ?? .zero) }
+            frameWatch?.stop(); frameWatch = nil
+            endGesture()
+        }
         if isDragging, let scroll = scrollView, let document = scroll.documentView {
             // Sample once per refresh, including when the pointer has stopped
             // outside the edge. The origin remains in the document as it scrolls.
@@ -273,9 +289,8 @@ final class AtticMarqueeController: NSObject {
             value.alpha = value.target > value.alpha ? min(value.target, value.alpha + step) : max(value.target, value.alpha - step)
             highlights[id] = value.alpha == 0 && value.target == 0 ? nil : value
         }
-        if let released, CACurrentMediaTime() - released >= 0.12 { box = nil; insertion = nil; self.released = nil }
         overlay.needsDisplay = true
-        if !isDragging, released == nil, !highlights.values.contains(where: { $0.alpha != $0.target }) { stopClock() }
+        if !isDragging, !highlights.values.contains(where: { $0.alpha != $0.target }) { stopClock() }
     }
 
     fileprivate func draw() {
@@ -294,20 +309,22 @@ final class AtticMarqueeController: NSObject {
         let clip = NSBezierPath()
         for run in runs { clip.append(NSBezierPath(roundedRect: overlay.convert(run, from: document), xRadius: 4, yRadius: 4)) }
         clip.addClip()
+        let dark = overlay.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let ink = highlightInk()
+        let opacity = dark ? highlightOpacity.dark : highlightOpacity.light
         for alpha in Set(highlights.values.map(\.alpha)) {
             let path = NSBezierPath()
             for value in highlights.values where value.alpha == alpha {
                 path.appendRect(overlay.convert(value.rect, from: document))
             }
-            NSColor.labelColor.withAlphaComponent(0.075 * alpha).setFill()
+            ink.withAlphaComponent(opacity * alpha).setFill()
             path.fill()
         }
         NSGraphicsContext.restoreGraphicsState()
         if let box {
-            let opacity = released.map { max(0, 1 - (CACurrentMediaTime() - $0) / 0.12) } ?? 1
             let path = NSBezierPath(rect: overlay.convert(box, from: document))
-            NSColor.black.withAlphaComponent(0.045 * opacity).setFill(); path.fill()
-            NSColor.labelColor.withAlphaComponent(0.22 * opacity).setStroke()
+            NSColor.black.withAlphaComponent(0.045).setFill(); path.fill()
+            NSColor.labelColor.withAlphaComponent(0.22).setStroke()
             path.lineWidth = 0.5; path.stroke()
         }
         if let insertion {

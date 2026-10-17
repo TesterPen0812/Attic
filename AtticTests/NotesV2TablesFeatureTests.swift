@@ -62,6 +62,57 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         }
     }
 
+    /// V-05 (recording 1937): dragging a column by its grip lifts it onto
+    /// a card that follows the pointer while the other columns slide apart
+    /// to open its landing gap; the release settles it there and makes the
+    /// move (one Undo step); the live table shows again.
+    func testV05AColumnDragLiftsItOpensItsGapAndLandsThere() throws {
+        let wide = NoteTable(texts: [["A", "B", "C", "D"], ["1", "2", "3", "4"]])
+        let (engine, textView) = makeEngine(blocks(wide))
+        let view = try view(engine)
+        view.activate(P(row: 1, column: 3), caret: .end)
+        settle(engine, textView)
+        let widths = view.grid.columnWidths
+        let reorder = try XCTUnwrap(NoteTableReorder(table: view, textView: textView, axis: .column, source: 3,
+                                                     tokens: AtticColorTokens.resolve(.default), animated: false, below: nil))
+        XCTAssertEqual(view.canvas.alphaValue, 0, "the strips stand in for the cells while dragging")
+        let card = try XCTUnwrap(textView.subviews.compactMap { $0 as? NoteDragLiftView }.first, "the lifted column")
+        XCTAssertNotNil(card.layer?.backgroundColor, "the card has a backing")
+        // From the grip over column 3 to over column 0.
+        let canvas = view.canvas
+        let start = CGPoint(x: widths.prefix(3).reduce(0, +) + widths[3] / 2, y: 10)
+        reorder.update(windowPoint: canvas.convert(start, to: nil))
+        XCTAssertEqual(reorder.target, 3)
+        reorder.update(windowPoint: canvas.convert(CGPoint(x: widths[0] / 2, y: 10), to: nil))
+        XCTAssertEqual(reorder.target, 0, "over the first column: it lands first")
+        let starts = NoteTableReorder.starts(sizes: widths, source: 3, target: 0)
+        XCTAssertEqual(starts[3], 0)
+        XCTAssertEqual(starts[0], widths[3], "column A slid over to open the gap")
+        var landed: Int?
+        reorder.finish { target in
+            landed = target
+            _ = engine.moveColumn(of: view.attachment!, from: 3, to: target)
+        }
+        XCTAssertEqual(landed, 0)
+        XCTAssertEqual(view.canvas.alphaValue, 1, "the live table is back")
+        XCTAssertTrue(textView.subviews.allSatisfy { !($0 is NoteDragLiftView) }, "the card is gone")
+        XCTAssertEqual(try table(engine).table.columns.count, 4)
+        XCTAssertEqual(view.cellString(P(row: 0, column: 0)).string, "D", "D moved first")
+        XCTAssertTrue(engine.undoCommand())
+        XCTAssertEqual(view.cellString(P(row: 0, column: 0)).string, "A", "one Undo step")
+    }
+
+    /// V-05: rows reorder the same way, and the slot rule is the middle of
+    /// the card against the middles of the other rows.
+    func testV05TheLandingSlotFollowsTheCardsMiddle() {
+        let sizes: [CGFloat] = [40, 30, 50, 20]
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 5), 0)
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 21), 1, "past A's middle")
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 66), 2, "past C's middle")
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 200), 3)
+        XCTAssertEqual(NoteTableReorder.starts(sizes: sizes, source: 1, target: 3), [0: 0, 2: 40, 3: 90, 1: 110])
+    }
+
     private func location(of text: String, in engine: NoteEditorEngine) -> Int {
         (engine.textStorage.string as NSString).range(of: text).location
     }

@@ -239,6 +239,14 @@ struct AtticSelectedChip: View {
     }
 }
 
+// MARK: - Hover gate
+
+/// Hover UI opens only while no mouse button is down (V-04): a drag that
+/// started elsewhere and passes over a hover control never opens it.
+enum AtticHoverGate {
+    static func opens(pressedButtons: Int) -> Bool { pressedButtons == 0 }
+}
+
 // MARK: - Page button (collapsed page dock)
 
 /// The header's page button (Phase 0's mode dock, brought into Direction
@@ -357,9 +365,20 @@ struct AtticPageButton<Page: Hashable>: View {
         .modifier(AtticPageButtonSurface(flat: flat, cornerRadius: radius, hovered: hovering))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: radius)
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .onHover { inside in
-            hovering = inside
-            if inside { onApproach() } else { hoveredPage = nil }
+        // V-04: it opens under a resting or moving pointer, never under a
+        // mouse drag that started elsewhere (a marquee or a selection
+        // passing over the header); the first move after the button comes
+        // up opens it.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard !hovering, AtticHoverGate.opens(pressedButtons: NSEvent.pressedMouseButtons) else { return }
+                hovering = true
+                onApproach()
+            case .ended:
+                if hovering { hovering = false }
+                hoveredPage = nil
+            }
         }
         .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: open)
         // The header title makes room while it is open (OD-11).

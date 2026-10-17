@@ -64,6 +64,7 @@ final class NoteFormatControls: NSObject {
     private var mouseMonitor: Any?
     private var trackingArea: NSTrackingArea?
     private var previousLayout: (() -> Void)?
+    private var previousMouseTracking: ((Bool) -> Void)?
     private var previousActivity: ((NoteEditorEngine.Activity, NoteEditorEngine.Activity) -> Void)?
     private var refreshScheduled = false
     /// A scheduled refresh acknowledges its generation after reading the selection.
@@ -149,6 +150,14 @@ final class NoteFormatControls: NSObject {
             self?.previousLayout?()
             self?.layoutDidChange()
         }
+        // V-03: a drag-select (and its autoscroll) holds the bar back; it
+        // comes once, where the settled selection leaves it room.
+        previousMouseTracking = textView.onMouseSelectionTracking
+        textView.onMouseSelectionTracking = { [weak self] tracking in
+            self?.previousMouseTracking?(tracking)
+            guard let self else { return }
+            if tracking { self.hideBar() } else { self.scheduleRefresh() }
+        }
         textView.contextMenuProvider = { [weak self] menu, event in self?.decorate(menu, for: event) }
         applyLinkLook()
 
@@ -203,6 +212,7 @@ final class NoteFormatControls: NSObject {
         engine.onActivityChanged = previousActivity
         if engine.pendingSlashDate != nil { engine.cancelSlashDate() }
         textView?.onLayout = previousLayout
+        textView?.onMouseSelectionTracking = previousMouseTracking
         textView?.contextMenuProvider = nil
         for host in [hintHost, barHost, slashHost, cardHost, addressHost] { AtticOverlayHierarchy.remove(host) }
         if Self.active === self { Self.active = nil }
@@ -290,6 +300,7 @@ final class NoteFormatControls: NSObject {
         let inTable = tableMarkTarget
         let allowsBar = ((current.length > 0 && focused && !textView.hasMarkedText()) || inTable) && engine.activity == .idle
             && cardModel.card == nil && dismissedSelection != current && !slashModel.shown
+            && !textView.isTrackingMouseSelection
         if allowsBar || isFormatBarOpen {
             snapshotCount += 1
             let snapshot = NoteFormatSnapshot.make(router: router, selection: current)
@@ -395,7 +406,8 @@ final class NoteFormatControls: NSObject {
         let key = formatModel.snapshot.cells.map { "cells:" + ($0.alignment?.title ?? "Align") }
             ?? NoteCommandCatalog.styleName(formatModel.snapshot.paragraph)
         barWidth = measuredBarWidth(styleName: key)
-        guard placeBar() else { return }
+        // A bar already showing moves to its new place (V-03: never a jump).
+        guard placeBar(animated: formatModel.barShown) else { return }
         barHost.isInteractive = true
         if barHost.isHidden { barHost.isHidden = false }
         if !formatModel.barShown { formatModel.barShown = true }
@@ -471,7 +483,9 @@ final class NoteFormatControls: NSObject {
     }
 
     /// Above the selection's first line, or under its last when there is no
-    /// room above; never over the selection while either fits.
+    /// room above; never over the selection (V-03): with room on neither
+    /// side (a selection taller than the view) there is no bar until a
+    /// scroll brings one of its ends into view with room beside it.
     func barPlacement(selection: NSRange) -> (frame: NSRect, below: Bool)? {
         guard let textView else { return nil }
         let first: NSRect, last: NSRect
@@ -493,12 +507,9 @@ final class NoteFormatControls: NSObject {
         var y = first.minY - m.barGap - m.barHeight
         var below = false
         if y < usable.minY {
-            if last.maxY + m.barGap + m.barHeight <= usable.maxY {
-                y = last.maxY + m.barGap
-                below = true
-            } else {
-                y = usable.minY
-            }
+            guard last.maxY + m.barGap + m.barHeight <= usable.maxY else { return nil }
+            y = last.maxY + m.barGap
+            below = true
         }
         y = min(max(y, usable.minY), usable.maxY - m.barHeight)
         let inset = textView.textContainerInset.width
@@ -508,12 +519,45 @@ final class NoteFormatControls: NSObject {
         return (NSRect(x: x, y: y, width: width, height: m.barHeight), below)
     }
 
+    /// Places the bar. `animated` (a new selection, not a scroll) glides a
+    /// showing bar to its new place on its side, or, when it changes sides,
+    /// fades it in there rather than crossing the selection (V-03). A
+    /// scroll or layout pass moves it with the text, at once.
     @discardableResult
-    private func placeBar() -> Bool {
+    private func placeBar(animated: Bool = false) -> Bool {
         guard let placement = barPlacement(selection: selection) else { hideBar(); return false }
         let room = AtticNoteFormatMetrics.shadowRoom
-        placeOverlay(barHost, rect: placement.frame.insetBy(dx: -room, dy: -room))
-        if formatModel.barBelow != placement.below { formatModel.barBelow = placement.below }
+        let rect = placement.frame.insetBy(dx: -room, dy: -room)
+        let flips = formatModel.barBelow != placement.below
+        if animated, let textView, let parent = overlayParent, barHost.superview === parent, !barHost.isHidden,
+           !AtticOverlayHierarchy.isInLayoutPass {
+            let target = parent.convert(rect, from: textView).integral
+            if target != barHost.frame {
+                if flips || design.reduceMotion {
+                    barHost.layer?.removeAllAnimations()
+                    barHost.frame = target
+                    barHost.alphaValue = 0
+                    NSAnimationContext.runAnimationGroup { context in
+                        context.duration = AtticNoteFormatMetrics.barFadeDuration
+                        barHost.animator().alphaValue = 1
+                    }
+                } else {
+                    NSAnimationContext.runAnimationGroup { context in
+                        context.duration = AtticNoteFormatMetrics.barMoveDuration
+                        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                        context.allowsImplicitAnimation = true
+                        barHost.animator().frame = target
+                    }
+                }
+            }
+        } else {
+            // A move with the text ends any glide first, so the bar never
+            // lags behind a scroll.
+            if barHost.layer?.animationKeys()?.isEmpty == false { barHost.layer?.removeAllAnimations() }
+            if barHost.alphaValue != 1 { barHost.alphaValue = 1 }
+            placeOverlay(barHost, rect: rect)
+        }
+        if flips { formatModel.barBelow = placement.below }
         barCover = placement.frame
         return true
     }
@@ -811,8 +855,38 @@ final class NoteFormatControls: NSObject {
     func pickSlash(_ kind: NoteSlashItem.Kind) {
         onSlashPick?(kind)
         slashModel.hide()
-        _ = engine.acceptSlashItem(kind)
+        let start = engine.slashSession?.range.location
+        let accepted = engine.acceptSlashItem(kind)
         returnKeyboardFromBar()
+        if accepted, let start, Self.revealsWholeBlock(kind) { revealInsertedBlock(from: start) }
+    }
+
+    /// The `/` rows that put in several lines at once (a diagram's template,
+    /// a table's rows).
+    static func revealsWholeBlock(_ kind: NoteSlashItem.Kind) -> Bool { kind == .diagram || kind == .table }
+
+    /// V-01: a block put in from the `/` list is shown whole, in the same
+    /// pass, above the floating bottom controls and below the header (the
+    /// scroll view's insets). The text view keeps only the caret on screen,
+    /// to the panel's edge, so a diagram picked on the last line had its
+    /// template under the bottom row until the next scroll.
+    private func revealInsertedBlock(from location: Int) {
+        guard let textView, let scrollView else { return }
+        textView.layoutSubtreeIfNeeded()
+        let end = textView.selectedRange().location
+        guard let top = engine.rect(for: NSRange(location: location, length: 1)), let bottom = engine.caretRect(at: end) else { return }
+        let clip = scrollView.contentView
+        let insets = scrollView.contentInsets
+        var origin = clip.bounds.origin
+        let readableBottom = origin.y + clip.bounds.height - insets.bottom
+        if bottom.maxY > readableBottom { origin.y += bottom.maxY - readableBottom }
+        // A block taller than the room keeps its start in view.
+        origin.y = min(origin.y, top.minY - insets.top)
+        let maximum = max(-insets.top, textView.frame.height - clip.bounds.height + insets.bottom)
+        origin.y = min(max(origin.y, -insets.top), maximum)
+        guard origin.y != clip.bounds.origin.y else { return }
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
     }
 
     /// The open `/` list's and card's places (nil while closed): each keeps
@@ -830,6 +904,12 @@ final class NoteFormatControls: NSObject {
         // inset (the controls and the 12 pt the last line keeps above
         // them): a card stops there rather than covering the controls.
         if let scrollView { space = space.clearing(bottom: scrollView.contentInsets.bottom, of: scrollView) }
+        // V-08: and below the header's floating controls (the pin, the
+        // title and the page button), the panel's margin under them.
+        if let scrollView {
+            let header = scrollView.contentInsets.top - AtticNoteMetrics.titleTopGap
+            space = space.clearing(top: header + AtticDropdownMetrics.panelMargin, of: scrollView)
+        }
         // D-16: a card over the text lines up its rows' text with the note's
         // column (its edge one row padding further out), so it covers whole
         // line starts instead of leaving their first letters peeking out
@@ -854,7 +934,11 @@ final class NoteFormatControls: NSObject {
         guard let placed = placeDropdown(slashHost, idealWidth: AtticDropdownLayout.listWidth(titles: slashModel.items.map(\.title),
                                                                                                match: session.query),
                                          height: wanted, anchor: anchor, current: slashPlacement) else { return }
+        // A list that opens anew takes its structure afresh; while it shows,
+        // one that has scrolled keeps scrolling (V-07).
+        let scrolls = placed.heightLimit != nil || (slashPlacement != nil && slashModel.scrolls)
         slashPlacement = placed
+        if slashModel.scrolls != scrolls { slashModel.scrolls = scrolls }
         if slashModel.viewportHeight != placed.heightLimit { slashModel.viewportHeight = placed.heightLimit }
         if slashModel.width != placed.width { slashModel.width = placed.width }
         if slashModel.query != session.query { slashModel.query = session.query }

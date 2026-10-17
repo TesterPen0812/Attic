@@ -32,6 +32,8 @@ final class NoteTableChrome: NSObject {
     }
     /// The drag's target while a grip is being dragged.
     private var dragTarget: Int?
+    /// The live reorder while a grip is being dragged (V-05).
+    private var reorder: NoteTableReorder?
 
     init(engine: NoteEditorEngine, textView: NoteEditorTextView, design: AtticDesignContext) {
         self.engine = engine
@@ -247,29 +249,45 @@ final class NoteTableChrome: NSObject {
 
     /// Dragging a grip moves its column or row; it lands where the pointer
     /// is when the drag ends (one Undo step).
+    ///
+    /// V-05: the column (or row) lifts onto a card that follows the pointer
+    /// along its axis while the others slide apart to open the gap it will
+    /// land in; on release the card settles into the gap and the move is
+    /// made (`NoteTableReorder`).
     private func drag(_ axis: Axis, to windowPoint: CGPoint, ended: Bool) {
         guard let table = engine.focusedTable, let attachment = table.attachment, let textView,
               let cell = table.activeCell ?? table.cellSelection?.head else { return }
-        let local = table.canvas.convert(windowPoint, from: nil)
-        let over = table.grid.position(at: local, clamped: true)
         let grip = axis == .column ? columnGrip : rowGrip
         if axis == .column { columnGripDragging = true } else { rowGripDragging = true }
+        let source = axis == .column ? cell.column : cell.row
+        if reorder == nil {
+            reorder = NoteTableReorder(table: table, textView: textView, axis: axis == .column ? .column : .row,
+                                       source: source, tokens: AtticColorTokens.resolve(design),
+                                       animated: !design.reduceMotion, below: grip)
+        }
         // The grip follows the pointer along its axis.
         let point = textView.convert(windowPoint, from: nil)
         var frame = grip.frame
         if axis == .column { frame.origin.x = point.x - frame.width / 2 } else { frame.origin.y = point.y - frame.height / 2 }
         grip.frame = frame
-        dragTarget = axis == .column ? over?.column : over?.row
+        reorder?.update(windowPoint: windowPoint)
+        dragTarget = reorder?.target ?? source
         guard ended else { return }
         columnGripDragging = false
         rowGripDragging = false
-        let target = dragTarget
         dragTarget = nil
-        if let target {
-            if axis == .column, target != cell.column { engine.moveColumn(of: attachment, from: cell.column, to: target) }
-            if axis == .row, target != cell.row { engine.moveRow(of: attachment, from: cell.row, to: target) }
+        let session = reorder
+        reorder = nil
+        grip.isHidden = true
+        let commit: (Int) -> Void = { [weak self, weak attachment] target in
+            guard let self, let attachment else { return }
+            if target != source {
+                if axis == .column { self.engine.moveColumn(of: attachment, from: source, to: target) }
+                else { self.engine.moveRow(of: attachment, from: source, to: target) }
+            }
+            self.place()
         }
-        place()
+        if let session { session.finish(commit) } else { commit(source) }
     }
 
     private func addAtEnd(column: Bool) {
@@ -281,4 +299,185 @@ final class NoteTableChrome: NSObject {
             engine.addRow(to: attachment, at: attachment.table.rowCount, focusing: cell.column)
         }
     }
+}
+
+
+/// A table column or row being dragged by its grip (V-05). The table's
+/// cells are shown as one snapshot strip per column (or row) over the
+/// hidden canvas; the dragged one lifts onto a card (the dropdowns'
+/// surface) that follows the pointer along the axis, and the others slide
+/// apart to open the gap it will land in. On release the card settles into
+/// the gap, the move is made, and the live table shows again in the same
+/// turn. Snapshots are taken once, when the drag starts: nothing redraws
+/// per frame but Core Animation's moves.
+@MainActor
+final class NoteTableReorder {
+    enum Axis { case column, row }
+
+    let axis: Axis
+    let source: Int
+    private(set) var target: Int
+    private weak var table: NoteTableView?
+    private weak var textView: NSView?
+    private let sizes: [CGFloat]
+    private let strips: [NSView]
+    private let container = NoteTableReorderLayer()
+    private let card: NoteDragLiftView
+    private let animated: Bool
+    private let canvasAlpha: CGFloat
+    /// Where the pointer took the card, along the axis, from its start.
+    private var grab: CGFloat?
+
+    static let duration = AtticMotionScale.fast
+
+    init?(table: NoteTableView, textView: NSView, axis: Axis, source: Int, tokens: AtticColorTokens,
+          animated: Bool, below sibling: NSView?) {
+        let grid = table.grid
+        let sizes = axis == .column ? grid.columnWidths : grid.rowHeights
+        guard sizes.indices.contains(source), sizes.count > 1 else { return nil }
+        self.axis = axis
+        self.source = source
+        self.target = source
+        self.table = table
+        self.textView = textView
+        self.sizes = sizes
+        self.animated = animated
+        let canvas = table.canvas
+        canvasAlpha = canvas.alphaValue
+        // One snapshot per strip, in the canvas's own drawing (its cells,
+        // grid lines, header fill, selection and the cell being edited).
+        var strips: [NSView] = []
+        var images: [NSImage?] = []
+        for index in sizes.indices {
+            let rect = Self.stripRect(index, sizes: sizes, axis: axis, grid: grid)
+            let image = NoteDragLiftView.snapshot(of: rect, in: canvas)
+            images.append(image)
+            let strip = NSView(frame: rect)
+            strip.wantsLayer = true
+            strip.layer?.contents = image
+            strip.layer?.contentsGravity = .resize
+            strips.append(strip)
+        }
+        self.strips = strips
+        container.frame = canvas.frame
+        container.wantsLayer = true
+        for (index, strip) in strips.enumerated() where index != source { container.addSubview(strip) }
+        table.scrollView.addSubview(container, positioned: .above, relativeTo: canvas)
+        let sourceRect = Self.stripRect(source, sizes: sizes, axis: axis, grid: grid)
+        card = NoteDragLiftView(snapshot: images[source], size: sourceRect.size, padding: .zero, tokens: tokens)
+        card.layer?.cornerRadius = 4
+        card.frame = textView.convert(sourceRect, from: canvas)
+        textView.addSubview(card, positioned: .below, relativeTo: sibling)
+        canvas.alphaValue = 0
+    }
+
+    private static func stripRect(_ index: Int, sizes: [CGFloat], axis: Axis, grid: NoteTableLayout) -> CGRect {
+        let start = sizes.prefix(index).reduce(0, +)
+        return axis == .column
+            ? CGRect(x: start, y: 0, width: sizes[index], height: grid.height)
+            : CGRect(x: 0, y: start, width: grid.width, height: sizes[index])
+    }
+
+    /// The strips' starts along the axis with `source` moved to `target`.
+    static func starts(sizes: [CGFloat], source: Int, target: Int) -> [Int: CGFloat] {
+        var order = Array(sizes.indices)
+        order.remove(at: source)
+        order.insert(source, at: target)
+        var result: [Int: CGFloat] = [:]
+        var position: CGFloat = 0
+        for index in order {
+            result[index] = position
+            position += sizes[index]
+        }
+        return result
+    }
+
+    /// The slot the card's middle (`center`, along the axis) lands in: the
+    /// number of other strips whose middles lie before it.
+    static func target(sizes: [CGFloat], source: Int, center: CGFloat) -> Int {
+        var position: CGFloat = 0
+        var before = 0
+        for index in sizes.indices where index != source {
+            if position + sizes[index] / 2 < center { before += 1 }
+            position += sizes[index]
+        }
+        return before
+    }
+
+    func update(windowPoint: CGPoint) {
+        guard let table, let textView else { return }
+        let canvas = table.canvas
+        let local = canvas.convert(windowPoint, from: nil)
+        let along = axis == .column ? local.x : local.y
+        let size = sizes[source]
+        let total = sizes.reduce(0, +)
+        let home = sizes.prefix(source).reduce(0, +)
+        if grab == nil { grab = along - home }
+        // The card follows the pointer, kept within the table.
+        let start = min(max(along - (grab ?? size / 2), 0), max(0, total - size))
+        var rect = Self.stripRect(source, sizes: sizes, axis: axis, grid: table.grid)
+        if axis == .column { rect.origin.x = start } else { rect.origin.y = start }
+        card.move(to: textView.convert(rect, from: canvas), animated: false)
+        let next = Self.target(sizes: sizes, source: source, center: start + size / 2)
+        guard next != target else { return }
+        target = next
+        layOut(animated: animated)
+    }
+
+    private func layOut(animated: Bool) {
+        let starts = Self.starts(sizes: sizes, source: source, target: target)
+        let apply = {
+            for (index, strip) in self.strips.enumerated() where index != self.source {
+                var frame = strip.frame
+                if self.axis == .column { frame.origin.x = starts[index] ?? frame.minX } else { frame.origin.y = starts[index] ?? frame.minY }
+                if animated { strip.animator().frame = frame } else { strip.frame = frame }
+            }
+        }
+        guard animated else { return apply() }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            apply()
+        }
+    }
+
+    /// Settles the card into its gap, then makes the move (`commit` with
+    /// the target) and shows the live table again, in one turn.
+    func finish(_ commit: @escaping (Int) -> Void) {
+        guard let table, let textView else { return teardown() }
+        let starts = Self.starts(sizes: sizes, source: source, target: target)
+        var rect = Self.stripRect(source, sizes: sizes, axis: axis, grid: table.grid)
+        if axis == .column { rect.origin.x = starts[source] ?? rect.minX } else { rect.origin.y = starts[source] ?? rect.minY }
+        let landing = textView.convert(rect, from: table.canvas)
+        pendingCommit = commit
+        guard animated, landing != card.frame else { return land() }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            card.animator().frame = landing
+        }, completionHandler: { [self] in MainActor.assumeIsolated { land() } })
+    }
+
+    private var pendingCommit: ((Int) -> Void)?
+
+    private func land() {
+        let commit = pendingCommit
+        pendingCommit = nil
+        commit?(target)
+        teardown()
+    }
+
+    private func teardown() {
+        table?.canvas.alphaValue = canvasAlpha
+        container.removeFromSuperview()
+        card.removeFromSuperview()
+    }
+}
+
+/// The reorder's strips: drawn only, never hit.
+final class NoteTableReorderLayer: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

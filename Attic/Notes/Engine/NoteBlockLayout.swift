@@ -1343,6 +1343,68 @@ final class NoteDropLineView: NSView {
     }
 }
 
+/// A dragged block's or table strip's lifted card (V-05, V-06): the
+/// snapshot on the dropdowns' own surface (`popoverFill`, its rim and
+/// shadow, which follow the panel's look), so nothing under it shows
+/// through and no text is drawn twice. Moves are Core Animation's.
+final class NoteDragLiftView: NSView {
+    static let cornerRadius: CGFloat = 8
+    /// The card's room around its snapshot.
+    let padding: CGSize
+    private let image = CALayer()
+
+    init(snapshot: NSImage?, size: CGSize, padding: CGSize, tokens: AtticColorTokens) {
+        self.padding = padding
+        super.init(frame: CGRect(origin: .zero, size: CGSize(width: size.width + padding.width * 2,
+                                                             height: size.height + padding.height * 2)))
+        wantsLayer = true
+        guard let layer else { return }
+        layer.backgroundColor = tokens.popoverFill.nsColor.cgColor
+        layer.cornerRadius = Self.cornerRadius
+        layer.cornerCurve = .continuous
+        layer.borderWidth = AtticHairline.width
+        layer.borderColor = tokens.popoverOuterRim.nsColor.cgColor
+        layer.shadowColor = tokens.dropdownShadow.nsColor.withAlphaComponent(1).cgColor
+        layer.shadowOpacity = Float(tokens.dropdownShadow.alpha)
+        layer.shadowRadius = AtticShadows.dropdown.radius / 2
+        layer.shadowOffset = CGSize(width: 0, height: -AtticShadows.dropdown.y / 2)
+        image.contents = snapshot
+        image.contentsGravity = .resize
+        image.frame = CGRect(x: padding.width, y: padding.height, width: size.width, height: size.height)
+        layer.addSublayer(image)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not archived") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Moves the card, gliding (`animated`) or at once.
+    func move(to frame: CGRect, animated: Bool, duration: Double = AtticMotionScale.fast) {
+        guard frame != self.frame else { return }
+        guard animated else {
+            layer?.removeAllAnimations()
+            self.frame = frame
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            animator().frame = frame
+        }
+    }
+
+    /// A snapshot of `rect` in `view` (its subviews included), for a card.
+    static func snapshot(of rect: CGRect, in view: NSView) -> NSImage? {
+        guard rect.width > 0, rect.height > 0, let bitmap = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil }
+        view.cacheDisplay(in: rect, to: bitmap)
+        let image = NSImage(size: rect.size)
+        image.addRepresentation(bitmap)
+        return image
+    }
+}
+
 // MARK: - The note's empty last line with a format of its own (O17-07)
 
 extension NoteListMarker {

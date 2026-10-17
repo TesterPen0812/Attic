@@ -61,20 +61,25 @@ struct AtticDropdownSurface: View {
 /// presenter caps it at the panel's margin (`AtticDropdownLayout.width`).
 struct AtticDropdownCard<Content: View>: View {
     var width: CGFloat?
+    /// Keeps the scrolling structure even while everything fits (V-07): a
+    /// filtered list that stops needing to scroll updates its rows in
+    /// place instead of swapping its whole content for a second copy.
+    var scrolls = false
     @Environment(\.atticDropdownHeight) private var height
     @Environment(\.atticDropdownWidth) private var widthLimit
     @Environment(\.atticDropdownContentHeightChanged) private var heightChanged
     @Environment(\.atticDropdownContentWidthChanged) private var widthChanged
     @ViewBuilder let content: Content
 
-    init(width: CGFloat? = nil, @ViewBuilder content: () -> Content) {
+    init(width: CGFloat? = nil, scrolls: Bool = false, @ViewBuilder content: () -> Content) {
         self.width = width
+        self.scrolls = scrolls
         self.content = content()
     }
 
     var body: some View {
         let m = AtticDropdownMetrics.self
-        AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }, persistent: heightChanged != nil) {
+        AtticDropdownViewport(height: height.map { max(0, $0 - m.inset * 2) }, persistent: scrolls || heightChanged != nil) {
             VStack(alignment: .leading, spacing: 0) { content }
                 .modifier(AtticDropdownHeightObserver(changed: heightChanged))
                 .modifier(AtticDropdownWidthObserver(changed: widthChanged))
@@ -870,6 +875,19 @@ struct AtticDropdownSpace {
         guard maxY > bounds.minY + AtticDropdownMetrics.rowHeight * 2 else { return self }
         return AtticDropdownSpace(parent: parent, bounds: CGRect(x: bounds.minX, y: bounds.minY,
                                                                  width: bounds.width, height: maxY - bounds.minY))
+    }
+
+    /// This space starting `clearance` below the top of `view`'s visible
+    /// part (V-08): a card over a page with floating top controls (the
+    /// note's pin, title and page button) stops below them instead of
+    /// covering them. Unchanged when that would leave no room.
+    func clearing(top clearance: CGFloat, of view: NSView) -> AtticDropdownSpace {
+        guard clearance > 0 else { return self }
+        let visible = anchor(view.visibleRect, in: view)
+        let minY = max(bounds.minY, visible.minY + clearance)
+        guard bounds.maxY > minY + AtticDropdownMetrics.rowHeight * 2 else { return self }
+        return AtticDropdownSpace(parent: parent, bounds: CGRect(x: bounds.minX, y: minY,
+                                                                 width: bounds.width, height: bounds.maxY - minY))
     }
 
     /// `rect` in `view`, top-down in this space.
