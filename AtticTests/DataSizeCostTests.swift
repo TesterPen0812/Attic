@@ -110,6 +110,9 @@ final class DataSizeCostTests: XCTestCase {
             let revealMS = milliseconds { XCTAssertEqual(reveal.show(lastID), .shown) }
             print("P2_REVEAL size=\(count) parents=\(store.doneFamilyParentReadCount - r) pages=\(store.donePageReadCount - p) ms=\(revealMS)")
             XCTAssertTrue(reveal.selection.contains(lastID))
+            XCTAssertEqual(store.doneFamilyParentReadCount - reads - (store.doneFamilyParentReadCount - r), count)
+            XCTAssertEqual(store.doneFamilyParentReadCount - r, count)
+            XCTAssertEqual(store.donePageReadCount - p, 2)
         }
     }
 

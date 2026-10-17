@@ -736,7 +736,11 @@ final class TasksPageModel: ObservableObject {
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
         let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "")
-        setDoneLog(doneLogTasks + page.tasks)
+        doneCountCache = nil
+        // The indexed cursor supplies canonical IDs in completion order.
+        // Existing families remain valid for this store revision.
+        doneLogTasks.append(contentsOf: page.tasks)
+        doneLogChildren.merge(store.doneLogSubtasks(ofParents: page.tasks.map(\.id))) { _, new in new }
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = page.failure
@@ -1098,9 +1102,7 @@ final class TasksPageModel: ObservableObject {
     /// counted in rows, so the browsing page size never shortens it
     /// (GPT-6.1's PR prep review, P3: 40-row pages halved it to 8,040).
     static let doneRevealReach = 80 + 200 * 80
-    /// A reveal reads in 80-row steps, as before the 40-row pages: each
-    /// step re-reads the loaded rows' families, so smaller steps would
-    /// double the reads for the same reach.
+    /// Keep the established reveal page boundary when seeking directly.
     static let doneRevealStep = 80
 
     /// Loads the Done log until `id`'s page is in, and says whether it is.
@@ -1110,9 +1112,12 @@ final class TasksPageModel: ObservableObject {
         isRevealing = true
         defer { isRevealing = false }
         loadDoneLogIfNeeded()
-        while !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
-              doneLogTasks.count < Self.doneRevealReach {
-            loadMoreDoneLog(limit: min(Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
+        if !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
+           doneLogTasks.count < Self.doneRevealReach {
+            let offset = store.indexedDoneLogOffset(of: id, matching: doneLogQuery ?? "") ?? (Self.doneRevealReach - 1)
+            let remaining = max(0, offset + 1 - doneLogTasks.count)
+            let pages = max(1, (remaining + Self.doneRevealStep - 1) / Self.doneRevealStep)
+            loadMoreDoneLog(limit: min(pages * Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
         }
         return doneLogTasks.contains { $0.id == id }
     }

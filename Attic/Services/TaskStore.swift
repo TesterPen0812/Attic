@@ -2294,6 +2294,10 @@ final class TaskStore: ObservableObject {
         return ids
     }
 
+    func indexedDoneLogOffset(of id: UUID, matching query: String) -> Int? {
+        doneSearchIDs(matching: query).firstIndex(of: id)
+    }
+
     func indexedDoneLogCount(matching query: String = "") -> Int {
         query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? doneSearchEntries.count : doneSearchIDs(matching: query).count
