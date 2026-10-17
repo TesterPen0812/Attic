@@ -19,9 +19,11 @@ final class RoundF3HintTests: RoundF3TestCase {
             for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 { first = x; break }
         }
         let start = try XCTUnwrap(first, "the hint drew nothing")
+        // The T's stem only (its middle columns): its bar is wider, and the
+        // "y" kerned under it descends. A low threshold keeps a 1x stem.
         var bottom = 0
-        for x in start..<min(rep.pixelsWide, start + Int(5 * scale)) {
-            for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 { bottom = max(bottom, y) }
+        for x in (start + Int(2 * scale))..<min(rep.pixelsWide, start + Int(ceil(4.6 * scale))) {
+            for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.25 { bottom = max(bottom, y) }
         }
         return host.frame.minY + CGFloat(bottom + 1) / scale
     }
@@ -61,9 +63,9 @@ final class RoundF3HintTests: RoundF3TestCase {
             let scale = CGFloat(rep.pixelsWide) / text.bounds.width
             var bottom = 0
             let rows = Int((line.baseline - 13) * scale)..<min(rep.pixelsHigh, Int((line.baseline + 6) * scale))
-            for px in Int(x * scale)..<Int((x + 5) * scale) {
+            for px in Int((x + 2) * scale)..<Int(ceil((x + 4.6) * scale)) {
                 for py in rows where (rep.colorAt(x: px, y: py)?.alphaComponent ?? 0) > 0.5
-                    && (rep.colorAt(x: px, y: py)?.brightnessComponent ?? 0) > 0.5 { bottom = max(bottom, py) }
+                    && (rep.colorAt(x: px, y: py)?.brightnessComponent ?? 0) > 0.4 { bottom = max(bottom, py) }
             }
             XCTAssertEqual(CGFloat(bottom + 1) / scale, drawn, accuracy: 0.01, "\(name): the typed letter stands where the hint's did")
         }
