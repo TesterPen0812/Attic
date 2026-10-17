@@ -234,6 +234,33 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// format of its own (O17-07: TextKit lays that line out again when
     /// the caret comes or goes).
     private var caretOnFormattedEmptyLastLine = false
+    private var storageProcessingDepth = 0
+    private var pendingEmptyParagraphViewRefresh = false
+
+    /// Storage delegates/notifications precede native selection repair and layout
+    /// notification. Keep semantics synchronous there; presentation follows the edit.
+    var isProcessingStorageEdit: Bool { storageProcessingDepth > 0 || !textStorage.editedMask.isEmpty }
+
+    func afterStorageEdit(_ update: @escaping @MainActor (NoteEditorEngine) -> Void) {
+        guard isProcessingStorageEdit else { update(self); return }
+        let expectedNote = noteID
+        DispatchQueue.main.async { [weak self, weak view = textView] in
+            guard let self, self.noteID == expectedNote, self.textView === view,
+                  view == nil || view?.engine === self else { return }
+            self.afterStorageEdit(update)
+        }
+    }
+
+    private func refreshRestoredEmptyParagraphView() {
+        guard pendingEmptyParagraphViewRefresh, !isProcessingStorageEdit else { return }
+        guard let textView else { pendingEmptyParagraphViewRefresh = false; return }
+        guard textView.engine === self, rangeIsInStorage(textView.selectedRange()), !textView.hasMarkedText() else { return }
+        pendingEmptyParagraphViewRefresh = false
+        // Read the current format/caret, never the block or old selection from
+        // didProcessEditing. A newer command may have already consumed this.
+        textView.typingAttributes = attributes(forParagraphAt: textView.selectedRange().location)
+        refreshEmptyLastLine()
+    }
 
     fileprivate func notifyTagsChanged() {
         onTagsChange?()
@@ -682,6 +709,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func detachView() {
+        pendingEmptyParagraphViewRefresh = false
         traceImageLoads("detach")
         imageViewportSubscription = nil
         scheduledImageReconciliation?.cancel()
@@ -892,7 +920,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 textStorage.addAttributes(base, range: actual)
                 restyleMarks(in: actual, base: base)
                 // No spelling or grammar marks inside code (Mono, Codex's change).
-                if name == "mono" { textView?.setSpellingState(0, range: actual) }
+                if name == "mono" {
+                    let generation = documentEditGeneration
+                    afterStorageEdit { engine in
+                        guard engine.documentEditGeneration == generation, engine.rangeIsInStorage(actual),
+                              engine.paragraphStyle(at: actual.location)?.isCode == true else { return }
+                        engine.textView?.setSpellingState(0, range: actual)
+                    }
+                }
                 position = NSMaxRange(paragraph)
                 if position <= actual.location { break }
             }
@@ -1980,6 +2015,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textDidChange(_ notification: Notification) {
+        refreshRestoredEmptyParagraphView()
         textView?.marquee?.textChanged()
         history.didChange()
         find.refresh()
@@ -2002,7 +2038,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textViewDidChangeSelection(_ notification: Notification) {
         guard let textView = textView else { return }
+        if isProcessingStorageEdit {
+            afterStorageEdit { $0.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification)) }
+            return
+        }
         let selection = textView.selectedRange()
+        guard rangeIsInStorage(selection) else { return }
+        refreshRestoredEmptyParagraphView()
         if let boundary = inputRuleBoundary, selection != NSRange(location: boundary.caret, length: 0),
            userEditDepth == 0, engineEditDepth == 0 { inputRuleBoundary = nil }
         // A caret may arrive through arrows, VoiceOver or native Find.
@@ -2204,6 +2246,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
+        storageProcessingDepth += 1
+        defer { storageProcessingDepth -= 1 }
         blockRunIntervals.removeAll(keepingCapacity: true)
         ordinalCheckpointCount = ordinalCheckpointIndex(paragraphRange(at: editedRange.location).location)
         let textOnly = pendingListTextOnlyEdit
@@ -2215,10 +2259,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         } else { invalidateOutlineIfNeeded(in: editedRange) }
         guard editedMask.contains(.editedCharacters) else { return }
         documentEditGeneration &+= 1
-        textView?.cancelCalloutIconSession(reason: "document characters edited")
+        if let session = textView?.calloutIconSession {
+            afterStorageEdit { [weak session] _ in session?.cancel(reason: "document characters edited") }
+        }
         // An edit that empties the note or fills an empty one (an Undo, a
         // paste, an agent's change included): "Title" comes or goes.
-        if textStorage.length == 0 || textStorage.length == delta { textView?.updatePlaceholder() }
+        if textStorage.length == 0 || textStorage.length == delta {
+            afterStorageEdit { $0.textView?.updatePlaceholder() }
+        }
         let emptyBefore = pendingParagraphStyle.flatMap { pending in
             pending.location == textStorage.length - delta ? block(for: pending.state) : nil
         }
@@ -3700,8 +3748,8 @@ extension NoteEditorEngine {
             pendingParagraphStyle = (textStorage.length, .init(style: paragraph, indent: block.indent ?? 0, block: block))
         } else { pendingParagraphStyle = nil }
         documentCache = nil
-        textView?.typingAttributes = attributes(forParagraphAt: textView?.selectedRange().location ?? textStorage.length)
-        refreshEmptyLastLine()
+        pendingEmptyParagraphViewRefresh = true
+        afterStorageEdit { $0.refreshRestoredEmptyParagraphView() }
     }
 
     private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int, metadata: NoteBlock? = nil) {
@@ -3954,7 +4002,12 @@ extension NoteEditorEngine {
 
     var slashSession: NoteSlashSession? {
         get { activeSlashSession }
-        set { activeSlashSession = newValue; onSlashSessionChange?(newValue) }
+        set {
+            activeSlashSession = newValue
+            afterStorageEdit { engine in
+                engine.onSlashSessionChange?(engine.textView?.hasMarkedText() == true ? nil : engine.activeSlashSession)
+            }
+        }
     }
     var pendingSlashDate: NoteSlashSession? {
         get { slashDateRequest }
