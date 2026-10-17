@@ -51,6 +51,10 @@ struct TasksPage: View {
     }
     @State private var drag: TasksDrag?
     @State private var fileDropRow: TasksRowID?
+    /// O17-12: the row whose lifted card is out of the panel on a drag:
+    /// its place stays empty until the card is home (or dropped), so the
+    /// card never flies back over a second copy of itself.
+    @State private var dragOutRow: TasksRowID?
     /// A row's date or tag list that is open (owner fix 5 C and D).
     @State private var metaPopover: TasksMetaPopover?
     /// The selection bar's Date or Tags picker (round 10).
@@ -246,6 +250,13 @@ struct TasksPage: View {
         model.showPagerPage(animated: false)
         // The settle steps on this page's display (round 11).
         swipe.motion.clockView = { [pointer] in pointer.view }
+        // O17-13: a file dropped on a row settles into its files list.
+        pointer.dropLandingSlot = { [weak model, weak pointer, $fileDropRow] point in
+            guard let model, let pointer, let row = $fileDropRow.wrappedValue, row.tab == model.tab,
+                  let frame = pointer.frames[row], frame.minY - 1 <= point.y, point.y <= frame.maxY + 1 else { return nil }
+            return Self.dropLandingSlot(rowFrame: frame, filesExpanded: model.expandedFiles.contains(row.id))
+        }
+        AtticDropLanding.register(pointer)
         swipe.onCancel = { [weak model] in
             // After the navigation that cancelled it has chosen its tab.
             DispatchQueue.main.async { model?.showPagerPage() }
@@ -1495,7 +1506,7 @@ struct TasksPage: View {
         let reorders = Self.reorders(tab: tab, manual: model.reorders(on: tab))
         TasksReorderCell(
             model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: rowFocus.binding,
-            id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
+            id: id, tab: tab, group: reorders ? group : [id], drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow, dragOutRow: $dragOutRow,
             enabled: model.editingTitleID != id,
             session: dragSession,
             pointer: pointer,
@@ -2684,7 +2695,9 @@ struct TasksPage: View {
             start(export, location)
             return
         }
-        TasksDragOut.begin(export, count: ids.count, from: view, at: location, card: card) { [dragSession] in
+        if card != nil { dragOutRow = TasksRowID(tab: current.tab, id: current.id) }
+        TasksDragOut.begin(export, count: ids.count, from: view, at: location, card: card,
+                           files: store.taskImageFiles) { [dragSession] in
             // The drag ate the button's release: the next press starts afresh.
             dragSession.end()
         }
@@ -2710,7 +2723,11 @@ struct TasksPage: View {
                 return window.convertToScreen(view.convert(image, to: nil))
             },
             reduceMotion: design.reduceMotion,
-            handOff: { liftedCard.releaseHandOff() }
+            handOff: { liftedCard.releaseHandOff() },
+            // Home (or dropped): the row takes the card's place.
+            settled: { [$dragOutRow] in
+                if $dragOutRow.wrappedValue == row { $dragOutRow.wrappedValue = nil }
+            }
         )
     }
 
@@ -2823,6 +2840,18 @@ struct TasksPage: View {
         guard model.tab != .done, let height = pointer.view?.bounds.height,
               pagerBand.contains(point, height: height, stackHeight: bottomStack.height) else { return nil }
         return Self.row(at: point, frames: pointer.frames, tab: model.tab, among: Set(model.rows(for: model.tab).map(\.id)))
+    }
+
+    /// Where a file dropped on a row settles (O17-13), in the page's
+    /// space: the files list's icon column. With the list open, the line
+    /// the new file takes (where "Attach file…" is now, the list's last);
+    /// closed, the row's last line, over which the list opens. Pure, tested.
+    nonisolated static func dropLandingSlot(rowFrame: CGRect, filesExpanded: Bool) -> CGRect {
+        let pitch = AtticLayout.subtaskPitch
+        let side = AtticQuietActionMetrics.iconSlot
+        let lineTop = filesExpanded ? rowFrame.maxY - AtticQuickLookMetrics.bottomPadding - pitch
+                                    : max(rowFrame.minY, rowFrame.maxY - pitch)
+        return CGRect(x: rowFrame.minX + AtticLayout.textX, y: lineTop + (pitch - side) / 2, width: side, height: side)
     }
 
     /// Whether the task can take what is dragged over it: files from
@@ -3759,6 +3788,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     /// list's cells are not rebuilt when only the page's state changes.
     @Binding var metaPopover: TasksMetaPopover?
     @Binding var fileDropRow: TasksRowID?
+    /// The row whose card is out of the panel (O17-12): it stays hidden.
+    @Binding var dragOutRow: TasksRowID?
     let enabled: Bool
     /// The drag's live state: cancellation, pointer, control frames.
     let session: TasksDragSession
@@ -3784,7 +3815,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
 
     var body: some View {
         let lifted = drag?.id == id && translation != nil
-        let hidden = lifted || (drag?.id == id && drag?.landing == true)
+        let hidden = lifted || (drag?.id == id && drag?.landing == true) || dragOutRow == TasksRowID(tab: tab, id: id)
         // Read here, in the cell's own body, so a new target moves the
         // neighbours at once (a list's lazy cells do not re-read the page).
         let offset = drag.map { Self.offset(of: id, in: $0, heights: heights) } ?? 0
@@ -4032,6 +4063,9 @@ final class TasksPointer {
     var openViewOptions: ((NSView) -> Void)?
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
+    /// O17-13: where a file dropped at a page point settles (the page
+    /// sets it; `AtticDropLanding` asks through it).
+    var dropLandingSlot: ((CGPoint) -> CGRect?)?
     /// The row that has the keyboard (the page's focus), for tests: which
     /// row a Tab reached (deep review P2-04).
     var keyboardRow: TasksRowID?
@@ -4164,6 +4198,11 @@ final class TasksPointer {
     func row(at point: CGPoint, in tab: TasksTab) -> UUID? {
         frames.first { $0.key.tab == tab && $0.value.contains(point) && $0.value.height < 2_000 }?.key.id
     }
+}
+
+extension TasksPointer: AtticDropLandingSource {
+    var landingView: NSView? { view }
+    func landingSlot(at point: CGPoint) -> CGRect? { dropLandingSlot?(point) }
 }
 
 /// A flipped, click-through view the size of the page: its coordinates are
@@ -4401,7 +4440,7 @@ private struct TasksDragOutStateProbe: View {
     @ObservedObject private var probe = TasksDragOut.Probe.shared
 
     var body: some View {
-        let state = "began \(probe.began) ended \(probe.ended)"
+        let state = probe.state
         Text(verbatim: state)
             .font(.system(size: 1))
             .frame(width: 1, height: 1)

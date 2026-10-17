@@ -22,8 +22,28 @@ struct TaskImageThumbnail: View {
             let data = try? await files.thumbnail(reference, pixels: pixels)
             guard !Task.isCancelled else { return }
             image = data.flatMap(NSImage.init(data:))
+            if let image { TaskThumbnailMemory.remember(image, for: reference.digest) }
         }
         .accessibilityLabel(reference.filename)
+    }
+}
+
+/// Thumbnails already drawn, by file digest, for what has to be drawn at
+/// once (a file's drag picture, O17-16). Bounded; the system may empty it.
+@MainActor
+enum TaskThumbnailMemory {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 64
+        return cache
+    }()
+
+    static func remember(_ image: NSImage, for digest: String) {
+        cache.setObject(image, forKey: digest as NSString)
+    }
+
+    static func image(for digest: String) -> NSImage? {
+        cache.object(forKey: digest as NSString)
     }
 }
 

@@ -62,7 +62,18 @@ final class TasksDragOutUITests: XCTestCase {
             .withOffset(CGVector(dx: 0, dy: 4 - window.frame.minY))
         from.press(forDuration: 0.05, thenDragTo: top, withVelocity: .default, thenHoldForDuration: 0.8)
         waitFor(state.hasPrefix("began 1"), "AppKit's session began (\(state))")
-        waitFor(state == "began 1 ended 1", "and ended, with nothing dropped (\(state))")
+        waitFor(state.hasPrefix("began 1 ended 1"), "and ended, with nothing dropped (\(state))")
+        // O17-12: the card started home from where it was let go, so the
+        // release point lies on it (it was held by it), on screen; the
+        // session's own frame for it (reported) is evidence only.
+        let numbers = state.split(whereSeparator: { !"-0123456789.".contains($0) }).compactMap { Double($0) }
+        XCTAssertGreaterThanOrEqual(numbers.count, 6, "the start and release are reported (\(state))")
+        if numbers.count >= 6 {
+            let start = CGPoint(x: numbers[2], y: numbers[3]), release = CGPoint(x: numbers[4], y: numbers[5])
+            XCTAssertTrue(release.x > start.x && release.x < start.x + 420 && release.y > start.y && release.y < start.y + 120,
+                          "the card starts home under the pointer that let it go (\(state))")
+            print("O17-12 evidence: \(state)")
+        }
         let after = ["Email beta testers", "Book dentist", "Call the plumber"].map { row($0).frame.minY }
         XCTAssertEqual(after, after.sorted(), "nothing moved")
         // The page goes on: a click selects a row.

@@ -8,8 +8,8 @@ import SwiftUI
 @MainActor
 enum TasksDragOut {
     static func begin(_ export: TasksTextExport, count: Int, from view: NSView, at location: CGPoint,
-                      card: Card? = nil, ended: @escaping () -> Void) {
-        guard let window = view.window else { card?.handOff(); ended(); return }
+                      card: Card? = nil, files: TaskImageFiles = .shared, ended: @escaping () -> Void) {
+        guard let window = view.window else { card?.handOff(); card?.settled(); ended(); return }
         let item = NSDraggingItem(pasteboardWriter: export.dragItem())
         // O14-11: the lifted card itself, where it lies, so the hand-off
         // from the panel's lift to the system's drag does not move or
@@ -31,20 +31,26 @@ enum TasksDragOut {
                                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
         }
-        guard let event else { card?.handOff(); ended(); return }
+        guard let event else { card?.handOff(); card?.settled(); ended(); return }
         let source = Source(ended: ended)
         if let card {
-            // Where the image lies against the pointer, on screen: the drop
-            // point less this is where a cancelled card starts home from.
+            // O17-12: where the image lies against the pointer, on screen.
+            // The system keeps it there for the whole drag, so the release
+            // point and this grip give where a cancelled card starts home
+            // from, in screen space, whatever the session reports.
             let imageOnScreen = window.convertToScreen(view.convert(card.frame, to: nil))
             let pointer = window.convertPoint(toScreen: event.locationInWindow)
             source.card = card
-            source.imageOffset = CGPoint(x: imageOnScreen.minX - pointer.x, y: imageOnScreen.minY - pointer.y)
-            source.imageSize = imageOnScreen.size
+            source.grip = AtticDragGrip(image: imageOnScreen, pointer: pointer)
             source.level = window.level
         }
+        // O17-15: each task's files go with its text, as file promises the
+        // receiver writes where it wants them (Finder, Mail, Notes…). They
+        // add no picture of their own: the card (or the label) stands for
+        // the whole drag.
+        let attachments = attachmentItems(for: export, files: files, frame: item.draggingFrame)
         Source.current = source
-        let session = view.beginDraggingSession(with: [item], event: event, source: source)
+        let session = view.beginDraggingSession(with: [item] + attachments, event: event, source: source)
         // A cancelled drop springs home (`Source.springHome`), never the
         // system's slide back and fade.
         session.animatesToStartingPositionsOnCancelOrFail = card == nil
@@ -99,6 +105,26 @@ enum TasksDragOut {
         let handOff: () -> Void
         /// The card is home (or the drop was taken): the drag is over.
         var settled: () -> Void = {}
+
+        init(images: Images, frame: CGRect, home: @escaping () -> CGRect?, reduceMotion: Bool,
+             handOff: @escaping () -> Void, settled: @escaping () -> Void = {}) {
+            self.images = images
+            self.frame = frame
+            self.home = home
+            self.reduceMotion = reduceMotion
+            self.handOff = handOff
+            self.settled = settled
+        }
+    }
+
+    /// The tasks' files as dragging items (O17-15): one file promise each,
+    /// with no picture of its own, at the text's frame.
+    static func attachmentItems(for export: TasksTextExport, files: TaskImageFiles, frame: CGRect) -> [NSDraggingItem] {
+        export.items.flatMap(\.files).map { reference in
+            let attachment = NSDraggingItem(pasteboardWriter: TaskAttachmentFilePromise(reference: reference, files: files))
+            attachment.setDraggingFrame(frame, contents: nil)
+            return attachment
+        }
     }
 
     /// UI tests: how many sessions began and ended (shown, under
@@ -107,6 +133,23 @@ enum TasksDragOut {
         static let shared = Probe()
         @Published var began = 0
         @Published var ended = 0
+        /// O17-12 evidence, on screen: where the last cancelled card
+        /// started home from, the pointer it was released at, and the
+        /// frame the session itself reported for its image then.
+        @Published var lastStart: CGRect?
+        @Published var lastRelease: CGPoint?
+        @Published var lastReported: CGRect?
+        /// The last start less its release point (the grip's offset).
+        var state: String {
+            var text = "began \(began) ended \(ended)"
+            if let lastStart, let lastRelease {
+                text += String(format: " start %.0f,%.0f release %.0f,%.0f", lastStart.minX, lastStart.minY, lastRelease.x, lastRelease.y)
+                if let lastReported {
+                    text += String(format: " reported %.0f,%.0f", lastReported.minX, lastReported.minY)
+                }
+            }
+            return text
+        }
     }
 
     /// What a drag of tasks offers: a copy to other apps, nothing within
@@ -145,12 +188,14 @@ enum TasksDragOut {
         /// The lifted card the drag carries, and where its image lies
         /// against the pointer on screen.
         var card: Card?
-        var imageOffset: CGPoint = .zero
-        var imageSize: CGSize = .zero
+        var grip = AtticDragGrip(offset: .zero, size: .zero)
         var level: NSWindow.Level = .floating
         private var handedOff = false
         /// The card's way home after a cancelled drop.
         private var dragReturn: AtticDragReturn?
+        #if DEBUG
+        var dragReturnForTesting: AtticDragReturn? { dragReturn }
+        #endif
 
         init(ended: @escaping () -> Void) {
             self.ended = ended
@@ -163,18 +208,26 @@ enum TasksDragOut {
 
         func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
             handOffOnce()
-            dragReturn?.moved(drawn: AtticDragReturn.drawnFrame(of: session))
+            dragReturn?.moved(drawn: grip.frame(at: screenPoint))
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-            ended(at: screenPoint, operation: operation, drawn: AtticDragReturn.drawnFrame(of: session))
+            ended(at: screenPoint, operation: operation, reported: AtticDragReturn.reportedFrame(of: session))
         }
 
         /// The session ended at `screenPoint` (internal for the tests).
-        func ended(at screenPoint: NSPoint, operation: NSDragOperation, drawn: CGRect? = nil) {
+        /// The card starts home from exactly where it was let go: the
+        /// release point and the grip, both on screen. `reported` (the
+        /// session's own frame for its image) is kept as evidence only: it
+        /// is not where the image was drawn (O17-12, the corner jump).
+        func ended(at screenPoint: NSPoint, operation: NSDragOperation, reported: CGRect? = nil) {
             handOffOnce()
-            let start = drawn.flatMap { $0.width > 1 && $0.height > 1 ? $0 : nil }
-                ?? CGRect(origin: CGPoint(x: screenPoint.x + imageOffset.x, y: screenPoint.y + imageOffset.y), size: imageSize)
+            let start = grip.frame(at: screenPoint)
+            if operation.isEmpty, card != nil {
+                Probe.shared.lastStart = start
+                Probe.shared.lastRelease = screenPoint
+                Probe.shared.lastReported = reported
+            }
             guard let dragReturn else {
                 card?.settled()
                 finish()
@@ -270,12 +323,17 @@ final class AtticDragReturn {
     }
 
     /// The way home for a drag the system began from a view's own picture
-    /// (a SwiftUI drag, a text view's selection): its image and the place
-    /// it starts from, which is where the item lies. Nil without an image.
-    static func starting(_ session: NSDraggingSession, level: NSWindow.Level?) -> AtticDragReturn? {
+    /// (a SwiftUI drag, a text view's selection): its image, where it lies
+    /// (home) and how it lies against the pointer (`grip`), all on screen.
+    /// The item's frame is read in `view`'s own space and converted here,
+    /// never taken as screen space from the session (O17-12). Nil without
+    /// an image or a window.
+    static func starting(_ session: NSDraggingSession, from view: NSView, at screenPoint: CGPoint,
+                         level: NSWindow.Level?) -> (dragReturn: AtticDragReturn, grip: AtticDragGrip)? {
+        guard let window = view.window else { return nil }
         var image: NSImage?
         var frame: CGRect?
-        session.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, stop in
+        session.enumerateDraggingItems(options: [], for: view, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, stop in
             frame = item.draggingFrame
             if let contents = item.imageComponents?.first?.contents {
                 if let picture = contents as? NSImage {
@@ -287,19 +345,23 @@ final class AtticDragReturn {
             }
             stop.pointee = true
         }
-        guard let image, let home = frame, home.width > 1, home.height > 1 else { return nil }
-        return AtticDragReturn(shadowed: nil, plain: image, home: { home }, level: level ?? .floating,
-                               reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        guard let image, let frame, frame.width > 1, frame.height > 1 else { return nil }
+        let home = window.convertToScreen(view.convert(frame, to: nil))
+        let dragReturn = AtticDragReturn(shadowed: nil, plain: image, home: { home }, level: level ?? .floating,
+                                         reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        return (dragReturn, AtticDragGrip(image: home, pointer: screenPoint))
     }
 
-    /// Where the system draws the drag's image now, on screen.
-    static func drawnFrame(of session: NSDraggingSession) -> CGRect? {
-        var drawn: CGRect?
+    /// The frame the session reports for its first item, asked for in
+    /// screen space. Evidence only (`TasksDragOut.Probe`): at the end of a
+    /// drag it is not where the system drew the image (O17-12).
+    static func reportedFrame(of session: NSDraggingSession) -> CGRect? {
+        var reported: CGRect?
         session.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, stop in
-            drawn = item.draggingFrame
+            reported = item.draggingFrame
             stop.pointee = true
         }
-        return drawn
+        return reported
     }
 
     private func place(_ frame: CGRect) {
@@ -354,6 +416,10 @@ final class AtticDragReturn {
         place(start)
         CATransaction.commit()
         show(true)
+        #if DEBUG
+        startOnScreen = CGRect(origin: CGPoint(x: cardLayer.position.x + window.frame.minX, y: cardLayer.position.y + window.frame.minY),
+                               size: cardLayer.bounds.size)
+        #endif
         springHome(from: start, to: home, done: done)
     }
 
@@ -412,5 +478,112 @@ final class AtticDragReturn {
 
     #if DEBUG
     var windowForTesting: NSWindow { window }
+    /// Where the picture lay, on screen, the moment it began home.
+    private(set) var startOnScreen: CGRect?
     #endif
+}
+
+/// How a dragged picture lies against the pointer (O17-12): its offset from
+/// the pointer and its size, on screen. The system moves the picture with
+/// the pointer and keeps this offset for the whole drag, so a release point
+/// gives exactly where the picture was let go. Pure, tested.
+struct AtticDragGrip: Equatable {
+    /// The picture's origin less the pointer, in screen points.
+    let offset: CGPoint
+    let size: CGSize
+
+    init(offset: CGPoint, size: CGSize) {
+        self.offset = offset
+        self.size = size
+    }
+
+    /// The picture at `image` while the pointer is at `pointer` (both on
+    /// screen).
+    init(image: CGRect, pointer: CGPoint) {
+        self.init(offset: CGPoint(x: image.minX - pointer.x, y: image.minY - pointer.y), size: image.size)
+    }
+
+    /// Where the picture lies when the pointer is at `pointer` (screen).
+    func frame(at pointer: CGPoint) -> CGRect {
+        CGRect(origin: CGPoint(x: pointer.x + offset.x, y: pointer.y + offset.y), size: size)
+    }
+}
+
+
+/// Something in a window that takes dropped files and knows where each
+/// lands (O17-13): the Tasks page, whose row puts a dropped file in its
+/// files list.
+@MainActor
+protocol AtticDropLandingSource: AnyObject {
+    /// The view whose space `landingSlot(at:)` answers in.
+    var landingView: NSView? { get }
+    /// Where something dropped at `point` settles, or nil when nothing
+    /// there takes it.
+    func landingSlot(at point: CGPoint) -> CGRect?
+}
+
+/// A drop that lands (O17-13): an accepted drop's picture settles into the
+/// place its item goes, shrinking into it on the system's own destination
+/// animation, instead of vanishing where it was let go. The window's host
+/// asks before the drop is performed (`slot`) and moves the pictures once
+/// it is (`land`).
+@MainActor
+enum AtticDropLanding {
+    private struct Entry {
+        weak var source: AtticDropLandingSource?
+    }
+
+    private static var entries: [Entry] = []
+
+    static func register(_ source: AtticDropLandingSource) {
+        entries.removeAll { $0.source == nil || $0.source === source }
+        entries.append(Entry(source: source))
+    }
+
+    /// Where a drop at `windowPoint` (the window's space) lands, in
+    /// `view`'s space: the first shown source in the same window that
+    /// takes it.
+    static func slot(at windowPoint: CGPoint, in view: NSView) -> CGRect? {
+        guard let window = view.window else { return nil }
+        entries.removeAll { $0.source == nil }
+        for entry in entries {
+            guard let source = entry.source, let landing = source.landingView, landing.window === window,
+                  !landing.isHiddenOrHasHiddenAncestor,
+                  let slot = source.landingSlot(at: landing.convert(windowPoint, from: nil)) else { continue }
+            return view.convert(landing.convert(slot, to: nil), from: nil)
+        }
+        return nil
+    }
+
+    /// A picture of `size` settled into `slot`: as large as fits, its own
+    /// shape kept, centred. Pure, tested.
+    nonisolated static func frame(for size: CGSize, in slot: CGRect) -> CGRect {
+        guard size.width > 0, size.height > 0 else { return slot }
+        let scale = min(slot.width / size.width, slot.height / size.height)
+        let fitted = CGSize(width: size.width * scale, height: size.height * scale)
+        return CGRect(x: slot.midX - fitted.width / 2, y: slot.midY - fitted.height / 2,
+                      width: fitted.width, height: fitted.height)
+    }
+
+    /// Before the drop is performed (after the host's own preparation):
+    /// a drop the host takes, over a place that knows where it lands, will
+    /// animate there. The slot, in `view`'s space, or nil.
+    static func prepare(_ info: NSDraggingInfo, accepted: Bool, in view: NSView) -> CGRect? {
+        guard accepted, let slot = slot(at: info.draggingLocation, in: view) else { return nil }
+        info.animatesToDestination = true
+        return slot
+    }
+
+    /// After the drop is performed: taken, its pictures go to `slot`.
+    static func perform(_ info: NSDraggingInfo, accepted: Bool, slot: CGRect?, in view: NSView) {
+        guard accepted, let slot else { return }
+        land(info, in: view, slot: slot)
+    }
+
+    /// The drop was taken: each picture goes to `slot` (`view`'s space).
+    static func land(_ info: NSDraggingInfo, in view: NSView, slot: CGRect) {
+        info.enumerateDraggingItems(options: [], for: view, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+            item.draggingFrame = frame(for: item.draggingFrame.size, in: slot)
+        }
+    }
 }

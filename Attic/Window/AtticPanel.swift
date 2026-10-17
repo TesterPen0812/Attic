@@ -1308,21 +1308,44 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     /// not open to Swift, so `AtticHostDragHooks` adds these to this class
     /// at run time, each after SwiftUI's own.
     private var dragReturn: AtticDragReturn?
+    /// How the dragged picture lies against the pointer (O17-12): its
+    /// place on a cancel is the release point plus this, on screen.
+    private var dragGrip: AtticDragGrip?
 
-    func hostDragWillBegin(_ session: NSDraggingSession) {
-        dragReturn = AtticDragReturn.starting(session, level: window?.level)
+    func hostDragWillBegin(_ session: NSDraggingSession, at screenPoint: NSPoint) {
+        let starting = AtticDragReturn.starting(session, from: self, at: screenPoint, level: window?.level)
+        dragReturn = starting?.dragReturn
+        dragGrip = starting?.grip
         if dragReturn != nil { session.animatesToStartingPositionsOnCancelOrFail = false }
     }
 
-    func hostDragMoved(_ session: NSDraggingSession) {
-        dragReturn?.moved(drawn: AtticDragReturn.drawnFrame(of: session))
+    func hostDragMoved(_ session: NSDraggingSession, to screenPoint: NSPoint) {
+        guard let dragGrip else { return }
+        dragReturn?.moved(drawn: dragGrip.frame(at: screenPoint))
     }
 
     func hostDragEnded(_ session: NSDraggingSession, at screenPoint: NSPoint, operation: NSDragOperation) {
-        guard let dragReturn else { return }
+        guard let dragReturn, let dragGrip else { return }
         self.dragReturn = nil
-        let drawn = AtticDragReturn.drawnFrame(of: session) ?? CGRect(origin: screenPoint, size: .zero)
-        dragReturn.ended(operation: operation, drawn: drawn) { withExtendedLifetime(dragReturn) {} }
+        self.dragGrip = nil
+        dragReturn.ended(operation: operation, drawn: dragGrip.frame(at: screenPoint)) { withExtendedLifetime(dragReturn) {} }
+    }
+
+    // MARK: Drops that land (O17-13)
+
+    /// Where the accepted drop's pictures settle (this view's space).
+    private var dropLanding: CGRect?
+
+    /// After SwiftUI's own `prepareForDragOperation:`: a drop it will take
+    /// over a place that knows where it lands animates there.
+    func hostDropPrepared(_ info: NSDraggingInfo, accepted: Bool) {
+        dropLanding = AtticDropLanding.prepare(info, accepted: accepted, in: self)
+    }
+
+    /// After SwiftUI's own `performDragOperation:`.
+    func hostDropPerformed(_ info: NSDraggingInfo, accepted: Bool) {
+        AtticDropLanding.perform(info, accepted: accepted, slot: dropLanding, in: self)
+        dropLanding = nil
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1785,7 +1808,7 @@ enum AtticHostDragHooks {
                 let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
                 let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
                     original(object, selector, session, point)
-                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragWillBegin(session) }
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragWillBegin(session, at: point) }
                 }
                 class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
             }
@@ -1797,10 +1820,27 @@ enum AtticHostDragHooks {
                 let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
                 let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
                     original(object, selector, session, point)
-                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragMoved(session) }
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragMoved(session, to: point) }
                 }
                 class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
             }
+        }
+        for (name, after) in [
+            ("prepareForDragOperation:", { (view: AtticPanelHostingView, info: NSDraggingInfo, accepted: Bool) in view.hostDropPrepared(info, accepted: accepted) }),
+            ("performDragOperation:", { (view: AtticPanelHostingView, info: NSDraggingInfo, accepted: Bool) in view.hostDropPerformed(info, accepted: accepted) })
+        ] {
+            let selector = NSSelectorFromString(name)
+            guard let method = class_getInstanceMethod(parent, selector) else { continue }
+            typealias Super = @convention(c) (AnyObject, Selector, NSDraggingInfo) -> ObjCBool
+            let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+            let block: @convention(block) (AnyObject, NSDraggingInfo) -> ObjCBool = { object, info in
+                let accepted = original(object, selector, info)
+                MainActor.assumeIsolated {
+                    if let view = object as? AtticPanelHostingView { after(view, info, accepted.boolValue) }
+                }
+                return accepted
+            }
+            class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
         }
         do {
             let selector = NSSelectorFromString("draggingSession:endedAtPoint:operation:")
