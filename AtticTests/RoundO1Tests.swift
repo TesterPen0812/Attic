@@ -429,7 +429,10 @@ final class RoundO1Tests: XCTestCase {
                              CGFloat((inkRows.first ?? 0) - (fillRows.first ?? 0)) / scale,
                              CGFloat((fillRows.last ?? 0) - (inkRows.last ?? 0)) / scale))
                 print(String(format: "O1_QUIET %@ %@ left %.2f right %.2f", mode == .dark ? "dark" : "light", title, left, right))
-                XCTAssertEqual(left, right, accuracy: 0.5, "\(title) (\(mode)): the same room on both sides")
+                // Layout snaps to the display's pixels: within half a
+                // point on Retina, within one pixel on a 1× display (CI).
+                let pixel = 1 / (NSScreen.main?.backingScaleFactor ?? 1)
+                XCTAssertEqual(left, right, accuracy: max(0.5, pixel), "\(title) (\(mode)): the same room on both sides")
             }
         }
     }
