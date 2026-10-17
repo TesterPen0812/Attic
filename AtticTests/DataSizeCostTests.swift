@@ -175,9 +175,21 @@ final class DataSizeCostTests: XCTestCase {
             let controller = NotesPageController(store: store, journal: nil)
             let first = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
             var groups: [NotesLibraryModel.Group] = []
+            let groupingMS = milliseconds { groups = first.groups(store: store, drafts: [], prepareSummaries: false) }
+            XCTAssertEqual(first.bodyDecodeCount, 0)
+            let demanded = Array(groups.flatMap(\.rows).prefix(12))
+            var prepared: [AtticNoteRowModel] = []
+            let demandMS = milliseconds { prepared = demanded.map { first.preparedRow($0, store: store) } }
+            XCTAssertEqual(first.bodyDecodeCount, demanded.count)
+            let second = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+            let remountGroups = second.groups(store: store, drafts: [], prepareSummaries: false)
+            XCTAssertEqual(Array(remountGroups.flatMap(\.rows).prefix(12)).map { second.preparedRow($0, store: store) }, prepared)
+            XCTAssertEqual(second.bodyDecodeCount, 0)
+            print("P2_LIBRARY_DEMAND size=\(count) grouping_decodes=0 demand_decodes=\(first.bodyDecodeCount) remount_decodes=\(second.bodyDecodeCount) grouping_ms=\(groupingMS) demand_ms=\(demandMS)")
             let coldMS = milliseconds { groups = first.groups(store: store, drafts: []) }
             let remount = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
             let warmMS = milliseconds { XCTAssertEqual(remount.groups(store: store, drafts: []).flatMap(\.rows), groups.flatMap(\.rows)) }
+            XCTAssertEqual(remount.bodyDecodeCount, 0)
             print("P2_LIBRARY size=\(count) cold_decodes=\(first.bodyDecodeCount) remount_decodes=\(remount.bodyDecodeCount) cold_ms=\(coldMS) remount_ms=\(warmMS)")
         }
     }
@@ -229,6 +241,35 @@ final class DataSizeCostTests: XCTestCase {
         let cached = engine.blockRange(at: at)
         engine.blockRunIntervals = []
         XCTAssertEqual(cached, engine.blockRange(at: at))
+    }
+
+    func testP10DemandSummariesPreserveCountsAndRejectChangedContentWithSameToken() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let document = NoteDocument(blocks: [.text("Title"), .checklist("Checked", checked: true), .checklist("Open"), .text("Preview words")])
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: document) else { return XCTFail("fixture save") }
+        let note = try XCTUnwrap(store.note(withID: id)); note.imageCount = 2; note.fileCount = 3
+        let controller = NotesPageController(store: store, journal: nil)
+        func row() throws -> (AtticNoteRowModel, NotesLibraryModel) {
+            let library = NotesLibraryModel(search: { _ in [] }, store: store, controller: controller)
+            let raw = try XCTUnwrap(library.groups(store: store, drafts: [], prepareSummaries: false).flatMap(\.rows).first)
+            XCTAssertEqual(library.bodyDecodeCount, 0)
+            return (library.preparedRow(raw, store: store), library)
+        }
+        let (first, model) = try row()
+        XCTAssertEqual(model.bodyDecodeCount, 1)
+        XCTAssertEqual(first.checklist?.done, 1); XCTAssertEqual(first.checklist?.total, 2)
+        XCTAssertEqual(first.images, 2); XCTAssertEqual(first.files, 3)
+        let (second, remount) = try row()
+        XCTAssertEqual(first, second); XCTAssertEqual(remount.bodyDecodeCount, 0)
+        XCTAssertEqual(first.spoken, second.spoken)
+        let token = note.revisionID
+        note.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Title"), .text("Changed preview")]))
+        XCTAssertEqual(note.revisionID, token)
+        let (changed, refreshed) = try row()
+        XCTAssertEqual(refreshed.bodyDecodeCount, 1)
+        XCTAssertNil(changed.checklist)
+        XCTAssertTrue(changed.preview.contains("Changed preview"))
     }
 
 }

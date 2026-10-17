@@ -234,6 +234,7 @@ final class NotesPageController: ObservableObject {
     @Published private(set) var undoRevision: UInt64 = 0
 
     let store: NoteStore
+    let librarySummaries = NotesLibrarySummaryCache()
     /// Where All notes' actions are recorded (the app's route once
     /// `attachUndoRoute` runs; a private one until then, so tests and
     /// previews work alone).

@@ -7,6 +7,11 @@ import SwiftUI
 /// recent tags and More tags…), a search that reads away from the main
 /// actor with loading and failure states, and the list's keyboard selection.
 @MainActor
+final class NotesLibrarySummaryCache {
+    var bodies: [UUID: (revision: UUID?, content: Data?, plainText: String, body: NoteRowSummary.Body)] = [:]
+}
+
+@MainActor
 final class NotesLibraryModel: ObservableObject {
     enum SearchState: Equatable {
         case idle
@@ -71,7 +76,7 @@ final class NotesLibraryModel: ObservableObject {
     /// including fresh-context changes that keep the same revision token.
     private var proposalIDs: (revision: UInt64, ids: Set<UUID>)?
     private var failedProposalRevision: UInt64?
-    private var bodies: [UUID: (content: Data?, plainText: String, body: NoteRowSummary.Body)] = [:]
+    private var summaries = NotesLibrarySummaryCache()
     /// How many note bodies the rows decoded (a profiling seam: a rebuild
     /// after one save decodes that note only).
     private(set) var bodyDecodeCount = 0
@@ -86,11 +91,13 @@ final class NotesLibraryModel: ObservableObject {
         let day: Int
         let dateEnvironment: DatePresentationEnvironment
         let tag: String?
+        let prepareSummaries: Bool
     }
 
     init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, now: @escaping () -> Date = Date.init,
          calendar: Calendar = .autoupdatingCurrent) {
         self.search = search
+        if let controller { summaries = controller.librarySummaries }
         self.now = now
         self.calendar = calendar
         dateEnvironmentSubscription = Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
@@ -211,7 +218,7 @@ final class NotesLibraryModel: ObservableObject {
     /// "This week" is the six days before today), or one group of results
     /// while searching. Drafts that were never saved (a failed first save)
     /// lead the list with their warning.
-    func groups(store: NoteStore, drafts: [NoteSession]) -> [Group] {
+    func groups(store: NoteStore, drafts: [NoteSession], prepareSummaries: Bool = true) -> [Group] {
         observeStore(store)
         let attention = Set(drafts.map(\.noteID))
         var unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
@@ -219,7 +226,7 @@ final class NotesLibraryModel: ObservableObject {
         let key = RowsKey(revision: store.revision, matches: searching ? matches : nil, attention: attention,
                           drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0,
                           dateEnvironment: DatePresentationEnvironment(calendar: calendar),
-                          tag: tagFilter)
+                          tag: tagFilter, prepareSummaries: prepareSummaries)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
         var notes = store.orderedNotes()
@@ -251,7 +258,7 @@ final class NotesLibraryModel: ObservableObject {
         if searching {
             // Never-saved drafts are searched through their whole text.
             let matchingDrafts = unsaved.filter { NoteTextExport.plainText($0.engine.document()).localizedStandardContains(matchedQuery) }
-            let rows = matchingDrafts.map { draftRow($0) } + notes.map { row($0, store: store, attention: attention) }
+            let rows = matchingDrafts.map { draftRow($0) } + notes.map { row($0, store: store, attention: attention, prepareSummary: prepareSummaries) }
             let count = rows.count
             result = rows.isEmpty ? [] : [Group(id: "results", title: count == 1 ? String(localized: "1 note") : String(localized: "\(count) notes"), rows: rows)]
         } else {
@@ -260,16 +267,16 @@ final class NotesLibraryModel: ObservableObject {
             var pinned: [AtticNoteRowModel] = [], todayRows: [AtticNoteRowModel] = draftRows
             var week: [AtticNoteRowModel] = [], earlier: [AtticNoteRowModel] = []
             for note in notes {
-                let model = row(note, store: store, attention: attention)
+                let model = row(note, store: store, attention: attention, prepareSummary: prepareSummaries)
                 if note.isPinned { pinned.append(model) }
                 else if note.updatedAt >= today { todayRows.append(model) }
                 else if note.updatedAt >= weekStart { week.append(model) }
                 else { earlier.append(model) }
             }
             // Deleted notes' bodies go (the full list was just read).
-            if bodies.count > allNotes.count {
+            if summaries.bodies.count > allNotes.count {
                 let stored = Set(allNotes.map(\.id))
-                bodies = bodies.filter { stored.contains($0.key) }
+                summaries.bodies = summaries.bodies.filter { stored.contains($0.key) }
             }
             result = [
                 Group(id: "pinned", title: String(localized: "Pinned"), rows: pinned),
@@ -403,7 +410,16 @@ final class NotesLibraryModel: ObservableObject {
         highlightedID = ids[next]
     }
 
-    private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>) -> AtticNoteRowModel {
+    /// Called by the lazy row's body, before any preview is presented.
+    func preparedRow(_ row: AtticNoteRowModel, store: NoteStore) -> AtticNoteRowModel {
+        guard let note = store.note(withID: row.id) else { return row }
+        return self.row(note, store: store, attention: row.needsAttention ? [row.id] : [])
+    }
+
+    private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>, prepareSummary: Bool = true) -> AtticNoteRowModel {
+        if !prepareSummary {
+            return AtticNoteRowModel(id: note.id, title: note.title, time: Self.time(note.updatedAt, now: now(), calendar: calendar), needsAttention: attention.contains(note.id), hasProposal: proposalIDs?.ids.contains(note.id) == true, preview: "", spoken: "")
+        }
         let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
@@ -415,10 +431,10 @@ final class NotesLibraryModel: ObservableObject {
     }
 
     private func body(of note: NoteItem) -> NoteRowSummary.Body {
-        if let kept = bodies[note.id], kept.content == note.content, kept.plainText == note.plainText { return kept.body }
+        if let kept = summaries.bodies[note.id], kept.revision == note.revisionID, kept.content == note.content, kept.plainText == note.plainText { return kept.body }
         let body = NoteRowSummary.body(of: note)
         bodyDecodeCount += 1
-        bodies[note.id] = (note.content, note.plainText, body)
+        summaries.bodies[note.id] = (note.revisionID, note.content, note.plainText, body)
         return body
     }
 
