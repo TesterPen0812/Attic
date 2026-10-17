@@ -28,6 +28,9 @@ final class NoteMarqueeSelection {
             guard let self, let textView = self.textView else { return }
             self.clear()
             textView.window?.makeFirstResponder(textView)
+            // O17-08: a click below the last block starts a new line there.
+            if textView.isEditable, point.y > textView.finalTextBottom(),
+               textView.engine?.startLineBelowFinalBlock() == true { return }
             textView.setSelectedRange(NSRange(location: textView.characterIndexForInsertion(at: point), length: 0))
         }
         controller.clear = { [weak self] in self?.clear() }

@@ -230,6 +230,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private(set) var pendingSlashFile: NoteSlashFileRequest?
     private var slashFileGeneration: UInt64 = 0
     private(set) var pendingParagraphStyle: (location: Int, state: NoteUndoHistory.ParagraphState)?
+    /// Whether the caret was last on the note's empty last line with a
+    /// format of its own (O17-07: TextKit lays that line out again when
+    /// the caret comes or goes).
+    private var caretOnFormattedEmptyLastLine = false
 
     fileprivate func notifyTagsChanged() {
         onTagsChange?()
@@ -1376,6 +1380,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if let id = block.id { attributes[.noteBlockID] = id }
                 if !block.extras.isEmpty { attributes[.noteBlockExtras] = NoteBlockExtras(block.extras) }
             }
+            if pending.location == textStorage.length { addEmptyLastLineBoxInsets(to: &attributes, style: pending.state.style) }
             return attributes
         }
         guard paragraph.location > 0 else { return style.titleAttributes }
@@ -2030,6 +2035,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             for key in NSAttributedString.Key.noteBookkeeping { attributes[key] = nil }
             attributes[.attachment] = nil
             textView.typingAttributes = attributes
+        }
+        // O17-07: while the caret is on the note's empty last line, TextKit
+        // lays that line out with the typing attributes, and AppKit sets
+        // them from the paragraph above as the caret arrives. Lay the line
+        // out again with its own format when the caret comes or goes.
+        let onFormattedEmptyLastLine = selection.length == 0 && selection.location == textStorage.length
+            && pendingParagraphStyle?.location == selection.location
+        if onFormattedEmptyLastLine != caretOnFormattedEmptyLastLine {
+            caretOnFormattedEmptyLastLine = onFormattedEmptyLastLine
+            if pendingParagraphStyle?.location == textStorage.length { refreshEmptyLastLine() }
         }
         if selection.length == 0, selection.location == line.location, selection.location > 0,
            newlineEditInFlight, userEditDepth > 0 || engineEditDepth > 0 {
@@ -3449,7 +3464,7 @@ extension NoteEditorEngine {
         }
     }
 
-    private func indentAt(_ location: Int) -> Int? {
+    func indentAt(_ location: Int) -> Int? {
         if let pending = pendingParagraphStyle, pending.location == lineRange(at: location).location {
             return pending.state.indent
         }
@@ -3686,6 +3701,7 @@ extension NoteEditorEngine {
         } else { pendingParagraphStyle = nil }
         documentCache = nil
         textView?.typingAttributes = attributes(forParagraphAt: textView?.selectedRange().location ?? textStorage.length)
+        refreshEmptyLastLine()
     }
 
     private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int, metadata: NoteBlock? = nil) {
@@ -3705,6 +3721,10 @@ extension NoteEditorEngine {
             let above = paragraphRange(at: location - 1)
             restyle(above)
             invalidateLayout(above)
+        }
+        if location == textStorage.length {
+            addEmptyLastLineBoxInsets(to: &typing, style: value)
+            refreshEmptyLastLine()
         }
         if let name = value.storageName { typing[.noteBlockStyle] = name }
         if let level = value.level { typing[.noteBlockLevel] = level }
@@ -4648,6 +4668,27 @@ extension NoteEditorEngine {
         }
         return true
     }
+    /// O17-08: a click in the empty space below the note's last block puts
+    /// the caret on a new line there, so text can start in another format
+    /// than the last block's. After a list, quote, code block, callout,
+    /// heading or object the new line is Body (`ensureBodyAfterFinalBlock`);
+    /// after Body text or the title it is a new Body line; an empty Body
+    /// line already ending the note only takes the caret (no stacked empty
+    /// lines). One Undo step.
+    @discardableResult func startLineBelowFinalBlock() -> Bool {
+        guard !isReadOnly, let textView, textStorage.length > 0 else { return false }
+        let end = textStorage.length
+        let last = lineRange(at: end)
+        if last.location > 0, last.length == 0, paragraphStyle(at: end) == .body {
+            textView.setSelectedRange(NSRange(location: end, length: 0))
+            return true
+        }
+        if last.location > 0, paragraphStyle(at: end) != .body { return ensureBodyAfterFinalBlock() }
+        history.beginGroup(); defer { history.endGroup() }
+        return performEdit(NSRange(location: end, length: 0), with: NSAttributedString(string: "\n", attributes: attributes(forParagraphAt: end)),
+                           name: "New Body Line", selection: NSRange(location: end + 1, length: 0))
+    }
+
     /// The visible builder calls this for a click below the final block too.
     @discardableResult func ensureBodyAfterFinalBlock() -> Bool {
         let end = textStorage.length

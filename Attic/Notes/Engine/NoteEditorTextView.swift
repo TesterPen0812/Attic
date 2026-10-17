@@ -1272,22 +1272,25 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             showCalloutIconMenu(forBlockAt: location, below: rect)
             return
         }
-        // A click below the final block, when it isn't Body, makes a Body
-        // line after it (ProseMirror's gap cursor, D.1 #15).
-        if event.clickCount == 1, point.y > finalTextBottom(), engine.ensureBodyAfterFinalBlock() { return }
+        // A click below the final block starts a new line there (D.1 #15,
+        // O17-08). The page's marquee takes such clicks first while it is
+        // on (`NoteMarqueeSelection`); this covers the rest.
+        if event.clickCount == 1, point.y > finalTextBottom(), engine.startLineBelowFinalBlock() { return }
         hideBlockHandle()
         super.mouseDown(with: event)
     }
 
     // MARK: Code language and callout icon menus (R14)
 
-    /// The bottom of the note's last line box, in this view.
-    private func finalTextBottom() -> CGFloat {
+    /// The bottom of the note's last line box, in this view (a box's
+    /// bottom padding included).
+    func finalTextBottom() -> CGFloat {
         guard let layoutManager = textLayoutManager else { return .greatestFiniteMagnitude }
         var bottom: CGFloat = 0
         layoutManager.enumerateTextLayoutFragments(from: layoutManager.documentRange.endLocation, options: [.reverse, .ensuresLayout]) { fragment in
             bottom = fragment.layoutFragmentFrame.maxY
-            if let box = fragment as? NoteBlockLayoutFragment, let rect = box.monoBlockRect ?? box.calloutBoxRect {
+            if let box = fragment as? NoteBlockLayoutFragment,
+               let rect = box.lastLineBoxRect ?? box.monoBlockRect ?? box.calloutBoxRect {
                 bottom = max(bottom, rect.maxY + fragment.layoutFragmentFrame.minY)
             }
             return false

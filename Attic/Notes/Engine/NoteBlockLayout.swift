@@ -29,7 +29,26 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         case callout(icon: String, starts: Bool, ends: Bool, exitsAtEnd: Bool = false)
     }
 
+    /// The note's empty last line with a format of its own (O17-07).
+    /// TextKit lays that line out inside the paragraph above's fragment
+    /// (`textLineFragments`' last, with no characters), so this fragment
+    /// draws the line's bar, marker or box the moment the format is picked.
+    enum LastLine: Equatable {
+        /// `joinsAbove`: this paragraph is a quote at the same depth and
+        /// its bar runs on through the empty line.
+        case quote(x: CGFloat, joinsAbove: Bool)
+        case marker(NoteListMarker, x: CGFloat)
+        /// A callout box that starts on the empty line.
+        case callout(icon: String)
+        /// A code block that starts on the empty line, with its label.
+        case mono(label: String)
+    }
+
     var decoration: Decoration = .mono(starts: true, ends: true, exitsAtEnd: false)
+    var lastLine: LastLine?
+    /// The empty last line's font (its marker's or bar's measure) and ink.
+    var lastLineFont: NSFont = NoteTextStyle.font(for: AtticNoteType.body)
+    var lastLineInk: NSColor = .labelColor
     var hasHistoryDifference = false
     /// The paragraph's space before its first line (inside the fragment).
     var spacingBefore: CGFloat = 0
@@ -76,9 +95,12 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         return super.topMargin
     }
     override var bottomMargin: CGFloat {
-        if let mono { return mono.ends && !mono.exitsAtEnd ? T.monoPaddingV + Self.monoShift : 0 }
-        if let callout { return callout.ends && !callout.exitsAtEnd ? T.calloutPaddingV + Self.bodyShift : 0 }
-        return super.bottomMargin
+        let own: CGFloat
+        if let mono { own = mono.ends && !mono.exitsAtEnd ? T.monoPaddingV + Self.monoShift : 0 }
+        else if let callout { own = callout.ends && !callout.exitsAtEnd ? T.calloutPaddingV + Self.bodyShift : 0 }
+        else { own = super.bottomMargin }
+        // A box that starts on the empty last line keeps its bottom padding.
+        return own + (lastLineBoxInsets?.bottom ?? 0)
     }
 
     private var columnWidth: CGFloat {
@@ -149,6 +171,91 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         }
     }
 
+    // MARK: The empty last line (O17-07)
+
+    /// The note's empty last line, when TextKit laid it out in this fragment.
+    var emptyLastLine: NSTextLineFragment? {
+        guard lastLine != nil, textLineFragments.count > 1, let line = textLineFragments.last,
+              line.characterRange.length == 0 else { return nil }
+        return line
+    }
+
+    /// The empty last line's box padding above and below its line box: as
+    /// a box's first and last slice (`topMargin`, `bottomMargin`).
+    private var lastLineBoxInsets: (top: CGFloat, bottom: CGFloat)? {
+        switch lastLine {
+        case .mono: (Self.monoTopInset - Self.monoShift, T.monoPaddingV + Self.monoShift)
+        case .callout: (T.calloutPaddingV - Self.bodyShift, T.calloutPaddingV + Self.bodyShift)
+        default: nil
+        }
+    }
+
+    /// The box that starts on the empty last line, in this fragment's
+    /// coordinates: the column's full width, its padding around the line.
+    var lastLineBoxRect: CGRect? {
+        guard let insets = lastLineBoxInsets, let line = emptyLastLine else { return nil }
+        let box = line.typographicBounds
+        return CGRect(x: -layoutFragmentFrame.minX, y: box.minY - insets.top, width: columnWidth,
+                      height: box.height + insets.top + insets.bottom)
+    }
+
+    /// The empty last line's quote bar (it continues this paragraph's own
+    /// bar when they join).
+    var lastLineQuoteBar: CGRect? {
+        guard case let .quote(x, joinsAbove) = lastLine, let line = emptyLastLine else { return nil }
+        let baseline = Self.baseline(of: line)
+        let bottom = baseline + Self.quoteBarBelow(lastLineFont)
+        let top = joinsAbove ? (quoteBar?.minY ?? 0) : baseline - Self.quoteBarAbove(lastLineFont)
+        return CGRect(x: x - layoutFragmentFrame.minX, y: top, width: T.quoteBar, height: max(0, bottom - top))
+    }
+
+    private var lastLineDecorationRect: CGRect {
+        guard let line = emptyLastLine else { return .zero }
+        switch lastLine {
+        case .mono, .callout:
+            return (lastLineBoxRect ?? .zero).insetBy(dx: 0, dy: -1)
+        case let .marker(_, x):
+            let baseline = Self.baseline(of: line)
+            return CGRect(x: x - layoutFragmentFrame.minX - 40, y: baseline - lastLineFont.ascender - 1,
+                          width: 40 + T.markerSlot + 1, height: lastLineFont.ascender - lastLineFont.descender + 2)
+        case .quote:
+            return lastLineQuoteBar ?? .zero
+        case nil:
+            return .zero
+        }
+    }
+
+    private func drawLastLine(at point: CGPoint, in context: CGContext) {
+        guard let line = emptyLastLine, let lastLine else { return }
+        switch lastLine {
+        case let .mono(label):
+            guard let box = lastLineBoxRect else { return }
+            let edge: (NSColor, CGFloat)? = border.map { ($0, 1) } ?? hairlineInk.map { ($0, T.monoHairline) }
+            drawBox(box, starts: true, ends: true, radius: T.monoRadius, edge: edge, at: point, in: context)
+            let row = CGRect(x: box.minX + T.monoPaddingH, y: box.minY + T.monoPaddingV,
+                             width: max(0, columnWidth - 2 * T.monoPaddingH - T.monoCopySize - 4), height: T.monoLabelHeight)
+            drawLabel(label, in: row.offsetBy(dx: point.x, dy: point.y), context: context)
+        case let .callout(icon):
+            guard let box = lastLineBoxRect else { return }
+            drawBox(box, starts: true, ends: true, radius: T.calloutRadius, edge: border.map { ($0, 1) }, at: point, in: context)
+            guard !icon.isEmpty else { return }
+            let centreY = Self.baseline(of: line) - lastLineFont.capHeight / 2
+            let slot = CGRect(x: -layoutFragmentFrame.minX + T.calloutPaddingH, y: centreY - T.body.lineHeight / 2,
+                              width: T.calloutIconSlot, height: T.body.lineHeight)
+            drawIcon(icon, in: slot.offsetBy(dx: point.x, dy: point.y), context: context)
+        case let .marker(marker, x):
+            drawMarker(marker, slotX: point.x + x - layoutFragmentFrame.minX, baseline: point.y + Self.baseline(of: line),
+                       font: lastLineFont, ink: lastLineInk, in: context)
+        case let .quote(_, joinsAbove):
+            guard let bar = lastLineQuoteBar else { return }
+            // Joined: one bar from this paragraph's top, which keeps its
+            // own join with the quote above.
+            let above: Bool = if joinsAbove, case let .quote(_, own, _) = decoration { own } else { false }
+            drawQuoteBar(bar.offsetBy(dx: point.x, dy: point.y), joinsAbove: above, joinsBelow: false,
+                         ink: lastLineInk, in: context)
+        }
+    }
+
     /// The quote's bar, in this fragment's coordinates (F-04): it spans its
     /// text, from the first line's ascender to the last line's descender,
     /// centred on the glyphs and never longer. Where the quote goes on in
@@ -196,6 +303,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
 
     override var renderingSurfaceBounds: CGRect {
         var bounds = super.renderingSurfaceBounds.union(decorationRect)
+        if lastLine != nil { bounds = bounds.union(lastLineDecorationRect) }
         if chipFill != nil { bounds = bounds.insetBy(dx: -T.inlineCodeChipPadding, dy: -1) }
         return bounds
     }
@@ -219,6 +327,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
                     edge: border.map { ($0, 1) }, at: point, in: context)
         }
         if chipFill != nil { drawInlineCodeChips(at: point, in: context) }
+        if lastLine != nil { drawLastLine(at: point, in: context) }
         super.draw(at: point, in: context)
         switch decoration {
         case .mono, .history, .plain:
@@ -230,6 +339,8 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
             guard let baseline = firstBaseline else { return }
             drawMarker(marker, slotX: point.x + x - layoutFragmentFrame.minX, baseline: point.y + baseline, in: context)
         case .quote:
+            // The empty last line's bar draws this one too when they join.
+            if case .quote(_, true) = lastLine, emptyLastLine != nil { return }
             guard let bar = quoteBar, case let .quote(_, joinsAbove, joinsBelow) = decoration else { return }
             drawQuoteBar(bar.offsetBy(dx: point.x, dy: point.y), joinsAbove: joinsAbove, joinsBelow: joinsBelow, in: context)
         }
@@ -240,7 +351,10 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     /// Disc (4), ring (4.5, 1 pt stroke) and square (3.5) centred on x 7,
     /// raised 0.5 off the first line's x-height middle; numbers, letters and
     /// roman numerals in tabular figures ending at x 14, on the baseline.
-    private func drawMarker(_ marker: NoteListMarker, slotX: CGFloat, baseline: CGFloat, in context: CGContext) {
+    private func drawMarker(_ marker: NoteListMarker, slotX: CGFloat, baseline: CGFloat,
+                            font markerFont: NSFont? = nil, ink: NSColor? = nil, in context: CGContext) {
+        let markerFont = markerFont ?? self.markerFont
+        let ink = ink ?? self.ink
         let centre = CGPoint(x: slotX + T.bulletCentre, y: baseline - markerFont.xHeight / 2 - T.bulletLift)
         context.saveGState()
         defer { context.restoreGState() }
@@ -344,7 +458,8 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     /// that joins its neighbour extends past its own edge, so the cap falls
     /// outside the clip and the seam is square; the seam sits on a device
     /// pixel so the two slices never blend into a hairline.
-    private func drawQuoteBar(_ bar: CGRect, joinsAbove: Bool, joinsBelow: Bool, in context: CGContext) {
+    private func drawQuoteBar(_ bar: CGRect, joinsAbove: Bool, joinsBelow: Bool, ink: NSColor? = nil, in context: CGContext) {
+        let ink = ink ?? self.ink
         func snapped(_ y: CGFloat) -> CGFloat {
             let device = context.convertToDeviceSpace(CGPoint(x: bar.minX, y: y))
             return context.convertToUserSpace(CGPoint(x: device.x, y: device.y.rounded())).y
@@ -423,7 +538,8 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
               let style = textStorage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle else { return nil }
         let structured = !style.textLists.isEmpty || textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading"
         let chips = containsInlineCode(paragraphAt: range.location)
-        guard structured || chips else { return nil }
+        let lastLine = pendingLastLineStyle(afterParagraphAt: range.location) != nil ? emptyLastLineAttributes() : nil
+        guard structured || chips || lastLine != nil else { return nil }
         let text = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
         if chips {
             // An inline code chip moves to the next line whole rather than
@@ -447,6 +563,18 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
             }
             text.addAttribute(.paragraphStyle, value: plain, range: part)
         }
+        if let lastLine, text.length > 0 {
+            // O17-07: TextKit lays the note's empty last line out with this
+            // separator's attributes (or the typing attributes while the
+            // caret is there, which are the same), so the line has its
+            // format's size, indent and box padding before a letter is
+            // typed, wherever the caret goes. Display only: storage keeps
+            // the paragraph's own attributes.
+            let separator = NSRange(location: text.length - 1, length: 1)
+            for key in [NSAttributedString.Key.font, .paragraphStyle, .foregroundColor] {
+                if let value = lastLine[key] { text.addAttribute(key, value: value, range: separator) }
+            }
+        }
         return NSTextParagraph(attributedString: text)
     }
 
@@ -458,11 +586,27 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         let inStorage = offset > 0 && offset < textStorage.length
         let native = inStorage ? decoration(forParagraphAt: offset) : nil
         let chips = inStorage && containsInlineCode(paragraphAt: offset)
+        let lastLine = offset >= 0 && offset < textStorage.length ? emptyLastLineDecoration(afterParagraphAt: offset) : nil
         guard offset >= 0, offset < textStorage.length,
-              let decoration = native ?? (changed ? .history : (chips ? .plain : nil)) else {
+              let decoration = native ?? (changed ? .history : (chips || lastLine != nil ? .plain : nil)) else {
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)
+        if let lastLine {
+            fragment.lastLine = lastLine
+            if case .marker(let marker, _) = lastLine, marker.isOrdinal {
+                fragment.lastLineFont = Self.markerNumberFont
+            } else {
+                fragment.lastLineFont = style.font(for: pendingParagraphStyle.map { NoteParagraphKind.of(
+                    style: $0.state.style.storageName, level: $0.state.style.level,
+                    callout: $0.state.style.calloutIcon, isChecklist: false) } ?? .body)
+            }
+            fragment.lastLineInk = if case .quote = lastLine { style.quoteBarColor } else { style.bodyColor }
+            if case .mono = lastLine { fragment.hairlineInk = style.tokens.divider.nsColor }
+            fragment.fill = style.codeBlockColor
+            fragment.border = style.codeBlockBorder
+            fragment.labelInk = style.secondaryColor
+        }
         let paragraph = textStorage.attribute(.paragraphStyle, at: offset, effectiveRange: nil) as? NSParagraphStyle
         fragment.decoration = decoration
         fragment.hasHistoryDifference = changed
@@ -1196,5 +1340,109 @@ final class NoteDropLineView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         ink.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: AtticNoteType.dropLineThickness / 2, yRadius: AtticNoteType.dropLineThickness / 2).fill()
+    }
+}
+
+// MARK: - The note's empty last line with a format of its own (O17-07)
+
+extension NoteListMarker {
+    /// Numbers, letters and roman numerals (drawn in tabular figures).
+    var isOrdinal: Bool {
+        switch self {
+        case .number, .letter, .roman: true
+        case .disc, .ring, .square, .checkbox: false
+        }
+    }
+}
+
+@MainActor
+extension NoteEditorEngine {
+    /// The format picked for the note's empty last line (O17-07), when the
+    /// paragraph at `location` is the one TextKit lays that line out in
+    /// (the note's last, ending with its separator). Nil for Body.
+    func pendingLastLineStyle(afterParagraphAt location: Int) -> NoteParagraphStyle? {
+        guard let pending = pendingParagraphStyle, pending.location == textStorage.length, pending.location > 0,
+              pending.state.style != .body,
+              (textStorage.string as NSString).character(at: pending.location - 1) == 0x0A,
+              NSMaxRange(paragraphRange(at: location)) == pending.location else { return nil }
+        return pending.state.style
+    }
+
+    /// What the empty last line draws beside its caret: a quote's bar, a
+    /// list's marker, or the box a callout or code block starts there. Nil
+    /// for a heading (its size is the line's own) or when the box above
+    /// goes on through the line (`calloutContinues`, `isMono`).
+    func emptyLastLineDecoration(afterParagraphAt location: Int) -> NoteBlockLayoutFragment.LastLine? {
+        guard let format = pendingLastLineStyle(afterParagraphAt: location), let pending = pendingParagraphStyle else { return nil }
+        let end = pending.location
+        let depth = CGFloat(pending.state.indent) * AtticNoteType.listLevelStep
+        switch format {
+        case .quote:
+            let above = paragraphRange(at: end - 1)
+            let joins = above.location > 0 && paragraphStyle(at: above.location) == .quote
+                && (indentAt(above.location) ?? 0) == pending.state.indent
+            return .quote(x: depth, joinsAbove: joins)
+        case .bullet, .number:
+            return listMarker(at: end).map { .marker($0, x: depth) }
+        case let .callout(icon):
+            return startsEmptyLastLineBox(format) ? .callout(icon: icon) : nil
+        case let .mono(language):
+            return startsEmptyLastLineBox(format) ? .mono(label: NoteCodeLanguageName.label(for: language)) : nil
+        case .body, .heading, .checklist:
+            return nil
+        }
+    }
+
+    /// Whether a callout or code block picked for the empty last line
+    /// starts its own box there (no box of the same kind ends just above).
+    func startsEmptyLastLineBox(_ format: NoteParagraphStyle) -> Bool {
+        let end = textStorage.length
+        guard end > 0 else { return false }
+        let above = paragraphRange(at: end - 1)
+        switch format {
+        case let .callout(icon):
+            guard above.location > 0 else { return true }
+            return textStorage.attribute(.noteCalloutIcon, at: above.location, effectiveRange: nil) as? String != icon
+        case .mono:
+            return !codeRunContinues(from: above.location, to: end)
+        default:
+            return false
+        }
+    }
+
+    /// A box that starts on the empty last line puts its top padding (and
+    /// code's sides) into the line's own spacing, where TextKit places the
+    /// caret, as the box's first slice does with its margins; the first
+    /// typed letter is restyled to the stored paragraph style and lands in
+    /// the same place.
+    func addEmptyLastLineBoxInsets(to attributes: inout [NSAttributedString.Key: Any], style format: NoteParagraphStyle) {
+        guard startsEmptyLastLineBox(format),
+              let paragraph = (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+        switch format {
+        case .mono:
+            paragraph.paragraphSpacingBefore += NoteBlockLayoutFragment.monoTopInset - NoteTextStyle.baselineShift(AtticNoteType.mono)
+            paragraph.firstLineHeadIndent += AtticNoteType.monoPaddingH
+            paragraph.headIndent += AtticNoteType.monoPaddingH
+        case .callout:
+            paragraph.paragraphSpacingBefore += AtticNoteType.calloutPaddingV - NoteTextStyle.baselineShift(AtticNoteType.body)
+        default:
+            return
+        }
+        attributes[.paragraphStyle] = paragraph
+    }
+
+    /// The attributes TextKit lays the empty last line out with.
+    func emptyLastLineAttributes() -> [NSAttributedString.Key: Any] {
+        attributes(forParagraphAt: textStorage.length)
+    }
+
+    /// The empty last line's format changed: its paragraph above is laid
+    /// out again (TextKit lays the line out there). One paragraph.
+    func refreshEmptyLastLine() {
+        let end = textStorage.length
+        guard end > 0, textStorage.editedMask.isEmpty else { return }
+        let above = paragraphRange(at: end - 1)
+        textStorage.edited(.editedAttributes, range: above, changeInLength: 0)
+        invalidateLayout(above)
     }
 }
