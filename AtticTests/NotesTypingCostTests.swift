@@ -5,6 +5,30 @@ import XCTest
 /// Deterministic work counters; times are evidence, never invented budgets.
 @MainActor
 final class NotesTypingCostTests: XCTestCase {
+    func testP06TailAttachmentLookupWork() throws {
+        for count in [100, 1000, 5000] {
+            let document = NoteDocument(blocks: [.text("Title")] + (0..<count).map { .text("Unrelated paragraph \($0)") } + [
+                .table(NoteTable(texts: [["a", "b"], ["c", "d"]])),
+                .image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)])
+            let engine = NoteEditorEngine(noteID: UUID(), document: document)
+            let table = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+            let image = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteImageAttachment }.first)
+            let beforeImage = engine.attachmentRangeEnumerationVisits
+            let imageMS = milliseconds { XCTAssertNotNil(engine.range(of: image)) }
+            let imageVisits = engine.attachmentRangeEnumerationVisits - beforeImage
+            let beforeTable = engine.attachmentRangeEnumerationVisits
+            let tableMS = milliseconds {
+                XCTAssertTrue(engine.changeTable(table, name: "Cell") { $0[.init(row: 0, column: 0)].text = "edited" })
+            }
+            let tableVisits = engine.attachmentRangeEnumerationVisits - beforeTable
+            print("P3_ATTACHMENT size=\(count) image_visits=\(imageVisits) table_visits=\(tableVisits) image_ms=\(imageMS) table_ms=\(tableMS)")
+            // Measured P3 baseline: absent attachment attributes coalesce
+            // across unrelated paragraphs; lookup visits do not grow.
+            XCTAssertEqual(imageVisits, 4)
+            XCTAssertEqual(tableVisits, 2)
+        }
+    }
+
     private func editor(_ blocks: [NoteBlock]) -> (NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
         let (scroll, view) = engine.makeView()

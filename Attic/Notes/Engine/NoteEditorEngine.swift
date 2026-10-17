@@ -1246,6 +1246,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func range(of attachment: NSTextAttachment) -> NSRange? {
         var found: NSRange?
         textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, stop in
+            attachmentRangeEnumerationVisits += 1
             if (value as AnyObject?) === attachment {
                 found = range
                 stop.pointee = true
@@ -1253,6 +1254,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         return found
     }
+
+    /// Lookup enumeration callbacks, including runs with no attachment.
+    var attachmentRangeEnumerationVisits = 0
 
     // MARK: Objects
 

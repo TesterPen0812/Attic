@@ -15,6 +15,7 @@ extension NoteEditorEngine {
     func tableAttachment(id: UUID) -> (NoteTableAttachment, NSRange)? {
         var found: (NoteTableAttachment, NSRange)?
         textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, stop in
+            attachmentRangeEnumerationVisits += 1
             if let table = value as? NoteTableAttachment, table.objectID == id {
                 found = (table, range)
                 stop.pointee = true
