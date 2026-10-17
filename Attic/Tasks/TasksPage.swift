@@ -1600,44 +1600,47 @@ struct TasksPage: View {
                     .accessibilityIdentifier("tasks-row-failure")
             }
             if expanded() {
-                AtticQuickLook(
-                    subtasks: row.subtasks,
-                    onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) } },
-                    onAddSubtask: { model.beginAddingSubtask(to: id) },
-                    commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
-                    onFocusChange: { subtaskID, focused in
-                        if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
-                    },
-                    renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
-                        (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
-                                                     cancel: { model.cancelSubtaskRename() },
-                                                     accessibilityLabel: String(localized: "Rename subtask"),
-                                                     emptyBackspace: { model.backspaceEmptySubtask() },
-                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
-                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
-                                            didEdit: { model.noteTextEdit() }))
-                    },
-                    newSubtask: model.newSubtaskParentID == id && active
-                        ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
-                                            cancel: { model.cancelEditing() },
-                                            accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
-                                            placeholder: String(localized: "Add subtask…"),
-                                            emptyBackspace: { model.backspaceEmptySubtask() },
-                                            pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
-                                            pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
-                                            didEdit: { model.noteTextEdit() })
-                        : nil,
-                    popover: movePopover(parentID: id, open: live.metaPopover),
-                    onReorder: { subtaskID, index, group in
-                        let move = { [weak model] in
-                            guard let model else { return CommandOutcome.failed(.taskGone) }
-                            return model.reorderSubtask(subtaskID, toGroupIndex: index, group: group)
+                TasksSubtaskDraftView(draft: active && (model.newSubtaskParentID == id || model.renamingSubtaskParentID == id)
+                                      ? model.subtaskDraft : .quiet) {
+                    AtticQuickLook(
+                        subtasks: row.subtasks,
+                        onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) } },
+                        onAddSubtask: { model.beginAddingSubtask(to: id) },
+                        commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
+                        onFocusChange: { subtaskID, focused in
+                            if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
+                        },
+                        renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
+                            (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
+                                                         cancel: { model.cancelSubtaskRename() },
+                                                         accessibilityLabel: String(localized: "Rename subtask"),
+                                                         emptyBackspace: { model.backspaceEmptySubtask() },
+                                                pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                                pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                                didEdit: { model.noteTextEdit() }))
+                        },
+                        newSubtask: model.newSubtaskParentID == id && active
+                            ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
+                                                cancel: { model.cancelEditing() },
+                                                accessibilityLabel: String(localized: "New subtask of \(row.model.title)"),
+                                                placeholder: String(localized: "Add subtask…"),
+                                                emptyBackspace: { model.backspaceEmptySubtask() },
+                                                pageUndo: { native in (model.taskChangeOwnsUndo || !native) && model.undo().isApplied },
+                                                pageRedo: { native in (model.taskChangeOwnsRedo || !native) && model.redo().isApplied },
+                                                didEdit: { model.noteTextEdit() })
+                            : nil,
+                        popover: movePopover(parentID: id, open: live.metaPopover),
+                        onReorder: { subtaskID, index, group in
+                            let move = { [weak model] in
+                                guard let model else { return CommandOutcome.failed(.taskGone) }
+                                return model.reorderSubtask(subtaskID, toGroupIndex: index, group: group)
+                            }
+                            if model.report(move(), on: id, retry: move).isApplied {
+                                AtticHaptics.tick(enabled: design.hapticsEnabled)
+                            }
                         }
-                        if model.report(move(), on: id, retry: move).isApplied {
-                            AtticHaptics.tick(enabled: design.hapticsEnabled)
-                        }
-                    }
-                )
+                    )
+                }
                 // It opens from under its row (a fade in Calm).
                 .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top))
                 if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
@@ -2562,9 +2565,16 @@ struct TasksPage: View {
     /// A row's height as laid out (its quick look, an error or an editor
     /// under it included; round 4), or, before it has been laid out, from
     /// what it shows: 34 pt, 48 with a details line, plus the quick look.
-    private func rowHeight(_ id: UUID, in tab: TasksTab) -> CGFloat {
+    static var dragHeightLookupVisits = 0
+    func rowHeight(_ id: UUID, in tab: TasksTab) -> CGFloat {
+        if dragSession.geometryTab == tab, let height = dragSession.geometry?.height(id) { return height }
         if let measured = pointer.frames[TasksRowID(tab: tab, id: id)]?.height, measured > 0 { return measured }
-        guard let row = model.rows(for: tab).first(where: { $0.id == id }) else { return AtticLayout.rowPitch }
+        guard let row = model.rows(for: tab).first(where: { Self.dragHeightLookupVisits += 1; return $0.id == id }) else { return AtticLayout.rowPitch }
+        return estimatedHeight(row)
+    }
+
+    private func estimatedHeight(_ row: TasksListRow) -> CGFloat {
+        let id = row.id
         let pitch = row.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         var height = pitch
         if model.expanded.contains(id), row.status != .done {
@@ -2579,7 +2589,18 @@ struct TasksPage: View {
     /// A drag began: a timer while it lasts reads Esc (SwiftUI's mouse
     /// tracking holds key events until the button is up, so the key's own
     /// state is read) and scrolls the list near its edges.
+    func prepareDragGeometry(group: [UUID], tab: TasksTab) -> TasksDragGeometry {
+        let rows = Dictionary(uniqueKeysWithValues: model.rows(for: tab).map { ($0.id, $0) })
+        return TasksDragGeometry(group: group) { id in
+            if let measured = pointer.frames[TasksRowID(tab: tab, id: id)]?.height, measured > 0 { return measured }
+            return rows[id].map { estimatedHeight($0) } ?? AtticLayout.rowPitch
+        }
+    }
+
     private func beginDragSession(in tab: TasksTab) {
+        dragSession.geometryTab = tab
+        if let current = drag { dragSession.geometry = prepareDragGeometry(group: current.group, tab: tab) }
+        dragSession.cachedScrollView = nil
         dragSession.timer?.invalidate()
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in
             MainActor.assumeIsolated { dragTick(in: tab) }
@@ -2623,7 +2644,7 @@ struct TasksPage: View {
         next.scrolled += moved
         let total = dragSession.translation + next.scrolled
         next.targetIndex = TasksReorderCell<EmptyView, EmptyView>.target(
-            start: current.startIndex, translation: total, group: current.group, heights: { rowHeight($0, in: tab) }
+            start: current.startIndex, translation: total, group: current.group, heights: { rowHeight($0, in: tab) }, geometry: dragSession.geometry
         )
         drag = next
     }
@@ -2695,19 +2716,8 @@ struct TasksPage: View {
 
     /// The list's scroll view under a page point (the page's current tab).
     private func listScrollView(at point: CGPoint) -> NSScrollView? {
-        guard let page = pointer.view, let window = page.window else { return nil }
-        let windowPoint = page.convert(point, to: nil)
-        var found: NSScrollView?
-        func visit(_ view: NSView) {
-            if let scroll = view as? NSScrollView, !scroll.isHiddenOrHasHiddenAncestor,
-               scroll.convert(scroll.bounds, to: nil).contains(windowPoint),
-               (scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height {
-                found = scroll
-            }
-            view.subviews.forEach(visit)
-        }
-        if let content = window.contentView { visit(content) }
-        return found
+        guard let page = pointer.view else { return nil }
+        return dragSession.scrollView(at: point, in: page)
     }
 
     /// Cancels the drag in progress: the row settles back, the neighbours
@@ -3422,6 +3432,47 @@ extension TaskPriority {
 /// others slide apart). ⌘B and the menu move a task between Now and Later.
 /// The live translation is the cell's own gesture state; the page holds
 /// only which row is lifted and where it would land.
+struct TasksDragGeometry: Equatable {
+    nonisolated(unsafe) static var comparisonCount = 0
+    private let indices: [UUID: Int]
+    private let heights: [CGFloat]
+    private let prefix: [CGFloat]
+    init(group: [UUID], height: (UUID) -> CGFloat) {
+        indices = Dictionary(uniqueKeysWithValues: group.enumerated().map { ($0.element, $0.offset) })
+        heights = group.map(height)
+        var sums: [CGFloat] = [0]
+        for height in heights { sums.append(sums.last! + height) }
+        prefix = sums
+    }
+    func index(_ id: UUID) -> Int? { indices[id] }
+    func height(_ id: UUID) -> CGFloat? { indices[id].map { heights[$0] } }
+    func landingDelta(start: Int, target: Int) -> CGFloat {
+        target > start ? prefix[target + 1] - prefix[start + 1] : prefix[target] - prefix[start]
+    }
+    func target(start: Int, translation: CGFloat) -> Int {
+        guard heights.indices.contains(start), translation != 0 else { return start }
+        var low = translation > 0 ? start + 1 : 0
+        var high = translation > 0 ? heights.count : start
+        while low < high {
+            Self.comparisonCount += 1
+            let mid = (low + high) / 2
+            if translation > 0 {
+                let boundary = prefix[mid] - prefix[start + 1] + heights[mid] / 2
+                if translation > boundary { low = mid + 1 } else { high = mid }
+            } else {
+                let boundary = prefix[start] - prefix[mid + 1] + heights[mid] / 2
+                if -translation > boundary { high = mid } else { low = mid + 1 }
+            }
+        }
+        return translation > 0 ? low - 1 : low
+    }
+    func pushesPastGroup(start: Int, translation: CGFloat) -> Bool {
+        guard heights.indices.contains(start) else { return false }
+        let room = translation > 0 ? prefix.last! - prefix[start + 1] : prefix[start]
+        return abs(translation) > room + heights[start] / 2
+    }
+}
+
 struct TasksDrag: Equatable {
     let id: UUID
     let tab: TasksTab
@@ -3430,6 +3481,7 @@ struct TasksDrag: Equatable {
     var targetIndex: Int
     /// How far the list has scrolled under the drag (edge auto-scroll):
     /// the row keeps under the pointer and lands by where it is.
+    var geometry: TasksDragGeometry?
     var scrolled: CGFloat = 0
     /// Released: the lifted card settles into the gap the neighbours
     /// opened, and the move is committed once it is there.
@@ -3513,6 +3565,9 @@ final class TasksLiftedCard: ObservableObject {
     /// `drag.targetIndex` (the rows between moved by the lifted row's
     /// height), less what the list scrolled under the drag.
     nonisolated static func landing(of drag: TasksDrag, originY: CGFloat, heights: (UUID) -> CGFloat) -> CGFloat {
+        if let geometry = drag.geometry {
+            return originY - drag.scrolled + geometry.landingDelta(start: drag.startIndex, target: drag.targetIndex)
+        }
         var y = originY - drag.scrolled
         if drag.targetIndex > drag.startIndex {
             for index in (drag.startIndex + 1)...drag.targetIndex where drag.group.indices.contains(index) {
@@ -3573,6 +3628,32 @@ final class TasksDragSession {
     /// Which cell reported each row's control frames (`TasksCellReports`).
     private var controlOwners: [TasksRowID: ObjectIdentifier] = [:]
     var timer: Timer?
+    var geometry: TasksDragGeometry?
+    var geometryTab: TasksTab?
+    weak var cachedScrollView: NSScrollView?
+
+    private(set) var scrollViewVisitCount = 0
+    func scrollView(at point: CGPoint, in page: NSView) -> NSScrollView? {
+        guard let window = page.window else { return nil }
+        let windowPoint = page.convert(point, to: nil)
+        if let scroll = cachedScrollView, scroll.window === window,
+           !scroll.isHiddenOrHasHiddenAncestor,
+           scroll.convert(scroll.bounds, to: nil).contains(windowPoint),
+           (scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height { return scroll }
+        var found: NSScrollView?
+        func visit(_ view: NSView) {
+            scrollViewVisitCount += 1
+            if let scroll = view as? NSScrollView, !scroll.isHiddenOrHasHiddenAncestor,
+               scroll.convert(scroll.bounds, to: nil).contains(windowPoint),
+               (scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height {
+                found = scroll
+            }
+            view.subviews.forEach(visit)
+        }
+        if let content = window.contentView { visit(content) }
+        cachedScrollView = found
+        return found
+    }
 
     /// A row's controls, as its cell reports them.
     func setControlFrames(_ frames: [CGRect], for row: TasksRowID, from cell: TasksCellReports) {
@@ -3630,6 +3711,9 @@ final class TasksDragSession {
         timer = nil
         location = nil
         translation = 0
+        geometry = nil
+        geometryTab = nil
+        cachedScrollView = nil
     }
 
     /// A press at `point` (page space) on row `id`, whose frame in the page
@@ -3774,32 +3858,32 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             }
             .onChanged { value in
                 guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
-                      let start = group.firstIndex(of: id) else { return }
+                      let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 session.translation = value.translation.height
                 session.location = value.location
                 onMove(value.translation.height)
                 let scrolled = drag?.id == id ? (drag?.scrolled ?? 0) : 0
                 let moved = value.translation.height + scrolled
-                let target = Self.target(start: start, translation: moved, group: group, heights: heights)
                 if drag?.id != id {
-                    drag = TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target)
+                    drag = TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: start)
                     onBegin()
+                    drag?.geometry = session.geometry
                     onMove(value.translation.height)
-                } else if drag?.targetIndex != target {
-                    drag?.targetIndex = target
                 }
+                let target = Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
+                if drag?.targetIndex != target { drag?.targetIndex = target }
                 // Pushing past the group's end: say why it stops there.
-                let past = Self.pushesPastGroup(start: start, translation: moved, group: group, heights: heights)
+                let past = Self.pushesPastGroup(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
                 if past, !pushedPast { onPushPastGroup() }
                 if past != pushedPast { pushedPast = past }
             }
             .onEnded { value in
                 // A cancelled press never commits on release.
                 guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
-                      let start = group.firstIndex(of: id) else { return }
+                      let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 let moved = value.translation.height + (drag?.id == id ? (drag?.scrolled ?? 0) : 0)
-                let target = Self.target(start: start, translation: moved, group: group, heights: heights)
-                onEnd(TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target))
+                let target = Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
+                onEnd(TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target, geometry: session.geometry))
             }
     }
 
@@ -3807,7 +3891,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     /// dragged row's height, for the rows between where it was and where
     /// it would land.
     static func offset(of id: UUID, in drag: TasksDrag, heights: (UUID) -> CGFloat) -> CGFloat {
-        guard drag.id != id, let index = drag.group.firstIndex(of: id) else { return 0 }
+        guard drag.id != id, let index = drag.geometry?.index(id) ?? drag.group.firstIndex(of: id) else { return 0 }
         let height = heights(drag.id)
         if drag.startIndex < drag.targetIndex, index > drag.startIndex, index <= drag.targetIndex { return -height }
         if drag.targetIndex < drag.startIndex, index >= drag.targetIndex, index < drag.startIndex { return height }
@@ -3816,7 +3900,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
 
     /// The place the row would land: it passes a neighbour once it has
     /// moved more than half that neighbour's height.
-    static func target(start: Int, translation: CGFloat, group: [UUID], heights: (UUID) -> CGFloat) -> Int {
+    static func target(start: Int, translation: CGFloat, group: [UUID], heights: (UUID) -> CGFloat, geometry: TasksDragGeometry? = nil) -> Int {
+        if let geometry { return geometry.target(start: start, translation: translation) }
         var target = start
         var remaining = translation
         if remaining > 0 {
@@ -3839,7 +3924,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
 
     /// The row has been pushed more than half a row beyond its group's
     /// first or last place (where the other group begins).
-    static func pushesPastGroup(start: Int, translation: CGFloat, group: [UUID], heights: (UUID) -> CGFloat) -> Bool {
+    static func pushesPastGroup(start: Int, translation: CGFloat, group: [UUID], heights: (UUID) -> CGFloat, geometry: TasksDragGeometry? = nil) -> Bool {
+        if let geometry { return geometry.pushesPastGroup(start: start, translation: translation) }
         guard group.indices.contains(start) else { return false }
         let own = heights(group[start])
         if translation > 0 {
@@ -4654,6 +4740,13 @@ enum TasksTabOrder {
 /// The closure reads the live draft each time this observer redraws.
 private struct TasksTitleDraftView<Content: View>: View {
     @ObservedObject var draft: TasksTitleDraftState
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+}
+
+private struct TasksSubtaskDraftView<Content: View>: View {
+    @ObservedObject var draft: TasksSubtaskDraftState
     @ViewBuilder let content: () -> Content
 
     var body: some View { content() }

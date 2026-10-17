@@ -2294,6 +2294,10 @@ final class TaskStore: ObservableObject {
         return ids
     }
 
+    func indexedDoneLogOffset(of id: UUID, matching query: String) -> Int? {
+        doneSearchIDs(matching: query).firstIndex(of: id)
+    }
+
     func indexedDoneLogCount(matching query: String = "") -> Int {
         query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? doneSearchEntries.count : doneSearchIDs(matching: query).count
@@ -2304,6 +2308,7 @@ final class TaskStore: ObservableObject {
     /// The raw physical cursor above remains available to command clients.
     func indexedDoneLogPage(from cursor: DoneLogCursor = DoneLogCursor(), limit: Int,
                             matching query: String = "") -> DoneLogPage {
+        donePageReadCount += 1
         let ids = doneSearchIDs(matching: query)
         let start = min(cursor.rowOffset, ids.count)
         let end = min(start + max(0, limit), ids.count)
@@ -2354,7 +2359,10 @@ final class TaskStore: ObservableObject {
     /// The subtasks of several Done log tasks, read together (one page's
     /// rows, Astra 19), each list in `doneLogSubtasks`' order. A parent
     /// whose read fails is left out (reported); its row shows no checklist.
+    private(set) var doneFamilyParentReadCount = 0
+    private(set) var donePageReadCount = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
+        doneFamilyParentReadCount += parentIDs.count
         guard !parentIDs.isEmpty else { return [:] }
         let wanted = Set(parentIDs)
         do {

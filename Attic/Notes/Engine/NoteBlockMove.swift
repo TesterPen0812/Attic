@@ -61,7 +61,16 @@ extension NoteEditorEngine {
             return range
         }
         guard format.isCode || format.isCallout || format == .quote else { return range }
+        // Intervals are valid until a character or paragraph-style generation
+        // changes. The first fragment discovers the run; later fragments seek it.
+        var low = 0, high = blockRunIntervals.count
+        while low < high {
+            let mid = (low + high) / 2
+            if NSMaxRange(blockRunIntervals[mid]) <= location { low = mid + 1 } else { high = mid }
+        }
+        if low < blockRunIntervals.count, NSLocationInRange(location, blockRunIntervals[low]) { return blockRunIntervals[low] }
         func matches(_ at: Int) -> Bool {
+            blockRangeParagraphVisits += 1
             guard let other = paragraphStyle(at: at) else { return false }
             return other == format
         }
@@ -73,6 +82,7 @@ extension NoteEditorEngine {
             guard next.length > 0 else { break }
             range = NSUnionRange(range, next)
         }
+        blockRunIntervals.insert(range, at: low)
         return range
     }
 

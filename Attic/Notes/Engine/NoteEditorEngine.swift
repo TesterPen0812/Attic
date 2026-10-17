@@ -128,6 +128,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var foldAssignedHeadingIDs = Set<UUID>()
     var syntaxCache = NoteSyntaxCache()
     private(set) var lastSyntaxScannedUTF16Count = 0
+    // Work, rather than wall-clock budgets, for the typing regression gates.
+    private var pendingListTextOnlyEdit = false
+    private var ordinalCheckpoints: [(location: Int, value: Int)] = []
+    private var ordinalCheckpointCount = 0
+    var renumberPassCount = 0
+    var renumberParagraphVisitCount = 0
+    var ordinalParagraphVisitCount = 0
+    var outlineRebuildCount = 0
+    var outlineParagraphVisitCount = 0
+    var outlineViewportVisitCount = 0
     var headingSectionsCache: [NoteHeadingSection]?
     var headingControls: [Int: NoteHeadingButton] = [:]
     /// The heading line under the pointer (its start), whose fold chevron
@@ -263,6 +273,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Diagnostic: time spent in the last per-edit upkeep (ms).
     private(set) var lastUpkeepMilliseconds: Double = 0
+    var blockRangeParagraphVisits = 0
+    var blockRunIntervals: [NSRange] = []
+    private(set) var documentProjectionUTF16Count = 0
+    private var projectionParagraphs: [NSRange] = []
+    private var middleProjection: (index: Int, delta: Int)?
     private(set) var documentExtractionCount = 0
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
     private var pendingImageLoads = Set<ObjectIdentifier>()
@@ -384,20 +399,43 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             template.extras["foldedHeadings"] = .array(foldedHeadingIDs.map(\.uuidString).sorted().map(NoteJSON.string))
         }
         if var cached = documentCache {
-            if !cached.finalParagraphDirty { return cached.document }
-            let range = NSRange(location: cached.finalParagraphStart,
-                                length: textStorage.length - cached.finalParagraphStart)
-            let paragraph = textStorage.attributedSubstring(from: range)
-            let tail = NoteTextCodec.document(from: paragraph, template: template, firstBlockIsTitle: false)
-            if tail.blocks.count == 1, Self.isSimpleTextBlock(tail.blocks[0]),
-               let last = cached.document.blocks.last, Self.isSimpleTextBlock(last) {
-                cached.document.blocks[cached.document.blocks.count - 1] = tail.blocks[0]
-                cached.finalParagraphDirty = false
-                documentCache = cached
-                documentExtractionCount += 1
-                return cached.document
+            if let dirty = middleProjection, projectionParagraphs.indices.contains(dirty.index) {
+                let old = projectionParagraphs[dirty.index]
+                let range = NSRange(location: old.location, length: old.length + dirty.delta)
+                let projected = NoteTextCodec.document(from: textStorage.attributedSubstring(from: range), template: template, firstBlockIsTitle: false)
+                documentProjectionUTF16Count += range.length
+                // The separator is metadata for this paragraph, not a new
+                // final empty block in the full document.
+                if projected.blocks.first.map(Self.isIndependentTextBlock) == true,
+                   projected.blocks.dropFirst().allSatisfy({ Self.isIndependentTextBlock($0) && $0.text.isEmpty }) {
+                    cached.document.blocks[dirty.index] = projected.blocks[0]
+                    cached.finalParagraphStart += dirty.delta
+                    projectionParagraphs[dirty.index].length += dirty.delta
+                    for index in (dirty.index + 1)..<projectionParagraphs.count { projectionParagraphs[index].location += dirty.delta }
+                    middleProjection = nil
+                    documentCache = cached
+                    documentExtractionCount += 1
+                    return cached.document
+                }
+            }
+            if middleProjection == nil, !cached.finalParagraphDirty { return cached.document }
+            if middleProjection == nil {
+                let range = NSRange(location: cached.finalParagraphStart,
+                                    length: textStorage.length - cached.finalParagraphStart)
+                let paragraph = textStorage.attributedSubstring(from: range)
+                let tail = NoteTextCodec.document(from: paragraph, template: template, firstBlockIsTitle: false)
+                if tail.blocks.count == 1, Self.isSimpleTextBlock(tail.blocks[0]),
+                   let last = cached.document.blocks.last, Self.isSimpleTextBlock(last) {
+                    cached.document.blocks[cached.document.blocks.count - 1] = tail.blocks[0]
+                    cached.finalParagraphDirty = false
+                    documentCache = cached
+                    projectionParagraphs = []
+                    documentExtractionCount += 1
+                    return cached.document
+                }
             }
         }
+        documentProjectionUTF16Count += textStorage.length
         var result = NoteTextCodec.document(from: textStorage, template: template)
         if let pending = pendingParagraphStyle, pending.location == textStorage.length,
            let last = result.blocks.indices.last, result.blocks[last].kind == .text,
@@ -408,6 +446,18 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let string = textStorage.string as NSString
         let newline = string.range(of: "\n", options: .backwards)
         let finalStart = newline.location == NSNotFound ? 0 : newline.location + 1
+        middleProjection = nil
+        projectionParagraphs = []
+        // Match the codec's literal separators, including its final empty
+        // paragraph. Cocoa also recognizes CR/U+2029 as paragraph breaks.
+        var at = 0
+        repeat {
+            let newline = string.range(of: "\n", options: .literal, range: NSRange(location: at, length: string.length - at))
+            let end = newline.location == NSNotFound ? string.length : newline.location
+            projectionParagraphs.append(NSRange(location: at, length: min(string.length, end + 1) - at))
+            at = end + 1
+        } while at <= string.length
+        if projectionParagraphs.count != result.blocks.count { projectionParagraphs = [] }
         documentCache = (result, finalStart, false)
         documentExtractionCount += 1
         return result
@@ -443,6 +493,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             pendingSlashFile = nil
         }
         if activity == .composing && textView?.hasMarkedText() != true { setActivity(.idle) }
+    }
+
+    private static func isIndependentTextBlock(_ block: NoteBlock) -> Bool {
+        block.kind == .text && block.id == nil && block.extras.isEmpty
+            && block.inlines.isEmpty && !block.text.contains(NoteDocument.objectCharacter)
+            && !block.text.contains("\n")
     }
 
     private static func isSimpleTextBlock(_ block: NoteBlock) -> Bool {
@@ -1626,6 +1682,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                   replacementStrings: [String]?) -> Bool {
         let ranges = affectedRanges.map(\.rangeValue)
         guard allowsChange(ranges: ranges) else { return false }
+        // Commands and replay may replace semantic paragraph attributes even
+        // when their strings agree. Only a native text edit can skip the tail.
+        pendingListTextOnlyEdit = engineEditDepth == 0 && !history.isReplaying && ranges.count == 1
+            && replacementStrings?.count == 1 && replacementStrings!.allSatisfy { replacement in
+                !replacement.contains(where: { $0.isNewline || $0 == "\u{FFFC}" })
+            } && ranges.allSatisfy { range in
+                !(textStorage.string as NSString).substring(with: range).contains(where: { $0.isNewline || $0 == "\u{FFFC}" })
+            }
         newlineEditInFlight = replacementStrings == ["\n"]
         recordTextChange(ranges: ranges, strings: replacementStrings)
         if ranges.count == 1 {
@@ -1849,7 +1913,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
-        headingSectionsCache = nil
+        blockRunIntervals.removeAll(keepingCapacity: true)
+        ordinalCheckpointCount = ordinalCheckpointIndex(paragraphRange(at: editedRange.location).location)
+        let textOnly = pendingListTextOnlyEdit
+        if editedMask.contains(.editedCharacters) { pendingListTextOnlyEdit = false }
+        if editedMask.contains(.editedCharacters) {
+            if textOnly, let edit = pendingImportEdit {
+                rebaseOutlineForTextEdit(NSRange(location: edit.range.location, length: edit.replacementLength), delta: delta)
+            } else { headingSectionsCache = nil }
+        } else { invalidateOutlineIfNeeded(in: editedRange) }
         guard editedMask.contains(.editedCharacters) else { return }
         documentEditGeneration &+= 1
         textView?.cancelCalloutIconSession(reason: "document characters edited")
@@ -1984,16 +2056,43 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
         }
         if var cached = documentCache {
-            let string = textStorage.string as NSString
-            let newline = string.range(of: "\n", options: .backwards)
-            let finalStart = newline.location == NSNotFound ? 0 : newline.location + 1
-            if finalStart == cached.finalParagraphStart, finalStart > 0,
-               editedRange.location >= finalStart,
-               NSMaxRange(editedRange) <= textStorage.length {
-                cached.finalParagraphDirty = true
-                documentCache = cached
-            } else {
-                documentCache = nil
+            var captured = false
+            if textOnly, !cached.finalParagraphDirty, !projectionParagraphs.isEmpty {
+                var low = 0, high = projectionParagraphs.count
+                while low < high {
+                    let mid = (low + high) / 2
+                    if projectionParagraphs[mid].location <= editedRange.location { low = mid + 1 } else { high = mid }
+                }
+                let index = low - 1
+                if index > 0, index < cached.document.blocks.count - 1,
+                   Self.isIndependentTextBlock(cached.document.blocks[index]),
+                   middleProjection == nil || middleProjection?.index == index {
+                    let old = projectionParagraphs[index]
+                    let previousDelta = middleProjection?.delta ?? 0
+                    let endBefore = NSMaxRange(editedRange) - delta
+                    if endBefore < NSMaxRange(old) + previousDelta {
+                        middleProjection = (index, previousDelta + delta)
+                        captured = true
+                    }
+                }
+            }
+            if !captured {
+                // A different paragraph, structural edit or semantic change uses
+                // the established full projection (including ID deduplication).
+                if middleProjection != nil { documentCache = nil; middleProjection = nil }
+                else {
+                    let string = textStorage.string as NSString
+                    let newline = string.range(of: "\n", options: .backwards)
+                    let finalStart = newline.location == NSNotFound ? 0 : newline.location + 1
+                    if finalStart == cached.finalParagraphStart, finalStart > 0,
+                       editedRange.location >= finalStart,
+                       NSMaxRange(editedRange) <= textStorage.length {
+                        cached.finalParagraphDirty = true
+                        documentCache = cached
+                    } else {
+                        documentCache = nil
+                    }
+                }
             }
         }
         if let transfer = pendingNumberStartTransfer {
@@ -2015,9 +2114,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             history.captureUnrecorded(newRange: editedRange, delta: delta, emptyParagraphBefore: emptyBefore)
         }
         let start = DispatchTime.now().uptimeNanoseconds
+        find.charactersChanged(in: editedRange, delta: delta)
         let around = paragraphs(around: editedRange)
         restyle(around)
-        if editedMask.contains(.editedCharacters), needsRenumbering(around) {
+        // Filling or emptying a pending heading can change membership even
+        // without a separator. Compare its local semantics after normalization.
+        if textOnly { invalidateOutlineIfNeeded(in: editedRange) }
+        if !textOnly, needsRenumbering(around) {
             // Numbers further down the list change: their fragments are
             // made again once this edit has been processed.
             DispatchQueue.main.async { [weak self] in self?.renumberList(after: around) }
@@ -3954,11 +4057,58 @@ extension NoteEditorEngine {
         return result
     }
 
+    private func ordinalCheckpointIndex(_ location: Int) -> Int {
+        var low = 0, high = ordinalCheckpointCount
+        while low < high {
+            let middle = low + (high - low) / 2
+            if ordinalCheckpoints[middle].location < location { low = middle + 1 }
+            else { high = middle }
+        }
+        return low
+    }
+
+    private func cachedOrdinal(at location: Int) -> Int? {
+        let index = ordinalCheckpointIndex(location)
+        return index < ordinalCheckpointCount && ordinalCheckpoints[index].location == location
+            ? ordinalCheckpoints[index].value : nil
+    }
+
+    private func cacheOrdinal(_ value: Int, at location: Int) {
+        let index = ordinalCheckpointIndex(location)
+        if index < ordinalCheckpointCount && ordinalCheckpoints[index].location == location {
+            ordinalCheckpoints[index].value = value
+        } else if index == ordinalCheckpointCount {
+            // Reuse the invalid suffix. A key near the end of a long list
+            // retains all preceding checkpoints without shifting their offsets.
+            if index < ordinalCheckpoints.count { ordinalCheckpoints[index] = (location, value) }
+            else { ordinalCheckpoints.append((location, value)) }
+            ordinalCheckpointCount += 1
+        } else {
+            ordinalCheckpoints.insert((location, value), at: index)
+            ordinalCheckpointCount += 1
+        }
+    }
+
     func numberedOrdinal(at location: Int, indent: Int) -> Int {
-        if location < textStorage.length, let value = textStorage.attribute(.noteListStart, at: location, effectiveRange: nil) as? Int { return value }
-        var ordinal = 1
+        if let cached = cachedOrdinal(at: location) { return cached }
+        if location < textStorage.length, let value = textStorage.attribute(.noteListStart, at: location, effectiveRange: nil) as? Int {
+            cacheOrdinal(value, at: location)
+            return value
+        }
+        // Save every sibling crossed on a cold lookup, including a viewport
+        // first opened at the end of a list. Nested levels remain independent.
+        var visited: [(Int, Int)] = [(location, 0)]
+        var distance = 0
+        func finish(base: Int, steps: Int) -> Int {
+            for (offset, depth) in visited.reversed() {
+                let sum = base.addingReportingOverflow(steps - depth)
+                cacheOrdinal(sum.overflow ? Int.max : sum.partialValue, at: offset)
+            }
+            return cachedOrdinal(at: location) ?? 1
+        }
         var start = location
         while start > titleParagraphRange.length + 1 {
+            ordinalParagraphVisitCount += 1
             let previous = lineRange(at: start - 1)
             guard previous.location < start, previous.location < textStorage.length else { break }
             let attrs = textStorage.attributes(at: previous.location, effectiveRange: nil)
@@ -3967,12 +4117,15 @@ extension NoteEditorEngine {
             let nested = previousDepth > indent && (["number", "bullet"].contains(previousKind ?? "") || checklistBox(inParagraphAt: previous.location) != nil)
             guard nested || (previousKind == "number" && previousDepth == indent) else { break }
             if previousDepth == indent {
-                if let value = attrs[.noteListStart] as? Int { return value.addingReportingOverflow(ordinal).overflow ? Int.max : value + ordinal }
-                ordinal += 1
+                distance += 1
+                if let value = attrs[.noteListStart] as? Int ?? cachedOrdinal(at: previous.location) {
+                    return finish(base: value, steps: distance)
+                }
+                visited.append((previous.location, distance))
             }
             start = previous.location
         }
-        return ordinal
+        return finish(base: 1, steps: distance)
     }
 
     func headingRanges() -> [NoteAccessibilityParagraph] {
