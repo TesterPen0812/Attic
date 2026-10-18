@@ -632,7 +632,8 @@ final class MarqueeInteractionTests: XCTestCase {
         let block = engine.blockRange(at: string.range(of: "let answer").location)
         let rect = try XCTUnwrap(engine.rect(for: block))
         let after = try XCTUnwrap(engine.rect(for: engine.paragraphRange(at: string.range(of: "After").location)))
-        let content = NSView(frame: text.bounds)
+        // Flipped, as TextKit's content view is under the flipped text view.
+        let content = FlippedView(frame: text.bounds)
         content.wantsLayer = true
         text.addSubview(content)
         let paragraph = NSView(frame: rect.insetBy(dx: 0, dy: -3))
