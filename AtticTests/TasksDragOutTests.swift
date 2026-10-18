@@ -902,7 +902,7 @@ final class TasksDragCancellationTests: XCTestCase {
             case .orderOut: hosted.window.orderOut(nil)
             case .panelHide: hosted.model.pageDidHide()
             case .pageSwitch: hosted.model.isPageShown = false
-            case .tabSwitch: hosted.model.select(tab: .later)
+            case .tabSwitch: hosted.model.select(tab: .backlog)
             case .none: break
             }
         }
