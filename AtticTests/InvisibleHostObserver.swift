@@ -8,8 +8,13 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
     private var tokens: [NSObjectProtocol] = []
     private var violations: Set<String> = []
 
-    @objc static func install() {
+    @objc static func install() -> NSNumber {
         XCTestObservationCenter.shared.addTestObserver(observer)
+        return NSNumber(value: TestPresentationPolicy.isInvisible)
+    }
+
+    @objc(inspect:) static func inspect(_ testCase: XCTestCase) {
+        observer.checkAfterTeardown(testCase)
     }
 
     private func onMain(_ body: @MainActor () -> Void) {
@@ -23,7 +28,7 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
             let center = NotificationCenter.default
             tokens.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] notification in
                 MainActor.assumeIsolated {
-                    if let window = notification.object as? NSWindow, window.isKeyWindow {
+                    if let window = notification.object as? NSWindow, window === NSApp.keyWindow {
                         self?.violations.insert("became key: \(type(of: window)) frame=\(window.frame)")
                     }
                 }
@@ -37,10 +42,12 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
         }
     }
 
-    func testCaseDidFinish(_ testCase: XCTestCase) {
+    private func checkAfterTeardown(_ testCase: XCTestCase) {
         onMain {
             guard TestPresentationPolicy.isInvisible else { return }
-            for window in NSApp.windows where window.isKeyWindow {
+            // Never-ordered rendering fixtures may override isKeyWindow
+            // to draw a caret; NSApp.keyWindow is AppKit's actual key owner.
+            if let window = NSApp.keyWindow {
                 violations.insert("key window: \(type(of: window)) frame=\(window.frame)")
             }
             if NSApp.isActive { violations.insert("application is active") }
