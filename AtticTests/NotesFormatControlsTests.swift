@@ -126,6 +126,11 @@ final class NotesFormatControlsTests: XCTestCase {
     func testH13SelectionBelowViewportDoesNotPutAFormatBarOutsideTheEditor() throws {
         let document = NoteDocument(blocks: [.text("H13")] + (0..<100).map { .text("Line \($0)") })
         let (controls, engine, text) = make(document, topInset: 64)
+        // Resolve TextKit's estimated geometry before revealing the selection,
+        // as in the tall-selection fixture: a later viewport correction can
+        // otherwise queue another refresh after the first one has completed.
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
         let target = range("Line 99", text)
         text.setSelectedRange(target)
         engine.scrollView?.contentView.scroll(to: NSPoint(x: 0, y: -64))
