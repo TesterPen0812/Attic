@@ -55,11 +55,14 @@ class AtticNoteTableControlView: NSView {
         var dragging = false
         defer { if dragging { NSCursor.pop() }; window.invalidateCursorRects(for: self) }
         while true {
+            // Checked after each wait: an event dequeued after the drag
+            // was interrupted (its release, say) moves nothing.
+            let next = tracking.nextEvent()
             if tracking.isInterrupted {
                 if dragging { onDragCancel?() }
                 return
             }
-            guard let next = tracking.nextEvent() else { continue }
+            guard let next else { continue }
             if AtticDragTracking.isCancel(next) {
                 // Esc ends the drag where it is; the button is still down,
                 // and its release (and any move before it) does nothing.
@@ -142,8 +145,7 @@ struct AtticDragTracking {
     /// until its release, or until the loop is interrupted.
     func waitForRelease() {
         while !isInterrupted {
-            guard let next = nextEvent() else { continue }
-            if next.type == .leftMouseUp { return }
+            if nextEvent()?.type == .leftMouseUp { return }
         }
     }
 }

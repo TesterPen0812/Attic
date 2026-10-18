@@ -494,8 +494,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if waitingForRelease { tracking.waitForRelease() }
         }
         tracking: while true {
+            let next = tracking.nextEvent()
             if tracking.isInterrupted { return cancel(waitingForRelease: false) }
-            guard let next = tracking.nextEvent() else { continue }
+            guard let next else { continue }
             if AtticDragTracking.isCancel(next) { return cancel(waitingForRelease: true) }
             switch next.type {
             case .leftMouseDragged:

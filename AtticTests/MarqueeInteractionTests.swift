@@ -307,10 +307,12 @@ final class MarqueeInteractionTests: XCTestCase {
     /// in the accent while the panel is key and in the system's
     /// unemphasized grey when it isn't, switching live with key status.
     func testF6BoxSelectionIsAccentWhileKeyAndGreyWhenNot() throws {
-        func composite(_ tint: NSColor, over background: CGFloat, dark: Bool) -> (CGFloat, CGFloat, CGFloat) {
+        /// The tint as the overlay draws it: made and resolved in the
+        /// drawing appearance.
+        func composite(_ tint: @escaping () -> NSColor, over background: CGFloat, dark: Bool) -> (CGFloat, CGFloat, CGFloat) {
             var result: (CGFloat, CGFloat, CGFloat) = (0, 0, 0)
             NSAppearance(named: dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
-                let color = tint.usingColorSpace(.sRGB)!
+                let color = tint().usingColorSpace(.sRGB)!
                 let a = color.alphaComponent
                 result = (color.redComponent * a + background * (1 - a), color.greenComponent * a + background * (1 - a),
                           color.blueComponent * a + background * (1 - a))
@@ -326,11 +328,11 @@ final class MarqueeInteractionTests: XCTestCase {
         }
         for dark in [false, true] {
             let surface: CGFloat = dark ? 0.12 : 1
-            let key = composite(AtticMarqueeController.highlightTint(emphasized: true, dark: dark), over: surface, dark: dark)
-            let accent = composite(NSColor.controlAccentColor.withAlphaComponent(1), over: surface, dark: dark)
+            let key = composite({ AtticMarqueeController.highlightTint(emphasized: true, dark: dark) }, over: surface, dark: dark)
+            let accent = composite({ NSColor.controlAccentColor.withAlphaComponent(1) }, over: surface, dark: dark)
             XCTAssertGreaterThan(abs(key.2 - key.0) + abs(key.1 - key.0), 0.02, "dark \(dark): key reads in the accent's hue")
             XCTAssertEqual(key.2 > key.0, accent.2 > accent.0, "dark \(dark): the accent's hue")
-            let rest = composite(AtticMarqueeController.highlightTint(emphasized: false, dark: dark), over: surface, dark: dark)
+            let rest = composite({ AtticMarqueeController.highlightTint(emphasized: false, dark: dark) }, over: surface, dark: dark)
             XCTAssertEqual(rest.0, rest.1, accuracy: 0.001, "dark \(dark): not key is a neutral grey")
             XCTAssertEqual(rest.1, rest.2, accuracy: 0.001)
             XCTAssertEqual(rest.0, grey(dark), accuracy: 0.04, "dark \(dark): the system's unemphasized selection grey")
