@@ -25,6 +25,7 @@ final class RoundF3CalloutNewTests: RoundF3TestCase {
     }
 
     func testPickingCalloutUnderACalloutStartsANewBoxAndItRoundTrips() throws {
+        try requireKeyWindowTests()
         let icon = "💡"
         // On the empty last line under a callout (Return twice leaves it).
         let (e, text) = editor([.text("Title"), callout("First py", icon: icon)])

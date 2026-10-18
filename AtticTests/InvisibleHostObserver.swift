@@ -38,6 +38,9 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
                     if NSApp.isActive { self?.violations.insert("application became active") }
                 }
             })
+            tokens.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.violations.insert("native NSMenu began tracking in the invisible host")
+            })
             print("INVISIBLE_HOST_CANARY registered for whole bundle")
         }
     }
@@ -65,7 +68,7 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
                       let frame = CGRect(dictionaryRepresentation: bounds),
                       frames.contains(where: { $0.intersects(frame) }) else { continue }
                 let number = info[kCGWindowNumber as String] as? Int ?? -1
-                let window = NSApp.windows.first { $0.windowNumber == number }
+                let window = NSApp.window(withWindowNumber: number)
                 let name = window.map { String(describing: type(of: $0)) } ?? "WindowServer window #\(number)"
                 violations.insert("on display: \(name) #\(number) frame=\(frame) appKitFrame=\(String(describing: window?.frame))")
             }

@@ -41,6 +41,7 @@ final class RoundF3BoxTests: RoundF3TestCase {
     }
 
     func testReturnInsideABoxEndsTheBoxUnderTheEmptyLineAndTypingMovesNothing() throws {
+        try requireKeyWindowTests()
         for kind in ["callout", "code", "diagram", "quote"] {
             let (e, text) = editor([.text("Title"), box(kind, "First py")], height: 160)
             text.setSelectedRange(NSRange(location: e.textStorage.length, length: 0))
@@ -80,6 +81,7 @@ final class RoundF3BoxTests: RoundF3TestCase {
     /// O18-01: whatever ends the note, its painted bottom is inside the
     /// document, so it scrolls fully into view.
     func testABlockEndingTheNoteIsInsideTheDocument() throws {
+        try requireKeyWindowTests()
         let image = NoteBlock.image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)
         let cases: [(String, [NoteBlock])] = [
             ("callout", [.text("Wet"), callout("Callout py")]),

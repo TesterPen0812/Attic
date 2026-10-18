@@ -16,11 +16,17 @@ static void FreezeWindowClass(Class cls);
 @implementation NSWindow (FGInvisibleInitialization)
 - (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred {
     FreezeWindowClass(object_getClass(self));
-    return [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred];
+    self = [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred];
+    FreezeWindowClass(object_getClass(self));
+    self.animationBehavior = NSWindowAnimationBehaviorNone;
+    return self;
 }
 - (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred screen:(NSScreen *)screen {
     FreezeWindowClass(object_getClass(self));
-    return [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred screen:screen];
+    self = [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred screen:screen];
+    FreezeWindowClass(object_getClass(self));
+    self.animationBehavior = NSWindowAnimationBehaviorNone;
+    return self;
 }
 @end
 
@@ -30,9 +36,13 @@ static void Replace(Class cls, SEL selector, id block) {
     class_addMethod(cls, selector, method_getImplementation(method), method_getTypeEncoding(method));
     method_setImplementation(class_getInstanceMethod(cls, selector), imp_implementationWithBlock(block));
 }
+static void ReplaceIfPresent(Class cls, NSString *name, id block) {
+    SEL selector = NSSelectorFromString(name);
+    if (class_getInstanceMethod(cls, selector)) Replace(cls, selector, block);
+}
 static char frozenClassKey;
 static void FreezeWindowClass(Class cls) {
-    if (cls == NSWindow.class || [objc_getAssociatedObject(cls, &frozenClassKey) boolValue]) return;
+    if (!cls || cls == NSWindow.class || [objc_getAssociatedObject(cls, &frozenClassKey) boolValue]) return;
     objc_setAssociatedObject(cls, &frozenClassKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     // A synthetic isKeyWindow override can cause responder setup itself to
     // steal WindowServer keyboard focus without a makeKeyWindow call.
@@ -138,6 +148,25 @@ void AtticInstallInvisiblePresentation(void) {
     Replace(NSMenu.class, @selector(popUpMenuPositioningItem:atLocation:inView:), ^BOOL(NSMenu *menu, NSMenuItem *item, NSPoint point, NSView *view) { return NO; });
     Replace(object_getClass(NSMenu.class), @selector(popUpContextMenu:withEvent:forView:), ^(id cls, NSMenu *menu, NSEvent *event, NSView *view) {});
     Replace(object_getClass(NSMenu.class), @selector(popUpContextMenu:withEvent:forView:withFont:), ^(id cls, NSMenu *menu, NSEvent *event, NSView *view, NSFont *font) {});
+    // SwiftUI/AX native menu buttons bypass NSMenu's public popUp methods.
+    // These host-only entry points were inspected on macOS 26.4 and 27;
+    // optional variants are absent on some OS versions. No app links this.
+    ReplaceIfPresent(NSMenu.class, @"popUpMenuPositioningItem:atLocation:inView:appearance:", ^BOOL(NSMenu *menu, id item, NSPoint point, id view, id appearance) { return NO; });
+    for (NSString *name in @[@"_popUpMenuWithEvent:forView:", @"_popUpMenuWithContext:forView:"]) {
+        ReplaceIfPresent(NSMenu.class, name, ^(NSMenu *menu, id event, id view) {});
+    }
+    ReplaceIfPresent(NSMenu.class, @"_popUpMenuRelativeToRect:inView:preferredEdge:", ^BOOL(NSMenu *menu, NSRect rect, id view, NSUInteger edge) { return NO; });
+    ReplaceIfPresent(NSMenu.class, @"_popUpMenuRelativeToRect:inView:width:flags:selectedItemIndexProvider:", ^(NSMenu *menu, NSRect rect, id view, CGFloat width, NSUInteger flags, id provider) {});
+    ReplaceIfPresent(NSMenu.class, @"_popUpMenuPositioningItem:atLocation:inView:completionBlock:", ^(NSMenu *menu, id item, NSPoint point, id view, id completion) {});
+    for (NSString *name in @[@"_popUpContextMenu:withContext:forView:", @"_popUpContextMenu:withEvent:forView:"]) {
+        ReplaceIfPresent(NSMenu.class, name, ^(NSMenu *menu, id contextMenu, id event, id view) {});
+    }
+    for (NSString *name in @[@"_popUpContextMenu:withContext:forView:withFont:", @"_popUpContextMenu:withEvent:forView:withFont:"]) {
+        ReplaceIfPresent(NSMenu.class, name, ^(NSMenu *menu, id contextMenu, id event, id view, id font) {});
+    }
+    for (NSString *name in @[@"_popUpContextMenu:withContext:forView:withFont:completionBlock:", @"_popUpContextMenu:withEvent:forView:withFont:completionBlock:"]) {
+        ReplaceIfPresent(NSMenu.class, name, ^(NSMenu *menu, id contextMenu, id event, id view, id font, id completion) {});
+    }
     Replace(NSPopover.class, @selector(showRelativeToRect:ofView:preferredEdge:), ^(NSPopover *popover, NSRect rect, NSView *view, NSRectEdge edge) {});
     // System save/open panels may run in a separate service process. Cancel
     // at the entry point rather than allowing a remote dialog to be created.

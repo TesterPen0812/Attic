@@ -33,6 +33,7 @@ final class RoundF3ScrollTests: RoundF3TestCase {
     }
 
     func testTheLineBeingTypedOnStaysAboveTheBottomControls() throws {
+        try requireKeyWindowTests()
         var (e, text) = filledEditor()
         try assertCaretClearOfTheBands(text, "start")
         text.insertNewline(nil); try assertCaretClearOfTheBands(text, "Return")
