@@ -273,7 +273,7 @@ final class TasksDragOutCardTests: XCTestCase {
         XCTAssertTrue(dragReturn.windowForTesting.isVisible, "ready, and clear, before the drop")
         dragReturn.moved(drawn: drawn)
         XCTAssertFalse(dragReturn.isResting, "not while the pointer moves")
-        RunLoop.current.run(until: Date().addingTimeInterval(AtticDragReturn.restDelay + 0.05))
+        waitForTestOperation("the drag return's scheduled rest") { dragReturn.isResting }
         XCTAssertTrue(dragReturn.isResting, "under the system's image once the pointer rests")
         dragReturn.moved(drawn: drawn.offsetBy(dx: 30, dy: 0))
         XCTAssertFalse(dragReturn.isResting, "withdrawn the moment it moves again")

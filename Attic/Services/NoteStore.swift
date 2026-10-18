@@ -418,14 +418,20 @@ final class NoteStore: ObservableObject {
     private(set) var exportActivityTimeoutTask: Task<Void, Never>?
     private(set) var importActivityTimeoutTask: Task<Void, Never>?
     private var attachmentReconciliationTask: Task<Void, Never>?
+    /// Cancellation does not finish a suspended actor call. Keep every pass
+    /// and post-save unlink until it returns, including superseded passes.
+    private var attachmentFileTasks: [UUID: Task<Void, Never>] = [:]
     private var attachmentReconciliationGeneration: UInt64 = 0
     private var reconciledAttachmentSignature: Int?
     /// Test/diagnostic seam: how many full metadata reconciliations ran.
     private(set) var attachmentReconciliationPasses = 0
 
-    /// Test/diagnostic seam: waits for the reconciliation in flight, if any.
+    /// Test/diagnostic seam: drain all file work before releasing its root.
     func waitForAttachmentReconciliation() async {
-        await attachmentReconciliationTask?.value
+        while !attachmentFileTasks.isEmpty {
+            let pending = Array(attachmentFileTasks.values)
+            for task in pending { await task.value }
+        }
     }
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
@@ -1554,8 +1560,10 @@ final class NoteStore: ObservableObject {
         let metadata = attachments.map {
             AttachmentFileReference($0, includePayload: false)
         }
-        attachmentReconciliationTask = Task { [weak self] in
+        let workID = UUID()
+        let task = Task { [weak self] in
             guard let self else { return }
+            defer { attachmentFileTasks[workID] = nil }
             do {
                 try Task.checkCancellation()
                 let report = try await attachmentFileStore.reconcileMetadata(metadata)
@@ -1582,13 +1590,17 @@ final class NoteStore: ObservableObject {
                 NSLog("Attic attachment reconciliation failed")
             }
         }
+        attachmentFileTasks[workID] = task
+        attachmentReconciliationTask = task
     }
 
     private func removeMaterializationsAfterSuccessfulSave(
         _ references: [AttachmentFileReference]
     ) {
         guard !references.isEmpty else { return }
-        Task { [attachmentFileStore] in
+        let workID = UUID()
+        attachmentFileTasks[workID] = Task { [self] in
+            defer { attachmentFileTasks[workID] = nil }
             try? await attachmentFileStore.removeMaterializations(references)
         }
     }
