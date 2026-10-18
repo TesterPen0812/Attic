@@ -67,7 +67,7 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
                 let number = info[kCGWindowNumber as String] as? Int ?? -1
                 let window = NSApp.windows.first { $0.windowNumber == number }
                 let name = window.map { String(describing: type(of: $0)) } ?? "WindowServer window #\(number)"
-                violations.insert("on display: \(name) frame=\(frame)")
+                violations.insert("on display: \(name) #\(number) frame=\(frame) appKitFrame=\(String(describing: window?.frame))")
             }
             for violation in violations.sorted() {
                 testCase.record(XCTIssue(type: .assertionFailure, compactDescription: "Invisible-host canary: \(violation)"))

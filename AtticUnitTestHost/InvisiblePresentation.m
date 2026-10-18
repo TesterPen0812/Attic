@@ -5,15 +5,26 @@
 #import <objc/runtime.h>
 #import "AtticUnitTestHost-Swift.h"
 
+// Typed initializer-family methods preserve ARC's consumed-self/+1 return
+// convention. Generic IMP blocks are deliberately not used for initializers.
+@interface NSWindow (FGInvisibleInitialization)
+- (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred __attribute__((objc_method_family(init)));
+- (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred screen:(NSScreen *)screen __attribute__((objc_method_family(init)));
+@end
+@implementation NSWindow (FGInvisibleInitialization)
+- (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred {
+    return [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred];
+}
+- (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred screen:(NSScreen *)screen {
+    return [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred screen:screen];
+}
+@end
+
 static void Replace(Class cls, SEL selector, id block) {
     Method method = class_getInstanceMethod(cls, selector);
     NSCAssert(method, @"Missing AppKit presentation boundary: %@", NSStringFromSelector(selector));
     class_addMethod(cls, selector, method_getImplementation(method), method_getTypeEncoding(method));
     method_setImplementation(class_getInstanceMethod(cls, selector), imp_implementationWithBlock(block));
-}
-static char orderingKey;
-static BOOL IsPresenting(NSWindow *window) {
-    return window.isVisible || [objc_getAssociatedObject(window, &orderingKey) boolValue];
 }
 static void Place(NSWindow *window) {
     NSRect frame = [AtticTestPresentationPolicy offscreenFrame:window.frame];
@@ -21,14 +32,19 @@ static void Place(NSWindow *window) {
 }
 
 static void Order(NSWindow *window, void (^action)(void)) {
-    id prior = objc_getAssociatedObject(window, &orderingKey);
-    objc_setAssociatedObject(window, &orderingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    @try { Place(window); action(); }
-    @finally { objc_setAssociatedObject(window, &orderingKey, prior, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    Place(window);
+    action();
 }
 
 void AtticInstallInvisiblePresentation(void) {
     if (!AtticTestPresentationPolicy.isInvisible) return;
+    // AppKit/SwiftUI can allocate a backing window before the first order
+    // call, including zero-sized placeholders. Protect initialization and
+    // hidden frame updates as well as explicit presentation.
+    method_exchangeImplementations(class_getInstanceMethod(NSWindow.class, @selector(initWithContentRect:styleMask:backing:defer:)),
+                                   class_getInstanceMethod(NSWindow.class, @selector(fg_initWithContentRect:styleMask:backing:defer:)));
+    method_exchangeImplementations(class_getInstanceMethod(NSWindow.class, @selector(initWithContentRect:styleMask:backing:defer:screen:)),
+                                   class_getInstanceMethod(NSWindow.class, @selector(fg_initWithContentRect:styleMask:backing:defer:screen:)));
     SEL order = @selector(orderWindow:relativeTo:);
     IMP originalOrder = class_getMethodImplementation(NSWindow.class, order);
     Replace(NSWindow.class, order, ^(NSWindow *window, NSWindowOrderingMode mode, NSInteger relative) {
@@ -57,19 +73,19 @@ void AtticInstallInvisiblePresentation(void) {
     IMP originalFrame = class_getMethodImplementation(NSWindow.class, frame);
     Replace(NSWindow.class, frame, ^(NSWindow *window, NSRect requested, BOOL display) {
         ((void (*)(id, SEL, NSRect, BOOL))originalFrame)(window, frame,
-            IsPresenting(window) ? [AtticTestPresentationPolicy offscreenFrame:requested] : requested, display);
+            [AtticTestPresentationPolicy offscreenFrame:requested], display);
     });
     SEL animated = @selector(setFrame:display:animate:);
     IMP originalAnimated = class_getMethodImplementation(NSWindow.class, animated);
     Replace(NSWindow.class, animated, ^(NSWindow *window, NSRect requested, BOOL display, BOOL animate) {
         ((void (*)(id, SEL, NSRect, BOOL, BOOL))originalAnimated)(window, animated,
-            IsPresenting(window) ? [AtticTestPresentationPolicy offscreenFrame:requested] : requested, display, animate);
+            [AtticTestPresentationPolicy offscreenFrame:requested], display, animate);
     });
     for (NSString *name in @[@"setFrameOrigin:", @"setFrameTopLeftPoint:"]) {
         SEL selector = NSSelectorFromString(name);
         IMP implementation = class_getMethodImplementation(NSWindow.class, selector);
         Replace(NSWindow.class, selector, ^(NSWindow *window, NSPoint point) {
-            if (IsPresenting(window)) {
+            {
                 NSRect requested = window.frame;
                 requested.origin = point;
                 if ([name isEqualToString:@"setFrameTopLeftPoint:"]) requested.origin.y -= requested.size.height;
