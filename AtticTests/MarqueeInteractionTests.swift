@@ -574,6 +574,52 @@ final class MarqueeInteractionTests: XCTestCase {
                        ["Pillar", "Confidentiality", "Integrity", "Availability"], "one Undo step")
     }
 
+    /// O4-02 (Air, row 4/4, column 5/5): Esc pressed while a table row or
+    /// column is held cancelled nothing; the grip's tracking loop watched
+    /// only drags and the release, so the release made the move. Esc now
+    /// cancels: the order is unchanged and no Undo step is added. The
+    /// events go through the grip's own tracking loop.
+    func testO4_02EscapeDuringATableRowOrColumnDragCancelsIt() throws {
+        let original = ["Pillar", "Confidentiality", "Integrity", "Availability"]
+        for axis in ["row", "column"] {
+            let (engine, text, _) = editor([.text("Title"), cia(), .text("End")])
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            text.layoutSubtreeIfNeeded()
+            let view = try XCTUnwrap(engine.tableViews().first)
+            view.activate(NoteTable.Position(row: 1, column: 0), caret: .end)
+            text.layoutSubtreeIfNeeded()
+            let chrome = NoteTableChrome(engine: engine, textView: text, design: .default)
+            chrome.place()
+            let grip = axis == "row" ? chrome.rowGrip : chrome.columnGrip
+            XCTAssertFalse(grip.isHidden)
+            let undoable = engine.canUndoCommand
+            let start = CGPoint(x: grip.frame.midX, y: grip.frame.midY)
+            let along = axis == "row" ? view.grid.rowHeights[2] + view.grid.rowHeights[3] : view.grid.columnWidths[1]
+            let end = axis == "row" ? CGPoint(x: start.x, y: start.y + along) : CGPoint(x: start.x + along, y: start.y)
+            for step in 1...4 {
+                let t = CGFloat(step) / 4
+                NSApp.postEvent(event(.leftMouseDragged, point: CGPoint(x: start.x + (end.x - start.x) * t,
+                                                                        y: start.y + (end.y - start.y) * t), in: text), atStart: false)
+            }
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                        windowNumber: text.window!.windowNumber, context: nil, characters: "\u{1b}",
+                                                        charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.postEvent(escape, atStart: false)
+            NSApp.postEvent(event(.leftMouseUp, point: end, in: text), atStart: false)
+            grip.mouseDown(with: event(.leftMouseDown, point: start, in: text))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            // Leave no stray key behind for the next test.
+            while NSApp.nextEvent(matching: [.keyDown, .leftMouseUp, .leftMouseDragged], until: Date(), inMode: .default, dequeue: true) != nil {}
+            let table = try XCTUnwrap(view.attachment).table
+            let order = axis == "row" ? table.rows.map { $0.cells[0].text } : table.rows[0].cells.map(\.text)
+            XCTAssertEqual(order, axis == "row" ? original : ["Pillar", "What happened"], "\(axis): Esc cancels the move")
+            XCTAssertEqual(engine.canUndoCommand, undoable, "\(axis): no Undo step")
+            XCTAssertEqual(view.canvas.alphaValue, 1, "\(axis): the live table is back")
+            XCTAssertTrue(text.subviews.allSatisfy { !($0 is NoteDragLiftView) }, "\(axis): the card is gone")
+            chrome.invalidate()
+        }
+    }
+
     /// V-05: during a row drag the header's look (fill, semibold) stays
     /// with the first place: a row dragged there takes it, and the header
     /// row it pushes down shows plain, as both will be after the drop.
