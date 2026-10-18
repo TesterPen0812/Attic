@@ -112,6 +112,12 @@ final class NoteTableAttachment: NoteObjectAttachment {
 
     /// A cell's text as drawn (dates prepared by the editor's renderer).
     @MainActor func cellString(at position: NoteTable.Position) -> NSMutableAttributedString {
+        cellString(at: position, in: table)
+    }
+
+    /// A cell's text as drawn in `table` (this table's rows in another
+    /// order, as a row drag shows them: F5a V-05).
+    @MainActor func cellString(at position: NoteTable.Position, in table: NoteTable) -> NSMutableAttributedString {
         let header = table.headerRow && position.row == 0
         let align = table.columns.indices.contains(position.column) ? table.columns[position.column].align : .left
         return NoteTextCodec.cellString(table[position], attributes: style.tableCellAttributes(header: header, alignment: align),

@@ -1445,6 +1445,21 @@ final class NoteDragLiftView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    /// Shows `image` on the card instead, cross-fading (`animated`) or at
+    /// once (a dragged table row taking or leaving the header's look).
+    func setSnapshot(_ snapshot: NSImage?, animated: Bool, duration: Double = AtticMotionScale.fast) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if animated {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = duration
+            image.add(fade, forKey: "look")
+        }
+        image.contents = snapshot
+        CATransaction.commit()
+    }
+
     /// Moves the card, gliding (`animated`) or at once.
     func move(to frame: CGRect, animated: Bool, duration: Double = AtticMotionScale.fast) {
         guard frame != self.frame else { return }

@@ -604,7 +604,8 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     /// keeping its side while it shows. While the `#` is scrolled out of the
     /// note's visible part the list waits out of sight.
     private func placeSuggestions(hashRect: NSRect, render: Bool) {
-        guard let textView, let scrollView, let space = AtticDropdownSpace(around: textView, bounding: textView) else { return }
+        guard let textView, let scrollView,
+              let space = AtticDropdownSpace(around: textView, bounding: textView)?.clearingNoteControls(of: scrollView) else { return }
         // The clip less the header and bottom insets, in the text's terms.
         let insets = scrollView.contentInsets
         let clip = textView.convert(scrollView.contentView.bounds, from: scrollView.contentView)

@@ -899,16 +899,7 @@ final class NoteFormatControls: NSObject {
     private func placeDropdown(_ host: AtticOverlayHostingView, idealWidth: CGFloat, height: CGFloat, anchor: NSRect,
                                current: AtticDropdownLayout.Placement?, alignsToColumn: Bool = true) -> AtticDropdownLayout.Placement? {
         guard let textView, var space = AtticDropdownSpace(around: textView, bounding: textView) else { return nil }
-        // U-22: the note's floating bottom row is its scroll view's bottom
-        // inset (the controls and the 12 pt the last line keeps above
-        // them): a card stops there rather than covering the controls.
-        if let scrollView { space = space.clearing(bottom: scrollView.contentInsets.bottom, of: scrollView) }
-        // V-08: and below the header's floating controls (the pin, the
-        // title and the page button), the panel's margin under them.
-        if let scrollView {
-            let header = scrollView.contentInsets.top - AtticNoteMetrics.titleTopGap
-            space = space.clearing(top: header + AtticDropdownMetrics.panelMargin, of: scrollView)
-        }
+        if let scrollView { space = space.clearingNoteControls(of: scrollView) }
         // D-16: a card over the text lines up its rows' text with the note's
         // column (its edge one row padding further out), so it covers whole
         // line starts instead of leaving their first letters peeking out
@@ -1434,5 +1425,19 @@ struct NoteLinkAddressView: View {
             .background(AtticPopoverBackground(cornerRadius: 11))
             .padding(AtticNoteFormatMetrics.shadowRoom)
             .accessibilityHidden(true)
+    }
+}
+
+extension AtticDropdownSpace {
+    /// A note's cards and lists stop short of its floating controls. U-22:
+    /// the bottom row is the scroll view's bottom inset (the controls and
+    /// the 12 pt the last line keeps above them). V-08: the header's pin,
+    /// title pill and page button sit in its top inset less the title's
+    /// gap, with the panel's margin under them. A list taller than the room
+    /// between them scrolls (`Placement.heightLimit`) on the side with more.
+    func clearingNoteControls(of scrollView: NSScrollView) -> AtticDropdownSpace {
+        let header = scrollView.contentInsets.top - AtticNoteMetrics.titleTopGap
+        return clearing(bottom: scrollView.contentInsets.bottom, of: scrollView)
+            .clearing(top: header + AtticDropdownMetrics.panelMargin, of: scrollView)
     }
 }

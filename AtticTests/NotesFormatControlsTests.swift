@@ -2631,4 +2631,109 @@ final class F4aPanelNotesTests: XCTestCase {
         let clearAbove = content.isFlipped ? above.minY - pin.maxY : pin.minY - above.maxY
         XCTAssertGreaterThanOrEqual(clearAbove, 0, "it starts below the header")
     }
+
+    /// F5a V-08 in the panel as the app builds it: the 28 pt native margin
+    /// around the visible surface (shadow room and resize band), the
+    /// `hint`-like note, at the owner's 340 x 560 and the other sizes. The
+    /// `/` list, opened down from the first body line and up from the end
+    /// of a long note (whose title has collapsed into the floating pill),
+    /// stays clear of every floating control: the pin, the page button, the
+    /// title pill, All notes, Aa and New Note.
+    func testF5aV08TheSlashListClearsEveryFloatingControlInTheAppsPanel() throws {
+        for size in [CGSize(width: 340, height: 560), CGSize(width: 320, height: 464), CGSize(width: 420, height: 640),
+                     CGSize(width: 340, height: 380)] {
+            try slashClearance(size: size)
+        }
+    }
+
+    private func slashClearance(size: CGSize) throws {
+        let suite = "F5aV08.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        // As `AtticPanelController.configurePanel` sets it up.
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
+        panel.surfaceMargin = AtticStyle.panelElevationMargin
+        panel.setVisibleContentFrame(CGRect(origin: CGPoint(x: -4000, y: -4000), size: size), display: false)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: panel.nativeMargin)
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        state.selectSection(.notes)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        content.layoutSubtreeIfNeeded()
+        let textView = try XCTUnwrap(views(NoteEditorTextView.self, in: content).first, "the note's editor")
+        panel.makeFirstResponder(textView)
+        func type(_ text: String) {
+            for character in text {
+                textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            content.layoutSubtreeIfNeeded()
+        }
+        // The floating controls, in the content container's space.
+        func controls() -> [(String, CGRect)] {
+            let ids = ["panel-pin-button", "panel-section-picker", "notes-header-title", "notes-all-notes",
+                       "notes-format-button", "notes-new-note"]
+            return elements(host).compactMap { element -> (String, CGRect)? in
+                let id = element.accessibilityIdentifier?() ?? ""
+                guard ids.contains(id), let screen = element.accessibilityFrame?(), screen.width > 0 else { return nil }
+                return (id, content.convert(panel.convertFromScreen(screen), from: nil))
+            }
+        }
+        func card() throws -> CGRect {
+            let list = try XCTUnwrap(views(AtticOverlayHostingView.self, in: content.overlayLayer)
+                .first { $0.menuLabel == "Insert" && !$0.isHidden })
+            let room = AtticDropdownMetrics.shadowRoom
+            return content.convert(list.frame.insetBy(dx: room, dy: room), from: list.superview)
+        }
+        func check(_ name: String) throws {
+            let list = try card()
+            let found = controls()
+            XCTAssertTrue(found.contains { $0.0 == "panel-pin-button" } && found.contains { $0.0 == "notes-all-notes" },
+                          "\(size) \(name): the controls are found: \(found.map(\.0))")
+            for (id, frame) in found {
+                XCTAssertFalse(list.intersects(frame), "\(size) \(name): the list \(list) covers \(id) \(frame)")
+            }
+            let surface = content.convert(host.frame, from: host.superview)
+            XCTAssertTrue(surface.insetBy(dx: 11.5, dy: 11.5).contains(list), "\(size) \(name): \(list) within \(surface)")
+        }
+        type("Launch sync\n/")
+        let controls = try XCTUnwrap(NoteFormatControls.active)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertFalse(controls.slashModel.above, "\(size): a high caret opens the list downward")
+        try check("downward")
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type(String(repeating: "Line\n", count: 40))
+        textView.scrollToEndOfDocument(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        content.layoutSubtreeIfNeeded()
+        type("/")
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertTrue(controls.slashModel.above, "\(size): a low caret opens the list upward")
+        try check("upward")
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+    }
 }

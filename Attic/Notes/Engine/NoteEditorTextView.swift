@@ -198,30 +198,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// done style everywhere; the filled box stays). Rendering attributes
     /// only, so the note's text and its Undo never change.
     private func colourFragment(_ fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {
-        if let dim = dragDimRange, let engine {
-            let content = engine.contentStorage
-            let start = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
-            if NSLocationInRange(start, dim) {
-                manager.removeRenderingAttribute(.foregroundColor, for: fragment.rangeInElement)
-                manager.addRenderingAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, for: fragment.rangeInElement)
-                return
-            }
-        }
         if let block = fragment as? NoteBlockLayoutFragment, block.monoBlockRect != nil {
             colourCode(in: fragment, manager: manager)
         } else {
             colourChecklistLine(fragment, manager: manager)
-        }
-    }
-
-    /// A dragged block's place (V-06): its text draws dimmed until the drop.
-    var dragDimRange: NSRange? {
-        didSet {
-            guard dragDimRange != oldValue, let engine, let manager = textLayoutManager else { return }
-            for range in [oldValue, dragDimRange].compactMap({ $0 }) {
-                if let textRange = engine.textRange(for: range) { manager.invalidateRenderingAttributes(for: textRange) }
-            }
-            needsDisplay = true
         }
     }
 
@@ -1758,36 +1738,61 @@ protocol NoteObjectInteraction: AnyObject {
     func performFileDrop(_ info: any NSDraggingInfo) -> Bool?
 }
 
-/// V-06: a dragged block's own place dims while its card is lifted (its
-/// text through the editor's rendering attributes, which change no layout;
-/// hosted views such as a table by their opacity), and comes back on drop.
+/// V-06: a dragged block's own place dims while its card is lifted, and
+/// comes back on drop: every view that draws it goes to 35 % opacity —
+/// TextKit's views for the block's lines (with their box) and hosted views
+/// such as a table.
+///
+/// F5a: F4a dimmed the text through the editor's rendering attributes,
+/// which the views TextKit had already drawn the block into never showed,
+/// and nothing it changed was committed to the screen during the drag
+/// (V1: pixel-identical while lifted). Opacity is the views' own, needs no
+/// redraw, and is how a table already dimmed; it is committed at once. No
+/// layout, no text and no Undo change.
 @MainActor
 final class NoteBlockDragDim {
-    private weak var textView: NoteEditorTextView?
     private var views: [(NSView, CGFloat)] = []
 
     init(textView: NoteEditorTextView, block: NSRange, rect: CGRect) {
-        self.textView = textView
-        textView.dragDimRange = block
-        // Hosted views (tables, images and files) in the block's rectangle,
-        // wherever TextKit keeps them under the text view.
+        // TextKit draws each laid-out paragraph in its own view, one level
+        // under the text view; hosted views (tables, images and files) sit
+        // in them or beside them.
         let hosted = (textView.engine?.tableViews() ?? []) as [NSView]
+        let drawn = textView.subviews.flatMap { [$0] + $0.subviews }
         var seen = Set<ObjectIdentifier>()
-        for view in hosted + textView.subviews where seen.insert(ObjectIdentifier(view)).inserted {
+        for view in hosted + drawn where seen.insert(ObjectIdentifier(view)).inserted {
             guard !view.isHidden, view.window === textView.window, !(view is NoteDragLiftView), !(view is NoteDropLineView),
                   view !== textView.blockHandle, view.isDescendant(of: textView) else { continue }
             let frame = view.superview === textView ? view.frame : textView.convert(view.bounds, from: view)
-            guard rect.contains(CGPoint(x: frame.midX, y: frame.midY)) else { continue }
+            guard Self.drawsOnly(frame, within: rect) else { continue }
+            // A hosted view inside a dimmed paragraph's view dims with it.
+            if views.contains(where: { view.isDescendant(of: $0.0) }) { continue }
+            views.removeAll { $0.0.isDescendant(of: view) && $0.0 !== view }
             views.append((view, view.alphaValue))
-            view.alphaValue = Self.viewOpacity
         }
+        for (view, _) in views { view.alphaValue = Self.viewOpacity }
+        // The drag runs in its own tracking loop, which never commits these
+        // implicit layer changes: on the Air the views held 0.35 for the
+        // whole drag while the screen showed them unchanged (the card
+        // moves through explicit animations, so it did show). Commit now.
+        CATransaction.flush()
+    }
+
+    /// A view that draws only (or almost only) the block: mostly inside its
+    /// rectangle, never one of TextKit's views as tall as the whole note.
+    static func drawsOnly(_ frame: CGRect, within rect: CGRect) -> Bool {
+        guard frame.width > 0, frame.height > 0 else { return false }
+        let inside = frame.intersection(rect)
+        guard !inside.isNull else { return false }
+        return inside.height >= frame.height * 0.6 && inside.width >= frame.width * 0.6
+            && frame.height <= rect.height + 24
     }
 
     static let viewOpacity: CGFloat = 0.35
 
     func restore() {
-        textView?.dragDimRange = nil
         for (view, alpha) in views { view.alphaValue = alpha }
         views = []
+        CATransaction.flush()
     }
 }

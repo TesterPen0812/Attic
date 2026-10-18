@@ -168,7 +168,11 @@ final class AtticMarqueeController: NSObject {
                 }
                 var hit: NSView? = target
                 while let view = hit, view !== document {
-                    if view is NSControl || view is NSTextView { embeddedClick(); return event }
+                    // A table's grips and "+" chips sit in the column's
+                    // margin; their press is theirs, not a marquee (F5a V-05).
+                    if view is NSControl || view is NSTextView || view is AtticNoteTableControlView {
+                        embeddedClick(); return event
+                    }
                     hit = view.superview
                 }
             }
