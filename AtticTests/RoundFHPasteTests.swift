@@ -62,6 +62,7 @@ final class RoundFHPasteTests: XCTestCase {
             }
             if images > 0 {
                 XCTAssertEqual(engine.stagedAttachments(for: document).count, images, file: file, line: line)
+                XCTAssertFalse(view.string.contains("[Attachment]"), file: file, line: line)
                 let encoded = try NoteContentCodec.encode(document)
                 XCTAssertTrue(NoteContentCodec.decode(encoded).isEditable, file: file, line: line)
                 engine.undoCommand()
@@ -134,6 +135,18 @@ final class RoundFHPasteTests: XCTestCase {
             let source = self.rtf(base).dropLast() + #"{\NeXTGraphic local.png \width10 \height10}{\NeXTGraphic "# + base + #"/remote.png \width10 \height10}}"#
             let wrapper = FileWrapper(directoryWithFileWrappers: ["TXT.rtf": FileWrapper(regularFileWithContents: Data(source.utf8)), "local.png": FileWrapper(regularFileWithContents: png), "remote.png": FileWrapper(symbolicLinkWithDestinationURL: URL(string: base + "/symlink.png")!)])
             return try XCTUnwrap(wrapper.serializedRepresentation)
+        }, type: .rtfd, images: 1)
+    }
+    func testFHNativeRTFDWithUnicodeImageFilenameSurvives() async throws {
+        let png = try png()
+        try await exercise({ base in
+            let text = try XCTUnwrap(NSAttributedString(rtf: Data(self.rtf(base).utf8), documentAttributes: nil))
+            let source = NSMutableAttributedString(attributedString: text)
+            let file = FileWrapper(regularFileWithContents: png)
+            file.preferredFilename = "café image.png"
+            source.append(NSAttributedString(attachment: NSTextAttachment(fileWrapper: file)))
+            return try source.data(from: NSRange(location: 0, length: source.length),
+                documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
         }, type: .rtfd, images: 1)
     }
     func testFHDataImagesAndFormattingSurvive() async throws {
