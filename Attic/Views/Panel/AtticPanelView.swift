@@ -351,6 +351,9 @@ struct AtticPanelView: View {
 
     func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
+        // O4-02: a drag tracked on the page being left is cancelled, not
+        // committed when its button comes up on another page.
+        AtticDragTracking.cancelAll()
         // A refused Notes close must leave every other state untouched, so
         // the refusal is decided before any focus or lock changes.
         if uiState.selectedSection.isNotes {

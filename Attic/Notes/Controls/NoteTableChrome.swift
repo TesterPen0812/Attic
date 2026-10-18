@@ -57,6 +57,8 @@ final class NoteTableChrome: NSObject {
         rowGrip.onClick = { [weak self] in self?.openMenu(.row) }
         columnGrip.onDrag = { [weak self] point, ended in self?.drag(.column, to: point, ended: ended) }
         rowGrip.onDrag = { [weak self] point, ended in self?.drag(.row, to: point, ended: ended) }
+        columnGrip.onDragCancel = { [weak self] in self?.cancelDrag(.column) }
+        rowGrip.onDragCancel = { [weak self] in self?.cancelDrag(.row) }
         addColumnChip.onClick = { [weak self] in self?.addAtEnd(column: true) }
         addRowChip.onClick = { [weak self] in self?.addAtEnd(column: false) }
         previousLayout = textView.onLayout
@@ -72,6 +74,8 @@ final class NoteTableChrome: NSObject {
     }
 
     func invalidate() {
+        reorder?.cancel(animated: false) {}
+        reorder = nil
         textView?.onLayout = previousLayout
         engine.onTableChromeChange = previousChromeChange
         for view in [columnGrip, rowGrip, addColumnChip, addRowChip] as [NSView] { view.removeFromSuperview() }
@@ -288,6 +292,25 @@ final class NoteTableChrome: NSObject {
             self.place()
         }
         if let session { session.finish(commit) } else { commit(source) }
+    }
+
+    /// O4-02: Esc (or the panel losing key status, hiding, or the page
+    /// going away) during a grip drag cancels it: the card glides back to
+    /// its place, the others close the gap, and no move (and no Undo step)
+    /// is made.
+    private func cancelDrag(_ axis: Axis) {
+        let grip = axis == .column ? columnGrip : rowGrip
+        columnGripDragging = false
+        rowGripDragging = false
+        dragTarget = nil
+        let session = reorder
+        reorder = nil
+        grip.isHidden = true
+        guard let session else { return place() }
+        session.cancel { [weak self] in
+            guard let self, self.textView != nil, self.columnGrip.superview != nil else { return }
+            self.place()
+        }
     }
 
     private func addAtEnd(column: Bool) {
@@ -569,10 +592,33 @@ final class NoteTableReorder {
 
     private var pendingCommit: ((Int) -> Void)?
 
-    private func land() {
+    /// Cancels the drag (O4-02): the strips slide back, the card glides
+    /// home (at once under Reduce Motion), the header look returns to row
+    /// 0, then the live table shows again; `then` runs with no move made.
+    func cancel(animated: Bool? = nil, then: @escaping () -> Void) {
+        let animated = animated ?? self.animated
+        if target != source {
+            target = source
+            layOut(animated: animated)
+            restyleHeader(animated: animated)
+        }
+        guard let table, let textView else { teardown(); return then() }
+        let home = textView.convert(Self.stripRect(source, sizes: sizes, axis: axis, grid: table.grid), from: table.canvas)
+        pendingCommit = { _ in then() }
+        CATransaction.flush()
+        guard animated, home != card.frame else { return land(moving: false) }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            card.animator().frame = home
+        }, completionHandler: { [self] in MainActor.assumeIsolated { land(moving: false) } })
+    }
+
+    private func land(moving: Bool = true) {
         let commit = pendingCommit
         pendingCommit = nil
-        commit?(target)
+        commit?(moving ? target : source)
         teardown()
     }
 
