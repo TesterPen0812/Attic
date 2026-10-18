@@ -33,6 +33,7 @@ final class RoundF3TableCellTests: RoundF3TestCase {
     }
 
     func testLiveCellAndDrawnCellShareEveryBaselineAndTheCaretIsNatural() throws {
+        try requireKeyWindowTests()
         let long = "A cell long enough to wrap onto more lines"
         let natural = NoteTextStyle.naturalLineHeight(NoteTextStyle.font(for: AtticNoteType.body))
         for content in ["Ab py", "a\u{2028}b", "a\u{2028}\u{2028}b", "a\u{2028}", long] {

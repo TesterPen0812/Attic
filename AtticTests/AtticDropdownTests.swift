@@ -1135,6 +1135,7 @@ final class AtticDropdownTests: XCTestCase {
     /// Esc closes the card and gives the keyboard back; a click outside
     /// closes it and goes through to what is under it.
     func testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess() throws {
+        try requireKeyWindowTests()
         guard ProcessInfo.processInfo.environment["ATTIC_FULL_KEYBOARD_ACCESS_TESTS"] == "1" else {
             throw XCTSkip("CI enables Full Keyboard Access before launching the test host; local tests preserve the user's setting")
         }
@@ -2092,7 +2093,8 @@ final class AtticDropdownTests: XCTestCase {
         }
     }
 
-    func testOpenAndFilterCostNoMoreThanBefore() {
+    func testOpenAndFilterCostNoMoreThanBefore() throws {
+        try requireKeyWindowTests()
         let window = makeWindow()
         defer { window.close() }
         gate(measureDropdownCosts(in: window, rounds: 8), label: "", accepted: Self.acceptedRatios)
@@ -2100,6 +2102,7 @@ final class AtticDropdownTests: XCTestCase {
 
     /// Opt-in evidence, separate from the normal gates and their unit timeout.
     func testRepeatedOldAndPairedPriorityEstimatesOnTheSameRunner() throws {
+        try requireKeyWindowTests()
         guard ProcessInfo.processInfo.environment["ATTIC_DROPDOWN_SAMPLING_DIAGNOSTIC"] == "1" else {
             throw XCTSkip("repeated native timing evidence runs in its dedicated CI step")
         }
@@ -2129,7 +2132,8 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(paired.count, 3)
     }
 
-    func testPairedSamplerRejectsARealPriorityOpeningSlowdown() {
+    func testPairedSamplerRejectsARealPriorityOpeningSlowdown() throws {
+        try requireKeyWindowTests()
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)
@@ -2159,7 +2163,8 @@ final class AtticDropdownTests: XCTestCase {
     /// The same gate with accessibility on and the tree read (as VoiceOver
     /// reads a menu), so each row's accessibility element is built and paid
     /// for. The replaced components build and read theirs too.
-    func testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn() {
+    func testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn() throws {
+        try requireKeyWindowTests()
         let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(attribute)
         NSApp.accessibilitySetValue(true, forAttribute: attribute)

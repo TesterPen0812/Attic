@@ -71,6 +71,7 @@ final class TasksRound6Tests: XCTestCase {
     /// opens): the search takes the tabs' line with the keyboard in it
     /// (CI run 1: the field showed without it).
     func testCommandFOnDoneGivesTheSearchTheKeyboard() throws {
+        try requireKeyWindowTests()
         // The apps' Edit menu has Find on ⌘F, sent to the text view with
         // the keyboard (CI run 3: it took ⌘F from the page).
         let saved = NSApp.mainMenu
@@ -110,6 +111,7 @@ final class TasksRound6Tests: XCTestCase {
     /// A click on Done's magnifier, with the add bar holding the keyboard:
     /// the field takes the tabs' line and the keyboard (CI run 1).
     func testTheMagnifierGivesTheSearchTheKeyboard() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
@@ -184,6 +186,7 @@ final class TasksRound6Tests: XCTestCase {
     /// results again (CU recheck 4b, P2: the click left the keyboard with
     /// the panel and ↓ did nothing).
     func testAClickBackOnTheQueryTextLetsDownReachTheResultsAgain() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.window.makeKey()
@@ -217,6 +220,7 @@ final class TasksRound6Tests: XCTestCase {
     /// recheck 4b, P2): ⌘Return with no draft opens the row's files; with
     /// a draft it stays the composer's (it adds the task and opens it).
     func testCommandReturnInTheComposerOpensTheSelectedRowsFilesOnlyWithoutADraft() throws {
+        try requireKeyWindowTests()
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.actions, composerDraft: "a draft"), "⇧⌘I: no field acts on it")
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: "  "))
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: nil), "Find has no ⌘Return")

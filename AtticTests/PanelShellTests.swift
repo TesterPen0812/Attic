@@ -20,7 +20,44 @@ final class PanelShellTests: XCTestCase {
         defer { panel.close() }
         let tracker = NativeTrackingView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
         panel.contentView = tracker
+        let requestedSize = panel.frame.size
+        if TestPresentationPolicy.isInvisible {
+            // Deliberately request a displayed origin: the host boundary,
+            // rather than a fixture's hard-coded coordinates, must protect it.
+            panel.setFrameOrigin(try XCTUnwrap(NSScreen.main).frame.origin)
+        }
         panel.orderFront(nil)
+        if TestPresentationPolicy.isInvisible {
+            XCTAssertEqual(panel.frame.size, requestedSize)
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !panel.frame.intersects($0.frame) })
+            panel.makeKeyAndOrderFront(nil)
+            XCTAssertFalse(panel.canBecomeKey)
+            XCTAssertFalse(panel.isKeyWindow)
+            NSApp.activate()
+            XCTAssertFalse(NSApp.isActive)
+            panel.setFrameOrigin(try XCTUnwrap(NSScreen.main).frame.origin)
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !panel.frame.intersects($0.frame) },
+                          "A visible window's frame update must also stay off every display")
+            XCTAssertEqual(panel.frame.size, requestedSize)
+            // Exercise native cell entry points as well as NSMenu: the
+            // bundle canary rejects even transient menu tracking.
+            let popup = NSPopUpButton(frame: CGRect(x: 10, y: 10, width: 100, height: 24), pullsDown: false)
+            popup.addItem(withTitle: "Invisible menu probe")
+            tracker.addSubview(popup)
+            let cell = try XCTUnwrap(popup.cell as? NSPopUpButtonCell)
+            cell.performClick(withFrame: popup.bounds, in: popup)
+            cell.attachPopUp(withFrame: popup.bounds, in: popup)
+            // Eager titled initialization can recenter internally before
+            // returning, even when its requested content rect is off-screen.
+            let titled = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 500),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            titled.isReleasedWhenClosed = false
+            defer { titled.close() }
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !titled.frame.intersects($0.frame) })
+            XCTAssertEqual(titled.contentView?.bounds.size, CGSize(width: 320, height: 500))
+            XCTAssertGreaterThan(titled.windowNumber, 0, "eager initialization still creates the backing window")
+            XCTAssertFalse(titled.isVisible, "eager initialization still returns a hidden window")
+        }
         var presses = 0
         var releases = 0
         panel.onPressEnded = { releases += 1 }

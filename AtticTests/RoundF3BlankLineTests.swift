@@ -62,6 +62,7 @@ final class RoundF3BlankLineTests: RoundF3TestCase {
     }
 
     func testBlankLinesSitWhereTypedLinesWouldWithANaturalCaret() throws {
+        try requireKeyWindowTests()
         let long = "A paragraph long enough to wrap over several lines in this narrow column of the note"
         try assertSameLines("leading", [.text("Title"), .text(""), .text("Body py")])
         try assertSameLines("interior", [.text("Title"), .text("A"), .text(""), .text("B")])
@@ -76,6 +77,7 @@ final class RoundF3BlankLineTests: RoundF3TestCase {
     /// The same blank lines made live: Return several times, deleting the
     /// last glyph, Undo and Redo, and reopening, all land on the oracle.
     func testBlankLinesMadeLiveMatchTheReopenedNote() throws {
+        try requireKeyWindowTests()
         let (e, text) = editor([.text("Title"), .text("A")], height: 400)
         text.setSelectedRange(NSRange(location: e.textStorage.length, length: 0))
         for _ in 0..<3 { text.insertNewline(nil) }

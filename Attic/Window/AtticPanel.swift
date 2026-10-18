@@ -84,7 +84,7 @@ final class AtticPanel: NSPanel {
         frameRect
     }
 
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { false }
 
     /// Esc reaches the window only when no responder in it handled the key:

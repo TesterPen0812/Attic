@@ -40,6 +40,7 @@ final class RoundF3EmptyLineTests: RoundF3TestCase {
     }
 
     func testEmptyBodyLineMatchesTheTypedLineAfterEveryBlock() throws {
+        try requireKeyWindowTests()
         var rows: [String] = []
         for kind in ["title", "body", "quote", "callout", "code", "bullet", "heading", "table"] {
             for route in ["return", "below", "pick-body", "reopen"] {

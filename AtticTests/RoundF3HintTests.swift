@@ -37,6 +37,7 @@ final class RoundF3HintTests: RoundF3TestCase {
     }
 
     func testTheHintStandsOnTheLinesBaselineLiveAndAfterReopening() throws {
+        try requireKeyWindowTests()
         for (name, blocks, live) in [("after-body", [NoteBlock.text("Title"), .text("Body py")], true),
                                      ("after-callout", [.text("Title"), callout("Callout py")], true),
                                      ("after-code", [.text("Title"), code("let x = 1")], true),

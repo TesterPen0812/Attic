@@ -43,6 +43,7 @@ final class F3CaretRenderTests: XCTestCase {
     func heading(_ l: Int) -> NoteBlock { var b = NoteBlock.text("Heading py", style: "heading"); b.level = l; return b }
 
     func testRenders() throws {
+        try requireKeyWindowTests()
         var mono = NoteBlock.text("let x = 1", style: "mono"); mono.language = "swift"
         let cases: [(String, [NoteBlock], Int)] = [
             ("body", [.text("Title"), .text("Body text py")], 8), ("h1", [.text("Title"), heading(1)], 8),

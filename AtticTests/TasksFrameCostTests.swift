@@ -55,6 +55,9 @@ final class TasksFrameCostTests: XCTestCase {
     }
 
     func testMeasuresWhatEachInteractionCostsTheMainThread() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         let host = try FrameCostHost()
         hosted = host
         // Measure the chosen default, Lively.

@@ -36,7 +36,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
     @MainActor
     func testNativeResizePerimeterPreservesVisibleSizeAndAnchor() {
-        let visible = CGRect(x: 100, y: 200, width: 480, height: 620)
+        let visible = TestPresentationPolicy.offscreenFrame(CGRect(x: 100, y: 200, width: 480, height: 620))
         let panel = AtticPanel(contentRect: visible, styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: true)
         panel.resizePerimeter = 6
@@ -63,7 +63,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
     @MainActor
     func testSurfaceMarginWidensTheNativeFrameWithoutMovingTheVisibleSurface() {
-        let visible = CGRect(x: 100, y: 200, width: 480, height: 620)
+        let visible = TestPresentationPolicy.offscreenFrame(CGRect(x: 100, y: 200, width: 480, height: 620))
         let panel = AtticPanel(contentRect: visible, styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: true)
         panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
@@ -365,7 +365,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
     @MainActor
     func testPanelRoutesAccessibilitySizeChangesWithoutRestoringNativeResizeBorder() {
-        let initialFrame = NSRect(x: 200, y: 150, width: 500, height: 600)
+        let initialFrame = TestPresentationPolicy.offscreenFrame(NSRect(x: 200, y: 150, width: 500, height: 600))
         let panel = AtticPanel(
             contentRect: initialFrame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -391,7 +391,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
     @MainActor
     func testPanelLeavesSameSizeAccessibilityMovementWithAppKit() {
-        let initialFrame = NSRect(x: 200, y: 150, width: 500, height: 600)
+        let initialFrame = TestPresentationPolicy.offscreenFrame(NSRect(x: 200, y: 150, width: 500, height: 600))
         let panel = AtticPanel(
             contentRect: initialFrame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -400,7 +400,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         )
         var requestedSize: CGSize?
         panel.onAccessibilityResizeRequest = { requestedSize = $0 }
-        let movedFrame = NSRect(origin: CGPoint(x: 260, y: 190), size: initialFrame.size)
+        let movedFrame = TestPresentationPolicy.offscreenFrame(NSRect(origin: CGPoint(x: 260, y: 190), size: initialFrame.size))
 
         panel.setAccessibilityFrame(movedFrame)
 
@@ -410,7 +410,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
     @MainActor
     func testPanelRoutesAccessibilityMovementForUsableAreaConfinement() {
-        let initialFrame = NSRect(x: 200, y: 150, width: 500, height: 600)
+        let initialFrame = TestPresentationPolicy.offscreenFrame(NSRect(x: 200, y: 150, width: 500, height: 600))
         let panel = AtticPanel(
             contentRect: initialFrame,
             styleMask: [.borderless, .nonactivatingPanel],

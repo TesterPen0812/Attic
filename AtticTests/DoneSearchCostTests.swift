@@ -204,6 +204,9 @@ final class DoneSearchCostTests: XCTestCase {
     }
 
     func testRenderedFindKeystrokeMediansFitTheInputBudget() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         // The predecessor's "cold" boundary is a fresh Done store/model,
         // not initialization of the process-wide native editing machinery.
         // Measure that separately on an empty control, before constructing
@@ -306,6 +309,9 @@ final class DoneSearchCostTests: XCTestCase {
     }
 
     func testPreFocusTypingReachesTheEditorBeforeNativeTypingContinues() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         let host = try FrameCostHost()
         defer { host.close() }
         host.place(.done)

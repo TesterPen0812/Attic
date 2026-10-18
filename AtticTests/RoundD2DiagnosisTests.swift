@@ -13,6 +13,10 @@ private final class D2UnshownWindow: NSWindow {
 
 @MainActor
 final class RoundD2DiagnosisTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try requireKeyWindowTests()
+    }
     private var windows: [NSWindow] = []
     private var engines: [NoteEditorEngine] = []
     private var controls: [NoteFormatControls] = []

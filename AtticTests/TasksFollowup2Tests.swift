@@ -46,6 +46,7 @@ final class TasksFollowup2Tests: XCTestCase {
     /// ⌥⌘1 on the selected row sets Low (one step, with its toast), ⌥⌘0
     /// takes the priority away; the row menu shows the keys.
     func testPriorityKeysSetTheSelectedTasksPriority() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" })
@@ -349,6 +350,7 @@ final class TasksViewOptionsTests: XCTestCase {
     /// ⌥⌘V is View Options' on Now and Later, never Done's; ⌘F is Find's
     /// on every page.
     func testTheKeysBelongToTheRightPages() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         func event(_ characters: String, _ code: UInt16, _ modifiers: NSEvent.ModifierFlags) -> NSEvent {
@@ -373,6 +375,7 @@ final class TasksViewOptionsTests: XCTestCase {
     /// ⌘F on Now, typing, the match shown with the count; ↓ gives the
     /// keyboard to the first match; Esc there ends the search.
     func testFindOnNowWithTheKeys() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         makeKey(hosted)
@@ -392,6 +395,7 @@ final class TasksViewOptionsTests: XCTestCase {
     /// A sorted view: ⌘↑ moves nothing (the hint says why), the menu's
     /// Move Up is off, VoiceOver has no Move up.
     func testASortedViewDoesNotReorder() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.model.setViewOptions(TasksViewOptions(sort: .priority), for: .now)

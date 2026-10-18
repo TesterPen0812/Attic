@@ -28,6 +28,7 @@ final class RoundF3CaretTests: RoundF3TestCase {
     func shape(_ c: Caret) -> (top: CGFloat, bottom: CGFloat) { (c.frame.minY - c.baseline, c.frame.maxY - c.baseline) }
 
     func testTitleAndTableCellCaretsAreTextEdits() throws {
+        try requireKeyWindowTests()
         // The title (D2's matrix covers the body, headings, lists, quotes and callouts).
         let (e, text) = editor([.text("Title py"), .text("Body")])
         text.setSelectedRange(NSRange(location: 2, length: 0))
@@ -54,6 +55,7 @@ final class RoundF3CaretTests: RoundF3TestCase {
     /// K-03 (a): the empty title's caret is the same native caret as the
     /// typed title's, before and after the first letter.
     func testTheEmptyTitleCaretIsTheTypedTitlesCaret() throws {
+        try requireKeyWindowTests()
         let (e, text) = editor([.text("")])
         text.setSelectedRange(NSRange(location: 0, length: 0)); settle(text)
         // An empty note has no laid-out line to read a baseline from.
@@ -72,6 +74,7 @@ final class RoundF3CaretTests: RoundF3TestCase {
     /// K-03 (b): a click beside a table or an image lands on the nearest text
     /// line with a line-high caret, never a bar the object's height.
     func testAClickBesideAnObjectLandsOnTheNearestTextLine() throws {
+        try requireKeyWindowTests()
         let image = NoteBlock.image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 400)
         for (name, object) in [("table", NoteBlock.table(NoteTable(texts: [["A", "B"], ["c", "d"], ["e", "f"]]))), ("image", image)] {
             let (e, text) = editor([.text("Title"), .text("Quote py", style: "quote"), object, .text("After")], height: 400)
@@ -98,6 +101,7 @@ final class RoundF3CaretTests: RoundF3TestCase {
     /// Attic never reframes the indicator: on every caret position AppKit's
     /// indicator is exactly TextKit's own insertion segment.
     func testTheIndicatorIsAlwaysTextKitsOwnInsertionSegment() throws {
+        try requireKeyWindowTests()
         var c = callout("Callout py"); c.callout = "💡"
         let (e, text) = editor([.text("Title"), .text("Body py"), heading("Heading", 1), .text("Quote", style: "quote"), c,
                                 code("let x = 1"), .text("Item", style: "bullet"), .text("")], height: 500)
@@ -120,6 +124,7 @@ final class RoundF3CaretTests: RoundF3TestCase {
     /// code, a bigger pasted font or a checklist box never changes the
     /// line's pitch, its baseline or AppKit's caret. Measured and printed.
     func testMixedContentKeepsThePitchBaselineAndCaret() throws {
+        try requireKeyWindowTests()
         var code = NoteBlock.text("Say launch now")
         code.marks = [NoteMark(.code, offset: 4, length: 6)]
         let cases: [(String, NoteBlock)] = [("plain", .text("Plain text py")), ("emoji", .text("Emoji 😀🎉 py")),

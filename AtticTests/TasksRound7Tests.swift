@@ -222,6 +222,7 @@ final class TasksRound7HostedTests: XCTestCase {
     // MARK: - R3: back into the search, nothing stays lit
 
     func testClickingBackIntoTheSearchClearsTheSelection() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.go(to: .done)
@@ -256,6 +257,7 @@ final class TasksRound7ShellTests: XCTestCase {
     /// Done search closed and the keyboard where it was; back on Tasks, ⌘F
     /// opens it with the keyboard.
     func testAHiddenTasksPageNeverTakesCommandF() throws {
+        try requireKeyWindowTests()
         // Menu routing lazily creates AppCoordinator.shared. Give that runtime
         // this test's owned root instead of an untracked AtticTestHosts tree.
         let runtimeRoot = ownedTemporaryDirectory(prefix: "AtticShellRuntimeTests")

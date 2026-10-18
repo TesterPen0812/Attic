@@ -2,6 +2,7 @@ import AppKit
 
 let application = NSApplication.shared
 application.setActivationPolicy(.prohibited)
+AtticInstallInvisiblePresentation()
 // The CI wrapper sets the keyboard mode before launching this process.
 // AXEnhancedUserInterface is process-local; no local developer setting changes.
 if ProcessInfo.processInfo.environment["ATTIC_CI_INPUT_MODES"] == "1" {
