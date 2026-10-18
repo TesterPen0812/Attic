@@ -777,8 +777,10 @@ final class RoundD1DragTests: XCTestCase {
             CATransaction.flush()
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             let layers = try XCTUnwrap(returning.windowForTesting.contentView?.layer?.sublayers)
-            XCTAssertTrue(layers.allSatisfy { $0.presentation()?.position == .zero },
-                          "The hidden image has a presentation at the overlay origin")
+            // V-09: the picture shows at hand-off (the drag's only one),
+            // placed without any animation of its own.
+            XCTAssertTrue(layers.allSatisfy { ($0.animationKeys() ?? []).isEmpty },
+                          "Shown at the hand-off with no implicit travel")
             let release = CGPoint(x: 900, y: 600)
             source.ended(at: release, operation: []) // no destination or a refused/cancelled drop
             let expected = source.grip.frame(at: release)
