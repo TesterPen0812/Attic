@@ -40,6 +40,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Every CI unit-test lane retains native presentation/key-window coverage,
+  # including optimized cost hosts. Local hosts default to invisible.
+  TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
   # Script-driven builds use the same wrapper as explicit xcodebuild steps.
   XCODEBUILD: ${{ github.workspace }}/Scripts/xcodebuild_locked.sh
   ATTIC_XCODEBUILD_COMMAND: ${{ github.workspace }}/Scripts/xcodebuild_locked.sh
