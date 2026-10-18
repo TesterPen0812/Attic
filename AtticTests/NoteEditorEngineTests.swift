@@ -508,6 +508,33 @@ final class NoteEditorEngineTests: XCTestCase {
         return window // No run-loop turn: presentation's queued callback is still pending.
     }
 
+    func testFL3AnUnattachedPresentationDoesNotRetainItsSession() throws {
+        weak var releasedSession: NoteSession?
+        try autoreleasepool {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Alpha")])) else {
+                return XCTFail("seed note")
+            }
+            let controller = NotesPageController(store: store, journal: nil)
+            XCTAssertTrue(controller.open(noteID: id))
+            let session = try XCTUnwrap(controller.active)
+            releasedSession = session
+            let root = NoteEditorRepresentable(session: session, chrome: NotesPageChrome(), columnInset: 20,
+                topInset: 60, bottomInset: 60, headerBottom: 40, design: .default,
+                tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] }, scrollOverride: 12)
+            let host = NSHostingView(rootView: root)
+            host.frame = NSRect(x: 0, y: 0, width: 320, height: 520)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertNotNil(session.engine.textView)
+            XCTAssertNil(session.engine.textView?.window)
+        }
+        waitForTestOperation("an abandoned unattached presentation releasing its session") {
+            releasedSession == nil
+        }
+        XCTAssertNil(releasedSession)
+    }
+
     func testFL3PresentationWaitsForActualWindowAttachmentBeforeRestoringFocus() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = UUID()
