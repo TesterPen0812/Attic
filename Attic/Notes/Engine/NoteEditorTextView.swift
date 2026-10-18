@@ -1234,11 +1234,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [NoteEditorEngine.fragmentType, NoteTablePaste.tableType, .fileURL, .png, .tiff, .rtf, .html, .string]
+        [NoteEditorEngine.fragmentType, NoteTablePaste.tableType, .fileURL, .png, .tiff] + NotePasteReader.richTypes + [.URL, .string]
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        guard let engine else { return super.readSelection(from: pboard, type: type) }
+        // A detached note view must not fall back to AppKit's unrestricted
+        // clipboard importer while its engine is being replaced.
+        guard let engine else { return false }
         let target = rangeForUserTextChange
         guard target.location != NSNotFound else { return false }
         if type == NoteEditorEngine.fragmentType, let data = pboard.data(forType: type) {
@@ -1275,10 +1277,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             engine.onRawImageBatchRequest?(data, type == .png ? "png" : "tiff", target)
             return engine.onRawImageBatchRequest != nil
         }
-        if (type == .rtf || type == .html), let data = pboard.data(forType: type) {
+        if NotePasteReader.richTypes.contains(type), let data = pboard.data(forType: type) {
             return engine.pasteRichText(data, type: type, at: target)
         }
-        if let text = pboard.string(forType: .string) {
+        if let text = pboard.string(forType: .string) ?? pboard.string(forType: .URL) {
             return engine.pastePlainText(text, at: target)
         }
         return false

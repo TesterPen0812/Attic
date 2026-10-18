@@ -119,6 +119,11 @@ purges. Tasks, Canvas and document-format notes remain; uncertain shared file
 ownership keeps the files. Database deletion rolls back if its save fails;
 committed file cleanup resumes before draft recovery starts.
 
+Pasting into Notes does not fetch web resources. HTML, RTF/RTFD and web archives
+keep supported text, lists, formatting and links; remote images are omitted.
+Raster images already embedded in the clipboard or stored in local files are
+copied into the note. Pasting a URL keeps it as a link without fetching a preview.
+
 ## Agent access (MCP)
 
 When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and tool requests require the private bearer token provided by Settings → Agent Access → Copy setup prompt. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.taha.Attic agentServerPort <port>`.
