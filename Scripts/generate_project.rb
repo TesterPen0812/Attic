@@ -79,7 +79,9 @@ app_group.files.each do |reference|
 
   unit_host.source_build_phase.add_file_reference(reference)
 end
+unit_host.source_build_phase.add_file_reference(project.main_group['AtticUnitTestHost'].new_file('InvisiblePresentation.m'))
 add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
+unit_tests.source_build_phase.add_file_reference(project.main_group['AtticTests'].new_file('InvisibleHostObserverLoader.m'))
 add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
 add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
@@ -215,7 +217,8 @@ unit_host.build_configurations.each do |config|
   settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_UNIT_TEST_HOST'
+  settings['SWIFT_OBJC_BRIDGING_HEADER'] = 'AtticUnitTestHost/InvisiblePresentation.h'
 end
 
 unit_tests.build_configurations.each do |config|

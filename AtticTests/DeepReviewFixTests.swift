@@ -216,6 +216,7 @@ final class DeepReviewFixTests: XCTestCase {
     /// click on the row gets), from ⇧⌘I's menu (a real ⇧⌘I, the menu's own
     /// keys) and from ⌘Return: each opens the row's files, once.
     func testOpenFilesOpensFromTheRightClickMenuTheActionsMenuAndCommandReturn() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         var opened: [UUID] { Array(hosted.model.expandedFiles) }
@@ -428,6 +429,7 @@ final class DeepReviewFixTests: XCTestCase {
     /// longer passes through nothing before it wraps: after the add bar
     /// comes the first row again.
     func testEveryTabStopIsAVisibleRowOrAField() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1)
@@ -478,6 +480,7 @@ final class DeepReviewFixTests: XCTestCase {
     /// round without a blank stop. Run on a panel whose key loop is
     /// AppKit's, as the combined app's is (the import freeze's fix).
     func testTabKeepsEveryRowItReachesInViewInALongAndAFilteredList() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true, long: true)
         defer { hosted.close() }
         hosted.window.autorecalculatesKeyViewLoop = true

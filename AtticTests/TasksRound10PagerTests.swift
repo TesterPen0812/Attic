@@ -104,6 +104,7 @@ final class TasksRound10PagerTests: XCTestCase {
     /// ⌘F on Done during a swipe (the view's own route into the search):
     /// the swipe ends, and reversing the fingers keeps Done and its search.
     func testCommandFDuringASwipeEndsIt() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.go(to: .backlog)
@@ -181,6 +182,7 @@ final class TasksRound10PagerTests: XCTestCase {
     /// otherwise go, and ⌘Z undoes with no view in the page holding the
     /// keyboard (after a click on the selection bar).
     func testEscStopsASubtaskFieldAndCommandZUndoesFromAnywhere() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let model = hosted.model

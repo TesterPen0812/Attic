@@ -270,7 +270,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let proposed = CGRect(x: right ? frame.maxX + 8 : frame.minX - 36,
                               y: top ? frame.maxY - 28 : frame.minY, width: 28, height: 28)
         let target = PanelGeometry.avoidingOverlap(proposed, occupied: [frame],
-            within: screen.visibleFrame.insetBy(dx: 4, dy: 4), gap: 8)
+            within: TestPresentationPolicy.placementFrame(screen.visibleFrame).insetBy(dx: 4, dy: 4), gap: 8)
         let indicator = dockingIndicator ?? NSPanel(contentRect: target,
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         indicator.isOpaque = false
@@ -328,7 +328,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // activity; no additional polling or rendering loop is needed.
         if panel.isVisible, !isLiveResizing, !isWindowDragging,
            let screen = panel.screen ?? currentScreen,
-           lastUsableFrame != screen.visibleFrame {
+           lastUsableFrame != TestPresentationPolicy.placementFrame(screen.visibleFrame) {
             recoverPanelInsideUsableArea(preferredScreen: screen)
         }
         guard !isLiveResizing else {
@@ -510,7 +510,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let generation = visibilityTransition.beginHideTransition(completion: completion)
         isShowing = false
         needsResizeAfterShowing = false
-        let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: screen.visibleFrame)
+        let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: TestPresentationPolicy.placementFrame(screen.visibleFrame))
         if !framesMatch(panel.visibleContentFrame, safeFrame) {
             panel.setVisibleContentFrame(safeFrame, display: true)
         }
@@ -518,7 +518,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Move its fixed-size native frame back while the same live subtree
         // collapses, so every hide reason converges on the actual dock anchor.
         let targetFrame = PanelGeometry.panelFrame(
-            in: screen.visibleFrame, size: safeFrame.size, corner: currentCorner
+            in: TestPresentationPolicy.placementFrame(screen.visibleFrame), size: safeFrame.size, corner: currentCorner
         )
         let reducedFade = hideFadesWhenReduced
         hideFadesWhenReduced = false
@@ -892,7 +892,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
             return frame
         }
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         if currentScreen !== screen {
             currentScreen = screen
             updateResizeLimits(in: visibleFrame)
@@ -926,7 +926,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         currentScreen = screen
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         updateResizeLimits(in: visibleFrame)
         let releaseAction = PanelDockingPolicy.releaseAction(
             velocity: velocity,
@@ -1031,7 +1031,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             isApplyingInteractiveCorner = false
         }
 
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         updateResizeLimits(in: visibleFrame)
         let targetFrame = PanelGeometry.workAreaPlacement(
             preferredSize: CGSize(
@@ -1156,7 +1156,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 ?? panel.screen
                 ?? currentScreen
                 ?? NSScreen.main else { return nil }
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         currentScreen = screen
         updateResizeLimits(in: visibleFrame)
         return PanelWorkAreaSnapshot(visibleFrame: visibleFrame)

@@ -372,7 +372,7 @@ final class PanelGeometryTests: XCTestCase {
             XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
             let expected = PanelGeometry.workAreaPlacement(
                 preferredSize: CGSize(width: settings.panelContentSize, height: settings.panelHeight),
-                in: screen.visibleFrame, corner: corner
+                in: TestPresentationPolicy.placementFrame(screen.visibleFrame), corner: corner
             ).frame
             XCTAssertEqual(panel.visibleContentFrame, expected)
             XCTAssertEqual(container.hostingView.frame.size, expected.size)
@@ -1707,7 +1707,7 @@ final class PanelGeometryTests: XCTestCase {
         let screen = try XCTUnwrap(NSScreen.main)
         let visible = PanelGeometry.workAreaPlacement(
             preferredSize: CGSize(width: 480, height: 620),
-            in: screen.visibleFrame, corner: .topRight
+            in: TestPresentationPolicy.placementFrame(screen.visibleFrame), corner: .topRight
         ).frame
         guard visible.height >= PanelGeometry.minimumPanelSize.height + 40 else {
             throw XCTSkip("The hosted resize regression needs 40 points above the minimum height")

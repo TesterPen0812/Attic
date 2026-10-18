@@ -74,6 +74,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testCommandDownReordersATabFocusedSubtaskNotItsParent() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let (parent, subtask) = try tabToASubtask(hosted)
@@ -92,6 +93,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnRenamesATabFocusedSubtaskNotItsParent() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let (_, subtask) = try tabToASubtask(hosted)
@@ -101,6 +103,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testDeleteStillDeletesATabFocusedSubtask() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let (parent, subtask) = try tabToASubtask(hosted)
@@ -205,6 +208,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnWithoutAnActionsMenuStillEditsTheSelectedTitle() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
@@ -215,6 +219,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnAfterCancellingAnActionsMenuStillEditsTheSelectedTitle() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try openActionsMenu(hosted, on: "Call the plumber", keys: [("\u{1B}", 53)])
@@ -309,6 +314,7 @@ final class TasksRound13Tests: XCTestCase {
     /// undoes that change and keeps the draft; ⌘Z again is the draft's own
     /// typing undo; typing after a menu change gives ⌘Z back to the field.
     func testCommandZAfterATaskMenuChangeUndoesTheChangeAndKeepsTheDraft() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         hosted.spin(1)
@@ -336,6 +342,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testTypingAfterATaskMenuChangeGivesCommandZBackToTheComposer() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         hosted.spin(1)
@@ -354,6 +361,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testRedoBringsBackATaskMenuChangeAfterAClaimedUndo() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         hosted.spin(1)
@@ -398,6 +406,7 @@ final class TasksRound13Tests: XCTestCase {
     /// hold ink between the lines the titles sit on before and after (two
     /// rows sliding through each other put titles and circles there).
     func testAFullAnimationReorderNeverPutsInkBetweenTheRowsLines() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1)

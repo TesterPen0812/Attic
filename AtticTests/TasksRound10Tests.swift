@@ -449,6 +449,7 @@ final class TasksRound10Tests: XCTestCase {
     /// ⌘D on a selected row, through the app's queue as a key comes: the
     /// page duplicates it (the key runs the menu's own command).
     func testCommandDOnARowDuplicatesIt() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" })

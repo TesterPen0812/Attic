@@ -303,3 +303,11 @@ func verifyCIAccessibilityMode(_ expected: Any?, phase: String) {
     XCTAssertEqual(value, expected as? Bool, phase)
     print("CI_INPUT_MODES AX \(phase) expected=\(String(describing: expected)) actual=\(String(describing: value))")
 }
+
+/// Native key-window tests remain enabled on CI, and require an explicit
+/// opt-in on a person's desktop.
+func requireKeyWindowTests() throws {
+    guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+        throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+    }
+}

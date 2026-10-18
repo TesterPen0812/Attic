@@ -222,6 +222,7 @@ final class TasksRound7HostedTests: XCTestCase {
     // MARK: - R3: back into the search, nothing stays lit
 
     func testClickingBackIntoTheSearchClearsTheSelection() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.go(to: .done)

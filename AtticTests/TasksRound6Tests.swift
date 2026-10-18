@@ -71,6 +71,7 @@ final class TasksRound6Tests: XCTestCase {
     /// opens): the search takes the tabs' line with the keyboard in it
     /// (CI run 1: the field showed without it).
     func testCommandFOnDoneGivesTheSearchTheKeyboard() throws {
+        try requireKeyWindowTests()
         // The apps' Edit menu has Find on ⌘F, sent to the text view with
         // the keyboard (CI run 3: it took ⌘F from the page).
         let saved = NSApp.mainMenu

@@ -134,6 +134,7 @@ final class TasksRound12Tests: XCTestCase {
     /// the keyboard was not on. ⇧↓ grows from that row, never back to a row
     /// remembered from before.
     func testShiftDownGrowsFromTheMenuSelectedRowNotFromAStaleOne() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
         let model = hosted.model
@@ -313,6 +314,7 @@ final class TasksRound12Tests: XCTestCase {
     /// keyboard and is visible; an unrelated store update leaves it alone; a
     /// tab switch closes it and the other page's copy never opens one.
     func testOnlyTheActivePageHoldsTheEditor() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -348,6 +350,7 @@ final class TasksRound12Tests: XCTestCase {
     /// ⌘D on the selected row acts once, on the page shown, though the task
     /// has a row on two pages; ⌘C and the actions menu key belong to it too.
     func testKeysActOnceOnTheActivePageWhenATaskIsListedTwice() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -363,6 +366,7 @@ final class TasksRound12Tests: XCTestCase {
     /// A parent selected while one of its subtasks has the keyboard: ⌘D is
     /// the subtask's, so it duplicates nothing.
     func testCommandDWithASubtaskFocusedDuplicatesNothing() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let model = hosted.model
@@ -381,6 +385,7 @@ final class TasksRound12Tests: XCTestCase {
     // MARK: - CU bug 4: Esc closes an open quick look first
 
     func testEscClosesTheQuickLookFirstThenClearsTheSelection() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let model = hosted.model

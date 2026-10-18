@@ -31,6 +31,7 @@ final class OwnerFindings1001Tests: XCTestCase {
     /// once, even one that does not accept the first mouse (SwiftUI's own
     /// views in a list), and the panel becomes key without activating Attic.
     func testOneClickOnAnInactivePanelBothActivatesItAndActs() throws {
+        try requireKeyWindowTests()
         let other = NSWindow(contentRect: CGRect(x: -6_000, y: -6_000, width: 200, height: 200), styleMask: [.titled],
                              backing: .buffered, defer: false)
         other.isReleasedWhenClosed = false
@@ -130,6 +131,7 @@ final class O14FirstClickKeyLookTests: XCTestCase {
     /// press was lost and only a second click pinned. The key look now
     /// waits for the release; the click pins at once, and the look follows.
     func testOneClickOnTheSolidPanelsPinPinsItAndTheKeyLookFollowsTheRelease() throws {
+        try requireKeyWindowTests()
         let suite = "O14KeyLook.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }

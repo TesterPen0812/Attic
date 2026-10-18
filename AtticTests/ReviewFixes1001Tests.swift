@@ -127,6 +127,7 @@ final class ReviewFixes1001Tests: XCTestCase {
     // MARK: - ⌥⌘V while Find is open
 
     func testViewOptionsOpensWhileFindIsOpen() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let deadline = Date().addingTimeInterval(2)
