@@ -142,14 +142,95 @@ enum TaskDropError: LocalizedError {
     case attachmentUnavailable
     /// A card released over the task that already owns it.
     case alreadyAttached
+    /// A dropped item never delivered its content (V-13): the import
+    /// gives up rather than stay busy.
+    case stalled
 
     var errorDescription: String? {
         switch self {
         case .unsupported: "Only files and images can be attached."
         case .attachmentUnavailable: "The attachment is no longer available."
         case .alreadyAttached: "That attachment already belongs to this task."
+        case .stalled: "A dropped item never arrived."
         }
     }
+}
+
+/// One item provider load that always ends (V-13). A provider can accept a
+/// load and never call back: a file promise whose drag was refused, an
+/// app that quit. The load resumes exactly once: with the provider's
+/// result; with `TaskDropError.stalled` once its progress has not moved
+/// for `stallLimit`; or with `CancellationError` when the awaiting task is
+/// cancelled. A result that arrives after that is dropped (`isWanted`).
+final class TaskProviderLoad<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var ended = false
+    private var progress: Progress?
+
+    /// Whether the result is still awaited (a late callback does no work).
+    var isWanted: Bool { lock.withLock { !ended } }
+
+    /// Ends the load with `result`; false when it had already ended.
+    @discardableResult
+    func finish(_ result: Result<Value, Error>) -> Bool {
+        let waiting: CheckedContinuation<Value, Error>? = lock.withLock {
+            guard !ended else { return nil }
+            ended = true
+            defer { continuation = nil }
+            return continuation
+        }
+        guard let waiting else { return false }
+        waiting.resume(with: result)
+        return true
+    }
+
+    /// Runs `start` (which begins the provider's load, calls `finish`, and
+    /// returns the load's progress) and awaits its one result.
+    static func run(isolation: isolated (any Actor)? = #isolation, _ start: (TaskProviderLoad<Value>) -> Progress?) async throws -> Value {
+        let load = TaskProviderLoad<Value>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Value, Error>) in
+                let early: Bool = load.lock.withLock {
+                    if load.ended { return true }
+                    load.continuation = continuation
+                    return false
+                }
+                if early {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                let progress = start(load)
+                load.lock.withLock { load.progress = progress }
+                load.watch(seen: progress?.completedUnitCount ?? 0)
+            }
+        } onCancel: {
+            load.lock.withLock { load.progress }?.cancel()
+            load.finish(.failure(CancellationError()))
+        }
+    }
+
+    /// Gives up once the progress has stood still for a whole limit
+    /// (`TaskProviderLoadLimit.seconds`).
+    private func watch(seen: Int64) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + TaskProviderLoadLimit.seconds) { [self] in
+            guard isWanted else { return }
+            let progress = lock.withLock { self.progress }
+            let now = progress?.completedUnitCount ?? 0
+            if now > seen {
+                watch(seen: now)
+                return
+            }
+            progress?.cancel()
+            finish(.failure(TaskDropError.stalled))
+        }
+    }
+}
+
+/// How long a dropped item's load may go without finishing or reporting
+/// progress, in seconds (tests shorten it).
+enum TaskProviderLoadLimit {
+    nonisolated(unsafe) static var seconds: TimeInterval = 60
 }
 
 /// The file row being dragged in this process (A1: a row of a task's files
@@ -193,10 +274,10 @@ enum TaskAttachmentCardDrag {
             }
             data = nativeData
         } else {
-            data = try await withCheckedThrowingContinuation { continuation in
-                _ = provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
-                    if let data { continuation.resume(returning: data) }
-                    else { continuation.resume(throwing: error ?? TaskDropError.attachmentUnavailable) }
+            data = try await TaskProviderLoad<Data>.run { load in
+                provider.loadDataRepresentation(forTypeIdentifier: TaskDropContent.attachmentCardType.identifier) { data, error in
+                    if let data { load.finish(.success(data)) }
+                    else { load.finish(.failure(error ?? TaskDropError.attachmentUnavailable)) }
                 }
             }
         }
@@ -272,25 +353,27 @@ enum TaskDroppedFiles {
     }
 
     private static func fileURL(from provider: NSItemProvider) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadObject(ofClass: URL.self) { url, error in
+        try await TaskProviderLoad<URL>.run { load in
+            provider.loadObject(ofClass: URL.self) { url, error in
                 guard let url, url.isFileURL else {
-                    continuation.resume(throwing: error ?? TaskDropError.unsupported)
+                    load.finish(.failure(error ?? TaskDropError.unsupported))
                     return
                 }
                 // Finder may hand over a file reference URL (/.file/id=…);
                 // the importer needs the real path and filename.
-                continuation.resume(returning: (url as NSURL).filePathURL ?? url)
+                load.finish(.success((url as NSURL).filePathURL ?? url))
             }
         }
     }
 
     private static func copyFile(of provider: NSItemProvider, type: UTType, into directory: URL) async throws -> URL {
         let suggestedName = provider.suggestedName
-        return try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, error in
+        return try await TaskProviderLoad<URL>.run { load in
+            provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, error in
+                // Given up already (stalled or cancelled): copy nothing.
+                guard load.isWanted else { return }
                 guard let url else {
-                    continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
+                    load.finish(.failure(error ?? CocoaError(.fileReadUnknown)))
                     return
                 }
                 do {
@@ -305,9 +388,9 @@ enum TaskDroppedFiles {
                         filename(suggested: suggestedName, loaded: url, type: type)
                     )
                     try FileManager.default.copyItem(at: url, to: destination)
-                    continuation.resume(returning: destination)
+                    if !load.finish(.success(destination)) { try? FileManager.default.removeItem(at: destination) }
                 } catch {
-                    continuation.resume(throwing: error)
+                    load.finish(.failure(error))
                 }
             }
         }

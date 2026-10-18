@@ -1313,10 +1313,17 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     private var dragGrip: AtticDragGrip?
 
     func hostDragWillBegin(_ session: NSDraggingSession, at screenPoint: NSPoint) {
-        let starting = AtticDragReturn.starting(session, from: self, at: screenPoint, level: window?.level)
+        let starting = AtticDragReturn.starting(session, from: self, at: screenPoint, level: window?.level,
+                                                source: AtticDragReturn.SourceFrame.take())
         dragReturn = starting?.dragReturn
         dragGrip = starting?.grip
-        if dragReturn != nil { session.animatesToStartingPositionsOnCancelOrFail = false }
+        guard let dragReturn, let dragGrip else { return }
+        session.animatesToStartingPositionsOnCancelOrFail = false
+        // V-09: the picture is the drag's only one; the system's is clear.
+        session.enumerateDraggingItems(options: [], for: self, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+            item.setDraggingFrame(item.draggingFrame, contents: AtticDragReturn.clearImage(size: item.draggingFrame.size))
+        }
+        dragReturn.moved(drawn: dragGrip.frame(at: screenPoint))
     }
 
     func hostDragMoved(_ session: NSDraggingSession, to screenPoint: NSPoint) {
@@ -1328,7 +1335,13 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         guard let dragReturn, let dragGrip else { return }
         self.dragReturn = nil
         self.dragGrip = nil
-        dragReturn.ended(operation: operation, drawn: dragGrip.frame(at: screenPoint)) { withExtendedLifetime(dragReturn) {} }
+        let start = dragGrip.frame(at: screenPoint)
+        if operation.isEmpty {
+            TasksDragOut.Probe.shared.fileHome = dragReturn.homeOnScreen
+            TasksDragOut.Probe.shared.fileStart = start
+            TasksDragOut.Probe.shared.fileWindow = dragReturn.windowFrame
+        }
+        dragReturn.ended(operation: operation, drawn: start) { withExtendedLifetime(dragReturn) {} }
     }
 
     // MARK: Drops that land (O17-13)

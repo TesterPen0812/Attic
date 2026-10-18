@@ -1347,6 +1347,10 @@ final class TaskStore: ObservableObject {
                 await taskImageFiles.remove(imported); return nil
             }
             return imported.map(\.id)
+        } catch is CancellationError {
+            // Cancelled (V-13): nothing kept, nothing to report.
+            await taskImageFiles.remove(imported)
+            return nil
         } catch {
             await taskImageFiles.remove(imported)
             reportAttachmentImportFailure(error, owner: errorOwner)
