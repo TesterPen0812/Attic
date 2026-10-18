@@ -6,6 +6,8 @@
 #import "AtticUnitTestHost-Swift.h"
 
 static void FreezeWindowClass(Class cls);
+static void Place(NSWindow *window);
+static void MaterializeOffscreen(NSWindow *window);
 
 // Typed initializer-family methods preserve ARC's consumed-self/+1 return
 // convention. Generic IMP blocks are deliberately not used for initializers.
@@ -16,16 +18,23 @@ static void FreezeWindowClass(Class cls);
 @implementation NSWindow (FGInvisibleInitialization)
 - (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred {
     FreezeWindowClass(object_getClass(self));
-    self = [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred];
+    // AppKit can recenter a titled window internally, bypassing setFrame.
+    // Keep its backing deferred until that initialization has finished and
+    // its final logical frame is safe, then honor eager callers.
+    self = [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:YES];
     FreezeWindowClass(object_getClass(self));
     self.animationBehavior = NSWindowAnimationBehaviorNone;
+    Place(self);
+    if (!deferred) MaterializeOffscreen(self);
     return self;
 }
 - (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred screen:(NSScreen *)screen {
     FreezeWindowClass(object_getClass(self));
-    self = [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred screen:screen];
+    self = [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:YES screen:screen];
     FreezeWindowClass(object_getClass(self));
     self.animationBehavior = NSWindowAnimationBehaviorNone;
+    Place(self);
+    if (!deferred) MaterializeOffscreen(self);
     return self;
 }
 @end
@@ -67,6 +76,14 @@ static void Place(NSWindow *window) {
 static void Order(NSWindow *window, void (^action)(void)) {
     Place(window);
     action();
+}
+
+static void MaterializeOffscreen(NSWindow *window) {
+    // AppKit creates a deferred backing only when ordered. The host's
+    // ordering/frame boundaries keep both transitions off every display;
+    // leave eager callers with a real window number and the original hidden state.
+    [window orderWindow:NSWindowAbove relativeTo:0];
+    [window orderOut:nil];
 }
 
 void AtticInstallInvisiblePresentation(void) {
