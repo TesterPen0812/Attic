@@ -77,7 +77,11 @@ final class TasksKeystrokeCostTests: XCTestCase {
     }
 
     private func page(tasks count: Int, addBarFocused: Bool = true) throws -> (model: TasksPageModel, field: AtticTokenTextView, hosting: NSView) {
-        try requireKeyWindowTests()
+        // This fixture is also overlaid on historical cost hosts whose
+        // TestSupport predates the shared key-window helper.
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         let store = try makeTestStore()
         for index in 0..<count { _ = store.create(title: "Task number \(index)") }
         let library = AtticLibrary(tasks: store)
