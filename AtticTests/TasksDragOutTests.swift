@@ -838,3 +838,104 @@ final class RoundD1DragTests: XCTestCase {
         }
     }
 }
+
+
+/// T7: cancellation owns the whole press, including its Escape and later release.
+@MainActor
+final class TasksDragCancellationTests: XCTestCase {
+    private enum Interruption { case escape, keyLoss, orderOut, panelHide, pageSwitch, tabSwitch, none }
+
+    func testT7EscapeCancelsSubtaskDragWithoutCollapsingOrUndo() throws { try exercise(.escape) }
+    func testT7KeyLossCancelsSubtaskDrag() throws { try exercise(.keyLoss) }
+    func testT7HiddenWindowCancelsSubtaskDrag() throws { try exercise(.orderOut) }
+    func testT7PanelHideCancelsSubtaskDrag() throws { try exercise(.panelHide) }
+    func testT7PageSwitchCancelsSubtaskDrag() throws { try exercise(.pageSwitch) }
+    func testT7TabSwitchCancelsSubtaskDrag() throws { try exercise(.tabSwitch) }
+    func testT7EscapeCancelsInListTaskReorderAndConsumesTheKey() throws { try exercise(.escape, subtask: false) }
+    func testT7UninterruptedSubtaskDragStillReordersWithOneUndo() throws { try exercise(.none) }
+
+    private func exercise(_ interruption: Interruption, subtask: Bool = true) throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 700)
+        defer { hosted.close() }
+        let parent = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == (subtask ? "Finalize launch checklist" : "Ship appearance PR") })
+        hosted.model.setExpanded(parent.id, true)
+        hosted.model.selectOnly(parent.id)
+        hosted.spin(0.3)
+        let children = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.id == parent.id }).subtasks
+        let before = hosted.store.subtasks(of: parent.id).map(\.id)
+        let rowsBefore = hosted.model.rows(for: .now).map(\.id)
+        let undoBefore = hosted.model.library.undo.undoStepID(in: .tasks)
+        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: parent.id)])
+        // The first open child is the first quick-look line. The last line is Add subtask.
+        let startY = subtask
+            ? frame.maxY - AtticQuickLookMetrics.bottomPadding - CGFloat(children.count + 1) * AtticLayout.subtaskPitch + AtticLayout.subtaskPitch / 2
+            : frame.minY + 15
+        let distance: CGFloat = subtask ? AtticLayout.subtaskPitch + 7 : frame.height + 24
+        func post(_ type: NSEvent.EventType, _ offset: CGFloat) {
+            NSApp.postEvent(NSEvent.mouseEvent(with: type, location: CGPoint(x: 170, y: hosted.height - startY - offset),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
+                context: nil, eventNumber: 7, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)!, atStart: false)
+        }
+        func escape() {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                NSApp.postEvent(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber, context: nil,
+                    characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53)!, atStart: false)
+            }
+        }
+        var timers: [Timer] = []
+        func after(_ delay: TimeInterval, _ action: @escaping @MainActor () -> Void) {
+            let timer = Timer(timeInterval: delay, repeats: false) { _ in MainActor.assumeIsolated { action() } }
+            RunLoop.main.add(timer, forMode: .common)
+            timers.append(timer)
+        }
+        defer { timers.forEach { $0.invalidate() } }
+        var lifted = false
+        after(0.15) { post(.leftMouseDragged, 7) }
+        after(0.25) { post(.leftMouseDragged, distance) }
+        after(0.45) {
+            if !subtask { lifted = hosted.pointer.liftedCard.lift != nil }
+            switch interruption {
+            case .escape: escape()
+            case .keyLoss: hosted.window.resignKey()
+            case .orderOut: hosted.window.orderOut(nil)
+            case .panelHide: hosted.model.pageDidHide()
+            case .pageSwitch: hosted.model.isPageShown = false
+            case .tabSwitch: hosted.model.select(tab: .later)
+            case .none: break
+            }
+        }
+        // Restore the surface *before* moving/releasing: cancellation must be latched.
+        after(0.7) {
+            if interruption == .orderOut { hosted.window.orderFront(nil) }
+            if interruption == .keyLoss || interruption == .orderOut { hosted.window.makeKey() }
+            if interruption == .pageSwitch { hosted.model.isPageShown = true }
+            if interruption == .tabSwitch { hosted.model.select(tab: .now) }
+            post(.leftMouseDragged, distance + 3)
+        }
+        after(0.9) { post(.leftMouseUp, distance + 3) }
+        post(.leftMouseDown, 0)
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            Hosted.pumpEvents(limit: 1)
+            hosted.spin(0.01)
+        }
+        Hosted.pumpEvents()
+        hosted.spin(0.3)
+        if !subtask { XCTAssertTrue(lifted, "the separate in-list row gesture lifted its card") }
+        XCTAssertTrue(hosted.model.expanded.contains(parent.id), "Escape belongs only to the drag; the task stays expanded")
+        XCTAssertNil(hosted.pointer.liftedCard.lift)
+        if interruption == .none {
+            XCTAssertNotEqual(hosted.store.subtasks(of: parent.id).map(\.id), before, "positive control: the real gesture reorders")
+            XCTAssertNotEqual(hosted.model.library.undo.undoStepID(in: .tasks), undoBefore)
+            XCTAssertTrue(hosted.model.undo().isApplied)
+            XCTAssertEqual(hosted.store.subtasks(of: parent.id).map(\.id), before)
+            XCTAssertEqual(hosted.model.library.undo.undoStepID(in: .tasks), undoBefore, "exactly one Undo step")
+        } else {
+            XCTAssertEqual(hosted.store.subtasks(of: parent.id).map(\.id), before, "cancelled subtasks keep their order")
+            XCTAssertEqual(hosted.model.rows(for: .now).map(\.id), rowsBefore, "cancelled task rows keep their order")
+            XCTAssertEqual(hosted.model.library.undo.undoStepID(in: .tasks), undoBefore, "cancellation adds no Undo step")
+        }
+    }
+}
