@@ -146,6 +146,11 @@ void AtticInstallInvisiblePresentation(void) {
     Replace(NSApplication.class, @selector(setActivationPolicy:), ^BOOL(NSApplication *app, NSApplicationActivationPolicy policy) { return policy == NSApplicationActivationPolicyProhibited; });
     Replace(NSApplication.class, @selector(orderFrontCharacterPalette:), ^(NSApplication *app, id sender) {});
     Replace(NSMenu.class, @selector(popUpMenuPositioningItem:atLocation:inView:), ^BOOL(NSMenu *menu, NSMenuItem *item, NSPoint point, NSView *view) { return NO; });
+    // Native popup cells track their menus without NSMenu's popUp entry
+    // points. Cover both programmatic clicks and direct attachment.
+    for (NSString *name in @[@"performClickWithFrame:inView:", @"attachPopUpWithFrame:inView:"]) {
+        Replace(NSPopUpButtonCell.class, NSSelectorFromString(name), ^(NSPopUpButtonCell *cell, NSRect frame, NSView *view) {});
+    }
     Replace(object_getClass(NSMenu.class), @selector(popUpContextMenu:withEvent:forView:), ^(id cls, NSMenu *menu, NSEvent *event, NSView *view) {});
     Replace(object_getClass(NSMenu.class), @selector(popUpContextMenu:withEvent:forView:withFont:), ^(id cls, NSMenu *menu, NSEvent *event, NSView *view, NSFont *font) {});
     // SwiftUI/AX native menu buttons bypass NSMenu's public popUp methods.

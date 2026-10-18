@@ -39,6 +39,14 @@ final class PanelShellTests: XCTestCase {
             XCTAssertTrue(NSScreen.screens.allSatisfy { !panel.frame.intersects($0.frame) },
                           "A visible window's frame update must also stay off every display")
             XCTAssertEqual(panel.frame.size, requestedSize)
+            // Exercise native cell entry points as well as NSMenu: the
+            // bundle canary rejects even transient menu tracking.
+            let popup = NSPopUpButton(frame: CGRect(x: 10, y: 10, width: 100, height: 24), pullsDown: false)
+            popup.addItem(withTitle: "Invisible menu probe")
+            tracker.addSubview(popup)
+            let cell = try XCTUnwrap(popup.cell as? NSPopUpButtonCell)
+            cell.performClick(withFrame: popup.bounds, in: popup)
+            cell.attachPopUp(withFrame: popup.bounds, in: popup)
         }
         var presses = 0
         var releases = 0

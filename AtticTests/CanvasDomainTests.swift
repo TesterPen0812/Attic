@@ -2369,6 +2369,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// the first open can be performed in one test.
     @MainActor
     func testAddMenuUndoRoutesToFocusedTextEditor() async throws {
+        try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
         XCTAssertTrue(placed)
@@ -2408,6 +2409,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// the first open can be performed in one test.
     @MainActor
     func testAddMenuRedoRoutesToFocusedTextEditor() async throws {
+        try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
         XCTAssertTrue(placed)
@@ -2453,6 +2455,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// enabled while the route refused to act on them.
     @MainActor
     func testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo() async throws {
+        try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
         XCTAssertTrue(placed)
@@ -2585,6 +2588,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// focuses the editor without any publish, so chrome kept history's state.
     @MainActor
     func testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo() throws {
+        try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -150, y: -100), CanvasPoint(x: -140, y: -90)]))
 
@@ -2675,6 +2679,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// and the insertion draft must keep working.
     @MainActor
     func testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory() throws {
+        try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -150, y: -100), CanvasPoint(x: -140, y: -90)]))
         XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -150, y: 100), CanvasPoint(x: -140, y: 110)]))
@@ -2752,6 +2757,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// instead rebuilds the surface, closing the editor, and clears history.)
     @MainActor
     func testRestyleThatClearsEditorHistoryRerendersUndoRedo() async throws {
+        try requireKeyWindowTests()
         let store = try makeTestCanvasStore()
         let session = CanvasSession(store: store)
         let placed = await session.insertText("Original", at: .zero, prefersDarkSurface: false)
@@ -2891,6 +2897,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// toolbar Undo removed the text object being edited (seen live).
     @MainActor
     func testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto() async throws {
+        try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
         XCTAssertTrue(placed)
@@ -2961,6 +2968,7 @@ final class CanvasAccessibilityTests: XCTestCase {
     /// and the saved draft kept the undone text.
     @MainActor
     func testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft() throws {
+        try requireKeyWindowTests()
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -150, y: -100), CanvasPoint(x: -140, y: -90)]))
 
