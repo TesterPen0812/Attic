@@ -2510,7 +2510,14 @@ struct AtticSubtaskTitleField: NSViewRepresentable {
     let color: NSColor
     func makeCoordinator() -> Coordinator { Coordinator(editing) }
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
+        let field = Self.makeField()
+        field.delegate = context.coordinator
+        return field
+    }
+
+    /// The field as the row uses it (internal for the tests).
+    static func makeField() -> NSTextField {
+        let field = AtticSubtaskTextField()
         let cell = AtticSubtaskTitleCell()
         cell.editor.isFieldEditor = true
         field.cell = cell
@@ -2526,7 +2533,6 @@ struct AtticSubtaskTitleField: NSViewRepresentable {
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = AtticTextStyle.rowTitle.nsFont
-        field.delegate = context.coordinator
         return field
     }
     /// As tall as its wrapped text, from one line up to the composers'
@@ -2652,12 +2658,39 @@ final class AtticSubtaskTitleCell: NSTextFieldCell {
 
     override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
         super.edit(withFrame: Self.textRect(forBounds: rect, font: font), in: controlView, editor: textObj, delegate: delegate, event: event)
+        fitEditor(textObj, in: controlView)
     }
 
     override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?,
                          start selStart: Int, length selLength: Int) {
         super.select(withFrame: Self.textRect(forBounds: rect, font: font), in: controlView, editor: textObj, delegate: delegate,
                      start: selStart, length: selLength)
+        fitEditor(textObj, in: controlView)
+    }
+
+    /// V-12: AppKit hosts the editor in its own focus clip, the whole field
+    /// and a little more (102 pt for a 98 pt field, from 1 pt above its
+    /// top), so it showed part of a seventh line, hid the last line and its
+    /// caret, and lifted a single line 1 pt above where it is drawn at rest.
+    /// The clip is made exactly the text's rectangle, whole lines tall, the
+    /// editor at its top, scrolled by whole lines to the caret: the text
+    /// lies where it is drawn, and the caret is always in view.
+    func fitEditor(_ editor: NSText, in controlView: NSView) {
+        guard let clip = editor.superview as? NSClipView, clip.superview === controlView else { return }
+        let rect = Self.textRect(forBounds: controlView.bounds, font: font)
+        let target = NSRect(x: clip.frame.minX, y: rect.minY, width: clip.frame.width, height: rect.height)
+        if clip.frame != target { clip.frame = target }
+        if editor.frame.minY != 0 { editor.setFrameOrigin(NSPoint(x: editor.frame.minX, y: 0)) }
+        if let text = editor as? NSTextView { text.scrollRangeToVisible(text.selectedRange()) }
+    }
+}
+
+/// The subtask entry's field (V-12): its editor's clip follows it as it
+/// grows and shrinks with its text.
+final class AtticSubtaskTextField: NSTextField {
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if let editor = currentEditor(), let cell = cell as? AtticSubtaskTitleCell { cell.fitEditor(editor, in: self) }
     }
 }
 

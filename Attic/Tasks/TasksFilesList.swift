@@ -90,6 +90,9 @@ struct TasksFileRow: View {
     @Environment(\.atticForcedState) private var forced
     @FocusState private var focused: Bool
     @State private var hovered = false
+    /// Where the row lies in the panel (K-04), for its drag's way home;
+    /// kept outside SwiftUI's state, so scrolling never re-renders it.
+    @State private var placement = AtticDragReturn.SourceFrame()
 
     private var size: String { ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file) }
     private var canOpen: Bool { TaskAttachmentActions.canOpen(file) }
@@ -143,8 +146,12 @@ struct TasksFileRow: View {
         // The file leaves as itself: a drag to Finder or another app copies
         // it, and so does a drop on another task (as the old window's cards
         // did); its own task refuses it.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { placement.frame = $0 }
         .onDrag {
-            MainActor.assumeIsolated { TaskAttachmentCardDrag.begin(file, store: store) }
+            MainActor.assumeIsolated {
+                TaskAttachmentCardDrag.begin(file, store: store)
+                AtticDragReturn.SourceFrame.next = placement.frame
+            }
             return TaskAttachmentDragItem(reference: file, files: store.taskImageFiles).itemProvider()
         } preview: {
             // O17-16: the file itself as it leaves (its picture or icon, and
