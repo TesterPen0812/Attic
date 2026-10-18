@@ -295,11 +295,66 @@ final class MarqueeInteractionTests: XCTestCase {
         for item in items.dropFirst() {
             XCTAssertTrue(selected.contains(item.id.base as! Int), "block at \(item.id) highlights as the box covers it")
         }
-        XCTAssertEqual(controller.highlightInk(), .controlAccentColor)
+        XCTAssertEqual(AtticMarqueeController.highlightTint(emphasized: true, dark: false),
+                       NSColor.controlAccentColor.withAlphaComponent(0.16))
         _ = controller.handle(event(.leftMouseUp, point: CGPoint(x: 120, y: second.midY), in: text))
         XCTAssertNil(controller.box, "the box is gone the moment the drag ends")
         XCTAssertFalse(controller.isDragging)
         XCTAssertEqual(Set(selection.ranges.map(\.location)), selected, "the blocks stay selected")
+    }
+
+    /// F6 (decided 10-18): box selection reads as native selection does,
+    /// in the accent while the panel is key and in the system's
+    /// unemphasized grey when it isn't, switching live with key status.
+    func testF6BoxSelectionIsAccentWhileKeyAndGreyWhenNot() throws {
+        /// The tint as the overlay draws it: made and resolved in the
+        /// drawing appearance.
+        func composite(_ tint: @escaping () -> NSColor, over background: CGFloat, dark: Bool) -> (CGFloat, CGFloat, CGFloat) {
+            var result: (CGFloat, CGFloat, CGFloat) = (0, 0, 0)
+            NSAppearance(named: dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
+                let color = tint().usingColorSpace(.sRGB)!
+                let a = color.alphaComponent
+                result = (color.redComponent * a + background * (1 - a), color.greenComponent * a + background * (1 - a),
+                          color.blueComponent * a + background * (1 - a))
+            }
+            return result
+        }
+        func grey(_ dark: Bool) -> CGFloat {
+            var white: CGFloat = 0
+            NSAppearance(named: dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
+                white = NSColor.unemphasizedSelectedContentBackgroundColor.usingColorSpace(.sRGB)!.redComponent
+            }
+            return white
+        }
+        for dark in [false, true] {
+            let surface: CGFloat = dark ? 0.12 : 1
+            let key = composite({ AtticMarqueeController.highlightTint(emphasized: true, dark: dark) }, over: surface, dark: dark)
+            let accent = composite({ NSColor.controlAccentColor.withAlphaComponent(1) }, over: surface, dark: dark)
+            XCTAssertGreaterThan(abs(key.2 - key.0) + abs(key.1 - key.0), 0.02, "dark \(dark): key reads in the accent's hue")
+            XCTAssertEqual(key.2 > key.0, accent.2 > accent.0, "dark \(dark): the accent's hue")
+            let rest = composite({ AtticMarqueeController.highlightTint(emphasized: false, dark: dark) }, over: surface, dark: dark)
+            XCTAssertEqual(rest.0, rest.1, accuracy: 0.001, "dark \(dark): not key is a neutral grey")
+            XCTAssertEqual(rest.1, rest.2, accuracy: 0.001)
+            XCTAssertEqual(rest.0, grey(dark), accuracy: 0.04, "dark \(dark): the system's unemphasized selection grey")
+        }
+        // Live: a selection shown redraws as the window gains or loses key.
+        let (engine, text, selection) = editor([.text("Title"), .text("let x = 1", style: "mono"), .text("End")])
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let controller = try XCTUnwrap(selection.controller)
+        let window = try XCTUnwrap(text.window)
+        XCTAssertFalse(controller.isEmphasized, "an unshown test window is not key")
+        let items = selection.items()
+        let block = try XCTUnwrap(items.dropFirst().first)
+        _ = controller.handle(event(.leftMouseDown, point: CGPoint(x: 4, y: block.rect.maxY + 2), in: text))
+        _ = controller.handle(event(.leftMouseDragged, point: CGPoint(x: 120, y: block.rect.midY), in: text))
+        _ = controller.handle(event(.leftMouseUp, point: CGPoint(x: 120, y: block.rect.midY), in: text))
+        XCTAssertTrue(controller.hasHighlights)
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            controller.highlightOverlay.needsDisplay = false
+            NotificationCenter.default.post(name: name, object: window)
+            XCTAssertTrue(controller.highlightOverlay.needsDisplay, "\(name.rawValue) redraws the tint")
+        }
     }
 
     /// V-04: hover UI (the page button's switcher) never opens while a mouse
@@ -572,6 +627,89 @@ final class MarqueeInteractionTests: XCTestCase {
         XCTAssertTrue(engine.undoCommand())
         XCTAssertEqual(try XCTUnwrap(view.attachment).table.rows.map { $0.cells[0].text },
                        ["Pillar", "Confidentiality", "Integrity", "Availability"], "one Undo step")
+    }
+
+    /// O4-02 (Air, row 4/4, column 5/5): Esc pressed while a table row or
+    /// column is held cancelled nothing; the grip's tracking loop watched
+    /// only drags and the release, so the release made the move. Esc now
+    /// cancels: the order is unchanged and no Undo step is added. The
+    /// events go through the grip's own tracking loop.
+    func testO4_02EscapeDuringATableRowOrColumnDragCancelsIt() throws {
+        let original = ["Pillar", "Confidentiality", "Integrity", "Availability"]
+        for axis in ["row", "column"] {
+            let (engine, text, _) = editor([.text("Title"), cia(), .text("End")])
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            text.layoutSubtreeIfNeeded()
+            let view = try XCTUnwrap(engine.tableViews().first)
+            view.activate(NoteTable.Position(row: 1, column: 0), caret: .end)
+            text.layoutSubtreeIfNeeded()
+            let chrome = NoteTableChrome(engine: engine, textView: text, design: .default)
+            chrome.place()
+            let grip = axis == "row" ? chrome.rowGrip : chrome.columnGrip
+            XCTAssertFalse(grip.isHidden)
+            let undoable = engine.canUndoCommand
+            let start = CGPoint(x: grip.frame.midX, y: grip.frame.midY)
+            let along = axis == "row" ? view.grid.rowHeights[2] + view.grid.rowHeights[3] : view.grid.columnWidths[1]
+            let end = axis == "row" ? CGPoint(x: start.x, y: start.y + along) : CGPoint(x: start.x + along, y: start.y)
+            for step in 1...4 {
+                let t = CGFloat(step) / 4
+                NSApp.postEvent(event(.leftMouseDragged, point: CGPoint(x: start.x + (end.x - start.x) * t,
+                                                                        y: start.y + (end.y - start.y) * t), in: text), atStart: false)
+            }
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                        windowNumber: text.window!.windowNumber, context: nil, characters: "\u{1b}",
+                                                        charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.postEvent(escape, atStart: false)
+            NSApp.postEvent(event(.leftMouseUp, point: end, in: text), atStart: false)
+            grip.mouseDown(with: event(.leftMouseDown, point: start, in: text))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            // Leave no stray key behind for the next test.
+            while NSApp.nextEvent(matching: [.keyDown, .leftMouseUp, .leftMouseDragged], until: Date(), inMode: .default, dequeue: true) != nil {}
+            let table = try XCTUnwrap(view.attachment).table
+            let order = axis == "row" ? table.rows.map { $0.cells[0].text } : table.rows[0].cells.map(\.text)
+            XCTAssertEqual(order, axis == "row" ? original : ["Pillar", "What happened"], "\(axis): Esc cancels the move")
+            XCTAssertEqual(engine.canUndoCommand, undoable, "\(axis): no Undo step")
+            XCTAssertEqual(view.canvas.alphaValue, 1, "\(axis): the live table is back")
+            XCTAssertTrue(text.subviews.allSatisfy { !($0 is NoteDragLiftView) }, "\(axis): the card is gone")
+            chrome.invalidate()
+        }
+    }
+
+    /// O4-02: a page switch mid-drag cancels a table drag; the release that
+    /// follows makes no move.
+    func testO4_02APageSwitchMidDragCancelsTableAndBlockDrags() throws {
+        let (engine, text, _) = editor([.text("Title"), cia(), .text("Second"), .text("End")])
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let view = try XCTUnwrap(engine.tableViews().first)
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .end)
+        text.layoutSubtreeIfNeeded()
+        let chrome = NoteTableChrome(engine: engine, textView: text, design: .default)
+        chrome.place()
+        let grip = chrome.rowGrip
+        let start = CGPoint(x: grip.frame.midX, y: grip.frame.midY)
+        let end = CGPoint(x: start.x, y: start.y + view.grid.rowHeights[2] + view.grid.rowHeights[3])
+        for step in 1...4 {
+            NSApp.postEvent(event(.leftMouseDragged, point: CGPoint(x: start.x, y: start.y + (end.y - start.y) * CGFloat(step) / 4),
+                                  in: text), atStart: false)
+        }
+        // The page switches while the row is held; the release comes later.
+        nonisolated(unsafe) let release = event(.leftMouseUp, point: end, in: text)
+        let switchPage = Timer(timeInterval: 0.15, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                AtticDragTracking.cancelAll()
+                NSApp.postEvent(release, atStart: false)
+            }
+        }
+        RunLoop.current.add(switchPage, forMode: .common)
+        grip.mouseDown(with: event(.leftMouseDown, point: start, in: text))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        while NSApp.nextEvent(matching: [.leftMouseUp, .leftMouseDragged], until: Date(), inMode: .default, dequeue: true) != nil {}
+        XCTAssertEqual(try XCTUnwrap(view.attachment).table.rows.map { $0.cells[0].text },
+                       ["Pillar", "Confidentiality", "Integrity", "Availability"], "the row stays")
+        XCTAssertEqual(view.canvas.alphaValue, 1)
+        XCTAssertTrue(text.subviews.allSatisfy { !($0 is NoteDragLiftView) })
+        chrome.invalidate()
     }
 
     /// V-05: during a row drag the header's look (fill, semibold) stays

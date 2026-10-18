@@ -458,6 +458,59 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(controls.barPlacement(selection: selection))
     }
 
+    /// F6 (decided 10-18): the bar sits by whichever end of a selection
+    /// taller than the view is visible: above the start while it shows
+    /// with room, else below the end; it hides only while neither end is
+    /// on screen, and comes back when a scroll brings one into view. It
+    /// never covers the selection. Red first: once the bar had shown, a
+    /// bar that left (neither end in view) never came back on a scroll,
+    /// so it was gone for the rest of a selection taller than the view.
+    func testF6TheBarSitsByWhicheverEndOfATallSelectionIsVisible() throws {
+        let long = NoteDocument(blocks: Self.sample.blocks + (0..<60).map { .text("Further body line \($0)") })
+        let (controls, engine, textView) = make(long, topInset: 60)
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        let start = range("Before launch", textView).location
+        let end = NSMaxRange(range("Further body line 50", textView))
+        let selection = NSRange(location: start, length: end - start)
+        let first = try XCTUnwrap(engine.rect(for: NSRange(location: start, length: 1)))
+        let last = try XCTUnwrap(engine.rect(for: NSRange(location: end - 1, length: 1)))
+        func scrollTo(_ y: CGFloat) {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            waitForFormatRefresh(controls)
+        }
+        func check(_ name: String, shown: Bool, below: Bool? = nil) {
+            XCTAssertEqual(controls.formatModel.barShown, shown, "\(name): shown")
+            guard shown else { return }
+            if let below { XCTAssertEqual(controls.formatModel.barBelow, below, "\(name): side") }
+            let visible = textView.visibleRect
+            let covered = NSRect(x: 0, y: max(first.minY, visible.minY), width: textView.bounds.width,
+                                 height: max(0, min(last.maxY, visible.maxY) - max(first.minY, visible.minY)))
+            XCTAssertFalse(controls.barFrame.intersects(covered), "\(name): \(controls.barFrame) over the selection")
+            XCTAssertTrue(visible.contains(controls.barFrame), "\(name): in view")
+        }
+        scrollTo(-60)
+        textView.setSelectedRange(selection)
+        waitForFormatRefresh(controls)
+        check("start in view", shown: true, below: false)
+        XCTAssertLessThan(controls.barFrame.maxY, first.minY, "above the start")
+        // The middle: neither end on screen.
+        scrollTo((first.maxY + last.minY) / 2 - scroll.contentView.bounds.height / 2)
+        check("neither end", shown: false)
+        // Only the end in view, with room under it.
+        scrollTo(last.maxY + 80 - scroll.contentView.bounds.height)
+        check("only the end in view", shown: true, below: true)
+        XCTAssertGreaterThan(controls.barFrame.minY, last.maxY, "below the end")
+        // Back to the start.
+        scrollTo((first.maxY + last.minY) / 2 - scroll.contentView.bounds.height / 2)
+        check("neither end again", shown: false)
+        scrollTo(-60)
+        check("the start again", shown: true, below: false)
+    }
+
     private func engine(of textView: NoteEditorTextView) -> NoteEditorEngine { textView.engine! }
 
     func testEscHidesTheBarUntilTheSelectionChangesAndReadOnlyShowsNone() {

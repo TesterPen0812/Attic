@@ -120,6 +120,80 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertEqual(NoteTableReorder.target(sizes: [30, 80, 20], source: 1, start: 50), 2)
     }
 
+    /// O4-04 (Air, 2/2): switching Light to Dark while Note options' menu
+    /// was open left the note's text almost black on the dark panel until
+    /// the menu closed: the design reached the editor only through the
+    /// page's SwiftUI `onChange`, which waits for the menu. The text and
+    /// the table's cells now follow the window's appearance at once, in
+    /// the menu's tracking mode, with no SwiftUI update at all.
+    func testO4_04TheNoteFollowsTheWindowsAppearanceWhileAMenuTracks() throws {
+        let (engine, textView) = makeEngine(blocks())
+        let window = try XCTUnwrap(textView.window)
+        window.appearance = NSAppearance(named: .aqua)
+        RunLoop.current.run(mode: .eventTracking, before: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(engine.style.design.mode, .light)
+        func titleLuminance() -> CGFloat {
+            let ink = engine.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+            var white: CGFloat = 0
+            textView.effectiveAppearance.performAsCurrentDrawingAppearance {
+                white = ink?.usingColorSpace(.genericGray)?.whiteComponent ?? 0
+            }
+            return white
+        }
+        XCTAssertLessThan(titleLuminance(), 0.4, "Light: dark ink")
+        window.appearance = NSAppearance(named: .darkAqua)
+        // A native menu's tracking loop runs the run loop in this mode only.
+        RunLoop.current.run(mode: .eventTracking, before: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(engine.style.design.mode, .dark, "the editor follows the window behind the menu")
+        XCTAssertGreaterThan(titleLuminance(), 0.6, "Dark: the existing title is light ink")
+        XCTAssertEqual(engine.objectDesign.mode, .dark, "the table's cells are drawn in Dark too")
+    }
+
+    /// F6 (decided 10-18): the lifted row or column follows the pointer
+    /// along its axis, not its landing slot, held inside the table, while
+    /// the others open the gap where it will land.
+    func testF6TheLiftedRowOrColumnFollowsThePointerInsideTheTable() throws {
+        let wide = NoteTable(texts: [["Pillar", "What happened", "When"], ["Confidentiality", "Data taken", "May"],
+                                     ["Integrity", "Systems encrypted", "June"], ["Availability", "Shut down", "July"]])
+        let (engine, textView) = makeEngine(blocks(wide))
+        let view = try view(engine)
+        view.activate(P(row: 1, column: 1), caret: .end)
+        settle(engine, textView)
+        let canvas = view.canvas
+        let grid = view.grid
+        for axis in [NoteTableReorder.Axis.row, .column] {
+            let sizes = axis == .row ? grid.rowHeights : grid.columnWidths
+            let total = sizes.reduce(0, +)
+            let reorder = try XCTUnwrap(NoteTableReorder(table: view, textView: textView, axis: axis, source: 1,
+                                                         tokens: AtticColorTokens.resolve(.default), animated: false, below: nil))
+            let card = try XCTUnwrap(textView.subviews.compactMap { $0 as? NoteDragLiftView }.first)
+            let home = sizes[0]
+            let grab = home + sizes[1] / 2
+            func point(_ along: CGFloat) -> CGPoint {
+                canvas.convert(axis == .row ? CGPoint(x: 12, y: along) : CGPoint(x: along, y: 12), to: nil)
+            }
+            func cardStart() -> (along: CGFloat, across: CGFloat) {
+                let frame = canvas.convert(card.frame, from: textView)
+                return axis == .row ? (frame.minY, frame.minX) : (frame.minX, frame.minY)
+            }
+            reorder.update(windowPoint: point(grab))
+            var targets: Set<Int> = []
+            for offset in stride(from: CGFloat(2), through: sizes[2], by: 5) {
+                reorder.update(windowPoint: point(grab + offset))
+                targets.insert(reorder.target)
+                XCTAssertEqual(cardStart().along, home + offset, accuracy: 0.5, "\(axis) +\(offset): at the pointer, not its slot")
+                XCTAssertEqual(cardStart().across, 0, accuracy: 0.5, "\(axis): along its axis only")
+            }
+            XCTAssertEqual(targets, [1, 2], "\(axis): the gap opened ahead of it on the way")
+            reorder.update(windowPoint: point(grab + 2_000))
+            XCTAssertEqual(cardStart().along, total - sizes[1], accuracy: 0.5, "\(axis): held inside the table's end")
+            reorder.update(windowPoint: point(grab - 2_000))
+            XCTAssertEqual(cardStart().along, 0, accuracy: 0.5, "\(axis): held inside the table's start")
+            XCTAssertEqual(reorder.target, 0)
+            reorder.finish { _ in }
+        }
+    }
+
     private func location(of text: String, in engine: NoteEditorEngine) -> Int {
         (engine.textStorage.string as NSString).range(of: text).location
     }

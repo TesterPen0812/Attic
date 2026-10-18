@@ -57,17 +57,31 @@ final class AtticMarqueeController: NSObject {
     var selectionEnded: (CGPoint) -> Void = { _ in }
     var enabled: () -> Bool = { true }
     var drawsHighlights = true
-    /// The selected blocks' tint, drawn over them (V-04): the system's
-    /// accent, as a selection reads everywhere on the Mac, strong enough to
-    /// show on blocks with their own fill (code, diagrams, tables).
-    var highlightInk: () -> NSColor = { .controlAccentColor }
-    /// The tint's opacity in light and dark.
-    var highlightOpacity: (light: CGFloat, dark: CGFloat) = (0.16, 0.28)
+    /// The selected blocks' tint, drawn over them, as native selection
+    /// reads on the Mac (F6, decided 10-18): the accent while the window
+    /// is key (V-04: strong enough to show on blocks with their own fill:
+    /// code, diagrams, tables), the system's unemphasized grey when it
+    /// isn't. It switches live as the window gains or loses key status.
+    static func highlightTint(emphasized: Bool, dark: Bool) -> NSColor {
+        emphasized
+            ? NSColor.controlAccentColor.withAlphaComponent(dark ? 0.28 : 0.16)
+            // The label colour at this opacity over the panel's surface
+            // gives the system's unemphasized selection grey
+            // (`unemphasizedSelectedContentBackgroundColor`, about 0.86
+            // white in Light and 0.27 in Dark), drawn over the text
+            // without washing it out.
+            : NSColor.labelColor.withAlphaComponent(dark ? 0.17 : 0.14)
+    }
+    /// Whether the selection draws emphasized: its window is key.
+    var isEmphasized: Bool { scrollView?.window?.isKeyWindow ?? false }
+    /// The overlay the tint is drawn in (tests).
+    var highlightOverlay: NSView { overlay }
     /// Notes clears its block selection here; Tasks owns a close-before-clear
     /// Escape chain. Both still cancel an in-progress marquee first.
     var consumesSelectionEscape = true
     private(set) var isDragging = false
     private(set) var box: CGRect?
+    var hasHighlights: Bool { !highlights.isEmpty }
     private var origin: CGPoint?
     private var windowPoint = CGPoint.zero
     private var originalWindowPoint = CGPoint.zero
@@ -314,14 +328,13 @@ final class AtticMarqueeController: NSObject {
         for run in runs { clip.append(NSBezierPath(roundedRect: overlay.convert(run, from: document), xRadius: 4, yRadius: 4)) }
         clip.addClip()
         let dark = overlay.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let ink = highlightInk()
-        let opacity = dark ? highlightOpacity.dark : highlightOpacity.light
+        let tint = Self.highlightTint(emphasized: isEmphasized, dark: dark)
         for alpha in Set(highlights.values.map(\.alpha)) {
             let path = NSBezierPath()
             for value in highlights.values where value.alpha == alpha {
                 path.appendRect(overlay.convert(value.rect, from: document))
             }
-            ink.withAlphaComponent(opacity * alpha).setFill()
+            tint.withAlphaComponent(tint.alphaComponent * alpha).setFill()
             path.fill()
         }
         NSGraphicsContext.restoreGraphicsState()
@@ -347,7 +360,27 @@ private final class MarqueeTicker: NSObject {
 
 private final class MarqueeOverlay: NSView {
     weak var controller: AtticMarqueeController?
+    private var keyObservers: [NSObjectProtocol] = []
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func draw(_ dirtyRect: NSRect) { controller?.draw() }
+
+    /// The tint follows the window's key status (accent or grey): redraw
+    /// when it changes, only if a selection shows.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        keyObservers.forEach(NotificationCenter.default.removeObserver)
+        keyObservers = []
+        guard let window else { return }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            keyObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.controller?.hasHighlights == true else { return }
+                    self.needsDisplay = true
+                }
+            })
+        }
+    }
+
+    isolated deinit { keyObservers.forEach(NotificationCenter.default.removeObserver) }
 }
