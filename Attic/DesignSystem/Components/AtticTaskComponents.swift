@@ -2107,7 +2107,12 @@ struct AtticQuickLook: View {
                                     drag = nil
                                     translation = 0
                                 },
-                                onDragCancelled: { drag = nil; translation = 0 },
+                                onDragCancelled: {
+                                    withAnimation(design.reduceMotion ? nil : AtticMotionPreset.failReturn.animation(reduceMotion: false)) {
+                                        drag = nil
+                                        translation = 0
+                                    }
+                                },
                                 onFocusChange: { onFocusChange(subtask.id, $0) },
                                 popover: popover?.id == subtask.id ? popover?.popover : nil)
                     .offset(y: drag?.id == subtask.id ? translation : drag.map {
@@ -2156,12 +2161,24 @@ private struct AtticSubtaskDrag: ViewModifier {
     let ended: ((CGFloat) -> Void)?
     let cancelled: (() -> Void)?
     @GestureState private var dragging = false
+    @State private var cancellation = TasksDragCancellation()
     func body(content: Content) -> some View {
         content.gesture(changed == nil ? nil : DragGesture(minimumDistance: 4)
             .updating($dragging) { _, state, _ in state = true }
-            .onChanged { changed?($0.translation.height) }
-            .onEnded { ended?($0.translation.height) })
-            .onChange(of: dragging) { _, now in if !now { cancelled?() } }
+            .onChanged {
+                cancellation.begin(in: NSApp.currentEvent?.window ?? NSApp.keyWindow) { cancelled?() }
+                guard !cancellation.isCancelled else { return }
+                changed?($0.translation.height)
+            }
+            .onEnded {
+                cancellation.poll()
+                if !cancellation.isCancelled { ended?($0.translation.height) }
+                cancellation.end()
+            })
+            .onChange(of: dragging) { _, now in
+                if !now { cancellation.cancel(); cancellation.end() }
+            }
+            .onDisappear { cancellation.cancel(); cancellation.end() }
     }
 }
 
