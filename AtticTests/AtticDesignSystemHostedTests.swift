@@ -222,6 +222,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     /// 2 pt accent ring (and only it), and answers the task keys with
     /// distinct commands.
     func testTaskRowTakesKeyboardFocusAndAnswersTheTaskKeys() throws {
+        try requireKeyWindowTests()
         var fired: [String] = []
         func actions(_ row: String) -> AtticTaskActions {
             AtticTaskActions(
@@ -288,6 +289,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     /// draws the ring, and a disabled bar takes no focus and draws its plus
     /// in the disabled icon colour.
     func testAddBarFollowsRealFocusAndDisabled() throws {
+        try requireKeyWindowTests()
         let context = AtticDesignContext(mode: .light, palette: .electricBlue)
         let pad: CGFloat = 12
         let size = CGSize(width: 320, height: AtticControlSize.addBarHeight + pad * 2)
@@ -389,6 +391,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 
     /// A task card takes keyboard focus and draws the ring around its tile shape.
     func testTaskCardTakesKeyboardFocus() throws {
+        try requireKeyWindowTests()
         var fired: [String] = []
         let actions = AtticTaskActions(
             toggleDone: { fired.append("done") }, toggleWorking: { fired.append("working") },
@@ -513,6 +516,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     /// with a named button per page, the current one selected; pressing a
     /// button selects its page. The tabs take ← → while they have focus.
     func testThePagesReadAsNamedButtonsAndTakeArrows() throws {
+        try requireKeyWindowTests()
         final class Record { var tab = 0; var page = 0 }
         let record = Record()
         let harness = PagesHarness(onTab: { record.tab = $0 }, onPage: { record.page = $0 })

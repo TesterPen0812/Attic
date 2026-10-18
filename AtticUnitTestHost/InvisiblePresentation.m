@@ -5,6 +5,8 @@
 #import <objc/runtime.h>
 #import "AtticUnitTestHost-Swift.h"
 
+static void FreezeWindowClass(Class cls);
+
 // Typed initializer-family methods preserve ARC's consumed-self/+1 return
 // convention. Generic IMP blocks are deliberately not used for initializers.
 @interface NSWindow (FGInvisibleInitialization)
@@ -13,9 +15,11 @@
 @end
 @implementation NSWindow (FGInvisibleInitialization)
 - (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred {
+    FreezeWindowClass(object_getClass(self));
     return [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred];
 }
 - (instancetype)fg_initWithContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style backing:(NSBackingStoreType)backing defer:(BOOL)deferred screen:(NSScreen *)screen {
+    FreezeWindowClass(object_getClass(self));
     return [self fg_initWithContentRect:[AtticTestPresentationPolicy offscreenFrame:rect] styleMask:style backing:backing defer:deferred screen:screen];
 }
 @end
@@ -25,6 +29,25 @@ static void Replace(Class cls, SEL selector, id block) {
     NSCAssert(method, @"Missing AppKit presentation boundary: %@", NSStringFromSelector(selector));
     class_addMethod(cls, selector, method_getImplementation(method), method_getTypeEncoding(method));
     method_setImplementation(class_getInstanceMethod(cls, selector), imp_implementationWithBlock(block));
+}
+static char frozenClassKey;
+static void FreezeWindowClass(Class cls) {
+    if (cls == NSWindow.class || [objc_getAssociatedObject(cls, &frozenClassKey) boolValue]) return;
+    objc_setAssociatedObject(cls, &frozenClassKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // A synthetic isKeyWindow override can cause responder setup itself to
+    // steal WindowServer keyboard focus without a makeKeyWindow call.
+    for (NSString *name in @[@"canBecomeKeyWindow", @"canBecomeMainWindow", @"isKeyWindow", @"isMainWindow"]) {
+        SEL selector = NSSelectorFromString(name);
+        if (class_getMethodImplementation(cls, selector) != class_getMethodImplementation(NSWindow.class, selector)) {
+            Replace(cls, selector, ^BOOL(NSWindow *window) { return NO; });
+        }
+    }
+    for (NSString *name in @[@"makeKeyWindow", @"becomeKeyWindow", @"makeMainWindow", @"becomeMainWindow"]) {
+        SEL selector = NSSelectorFromString(name);
+        if (class_getMethodImplementation(cls, selector) != class_getMethodImplementation(NSWindow.class, selector)) {
+            Replace(cls, selector, ^(NSWindow *window) {});
+        }
+    }
 }
 static void Place(NSWindow *window) {
     NSRect frame = [AtticTestPresentationPolicy offscreenFrame:window.frame];
@@ -85,14 +108,12 @@ void AtticInstallInvisiblePresentation(void) {
         SEL selector = NSSelectorFromString(name);
         IMP implementation = class_getMethodImplementation(NSWindow.class, selector);
         Replace(NSWindow.class, selector, ^(NSWindow *window, NSPoint point) {
-            {
-                NSRect requested = window.frame;
+            NSRect requested = window.frame;
                 requested.origin = point;
                 if ([name isEqualToString:@"setFrameTopLeftPoint:"]) requested.origin.y -= requested.size.height;
                 NSRect safe = [AtticTestPresentationPolicy offscreenFrame:requested];
                 point = safe.origin;
                 if ([name isEqualToString:@"setFrameTopLeftPoint:"]) point.y += safe.size.height;
-            }
             ((void (*)(id, SEL, NSPoint))implementation)(window, selector, point);
         });
     }

@@ -17,6 +17,7 @@ class RoundF3TestCase: XCTestCase {
     var engines: [NoteEditorEngine] = []
     var controls: [NoteFormatControls] = []
 
+
     override func tearDown() async throws {
         controls.removeAll()
         for window in windows { window.contentView = nil; window.close() }
@@ -84,6 +85,7 @@ class RoundF3TestCase: XCTestCase {
     /// baseline of the line TextKit laid it on.
     struct Caret { var frame: CGRect; var baseline: CGFloat }
     func caret(_ text: NSTextView, file: StaticString = #filePath, line: UInt = #line) throws -> Caret {
+        try requireKeyWindowTests()
         settle(text)
         let frames = indicatorFrames(text)
         XCTAssertEqual(frames.count, 1, "exactly one native indicator", file: file, line: line)

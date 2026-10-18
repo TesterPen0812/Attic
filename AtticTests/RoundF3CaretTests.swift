@@ -54,6 +54,7 @@ final class RoundF3CaretTests: RoundF3TestCase {
     /// K-03 (a): the empty title's caret is the same native caret as the
     /// typed title's, before and after the first letter.
     func testTheEmptyTitleCaretIsTheTypedTitlesCaret() throws {
+        try requireKeyWindowTests()
         let (e, text) = editor([.text("")])
         text.setSelectedRange(NSRange(location: 0, length: 0)); settle(text)
         // An empty note has no laid-out line to read a baseline from.

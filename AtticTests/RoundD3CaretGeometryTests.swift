@@ -78,6 +78,10 @@ private final class D3MarginDelegate: NSObject, NSTextLayoutManagerDelegate {
 
 @MainActor
 final class RoundD3CaretGeometryTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try requireKeyWindowTests()
+    }
     private var windows: [NSWindow] = []
     private var rows: [[String: Any]] = []
     private let fragmentDelegate = D3LayoutDelegate()

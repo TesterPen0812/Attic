@@ -77,6 +77,7 @@ final class TasksKeystrokeCostTests: XCTestCase {
     }
 
     private func page(tasks count: Int, addBarFocused: Bool = true) throws -> (model: TasksPageModel, field: AtticTokenTextView, hosting: NSView) {
+        try requireKeyWindowTests()
         let store = try makeTestStore()
         for index in 0..<count { _ = store.create(title: "Task number \(index)") }
         let library = AtticLibrary(tasks: store)
