@@ -1,6 +1,19 @@
 #!/bin/sh
+# Same machine-wide lock as the local redesign-assets wrapper; CI also serializes hosts.
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+  for argument in "$@"; do
+    case "$argument" in
+      test|test-without-building)
+        script_dir=$(cd "$(dirname "$0")" && pwd)
+        exec /usr/bin/lockf -k /tmp/attic-xcodebuild.lock \
+          "$script_dir/with_ci_input_modes.sh" "${ATTIC_CI_KEYBOARD_MODE:-normal}" /usr/bin/xcodebuild "$@"
+        ;;
+    esac
+  done
+fi
 # Informational only: old/prebuilt hosts and UI runners may lack the unit-host
-# boundary. Explicit visible runs remain the caller's choice.
+# boundary. Explicit visible runs remain the caller's choice. Keep the CI
+# dispatch above this local-only note so its lock boundary stays unambiguous.
 if [ "${GITHUB_ACTIONS:-}" != true ]; then
   for argument in "$@"; do
     case "$argument" in
@@ -12,18 +25,6 @@ if [ "${GITHUB_ACTIONS:-}" != true ]; then
           echo 'NOTE: Local tests require the invisible AtticUnitTestHost policy. Older/prebuilt hosts and UI-test runners may show UI or take the keyboard; this wrapper does not enforce invisibility.' >&2
         fi
         break
-        ;;
-    esac
-  done
-fi
-# Same machine-wide lock as the local redesign-assets wrapper; CI also serializes hosts.
-if [ "${GITHUB_ACTIONS:-}" = true ]; then
-  for argument in "$@"; do
-    case "$argument" in
-      test|test-without-building)
-        script_dir=$(cd "$(dirname "$0")" && pwd)
-        exec /usr/bin/lockf -k /tmp/attic-xcodebuild.lock \
-          "$script_dir/with_ci_input_modes.sh" "${ATTIC_CI_KEYBOARD_MODE:-normal}" /usr/bin/xcodebuild "$@"
         ;;
     esac
   done
