@@ -20,7 +20,26 @@ final class PanelShellTests: XCTestCase {
         defer { panel.close() }
         let tracker = NativeTrackingView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
         panel.contentView = tracker
+        let requestedSize = panel.frame.size
+        if TestPresentationPolicy.isInvisible {
+            // Deliberately request a displayed origin: the host boundary,
+            // rather than a fixture's hard-coded coordinates, must protect it.
+            panel.setFrameOrigin(try XCTUnwrap(NSScreen.main).frame.origin)
+        }
         panel.orderFront(nil)
+        if TestPresentationPolicy.isInvisible {
+            XCTAssertEqual(panel.frame.size, requestedSize)
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !panel.frame.intersects($0.frame) })
+            panel.makeKeyAndOrderFront(nil)
+            XCTAssertFalse(panel.canBecomeKey)
+            XCTAssertFalse(panel.isKeyWindow)
+            NSApp.activate()
+            XCTAssertFalse(NSApp.isActive)
+            panel.setFrameOrigin(try XCTUnwrap(NSScreen.main).frame.origin)
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !panel.frame.intersects($0.frame) },
+                          "A visible window's frame update must also stay off every display")
+            XCTAssertEqual(panel.frame.size, requestedSize)
+        }
         var presses = 0
         var releases = 0
         panel.onPressEnded = { releases += 1 }

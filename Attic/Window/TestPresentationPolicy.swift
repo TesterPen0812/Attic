@@ -25,7 +25,11 @@ final class TestPresentationPolicy: NSObject {
     }
 
     @objc static func offscreenFrame(_ frame: CGRect) -> CGRect {
-        guard isInvisible, NSScreen.screens.contains(where: { frame.intersects($0.frame) }) else { return frame }
+        guard isInvisible else { return frame }
+        let union = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+        // Empty windows acquire their size while being ordered. Move their
+        // origin too, before AppKit creates a visible backing window.
+        guard union.intersects(frame) || union.contains(frame.origin) else { return frame }
         var result = placementFrame(frame)
         let minimumX = NSScreen.screens.map { $0.frame.minX }.min() ?? 0
         if result.maxX >= minimumX { result.origin.x = minimumX - result.width - 4096 }

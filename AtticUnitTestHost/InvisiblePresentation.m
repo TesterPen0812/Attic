@@ -11,9 +11,20 @@ static void Replace(Class cls, SEL selector, id block) {
     class_addMethod(cls, selector, method_getImplementation(method), method_getTypeEncoding(method));
     method_setImplementation(class_getInstanceMethod(cls, selector), imp_implementationWithBlock(block));
 }
+static char orderingKey;
+static BOOL IsPresenting(NSWindow *window) {
+    return window.isVisible || [objc_getAssociatedObject(window, &orderingKey) boolValue];
+}
 static void Place(NSWindow *window) {
     NSRect frame = [AtticTestPresentationPolicy offscreenFrame:window.frame];
     if (!NSEqualRects(frame, window.frame)) [window setFrame:frame display:NO];
+}
+
+static void Order(NSWindow *window, void (^action)(void)) {
+    id prior = objc_getAssociatedObject(window, &orderingKey);
+    objc_setAssociatedObject(window, &orderingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    @try { Place(window); action(); }
+    @finally { objc_setAssociatedObject(window, &orderingKey, prior, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
 }
 
 void AtticInstallInvisiblePresentation(void) {
@@ -21,8 +32,11 @@ void AtticInstallInvisiblePresentation(void) {
     SEL order = @selector(orderWindow:relativeTo:);
     IMP originalOrder = class_getMethodImplementation(NSWindow.class, order);
     Replace(NSWindow.class, order, ^(NSWindow *window, NSWindowOrderingMode mode, NSInteger relative) {
-        if (mode != NSWindowOut) Place(window);
-        ((void (*)(id, SEL, NSWindowOrderingMode, NSInteger))originalOrder)(window, order, mode, relative);
+        if (mode == NSWindowOut) {
+            ((void (*)(id, SEL, NSWindowOrderingMode, NSInteger))originalOrder)(window, order, mode, relative);
+        } else {
+            Order(window, ^{ ((void (*)(id, SEL, NSWindowOrderingMode, NSInteger))originalOrder)(window, order, mode, relative); });
+        }
     });
     IMP originalFront = class_getMethodImplementation(NSWindow.class, @selector(orderFront:));
     for (NSString *name in @[@"orderFront:", @"orderBack:", @"makeKeyAndOrderFront:"]) {
@@ -31,33 +45,31 @@ void AtticInstallInvisiblePresentation(void) {
         IMP implementation = originalFront;
         if (![name isEqualToString:@"makeKeyAndOrderFront:"]) implementation = class_getMethodImplementation(NSWindow.class, selector);
         Replace(NSWindow.class, selector, ^(NSWindow *window, id sender) {
-            Place(window);
-            ((void (*)(id, SEL, id))implementation)(window, selector, sender);
+            Order(window, ^{ ((void (*)(id, SEL, id))implementation)(window, selector, sender); });
         });
     }
     SEL regardless = @selector(orderFrontRegardless);
     IMP originalRegardless = class_getMethodImplementation(NSWindow.class, regardless);
     Replace(NSWindow.class, regardless, ^(NSWindow *window) {
-        Place(window);
-        ((void (*)(id, SEL))originalRegardless)(window, regardless);
+        Order(window, ^{ ((void (*)(id, SEL))originalRegardless)(window, regardless); });
     });
     SEL frame = @selector(setFrame:display:);
     IMP originalFrame = class_getMethodImplementation(NSWindow.class, frame);
     Replace(NSWindow.class, frame, ^(NSWindow *window, NSRect requested, BOOL display) {
         ((void (*)(id, SEL, NSRect, BOOL))originalFrame)(window, frame,
-            window.isVisible ? [AtticTestPresentationPolicy offscreenFrame:requested] : requested, display);
+            IsPresenting(window) ? [AtticTestPresentationPolicy offscreenFrame:requested] : requested, display);
     });
     SEL animated = @selector(setFrame:display:animate:);
     IMP originalAnimated = class_getMethodImplementation(NSWindow.class, animated);
     Replace(NSWindow.class, animated, ^(NSWindow *window, NSRect requested, BOOL display, BOOL animate) {
         ((void (*)(id, SEL, NSRect, BOOL, BOOL))originalAnimated)(window, animated,
-            window.isVisible ? [AtticTestPresentationPolicy offscreenFrame:requested] : requested, display, animate);
+            IsPresenting(window) ? [AtticTestPresentationPolicy offscreenFrame:requested] : requested, display, animate);
     });
     for (NSString *name in @[@"setFrameOrigin:", @"setFrameTopLeftPoint:"]) {
         SEL selector = NSSelectorFromString(name);
         IMP implementation = class_getMethodImplementation(NSWindow.class, selector);
         Replace(NSWindow.class, selector, ^(NSWindow *window, NSPoint point) {
-            if (window.isVisible) {
+            if (IsPresenting(window)) {
                 NSRect requested = window.frame;
                 requested.origin = point;
                 if ([name isEqualToString:@"setFrameTopLeftPoint:"]) requested.origin.y -= requested.size.height;
@@ -71,8 +83,7 @@ void AtticInstallInvisiblePresentation(void) {
     SEL child = @selector(addChildWindow:ordered:);
     IMP originalChild = class_getMethodImplementation(NSWindow.class, child);
     Replace(NSWindow.class, child, ^(NSWindow *window, NSWindow *childWindow, NSWindowOrderingMode mode) {
-        Place(childWindow);
-        ((void (*)(id, SEL, id, NSWindowOrderingMode))originalChild)(window, child, childWindow, mode);
+        Order(childWindow, ^{ ((void (*)(id, SEL, id, NSWindowOrderingMode))originalChild)(window, child, childWindow, mode); });
     });
     // Prevent AppKit from pulling off-display titled windows back on display.
     Replace(NSWindow.class, @selector(constrainFrameRect:toScreen:), ^NSRect(NSWindow *window, NSRect rect, NSScreen *screen) { return rect; });
