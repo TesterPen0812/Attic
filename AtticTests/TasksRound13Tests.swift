@@ -165,6 +165,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnInTheActionsMenuActivatesTheHighlightedItemNotEditTitle() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try openActionsMenu(hosted, on: "Ship appearance PR", keys: [("\u{F701}", 125), ("\u{F701}", 125), ("\r", 36)])
@@ -174,6 +175,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnOnAddSubtaskInTheActionsMenuOpensTheSubtaskEditor() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
@@ -186,6 +188,7 @@ final class TasksRound13Tests: XCTestCase {
     /// menu tracker, including its internal key-equivalent lookup. No direct
     /// responder dispatch or permission-dependent CGEvent posting is used.
     func testCoreGraphicsBackedReturnInTheActionsMenuRunsTheHighlightedItem() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
@@ -197,6 +200,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnOpensAHighlightedSubmenuAndRunsItsHighlightedCommand() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)

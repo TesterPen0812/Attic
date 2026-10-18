@@ -19,6 +19,7 @@ final class TasksRound12Tests: XCTestCase {
     }
 
     func testG08FindRetriesPreserveSelectionAndMidQueryCaretOnNowAndLater() throws {
+        try requireKeyWindowTests()
         for tab in [TasksTab.now, .backlog] {
             for selection in [NSRange(location: 1, length: 3), NSRange(location: 2, length: 0)] {
                 let hosted = try Hosted(height: 520)
@@ -42,6 +43,7 @@ final class TasksRound12Tests: XCTestCase {
     }
 
     func testG08DismissingFindDuringRetriesDoesNotTakeTheNextFieldsKeyboard() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.window.contentView = nil; hosted.close() }
         sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
