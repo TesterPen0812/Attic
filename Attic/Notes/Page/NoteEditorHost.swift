@@ -842,6 +842,10 @@ struct NoteEditorRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let engine = session.engine
+        // Capture before making the view: native setup can publish its initial
+        // zero selection back into the session. Restore before exposing the
+        // editor so queued presentation work cannot overwrite a newer caret.
+        let selection = session.selection
         context.coordinator.engine = engine
         let (scrollView, textView) = engine.makeView()
         scrollView.automaticallyAdjustsContentInsets = false
@@ -888,16 +892,15 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         #if DEBUG
         NoteFormatCaptureScene.runIfRequested(controls: controls, chrome: chrome, textView: textView)
         #endif
-        let selection = session.selection
+        let length = engine.textStorage.length
+        textView.setSelectedRange(NSRange(location: min(selection.location, length),
+                                          length: min(selection.length, max(0, length - selection.location))))
         DispatchQueue.main.async {
             // A note switch can leave the old session's view attached for
             // its outgoing transition. Its queued work no longer owns chrome.
             guard let accessories = context.coordinator.accessories,
                   chrome.accessories === accessories,
                   engine.textView === textView, engine.scrollView === scrollView else { return }
-            let length = engine.textStorage.length
-            textView.setSelectedRange(NSRange(location: min(selection.location, length),
-                                              length: min(selection.length, max(0, length - selection.location))))
             if let scrollOverride {
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollOverride))
             } else if session.scrollOffset > 0 {
