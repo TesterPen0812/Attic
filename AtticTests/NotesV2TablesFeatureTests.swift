@@ -102,15 +102,22 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertEqual(view.cellString(P(row: 0, column: 0)).string, "A", "one Undo step")
     }
 
-    /// V-05: rows reorder the same way, and the slot rule is the middle of
-    /// the card against the middles of the other rows.
+    /// V-05: rows reorder the same way. A strip before the card gives way
+    /// once the card's leading edge passes its middle, one after it once the
+    /// trailing edge does; at rest the card is in its own slot.
     func testV05TheLandingSlotFollowsTheCardsMiddle() {
         let sizes: [CGFloat] = [40, 30, 50, 20]
-        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 5), 0)
-        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 21), 1, "past A's middle")
-        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 66), 2, "past C's middle")
-        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, center: 200), 3)
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, start: 40), 1, "at rest")
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, start: 25), 1, "its top not yet past A's middle")
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, start: 19), 0, "its top past A's middle")
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, start: 64), 1, "its end not yet past C's middle")
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, start: 66), 2, "its end past C's middle")
+        XCTAssertEqual(NoteTableReorder.target(sizes: sizes, source: 1, start: 200), 3)
         XCTAssertEqual(NoteTableReorder.starts(sizes: sizes, source: 1, target: 3), [0: 0, 2: 40, 3: 90, 1: 110])
+        // F5a (Air): pushed against the top, a row taller than the header
+        // lands first; pushed against the end, a wide column lands last.
+        XCTAssertEqual(NoteTableReorder.target(sizes: [30, 31, 31, 31], source: 3, start: 0), 0)
+        XCTAssertEqual(NoteTableReorder.target(sizes: [30, 80, 20], source: 1, start: 50), 2)
     }
 
     private func location(of text: String, in engine: NoteEditorEngine) -> Int {

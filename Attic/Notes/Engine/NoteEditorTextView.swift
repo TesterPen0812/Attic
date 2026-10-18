@@ -245,6 +245,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             manager.textViewportLayoutController.layoutViewport()
             if let range = dragDimRange ?? oldValue, let rect = engine.rect(for: range) { redrawText(in: rect) }
             needsDisplay = true
+            // Drawn now: the tracking loop's own display passes are not
+            // reliable (the dim showed in one Light run of three).
+            displayIfNeeded()
         }
     }
 
@@ -255,7 +258,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             for child in view.subviews where !(child is NoteDragLiftView) && !child.isHidden {
                 guard child.convert(child.bounds, to: self).intersects(rect) else { continue }
                 child.needsDisplay = true
-                child.layer?.sublayers?.forEach { $0.setNeedsDisplay() }
+                child.layer?.sublayers?.forEach { $0.setNeedsDisplay(); $0.displayIfNeeded() }
                 if depth < 1 { visit(child, depth: depth + 1) }
             }
         }
@@ -1814,7 +1817,10 @@ final class NoteBlockDragDim {
             guard !view.isHidden, view.window === textView.window, !(view is NoteDragLiftView), !(view is NoteDropLineView),
                   view !== textView.blockHandle, view.isDescendant(of: textView) else { continue }
             let frame = view.superview === textView ? view.frame : textView.convert(view.bounds, from: view)
-            guard rect.contains(CGPoint(x: frame.midX, y: frame.midY)) else { continue }
+            // Only views within the block: TextKit's own full-size views
+            // (its content, selection and surfaces) can have their middle
+            // in a tall block, and dimming them would dim the whole note.
+            guard rect.insetBy(dx: -4, dy: -4).contains(frame) else { continue }
             views.append((view, view.alphaValue))
             view.alphaValue = Self.viewOpacity
         }

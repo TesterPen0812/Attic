@@ -405,14 +405,23 @@ final class NoteTableReorder {
         return result
     }
 
-    /// The slot the card's middle (`center`, along the axis) lands in: the
-    /// number of other strips whose middles lie before it.
-    static func target(sizes: [CGFloat], source: Int, center: CGFloat) -> Int {
+    /// The slot the card (starting at `start`, along the axis) lands in.
+    /// A strip before the source stays before it until the card's leading
+    /// edge passes the strip's middle; one after it moves before it once
+    /// the card's trailing edge does. F5a V-05: the earlier rule (the
+    /// card's middle against the others' middles) could never give the
+    /// first place when the strip there is shorter than the card: a row
+    /// pushed hard against the table's top still landed second, under its
+    /// own card, with a gap shown where nothing would land.
+    static func target(sizes: [CGFloat], source: Int, start: CGFloat) -> Int {
+        let size = sizes[source]
         var position: CGFloat = 0
         var before = 0
-        for index in sizes.indices where index != source {
-            if position + sizes[index] / 2 < center { before += 1 }
-            position += sizes[index]
+        for index in sizes.indices {
+            defer { position += sizes[index] }
+            guard index != source else { continue }
+            let middle = position + sizes[index] / 2
+            if index < source ? start >= middle : start + size > middle { before += 1 }
         }
         return before
     }
@@ -431,7 +440,7 @@ final class NoteTableReorder {
         var rect = Self.stripRect(source, sizes: sizes, axis: axis, grid: table.grid)
         if axis == .column { rect.origin.x = start } else { rect.origin.y = start }
         card.move(to: textView.convert(rect, from: canvas), animated: false)
-        let next = Self.target(sizes: sizes, source: source, center: start + size / 2)
+        let next = Self.target(sizes: sizes, source: source, start: start)
         guard next != target else { return }
         target = next
         layOut(animated: animated)
