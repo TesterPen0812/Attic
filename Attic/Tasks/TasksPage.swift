@@ -2607,9 +2607,8 @@ struct TasksPage: View {
         return height
     }
 
-    /// A drag began: a timer while it lasts reads Esc (SwiftUI's mouse
-    /// tracking holds key events until the button is up, so the key's own
-    /// state is read) and scrolls the list near its edges.
+    /// A drag began: common-mode timers read queued Escape during SwiftUI
+    /// mouse tracking and scroll the list near its edges.
     func prepareDragGeometry(group: [UUID], tab: TasksTab) -> TasksDragGeometry {
         let rows = Dictionary(uniqueKeysWithValues: model.rows(for: tab).map { ($0.id, $0) })
         return TasksDragGeometry(group: group) { id in
