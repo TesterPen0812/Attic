@@ -89,6 +89,59 @@ final class NoteDocumentStoreTests: XCTestCase {
     private var gate: PersistenceGate!
     private var store: NoteStore!
 
+    func testFLDrainIncludesSupersededAttachmentReconciliation() async throws {
+        await store.waitForAttachmentReconciliation()
+        let files = makeTestAttachmentFileStore()
+        let orphan = AttachmentFileReference(id: UUID(), digest: NotePayloadDigest.sha256(Data("orphan".utf8)),
+            filename: "orphan.txt", payload: Data("orphan".utf8))
+        _ = try await files.ensureMaterialized(orphan)
+        let notes = try makeTestNoteStore(attachmentFileStore: files)
+        let entered = expectation(description: "old reconciliation reading recovery ownership")
+        let newerEntered = expectation(description: "replacement reconciliation reading recovery ownership")
+        var held: CheckedContinuation<Set<UUID>, Never>?
+        defer { held?.resume(returning: []) }
+        var calls = 0
+        notes.recoveryReferencedAttachmentIDsDurably = {
+            calls += 1
+            if calls == 1 {
+                return await withCheckedContinuation { held = $0; entered.fulfill() }
+            }
+            if calls == 2 { newerEntered.fulfill() }
+            return []
+        }
+        await fulfillment(of: [entered], timeout: 3)
+        XCTAssertNotNil(held)
+        // Supersede the pass suspended in its provider with a changed inventory.
+        let data = Data("live".utf8)
+        let item = StagedNoteAttachment(id: UUID(), filename: "live.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+        guard case .success = notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("Live"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                  byteCount: item.byteCount)]), staged: [item]) else { return XCTFail("fixture creation") }
+        await fulfillment(of: [newerEntered], timeout: 3)
+        let waiting = expectation(description: "drain started")
+        let premature = expectation(description: "drain must not finish while an old file operation is held")
+        premature.isInverted = true
+        var drained = false
+        let drain = Task { @MainActor in
+            waiting.fulfill()
+            await notes.waitForAttachmentReconciliation()
+            drained = true
+            if held != nil { premature.fulfill() }
+        }
+        await fulfillment(of: [waiting], timeout: 3)
+        // Await the newer actor work explicitly; the held old pass still owns work.
+        _ = try await files.existingMaterializedURL(for: orphan)
+        // A bounded negative assertion: the controlled provider cannot
+        // complete before we release it, however fast the newer pass runs.
+        await fulfillment(of: [premature], timeout: 0.1)
+        XCTAssertFalse(drained, "a cancelled pass still in its provider must finish before root teardown")
+        held?.resume(returning: [])
+        held = nil
+        await drain.value
+        XCTAssertTrue(drained)
+    }
+
     override func setUp() async throws {
         gate = PersistenceGate()
         store = try makeTestNoteStore(persist: { [gate] in try gate!.save($0) },

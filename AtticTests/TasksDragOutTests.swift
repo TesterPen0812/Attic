@@ -262,21 +262,25 @@ final class TasksDragOutCardTests: XCTestCase {
         XCTAssertFalse(NSApp.windows.contains { !windows.contains(ObjectIdentifier($0)) && $0.isVisible }, "and its window goes")
     }
 
-    /// The item never vanishes for a frame at a cancelled drop: wherever the
-    /// pointer rests, the same picture already lies under the system's
-    /// image; a move withdraws it, and a successful drop takes it away.
-    func testThePictureRestsUnderTheSystemsImageAndGoesOnAMoveOrADrop() {
+    /// V-09: the picture is the drag's only one. It shows at once where it
+    /// is drawn, follows every move without a gap (so it never vanishes for
+    /// a frame at a cancelled drop), and a successful drop takes it away.
+    func testThePictureFollowsThePointerAndGoesOnADrop() throws {
         let images = TasksDragOut.Card.Images(card: Color.gray.frame(height: 34), width: 300, environment: EnvironmentValues(), scale: 2)!
         let drawn = CGRect(x: -5_200, y: -5_200, width: 200, height: 44)
         let dragReturn = AtticDragReturn(shadowed: images.shadowed, plain: images.plain, home: { CGRect(x: -5_000, y: -5_000, width: 340, height: 74) },
                                          level: .floating, reduceMotion: false)
         XCTAssertTrue(dragReturn.windowForTesting.isVisible, "ready, and clear, before the drop")
+        XCTAssertFalse(dragReturn.isShown)
         dragReturn.moved(drawn: drawn)
-        XCTAssertFalse(dragReturn.isResting, "not while the pointer moves")
-        RunLoop.current.run(until: Date().addingTimeInterval(AtticDragReturn.restDelay + 0.05))
-        XCTAssertTrue(dragReturn.isResting, "under the system's image once the pointer rests")
+        XCTAssertTrue(dragReturn.isShown, "shown at once, where it is drawn")
+        let layer = try XCTUnwrap(dragReturn.windowForTesting.contentView?.layer?.sublayers?.last)
+        let origin = dragReturn.windowForTesting.frame.origin
+        XCTAssertEqual(layer.position, CGPoint(x: drawn.minX - origin.x, y: drawn.minY - origin.y))
         dragReturn.moved(drawn: drawn.offsetBy(dx: 30, dy: 0))
-        XCTAssertFalse(dragReturn.isResting, "withdrawn the moment it moves again")
+        XCTAssertTrue(dragReturn.isShown, "still shown as it moves")
+        XCTAssertEqual(layer.position.x, drawn.minX + 30 - origin.x, "it follows the pointer")
+        XCTAssertTrue((layer.animationKeys() ?? []).isEmpty, "with no animation of its own")
         var done = 0
         dragReturn.ended(operation: .copy, drawn: drawn) { done += 1 }
         XCTAssertEqual(done, 1)
@@ -773,8 +777,10 @@ final class RoundD1DragTests: XCTestCase {
             CATransaction.flush()
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             let layers = try XCTUnwrap(returning.windowForTesting.contentView?.layer?.sublayers)
-            XCTAssertTrue(layers.allSatisfy { $0.presentation()?.position == .zero },
-                          "The hidden image has a presentation at the overlay origin")
+            // V-09: the picture shows at hand-off (the drag's only one),
+            // placed without any animation of its own.
+            XCTAssertTrue(layers.allSatisfy { ($0.animationKeys() ?? []).isEmpty },
+                          "Shown at the hand-off with no implicit travel")
             let release = CGPoint(x: 900, y: 600)
             source.ended(at: release, operation: []) // no destination or a refused/cancelled drop
             let expected = source.grip.frame(at: release)
@@ -821,7 +827,7 @@ final class RoundD1DragTests: XCTestCase {
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             let start = CGRect(x: -900, y: 300, width: 180, height: 30)
             returning.moved(drawn: start)
-            RunLoop.main.run(until: Date().addingTimeInterval(AtticDragReturn.restDelay + 0.05))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             let layers = try XCTUnwrap(returning.windowForTesting.contentView?.layer?.sublayers)
             XCTAssertTrue(layers.allSatisfy { ($0.animationKeys() ?? []).isEmpty }, "Resting placement has no implicit travel or fade")
             returning.ended(operation: [], drawn: start, done: {})

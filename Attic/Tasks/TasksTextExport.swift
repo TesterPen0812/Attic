@@ -169,12 +169,18 @@ private final class TasksTextFilePromise: NSFilePromiseProvider, NSFilePromisePr
         [.string, TasksTextExport.markdownType] + (richText == nil ? [] : [.rtf])
     }
 
+    /// V-13: marks the drag as Attic tasks, so a drop back on the panel
+    /// reads it as tasks (`TaskDropContent.task`), never as files to
+    /// attach: a task released over its own row only springs home. It
+    /// carries nothing (no title or identifier); other apps ignore it.
+    static let taskMarkerType = NSPasteboard.PasteboardType(TaskDragPayload.internalTaskType.identifier)
+
     override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        super.writableTypes(for: pasteboard) + textTypes
+        super.writableTypes(for: pasteboard) + textTypes + [Self.taskMarkerType]
     }
 
     override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
-        textTypes.contains(type) ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
+        textTypes.contains(type) || type == Self.taskMarkerType ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
     }
 
     override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
@@ -182,6 +188,7 @@ private final class TasksTextFilePromise: NSFilePromiseProvider, NSFilePromisePr
         case .string: plain
         case TasksTextExport.markdownType: markdown
         case .rtf: richText
+        case Self.taskMarkerType: Data()
         default: super.pasteboardPropertyList(forType: type)
         }
     }

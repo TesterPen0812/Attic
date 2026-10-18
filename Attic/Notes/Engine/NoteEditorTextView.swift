@@ -27,6 +27,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// Page presentation restores the current input client. It must not
     /// replace the palette receiver with the note body during a handoff.
     func restoreInputFocus() {
+        // SwiftUI may still retain the outgoing view when a queued page
+        // presentation runs. Only the engine's live client owns its input.
+        guard let engine, engine.textView === self else { return }
         window?.makeFirstResponder(calloutIconSession?.receiver ?? self)
     }
 

@@ -476,6 +476,143 @@ final class NoteEditorEngineTests: XCTestCase {
         withExtendedLifetime(accessories) {}
     }
 
+    func testFLDetachedEditorsCannotRestoreFocusOverTheirReplacement() throws {
+        let (engine, old) = makeEngine(window: true)
+        let window = try XCTUnwrap(old.window)
+        // Keep the outgoing view attached, as SwiftUI can until dismantle.
+        let (scroll, live) = engine.makeView()
+        window.contentView?.addSubview(scroll)
+        XCTAssertTrue(window.makeFirstResponder(live))
+        XCTAssertNil(old.engine)
+        old.restoreInputFocus() // the outgoing presentation's queued callback
+        XCTAssertTrue(window.firstResponder === live)
+        live.restoreInputFocus()
+        XCTAssertTrue(window.firstResponder === live, "the live editor can still restore focus")
+        engine.detachView()
+    }
+
+    private func mountFLPresentation(_ session: NoteSession, chrome: NotesPageChrome, in existingWindow: NSWindow? = nil) -> NSWindow {
+        let root = NoteEditorRepresentable(session: session, chrome: chrome, columnInset: 20,
+                                           topInset: 60, bottomInset: 60, headerBottom: 40,
+                                           design: .default, tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] })
+        let host = NSHostingView(rootView: root)
+        host.frame = NSRect(x: 0, y: 0, width: 320, height: 520)
+        let window = existingWindow ?? NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        if existingWindow == nil {
+            window.contentView = NSView(frame: host.frame)
+            windows.append(window)
+        }
+        window.contentView?.addSubview(host)
+        host.layoutSubtreeIfNeeded()
+        return window // No run-loop turn: presentation's queued callback is still pending.
+    }
+
+    func testFLPresentationRestoresSavedSelectionBeforeTheEditorCanReceiveInput() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Alpha")]), tags: nil) else {
+            return XCTFail("create note")
+        }
+        let controller = NotesPageController(store: store, journal: nil)
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let saved = NSRange(location: 2, length: 2)
+        session.engine.onSelectionChange?(saved)
+        let window = mountFLPresentation(session, chrome: NotesPageChrome())
+        let editor = try XCTUnwrap(session.engine.textView)
+        XCTAssertTrue(editor.window === window)
+        XCTAssertEqual(editor.selectedRange(), saved, "saved selection is ready before focus or a run-loop turn")
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        let drained = expectation(description: "presentation callback drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
+        XCTAssertEqual(editor.selectedRange(), saved)
+        XCTAssertEqual(session.selection, saved)
+        XCTAssertTrue(window.firstResponder === editor)
+    }
+
+    func testFLQueuedPresentationCannotResetAnAlreadyFocusedLiveCaret() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Alpha")]), tags: nil) else {
+            return XCTFail("create note")
+        }
+        let controller = NotesPageController(store: store, journal: nil)
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let window = mountFLPresentation(session, chrome: NotesPageChrome())
+        let editor = try XCTUnwrap(session.engine.textView)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        let end = NSRange(location: editor.string.utf16.count, length: 0)
+        editor.setSelectedRange(end)
+        let drained = expectation(description: "presentation callback drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
+        XCTAssertEqual(editor.selectedRange(), end, "queued geometry/focus work must preserve a newer live caret")
+        XCTAssertEqual(session.selection, end)
+        XCTAssertTrue(window.firstResponder === editor)
+        editor.insertText(" typed", replacementRange: editor.selectedRange())
+        XCTAssertEqual(session.engine.plainText, "Alpha typed")
+    }
+
+    func testFLNewNoteFromSearchKeepsItsDefaultCaretAtTheEndOfTheTitle() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: nil)
+        await controller.startAndWait()
+        XCTAssertTrue(controller.requestNewNote(title: "Alpha", tags: []))
+        let session = try XCTUnwrap(controller.active)
+        let end = NSRange(location: 5, length: 0)
+        XCTAssertEqual(session.selection, end, "the search-to-new-note rule places the caret after the title")
+        let window = mountFLPresentation(session, chrome: NotesPageChrome())
+        let editor = try XCTUnwrap(session.engine.textView)
+        XCTAssertEqual(editor.selectedRange(), end)
+        let drained = expectation(description: "new-note presentation drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        await fulfillment(of: [drained], timeout: 2)
+        XCTAssertEqual(editor.selectedRange(), end)
+        XCTAssertTrue(window.firstResponder === editor)
+        editor.insertText(" typed", replacementRange: editor.selectedRange())
+        XCTAssertEqual(session.engine.plainText, "Alpha typed")
+    }
+
+    func testFLQueuedOutgoingPresentationsCannotMoveSelectionOrFocus() throws {
+        for reuseSession in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let controller = NotesPageController(store: store, journal: nil)
+            let ids = [UUID(), UUID()]
+            for id in ids {
+                guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Alpha")]), tags: nil) else {
+                    return XCTFail("create note")
+                }
+            }
+            XCTAssertTrue(controller.open(noteID: ids[0]))
+            let outgoing = try XCTUnwrap(controller.active)
+            let chrome = NotesPageChrome()
+            let window = mountFLPresentation(outgoing, chrome: chrome)
+            let old = try XCTUnwrap(outgoing.engine.textView)
+            if !reuseSession { XCTAssertTrue(controller.open(noteID: ids[1])) }
+            let current = try XCTUnwrap(controller.active)
+            _ = mountFLPresentation(current, chrome: chrome, in: window)
+            let live = try XCTUnwrap(current.engine.textView)
+            XCTAssertFalse(old === live)
+            // A replaced engine client has been detached from its storage;
+            // a different note's outgoing client still has its own text.
+            XCTAssertEqual(old.string.utf16.count, reuseSession ? 0 : 5)
+            let oldSelection = NSRange(location: reuseSession ? 0 : 1, length: reuseSession ? 0 : 1)
+            old.setSelectedRange(oldSelection)
+            XCTAssertTrue(window.makeFirstResponder(live))
+            let liveSelection = NSRange(location: 4, length: 0)
+            live.setSelectedRange(liveSelection)
+            let drained = expectation(description: "outgoing and live callbacks drained")
+            DispatchQueue.main.async { drained.fulfill() }
+            wait(for: [drained], timeout: 2)
+            XCTAssertEqual(old.selectedRange(), oldSelection, "outgoing callback cannot change even its own selection")
+            XCTAssertEqual(live.selectedRange(), liveSelection)
+            XCTAssertTrue(window.firstResponder === live)
+        }
+    }
+
     private func g05Engine() -> (NoteEditorEngine, NoteEditorTextView) {
         var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
         return makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]), window: true)
