@@ -327,18 +327,16 @@ final class MarqueeInteractionTests: XCTestCase {
         XCTAssertNotNil((card.layer?.sublayers?.first)?.contents, "the block's snapshot")
         XCTAssertEqual(card.frame.size, CGSize(width: rect.width + 12, height: rect.height + 8))
 
-        let dim = NoteBlockDragDim(textView: text, block: quote, rect: rect)
-        XCTAssertEqual(text.dragDimRange, quote, "its place dims while it is lifted")
-        dim.restore()
-        XCTAssertNil(text.dragDimRange)
-
         // A table block dims through its hosted view.
         let tableLocation = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first?.hostedView)
         let tableRect = text.convert(tableLocation.bounds, from: tableLocation)
+        func shown(_ view: NSView) -> CGFloat {
+            sequence(first: view, next: { $0 === text ? nil : $0.superview }).reduce(1) { $0 * $1.alphaValue }
+        }
         let tableDim = NoteBlockDragDim(textView: text, block: engine.blockRange(at: quote.location + quote.length), rect: tableRect.insetBy(dx: -2, dy: -2))
-        XCTAssertEqual(tableLocation.alphaValue, NoteBlockDragDim.viewOpacity, accuracy: 0.01)
+        XCTAssertEqual(shown(tableLocation), NoteBlockDragDim.viewOpacity, accuracy: 0.01, "the table dims, once")
         tableDim.restore()
-        XCTAssertEqual(tableLocation.alphaValue, 1)
+        XCTAssertEqual(shown(tableLocation), 1)
     }
 
     func testDiscontiguousDeleteAndUndoPreserveUnselectedBlocksAndMarks() throws {
@@ -619,53 +617,36 @@ final class MarqueeInteractionTests: XCTestCase {
     }
 
     /// V-06 on the Air: the dragged block's place never dimmed on screen
-    /// (pixel-identical before and during the drag). Invalidating its
-    /// rendering attributes neither recoloured it nor redrew the layers
-    /// TextKit had drawn it into. Measured in those layers, as the screen
-    /// shows them: its text draws dimmed while it is lifted and as before
-    /// once it is dropped.
-    func testF5aV06TheDraggedBlocksPlaceDrawsDimmed() throws {
-        let (engine, text, _) = editor([.text("Title"), .text("let answer = 42", style: "mono"), .text("End")])
-        let window = try XCTUnwrap(text.window)
-        window.contentView?.wantsLayer = true
-        window.setFrameOrigin(CGPoint(x: -4000, y: -4000))
-        window.orderFront(nil)
+    /// (pixel-identical before and during the drag): F4a recoloured its
+    /// text through rendering attributes, which the views TextKit had drawn
+    /// it into never showed. The views that draw the block dim instead, and
+    /// nothing else: not a note-tall view (TextKit's content, selection and
+    /// surfaces views), not the next paragraph's view; all come back on
+    /// drop. (TextKit makes its paragraph views only for a window on
+    /// screen, so they are stood in for here; the Air frames show them.)
+    func testF5aV06TheViewsDrawingTheDraggedBlockDim() throws {
+        let (engine, text, _) = editor([.text("Title"), .text("Before"), .text("let answer = 42", style: "mono"), .text("After")])
         engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         text.layoutSubtreeIfNeeded()
-        let block = engine.blockRange(at: (engine.textStorage.string as NSString).range(of: "let answer").location)
+        let string = engine.textStorage.string as NSString
+        let block = engine.blockRange(at: string.range(of: "let answer").location)
         let rect = try XCTUnwrap(engine.rect(for: block))
-        /// The ink of what the window's layers hold for the block.
-        func ink() throws -> CGFloat {
-            window.displayIfNeeded()
-            CATransaction.flush()
-            let drawn = try XCTUnwrap(text.subviews.flatMap { [$0] + $0.subviews }
-                .first { NSStringFromClass(type(of: $0)).contains("ViewportElement") && $0.convert($0.bounds, to: text).intersects(rect)
-                    && $0.convert($0.bounds, to: text).height > 30 }, "the view TextKit draws the code block in")
-            let layer = try XCTUnwrap(drawn.layer)
-            let size = CGSize(width: layer.bounds.width * 2, height: layer.bounds.height * 2)
-            let space = CGColorSpaceCreateDeviceRGB()
-            let context = try XCTUnwrap(CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
-                                                  bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-            context.scaleBy(x: 2, y: 2)
-            layer.render(in: context)
-            let data = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
-            // The text's pixels: dark ink, not the block's light fill.
-            var total: CGFloat = 0
-            for index in stride(from: 0, to: context.bytesPerRow * context.height, by: 4) {
-                let alpha = CGFloat(data[index + 3]) / 255
-                guard alpha > 0.5 else { continue }
-                let brightness = (CGFloat(data[index]) + CGFloat(data[index + 1]) + CGFloat(data[index + 2])) / 3 / 255 / alpha
-                if brightness < 0.4 { total += 1 }
-            }
-            return total
-        }
-        let before = try ink()
-        XCTAssertGreaterThan(before, 50, "the code's text draws")
+        let after = try XCTUnwrap(engine.rect(for: engine.paragraphRange(at: string.range(of: "After").location)))
+        let content = NSView(frame: text.bounds)
+        content.wantsLayer = true
+        text.addSubview(content)
+        let paragraph = NSView(frame: rect.insetBy(dx: 0, dy: -3))
+        let next = NSView(frame: after)
+        for view in [paragraph, next] { view.wantsLayer = true; content.addSubview(view) }
         let dim = NoteBlockDragDim(textView: text, block: block, rect: rect)
-        let during = try ink()
-        XCTAssertLessThan(during, before * 0.3, "its place draws dimmed while it is lifted (\(during) of \(before))")
+        XCTAssertEqual(paragraph.alphaValue, NoteBlockDragDim.viewOpacity, "the block's own view dims")
+        XCTAssertEqual(next.alphaValue, 1, "the next paragraph stays")
+        XCTAssertEqual(content.alphaValue, 1, "a note-tall view stays")
+        XCTAssertEqual(text.alphaValue, 1)
         dim.restore()
-        XCTAssertEqual(try ink(), before, accuracy: before * 0.01, "and as before once dropped")
+        XCTAssertEqual(paragraph.alphaValue, 1, "back on drop")
+        XCTAssertFalse(NoteBlockDragDim.drawsOnly(text.bounds, within: rect))
+        XCTAssertTrue(NoteBlockDragDim.drawsOnly(rect.insetBy(dx: 0, dy: -3), within: rect))
     }
 
 }

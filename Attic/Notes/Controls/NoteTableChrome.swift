@@ -382,6 +382,7 @@ final class NoteTableReorder {
         card.frame = textView.convert(sourceRect, from: canvas)
         textView.addSubview(card, positioned: .below, relativeTo: sibling)
         canvas.alphaValue = 0
+        CATransaction.flush()
     }
 
     private static func stripRect(_ index: Int, sizes: [CGFloat], axis: Axis, grid: NoteTableLayout) -> CGRect {
@@ -473,6 +474,9 @@ final class NoteTableReorder {
                 layer?.contents = image
             }
         }
+        // The grip's tracking loop never commits implicit layer changes
+        // (F5a V-06 met the same): commit the new looks now.
+        CATransaction.flush()
     }
 
     /// Row `index` with the header's look or a body row's.
