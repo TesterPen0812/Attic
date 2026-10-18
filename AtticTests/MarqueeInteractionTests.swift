@@ -525,6 +525,133 @@ final class MarqueeInteractionTests: XCTestCase {
         XCTAssertEqual(model.selection, [archivedID, todayID])
         XCTAssertEqual(model.orderedSelection(), rows.map(\.id))
     }
+
+    // MARK: F5a (Air round V1)
+
+    private func cia() -> NoteBlock {
+        .table(NoteTable(texts: [["Pillar", "What happened"], ["Confidentiality", "Data taken"],
+                                 ["Integrity", "Systems encrypted"], ["Availability", "Pipeline shut down"]]))
+    }
+
+    /// V-05 on the Air: the row grip sits in the column's left margin, so
+    /// its press started a margin marquee instead of reaching the grip (the
+    /// column grip, over the column, always worked). Both grips keep their
+    /// press, and a row dragged by its grip lifts, opens its gap, lands
+    /// there and is one Undo step.
+    func testF5aV05TheRowGripKeepsItsPressAndItsDragMovesTheRow() throws {
+        let (engine, text, selection) = editor([.text("Title"), cia(), .text("End")])
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let view = try XCTUnwrap(engine.tableViews().first)
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .end)
+        text.layoutSubtreeIfNeeded()
+        let chrome = NoteTableChrome(engine: engine, textView: text, design: .default)
+        chrome.place()
+        XCTAssertFalse(chrome.rowGrip.isHidden, "the active row's grip shows")
+        XCTAssertLessThan(chrome.rowGrip.frame.midX, text.textContainerOrigin.x, "the row grip is in the margin")
+        let controller = try XCTUnwrap(selection.controller)
+        for (name, grip) in [("row", chrome.rowGrip), ("column", chrome.columnGrip)] {
+            let press = event(.leftMouseDown, point: CGPoint(x: grip.frame.midX, y: grip.frame.midY), in: text)
+            XCTAssertTrue(controller.handle(press) === press, "the \(name) grip's press is the grip's, not a marquee")
+            _ = controller.handle(event(.leftMouseUp, point: CGPoint(x: grip.frame.midX, y: grip.frame.midY), in: text))
+        }
+        // The drag: Confidentiality, two rows down, lands last.
+        let heights = view.grid.rowHeights
+        let start = CGPoint(x: chrome.rowGrip.frame.midX, y: chrome.rowGrip.frame.midY)
+        let drag = try XCTUnwrap(chrome.rowGrip.onDrag)
+        drag(text.convert(start, to: nil), false)
+        XCTAssertEqual(view.canvas.alphaValue, 0, "the rows' strips stand in for the cells")
+        XCTAssertNotNil(text.subviews.first { $0 is NoteDragLiftView }, "the row lifts onto its card")
+        for step in 1...4 {
+            drag(text.convert(CGPoint(x: start.x, y: start.y + (heights[2] + heights[3]) * CGFloat(step) / 4), to: nil), false)
+        }
+        drag(text.convert(CGPoint(x: start.x, y: start.y + heights[2] + heights[3]), to: nil), true)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertEqual(view.canvas.alphaValue, 1, "the live table is back")
+        XCTAssertTrue(text.subviews.allSatisfy { !($0 is NoteDragLiftView) }, "the card is gone")
+        let moved = try XCTUnwrap(view.attachment).table
+        XCTAssertEqual(moved.rows.map { $0.cells[0].text }, ["Pillar", "Integrity", "Availability", "Confidentiality"])
+        XCTAssertTrue(engine.undoCommand())
+        XCTAssertEqual(try XCTUnwrap(view.attachment).table.rows.map { $0.cells[0].text },
+                       ["Pillar", "Confidentiality", "Integrity", "Availability"], "one Undo step")
+    }
+
+    /// V-05: during a row drag the header's look (fill, semibold) stays
+    /// with the first place: a row dragged there takes it, and the header
+    /// row it pushes down shows plain, as both will be after the drop.
+    func testF5aV05TheHeadersLookStaysWithTheFirstPlaceDuringARowDrag() throws {
+        let (engine, text, _) = editor([.text("Title"), cia(), .text("End")])
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let view = try XCTUnwrap(engine.tableViews().first)
+        let heights = view.grid.rowHeights
+        let reorder = try XCTUnwrap(NoteTableReorder(table: view, textView: text, axis: .row, source: 2,
+                                                     tokens: AtticColorTokens.resolve(.default), animated: false, below: nil))
+        let layer = try XCTUnwrap(view.scrollView.subviews.first { $0 is NoteTableReorderLayer })
+        let headerStrip = try XCTUnwrap(layer.subviews.first, "row 0's strip")
+        let card = try XCTUnwrap(text.subviews.first { $0 is NoteDragLiftView })
+        func image(_ contents: Any?) throws -> NSBitmapImageRep {
+            let image = try XCTUnwrap(contents as? NSImage)
+            return try XCTUnwrap(image.representations.first as? NSBitmapImageRep)
+        }
+        /// The fill in a cell's top-left padding (no text there).
+        func fill(_ rep: NSBitmapImageRep) -> CGFloat {
+            let scale = CGFloat(rep.pixelsWide) / view.grid.width
+            return rep.colorAt(x: Int(4 * scale), y: Int(3 * scale))?.alphaComponent ?? 0
+        }
+        let header = try fill(image(headerStrip.layer?.contents))
+        let plainCard = try fill(image(card.layer?.sublayers?.first?.contents))
+        XCTAssertGreaterThan(header, plainCard + 0.02, "the header row has its fill; Integrity has none")
+        let canvas = view.canvas
+        reorder.update(windowPoint: canvas.convert(CGPoint(x: 10, y: heights[0] + heights[1] + heights[2] / 2), to: nil))
+        reorder.update(windowPoint: canvas.convert(CGPoint(x: 10, y: 2), to: nil))
+        XCTAssertEqual(reorder.target, 0, "Integrity is over the first place")
+        XCTAssertEqual(try fill(image(card.layer?.sublayers?.first?.contents)), header, accuracy: 0.02,
+                       "the card takes the header's fill")
+        XCTAssertEqual(try fill(image(headerStrip.layer?.contents)), plainCard, accuracy: 0.02,
+                       "the old header row, pushed down, shows plain")
+        // Back over its own place: each look returns.
+        reorder.update(windowPoint: canvas.convert(CGPoint(x: 10, y: heights[0] + heights[1] + heights[2] / 2), to: nil))
+        XCTAssertEqual(reorder.target, 2)
+        XCTAssertEqual(try fill(image(headerStrip.layer?.contents)), header, accuracy: 0.02)
+        XCTAssertEqual(try fill(image(card.layer?.sublayers?.first?.contents)), plainCard, accuracy: 0.02)
+        reorder.finish { _ in }
+    }
+
+    /// V-06 on the Air: the dragged block's place never dimmed on screen
+    /// (pixel-identical before and during the drag): invalidating its
+    /// rendering attributes alone left its drawn text as it was. Its text
+    /// draws dimmed while it is lifted and as before once it is dropped.
+    func testF5aV06TheDraggedBlocksPlaceDrawsDimmed() throws {
+        let (engine, text, _) = editor([.text("Title"), .text("let answer = 42", style: "mono"), .text("End")])
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let block = engine.blockRange(at: (engine.textStorage.string as NSString).range(of: "let answer").location)
+        let rect = try XCTUnwrap(engine.rect(for: block))
+        func ink() throws -> CGFloat {
+            engine.layoutManager?.textViewportLayoutController.layoutViewport()
+            text.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: text.bounds))
+            text.cacheDisplay(in: text.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / text.bounds.width
+            var total: CGFloat = 0
+            for y in Int(rect.minY * scale)..<Int(rect.maxY * scale) {
+                for x in Int(rect.minX * scale)..<Int(rect.maxX * scale) {
+                    guard let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                    total += colour.alphaComponent * (1 - colour.brightnessComponent)
+                }
+            }
+            return total
+        }
+        let before = try ink()
+        XCTAssertGreaterThan(before, 0, "the code's text draws")
+        let dim = NoteBlockDragDim(textView: text, block: block, rect: rect)
+        let during = try ink()
+        XCTAssertLessThan(during, before * 0.8, "its place draws dimmed while it is lifted (\(during) of \(before))")
+        dim.restore()
+        XCTAssertEqual(try ink(), before, accuracy: before * 0.01, "and as before once dropped")
+    }
+
 }
 
 private final class FlippedView: NSView {

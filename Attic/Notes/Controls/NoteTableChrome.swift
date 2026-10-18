@@ -327,6 +327,17 @@ final class NoteTableReorder {
     private let canvasAlpha: CGFloat
     /// Where the pointer took the card, along the axis, from its start.
     private var grab: CGFloat?
+    /// The strips as the canvas drew them.
+    private let images: [NSImage?]
+    /// A row drag in a table with a header row: the header's look (its
+    /// fill and semibold text) belongs to the first place, not to the row
+    /// that had it. Whichever row the drop would put first shows it, and
+    /// the header row shows as a body row once it would leave (F5a V-05).
+    private let headerRows: Bool
+    /// The rows drawn in the other look, made once each when first needed.
+    private var otherLooks: [Int: NSImage] = [:]
+    /// The row shown with the header's look.
+    private var headerOccupant = 0
 
     static let duration = AtticMotionScale.fast
 
@@ -359,6 +370,8 @@ final class NoteTableReorder {
             strips.append(strip)
         }
         self.strips = strips
+        self.images = images
+        headerRows = axis == .row && table.attachment?.table.headerRow == true
         container.frame = canvas.frame
         container.wantsLayer = true
         for (index, strip) in strips.enumerated() where index != source { container.addSubview(strip) }
@@ -422,6 +435,87 @@ final class NoteTableReorder {
         guard next != target else { return }
         target = next
         layOut(animated: animated)
+        restyleHeader(animated: animated)
+    }
+
+    /// The header's look follows the first place (rows only): the row the
+    /// drop would put first takes it, and the one it leaves goes plain.
+    private func restyleHeader(animated: Bool) {
+        guard headerRows, let table else { return }
+        var order = Array(sizes.indices)
+        order.remove(at: source)
+        order.insert(source, at: target)
+        let occupant = order[0]
+        guard occupant != headerOccupant else { return }
+        let previous = headerOccupant
+        headerOccupant = occupant
+        for index in [previous, occupant] {
+            let image = look(of: index, asHeader: index == occupant, in: table)
+            if index == source {
+                card.setSnapshot(image, animated: animated, duration: Self.duration)
+            } else {
+                let layer = strips[index].layer
+                if animated {
+                    let fade = CATransition()
+                    fade.type = .fade
+                    fade.duration = Self.duration
+                    layer?.add(fade, forKey: "look")
+                }
+                layer?.contents = image
+            }
+        }
+    }
+
+    /// Row `index` with the header's look or a body row's.
+    private func look(of index: Int, asHeader: Bool, in table: NoteTableView) -> NSImage? {
+        // The canvas drew row 0 as the header and the others plain.
+        if asHeader == (index == 0) { return images[index] }
+        if let made = otherLooks[index] { return made }
+        let made = Self.rowImage(index, asHeader: asHeader, in: table)
+        otherLooks[index] = made
+        return made
+    }
+
+    /// Draws row `index` as it would look first (`asHeader`) or second, in
+    /// its own height: the table drawn with that row moved there, cut to it.
+    static func rowImage(_ index: Int, asHeader: Bool, in table: NoteTableView) -> NSImage? {
+        guard let attachment = table.attachment else { return nil }
+        let grid = table.grid
+        var model = attachment.table
+        let slot = asHeader ? 0 : 1
+        guard grid.rowHeights.count == model.rowCount, model.moveRow(from: index, to: slot) else { return nil }
+        var order = Array(grid.rowHeights.indices)
+        order.remove(at: index)
+        order.insert(index, at: slot)
+        let layout = NoteTableLayout(columnWidths: grid.columnWidths, rowHeights: order.map { grid.rowHeights[$0] },
+                                     viewportWidth: grid.viewportWidth)
+        let rect = CGRect(x: 0, y: layout.rowY(slot), width: grid.width, height: layout.rowHeights[slot])
+        let canvas = table.canvas
+        guard rect.width > 0, rect.height > 0,
+              let bitmap = canvas.bitmapImageRepForCachingDisplay(in: CGRect(origin: .zero, size: rect.size)),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        // The cell being edited keeps its soft fill, in its new place.
+        let editing = table.hasEditor && !table.editor.isHidden ? table.activeCell : nil
+        let active = editing.flatMap { cell in order.firstIndex(of: cell.row).map { NoteTable.Position(row: $0, column: cell.column) } }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        // In points, whether or not the context already scales to pixels.
+        let cg = context.cgContext
+        let scale = CGFloat(bitmap.pixelsWide) / rect.width / max(cg.ctm.a, 0.0001)
+        cg.scaleBy(x: scale, y: scale)
+        cg.translateBy(x: 0, y: rect.height)
+        cg.scaleBy(x: 1, y: -1)
+        cg.translateBy(x: 0, y: -rect.minY)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: cg, flipped: true)
+        canvas.effectiveAppearance.performAsCurrentDrawingAppearance {
+            NoteTableDrawing.draw(table: model, layout: layout,
+                                  design: attachment.engine?.objectDesign ?? attachment.style.design, style: attachment.style,
+                                  string: { attachment.cellString(at: $0, in: model) }, skipping: nil,
+                                  active: active, strokesCard: canvas.strokesCard)
+        }
+        let image = NSImage(size: rect.size)
+        image.addRepresentation(bitmap)
+        return image
     }
 
     private func layOut(animated: Bool) {

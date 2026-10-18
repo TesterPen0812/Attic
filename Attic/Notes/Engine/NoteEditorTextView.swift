@@ -216,7 +216,26 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         didSet {
             guard dragDimRange != oldValue, let engine, let manager = textLayoutManager else { return }
             for range in [oldValue, dragDimRange].compactMap({ $0 }) {
-                if let textRange = engine.textRange(for: range) { manager.invalidateRenderingAttributes(for: textRange) }
+                guard let textRange = engine.textRange(for: range) else { continue }
+                // F5a V-06: invalidating the rendering attributes left the
+                // place drawn as it was on screen (V1: pixel-identical while
+                // lifted). The block's fragments are recoloured here, at
+                // once (dimmed, or back to their syntax and checklist inks),
+                // and their layout invalidated so the new ink is drawn:
+                // invalidated attributes alone leave the drawn pixels as they
+                // were (Find's highlights met the same). Once at the lift
+                // and once at the drop. A hosted block (a table) dims by its
+                // view instead; re-laying it out would re-host that view.
+                manager.removeRenderingAttribute(.foregroundColor, for: textRange)
+                manager.enumerateTextLayoutFragments(from: textRange.location, options: []) { fragment in
+                    guard fragment.rangeInElement.location.compare(textRange.endLocation) == .orderedAscending else { return false }
+                    colourFragment(fragment, manager: manager)
+                    return true
+                }
+                let location = min(range.location, max(0, engine.textStorage.length - 1))
+                if engine.textStorage.length > 0, !engine.isBlockObject(at: location) {
+                    manager.invalidateLayout(for: textRange)
+                }
             }
             needsDisplay = true
         }

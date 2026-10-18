@@ -870,7 +870,7 @@ struct AtticDropdownSpace {
     /// them. Unchanged when that would leave no room.
     func clearing(bottom clearance: CGFloat, of view: NSView) -> AtticDropdownSpace {
         guard clearance > 0 else { return self }
-        let visible = anchor(view.visibleRect, in: view)
+        let visible = anchor(Self.shown(view), in: view)
         let maxY = min(bounds.maxY, visible.maxY - clearance)
         guard maxY > bounds.minY + AtticDropdownMetrics.rowHeight * 2 else { return self }
         return AtticDropdownSpace(parent: parent, bounds: CGRect(x: bounds.minX, y: bounds.minY,
@@ -883,11 +883,22 @@ struct AtticDropdownSpace {
     /// covering them. Unchanged when that would leave no room.
     func clearing(top clearance: CGFloat, of view: NSView) -> AtticDropdownSpace {
         guard clearance > 0 else { return self }
-        let visible = anchor(view.visibleRect, in: view)
+        let visible = anchor(Self.shown(view), in: view)
         let minY = max(bounds.minY, visible.minY + clearance)
         guard bounds.maxY > minY + AtticDropdownMetrics.rowHeight * 2 else { return self }
         return AtticDropdownSpace(parent: parent, bounds: CGRect(x: bounds.minX, y: minY,
                                                                  width: bounds.width, height: bounds.maxY - minY))
+    }
+
+    /// `view`'s shown part, within its own bounds. Its `visibleRect` alone
+    /// is not: an ancestor that doesn't clip (the panel's SwiftUI host, in
+    /// a window 28 pt larger than the surface on every side for its shadow
+    /// and resize band) leaves it reaching into the window's margin, so the
+    /// clearances above were measured from the window's edges, not the
+    /// surface's, and the `/` list covered the pin and All notes (F5a V-08).
+    private static func shown(_ view: NSView) -> CGRect {
+        let shown = view.visibleRect.intersection(view.bounds)
+        return shown.isNull ? view.bounds : shown
     }
 
     /// `rect` in `view`, top-down in this space.
