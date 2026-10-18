@@ -619,35 +619,51 @@ final class MarqueeInteractionTests: XCTestCase {
     }
 
     /// V-06 on the Air: the dragged block's place never dimmed on screen
-    /// (pixel-identical before and during the drag): invalidating its
-    /// rendering attributes alone left its drawn text as it was. Its text
-    /// draws dimmed while it is lifted and as before once it is dropped.
+    /// (pixel-identical before and during the drag). Invalidating its
+    /// rendering attributes neither recoloured it nor redrew the layers
+    /// TextKit had drawn it into. Measured in those layers, as the screen
+    /// shows them: its text draws dimmed while it is lifted and as before
+    /// once it is dropped.
     func testF5aV06TheDraggedBlocksPlaceDrawsDimmed() throws {
         let (engine, text, _) = editor([.text("Title"), .text("let answer = 42", style: "mono"), .text("End")])
+        let window = try XCTUnwrap(text.window)
+        window.contentView?.wantsLayer = true
+        window.setFrameOrigin(CGPoint(x: -4000, y: -4000))
+        window.orderFront(nil)
         engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         text.layoutSubtreeIfNeeded()
         let block = engine.blockRange(at: (engine.textStorage.string as NSString).range(of: "let answer").location)
         let rect = try XCTUnwrap(engine.rect(for: block))
+        /// The ink of what the window's layers hold for the block.
         func ink() throws -> CGFloat {
-            engine.layoutManager?.textViewportLayoutController.layoutViewport()
-            text.layoutSubtreeIfNeeded()
-            let rep = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: text.bounds))
-            text.cacheDisplay(in: text.bounds, to: rep)
-            let scale = CGFloat(rep.pixelsWide) / text.bounds.width
+            window.displayIfNeeded()
+            CATransaction.flush()
+            let drawn = try XCTUnwrap(text.subviews.flatMap { [$0] + $0.subviews }
+                .first { NSStringFromClass(type(of: $0)).contains("ViewportElement") && $0.convert($0.bounds, to: text).intersects(rect)
+                    && $0.convert($0.bounds, to: text).height > 30 }, "the view TextKit draws the code block in")
+            let layer = try XCTUnwrap(drawn.layer)
+            let size = CGSize(width: layer.bounds.width * 2, height: layer.bounds.height * 2)
+            let space = CGColorSpaceCreateDeviceRGB()
+            let context = try XCTUnwrap(CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
+                                                  bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.scaleBy(x: 2, y: 2)
+            layer.render(in: context)
+            let data = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+            // The text's pixels: dark ink, not the block's light fill.
             var total: CGFloat = 0
-            for y in Int(rect.minY * scale)..<Int(rect.maxY * scale) {
-                for x in Int(rect.minX * scale)..<Int(rect.maxX * scale) {
-                    guard let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                    total += colour.alphaComponent * (1 - colour.brightnessComponent)
-                }
+            for index in stride(from: 0, to: context.bytesPerRow * context.height, by: 4) {
+                let alpha = CGFloat(data[index + 3]) / 255
+                guard alpha > 0.5 else { continue }
+                let brightness = (CGFloat(data[index]) + CGFloat(data[index + 1]) + CGFloat(data[index + 2])) / 3 / 255 / alpha
+                if brightness < 0.4 { total += 1 }
             }
             return total
         }
         let before = try ink()
-        XCTAssertGreaterThan(before, 0, "the code's text draws")
+        XCTAssertGreaterThan(before, 50, "the code's text draws")
         let dim = NoteBlockDragDim(textView: text, block: block, rect: rect)
         let during = try ink()
-        XCTAssertLessThan(during, before * 0.8, "its place draws dimmed while it is lifted (\(during) of \(before))")
+        XCTAssertLessThan(during, before * 0.3, "its place draws dimmed while it is lifted (\(during) of \(before))")
         dim.restore()
         XCTAssertEqual(try ink(), before, accuracy: before * 0.01, "and as before once dropped")
     }

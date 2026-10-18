@@ -218,14 +218,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             for range in [oldValue, dragDimRange].compactMap({ $0 }) {
                 guard let textRange = engine.textRange(for: range) else { continue }
                 // F5a V-06: invalidating the rendering attributes left the
-                // place drawn as it was on screen (V1: pixel-identical while
-                // lifted). The block's fragments are recoloured here, at
+                // place drawn as it was (V1 and F5a's first Air run: pixel-
+                // identical while lifted). Nothing asked the validator again
+                // inside the drag's tracking loop, and TextKit's fragment
+                // views keep their pixels until they are laid out or told to
+                // redraw. So the block's fragments are recoloured here, at
                 // once (dimmed, or back to their syntax and checklist inks),
-                // and their layout invalidated so the new ink is drawn:
-                // invalidated attributes alone leave the drawn pixels as they
-                // were (Find's highlights met the same). Once at the lift
-                // and once at the drop. A hosted block (a table) dims by its
-                // view instead; re-laying it out would re-host that view.
+                // re-laid out, and their views redrawn, as an appearance
+                // change does. Once at the lift and once at the drop. A
+                // hosted block (a table) dims by its view instead; re-laying
+                // it out would re-host that view.
                 manager.removeRenderingAttribute(.foregroundColor, for: textRange)
                 manager.enumerateTextLayoutFragments(from: textRange.location, options: []) { fragment in
                     guard fragment.rangeInElement.location.compare(textRange.endLocation) == .orderedAscending else { return false }
@@ -236,9 +238,28 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 if engine.textStorage.length > 0, !engine.isBlockObject(at: location) {
                     manager.invalidateLayout(for: textRange)
                 }
+                if let rect = engine.rect(for: range) { redrawText(in: rect) }
             }
+            needsLayout = true
+            layoutSubtreeIfNeeded()
+            manager.textViewportLayoutController.layoutViewport()
+            if let range = dragDimRange ?? oldValue, let rect = engine.rect(for: range) { redrawText(in: rect) }
             needsDisplay = true
         }
+    }
+
+    /// Redraws TextKit's drawing of `rect` (in this view): the views and
+    /// layers it draws fragments into keep their pixels until told.
+    private func redrawText(in rect: CGRect) {
+        func visit(_ view: NSView, depth: Int) {
+            for child in view.subviews where !(child is NoteDragLiftView) && !child.isHidden {
+                guard child.convert(child.bounds, to: self).intersects(rect) else { continue }
+                child.needsDisplay = true
+                child.layer?.sublayers?.forEach { $0.setNeedsDisplay() }
+                if depth < 1 { visit(child, depth: depth + 1) }
+            }
+        }
+        visit(self, depth: 0)
     }
 
     private func colourChecklistLine(_ fragment: NSTextLayoutFragment, manager: NSTextLayoutManager) {
