@@ -25,6 +25,69 @@ final class NotesPageControllerTests: XCTestCase {
 
     }
 
+    func testFL3NoteSwitchEndsThePreviousTypingVisit() async throws {
+        try await checkFL3TypingVisits(leaving: .openNote)
+    }
+
+    func testFL3PageSwitchEndsThePreviousTypingVisit() async throws {
+        try await checkFL3TypingVisits(leaving: .pageSwitch)
+    }
+
+    func testFL3HideShowEndsThePreviousTypingVisit() async throws {
+        try await checkFL3TypingVisits(leaving: .hide)
+    }
+
+    func testFL3LibraryReopenEndsThePreviousTypingVisit() async throws {
+        try await checkFL3TypingVisits(leaving: .library)
+    }
+
+    private func checkFL3TypingVisits(leaving reason: NotesPageController.LeaveReason) async throws {
+        let controller = makeController()
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        let engine = session.engine
+        let (scroll, editor) = engine.makeView()
+        defer { engine.detachView() }
+        // Real native typing, including Return, leaves one coalescing step.
+        // Keep the view alive: outgoing transitions and hide need not dismantle it.
+        for character in "C title" { editor.insertText(String(character), replacementRange: editor.selectedRange()) }
+        editor.insertNewline(nil)
+        for character in "Earlier visit" { editor.insertText(String(character), replacementRange: editor.selectedRange()) }
+        let earlier = engine.plainText
+        XCTAssertEqual(earlier, "C title\nEarlier visit")
+        XCTAssertEqual(engine.history.undoOps.count, 1)
+        switch reason {
+        case .openNote:
+            let other = UUID()
+            guard case .success = store.createDocumentNote(id: other, document: NoteDocument(blocks: [.text("A")])) else {
+                return XCTFail("seed other note")
+            }
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: other))
+            await XCTAssertTrueAsync(await controller.openDurably(noteID: session.noteID))
+        case .library:
+            XCTAssertTrue(controller.showLibrary())
+            await XCTAssertTrueAsync(await controller.openFromLibrary(noteID: session.noteID))
+            controller.dismissLibrary()
+        default:
+            await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(reason))
+            controller.present()
+        }
+        XCTAssertTrue(controller.active === session, "cached history survives the visit")
+        XCTAssertTrue(session.engine === engine)
+        editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+        for character in " + latest visit" { editor.insertText(String(character), replacementRange: editor.selectedRange()) }
+        let latest = engine.plainText
+        editor.undo(nil)
+        XCTAssertEqual(engine.plainText, earlier, "one Undo removes only this visit")
+        editor.undo(nil)
+        XCTAssertEqual(engine.plainText, "", "the earlier visit remains a separate Undo step")
+        editor.redo(nil)
+        XCTAssertEqual(engine.plainText, earlier)
+        editor.redo(nil)
+        XCTAssertEqual(engine.plainText, latest, "Redo recovers both visits step by step")
+        withExtendedLifetime(scroll) {}
+    }
+
     func testU05OversizedClipboardImageNeverCreatesAFileOrImport() async throws {
         let controller = makeController()
         await controller.startAndWait()

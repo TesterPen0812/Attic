@@ -1248,6 +1248,10 @@ final class NotesPageController: ObservableObject {
         }
         endProposalReview()
         if let session = active {
+            // The session and its history survive navigation (and may keep
+            // their native view during a transition). A new visit must start
+            // a new typing run even when its caret returns to the same edge.
+            session.engine.history.breakCoalescing()
             if session.isPersisted, !NoteSessionPolicy.hasPendingWork(session.state) {
                 store.recordVersion(noteID: session.noteID, reason: .leave)
                 _ = store.applyPendingEdits(noteID: session.noteID)

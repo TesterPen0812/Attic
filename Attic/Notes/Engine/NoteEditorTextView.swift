@@ -16,7 +16,10 @@ import UniformTypeIdentifiers
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
     weak var engine: NoteEditorEngine? {
         didSet {
-            if engine !== oldValue { cancelCalloutIconSession(reason: "engine changed") }
+            if engine !== oldValue {
+                pendingWindowPresentation = nil
+                cancelCalloutIconSession(reason: "engine changed")
+            }
             installCodeColouring()
         }
     }
@@ -31,6 +34,29 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         // presentation runs. Only the engine's live client owns its input.
         guard let engine, engine.textView === self else { return }
         window?.makeFirstResponder(calloutIconSession?.receiver ?? self)
+    }
+
+    private var pendingWindowPresentation: (() -> Void)?
+
+    /// Native creation can precede attachment by more than a queued turn.
+    /// Keep the one opening presentation until it has a real window.
+    func presentWhenAttachedToWindow(_ presentation: @escaping () -> Void) {
+        pendingWindowPresentation = presentation
+        scheduleWindowPresentation()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scheduleWindowPresentation()
+    }
+
+    private func scheduleWindowPresentation() {
+        guard window != nil, pendingWindowPresentation != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil, let presentation = self.pendingWindowPresentation else { return }
+            self.pendingWindowPresentation = nil
+            presentation()
+        }
     }
 
     override var isEditable: Bool {

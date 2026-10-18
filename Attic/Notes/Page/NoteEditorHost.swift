@@ -896,10 +896,12 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         let length = engine.textStorage.length
         textView.setSelectedRange(NSRange(location: min(selection.location, length),
                                           length: min(selection.length, max(0, length - selection.location))))
-        DispatchQueue.main.async {
+        textView.presentWhenAttachedToWindow { [weak textView, weak scrollView, weak engine, weak session,
+                                               weak chrome, weak coordinator = context.coordinator] in
             // A note switch can leave the old session's view attached for
             // its outgoing transition. Its queued work no longer owns chrome.
-            guard let accessories = context.coordinator.accessories,
+            guard let textView, let scrollView, let engine, let session, let chrome, let coordinator,
+                  let accessories = coordinator.accessories,
                   chrome.accessories === accessories,
                   engine.textView === textView, engine.scrollView === scrollView else { return }
             if let scrollOverride {
@@ -912,7 +914,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             }
             scrollView.reflectScrolledClipView(scrollView.contentView)
             textView.restoreInputFocus()
-            context.coordinator.accessories?.layout()
+            coordinator.accessories?.layout()
         }
         return scrollView
     }

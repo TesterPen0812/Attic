@@ -508,6 +508,85 @@ final class NoteEditorEngineTests: XCTestCase {
         return window // No run-loop turn: presentation's queued callback is still pending.
     }
 
+    func testFL3PresentationWaitsForActualWindowAttachmentBeforeRestoringFocus() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Alpha")])) else {
+            return XCTFail("seed note")
+        }
+        let controller = NotesPageController(store: store, journal: nil)
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let root = NoteEditorRepresentable(session: session, chrome: NotesPageChrome(), columnInset: 20,
+            topInset: 60, bottomInset: 60, headerBottom: 40, design: .default,
+            tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] })
+        let host = NSHostingView(rootView: root)
+        host.frame = NSRect(x: 0, y: 0, width: 320, height: 520)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(session.engine.textView)
+        XCTAssertNil(editor.window, "native creation need not coincide with window attachment")
+        let end = NSRange(location: 5, length: 0)
+        editor.setSelectedRange(end)
+        let drained = expectation(description: "early presentation callback drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
+        XCTAssertNil(editor.window)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        let attached = expectation(description: "attachment presentation drained")
+        DispatchQueue.main.async { attached.fulfill() }
+        wait(for: [attached], timeout: 2)
+        XCTAssertTrue(editor.window === window)
+        XCTAssertTrue(window.firstResponder === editor, "late attachment must still deliver the opening caret")
+        XCTAssertEqual(editor.selectedRange(), end, "attachment preserves a newer live selection")
+        let input = try XCTUnwrap(window.firstResponder as? NoteEditorTextView)
+        input.insertText(" typed", replacementRange: input.selectedRange())
+        XCTAssertEqual(session.engine.plainText, "Alpha typed")
+        input.undo(nil)
+        XCTAssertEqual(session.engine.plainText, "Alpha")
+    }
+
+    func testFL3LateOutgoingAttachmentCannotTakeTheLiveEditorsFocus() throws {
+        for reuseSession in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let controller = NotesPageController(store: store, journal: nil)
+            let ids = [UUID(), UUID()]
+            for id in ids {
+                guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Alpha")])) else {
+                    return XCTFail("seed note")
+                }
+            }
+            XCTAssertTrue(controller.open(noteID: ids[0]))
+            let outgoing = try XCTUnwrap(controller.active)
+            let chrome = NotesPageChrome()
+            let root = NoteEditorRepresentable(session: outgoing, chrome: chrome, columnInset: 20,
+                topInset: 60, bottomInset: 60, headerBottom: 40, design: .default,
+                tagEditor: { AnyView(EmptyView()) }, tagCounts: { [:] })
+            let oldHost = NSHostingView(rootView: root)
+            oldHost.frame = NSRect(x: 0, y: 0, width: 320, height: 520)
+            oldHost.layoutSubtreeIfNeeded()
+            let old = try XCTUnwrap(outgoing.engine.textView)
+            XCTAssertNil(old.window)
+            if !reuseSession { XCTAssertTrue(controller.open(noteID: ids[1])) }
+            let current = try XCTUnwrap(controller.active)
+            let window = mountFLPresentation(current, chrome: chrome)
+            let live = try XCTUnwrap(current.engine.textView)
+            XCTAssertTrue(window.makeFirstResponder(live))
+            let selection = NSRange(location: 4, length: 0)
+            live.setSelectedRange(selection)
+            window.contentView?.addSubview(oldHost)
+            let drained = expectation(description: "late outgoing and live presentations drained")
+            DispatchQueue.main.async { drained.fulfill() }
+            wait(for: [drained], timeout: 2)
+            XCTAssertTrue(old.window === window)
+            XCTAssertTrue(window.firstResponder === live)
+            XCTAssertEqual(live.selectedRange(), selection)
+        }
+    }
+
     func testFLPresentationRestoresSavedSelectionBeforeTheEditorCanReceiveInput() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = UUID()
