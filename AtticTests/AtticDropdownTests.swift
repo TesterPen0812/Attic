@@ -1752,6 +1752,8 @@ final class AtticDropdownTests: XCTestCase {
 
     /// Opens, filters and closes the dropdowns and replaced components in
     /// interleaved rounds. AX samples include the full shown tree traversal.
+    /// Each timed update also commits its own layers; prior closes settle
+    /// outside the timer, so work cannot migrate between sample owners.
     private func measureDropdownCosts(in window: NSWindow, rounds: Int, readAccessibility: Bool = false, priorityDelay: TimeInterval = 0, paired: Bool = true) -> [Round] {
         verifyCIInputModes(readAccessibility: readAccessibility)
         let diagnostic = ProcessInfo.processInfo.environment["ATTIC_DROPDOWN_DIAGNOSTICS"] == "1"
@@ -1772,7 +1774,10 @@ final class AtticDropdownTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             var open: [Double] = [], narrow: [Double] = [], widen: [Double] = []
-            func read() { if readAccessibility { _ = accessibilityElements(host) } }
+            func read() {
+                if readAccessibility { _ = accessibilityElements(host) }
+                CATransaction.flush()
+            }
             for _ in 0..<15 {
                 model.hide(); host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); read()
                 open.append(ms { model.show(all); host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); read() })
@@ -1796,6 +1801,7 @@ final class AtticDropdownTests: XCTestCase {
                     popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
                     popover.contentViewController?.view.window?.displayIfNeeded()
                     if readAccessibility, let view = popover.contentViewController?.view { _ = accessibilityElements(view) }
+                    CATransaction.flush()
                 }
                 popover.close()
                 return elapsed
@@ -1810,6 +1816,7 @@ final class AtticDropdownTests: XCTestCase {
                     presenter.present(from: anchor)
                     presenter.host?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
                     if readAccessibility, let host = presenter.host { _ = accessibilityElements(host) }
+                    CATransaction.flush()
                 }
                 presenter.close(restoreFocus: false, immediately: true)
                 return elapsed
@@ -1827,6 +1834,7 @@ final class AtticDropdownTests: XCTestCase {
                     prio.host?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
                     if readAccessibility, let host = prio.host { _ = accessibilityElements(host) }
                     if priorityDelay > 0 { Thread.sleep(forTimeInterval: priorityDelay) }
+                    CATransaction.flush()
                 }
                 if diagnostic {
                     openingDiagnostics.append("DROPDOWN_OPEN_DIAGNOSTIC ax=\(readAccessibility) ms=\(elapsed) layouts=\(AtticDropdownDiagnostics.layouts - layouts) hint_retains=\(AtticDropdownDiagnostics.hintRetains - retains) reveals_inside_timer=\(AtticDropdownDiagnostics.reveals - reveals)")
