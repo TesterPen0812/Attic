@@ -1120,14 +1120,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func screen(containing point: CGPoint) -> NSScreen? {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+            ?? NSScreen.screens.first { NSMouseInRect(point, TestPresentationPolicy.placementFrame($0.frame), false) }
             ?? NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
     }
 
     private func bestScreen(for frame: CGRect) -> NSScreen? {
+        let frame = TestPresentationPolicy.offscreenFrame(frame)
         let screens = NSScreen.screens
         let overlapCandidate = screens
             .map { screen in
-                let overlap = screen.frame.intersection(frame)
+                let overlap = TestPresentationPolicy.placementFrame(screen.frame).intersection(frame)
                 return (screen, max(0, overlap.width) * max(0, overlap.height))
             }
             .max { $0.1 < $1.1 }
@@ -1136,7 +1138,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         let frameCenter = CGPoint(x: frame.midX, y: frame.midY)
         return screens.min {
-            squaredDistance(from: frameCenter, to: $0.frame) < squaredDistance(from: frameCenter, to: $1.frame)
+            squaredDistance(from: frameCenter, to: TestPresentationPolicy.placementFrame($0.frame))
+                < squaredDistance(from: frameCenter, to: TestPresentationPolicy.placementFrame($1.frame))
         }
     }
 
