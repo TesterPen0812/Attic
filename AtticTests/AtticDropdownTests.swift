@@ -2577,6 +2577,80 @@ extension AtticDropdownTests {
 
 @MainActor
 extension AtticDropdownTests {
+    private final class PFCloseFrame: ObservableObject {
+        @Published var unfold = AtticUnfoldState(reveal: 1, fromTop: true, contentBlur: 0, shadow: 1)
+        @Published var width: CGFloat = 180
+    }
+
+    private struct PFClosingCard: View {
+        @ObservedObject var frame: PFCloseFrame
+
+        var body: some View {
+            AtticDropdownCard(width: frame.width) {
+                ForEach(["None", "Low", "Medium", "High"], id: \.self) { title in
+                    AtticDropdownRow(title: title) {}
+                }
+            }
+            .environment(\.atticUnfold, frame.unfold)
+            .atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: 240, height: 220, alignment: .topLeading)
+        }
+    }
+
+    /// Closing keeps the clip's shape unchanged. Shadow-only frames must
+    /// not rebuild that path; reveal and geometry changes still must.
+    func testPFShadowOnlyCloseFramesDoNotRebuildTheContentMask() {
+        let wasEnabled = AtticDropdownDiagnostics.enabled
+        AtticDropdownDiagnostics.enabled = true
+        defer { AtticDropdownDiagnostics.enabled = wasEnabled }
+        for fromTop in [true, false] {
+            let initial = AtticDropdownDiagnostics.contentMaskBuilds
+            let window = makeWindow()
+            defer { window.close() }
+            let frame = PFCloseFrame()
+            frame.unfold.fromTop = fromTop
+            frame.unfold.shadow = AtticDropdownReveal.frame(time: 0.1, closing: true).shadow
+            let host = NSHostingView(rootView: PFClosingCard(frame: frame))
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            spin(0.1)
+            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, initial, "the real content mask was rendered")
+
+            let beforeClose = AtticDropdownDiagnostics.contentMaskBuilds
+            let refreshPeriod = 1.0 / 60.0
+            let frames = Int(ceil(AtticDropdownReveal.closeDuration / refreshPeriod))
+            for index in 1..<frames {
+                frame.unfold.shadow = AtticDropdownReveal.frame(time: CGFloat(index) / CGFloat(frames), closing: true).shadow
+                host.layoutSubtreeIfNeeded()
+                spin(refreshPeriod)
+            }
+            let closeBuilds = AtticDropdownDiagnostics.contentMaskBuilds - beforeClose
+            print("PF_CLOSE_MASK_BUILDS from_top=\(fromTop) \(closeBuilds)")
+            XCTAssertEqual(closeBuilds, 0, "shadow opacity does not change the content clip")
+
+            let beforeReveal = AtticDropdownDiagnostics.contentMaskBuilds
+            frame.unfold.reveal = 0.4
+            host.layoutSubtreeIfNeeded()
+            spin(refreshPeriod)
+            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, beforeReveal, "opening still updates its clip")
+
+            let beforeAnchor = AtticDropdownDiagnostics.contentMaskBuilds
+            frame.unfold.fromTop.toggle()
+            host.layoutSubtreeIfNeeded()
+            spin(refreshPeriod)
+            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, beforeAnchor, "a changed anchor still updates its clip")
+
+            let beforeResize = AtticDropdownDiagnostics.contentMaskBuilds
+            frame.width += 20
+            host.layoutSubtreeIfNeeded()
+            spin(refreshPeriod)
+            XCTAssertGreaterThan(AtticDropdownDiagnostics.contentMaskBuilds, beforeResize, "a resized card still updates its clip")
+        }
+    }
+}
+
+@MainActor
+extension AtticDropdownTests {
     /// U-41: mid-unfold the card is already opaque, so the rows under it
     /// never show through; its height still grows and its contents still
     /// sharpen. Shut and gone stay clear.
