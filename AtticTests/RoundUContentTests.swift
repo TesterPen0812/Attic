@@ -246,7 +246,7 @@ final class RoundUContentTests: XCTestCase {
     }
 }
 
-private final class RoundUHTTPServer: @unchecked Sendable {
+final class RoundUHTTPServer: @unchecked Sendable {
     private let listener: NWListener
     private let lock = NSLock()
     private var count = 0
@@ -257,7 +257,10 @@ private final class RoundUHTTPServer: @unchecked Sendable {
     func start() async throws {
         listener.newConnectionHandler = { [weak self] connection in
             connection.start(queue: .global())
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { _, _, _, _ in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, _ in
+                if let data, let request = String(data: data, encoding: .utf8)?.components(separatedBy: "\r\n").first {
+                    print("ROUND_U_HTTP \(request)")
+                }
                 self?.lock.withLock { self?.count += 1 }
                 let reply = Data("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
                 connection.send(content: reply, completion: .contentProcessed { _ in connection.cancel() })

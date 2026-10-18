@@ -4377,18 +4377,32 @@ extension NoteEditorEngine {
     /// Rich external paste maps only attributes this note can round-trip.
     /// Unsupported attachments become readable literal placeholders.
     func pasteRichText(_ data: Data, type: NSPasteboard.PasteboardType, at selection: NSRange) -> Bool {
-        guard type == .rtf || type == .html else { return false }
-        let documentType: NSAttributedString.DocumentType = type == .rtf ? .rtf : .html
-        guard let imported = try? NSAttributedString(data: data,
-                                                     options: [.documentType: documentType],
-                                                     documentAttributes: nil), imported.length > 0 else { return false }
+        guard let read = NotePasteReader.read(data, type: type), read.text.length > 0 else { return false }
+        let imported = NSMutableAttributedString(attributedString: read.text)
+        var payloads: [UUID: StagedNoteAttachment] = [:]
+        for image in read.images {
+            let range = (imported.string as NSString).range(of: image.token)
+            guard range.location != NSNotFound else { continue }
+            let id = UUID()
+            let payload = StagedNoteAttachment(id: id, filename: "Pasted Image." + (image.type.preferredFilenameExtension ?? "png"),
+                contentTypeIdentifier: image.type.identifier, byteCount: Int64(image.data.count),
+                digest: NotePayloadDigest.sha256(image.data), data: image.data)
+            payloads[id] = payload
+            let attachment = NoteImageAttachment(attachmentID: id, preferredWidthFraction: 1, pixelSize: image.size, extras: payload.identityExtras)
+            imported.replaceCharacters(in: range, with: NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
+        }
         let source = NSMutableAttributedString(attributedString: imported)
         let raw = source.string as NSString
         for index in (0..<raw.length).reversed() where raw.character(at: index) == NoteDocument.objectUnit {
-            source.replaceCharacters(in: NSRange(location: index, length: 1), with: "[Attachment]")
+            if !(source.attribute(.attachment, at: index, effectiveRange: nil) is NoteImageAttachment) {
+                source.replaceCharacters(in: NSRange(location: index, length: 1), with: "[Attachment]")
+            }
         }
         let result = NSMutableAttributedString(string: source.string, attributes: style.bodyAttributes)
         source.enumerateAttributes(in: NSRange(location: 0, length: source.length)) { attributes, range, _ in
+            if let image = attributes[.attachment] as? NoteImageAttachment {
+                result.addAttribute(.attachment, value: image, range: range)
+            }
             if let font = attributes[.font] as? NSFont {
                 let traits = font.fontDescriptor.symbolicTraits
                 if traits.contains(.bold) { result.addAttribute(.noteMark(.bold), value: true, range: range) }
@@ -4433,9 +4447,7 @@ extension NoteEditorEngine {
             result.insert(NSAttributedString(string: marker, attributes: style.bodyAttributes), at: at)
         }
         let normalized = NoteTextCodec.document(from: result, firstBlockIsTitle: false)
-        let attributed = NoteTextCodec.attributedString(from: normalized, style: style, firstBlockIsTitle: false)
-        let paste = pasteIncludingTail(attributed, replacing: selection)
-        return performEdit(paste.range, with: paste.text, name: "Paste", selection: NSRange(location: selection.location + attributed.length, length: 0))
+        return insertFragment(normalized, at: selection, resolved: payloads)
     }
 }
 
