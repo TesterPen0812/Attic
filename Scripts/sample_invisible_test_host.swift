@@ -11,6 +11,8 @@ let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: output))
 let system = AXUIElementCreateSystemWide()
 let baseline = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
 let start = ProcessInfo.processInfo.systemUptime
+var nextSample = start
+var unknownKeyOwnerSamples = 0
 var samples = 0, hostSamples = 0, displayed = 0, activation = 0, focus = 0, frontChanges = 0
 func focusedPID(_ attribute: String) -> pid_t {
     var value: CFTypeRef?
@@ -51,6 +53,7 @@ while !FileManager.default.fileExists(atPath: stop) {
         samples += 1
         if !hosts.isEmpty {
             hostSamples += 1
+            if keyOwner == -1 { unknownKeyOwnerSamples += 1 }
             if front?.processIdentifier != baseline { frontChanges += 1 }
         }
         displayed += onscreen.count
@@ -61,9 +64,10 @@ while !FileManager.default.fileExists(atPath: stop) {
                "frontmostPID": front?.processIdentifier ?? -1, "frontmostBundle": front?.bundleIdentifier ?? "",
                "keyWindowOwnerPID": keyOwner, "keyboardElementOwnerPID": keyboardOwner])
     }
-    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    nextSample += 0.05
+    RunLoop.current.run(until: Date().addingTimeInterval(max(0, nextSample - ProcessInfo.processInfo.systemUptime)))
 }
 write(["kind": "summary", "samples": samples, "hostSamples": hostSamples, "onscreenWindows": displayed,
-       "hostActiveSamples": activation, "hostKeyboardSamples": focus, "frontmostChangedDuringHostSamples": frontChanges,
+       "unknownKeyOwnerSamples": unknownKeyOwnerSamples, "hostActiveSamples": activation, "hostKeyboardSamples": focus, "frontmostChangedDuringHostSamples": frontChanges,
        "elapsed": ProcessInfo.processInfo.systemUptime - start])
 try handle.close()

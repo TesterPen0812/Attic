@@ -7,7 +7,6 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
     private static let observer = InvisibleHostObserver()
     private var tokens: [NSObjectProtocol] = []
     private var violations: Set<String> = []
-    private var currentTest: XCTestCase?
 
     @objc static func install() {
         XCTestObservationCenter.shared.addTestObserver(observer)
@@ -36,10 +35,6 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
             })
             print("INVISIBLE_HOST_CANARY registered for whole bundle")
         }
-    }
-
-    func testCaseWillStart(_ testCase: XCTestCase) {
-        onMain { currentTest = testCase }
     }
 
     func testCaseDidFinish(_ testCase: XCTestCase) {
@@ -72,7 +67,6 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
             }
             print("INVISIBLE_HOST_CANARY \(testCase.name) violations=\(violations.count)")
             violations.removeAll()
-            currentTest = nil
         }
     }
 }

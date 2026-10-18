@@ -24,10 +24,11 @@ void AtticInstallInvisiblePresentation(void) {
         if (mode != NSWindowOut) Place(window);
         ((void (*)(id, SEL, NSWindowOrderingMode, NSInteger))originalOrder)(window, order, mode, relative);
     });
+    IMP originalFront = class_getMethodImplementation(NSWindow.class, @selector(orderFront:));
     for (NSString *name in @[@"orderFront:", @"orderBack:", @"makeKeyAndOrderFront:"]) {
         SEL selector = NSSelectorFromString(name);
         // makeKeyAndOrderFront deliberately orders without requesting key.
-        IMP implementation = class_getMethodImplementation(NSWindow.class, @selector(orderFront:));
+        IMP implementation = originalFront;
         if (![name isEqualToString:@"makeKeyAndOrderFront:"]) implementation = class_getMethodImplementation(NSWindow.class, selector);
         Replace(NSWindow.class, selector, ^(NSWindow *window, id sender) {
             Place(window);
@@ -51,6 +52,27 @@ void AtticInstallInvisiblePresentation(void) {
     Replace(NSWindow.class, animated, ^(NSWindow *window, NSRect requested, BOOL display, BOOL animate) {
         ((void (*)(id, SEL, NSRect, BOOL, BOOL))originalAnimated)(window, animated,
             window.isVisible ? [AtticTestPresentationPolicy offscreenFrame:requested] : requested, display, animate);
+    });
+    for (NSString *name in @[@"setFrameOrigin:", @"setFrameTopLeftPoint:"]) {
+        SEL selector = NSSelectorFromString(name);
+        IMP implementation = class_getMethodImplementation(NSWindow.class, selector);
+        Replace(NSWindow.class, selector, ^(NSWindow *window, NSPoint point) {
+            if (window.isVisible) {
+                NSRect requested = window.frame;
+                requested.origin = point;
+                if ([name isEqualToString:@"setFrameTopLeftPoint:"]) requested.origin.y -= requested.size.height;
+                NSRect safe = [AtticTestPresentationPolicy offscreenFrame:requested];
+                point = safe.origin;
+                if ([name isEqualToString:@"setFrameTopLeftPoint:"]) point.y += safe.size.height;
+            }
+            ((void (*)(id, SEL, NSPoint))implementation)(window, selector, point);
+        });
+    }
+    SEL child = @selector(addChildWindow:ordered:);
+    IMP originalChild = class_getMethodImplementation(NSWindow.class, child);
+    Replace(NSWindow.class, child, ^(NSWindow *window, NSWindow *childWindow, NSWindowOrderingMode mode) {
+        Place(childWindow);
+        ((void (*)(id, SEL, id, NSWindowOrderingMode))originalChild)(window, child, childWindow, mode);
     });
     // Prevent AppKit from pulling off-display titled windows back on display.
     Replace(NSWindow.class, @selector(constrainFrameRect:toScreen:), ^NSRect(NSWindow *window, NSRect rect, NSScreen *screen) { return rect; });

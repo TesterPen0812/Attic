@@ -2922,25 +2922,7 @@
 			};
 			name = Release;
 		};
-		255275DE6156E3834AA64939A34D290A /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = NO;
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticMobileUITests;
-				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_TARGET_NAME = AtticMobile;
-			};
-			name = Debug;
-		};
-		267B45948089D45EE90D7BBEB1A8D661 /* Debug */ = {
+		1D9E4C5AE0DCE97FFAEA5FA07C3B3EA0 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -2965,14 +2947,33 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_UNIT_TEST_HOST";
+				OTHER_SWIFT_FLAGS = "$(inherited) -DATTIC_LOCAL_ONLY";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = AtticUnitTestHost;
 				PRODUCT_NAME = "$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)";
 				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ATTIC_UNIT_TEST_HOST";
 				SWIFT_OBJC_BRIDGING_HEADER = AtticUnitTestHost/InvisiblePresentation.h;
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		255275DE6156E3834AA64939A34D290A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticMobileUITests;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = AtticMobile;
 			};
 			name = Debug;
 		};
@@ -3103,7 +3104,7 @@
 			};
 			name = Release;
 		};
-		40F9221F1F3D6A44BDA69B303B0B51BD /* Release */ = {
+		575A381837BE8531E49D32776443B066 /* Local */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -3128,16 +3129,17 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_UNIT_TEST_HOST";
+				OTHER_SWIFT_FLAGS = "$(inherited) -DATTIC_LOCAL_ONLY";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = AtticUnitTestHost;
 				PRODUCT_NAME = "$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)";
 				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ATTIC_UNIT_TEST_HOST";
 				SWIFT_OBJC_BRIDGING_HEADER = AtticUnitTestHost/InvisiblePresentation.h;
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
 			};
-			name = Release;
+			name = Local;
 		};
 		70F1A4A5D207AE9FB2332481B8AF5FE4 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -3217,42 +3219,6 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_TARGET_NAME = AtticMobile;
-			};
-			name = Local;
-		};
-		9D1B587E8F8A6CAF487F20E4B92AA801 /* Local */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ATTIC_DISPLAY_NAME = "$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)";
-				ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER = com.taha.Attic.UnitTestHost;
-				ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME = AtticUnitTestHost;
-				ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME = AtticUnitTestHost;
-				CODE_SIGN_ENTITLEMENTS = Attic/AtticNotesLocal.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = ZGZWS73268;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				EXECUTABLE_NAME = "$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)";
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Attic/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_UNIT_TEST_HOST";
-				PRODUCT_BUNDLE_IDENTIFIER = "$(ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER)";
-				PRODUCT_MODULE_NAME = AtticUnitTestHost;
-				PRODUCT_NAME = "$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)";
-				SDKROOT = macosx;
-				SWIFT_OBJC_BRIDGING_HEADER = AtticUnitTestHost/InvisiblePresentation.h;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
 			};
 			name = Local;
 		};
@@ -3349,6 +3315,43 @@
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Local;
+		};
+		C2FD0EB70209C46ADF80052DE4700A3E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ATTIC_DISPLAY_NAME = "$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)";
+				ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER = com.taha.Attic.UnitTestHost;
+				ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME = AtticUnitTestHost;
+				ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME = AtticUnitTestHost;
+				CODE_SIGN_ENTITLEMENTS = Attic/AtticNotesLocal.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ZGZWS73268;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXECUTABLE_NAME = "$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Attic/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -DATTIC_LOCAL_ONLY";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = AtticUnitTestHost;
+				PRODUCT_NAME = "$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ATTIC_UNIT_TEST_HOST";
+				SWIFT_OBJC_BRIDGING_HEADER = AtticUnitTestHost/InvisiblePresentation.h;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
 		};
 		C7A32210FAB32403A706E7EAAEC9CD94 /* Local */ = {
 			isa = XCBuildConfiguration;
@@ -3651,9 +3654,9 @@
 		E5B7843681DB33E54ACE95C62AF3425E /* Build configuration list for PBXNativeTarget "AtticUnitTestHost" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				40F9221F1F3D6A44BDA69B303B0B51BD /* Release */,
-				267B45948089D45EE90D7BBEB1A8D661 /* Debug */,
-				9D1B587E8F8A6CAF487F20E4B92AA801 /* Local */,
+				1D9E4C5AE0DCE97FFAEA5FA07C3B3EA0 /* Release */,
+				C2FD0EB70209C46ADF80052DE4700A3E /* Debug */,
+				575A381837BE8531E49D32776443B066 /* Local */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

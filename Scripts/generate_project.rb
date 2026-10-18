@@ -217,7 +217,8 @@ unit_host.build_configurations.each do |config|
   settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_UNIT_TEST_HOST'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+  settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) ATTIC_UNIT_TEST_HOST'
   settings['SWIFT_OBJC_BRIDGING_HEADER'] = 'AtticUnitTestHost/InvisiblePresentation.h'
 end
 
