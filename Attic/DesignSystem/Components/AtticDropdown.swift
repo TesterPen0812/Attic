@@ -328,6 +328,7 @@ enum AtticDropdownDiagnostics {
     static var layouts = 0
     static var hintRetains = 0
     static var reveals = 0
+    static var contentMaskBuilds = 0
 }
 #endif
 
@@ -1545,20 +1546,62 @@ struct AtticUnfoldContent: ViewModifier {
         let active = (scrolls || !treated) ? unfold : nil
         content
             .mask {
-                if let active {
-                    GeometryReader { proxy in
-                        if let card = proxy.bounds(of: .named(AtticUnfoldCard.space)) {
-                            AtticUnfoldShape(cornerRadius: cornerRadius, reveal: active.reveal, fromTop: active.fromTop).path(in: card)
-                        } else {
-                            Rectangle()
-                        }
-                    }
+                AtticUnfoldContentMask(reveal: active?.reveal, fromTop: active?.fromTop ?? true, cornerRadius: cornerRadius)
+                    .equatable()
+            }
+            .blur(radius: active?.contentBlur ?? 0)
+            .environment(\.atticUnfoldTreated, true)
+    }
+
+    @MainActor
+    static func contentPath(in rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool) -> Path {
+        #if DEBUG
+        if AtticDropdownDiagnostics.enabled { AtticDropdownDiagnostics.contentMaskBuilds += 1 }
+        #endif
+        return AtticUnfoldShape(cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop).path(in: rect)
+    }
+}
+
+/// A closing card's shadow changes every frame, but its content outline
+/// does not. Keep those updates out of the mask's geometry and path work.
+/// GeometryReader still follows changes to the card's bounds and position.
+private struct AtticUnfoldContentMask: View, Equatable {
+    let reveal: CGFloat?
+    let fromTop: Bool
+    let cornerRadius: CGFloat
+    @StateObject private var geometry = AtticUnfoldContentPathCache()
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.reveal == rhs.reveal && lhs.fromTop == rhs.fromTop && lhs.cornerRadius == rhs.cornerRadius
+    }
+
+    var body: some View {
+        if let reveal {
+            GeometryReader { proxy in
+                if let card = proxy.bounds(of: .named(AtticUnfoldCard.space)) {
+                    geometry.path(in: card, cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop)
                 } else {
                     Rectangle()
                 }
             }
-            .blur(radius: active?.contentBlur ?? 0)
-            .environment(\.atticUnfoldTreated, true)
+        } else {
+            Rectangle()
+        }
+    }
+}
+
+/// One last path per mask. GeometryReader can be replayed with unchanged
+/// bounds as the card's surface updates; that is not a new outline.
+@MainActor
+private final class AtticUnfoldContentPathCache: ObservableObject {
+    private var cached: (rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool, path: Path)?
+
+    func path(in rect: CGRect, cornerRadius: CGFloat, reveal: CGFloat, fromTop: Bool) -> Path {
+        if let cached, cached.rect == rect, cached.cornerRadius == cornerRadius,
+           cached.reveal == reveal, cached.fromTop == fromTop { return cached.path }
+        let path = AtticUnfoldContent.contentPath(in: rect, cornerRadius: cornerRadius, reveal: reveal, fromTop: fromTop)
+        cached = (rect, cornerRadius, reveal, fromTop, path)
+        return path
     }
 }
 

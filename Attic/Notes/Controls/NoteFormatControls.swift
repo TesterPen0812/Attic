@@ -171,10 +171,14 @@ final class NoteFormatControls: NSObject {
             forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated {
             AtticOverlayHierarchy.layoutPass { self?.layoutDidChange() }
-            // Only a hidden bar returning to view needs a new snapshot.
-            // Moving an already-visible bar must not rescan a long selection
-            // on every scroll tick; layoutDidChange above just places it.
-            if let self, self.barHost.isHidden, (self.selection.length > 0 || self.tableMarkTarget),
+            // Only a bar that left for want of room returns on a scroll
+            // (F6: the visible end of a selection taller than the view
+            // brings it back). Moving an already-visible bar must not
+            // rescan a long selection on every scroll tick; layoutDidChange
+            // above just places it. (The host is never hidden again once
+            // shown, so its `isHidden` could not tell: a bar that left
+            // never came back until the selection changed.)
+            if let self, self.barAwaitsRoom, (self.selection.length > 0 || self.tableMarkTarget),
                self.dismissedSelection != self.selection,
                self.barPlacement(selection: self.selection) != nil {
                 self.scheduleRefresh()
@@ -400,19 +404,28 @@ final class NoteFormatControls: NSObject {
         NoteFormatRowItem.items(inTable: formatModel.snapshot.table != nil, textSelected: formatModel.snapshot.hasTextSelection)
     }
 
+    /// The bar would show but neither end of the selection has room
+    /// beside it in view (F6): a scroll that gives one room brings it back.
+    private var barAwaitsRoom = false
+
     private func showBar() {
         // The cells' bar is measured under its own key (its pill names the alignment).
         let key = formatModel.snapshot.cells.map { "cells:" + ($0.alignment?.title ?? "Align") }
             ?? NoteCommandCatalog.styleName(formatModel.snapshot.paragraph)
         barWidth = measuredBarWidth(styleName: key)
         // A bar already showing moves to its new place (V-03: never a jump).
-        guard placeBar(animated: formatModel.barShown) else { return }
+        guard placeBar(animated: formatModel.barShown) else {
+            barAwaitsRoom = true
+            return
+        }
+        barAwaitsRoom = false
         barHost.isInteractive = true
         if barHost.isHidden { barHost.isHidden = false }
         if !formatModel.barShown { formatModel.barShown = true }
     }
 
     func hideBar() {
+        barAwaitsRoom = false
         guard formatModel.barShown || formatModel.barKeyboardIndex != nil else { return }
         formatModel.barShown = false
         formatModel.barKeyboardIndex = nil
@@ -524,7 +537,13 @@ final class NoteFormatControls: NSObject {
     /// scroll or layout pass moves it with the text, at once.
     @discardableResult
     private func placeBar(animated: Bool = false) -> Bool {
-        guard let placement = barPlacement(selection: selection) else { hideBar(); return false }
+        guard let placement = barPlacement(selection: selection) else {
+            // A showing bar scrolled out of room waits to come back.
+            let waits = formatModel.barShown
+            hideBar()
+            barAwaitsRoom = waits
+            return false
+        }
         let room = AtticNoteFormatMetrics.shadowRoom
         let rect = placement.frame.insetBy(dx: -room, dy: -room)
         let flips = formatModel.barBelow != placement.below

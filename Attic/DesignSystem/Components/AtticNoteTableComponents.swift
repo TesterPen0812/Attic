@@ -41,13 +41,36 @@ class AtticNoteTableControlView: NSView {
     var onDrag: ((_ windowPoint: CGPoint, _ ended: Bool) -> Void)? {
         didSet { window?.invalidateCursorRects(for: self) }
     }
+    /// A drag that was cancelled (O4-02): Escape, the panel losing key
+    /// status or hiding, the view leaving its window, or
+    /// `AtticDragTracking.cancelAll()` (a page switch). The drag's move is
+    /// not made.
+    var onDragCancel: (() -> Void)?
     var hoverCursor: NSCursor { .arrow }
 
     override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
         let start = event.locationInWindow
+        let tracking = AtticDragTracking(view: self, window: window)
         var dragging = false
-        defer { if dragging { NSCursor.pop() }; window?.invalidateCursorRects(for: self) }
-        while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+        defer { if dragging { NSCursor.pop() }; window.invalidateCursorRects(for: self) }
+        while true {
+            // Checked after each wait: an event dequeued after the drag
+            // was interrupted (its release, say) moves nothing.
+            let next = tracking.nextEvent()
+            if tracking.isInterrupted {
+                if dragging { onDragCancel?() }
+                return
+            }
+            guard let next else { continue }
+            if AtticDragTracking.isCancel(next) {
+                // Esc ends the drag where it is; the button is still down,
+                // and its release (and any move before it) does nothing.
+                if dragging { onDragCancel?() }
+                tracking.waitForRelease()
+                return
+            }
+            guard next.type == .leftMouseDragged || next.type == .leftMouseUp else { continue }
             let point = next.locationInWindow
             if !dragging, hypot(point.x - start.x, point.y - start.y) >= 3, onDrag != nil { dragging = true; NSCursor.closedHand.push() }
             if dragging { onDrag?(point, next.type == .leftMouseUp) }
@@ -62,6 +85,69 @@ class AtticNoteTableControlView: NSView {
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: hoverCursor) }
+}
+
+/// A press-and-drag tracking loop that ends the way a native drag does
+/// (O4-02): Escape cancels it, and so does the window losing key status
+/// or hiding, the view leaving its window or being hidden, or
+/// `cancelAll()` (the Notes page going away mid-drag). The loop wakes at
+/// least every 50 ms to notice the ones that send it no event.
+@MainActor
+struct AtticDragTracking {
+    /// Bumped by `cancelAll()`; a tracking loop started under an older
+    /// value is interrupted.
+    private(set) static var generation = 0
+    /// Cancels every drag being tracked now.
+    static func cancelAll() { generation &+= 1 }
+
+    static let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp, .keyDown, .appKitDefined]
+    static let wake: TimeInterval = 0.05
+
+    let view: NSView
+    let window: NSWindow
+    private let wasKey: Bool
+    private let wasVisible: Bool
+    private let started: Int
+
+    init(view: NSView, window: NSWindow) {
+        self.view = view
+        self.window = window
+        wasKey = window.isKeyWindow
+        wasVisible = window.isVisible
+        started = Self.generation
+    }
+
+    /// Esc (no modifiers but Fn) cancels.
+    static func isCancel(_ event: NSEvent) -> Bool {
+        event.type == .keyDown && event.keyCode == 53
+            && event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+    }
+
+    var isInterrupted: Bool {
+        started != Self.generation || view.window !== window || (wasVisible && !window.isVisible)
+            || view.isHiddenOrHasHiddenAncestor || (wasKey && !window.isKeyWindow)
+    }
+
+    /// The next drag, release or key event, or nil after `wake` with none.
+    /// AppKit's own events (activation, key status) are handled at once,
+    /// so `isInterrupted` sees them.
+    func nextEvent() -> NSEvent? {
+        guard let event = window.nextEvent(matching: Self.mask, until: Date(timeIntervalSinceNow: Self.wake),
+                                           inMode: .eventTracking, dequeue: true) else { return nil }
+        if event.type == .appKitDefined {
+            NSApp.sendEvent(event)
+            return nil
+        }
+        return event
+    }
+
+    /// After a cancel: swallows the rest of the press (moves and keys)
+    /// until its release, or until the loop is interrupted.
+    func waitForRelease() {
+        while !isInterrupted {
+            if nextEvent()?.type == .leftMouseUp { return }
+        }
+    }
 }
 
 /// A row's or a column's grip: a 5 × 14 (row) or 18 × 5 (column) pill with
@@ -155,3 +241,4 @@ final class AtticNoteTableIndicatorView: NSView {
         NSBezierPath(roundedRect: rect, xRadius: height / 2, yRadius: height / 2).fill()
     }
 }
+

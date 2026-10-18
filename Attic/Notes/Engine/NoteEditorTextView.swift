@@ -14,6 +14,22 @@ import UniformTypeIdentifiers
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
 final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
+    /// O4-04: the text's colours follow the window's appearance at once,
+    /// even while a native menu tracks. The design reaches the engine
+    /// through the Notes page's `onChange(of: design)`, and SwiftUI runs
+    /// that action only once the menu closes (traced on the Air: the
+    /// window turned dark in the menu's tracking mode, the action ran
+    /// after it), so the note kept its Light inks on the dark panel. The
+    /// design SwiftUI sends later is then the same and redraws nothing.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        guard let engine, window != nil else { return }
+        let mode: AtticDesignContext.Mode = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+        var design = engine.style.design
+        guard design.mode != mode else { return }
+        design.mode = mode
+        engine.update(design: design)
+    }
     weak var engine: NoteEditorEngine? {
         didSet {
             if engine !== oldValue {
@@ -477,11 +493,38 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             dropLine.isHidden = true
         }
         let animated = !engine.style.design.reduceMotion
-        tracking: while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
-                                                    until: .distantFuture, inMode: .eventTracking, dequeue: true) {
+        // O4-02: Esc, the panel losing key status or hiding, or the page
+        // going away cancels the drag: the card glides back over its
+        // source and the block stays where it was.
+        let tracking = AtticDragTracking(view: self, window: window)
+        func cancel(waitingForRelease: Bool) {
+            if let card = lift {
+                lift = nil
+                let home = CGRect(x: sourceRect.minX - card.padding.width, y: sourceRect.minY - card.padding.height,
+                                  width: card.frame.width, height: card.frame.height)
+                if animated, card.frame != home, card.window != nil {
+                    NSAnimationContext.runAnimationGroup({ context in
+                        context.duration = AtticMotionScale.fast
+                        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                        context.allowsImplicitAnimation = true
+                        card.animator().frame = home
+                    }, completionHandler: { MainActor.assumeIsolated { card.removeFromSuperview() } })
+                } else {
+                    card.removeFromSuperview()
+                }
+            }
+            dim?.restore()
+            dim = nil
+            dropLine.isHidden = true
+            CATransaction.flush()
+            if waitingForRelease { tracking.waitForRelease() }
+        }
+        tracking: while true {
+            let next = tracking.nextEvent()
+            if tracking.isInterrupted { return cancel(waitingForRelease: false) }
+            guard let next else { continue }
+            if AtticDragTracking.isCancel(next) { return cancel(waitingForRelease: true) }
             switch next.type {
-            case .keyDown where next.keyCode == 53:
-                return
             case .leftMouseDragged:
                 let point = convert(next.locationInWindow, from: nil)
                 if !dragging, hypot(point.x - start.x, point.y - start.y) > 3 {
