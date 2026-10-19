@@ -32,6 +32,17 @@ extension NoteEditorEngine {
         tableAttachment(id: attachment.objectID).flatMap { $0.0 === attachment ? $0.1 : nil }
     }
 
+    /// DG1: where the attachment at `location` is in the text view (its
+    /// layout fragment's attachment frame), or nil while it isn't laid out.
+    func attachmentFrame(at location: Int) -> CGRect? {
+        guard let layoutManager, let textView, let start = textRange(for: NSRange(location: location, length: 0))?.location,
+              let fragment = layoutManager.textLayoutFragment(for: start) else { return nil }
+        let frame = fragment.frameForTextAttachment(at: start)
+        guard frame.width > 0 || frame.height > 0 else { return nil }
+        let origin = textView.textContainerOrigin
+        return frame.offsetBy(dx: fragment.layoutFragmentFrame.minX + origin.x, dy: fragment.layoutFragmentFrame.minY + origin.y)
+    }
+
     /// The table the keyboard is in (a cell, or whole cells selected), or
     /// was in before one of the page's controls took it for a moment.
     var focusedTable: NoteTableView? {

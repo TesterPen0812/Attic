@@ -280,6 +280,7 @@ final class NoteTableView: NSView {
                     self.frame = self.lastFrameInTextView ?? NSRect(x: textView.textContainerOrigin.x, y: -10_000,
                                                                     width: self.bounds.width, height: self.bounds.height)
                     textView.addSubview(self)
+                    self.placeParked()
                 } else {
                     // Gone from the note (deleted, or its Undo): the note's text takes the keyboard.
                     self.keepsFocusThroughRehost = false
@@ -292,6 +293,16 @@ final class NoteTableView: NSView {
                 }
             }
         }
+    }
+
+    /// DG1: a parked view sits where its table is in the text, and is put
+    /// there again after every layout pass. The frame it last had goes
+    /// stale as soon as a block moves above it, and one taken while TextKit
+    /// was re-hosting it can be anywhere (the table over the title).
+    func placeParked() {
+        guard isParked, let attachment, let engine, let textView = engine.textView, superview === textView,
+              let range = engine.range(ofTable: attachment), let rect = engine.attachmentFrame(at: range.location) else { return }
+        if frame.origin != rect.origin { setFrameOrigin(rect.origin) }
     }
 
     private func restoreFocusAfterRehost() {

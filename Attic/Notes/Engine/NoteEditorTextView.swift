@@ -326,7 +326,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// A location in the block the handle belongs to.
     private(set) var handleBlockLocation: Int?
     private var handleHiddenForTyping = false
-    private lazy var dropLine: NoteDropLineView = {
+    private(set) lazy var dropLine: NoteDropLineView = {
         let line = NoteDropLineView(frame: .zero)
         line.isHidden = true
         addSubview(line)
@@ -439,7 +439,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     #endif
 
     /// The block's rectangle in this view (its fragments' union).
-    private func rect(ofBlock block: NSRange) -> CGRect? {
+    func rect(ofBlock block: NSRange) -> CGRect? {
         guard let engine, let layoutManager = textLayoutManager, let range = engine.textRange(for: block) else { return nil }
         var union: CGRect?
         layoutManager.enumerateTextLayoutFragments(from: range.location, options: [.ensuresLayout]) { fragment in
@@ -459,139 +459,52 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y) }
     }
 
-    /// Where a block dragged to `point` lands: before or after the block
-    /// under it (never inside the dragged block itself), with its line.
-    private func dropTarget(at point: NSPoint, moving source: NSRange) -> (NoteBlockDropPosition, CGRect)? {
-        guard let engine, let (_, location) = fragment(nearViewPoint: point) else { return nil }
-        guard location >= engine.titleParagraphRange.length else { return nil }
-        let block = engine.blockRange(at: location)
-        guard let rect = rect(ofBlock: block) else { return nil }
-        let after = point.y > rect.midY
-        guard NSIntersectionRange(block, source).length == 0, block.location != source.location,
-              let position = engine.blockDropPosition(at: block.location, after: after),
-              position.location != source.location, position.location != NSMaxRange(source),
-              position.location > engine.titleParagraphRange.length - 1 else { return nil }
-        // The line sits in the gap between the two blocks, at the drop's depth.
-        let gapY: CGFloat
-        if after {
-            let below = position.location < engine.textStorage.length ? self.rect(ofBlock: engine.blockRange(at: position.location)) : nil
-            gapY = below.map { (rect.maxY + $0.minY) / 2 } ?? rect.maxY + AtticNoteType.paragraphGap / 2
-        } else {
-            let above = block.location > engine.titleParagraphRange.length ? self.rect(ofBlock: engine.blockRange(at: block.location - 1)) : nil
-            gapY = above.map { ($0.maxY + rect.minY) / 2 } ?? rect.minY - AtticNoteType.paragraphGap / 2
-        }
-        let indent = CGFloat(position.depth) * AtticNoteType.listLevelStep
-        let width = (textContainer?.size.width ?? bounds.width) - indent
-        let line = CGRect(x: textContainerOrigin.x + indent, y: gapY - AtticNoteType.dropLineThickness / 2,
-                          width: max(0, width), height: AtticNoteType.dropLineThickness)
-        return (position, line)
-    }
-
     /// A click on the handle selects the block; a drag moves it (Esc or a
     /// drop where it started cancels; the move is one Undo step).
     ///
-    /// V-06: the block lifts onto a card (the dropdowns' surface, so nothing
-    /// shows through it) while its place in the text dims. The card hangs
-    /// from the drop line, gliding from gap to gap, so the line runs along
-    /// its top edge and never through its text; with no drop (over the
-    /// block itself) it settles back over its source.
+    /// DG1: the block lifts onto a card that follows the pointer one to
+    /// one, above the page's floating controls, while its place dims; the
+    /// drop line glides from gap to gap, and the note scrolls each display
+    /// frame near its top or bottom edge (`NoteBlockDragSession`). Slots
+    /// come from block frames measured once, so a pointer move lays
+    /// nothing out.
     private func trackBlockHandle(with event: NSEvent) {
         guard let engine, let window, let location = handleBlockLocation else { return }
         let source = engine.blockRange(at: location)
         guard let sourceRect = rect(ofBlock: source) else { return }
         let start = convert(event.locationInWindow, from: nil)
-        var dragging = false
-        var target: NoteBlockDropPosition?
-        var lift: NoteDragLiftView?
-        var dim: NoteBlockDragDim?
-        #if DEBUG
-        var probe: NoteDragProbe?
-        #endif
+        var session: NoteBlockDragSession?
         NSCursor.closedHand.push()
         defer {
-            #if DEBUG
-            probe?.end(dragging ? "done" : "click")
-            #endif
             NSCursor.pop()
-            lift?.removeFromSuperview()
-            dim?.restore()
-            dropLine.isHidden = true
+            session?.finish()
         }
-        let animated = !engine.style.design.reduceMotion
         // O4-02: Esc, the panel losing key status or hiding, or the page
         // going away cancels the drag: the card glides back over its
         // source and the block stays where it was.
         let tracking = AtticDragTracking(view: self, window: window)
-        func cancel(waitingForRelease: Bool) {
-            if let card = lift {
-                lift = nil
-                let home = CGRect(x: sourceRect.minX - card.padding.width, y: sourceRect.minY - card.padding.height,
-                                  width: card.frame.width, height: card.frame.height)
-                if animated, card.frame != home, card.window != nil {
-                    NSAnimationContext.runAnimationGroup({ context in
-                        context.duration = AtticMotionScale.fast
-                        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                        context.allowsImplicitAnimation = true
-                        card.animator().frame = home
-                    }, completionHandler: { MainActor.assumeIsolated { card.removeFromSuperview() } })
-                } else {
-                    card.removeFromSuperview()
-                }
-            }
-            dim?.restore()
-            dim = nil
-            dropLine.isHidden = true
-            CATransaction.flush()
-            if waitingForRelease { tracking.waitForRelease() }
-        }
         tracking: while true {
             let next = tracking.nextEvent()
-            if tracking.isInterrupted { return cancel(waitingForRelease: false) }
+            if tracking.isInterrupted { session?.cancel(); return }
             guard let next else { continue }
-            if AtticDragTracking.isCancel(next) { return cancel(waitingForRelease: true) }
+            if AtticDragTracking.isCancel(next) {
+                session?.cancel()
+                tracking.waitForRelease()
+                return
+            }
             switch next.type {
             case .leftMouseDragged:
                 let point = convert(next.locationInWindow, from: nil)
-                if !dragging, hypot(point.x - start.x, point.y - start.y) > 3 {
-                    dragging = true
-                    lift = makeBlockLift(sourceRect)
-                    dim = NoteBlockDragDim(textView: self, block: source, rect: sourceRect)
+                if session == nil, hypot(point.x - start.x, point.y - start.y) > 3 {
+                    session = NoteBlockDragSession(textView: self, source: source, sourceRect: sourceRect,
+                                                   pressPoint: event.locationInWindow)
                     hideBlockHandle()
+                    lastBlockDrag = session
                 }
-                guard dragging, let card = lift else { continue }
-                #if DEBUG
-                if probe == nil, NoteDragProbe.isEnabled {
-                    probe = NoteDragProbe.begin(in: self) { [weak self, weak card] in
-                        guard let self else { return (nil, nil) }
-                        let line = self.dropLine.isHidden ? nil : self.convert(self.dropLine.frame, to: nil).midY
-                        return (card.flatMap(NoteDragProbe.screenTop(of:)), line)
-                    }
-                }
-                let started = CACurrentMediaTime()
-                defer { probe?.eventHandled(since: started) }
-                #endif
-                autoscroll(with: next)
-                var frame = card.frame
-                if let (position, line) = dropTarget(at: point, moving: source) {
-                    target = position
-                    dropLine.ink = engine.style.tokens.focusRing.nsColor
-                    dropLine.frame = line
-                    dropLine.isHidden = false
-                    dropLine.needsDisplay = true
-                    frame.origin.y = line.maxY + Self.liftGapBelowDropLine
-                } else {
-                    target = nil
-                    dropLine.isHidden = true
-                    frame.origin.y = sourceRect.minY - card.padding.height
-                }
-                card.move(to: frame, animated: animated)
+                session?.pointerMoved(to: next.locationInWindow)
             case .leftMouseUp:
-                if dragging {
-                    // Undimmed before the edit: the dim names the block's
-                    // place as it was.
-                    dim?.restore()
-                    dim = nil
-                    if let target { engine.moveBlock(source, to: target.location) }
+                if let session {
+                    session.drop()
                 } else {
                     window.makeFirstResponder(self)
                     setSelectedRange(source)
@@ -603,19 +516,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         }
     }
 
-    /// The lifted card's top edge under the drop line.
-    static let liftGapBelowDropLine: CGFloat = 3
-
-    private func makeBlockLift(_ rect: CGRect) -> NoteDragLiftView? {
-        guard let engine else { return nil }
-        let image = NoteDragLiftView.snapshot(of: rect, in: self)
-        let padding = CGSize(width: 6, height: 4)
-        let card = NoteDragLiftView(snapshot: image, size: rect.size, padding: padding, tokens: engine.style.tokens)
-        card.frame.origin = CGPoint(x: rect.minX - padding.width, y: rect.minY - padding.height)
-        card.unregisterDraggedTypes()
-        addSubview(card)
-        return card
-    }
+    /// The latest block drag (tests read its slots and card).
+    private(set) var lastBlockDrag: NoteBlockDragSession?
 
     /// VoiceOver's Move Block Up / Down: past the block above or below.
     private func moveHandledBlock(up: Bool) -> Bool {
@@ -1011,6 +913,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             PerformanceSignposts.noteDidLayout()
             updatePlaceholder()
             engine?.updateHeadingControls()
+            // DG1: a table parked here (scrolled out with a cell's keyboard)
+            // follows its text.
+            for case let table as NoteTableView in subviews where table.isParked { table.placeParked() }
             onLayout?()
         }
         caretVisibility.refresh()
