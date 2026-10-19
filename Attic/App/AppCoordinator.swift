@@ -910,6 +910,7 @@ final class AppCoordinator: ObservableObject {
                 mode: { [weak self] in self?.settings.hideAnimation.rawValue ?? "?" }
             )
             hideMotionBench?.acceptsInput = { [weak self] in self?.panelController.acceptsInputForProbe ?? false }
+            hideMotionBench?.beginCost = { [weak self] in self?.panelController.alternateBeginCostForProbe ?? 0 }
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {
                 hoverMonitor.start()
                 hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)

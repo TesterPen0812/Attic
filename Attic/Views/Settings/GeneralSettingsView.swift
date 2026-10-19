@@ -71,7 +71,7 @@ struct GeneralSettingsView: View {
                     selection: $settings.hideAnimation,
                     identifier: "setting-hide-animation"
                 )
-                .help(String(localized: "Slide shrinks the panel into its corner. Genie pours it in through a funnel. Swoop curves it in, narrowing toward the corner."))
+                .help(String(localized: "Slide shrinks the panel into its corner. Genie pours it in through a funnel. Swoop curves it in, narrowing toward the corner. Genie (live glass) pours it in with the real glass kept live."))
             }
 
             // The Motion Lab: preview builds only (never the release

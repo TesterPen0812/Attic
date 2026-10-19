@@ -19,16 +19,22 @@ enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
     case slide
     case genie
     case swoop
+    /// Genie's bend with the real glass kept live under it (draft 3).
+    case genieLiveGlass
 
     static let defaultValue: PanelHideAnimation = .slide
 
     var id: String { rawValue }
+
+    /// Both Genies draw the content through the Metal mesh.
+    var usesGenieMesh: Bool { self == .genie || self == .genieLiveGlass }
 
     var title: String {
         switch self {
         case .slide: String(localized: "Slide")
         case .genie: String(localized: "Genie")
         case .swoop: String(localized: "Swoop")
+        case .genieLiveGlass: String(localized: "Genie (live glass)")
         }
     }
 }
@@ -78,6 +84,13 @@ enum PanelHideMotionTuning {
     static let swoopPerspective: Double = 900
     static let swoopFadeStart: Double = 0.85
     static let swoopKeyframes = 30
+
+    // Swipe follows fingers
+    /// A swipe released to close finishes into the corner on this spring
+    /// (critically damped, from the fingers' progress and speed).
+    static let swipeCloseSpring = AtticMotionSpring(response: 0.24, bounce: 0)
+    /// The release speed is capped (progress per second).
+    static let swipeMaxVelocity: Double = 12
 }
 
 /// CSS-style cubic Bézier timing, solved on the CPU so a motion's
@@ -110,20 +123,97 @@ private func smoothstep(_ edge0: Double, _ edge1: Double, _ x: Double) -> Double
     return t * t * (3 - 2 * t)
 }
 
-/// A timed run from one progress to another (0 = shown, 1 = hidden).
+/// A run from one progress to another (0 = shown, 1 = hidden): timed on a
+/// Bézier curve, or on a spring that starts with the fingers' speed.
 struct PanelHideMotionRun {
     let from: Double
     let to: Double
     let start: CFTimeInterval
     let duration: CFTimeInterval
-    let timing: UnitBezier
+    private let curve: Curve
+
+    private enum Curve {
+        case timed(UnitBezier)
+        case spring(omega: Double, zeta: Double, velocity: Double)
+    }
+
+    init(from: Double, to: Double, start: CFTimeInterval, duration: CFTimeInterval, timing: UnitBezier) {
+        self.from = from
+        self.to = to
+        self.start = start
+        self.duration = duration
+        curve = .timed(timing)
+    }
+
+    /// A spring (SwiftUI's response and bounce) from `from` with
+    /// `velocity` (progress per second); it lasts until it settles.
+    init(from: Double, to: Double, start: CFTimeInterval, spring: AtticMotionSpring, velocity: Double) {
+        self.from = from
+        self.to = to
+        self.start = start
+        let omega = 2 * .pi / max(0.05, spring.response)
+        let zeta = spring.bounce >= 0 ? max(0.05, 1 - spring.bounce) : 1 / (1 + max(-0.95, spring.bounce))
+        curve = .spring(omega: omega, zeta: zeta, velocity: velocity)
+        // Settled: within 0.1% of the travel for 1/12 s in a row.
+        let tolerance = 0.001
+        var settled = 0.0, quiet = 0.0, t = 0.0
+        while t < 2 {
+            t += 1.0 / 240
+            let x = Self.displacement(x0: from - to, v0: velocity, omega: omega, zeta: zeta, t: t)
+            if abs(x) < tolerance { quiet += 1.0 / 240; if quiet >= 1.0 / 12 { settled = t - quiet; break } } else { quiet = 0 }
+            settled = t
+        }
+        duration = max(1.0 / 60, settled)
+    }
+
+    private static func displacement(x0: Double, v0: Double, omega: Double, zeta: Double, t: Double) -> Double {
+        if abs(zeta - 1) < 1e-3 {
+            return exp(-omega * t) * (x0 + (v0 + omega * x0) * t)
+        }
+        if zeta < 1 {
+            let damped = omega * (1 - zeta * zeta).squareRoot()
+            return exp(-zeta * omega * t) * (x0 * cos(damped * t) + (v0 + zeta * omega * x0) / damped * sin(damped * t))
+        }
+        let root = (zeta * zeta - 1).squareRoot()
+        let r1 = -omega * (zeta - root), r2 = -omega * (zeta + root)
+        let c2 = (v0 - r1 * x0) / (r2 - r1)
+        return (x0 - c2) * exp(r1 * t) + c2 * exp(r2 * t)
+    }
 
     func progress(at time: CFTimeInterval) -> Double {
         guard duration > 0 else { return to }
-        return from + (to - from) * timing.value(at: (time - start) / duration)
+        switch curve {
+        case .timed(let timing):
+            return from + (to - from) * timing.value(at: (time - start) / duration)
+        case let .spring(omega, zeta, velocity):
+            let t = time - start
+            guard t > 0 else { return from }
+            guard t < duration else { return to }
+            return to + Self.displacement(x0: from - to, v0: velocity, omega: omega, zeta: zeta, t: t)
+        }
     }
 
     func isFinished(at time: CFTimeInterval) -> Bool { time - start >= duration }
+
+    /// The progress `count + 1` evenly spaced samples (Swoop's keyframes).
+    func samples(_ count: Int) -> [Double] {
+        (0...count).map { progress(at: start + duration * Double($0) / Double(count)) }
+    }
+}
+
+/// How a draft motion runs: timed like Slide, or a spring after a swipe.
+enum PanelHideMotionCurve {
+    case timed(duration: TimeInterval, timing: UnitBezier)
+    case spring(AtticMotionSpring, velocity: Double)
+
+    func run(from: Double, to: Double, start: CFTimeInterval) -> PanelHideMotionRun {
+        switch self {
+        case let .timed(duration, timing):
+            PanelHideMotionRun(from: from, to: to, start: start, duration: duration, timing: timing)
+        case let .spring(spring, velocity):
+            PanelHideMotionRun(from: from, to: to, start: start, spring: spring, velocity: velocity)
+        }
+    }
 }
 
 enum PanelSwoopGeometry {
@@ -266,6 +356,36 @@ final class PanelGenieRenderer: @unchecked Sendable {
         )
     }
 
+    /// The vertex shader's position for grid point `g` (both 0…1, y up),
+    /// on the CPU: the live glass's mask follows the same outline.
+    static func position(_ gx: Float, _ gy: Float, _ u: Uniforms) -> SIMD2<Float> {
+        let s = u.right > 0.5 ? gx : 1 - gx
+        let v = u.top > 0.5 ? gy : 1 - gy
+        let w = min(s + u.slide, 1)
+        let t = min(1, max(0, w))
+        let f = u.curve * t * t * (3 - 2 * t)
+        let b = f * (1 - u.mouth) * (1 - v) + v
+        return SIMD2(u.right > 0.5 ? w : 1 - w, u.top > 0.5 ? b : 1 - b)
+    }
+
+    /// Where the drawn mesh puts grid point `p`: the shader's positions at
+    /// the cell's corners, interpolated across the same triangle the index
+    /// buffer draws (`a b c`, `b d c`), so an outline sits exactly on the
+    /// drawn content's edge.
+    static func meshPosition(_ p: SIMD2<Float>, _ u: Uniforms) -> SIMD2<Float> {
+        let columns = Float(PanelHideMotionTuning.genieColumns), rows = Float(PanelHideMotionTuning.genieRows)
+        let x = min(max(p.x, 0), 1) * columns, y = min(max(p.y, 0), 1) * rows
+        let i = min(floor(x), columns - 1), j = min(floor(y), rows - 1)
+        let fx = x - i, fy = y - j
+        let x0 = i / columns, x1 = (i + 1) / columns, y0 = j / rows, y1 = (j + 1) / rows
+        if fx + fy <= 1 {
+            let a = position(x0, y0, u), b = position(x1, y0, u), c = position(x0, y1, u)
+            return a + fx * (b - a) + fy * (c - a)
+        }
+        let b = position(x1, y0, u), c = position(x0, y1, u), d = position(x1, y1, u)
+        return d + (1 - fx) * (c - d) + (1 - fy) * (b - d)
+    }
+
     // The flow runs along x toward the screen edge the panel hides into;
     // the edge on the corner's side stays straight and the other edge
     // bends along a smoothstep funnel to the mouth at the corner. Content
@@ -305,7 +425,9 @@ final class PanelGenieView: NSView {
     private var displayLink: CADisplayLink?
     private var run: PanelHideMotionRun?
     private var corner: ScreenCorner = .topRight
-    private var onFrame: ((Double) -> Void)?
+    /// Called with every drawn frame's uniforms, in the frame's own
+    /// transaction (the live glass's mask moves with it).
+    var frameObserver: ((PanelGenieRenderer.Uniforms) -> Void)?
     private var completion: (() -> Void)?
     private(set) var progress: Double = 0
 
@@ -339,7 +461,9 @@ final class PanelGenieView: NSView {
     /// The last snapshot's cost (cache, composite, upload), for the bench.
     static var lastSnapshotMilliseconds: [String: Double] = [:]
 
-    func captureSnapshot(of view: NSView, surfaceRect: CGRect, cornerRadius: CGFloat, underlay: NSColor?, dark: Bool) {
+    func captureSnapshot(
+        of view: NSView, surfaceRect: CGRect, cornerRadius: CGFloat, underlay: NSColor?, translucent: Bool, dark: Bool
+    ) {
         let began = CACurrentMediaTime()
         defer { Self.lastSnapshotMilliseconds["total"] = (CACurrentMediaTime() - began) * 1000 }
         texture = nil
@@ -406,7 +530,7 @@ final class PanelGenieView: NSView {
         }
         // The controls' own glass: a faint pill over each (a flat snapshot
         // has no layer between a control's surface and its glyph).
-        context.setFillColor(underlay == nil && !dark
+        context.setFillColor(!translucent && !dark
             ? NSColor(white: 0, alpha: 0.05).cgColor
             : NSColor(white: 1, alpha: dark ? 0.07 : 0.22).cgColor)
         for rect in glassPills where rect.width > 4 && rect.height > 4 {
@@ -445,15 +569,21 @@ final class PanelGenieView: NSView {
         render()
     }
 
+    @discardableResult
     func animate(
-        to target: Double, duration: TimeInterval, timing: UnitBezier, corner: ScreenCorner,
+        to target: Double, curve: PanelHideMotionCurve, corner: ScreenCorner,
         completion: @escaping () -> Void
-    ) {
+    ) -> TimeInterval {
         stop()
         self.corner = corner
         self.completion = completion
-        run = PanelHideMotionRun(from: progress, to: target, start: CACurrentMediaTime(),
-                                 duration: duration, timing: timing)
+        let made = curve.run(from: progress, to: target, start: CACurrentMediaTime())
+        run = made
+        defer { startLink() }
+        return made.duration
+    }
+
+    private func startLink() {
         let link = displayLink(target: self, selector: #selector(step(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -497,8 +627,9 @@ final class PanelGenieView: NSView {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         pass.colorAttachments[0].storeAction = .store
+        var uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner)
+        frameObserver?(uniforms)
         if let texture, let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) {
-            var uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner)
             encoder.setRenderPipelineState(pipeline)
             encoder.setVertexBuffer(grid.vertices, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<PanelGenieRenderer.Uniforms>.stride, index: 1)
@@ -514,4 +645,146 @@ final class PanelGenieView: NSView {
         buffer.waitUntilScheduled()
         drawable.present()
     }
+}
+
+// MARK: - Genie (live glass)
+
+/// The panel's own material, live, for Genie (live glass): the same native
+/// glass (or Frosted's material) the panel surface draws, in the panel's
+/// squircle. Everything else is the bent snapshot above it.
+struct PanelGenieLiveMaterial: Equatable {
+    enum Kind: Equatable { case glass, frosted }
+    var kind: Kind
+    var colorScheme: ColorScheme
+    var cornerRadius: CGFloat
+}
+
+private struct PanelGenieMaterialView: View {
+    let material: PanelGenieLiveMaterial
+
+    var body: some View {
+        let shape = Squircle(cornerRadius: material.cornerRadius, exponent: AtticStyle.panelSquircleExponent)
+        Group {
+            switch material.kind {
+            case .glass:
+                // As `AtticPanelSurface.nativeGlassBackground`.
+                shape.fill(Color.clear).glassEffect(.regular, in: shape)
+            case .frosted:
+                shape.fill(.ultraThinMaterial)
+            }
+        }
+        .environment(\.colorScheme, material.colorScheme)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Under the Genie mesh: the live material, masked every frame to the
+/// outline of the bent panel, so it keeps blurring the real desktop in
+/// the bending shape. Fills the content container (the mesh's space).
+final class PanelGenieLiveGlassView: NSView {
+    private let maskLayer = CAShapeLayer()
+    private var host: NSHostingView<PanelGenieMaterialView>?
+    private var material: PanelGenieLiveMaterial?
+    /// The surface's squircle in mesh coordinates (0…1, y up), sampled
+    /// densely enough to follow the mesh's columns and rows.
+    private var outline: [SIMD2<Float>] = []
+    private var points: [CGPoint] = []
+    /// The last mask's cost (outline warp and path), for the bench.
+    static var lastMaskMicroseconds: Double = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        maskLayer.fillColor = NSColor.black.cgColor
+        // A plain layer animates its path implicitly; the mask must land in
+        // the same transaction as the mesh's drawable.
+        maskLayer.actions = ["path": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
+        layer?.mask = maskLayer
+        isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Lays the material over `surfaceRect` (container coordinates) and
+    /// samples its outline. Cheap when nothing changed.
+    func configure(material: PanelGenieLiveMaterial, surfaceRect: CGRect) {
+        if self.material != material || host == nil {
+            self.material = material
+            if let host {
+                host.rootView = PanelGenieMaterialView(material: material)
+            } else {
+                let made = NSHostingView(rootView: PanelGenieMaterialView(material: material))
+                made.sizingOptions = []
+                addSubview(made)
+                host = made
+            }
+        }
+        if host?.frame != surfaceRect { host?.frame = surfaceRect }
+        maskLayer.frame = bounds
+        guard bounds.width > 0, bounds.height > 0 else { outline = []; return }
+        let squircle = Squircle(cornerRadius: material.cornerRadius, exponent: AtticStyle.panelSquircleExponent)
+            .path(in: surfaceRect).cgPath
+        var sampled: [SIMD2<Float>] = []
+        var last: CGPoint?
+        var first: CGPoint?
+        let step: CGFloat = 2
+        func add(_ point: CGPoint) {
+            if let last {
+                let pieces = max(1, Int((hypot(point.x - last.x, point.y - last.y) / step).rounded(.up)))
+                for k in 1...pieces {
+                    let t = CGFloat(k) / CGFloat(pieces)
+                    sampled.append(SIMD2(Float((last.x + (point.x - last.x) * t) / bounds.width),
+                                         Float((last.y + (point.y - last.y) * t) / bounds.height)))
+                }
+            } else {
+                sampled.append(SIMD2(Float(point.x / bounds.width), Float(point.y / bounds.height)))
+            }
+            last = point
+        }
+        squircle.applyWithBlock { element in
+            let e = element.pointee
+            switch e.type {
+            case .moveToPoint: first = e.points[0]; last = nil; add(e.points[0])
+            case .addLineToPoint: add(e.points[0])
+            case .addQuadCurveToPoint: add(e.points[1])
+            case .addCurveToPoint: add(e.points[2])
+            case .closeSubpath: if let first { add(first) }
+            @unknown default: break
+            }
+        }
+        outline = sampled
+        points = Array(repeating: .zero, count: sampled.count)
+    }
+
+    /// Masks the material to the mesh's outline at `uniforms`. Called in
+    /// the mesh frame's transaction.
+    func update(_ uniforms: PanelGenieRenderer.Uniforms) {
+        let began = CACurrentMediaTime()
+        let width = bounds.width, height = bounds.height
+        for index in outline.indices {
+            let p = PanelGenieRenderer.meshPosition(outline[index], uniforms)
+            points[index] = CGPoint(x: CGFloat(p.x) * width, y: CGFloat(p.y) * height)
+        }
+        let path = CGMutablePath()
+        path.addLines(between: points)
+        path.closeSubpath()
+        maskLayer.path = path
+        // The mesh fades its last sliver; the glass fades with it.
+        layer?.opacity = uniforms.alpha
+        Self.lastMaskMicroseconds = (CACurrentMediaTime() - began) * 1_000_000
+    }
+}
+
+/// What a Genie snapshot stands on: Genie's mid-grey stand-in for the
+/// backdrop, or (live glass) the panel's material kept live under it.
+struct PanelGenieSurface {
+    var underlay: NSColor?
+    var live: PanelGenieLiveMaterial?
+    /// Glass or Frosted (the controls' glass gets a light stand-in).
+    var translucent: Bool
 }

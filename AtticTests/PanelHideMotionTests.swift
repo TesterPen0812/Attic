@@ -78,6 +78,61 @@ final class PanelHideMotionTests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: defaults).hideAnimation, .slide)
     }
 
+    func testSwipeSpringStartsWithTheFingersAndSettles() {
+        // A release to close: from the fingers' progress and speed into 1.
+        let close = PanelHideMotionRun(from: 0.35, to: 1, start: 5,
+                                       spring: PanelHideMotionTuning.swipeCloseSpring, velocity: 3)
+        XCTAssertEqual(close.progress(at: 5), 0.35, accuracy: 1e-9)
+        XCTAssertGreaterThan(close.progress(at: 5 + 1.0 / 120), 0.35)
+        XCTAssertLessThan(close.duration, 0.6)
+        XCTAssertEqual(close.progress(at: 5 + close.duration), 1, accuracy: 1e-9)
+        // Critically damped: never past the corner on the way.
+        for step in 0...60 {
+            XCTAssertLessThanOrEqual(close.progress(at: 5 + close.duration * Double(step) / 60), 1.001)
+        }
+        // A spring-back with the feel's bounce, starting while moving out.
+        let back = PanelHideMotionRun(from: 0.3, to: 0, start: 0,
+                                      spring: AtticMotionSpring(response: 0.35, bounce: 0.2), velocity: 1)
+        XCTAssertGreaterThan(back.progress(at: 1.0 / 120), 0.3)
+        XCTAssertEqual(back.progress(at: back.duration), 0, accuracy: 1e-9)
+        XCTAssertTrue(back.isFinished(at: back.duration))
+    }
+
+    func testLiveGlassOutlineFollowsTheDrawnMesh() {
+        let columns = Float(PanelHideMotionTuning.genieColumns), rows = Float(PanelHideMotionTuning.genieRows)
+        for corner in ScreenCorner.allCases {
+            // Shown: the outline is the panel's own.
+            let shown = PanelGenieRenderer.uniforms(progress: 0, corner: corner)
+            let point = SIMD2<Float>(0.137, 0.861)
+            let same = PanelGenieRenderer.meshPosition(point, shown)
+            XCTAssertEqual(same.x, point.x, accuracy: 1e-5)
+            XCTAssertEqual(same.y, point.y, accuracy: 1e-5)
+            // In flight: on every grid vertex it is the shader's position,
+            // and between them it stays on the drawn triangles' edges.
+            for progress in [0.2, 0.5, 0.8] {
+                let u = PanelGenieRenderer.uniforms(progress: progress, corner: corner)
+                for (i, j) in [(0, 0), (7, 3), (56, 14), (31, 9)] {
+                    let g = SIMD2(Float(i) / columns, Float(j) / rows)
+                    let mesh = PanelGenieRenderer.meshPosition(g, u)
+                    let shader = PanelGenieRenderer.position(g.x, g.y, u)
+                    XCTAssertEqual(mesh.x, shader.x, accuracy: 1e-5)
+                    XCTAssertEqual(mesh.y, shader.y, accuracy: 1e-5)
+                }
+                let a = PanelGenieRenderer.position(10 / columns, 4 / rows, u)
+                let b = PanelGenieRenderer.position(11 / columns, 4 / rows, u)
+                let mid = PanelGenieRenderer.meshPosition(SIMD2(10.5 / columns, 4 / rows), u)
+                XCTAssertEqual(mid.x, (a.x + b.x) / 2, accuracy: 1e-5)
+                XCTAssertEqual(mid.y, (a.y + b.y) / 2, accuracy: 1e-5)
+            }
+        }
+    }
+
+    func testLiveGlassIsAFourthOption() {
+        XCTAssertEqual(PanelHideAnimation.allCases, [.slide, .genie, .swoop, .genieLiveGlass])
+        XCTAssertTrue(PanelHideAnimation.genieLiveGlass.usesGenieMesh)
+        XCTAssertFalse(PanelHideAnimation.swoop.usesGenieMesh)
+    }
+
     private func project(_ point: CGPoint, _ t: CATransform3D) -> CGPoint {
         let x = point.x * t.m11 + point.y * t.m21 + t.m41
         let y = point.x * t.m12 + point.y * t.m22 + t.m42

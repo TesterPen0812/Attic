@@ -1169,6 +1169,13 @@ final class AtticPanelContentContainer: NSView {
         addSubview(view, positioned: .above, relativeTo: motionView)
         return view
     }()
+    /// Genie (live glass): the panel's material, live, under the mesh.
+    private lazy var liveGlassView: PanelGenieLiveGlassView = {
+        let view = PanelGenieLiveGlassView(frame: bounds)
+        view.autoresizingMask = [.width, .height]
+        addSubview(view, positioned: .below, relativeTo: genieView)
+        return view
+    }()
     private static let swoopAnimationKey = "attic.panel.swoop"
     /// The draft that owns the presentation; nil when Slide (or nothing) does.
     private(set) var alternateMode: PanelHideAnimation?
@@ -1179,7 +1186,7 @@ final class AtticPanelContentContainer: NSView {
     /// Where the draft's motion is now (0 shown, 1 hidden).
     var alternateProgress: Double {
         switch alternateMode {
-        case .genie?: genieView.currentProgress
+        case .genie?, .genieLiveGlass?: genieView.currentProgress
         case .swoop?: swoopRun?.progress(at: CACurrentMediaTime()) ?? swoopProgress
         default: 0
         }
@@ -1187,7 +1194,7 @@ final class AtticPanelContentContainer: NSView {
 
     /// Before a reveal from hidden: the presentation collapsed in `mode`
     /// (Genie snapshots the laid-out panel first).
-    func prepareAlternateCollapsed(_ mode: PanelHideAnimation, corner: ScreenCorner, underlay: NSColor?) {
+    func prepareAlternateCollapsed(_ mode: PanelHideAnimation, corner: ScreenCorner, surface: PanelGenieSurface?) {
         clearAlternateMotion()
         resetReducedFade()
         stopCollapseMotion()
@@ -1196,49 +1203,101 @@ final class AtticPanelContentContainer: NSView {
         CATransaction.setDisableActions(true)
         layer.transform = CATransform3DIdentity
         CATransaction.commit()
-        beginAlternate(mode, at: 1, corner: corner, underlay: underlay)
+        beginAlternate(mode, at: 1, corner: corner, surface: surface)
     }
 
     /// Runs the draft from where it is to `target`. A hide from the full
-    /// panel starts it (Genie snapshots then).
+    /// panel starts it (Genie snapshots then). Returns how long it runs.
+    @discardableResult
     func animateAlternate(
-        _ mode: PanelHideAnimation, to target: Double, corner: ScreenCorner, underlay: NSColor?,
-        duration: TimeInterval, timing: UnitBezier, completion: @escaping () -> Void
-    ) {
+        _ mode: PanelHideAnimation, to target: Double, corner: ScreenCorner, surface: PanelGenieSurface?,
+        curve: PanelHideMotionCurve, completion: @escaping () -> Void
+    ) -> TimeInterval {
         if alternateMode != mode {
             clearAlternateMotion()
-            beginAlternate(mode, at: 0, corner: corner, underlay: underlay)
+            beginAlternate(mode, at: 0, corner: corner, surface: surface)
         }
         alternateToken += 1
         let token = alternateToken
         let finish: () -> Void = { [weak self] in
             guard let self, self.alternateToken == token else { return }
             // A finished reveal hands the panel back to the live view.
-            if target == 0 { self.clearAlternateMotion() } else if mode == .genie { self.genieView.releaseSnapshot() }
+            if target == 0 {
+                self.clearAlternateMotion()
+            } else if mode.usesGenieMesh {
+                self.genieView.releaseSnapshot()
+                self.liveGlassView.isHidden = true
+            }
             completion()
         }
         switch mode {
-        case .genie:
-            genieView.animate(to: target, duration: duration, timing: timing, corner: corner, completion: finish)
+        case .genie, .genieLiveGlass:
+            return genieView.animate(to: target, curve: curve, corner: corner, completion: finish)
         case .swoop:
-            animateSwoop(to: target, duration: duration, timing: timing, corner: corner, completion: finish)
+            return animateSwoop(to: target, curve: curve, corner: corner, completion: finish)
         case .slide:
             finish()
+            return 0
         }
     }
 
-    private func beginAlternate(_ mode: PanelHideAnimation, at progress: Double, corner: ScreenCorner, underlay: NSColor?) {
+    /// A swipe: the draft at `progress` now, following the fingers (the
+    /// first call starts it; Genie snapshots then).
+    func setAlternateProgress(_ mode: PanelHideAnimation, _ progress: Double, corner: ScreenCorner, surface: PanelGenieSurface?) {
+        if alternateMode != mode {
+            clearAlternateMotion()
+            beginAlternate(mode, at: progress, corner: corner, surface: surface)
+            return
+        }
+        alternateToken += 1
+        switch mode {
+        case .genie, .genieLiveGlass:
+            genieView.stop()
+            genieView.show(progress: progress, corner: corner)
+        case .swoop:
+            guard let layer = motionView.layer else { return }
+            swoopRun = nil
+            swoopProgress = progress
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.removeAnimation(forKey: Self.swoopAnimationKey)
+            layer.transform = swoopTransform(progress, corner: corner)
+            layer.opacity = PanelSwoopGeometry.opacity(progress: progress)
+            CATransaction.commit()
+        case .slide:
+            break
+        }
+    }
+
+    /// The last swipe start's cost: snapshot and live-glass set-up (ms).
+    private(set) var lastAlternateBeginMilliseconds: Double = 0
+
+    private func beginAlternate(_ mode: PanelHideAnimation, at progress: Double, corner: ScreenCorner, surface: PanelGenieSurface?) {
         guard mode != .slide, let layer = motionView.layer else { return }
+        let began = CACurrentMediaTime()
+        defer { lastAlternateBeginMilliseconds = (CACurrentMediaTime() - began) * 1000 }
         alternateMode = mode
         switch mode {
-        case .genie:
+        case .genie, .genieLiveGlass:
+            let live = mode == .genieLiveGlass ? surface?.live : nil
             hostingView.layoutSubtreeIfNeeded()
             genieView.frame = bounds
             genieView.captureSnapshot(of: motionView, surfaceRect: hostingView.frame,
-                                      cornerRadius: hostingView.panelCornerRadius, underlay: underlay,
+                                      cornerRadius: hostingView.panelCornerRadius,
+                                      underlay: mode == .genie ? surface?.underlay : nil,
+                                      translucent: surface?.translucent ?? false,
                                       dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            if let live {
+                liveGlassView.frame = bounds
+                liveGlassView.configure(material: live, surfaceRect: hostingView.frame)
+                liveGlassView.isHidden = false
+                liveGlassView.layoutSubtreeIfNeeded()
+                genieView.frameObserver = { [weak self] uniforms in self?.liveGlassView.update(uniforms) }
+            } else {
+                genieView.frameObserver = nil
+            }
             layer.opacity = 0
             genieView.show(progress: progress, corner: corner)
             CATransaction.commit()
@@ -1267,16 +1326,17 @@ final class AtticPanelContentContainer: NSView {
     }
 
     private func animateSwoop(
-        to target: Double, duration: TimeInterval, timing: UnitBezier, corner: ScreenCorner,
+        to target: Double, curve: PanelHideMotionCurve, corner: ScreenCorner,
         completion: @escaping () -> Void
-    ) {
-        guard let layer = motionView.layer else { completion(); return }
+    ) -> TimeInterval {
+        guard let layer = motionView.layer else { completion(); return 0 }
         let from = alternateProgress
-        let run = PanelHideMotionRun(from: from, to: target, start: CACurrentMediaTime(), duration: duration, timing: timing)
+        let run = curve.run(from: from, to: target, start: CACurrentMediaTime())
         swoopRun = run
         swoopProgress = target
-        let count = PanelHideMotionTuning.swoopKeyframes
-        let steps = (0...count).map { run.from + (run.to - run.from) * timing.value(at: Double($0) / Double(count)) }
+        // 30 keyframes for a timed run; a spring gets one per 120 Hz frame.
+        let count = max(PanelHideMotionTuning.swoopKeyframes, Int((run.duration * 120).rounded(.up)))
+        let steps = run.samples(count)
         let transforms = CAKeyframeAnimation(keyPath: "transform")
         transforms.values = steps.map { NSValue(caTransform3D: swoopTransform($0, corner: corner)) }
         let opacities = CAKeyframeAnimation(keyPath: "opacity")
@@ -1286,7 +1346,7 @@ final class AtticPanelContentContainer: NSView {
         opacities.keyTimes = keyTimes
         let group = CAAnimationGroup()
         group.animations = [transforms, opacities]
-        group.duration = duration
+        group.duration = run.duration
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.removeAnimation(forKey: Self.swoopAnimationKey)
@@ -1300,13 +1360,14 @@ final class AtticPanelContentContainer: NSView {
         }
         layer.add(group, forKey: Self.swoopAnimationKey)
         CATransaction.commit()
+        return run.duration
     }
 
     /// Freezes a draft where it is (an interruption reverses from there).
     private func stopAlternateMotion() {
         alternateToken += 1
         switch alternateMode {
-        case .genie?:
+        case .genie?, .genieLiveGlass?:
             genieView.stop()
         case .swoop?:
             guard let layer = motionView.layer else { return }
@@ -1332,10 +1393,12 @@ final class AtticPanelContentContainer: NSView {
         guard let layer = motionView.layer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if mode == .genie {
+        if mode.usesGenieMesh {
             genieView.stop()
+            genieView.frameObserver = nil
             genieView.isHidden = true
             genieView.releaseSnapshot()
+            if mode == .genieLiveGlass { liveGlassView.isHidden = true }
         }
         swoopRun = nil
         swoopProgress = 0
