@@ -589,6 +589,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.cancelInteractiveDismissal()
             }
         }
+        panel.onTrackpadSwipeMayBegin = { [weak self] in
+            guard let self, self.panel.isVisible, !self.isInteractiveDismissal,
+                  !AtticMotionPreference.reducesMotion, self.settings.hideAnimation.usesGenieMesh,
+                  let container = self.contentContainer, container.alternateMode == nil else { return }
+            container.prepareAlternateSnapshot(self.settings.hideAnimation, surface: self.genieSurface(for: self.settings.hideAnimation))
+        }
         panel.onTrackpadDismissProgress = { [weak self] distance in
             self?.updateInteractiveDismissal(distance: distance)
         }
