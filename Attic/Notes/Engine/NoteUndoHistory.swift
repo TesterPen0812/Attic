@@ -174,6 +174,13 @@ final class NoteUndoHistory {
 
     func breakCoalescing() { open = nil }
 
+    /// A caret jump inside the text of a coalesced edit is still a boundary,
+    /// even if the next navigation command returns to the old typing edge.
+    func selectionMoved(to selection: NSRange) {
+        guard !isChangeInFlight, !isReplaying, let open, selection != open.selectionAfter else { return }
+        breakCoalescing()
+    }
+
     /// Steps recorded between `beginGroup` and `endGroup` undo as one.
     func beginGroup() {
         if groupDepth == 0 {
@@ -682,6 +689,7 @@ final class NoteUndoHistory {
             // Even setting the same caret makes AppKit rederive typing
             // attributes from the text, discarding pending inline marks.
             if textView.selectedRange() != restored { textView.setSelectedRange(restored) }
+            textView.scrollRangeToVisible(restored)
         }
     }
 

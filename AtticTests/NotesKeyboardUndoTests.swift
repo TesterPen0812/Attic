@@ -248,6 +248,49 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertNotNil(harness.store.note(withID: first))
     }
 
+    func testFX2SettingsWindowTakingKeyEndsTheNotesTypingRun() throws {
+        for changeSetting in [false, true] {
+            let (harness, ids) = try makeHarness(titles: [""])
+            let text = try openAndFocus(ids[0], in: harness)
+            for character in "Focus trial" { text.insertText(String(character), replacementRange: text.selectedRange()) }
+            text.insertNewline(nil)
+            for character in "Earlier body" { text.insertText(String(character), replacementRange: text.selectedRange()) }
+            let engine = try XCTUnwrap(harness.controller.active?.engine)
+            let earlier = engine.plainText
+            XCTAssertEqual(earlier, "Focus trial\nEarlier body")
+            XCTAssertEqual(engine.history.undoOps.count, 1)
+            // A separate Settings-like key window: the note keeps its first responder.
+            let settings = KeyWindow(contentRect: NSRect(x: -4000, y: -4000, width: 400, height: 300),
+                                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            settings.isReleasedWhenClosed = false
+            windows.append(settings)
+            settings.orderFront(nil)
+            settings.makeKey()
+            XCTAssertTrue(NSApp.keyWindow === settings)
+            XCTAssertFalse(harness.window.isKeyWindow)
+            XCTAssertTrue(harness.window.firstResponder === text)
+            if changeSetting {
+                var design = engine.style.design
+                design.mode = .dark
+                engine.update(design: design)
+            }
+            harness.window.makeKey()
+            XCTAssertTrue(NSApp.keyWindow === harness.window)
+            XCTAssertTrue(harness.window.makeFirstResponder(text))
+            text.moveToEndOfDocument(nil)
+            for character in " later" { text.insertText(String(character), replacementRange: text.selectedRange()) }
+            let latest = engine.plainText
+            XCTAssertEqual(try press("z", keyCode: 6, .command, in: harness), .firstResponder)
+            XCTAssertEqual(engine.plainText, earlier, "Settings changed=\(changeSetting): title/body survive first Undo")
+            try press("z", keyCode: 6, .command, in: harness)
+            XCTAssertEqual(engine.plainText, "")
+            try press("z", keyCode: 6, [.command, .shift], in: harness)
+            XCTAssertEqual(engine.plainText, earlier)
+            try press("z", keyCode: 6, [.command, .shift], in: harness)
+            XCTAssertEqual(engine.plainText, latest)
+        }
+    }
+
     // MARK: Delete B, return to the same A, type, Undo
 
     func testTypingUndoAfterDeletingAnotherNoteAndReturningToTheSameNoteUndoesTheTyping() throws {

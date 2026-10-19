@@ -1619,6 +1619,103 @@ final class NoteEditorEngineTests: XCTestCase {
         ])
     }
 
+    func testFX2WindowResignationEndsTypingEvenWhenEditorStaysFirstResponder() throws {
+        try checkFX2TypingBoundary { _, view in
+            NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: view.window)
+        }
+    }
+
+    func testFX2AppDeactivationEndsTypingEvenWhenEditorStaysFirstResponder() throws {
+        try checkFX2TypingBoundary { _, _ in
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        }
+    }
+
+    func testFX2ResponderDepartureEndsTyping() throws {
+        try checkFX2TypingBoundary { _, view in
+            XCTAssertTrue(view.window!.makeFirstResponder(nil))
+            XCTAssertTrue(view.window!.makeFirstResponder(view))
+        }
+    }
+
+    func testFX2HiddenEditorEndsTyping() throws {
+        try checkFX2TypingBoundary { _, view in
+            view.isHidden = true
+            view.isHidden = false
+        }
+    }
+
+    func testFX2WindowDetachmentEndsTyping() throws {
+        try checkFX2TypingBoundary { _, view in
+            let window = view.window!
+            let scroll = view.enclosingScrollView!
+            window.contentView = nil
+            window.contentView = scroll
+            XCTAssertTrue(window.makeFirstResponder(view))
+        }
+    }
+
+    func testFX2CaretReturnEndsTypingInsideTheOpenStep() throws {
+        try checkFX2TypingBoundary { _, view in
+            let end = view.selectedRange()
+            view.moveLeft(nil)
+            XCTAssertEqual(view.selectedRange().location, end.location - 1)
+            view.moveRight(nil)
+            XCTAssertEqual(view.selectedRange(), end)
+        }
+    }
+
+    func testFX2NativeArrowKeyReturnEndsTypingInsideTheOpenStep() throws {
+        try checkFX2TypingBoundary { _, view in
+            let end = view.selectedRange()
+            for (code, characters) in [(UInt16(123), "\u{F702}"), (UInt16(124), "\u{F703}")] {
+                let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: view.window!.windowNumber,
+                    context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+                view.keyDown(with: event)
+            }
+            XCTAssertEqual(view.selectedRange(), end)
+        }
+    }
+
+    func testFX2OtherWindowNotificationDoesNotSplitContinuousTyping() throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: []), window: true)
+        defer { engine.detachView() }
+        type("before", view)
+        let other = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: other)
+        type("after", view)
+        XCTAssertEqual(engine.history.undoOps.count, 1)
+        view.undo(nil)
+        XCTAssertEqual(engine.plainText, "")
+    }
+
+    private func checkFX2TypingBoundary(_ depart: (NoteEditorEngine, NoteEditorTextView) throws -> Void) throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: []), window: true)
+        defer { engine.detachView() }
+        XCTAssertTrue(view.window!.makeFirstResponder(view))
+        for character in "Focus trial" { type(String(character), view) }
+        view.insertNewline(nil)
+        for character in "Earlier body" { type(String(character), view) }
+        let earlier = engine.plainText
+        XCTAssertEqual(earlier, "Focus trial\nEarlier body")
+        XCTAssertEqual(engine.history.undoOps.count, 1)
+        try depart(engine, view)
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        for character in " later" { type(String(character), view) }
+        let latest = engine.plainText
+        view.undo(nil)
+        XCTAssertEqual(engine.plainText, earlier, "first Undo preserves title and the earlier run")
+        view.undo(nil)
+        XCTAssertEqual(engine.plainText, "")
+        view.redo(nil)
+        XCTAssertEqual(engine.plainText, earlier)
+        view.redo(nil)
+        XCTAssertEqual(engine.plainText, latest)
+    }
+
     private func makeEngine(_ document: NoteDocument? = nil, window: Bool = false, staged: [StagedNoteAttachment] = []) -> (NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: document ?? sample(), stagedAttachments: staged)
         let (scrollView, textView) = engine.makeView()
