@@ -93,7 +93,6 @@ enum AtticControlSize {
     /// The page switch: 32 tall (visual A), chips 24 inside a 4 pt inset.
     static let capsuleHeight: CGFloat = 32
     static let capsuleInset: CGFloat = 4
-    static let chipHeight: CGFloat = capsuleHeight - 2 * capsuleInset
     /// An icon-only chip, 24 tall and 1.15 × as wide (28).
     /// The add bar matches the corner controls (chrome B: 32, was 36).
     static let addBarHeight: CGFloat = headerControl

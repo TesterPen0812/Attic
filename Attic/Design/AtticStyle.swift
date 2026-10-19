@@ -1,7 +1,6 @@
 import SwiftUI
 
 enum AtticStyle {
-    static let panelCornerRadius: CGFloat = 18
     /// Superellipse exponent for the panel corners. `5` produces a
     /// recognisably squircular silhouette without aggressive inward
     /// curvature.
@@ -18,7 +17,6 @@ enum AtticStyle {
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4
-    static let bodyTextSize: CGFloat = 13
 
     // Keep the compact workboard visually light while preserving forgiving
     // pointer targets around the smaller rendered controls.
@@ -45,166 +43,7 @@ enum AtticStyle {
     static let taskScrollTopPadding: CGFloat = 22
 }
 
-/// The one panel surface: fill, Tint, hairline edge and
-/// outside-only elevation, in that order. The main panel and the subtask
-/// checklist windows both render through this modifier, so they can only
-/// ever look the same.
-struct AtticPanelSurface: ViewModifier {
-    let treatment: AtticPanelSurfaceTreatment
-    let cornerRadius: CGFloat
-    /// Only hosts whose native window leaves `AtticStyle.panelElevationMargin`
-    /// around the surface should draw the exterior shadow.
-    let showsElevation: Bool
 
-    @Environment(\.colorSchemeContrast) private var systemContrast
-    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
-    private var colorSchemeContrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
-    /// The Mac's setting (or a UI-test launch's, `AtticTransparencySeam`).
-    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
-
-    /// One Reduced policy (A4 M-07): macOS Reduce Motion or Settings ›
-    /// Animations › Reduced.
-    private var reducesMotion: Bool { reduceMotion || AtticMotionPreference.level == .reduced }
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        let shape = Squircle(
-            cornerRadius: cornerRadius,
-            exponent: AtticStyle.panelSquircleExponent
-        )
-
-        content
-            .background {
-                ZStack {
-                    surfaceBackground(shape: shape)
-                        .transition(.opacity)
-                }
-                .animation(
-                    (reducesMotion || reduceTransparency) ? nil : AtticMotion.background,
-                    value: surfaceAnimationIdentity
-                )
-                // Keep the full glass surface in the native event region.
-                // Disabling background hit testing makes blank visible areas
-                // click through at WindowServer, before host.hitTest runs.
-            }
-            .overlay {
-                shape.stroke(
-                    surfaceEdgeColor,
-                    lineWidth: treatment.surfaceEdgeLineWidth(
-                        for: colorSchemeContrast
-                    )
-                )
-            }
-            .clipShape(shape)
-            .contentShape(shape)
-            .background {
-                // Outside the clip on purpose: the shadow belongs to the
-                // visible squircle, not to the rectangular AppKit window.
-                if showsElevation {
-                    AtticPanelOutsideShadow(
-                        shape: shape,
-                        elevation: treatment.surfaceElevation
-                    )
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-                    .animation(
-                        (reducesMotion || reduceTransparency) ? nil : AtticMotion.background,
-                        value: surfaceAnimationIdentity
-                    )
-                }
-            }
-    }
-
-    @ViewBuilder
-    private func surfaceBackground(shape: Squircle) -> some View {
-        ZStack {
-            themedSurfaceBackground(shape: shape)
-            if treatment.kind != .solid {
-                shape.fill(treatment.palette.opaqueSurfaceColor.opacity(treatment.foundationOpacity))
-            }
-            if treatment.tintTopOpacity > 0 {
-                tintWash(shape: shape)
-            }
-        }
-    }
-
-    /// The Tint (neutral shade or accent wash) along `tintStops`, above
-    /// the fill.
-    private func tintWash(shape: Squircle) -> some View {
-        LinearGradient(
-            stops: treatment.tintGradientStops,
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .clipShape(shape)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private func themedSurfaceBackground(shape: Squircle) -> some View {
-        switch treatment.kind {
-        case .solid:
-            // Solid uses the palette seed directly; `surfaceTint` remains a
-            // Frosted-only wash regardless of its treatment token.
-            shape.fill(treatment.palette.opaqueSurfaceColor)
-        case .frosted:
-            ZStack {
-                shape.fill(.ultraThinMaterial)
-                    .environment(\.colorScheme, nativeSurfaceColorScheme)
-                shape.fill(themedSurfaceTint)
-            }
-        case .glass:
-            nativeGlassBackground(shape: shape)
-                .environment(\.colorScheme, nativeSurfaceColorScheme)
-        }
-    }
-
-    private func nativeGlassBackground(shape: Squircle) -> some View {
-        // The calibrated foundation already carries the palette colour. A
-        // second tint inside native glass only adds opacity. Keep regular
-        // glass's blur so background lettering does not compete with
-        // foreground content.
-        shape
-            .fill(Color.clear)
-            .glassEffect(.regular, in: shape)
-    }
-
-    /// With Original's shade as the readability layer the native surface is
-    /// drawn bright, as the Siri panel's is, so the desktop keeps its own
-    /// brightness and all the darkness comes from the shade. Otherwise the
-    /// surface follows the panel's appearance.
-    private var nativeSurfaceColorScheme: ColorScheme {
-        if treatment.usesShadeAsFoundation { return .light }
-        return treatment.appearance == .dark ? .dark : .light
-    }
-
-    private var themedSurfaceTint: Color {
-        treatment.palette.surfaceTint.swiftUIColor(opacity: treatment.materialTintOpacity)
-    }
-
-    /// Every surface and Tint change is one crossfade of the whole
-    /// background; Reduce Motion (and Reduce Transparency) disable it.
-    private var surfaceAnimationIdentity: SurfaceAnimationIdentity {
-        .themed(treatment)
-    }
-
-    private var surfaceEdgeColor: Color {
-        let opacity = treatment.surfaceEdgeOpacity(for: colorSchemeContrast)
-        if treatment.usesSystemOpaqueSurface {
-            return Color.primary.opacity(opacity)
-        }
-        return treatment.palette.edgeTint.swiftUIColor(
-            opacity: opacity
-        )
-    }
-}
-
-private enum SurfaceAnimationIdentity: Equatable {
-    case themed(AtticPanelSurfaceTreatment)
-}
 
 /// The panel's exterior elevation: a soft shadow of the squircle with the
 /// squircle itself cut back out, so nothing is ever drawn under the surface.
@@ -401,19 +240,6 @@ private struct AtticGlassEffectContainerModifier: ViewModifier {
 }
 
 extension View {
-    func atticPanelSurface(
-        treatment: AtticPanelSurfaceTreatment,
-        cornerRadius: CGFloat = AtticStyle.panelCornerRadius,
-        showsElevation: Bool = false
-    ) -> some View {
-        modifier(
-            AtticPanelSurface(
-                treatment: treatment,
-                cornerRadius: cornerRadius,
-                showsElevation: showsElevation
-            )
-        )
-    }
 
     func atticGlassControl<S: InsettableShape>(
         in shape: S,
@@ -444,30 +270,6 @@ extension View {
     }
 }
 
-/// An inert band over a scrolling list, sized to the fixed chrome above or
-/// below it plus the mask's fade. Rows hidden or fading under chrome are
-/// dimmed by the mask; this makes them inert as well, so a press or hover
-/// landing beside a chrome control, or in the fade, can never reach a row the
-/// user cannot see. Scroll wheel events still reach the list, which AppKit
-/// hit-tests independently of this shape.
-struct AtticPointerShield: View {
-    let height: CGFloat
-
-    /// A degenerate measurement collapses the shield rather than making the
-    /// whole list inert: chrome heights are measured from live geometry, and a
-    /// band that swallowed every press would be far worse than none.
-    static func shieldedHeight(_ height: CGFloat) -> CGFloat {
-        guard height.isFinite else { return 0 }
-        return max(0, height)
-    }
-
-    var body: some View {
-        Color.clear
-            .frame(height: Self.shieldedHeight(height))
-            .contentShape(Rectangle())
-            .accessibilityHidden(true)
-    }
-}
 
 extension AtticPanelSurfaceTreatment {
     /// `tintStops` as SwiftUI gradient stops in the wash colour. The panel

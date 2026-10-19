@@ -326,7 +326,6 @@ enum AtticCompletedLineMetrics {
     static let gap: CGFloat = 6
     /// An 8 pt medium chevron, 6 after the count.
     static let chevronSize: CGFloat = 8
-    static let horizontalPadding: CGFloat = 6
 }
 
 /// The Done page's search on the tabs line (`AtticTabsSearchField`).
@@ -584,8 +583,6 @@ enum AtticPaletteTileMetrics {
     static let swatchRimDark = AtticRGBA.black(0.25)
     static let accentDot: CGFloat = 5
     static let accentDotInset: CGFloat = 6
-    /// Three tiles per row, 12 apart.
-    static let perRow = 3
     static let spacing: CGFloat = 12
 }
 
@@ -597,8 +594,6 @@ enum AtticTagMetrics {
     /// fill changes no layout (colour pass sheet: 4 px padding, -2 px margin).
     static let inlineFillOutset: CGFloat = 4
     static let inlineFillRadius: CGFloat = 5
-    /// The tag menu's colour dot and Settings' tag dot.
-    static let dotDiameter: CGFloat = 8
 }
 
 // MARK: - Notes (Phase 2, slice 2)
@@ -768,7 +763,6 @@ enum AtticNoteTableMetrics {
     static let columnGripAbove: CGFloat = 7
     /// The "+" chips at the end of the last column and under the last row.
     static let addChipSize: CGFloat = 14
-    static let addChipGap: CGFloat = 4
     static let addChipGlyph: CGFloat = 8
     /// Grips and chips keep a 28 pt hit target, as every small control.
     static let gripHitTarget: CGFloat = 28
@@ -844,9 +838,6 @@ enum AtticNoteMetrics {
     static let countIconSize: CGFloat = 10
     static let countGap: CGFloat = 3
     static let countsSpacing: CGFloat = 8
-    /// Tag suggestions under a title hashtag: 220 wide, 6 below its line,
-    /// the row text on the hashtag's first letter.
-    static let suggestionWidth: CGFloat = 220
 }
 
 /// Notes' format controls (Phase 2 slice 3, mockups p2-16 D and p2-03):
@@ -927,7 +918,6 @@ enum AtticNoteObjectMetrics {
     /// ring on the object's own edge, inside it, on its own corner radius,
     /// so it hugs the card or image with no gap and no second ring.
     static let ringWidth: CGFloat = 1.5
-    static let ringOutset: CGFloat = 0
     static let resizeHandle: CGFloat = 10
     static let resizeHitTarget: CGFloat = 20
     /// The drop line: 2 pt, with a 6 pt disc at its leading end, across
@@ -949,13 +939,11 @@ enum AtticPickerMetrics {
     static let highlightGap: CGFloat = 2
     static let checkSize: CGFloat = 10
     static let checkSlot: CGFloat = 12
-    static let dividerGap: CGFloat = 4
     /// Seven dropdown rows (28 pt) before the tag list scrolls.
     static let tagListMaxHeight: CGFloat = 196
     /// Move to Task… (control audit item 5): wider than the tag list, for
     /// task titles and where each is listed; seven rows before it scrolls.
     static let taskListMaxHeight: CGFloat = 196
-    static let suggestionWidth: CGFloat = 220
     static let todayRing: CGFloat = 1.2
     /// The strip's buttons 4 apart (v19, so two filled pills never touch),
     /// 8 above the bar.

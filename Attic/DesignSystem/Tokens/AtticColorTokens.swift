@@ -441,14 +441,6 @@ struct AtticColorTokens: Equatable, Sendable {
     /// on colour alone (the blue is only 1.5 : 1 against body text).
     var linkUnderline: AtticRGBA { ink(.linkText).withAlpha(0.55) }
 
-    func priority(_ priority: AtticPriority) -> AtticRGBA {
-        switch priority {
-        case .none: ink(.priorityNone)
-        case .low: ink(.priorityLow)
-        case .medium: ink(.priorityMedium)
-        case .high: ink(.priorityHigh)
-        }
-    }
 
     // MARK: Resolution
 

@@ -281,9 +281,6 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// The desktops this surface is judged over (Solid transmits nothing).
     var desktops: [Desktop] { kind == .solid ? [.midGrey] : Desktop.allCases }
 
-    /// Secondary text (`AtticInk.isSecondaryText`): 3 : 1 unless Increase
-    /// Contrast is on.
-    static func isSecondaryText(_ ink: AtticInk) -> Bool { ink.isSecondaryText }
 
     /// The least contrast a role must keep on this surface (the rule above).
     func floor(for ink: AtticInk) -> Double {

@@ -283,12 +283,6 @@ enum PanelTintCalibration {
 
     // MARK: Composite model
 
-    /// The raw desktop extreme used by the pre-macOS-26 fallback path and by
-    /// tests that deliberately bypass the native-surface credit.
-    static func worstCaseBackdrop(for appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
-        let value = appearance == .dark ? 1.0 : 0.0
-        return AtticThemeColor(red: value, green: value, blue: value)
-    }
 
     /// The top-edge composite before the wash.
     static func baseComposite(
