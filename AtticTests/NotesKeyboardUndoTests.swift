@@ -225,7 +225,10 @@ final class NotesKeyboardUndoTests: XCTestCase {
         XCTAssertTrue(harness.controller.open(noteID: id))
         harness.controller.dismissLibrary()
         waitForTestOperation("the live editor joining the Undo harness") {
-            harness.controller.active?.engine.textView?.window === harness.window
+            // This panel is fully offscreen. Service its pending SwiftUI
+            // layout instead of relying on an occluded display's frame tick.
+            harness.host.layoutSubtreeIfNeeded()
+            return harness.controller.active?.engine.textView?.window === harness.window
         }
         let textView = try XCTUnwrap(harness.controller.active?.engine.textView)
         XCTAssertTrue(harness.window.makeFirstResponder(textView))

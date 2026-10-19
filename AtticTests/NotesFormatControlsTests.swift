@@ -126,6 +126,11 @@ final class NotesFormatControlsTests: XCTestCase {
     func testH13SelectionBelowViewportDoesNotPutAFormatBarOutsideTheEditor() throws {
         let document = NoteDocument(blocks: [.text("H13")] + (0..<100).map { .text("Line \($0)") })
         let (controls, engine, text) = make(document, topInset: 64)
+        // Resolve TextKit's estimated geometry before revealing the selection,
+        // as in the tall-selection fixture: a later viewport correction can
+        // otherwise queue another refresh after the first one has completed.
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
         let target = range("Line 99", text)
         text.setSelectedRange(target)
         engine.scrollView?.contentView.scroll(to: NSPoint(x: 0, y: -64))
@@ -133,13 +138,13 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(controls.barPlacement(selection: target), "an offscreen selection has no floating bar")
         XCTAssertFalse(controls.formatModel.barShown)
         text.scrollRangeToVisible(target)
-        spin()
+        waitForFormatRefresh(controls)
         XCTAssertTrue(controls.formatModel.barShown, "the controls return with the visible selection")
         let reads = controls.snapshotCount
         for _ in 0..<3 {
             let clip = try XCTUnwrap(engine.scrollView?.contentView)
             clip.scroll(to: NSPoint(x: 0, y: clip.bounds.minY - 1))
-            spin()
+            waitForFormatRefresh(controls)
         }
         XCTAssertEqual(controls.snapshotCount, reads, "scrolling a visible selection only repositions its bar")
     }
@@ -479,7 +484,6 @@ final class NotesFormatControlsTests: XCTestCase {
         func scrollTo(_ y: CGFloat) {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
             scroll.reflectScrolledClipView(scroll.contentView)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             waitForFormatRefresh(controls)
         }
         func check(_ name: String, shown: Bool, below: Bool? = nil) {
@@ -620,10 +624,10 @@ final class NotesFormatControlsTests: XCTestCase {
     func testTypingWithNothingShownReadsNoState() {
         let (controls, _, textView) = make()
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
-        spin()
+        waitForFormatRefresh(controls)
         let before = controls.snapshotCount
         type(" and more words typed quickly", textView)
-        spin()
+        waitForFormatRefresh(controls)
         XCTAssertEqual(controls.snapshotCount, before, "no state read, no bar work per keystroke")
     }
 
