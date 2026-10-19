@@ -343,11 +343,31 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     // MARK: Pasteboard
 
-    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.html, .string] }
+    private var isPastingAsPlainText = false
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        guard isEditable, !hasMarkedText(), let engine = table?.engine else { return }
+        isPastingAsPlainText = true
+        let generation = engine.history.recordingGeneration
+        engine.history.breakCoalescing()
+        engine.history.beginGroup()
+        defer {
+            engine.history.endGroup()
+            if engine.history.recordingGeneration != generation { engine.history.renameLast(String(localized: "Paste")) }
+            engine.history.breakCoalescing()
+            isPastingAsPlainText = false
+        }
+        // AppKit can insert converted rich text directly, bypassing our
+        // cell-line normalization. Always use the cell's own plain reader.
+        _ = readSelection(from: .general, type: .string)
+    }
+
+    // As in the note body, AppKit's plain-paste action requires the legacy alias.
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.html, .string, .init("NSStringPboardType")] }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         guard let table, let engine = table.engine, let cell = table.activeCell else { return false }
-        if NoteTablePaste.table(from: pboard) != nil {
+        if !isPastingAsPlainText, NoteTablePaste.table(from: pboard) != nil {
             return engine.pasteIntoTable(table, at: cell, from: pboard)
         }
         guard let text = pboard.string(forType: .string) else { return false }
