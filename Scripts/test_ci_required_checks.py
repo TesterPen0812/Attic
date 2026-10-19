@@ -30,12 +30,23 @@ class RequiredChecksTests(unittest.TestCase):
                     self.assertIn(f'::{name}: ', output)
                     self.assertIn(name, summary)
 
-    def test_fast_keeps_only_the_existing_two_optional_checks_optional(self):
+    def test_fast_keeps_only_the_optional_checks_optional(self):
+        self.assertEqual(FULL_ONLY, {'FKA_TESTS', 'PERF_UI_TESTS', 'DROPDOWN_TESTS'})
         env = dict.fromkeys(CHECKS, 'success')
         env.update(dict.fromkeys(FULL_ONLY, 'skipped'), LANE='fast')
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gate(env), 0)
             env['UNIT_TESTS'] = ''
+            self.assertEqual(gate(env), 1)
+
+    def test_dropdown_timing_reports_but_does_not_block_the_fast_lane(self):
+        env = dict.fromkeys(CHECKS, 'success')
+        env.update(DROPDOWN_TESTS='failure', LANE='fast')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(gate(env), 0)
+            env['LANE'] = 'full'
+            self.assertEqual(gate(env), 1)
+            env['LANE'] = ''
             self.assertEqual(gate(env), 1)
 
     def test_success_and_pull_request_empty_lane(self):

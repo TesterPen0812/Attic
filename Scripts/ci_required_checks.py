@@ -15,7 +15,9 @@ CHECKS = {
     'ANALYZER': 'analyzer',
     'FINAL_STATE': 'final-worktree',
 }
-FULL_ONLY = {'FKA_TESTS', 'PERF_UI_TESTS'}
+# Timing gates are noisy on shared runners: in the fast lane they report but
+# don't block (owner, 2026-10-19). Full, costs and pull-request runs still require them.
+FULL_ONLY = {'FKA_TESTS', 'PERF_UI_TESTS', 'DROPDOWN_TESTS'}
 PARALLEL_CHECKS = {
     'MACOS_JOB': 'macos',
     'ROUND_TRIPS': 'round-trips',
