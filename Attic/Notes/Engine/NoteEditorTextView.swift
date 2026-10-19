@@ -328,6 +328,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     private var handleHiddenForTyping = false
     private(set) lazy var dropLine: NoteDropLineView = {
         let line = NoteDropLineView(frame: .zero)
+        // Its own layer: a glide between gaps is Core Animation's.
+        line.wantsLayer = true
         line.isHidden = true
         addSubview(line)
         return line

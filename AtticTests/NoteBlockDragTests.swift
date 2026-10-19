@@ -86,7 +86,8 @@ final class NoteBlockDragTests: XCTestCase {
         let slots = text.blockDropSlots(moving: source)
         let names = slots.blocks.map { (engine.textStorage.string as NSString).substring(with: $0.range)
             .trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        XCTAssertEqual(names, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"], "every block below the title, top to bottom")
+        // The harness's note has an empty title line: "Title" is its first block.
+        XCTAssertEqual(names, ["Title", "Alpha", "Bravo", "Charlie", "Delta", "Echo"], "every block below the title, top to bottom")
         XCTAssertEqual(slots.blocks.map(\.rect.minY), slots.blocks.map(\.rect.minY).sorted())
         let charlie = try XCTUnwrap(slots.blocks.first { $0.range == source })
         XCTAssertNil(charlie.before, "no move over its own place")
@@ -94,8 +95,8 @@ final class NoteBlockDragTests: XCTestCase {
         let bravo = try XCTUnwrap(slots.blocks.first { $0.range.location == location(of: "Bravo", in: engine) })
         XCTAssertNil(bravo.after, "right above its own place is no move")
         XCTAssertNotNil(bravo.before)
-        let alpha = try XCTUnwrap(slots.blocks.first)
-        XCTAssertNil(alpha.before, "the first block below the title keeps its place (moveBlock's rule)")
+        let first = try XCTUnwrap(slots.blocks.first)
+        XCTAssertNil(first.before, "nothing lands above the first block below the title (moveBlock's rule)")
         for block in slots.blocks {
             for slot in [block.before, block.after].compactMap({ $0 }) {
                 let undo = engine.textStorage.string
@@ -132,36 +133,42 @@ final class NoteBlockDragTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
 
+    /// Driven through the session itself: the hosted test window sits far
+    /// off screen, where a queued event's window location isn't kept.
     func testTheCardFollowsThePointerOneToOneAboveThePage() throws {
         let (engine, text) = editor(blocks)
-        let source = location(of: "Bravo", in: engine)
-        var followed: CGFloat?
-        var lifted: CGFloat?
-        var onTop = false
-        var target: Int?
-        let echo = location(of: "Echo", in: engine)
-        let travel = (text.rect(ofBlock: engine.blockRange(at: echo))?.midY ?? 0) - (text.rect(ofBlock: engine.blockRange(at: source))?.midY ?? 0)
-        drag(text, block: source, path: [6, travel / 2, travel + 4]) { session in
-            guard let session else { return }
-            let stage = session.stage
-            onTop = stage.superview?.subviews.last === stage
-            lifted = text.convert(text.rect(ofBlock: session.source)!, to: nil).maxY
-            followed = stage.convert(stage.cardFrame, to: nil).maxY
-            target = session.target?.location
+        let source = engine.blockRange(at: location(of: "Bravo", in: engine))
+        let echo = engine.blockRange(at: location(of: "Echo", in: engine))
+        let sourceRect = try XCTUnwrap(text.rect(ofBlock: source))
+        let travel = try XCTUnwrap(text.rect(ofBlock: echo)).midY - sourceRect.midY
+        let press = CGPoint(x: sourceRect.minX - 10, y: sourceRect.midY)
+        func window(_ dy: CGFloat) -> CGPoint { text.convert(CGPoint(x: press.x, y: press.y + dy), to: nil) }
+        let session = try XCTUnwrap(NoteBlockDragSession(textView: text, source: source, sourceRect: sourceRect,
+                                                         pressPoint: window(0)))
+        let stage = session.stage
+        XCTAssertTrue(stage.superview?.subviews.last === stage, "the card is the overlay's top view, above every floating control")
+        let cardTop = { stage.convert(stage.cardFrame, to: nil).maxY }
+        let lifted = window(0).y - cardTop()
+        XCTAssertEqual(cardTop(), text.convert(sourceRect, to: nil).maxY + stage.padding.height, accuracy: 0.5,
+                       "it lifts from the block's own place")
+        for dy in stride(from: CGFloat(6), through: travel + 4, by: 7) {
+            session.pointerMoved(to: window(dy))
+            XCTAssertEqual(window(dy).y - cardTop(), lifted, accuracy: 0.5, "one to one at \(dy) pt")
         }
-        // Window y runs up: dragging down the note lowers the card by the
-        // same distance (the 4 pt card padding aside).
-        let moved = try XCTUnwrap(lifted) - (try XCTUnwrap(followed))
-        XCTAssertEqual(moved, travel + 4 - 4, accuracy: 1.5, "the card moved with the pointer, not to a slot")
-        XCTAssertTrue(onTop, "the card is the overlay's top view, above every floating control")
-        XCTAssertEqual(target, NSMaxRange(engine.blockRange(at: echo)), "over Echo's lower half: after Echo")
+        session.pointerMoved(to: window(travel + 4))
+        XCTAssertEqual(session.target?.location, NSMaxRange(echo), "over Echo's lower half: after Echo")
+        XCTAssertFalse(text.dropLine.isHidden)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        XCTAssertEqual(text.dropLine.frame.midY, (try XCTUnwrap(text.rect(ofBlock: echo))).maxY + AtticNoteType.paragraphGap / 2,
+                       accuracy: AtticNoteType.paragraphGap, "the line in the gap below Echo")
+        XCTAssertTrue(session.drop())
         XCTAssertEqual(engine.textStorage.string.components(separatedBy: "\n").filter { !$0.isEmpty },
                        ["Title", "Alpha", "Charlie", "Delta", "Echo", "Bravo"], "dropped after Echo")
         XCTAssertTrue(engine.history.undo(), "one Undo step")
         XCTAssertEqual(engine.textStorage.string.components(separatedBy: "\n").filter { !$0.isEmpty },
                        ["Title", "Alpha", "Bravo", "Charlie", "Delta", "Echo"])
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
-        XCTAssertNil(text.lastBlockDrag?.stage.superview, "the card is gone after it lands")
+        XCTAssertNil(stage.superview, "the card is gone after it lands")
     }
 
     func testEscapeCancelsABlockDragAndTheCardGoesHome() throws {

@@ -276,11 +276,7 @@ final class NoteTableView: NSView {
                           let textView = engine.textView, textView.window != nil {
                     // Scrolled out of TextKit's viewport while a cell has the
                     // keyboard: parked in the text view, the cell keeps it.
-                    self.isParked = true
-                    self.frame = self.lastFrameInTextView ?? NSRect(x: textView.textContainerOrigin.x, y: -10_000,
-                                                                    width: self.bounds.width, height: self.bounds.height)
-                    textView.addSubview(self)
-                    self.placeParked()
+                    self.park(in: textView)
                 } else {
                     // Gone from the note (deleted, or its Undo): the note's text takes the keyboard.
                     self.keepsFocusThroughRehost = false
@@ -293,6 +289,16 @@ final class NoteTableView: NSView {
                 }
             }
         }
+    }
+
+    /// Parks the view in the note's text view (out of TextKit's viewport
+    /// with a cell's keyboard), at its table's place in the text.
+    func park(in textView: NSTextView) {
+        isParked = true
+        frame = lastFrameInTextView ?? NSRect(x: textView.textContainerOrigin.x, y: -10_000,
+                                              width: bounds.width, height: bounds.height)
+        textView.addSubview(self)
+        placeParked()
     }
 
     /// DG1: a parked view sits where its table is in the text, and is put

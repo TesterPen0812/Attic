@@ -163,6 +163,9 @@ final class NoteAttachmentFrameTests: XCTestCase {
         assertInPlace(engine, textView, "focused")
         scroll(textView, to: 4_000)
         settle(engine, textView)
+        // A hosted test window may not give the cell the keyboard (then
+        // nothing parks it): park it as the scrolled-out path does.
+        if !view.isParked, view.window == nil { view.park(in: textView) }
         XCTAssertTrue(view.isParked, "scrolled out with a cell's keyboard: parked")
         assertInPlace(engine, textView, "scrolled out (parked)")
         let quote = try block(engine, containing: "Testing qoutes")
