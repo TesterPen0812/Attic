@@ -394,6 +394,7 @@ final class AppCoordinator: ObservableObject {
     let demoDataAllowed: Bool
     private let demoContainer: ModelContainer?
     private var performanceSignalSource: (any DispatchSourceSignal)?
+    private var hideMotionBench: PanelHideMotionBench?
     private var performancePhaseIndex = 0
 
     init(runtime: AppRuntimeEnvironment = AppRuntimeEnvironment(),
@@ -895,6 +896,20 @@ final class AppCoordinator: ObservableObject {
                 }
                 return
             }
+            // Experimental (phase-x/genie): signal-driven hides and reveals.
+            if let mode = ProcessInfo.processInfo.environment["ATTIC_GENIE_MODE"].flatMap(PanelHideAnimation.init(rawValue:)) {
+                settings.hideAnimation = mode
+            }
+            hideMotionBench = PanelHideMotionBench.installIfRequested(
+                isVisible: { [weak self] in self?.panelController.isPanelVisible ?? false },
+                hide: { [weak self] done in _ = self?.hoverMonitor.hideForPerformanceProbe { _ in done() } },
+                reveal: { [weak self] in
+                    guard let self else { return }
+                    self.hoverMonitor.revealForPerformanceProbe(section: self.uiState.selectedSection)
+                },
+                mode: { [weak self] in self?.settings.hideAnimation.rawValue ?? "?" }
+            )
+            hideMotionBench?.acceptsInput = { [weak self] in self?.panelController.acceptsInputForProbe ?? false }
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {
                 hoverMonitor.start()
                 hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)

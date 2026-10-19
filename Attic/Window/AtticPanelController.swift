@@ -156,6 +156,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
+    /// The genie bench: whether the panel takes clicks and keys right now.
+    var acceptsInputForProbe: Bool { contentContainer?.allowsContentInteraction == true && panel.isKeyWindow }
     /// Tests: the panel's window, to send it a swipe as the system does.
     var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0
@@ -255,6 +257,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         bindContentSize()
         uiState.$dockingPreviewCorner.sink { [weak self] corner in
             self?.updateDockingIndicator(corner: corner)
+        }.store(in: &cancellables)
+        // Genie's shader compiles off the main thread before its first use.
+        settings.$hideAnimation.sink { mode in
+            if mode == .genie { PanelGenieRenderer.shared.prewarm() }
         }.store(in: &cancellables)
     }
 
@@ -424,7 +430,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
             if mustEstablishOnTargetDisplay {
                 panel.setVisibleContentFrame(finalFrame, display: true)
-                contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+                prepareCollapsedPresentation(corner: corner)
             }
 
             if makeKey {
@@ -440,7 +446,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         panel.setVisibleContentFrame(finalFrame, display: true)
-        contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+        prepareCollapsedPresentation(corner: corner)
         panel.alphaValue = 1
 
         performanceVisibilityChanges += 1
@@ -1073,8 +1079,54 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let currentScale = contentContainer?.presentationTransform.m11 ?? 1
         let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
         let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
-        // A swipe's close or spring-back under Reduced motion fades.
-        let fades = reduceMotion && reducedFade
+        // Experimental drafts (phase-x/genie): Genie or Swoop owns a hide
+        // from the full panel, and the reveal or reversal that follows it.
+        // A swipe's partly collapsed Slide keeps Slide.
+        let draft: PanelHideAnimation? = {
+            guard spring == nil, let container = contentContainer else { return nil }
+            if let active = container.alternateMode { return active }
+            guard collapseProgress >= 1, settings.hideAnimation != .slide,
+                  CATransform3DIsIdentity(container.presentationTransform) else { return nil }
+            return settings.hideAnimation
+        }()
+        // A swipe's close or spring-back under Reduced motion fades; so
+        // does every draft motion.
+        let fades = reduceMotion && (reducedFade || draft != nil || (spring == nil && settings.hideAnimation != .slide))
+        if let draft, !reduceMotion, let container = contentContainer {
+            let target = Double(collapseProgress)
+            let current = container.alternateMode == nil ? 0 : container.alternateProgress
+            let hiding = collapseProgress >= 1
+            let base = hiding ? PanelHideMotionTuning.hideDuration : PanelHideMotionTuning.showDuration
+            let left = min(1, abs(current - target))
+            let duration = left > 0.001 ? max(0.08, base * sqrt(left)) : base
+            // A reveal takes clicks and keys from its first frame.
+            container.allowsContentInteraction = !hiding
+            container.dockedCornerForAlternate = currentCorner
+            let finishes = PanelMotionCompletionBarrier { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
+                    self.isPanelMotionActive = false
+                    self.contentContainer?.allowsContentInteraction = collapseProgress == 0
+                    completion()
+                }
+            }
+            container.animateAlternate(
+                draft, to: target, corner: currentCorner,
+                underlay: draft == .genie ? genieUnderlay() : nil,
+                duration: duration,
+                timing: hiding ? PanelHideMotionTuning.hideTiming : PanelHideMotionTuning.showTiming
+            ) {
+                MainActor.assumeIsolated { finishes.finishPresentation() }
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
+                panel.animator().setFrame(panel.nativeFrame(forVisibleFrame: frame), display: true)
+            } completionHandler: {
+                MainActor.assumeIsolated { finishes.finishFrame() }
+            }
+            return
+        }
         let duration = fades ? PanelCollapseGeometry.reducedFadeDuration
             : reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
         let finishes = PanelMotionCompletionBarrier { [weak self] in
@@ -1101,6 +1153,37 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 finishes.finishFrame()
             }
         }
+    }
+
+    /// Before a reveal from hidden: the presentation collapsed the way the
+    /// chosen hide animation reveals from.
+    private func prepareCollapsedPresentation(corner: ScreenCorner) {
+        let mode = settings.hideAnimation
+        guard mode != .slide, let container = contentContainer else {
+            contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+            return
+        }
+        if AtticMotionPreference.reducesMotion {
+            // Reduced: the draft's reveal is a fade in from nothing.
+            container.setCollapseProgress(1, corner: corner, reduceMotion: true, fades: true)
+        } else {
+            container.dockedCornerForAlternate = corner
+            container.prepareAlternateCollapsed(mode, corner: corner, underlay: mode == .genie ? genieUnderlay() : nil)
+        }
+    }
+
+    /// Genie's stand-in for the live backdrop a snapshot cannot hold: the
+    /// surface's own measured render of a mid-grey desktop. Solid needs none.
+    private func genieUnderlay() -> NSColor? {
+        let dark = hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let treatment = settings.panelSurfaceTreatment(
+            colorScheme: dark ? .dark : .light,
+            contrast: increaseContrast ? .increased : .standard,
+            reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        )
+        guard treatment.kind != .solid else { return nil }
+        return AtticSurfaceModel.phase0(treatment, increaseContrast: increaseContrast).underlay(.midGrey).nsColor
     }
 
     private func stopPanelMotion() {

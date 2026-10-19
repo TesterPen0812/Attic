@@ -100,6 +100,7 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
         static let animations = "animations"
+        static let hideAnimation = "panelHideAnimation"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
@@ -245,6 +246,11 @@ final class AppSettings: ObservableObject {
     }
 
     let motionLabAvailable: Bool
+
+    /// Experimental (phase-x/genie): how the panel hides and reveals.
+    @Published var hideAnimation: PanelHideAnimation {
+        didSet { defaults.set(hideAnimation.rawValue, forKey: Key.hideAnimation) }
+    }
 
     @Published var panelCornerSize: Double {
         didSet {
@@ -397,6 +403,8 @@ final class AppSettings: ObservableObject {
         tuning.popsNativePopovers = storedTuning?.popsNativePopovers ?? false
         motionTuning = tuning
         AtticMotionTuning.current = tuning
+        hideAnimation = defaults.string(forKey: Key.hideAnimation)
+            .flatMap(PanelHideAnimation.init(rawValue:)) ?? .defaultValue
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,

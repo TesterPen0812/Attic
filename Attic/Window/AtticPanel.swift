@@ -1061,7 +1061,8 @@ final class AtticPanelContentContainer: NSView {
     }
 
     func stopCollapseMotion() {
-        guard let layer = motionView.layer else { return }
+        stopAlternateMotion()
+        guard alternateMode == nil, let layer = motionView.layer else { return }
         let current = presentationTransform
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1088,6 +1089,8 @@ final class AtticPanelContentContainer: NSView {
         completion: (() -> Void)? = nil
     ) {
         guard let layer = motionView.layer else { completion?(); return }
+        // Slide (or Reduced's fade) takes the presentation back from a draft.
+        clearAlternateMotion()
         if reduceMotion {
             // No travel: the pull and a swipe's close or spring-back fade
             // (a live pull dims toward `reducedMinimumOpacity`).
@@ -1095,7 +1098,9 @@ final class AtticPanelContentContainer: NSView {
             // nothing: only a live pull dims.
             let target: Float = fades ? (progress >= 1 ? 0 : 1)
                 : progress >= 1 ? 1 : Float(PanelCollapseGeometry.reducedOpacity(progress: progress))
-            let from = layer.presentation()?.opacity ?? layer.opacity
+            // Only a running fade's presentation is newer than the model.
+            let from = layer.animation(forKey: Self.fadeAnimationKey) != nil
+                ? layer.presentation()?.opacity ?? layer.opacity : layer.opacity
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             layer.removeAnimation(forKey: Self.fadeAnimationKey)
@@ -1154,6 +1159,194 @@ final class AtticPanelContentContainer: NSView {
             completion?()
         }
     }
+
+    // MARK: Experimental hide motions (phase-x/genie)
+
+    private lazy var genieView: PanelGenieView = {
+        let view = PanelGenieView(frame: bounds)
+        view.autoresizingMask = [.width, .height]
+        // Above the live presentation; it never takes a click.
+        addSubview(view, positioned: .above, relativeTo: motionView)
+        return view
+    }()
+    private static let swoopAnimationKey = "attic.panel.swoop"
+    /// The draft that owns the presentation; nil when Slide (or nothing) does.
+    private(set) var alternateMode: PanelHideAnimation?
+    private var swoopRun: PanelHideMotionRun?
+    private var swoopProgress: Double = 0
+    private var alternateToken = 0
+
+    /// Where the draft's motion is now (0 shown, 1 hidden).
+    var alternateProgress: Double {
+        switch alternateMode {
+        case .genie?: genieView.currentProgress
+        case .swoop?: swoopRun?.progress(at: CACurrentMediaTime()) ?? swoopProgress
+        default: 0
+        }
+    }
+
+    /// Before a reveal from hidden: the presentation collapsed in `mode`
+    /// (Genie snapshots the laid-out panel first).
+    func prepareAlternateCollapsed(_ mode: PanelHideAnimation, corner: ScreenCorner, underlay: NSColor?) {
+        clearAlternateMotion()
+        resetReducedFade()
+        stopCollapseMotion()
+        guard let layer = motionView.layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = CATransform3DIdentity
+        CATransaction.commit()
+        beginAlternate(mode, at: 1, corner: corner, underlay: underlay)
+    }
+
+    /// Runs the draft from where it is to `target`. A hide from the full
+    /// panel starts it (Genie snapshots then).
+    func animateAlternate(
+        _ mode: PanelHideAnimation, to target: Double, corner: ScreenCorner, underlay: NSColor?,
+        duration: TimeInterval, timing: UnitBezier, completion: @escaping () -> Void
+    ) {
+        if alternateMode != mode {
+            clearAlternateMotion()
+            beginAlternate(mode, at: 0, corner: corner, underlay: underlay)
+        }
+        alternateToken += 1
+        let token = alternateToken
+        let finish: () -> Void = { [weak self] in
+            guard let self, self.alternateToken == token else { return }
+            // A finished reveal hands the panel back to the live view.
+            if target == 0 { self.clearAlternateMotion() } else if mode == .genie { self.genieView.releaseSnapshot() }
+            completion()
+        }
+        switch mode {
+        case .genie:
+            genieView.animate(to: target, duration: duration, timing: timing, corner: corner, completion: finish)
+        case .swoop:
+            animateSwoop(to: target, duration: duration, timing: timing, corner: corner, completion: finish)
+        case .slide:
+            finish()
+        }
+    }
+
+    private func beginAlternate(_ mode: PanelHideAnimation, at progress: Double, corner: ScreenCorner, underlay: NSColor?) {
+        guard mode != .slide, let layer = motionView.layer else { return }
+        alternateMode = mode
+        switch mode {
+        case .genie:
+            hostingView.layoutSubtreeIfNeeded()
+            genieView.frame = bounds
+            genieView.captureSnapshot(of: motionView, surfaceRect: hostingView.frame,
+                                      cornerRadius: hostingView.panelCornerRadius, underlay: underlay,
+                                      dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.opacity = 0
+            genieView.show(progress: progress, corner: corner)
+            CATransaction.commit()
+        case .swoop:
+            swoopProgress = progress
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.transform = swoopTransform(progress, corner: corner)
+            layer.opacity = PanelSwoopGeometry.opacity(progress: progress)
+            CATransaction.commit()
+        case .slide:
+            break
+        }
+    }
+
+    private func swoopTransform(_ progress: Double, corner: ScreenCorner) -> CATransform3D {
+        guard let layer = motionView.layer else { return CATransform3DIdentity }
+        return PanelSwoopGeometry.transform(
+            progress: progress, visibleBounds: hostingView.frame,
+            layerAnchor: CGPoint(
+                x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
+                y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height
+            ),
+            corner: corner
+        )
+    }
+
+    private func animateSwoop(
+        to target: Double, duration: TimeInterval, timing: UnitBezier, corner: ScreenCorner,
+        completion: @escaping () -> Void
+    ) {
+        guard let layer = motionView.layer else { completion(); return }
+        let from = alternateProgress
+        let run = PanelHideMotionRun(from: from, to: target, start: CACurrentMediaTime(), duration: duration, timing: timing)
+        swoopRun = run
+        swoopProgress = target
+        let count = PanelHideMotionTuning.swoopKeyframes
+        let steps = (0...count).map { run.from + (run.to - run.from) * timing.value(at: Double($0) / Double(count)) }
+        let transforms = CAKeyframeAnimation(keyPath: "transform")
+        transforms.values = steps.map { NSValue(caTransform3D: swoopTransform($0, corner: corner)) }
+        let opacities = CAKeyframeAnimation(keyPath: "opacity")
+        opacities.values = steps.map { PanelSwoopGeometry.opacity(progress: $0) }
+        let keyTimes = (0...count).map { NSNumber(value: Double($0) / Double(count)) }
+        transforms.keyTimes = keyTimes
+        opacities.keyTimes = keyTimes
+        let group = CAAnimationGroup()
+        group.animations = [transforms, opacities]
+        group.duration = duration
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.removeAnimation(forKey: Self.swoopAnimationKey)
+        layer.transform = swoopTransform(target, corner: corner)
+        layer.opacity = PanelSwoopGeometry.opacity(progress: target)
+        CATransaction.setCompletionBlock { [weak self] in
+            MainActor.assumeIsolated {
+                if let self, self.swoopRun?.start == run.start { self.swoopRun = nil }
+                completion()
+            }
+        }
+        layer.add(group, forKey: Self.swoopAnimationKey)
+        CATransaction.commit()
+    }
+
+    /// Freezes a draft where it is (an interruption reverses from there).
+    private func stopAlternateMotion() {
+        alternateToken += 1
+        switch alternateMode {
+        case .genie?:
+            genieView.stop()
+        case .swoop?:
+            guard let layer = motionView.layer else { return }
+            let progress = alternateProgress
+            swoopRun = nil
+            swoopProgress = progress
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.removeAnimation(forKey: Self.swoopAnimationKey)
+            layer.transform = swoopTransform(progress, corner: dockedCornerForAlternate)
+            layer.opacity = PanelSwoopGeometry.opacity(progress: progress)
+            CATransaction.commit()
+        default:
+            break
+        }
+    }
+
+    /// The live panel back at full presentation, the draft's state gone.
+    func clearAlternateMotion() {
+        guard let mode = alternateMode else { return }
+        alternateToken += 1
+        alternateMode = nil
+        guard let layer = motionView.layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if mode == .genie {
+            genieView.stop()
+            genieView.isHidden = true
+            genieView.releaseSnapshot()
+        }
+        swoopRun = nil
+        swoopProgress = 0
+        layer.removeAnimation(forKey: Self.swoopAnimationKey)
+        layer.transform = CATransform3DIdentity
+        layer.opacity = 1
+        CATransaction.commit()
+    }
+
+    /// Set by the controller with every motion (Swoop's freeze needs it).
+    var dockedCornerForAlternate: ScreenCorner = .topRight
 }
 
 final class AtticPanelHostingView: NSHostingView<AtticPanelView> {

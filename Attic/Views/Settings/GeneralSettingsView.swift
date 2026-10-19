@@ -63,6 +63,15 @@ struct GeneralSettingsView: View {
                     identifier: "setting-animations"
                 )
                 .help(String(localized: "Lively springs things in and away. Subtle does the same more quietly. Reduced fades or changes at once instead of moving."))
+                AtticGroupDivider()
+                // Experimental (phase-x/genie only): the drafts to compare.
+                AtticPopUpRow(
+                    label: String(localized: "Hide animation"),
+                    choices: PanelHideAnimation.allCases.map { ($0, $0.title) },
+                    selection: $settings.hideAnimation,
+                    identifier: "setting-hide-animation"
+                )
+                .help(String(localized: "Slide shrinks the panel into its corner. Genie pours it in through a funnel. Swoop curves it in, narrowing toward the corner."))
             }
 
             // The Motion Lab: preview builds only (never the release
