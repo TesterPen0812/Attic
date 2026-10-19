@@ -938,11 +938,25 @@ enum NoteTablePaste {
     static func table(fromHTML html: String, onOversized: () -> Void = {}) -> NoteTable? {
         guard let parsed = NoteTableText.parseHTML(html) else { return nil }
         guard let start = html.range(of: "<table", options: .caseInsensitive),
-              let end = html.range(of: "</table>", options: [.caseInsensitive, .backwards]) else { return nil }
-        let outside = NoteTableText.htmlText(String(html[..<start.lowerBound]) + String(html[end.upperBound...]))
-        guard outside.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+              let end = html.range(of: "</table>", options: .caseInsensitive),
+              html.range(of: "<table\\b", options: [.regularExpression, .caseInsensitive], range: start.upperBound..<html.endIndex) == nil else { return nil }
+        let remainder = String(html[..<start.lowerBound]) + String(html[end.upperBound...])
+        let outside = NoteTableText.htmlText(remainder)
+        // A text-only check cannot see images or embedded objects. Those must
+        // go through the complete, resource-denying rich reader.
+        guard outside.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              html.range(of: "<(img|object|embed|svg|video|audio)\\b", options: [.regularExpression, .caseInsensitive]) == nil else { return nil }
         guard NoteTable.admits(parsed.rows) else { onOversized(); return nil }
-        return NoteTable(texts: parsed.rows, headerRow: true)
+        guard let read = NotePasteReader.read(Data(html.utf8), type: .html), read.images.isEmpty, read.files.isEmpty else { return nil }
+        return singleTable(in: NoteRichTextImport.document(from: read.text, style: NoteTextStyle()))
+    }
+
+    /// A complete grid, with at most the native reader's terminal Body
+    /// paragraph. Explicit empty paragraphs before/after a grid are content.
+    static func singleTable(in document: NoteDocument) -> NoteTable? {
+        guard let table = document.blocks.first?.table, document.blocks.count <= 2,
+              document.blocks.dropFirst().allSatisfy({ $0.kind == .text && $0.style == nil && $0.text.isEmpty }) else { return nil }
+        return table
     }
 
     /// Plain fallback from raw cells, without rectangularizing a rejected grid.
@@ -960,10 +974,17 @@ enum NoteTablePaste {
            let table = document.blocks.first(where: { $0.kind == .table })?.table {
             return table.withFreshIDs()
         }
-        if let html = pasteboard.string(forType: .html) {
-            var oversized = false
-            if let table = table(fromHTML: html, onOversized: { oversized = true; onOversized() }) { return table }
-            if oversized { return nil }
+        // Rich formats own their semantics. Querying string(forType:)
+        // can synthesize plain text even when that flavor was not declared;
+        // a literal tab in RTF must never become an inferred TSV grid.
+        let types = Set(pasteboard.types ?? [])
+        for type in NotePasteReader.richTypes where types.contains(type) {
+            if type == .html, let html = pasteboard.string(forType: type) {
+                return table(fromHTML: html, onOversized: onOversized)
+            }
+            guard let data = pasteboard.data(forType: type), let read = NotePasteReader.read(data, type: type),
+                  read.images.isEmpty, read.files.isEmpty else { return nil }
+            return singleTable(in: NoteRichTextImport.document(from: read.text, style: NoteTextStyle()))
         }
         if let tsv = pasteboard.string(forType: tsvType), let rows = NoteTableText.parseTSV(tsv) {
             guard NoteTable.admits(rows) else { onOversized(); return nil }

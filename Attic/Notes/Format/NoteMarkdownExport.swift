@@ -19,7 +19,7 @@ enum NoteMarkdownExport {
             let block = document.blocks[index]
             index += 1
             if index == 1, block.kind == .text {
-                let title = inlineText(block, calendar: calendar, locale: locale).trimmingCharacters(in: .whitespaces)
+                let title = inlineText(block, calendar: calendar, locale: locale, preserveWhitespace: false).trimmingCharacters(in: .whitespaces)
                 if !title.isEmpty { lines.append(("# " + title, false)) }
                 continue
             }
@@ -55,7 +55,7 @@ enum NoteMarkdownExport {
                 var text = (block.calloutStart ? "<!-- attic:callout-start -->\n\n" : "") + "> [!NOTE]"
                 for (offset, paragraph) in box.enumerated() {
                     if offset > 0 { text += "\n>" }
-                    var content = inlineText(paragraph, calendar: calendar, locale: locale)
+                    var content = inlineText(paragraph, calendar: calendar, locale: locale, literalLeadingEmoji: offset == 0 && icon.isEmpty)
                         .replacingOccurrences(of: "\u{2028}", with: "\\\n> ")
                     if content.isEmpty, box.count > 1 { content = "<br>" }
                     // An entity denotes text, while a raw leading emoji is
@@ -72,8 +72,18 @@ enum NoteMarkdownExport {
             let isList = block.kind == .checklist || block.style == "bullet" || block.style == "number"
             let depth = min(2, max(0, block.indent ?? 0))
             if !isList { numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll() }
-            let column = depth == 0 ? 0 : (listColumns[depth - 1] ?? (depth - 1) * 2) + (listWidths[depth - 1] ?? 2)
+            let column = depth == 0 || listColumns[depth - 1] == nil ? 0 : (listColumns[depth - 1] ?? (depth - 1) * 2) + (listWidths[depth - 1] ?? 2)
             let nesting = String(repeating: " ", count: column)
+            // CommonMark cannot express an orphan's semantic depth, or a
+            // restart in the middle of the same ordered-list identity.
+            var listHint = ""
+            if isList {
+                var hints: [String] = []
+                if depth > 0 && (listColumns[depth - 1] == nil || listColumns[0] == nil) { hints.append("indent=\(depth)") }
+                if let start = block.start, start > 999_999_999 || numbered[depth] != nil || (depth > 0 && listColumns[depth - 1] == nil) || (listColumns[0] == nil && !listColumns.isEmpty) { hints.append("start=\(start)") }
+                if !hints.isEmpty { listHint = "<!-- attic:list " + hints.joined(separator: " ") + " -->" }
+            }
+            let looseChild = isList && block.style == "number" && (block.start ?? 1) > 1 && depth > (document.blocks[index - 2].indent ?? 0)
             var prefix = ""
             switch block.kind {
             case .text:
@@ -84,7 +94,11 @@ enum NoteMarkdownExport {
                     numbered = numbered.filter { $0.key <= depth }
                     let old = numbered[depth] ?? 0
                     let number = block.start ?? (old < Int.max ? old + 1 : old)
-                    numbered[depth] = number; prefix = "\(number). "
+                    numbered[depth] = number
+                    // CommonMark limits ordered markers to nine digits.
+                    // The hidden hint carries an otherwise unrepresentable
+                    // start; later items continue from it in Attic.
+                    prefix = "\(number > 999_999_999 ? 1 : number). "
                 case "quote": prefix = "> "
                 default: break
                 }
@@ -96,19 +110,19 @@ enum NoteMarkdownExport {
             }
             if isList {
                 listColumns = listColumns.filter { $0.key <= depth }; listWidths = listWidths.filter { $0.key <= depth }
-                listColumns[depth] = column; listWidths[depth] = prefix.count
+                listColumns[depth] = column; listWidths[depth] = block.kind == .checklist ? 2 : prefix.count
             }
             switch block.kind {
             case .text, .checklist:
-                let continuation = isList ? String(repeating: " ", count: column + prefix.count) : (block.style == "quote" ? nesting + "> " : "")
+                let continuation = isList ? String(repeating: " ", count: column + (block.kind == .checklist ? 2 : prefix.count)) : (block.style == "quote" ? nesting + "> " : "")
                 let text = inlineText(block, calendar: calendar, locale: locale)
-                    .replacingOccurrences(of: "\u{2028}", with: "\\\n" + continuation)
+                    .replacingOccurrences(of: "\u{2028}", with: block.style == "heading" ? "<br>" : "\\\n" + continuation)
                 if !isList, text.isEmpty {
                     // Whitespace alone is only a separator in Markdown.
                     // A normal HTML break keeps an empty formatted paragraph.
                     lines.append((nesting + prefix + "<br>", false))
                 } else if isList || !text.trimmingCharacters(in: .whitespaces).isEmpty {
-                    lines.append((nesting + prefix + text, isList))
+                    lines.append(((looseChild ? "\n" : "") + nesting + prefix + listHint + text, isList))
                 }
             case .image:
                 lines.append((attachmentLabel("image", filename: block.attachmentID.flatMap(filename) ?? String(localized: "image")), false))
@@ -146,14 +160,21 @@ enum NoteMarkdownExport {
 
     /// A table cell's text with its marks as Markdown and its dates as text.
     static func inlineMarkdown(_ block: NoteBlock, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        inlineText(block, calendar: calendar, locale: locale, escapeLiterals: true)
+        inlineText(block, calendar: calendar, locale: locale, escapeLiterals: true, tableCell: true)
     }
 
     /// Escape prose before adding mark delimiters, so literal Markdown and
     /// HTML cannot turn into formatting on re-import.
-    static func escapeInlineText(_ text: String) -> String {
+    static func escapeInlineText(_ text: String, preserveWhitespace: Bool = true, leadingWhitespace: Bool = true, trailingWhitespace: Bool = true) -> String {
         var result = ""
-        for character in text {
+        let characters = Array(text)
+        let leading = characters.prefix { $0.isWhitespace }.count
+        let trailing = characters.reversed().prefix { $0.isWhitespace }.count
+        for (index, character) in characters.enumerated() {
+            if preserveWhitespace && (character == "\t" || (((leadingWhitespace && index < leading) || (trailingWhitespace && index >= characters.count - trailing)) && character.isWhitespace)) {
+                result += character.unicodeScalars.map { "&#\($0.value);" }.joined()
+                continue
+            }
             switch character {
             case "&": result += "&amp;"
             case "<": result += "&lt;"
@@ -169,8 +190,11 @@ enum NoteMarkdownExport {
     }
 
     private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale,
-                                   escapeLiterals: Bool = true, includeMarks: Bool = true) -> String {
+                                   escapeLiterals: Bool = true, includeMarks: Bool = true, preserveWhitespace: Bool = true, literalLeadingEmoji: Bool = false, tableCell: Bool = false) -> String {
         var result = ""
+        let useHTML = includeMarks && escapeLiterals && (NoteMarkdownInline.needsHTML(block) ||
+            (tableCell && block.marks.contains { $0.kind == .code && (block.text as NSString).substring(with: NSRange(location: $0.offset, length: $0.length)).contains("\\") }) ||
+            (literalLeadingEmoji && block.text.first?.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.value > 127 && $0.properties.isEmoji) }) == true))
         let text = block.text as NSString
         var boundaries: Set<Int> = [0, text.length]
         var starts: [Int: [Int]] = [:]
@@ -210,13 +234,18 @@ enum NoteMarkdownExport {
                 $0.value.kind.rawValue != $1.value.kind.rawValue
                     ? $0.value.kind.rawValue < $1.value.kind.rawValue : $0.key < $1.key
             }.map(\.value)
+            if useHTML, !marks.isEmpty {
+                result += NoteMarkdownInline.wrap(value, marks: marks, literalLeadingEmoji: literalLeadingEmoji && range.location == 0)
+                continue
+            }
             if marks.contains(where: { $0.kind == .code }) {
                 let longest = value.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
                 let fence = String(repeating: "`", count: longest + 1)
                 let pad = value.hasPrefix("`") || value.hasSuffix("`") ||
                     (value.hasPrefix(" ") && value.hasSuffix(" ") && value.contains(where: { $0 != " " }))
                 value = fence + (pad ? " " : "") + value + (pad ? " " : "") + fence
-            } else if escapeLiterals { value = escapeInlineText(value) }
+            } else if escapeLiterals { value = escapeInlineText(value, preserveWhitespace: preserveWhitespace, leadingWhitespace: range.location == 0, trailingWhitespace: NSMaxRange(range) == text.length) }
+            if literalLeadingEmoji && range.location == 0 { value = NoteMarkdownInline.literalEmoji(value) }
             for mark in marks.reversed() {
                 switch mark.kind {
                 case .bold: value = "**" + value + "**"
@@ -240,6 +269,108 @@ enum NoteMarkdownExport {
             }
             result += value
         }
+        return result
+    }
+}
+
+/// A small, inert HTML inline vocabulary for spans Markdown cannot nest or
+/// delimit unambiguously. No document/resource importer is involved.
+enum NoteMarkdownInline {
+    static func html(_ text: String) -> String {
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "\n", with: "&#10;").replacingOccurrences(of: "\r", with: "&#13;")
+            .replacingOccurrences(of: "\t", with: "&#9;").replacingOccurrences(of: "\\", with: "&#92;")
+            .replacingOccurrences(of: "|", with: "&#124;").replacingOccurrences(of: "\u{2028}", with: "&#8232;")
+    }
+
+    static func needsHTML(_ block: NoteBlock) -> Bool {
+        let text = block.text as NSString
+        var furthestEnd = -1
+        for mark in block.marks.sorted(by: { $0.offset < $1.offset }) {
+            // Detect crossing or adjoining spans with a sweep, rather than
+            // comparing every pair (ordinary alternating marks must scale).
+            if mark.offset <= furthestEnd { return true }
+            furthestEnd = max(furthestEnd, mark.offset + mark.length)
+            if mark.kind == .underline || mark.kind == .highlight { return true }
+            let value = text.substring(with: NSRange(location: mark.offset, length: mark.length))
+            if value.first?.isWhitespace == true || value.last?.isWhitespace == true { return true }
+            if [.bold, .italic, .strikethrough].contains(mark.kind),
+               (mark.offset > 0 || mark.offset + mark.length < text.length),
+               [value.first, value.last].compactMap({ $0 }).contains(where: { !$0.isLetter && !$0.isNumber }) { return true }
+            if mark.kind == .link, (mark.url ?? "").unicodeScalars.contains(where: { !$0.isASCII || CharacterSet.whitespacesAndNewlines.contains($0) || "\"<>\\".unicodeScalars.contains($0) }) { return true }
+            if mark.kind == .code || mark.kind == .link, value.contains(where: { $0 == "\t" || $0 == "\u{2028}" || $0 == "\n" }) { return true }
+        }
+        return false
+    }
+
+    static func literalEmoji(_ text: String) -> String {
+        guard let first = text.first, first.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.value > 127 && $0.properties.isEmoji) }) else { return text }
+        return first.unicodeScalars.map { "&#\($0.value);" }.joined() + text.dropFirst()
+    }
+
+    static func wrap(_ text: String, marks: [NoteMark], literalLeadingEmoji: Bool = false) -> String {
+        var value = literalLeadingEmoji ? literalEmoji(html(text)) : html(text)
+        for mark in marks.reversed() {
+            switch mark.kind {
+            case .bold: value = "<strong>" + value + "</strong>"
+            case .italic: value = "<em>" + value + "</em>"
+            case .underline: value = "<u>" + value + "</u>"
+            case .strikethrough: value = "<s>" + value + "</s>"
+            case .highlight: value = "<mark" + (mark.colour.map { " data-attic-colour=\"" + html($0) + "\"" } ?? "") + ">" + value + "</mark>"
+            case .code: value = "<code>" + value + "</code>"
+            case .link: value = "<a href=\"" + html(mark.url ?? "") + "\">" + value + "</a>"
+            }
+        }
+        return value
+    }
+
+    /// Parse only our paired tags, with a bounded stack and no URL access.
+    /// Escaped literal tags are decoded after recognition and remain text.
+    static func parse(_ source: String) -> NoteTable.Cell? {
+        let regex = try! NSRegularExpression(pattern: #"</?(?:strong|em|u|s|mark|code|a)(?:\s+[^<>]*)?>"#)
+        let string = source as NSString
+        var stack: [(tag: String, kind: NoteMark.Kind, start: Int, payload: String?)] = []
+        var result = NoteTable.Cell(), cursor = 0
+        for match in regex.matches(in: source, range: NSRange(location: 0, length: string.length)) {
+            result.text += NoteTableText.decodeEntities(string.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+            let raw = string.substring(with: match.range)
+            let tag = raw.dropFirst(raw.hasPrefix("</") ? 2 : 1).prefix { $0.isLetter }
+            if raw.hasPrefix("</") {
+                guard let open = stack.popLast(), open.tag == tag else { return nil }
+                let length = result.text.utf16.count - open.start
+                if length > 0 {
+                    result.marks.append(NoteMark(open.kind, offset: open.start, length: length,
+                        url: open.kind == .link ? open.payload : nil, colour: open.kind == .highlight ? open.payload : nil))
+                }
+            } else {
+                guard stack.count < 32 else { return nil }
+                let kind: NoteMark.Kind
+                switch tag {
+                case "strong": kind = .bold
+                case "em": kind = .italic
+                case "u": kind = .underline
+                case "s": kind = .strikethrough
+                case "mark": kind = .highlight
+                case "code": kind = .code
+                case "a": kind = .link
+                default: return nil
+                }
+                let key = kind == .link ? "href" : "data-attic-colour"
+                var payload: String?
+                if let range = raw.range(of: key + "=\""), let end = raw[range.upperBound...].firstIndex(of: "\"") {
+                    payload = NoteTableText.decodeEntities(String(raw[range.upperBound..<end]))
+                }
+                if kind == .link, payload == nil { return nil }
+                if kind == .highlight, payload?.isEmpty == true { payload = nil }
+                stack.append((String(tag), kind, result.text.utf16.count, payload))
+            }
+            cursor = NSMaxRange(match.range)
+        }
+        result.text += NoteTableText.decodeEntities(string.substring(from: cursor))
+        guard stack.isEmpty else { return nil }
+        result.marks = NoteTableText.canonicalMarks(result.marks)
         return result
     }
 }

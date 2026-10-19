@@ -4410,67 +4410,10 @@ extension NoteEditorEngine {
                 source.replaceCharacters(in: NSRange(location: index, length: 1), with: "[Attachment]")
             }
         }
-        let result = NSMutableAttributedString(string: source.string, attributes: style.bodyAttributes)
-        source.enumerateAttributes(in: NSRange(location: 0, length: source.length)) { attributes, range, _ in
-            if let attachment = attributes[.attachment], attachment is NoteImageAttachment || attachment is NoteFileAttachment {
-                result.addAttribute(.attachment, value: attachment, range: range)
-            }
-            if let font = attributes[.font] as? NSFont {
-                let traits = font.fontDescriptor.symbolicTraits
-                if traits.contains(.bold) { result.addAttribute(.noteMark(.bold), value: true, range: range) }
-                if traits.contains(.italic) { result.addAttribute(.noteMark(.italic), value: true, range: range) }
-                if traits.contains(.monoSpace) { result.addAttribute(.noteMark(.code), value: true, range: range) }
-            }
-            if attributes[.underlineStyle] != nil { result.addAttribute(.noteMark(.underline), value: true, range: range) }
-            if attributes[.strikethroughStyle] != nil { result.addAttribute(.noteMark(.strikethrough), value: true, range: range) }
-            if attributes[.backgroundColor] != nil { result.addAttribute(.noteMark(.highlight), value: true, range: range) }
-            if let url = (attributes[.link] as? URL)?.absoluteString ?? attributes[.link] as? String {
-                result.addAttribute(.noteMark(.link), value: url, range: range)
-            }
+        let normalized = NoteRichTextImport.document(from: source, style: style)
+        if payloads.isEmpty, let table = NoteTablePaste.singleTable(in: normalized) {
+            return pasteTable(table, at: selection, sourceText: NoteTableText.tsv(table))
         }
-        // List identity is a paragraph property. A foreign list kind or an
-        // unsupported depth stays readable as literal marker text.
-        var paragraphs: [(range: NSRange, lists: [NSTextList])] = []
-        let sourceString = source.string as NSString
-        var start = 0
-        while start < sourceString.length {
-            let paragraph = sourceString.paragraphRange(for: NSRange(location: start, length: 0))
-            let lists = (source.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle)?.textLists ?? []
-            paragraphs.append((paragraph, lists))
-            start = NSMaxRange(paragraph)
-        }
-        var ordinals: [Int: Int] = [:]
-        var listIdentities: [Int: ObjectIdentifier] = [:]
-        var literals: [(Int, String)] = []
-        func numbered(_ list: NSTextList) -> Bool {
-            list.markerFormat == .decimal || list.markerFormat.rawValue == "{decimal}."
-        }
-        func supported(_ list: NSTextList) -> Bool {
-            numbered(list) || [.disc, .circle, .square].contains(list.markerFormat) ||
-                ["{disc}.", "{circle}.", "{square}."].contains(list.markerFormat.rawValue)
-        }
-        for entry in paragraphs {
-            guard let list = entry.lists.last else { ordinals.removeAll(); listIdentities.removeAll(); continue }
-            let depth = entry.lists.count - 1
-            ordinals = ordinals.filter { $0.key <= depth }
-            listIdentities = listIdentities.filter { $0.key <= depth }
-            let first = listIdentities[depth] != ObjectIdentifier(list)
-            let previous = ordinals[depth] ?? list.startingItemNumber
-            let ordinal = first ? list.startingItemNumber : (previous < Int.max ? previous + 1 : previous)
-            ordinals[depth] = ordinal
-            listIdentities[depth] = ObjectIdentifier(list)
-            if depth <= 2 && entry.lists.allSatisfy(supported) {
-                result.addAttribute(.noteBlockStyle, value: numbered(list) ? "number" : "bullet", range: entry.range)
-                if first, numbered(list), ordinal > 1 { result.addAttribute(.noteListStart, value: ordinal, range: entry.range) }
-                if depth > 0 { result.addAttribute(.noteBlockIndent, value: depth, range: entry.range) }
-            } else {
-                literals.append((entry.range.location, String(repeating: "  ", count: max(0, depth)) + list.marker(forItemNumber: ordinal) + " "))
-            }
-        }
-        for (at, marker) in literals.reversed() {
-            result.insert(NSAttributedString(string: marker, attributes: style.bodyAttributes), at: at)
-        }
-        let normalized = NoteTextCodec.document(from: result, firstBlockIsTitle: false)
         return insertFragment(normalized, at: selection, resolved: payloads)
     }
 }
@@ -4710,8 +4653,19 @@ extension NoteEditorEngine {
         history.beginGroup(); defer { history.endGroup() }
         guard performEdit(paste.range, with: paste.text, name: "Paste", selection: NSRange(location: selection.location + attributed.length, length: 0)) else { return false }
         if let last = fragment.blocks.last, last.text.isEmpty, attributed.string.hasSuffix("\n"), selection.location + attributed.length == textStorage.length {
-            let format: NoteParagraphStyle = last.style == "mono" ? .mono(language: last.language) : (last.callout.map { .callout(icon: $0) } ?? .body)
-            if format.isCode || format.isCallout { carryEmptyContainer(format) }
+            let format: NoteParagraphStyle = switch last.style {
+            case "heading": .heading(last.level ?? 2)
+            case "quote": last.callout.map { .callout(icon: $0) } ?? .quote
+            case "mono": .mono(language: last.language)
+            case "bullet": .bullet
+            case "number": .number
+            default: last.kind == .checklist ? .checklist : .body
+            }
+            let location = textStorage.length
+            history.recordParagraphStyleChange(location: location,
+                before: .init(style: .body, indent: 0),
+                after: .init(style: format, indent: last.indent ?? 0, block: last))
+            setPendingParagraphStyle(format, indent: last.indent ?? 0, at: location, metadata: last)
         }
         history.renameLast("Paste")
         return true

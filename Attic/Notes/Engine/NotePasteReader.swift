@@ -38,7 +38,7 @@ enum NotePasteReader {
         switch type {
         case .html:
             guard let html = decodeHTML(data) else { return nil }
-            text = importHTML(sanitizeHTML(html, images: &images))
+            text = importSanitizedHTML(sanitizeHTML(html, images: &images))
         case webArchiveType, publicWebArchiveType:
             // Decode the property list ourselves, never WebArchive/WebView:
             // archive URLs are identifiers, not permission to fetch anything.
@@ -52,7 +52,7 @@ enum NotePasteReader {
                     resources[url] = bytes
                 }
             }
-            text = importHTML(sanitizeHTML(html, resources: resources, baseURL: (main["WebResourceURL"] as? String).flatMap(URL.init(string:)), images: &images))
+            text = importSanitizedHTML(sanitizeHTML(html, resources: resources, baseURL: (main["WebResourceURL"] as? String).flatMap(URL.init(string:)), images: &images))
         case .rtf:
             guard let safe = sanitizeRTF(data, images: &images) else { return nil }
             // Explicit RTF reader: no format sniffing and no HTML/WebKit path.
@@ -111,6 +111,23 @@ enum NotePasteReader {
                 .webResourceLoadDelegate: deny
             ], documentAttributes: nil)
         }
+    }
+
+    /// With a resource delegate AppKit uses its legacy HTML path, which
+    /// turns an empty native paragraph's sole <br> into an extra soft break.
+    /// Keep that paragraph with a parse-only atom, then remove the atom.
+    private static func importSanitizedHTML(_ html: String) -> NSAttributedString? {
+        let token = "ATTICPASTEEMPTY" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let regex = try! NSRegularExpression(pattern: #"(<(p|div|li|h[1-6])(?:\s+[^<>]*)?>)[ \t]*<br>[ \t]*(</\2>)"#)
+        let source = regex.stringByReplacingMatches(in: html, range: NSRange(location: 0, length: (html as NSString).length), withTemplate: "$1" + token + "$3")
+        guard let imported = importHTML(source) else { return nil }
+        let result = NSMutableAttributedString(attributedString: imported)
+        while true {
+            let range = (result.string as NSString).range(of: token)
+            guard range.location != NSNotFound else { break }
+            result.deleteCharacters(in: range)
+        }
+        return result
     }
 
     private final class DenyResources: NSObject, WebResourceLoadDelegate {
@@ -252,7 +269,7 @@ enum NotePasteReader {
     }
 
     private static func safeCSS(_ css: String) -> String {
-        let properties: Set<String> = ["font-weight", "font-style", "font-family", "font-size", "text-decoration", "text-decoration-line", "color", "background-color", "text-align", "white-space", "list-style-type"]
+        let properties: Set<String> = ["font", "font-weight", "font-style", "font-family", "font-size", "min-height", "margin", "text-decoration", "text-decoration-line", "color", "background-color", "text-align", "white-space", "list-style-type"]
         return css.split(separator: ";").compactMap { entry -> String? in
             let parts = entry.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             guard parts.count == 2, properties.contains(parts[0]) else { return nil }
