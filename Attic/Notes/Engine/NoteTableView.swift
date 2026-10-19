@@ -276,10 +276,7 @@ final class NoteTableView: NSView {
                           let textView = engine.textView, textView.window != nil {
                     // Scrolled out of TextKit's viewport while a cell has the
                     // keyboard: parked in the text view, the cell keeps it.
-                    self.isParked = true
-                    self.frame = self.lastFrameInTextView ?? NSRect(x: textView.textContainerOrigin.x, y: -10_000,
-                                                                    width: self.bounds.width, height: self.bounds.height)
-                    textView.addSubview(self)
+                    self.park(in: textView)
                 } else {
                     // Gone from the note (deleted, or its Undo): the note's text takes the keyboard.
                     self.keepsFocusThroughRehost = false
@@ -292,6 +289,26 @@ final class NoteTableView: NSView {
                 }
             }
         }
+    }
+
+    /// Parks the view in the note's text view (out of TextKit's viewport
+    /// with a cell's keyboard), at its table's place in the text.
+    func park(in textView: NSTextView) {
+        isParked = true
+        frame = lastFrameInTextView ?? NSRect(x: textView.textContainerOrigin.x, y: -10_000,
+                                              width: bounds.width, height: bounds.height)
+        textView.addSubview(self)
+        placeParked()
+    }
+
+    /// DG1: a parked view sits where its table is in the text, and is put
+    /// there again after every layout pass. The frame it last had goes
+    /// stale as soon as a block moves above it, and one taken while TextKit
+    /// was re-hosting it can be anywhere (the table over the title).
+    func placeParked() {
+        guard isParked, let attachment, let engine, let textView = engine.textView, superview === textView,
+              let range = engine.range(ofTable: attachment), let rect = engine.attachmentFrame(at: range.location) else { return }
+        if frame.origin != rect.origin { setFrameOrigin(rect.origin) }
     }
 
     private func restoreFocusAfterRehost() {

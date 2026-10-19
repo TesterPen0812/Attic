@@ -88,6 +88,10 @@ enum NoteFormatCaptureScene {
                 writeCodexTestPage(textView: textView)
                 return
             }
+            if scene == "dg1" {
+                writeDragTestNote(textView: textView)
+                return
+            }
             writeSample(controls: controls, textView: textView, rich: scene == "structured" || scene == "aasub")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 show(scene, controls: controls, chrome: chrome, textView: textView)
@@ -101,6 +105,53 @@ enum NoteFormatCaptureScene {
     /// `ATTIC_UI_TEST_NOTES_SCROLL=<pt>` scrolls the note that far from its
     /// top; `ATTIC_UI_TEST_HOVER_BLOCK=<text>` shows the block handle and
     /// Copy as if the pointer were over the block holding that text.
+    /// Round DG1: the owner's block-drag note of 10-19 (a title, a body
+    /// line, a Plain-text code block, a quote, a callout, a Mermaid block
+    /// and a table), for scripted drags before and after a change.
+    private static func writeDragTestNote(textView: NoteEditorTextView) {
+        guard let engine = textView.engine else { return }
+        type("TEST\n", into: textView)
+        _ = engine.pasteMarkdown(dragTestNote, at: textView.selectedRange())
+        engine.history.reset()
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+    }
+
+    static let dragTestNote = #"""
+    My name is tester, I am performing test on attic
+
+    ```
+    testing code block
+    second line
+    ```
+
+    > Testing qoutes
+    >
+    > Quotes on a second line
+
+    > [!TIP]
+    > Testing call outs
+    >
+    > Call outs on a second line
+    >
+    > Oh
+
+    ```mermaid
+    flowchart LR
+        A[Start] --> B[End]
+        B --> C[Done] testing digram
+    second line
+    ```
+
+    | Testing table | 2 |
+    | --- | --- |
+    | 1 | 2 |
+    | 2 | 2 |
+    |  |  |
+    |  |  |
+
+    """#
+
     private static func writeCodexTestPage(textView: NoteEditorTextView) {
         guard let engine = textView.engine else { return }
         type("Formatting test page\n", into: textView)
