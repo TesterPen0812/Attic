@@ -31,8 +31,6 @@
     "testALargeLibraryDecodesEachNoteOnceAndOneSaveRereadsOnlyItself"
   ],
   "NotesPageControllerTests.swift": [
-    "testCheckpointRetirementKeepsMainActorWithinSaveTolerance",
-    "testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents",
     "testMeasuredColdOpenAndLaunchWithFiveThousandLineNote",
     "testEveryStateEventPair",
     "testStaleBaseNeverCommitsAcrossExternalEvents"

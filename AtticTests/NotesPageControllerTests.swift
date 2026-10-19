@@ -708,9 +708,7 @@ final class NotesPageControllerTests: XCTestCase {
     func testMeasuredMainActorSaveOnFiveThousandLineNote() async throws {
         assertSaveBaseline(try await measureMainActorSave())
     }
-    #endif
 
-    #if ATTIC_GENERATED_TESTS
     func testCheckpointRetirementKeepsMainActorWithinSaveTolerance() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
         let id = UUID()
@@ -780,9 +778,7 @@ final class NotesPageControllerTests: XCTestCase {
         // build's overhead medians/range, alongside the total recovered cost.
         print("ATTIC_INTEGRATION_COST recovery-overhead median_ms=\(recovered - baseline)")
     }
-    #endif
 
-    #if !ATTIC_GENERATED_TESTS
     func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode() async throws {
         for failure in ["decode", "bytes", "revision", "tags"] {
             let id = UUID()
@@ -828,7 +824,7 @@ final class NotesPageControllerTests: XCTestCase {
         print("ATTIC_INTEGRATION_COST \(label)-prepared median_ms=\(sample.prepared)")
     }
 
-    #if ATTIC_GENERATED_TESTS
+    #if !ATTIC_GENERATED_TESTS
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
         let empty = try await makeSavePerformanceFixture()
         let emptyAttachment = try await makeSavePerformanceFixture(withAttachment: true)
@@ -873,7 +869,9 @@ final class NotesPageControllerTests: XCTestCase {
             print("ATTIC_COST_SAMPLES metric=scaling-\(label.lowercased())-prepared raw_ms=\(preparedDifferences)")
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testMeasuredColdOpenAndLaunchWithFiveThousandLineNote() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
         guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {

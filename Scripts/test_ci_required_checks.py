@@ -143,6 +143,19 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('run_tests unit 4', focused)
         self.assertIn('fka-task-focus-summary.json', focused)
 
+    def test_optimized_cost_callers_keep_their_fixtures_in_the_main_bundle(self):
+        import json
+        import re
+        root = Path(__file__).resolve().parent.parent
+        routes = json.loads((root / 'Scripts/generated_test_routes.json').read_text())
+        moved = {method for methods in routes.values() for method in methods}
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        direct = set(re.findall(r'-only-testing:AtticTests/\w+/(test\w+)', workflow))
+        rechecks = (root / 'Scripts/recheck_cost_gates.py').read_text()
+        retry = set(re.findall(r"'\w+/(test\w+)'", rechecks))
+        self.assertFalse(moved & (direct | retry),
+                         'A moved method is still selected from AtticTests by a cost/FKA caller')
+
 
 if __name__ == '__main__':
     unittest.main()
