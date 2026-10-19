@@ -1,3 +1,4 @@
+import AppKit
 import QuartzCore
 import XCTest
 @testable import Attic
@@ -146,6 +147,21 @@ final class PanelHideMotionTests: XCTestCase {
                 XCTAssertTrue(CATransform3DEqualToTransform(designed, fitted), "\(corner) p=\(progress)")
             }
         }
+    }
+
+    /// Owner report (2026-10-19): a bright white bar behind "Add a task" in
+    /// flight. The token field's clip view drew the control background.
+    @MainActor
+    func testTokenFieldDrawsNoBackgroundBehindItsText() {
+        let field = AtticTokenFieldView()
+        var views: [NSView] = [field]
+        var clips: [NSClipView] = []
+        while let view = views.popLast() {
+            if let clip = view as? NSClipView { clips.append(clip) }
+            views += view.subviews
+        }
+        XCTAssertFalse(clips.isEmpty)
+        for clip in clips { XCTAssertFalse(clip.drawsBackground) }
     }
 
     private func assertInside(_ point: CGPoint, _ host: CGRect, _ tolerance: CGFloat, _ label: String,

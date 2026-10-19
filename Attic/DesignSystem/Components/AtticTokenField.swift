@@ -429,12 +429,17 @@ final class AtticTokenFieldView: NSView {
         textView.focusRingType = .none
         textView.setAccessibilityRole(.textField)
         textView.setAccessibilityIdentifier("AtticTokenField")
-        scrollView.drawsBackground = false
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.horizontalScrollElasticity = .none
         scrollView.verticalScrollElasticity = .none
         scrollView.contentView = clip
+        // After the clip view is in place: `drawsBackground` is the clip
+        // view's own, and a new NSClipView draws the control background (a
+        // white bar behind the text, faint over glass at rest and bright
+        // white under a hide animation's transform or snapshot).
+        clip.drawsBackground = false
+        scrollView.drawsBackground = false
         scrollView.documentView = textView
         scrollView.focusRingType = .none
         addSubview(scrollView)
