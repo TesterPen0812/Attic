@@ -240,6 +240,7 @@ struct TasksPage: View {
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear { pageAppeared() }
         .onDisappear {
+            cancelTransientState()
             eventMonitors.stop()
         }
         // The page's own view, so a press is placed from its event (its
@@ -308,7 +309,8 @@ struct TasksPage: View {
         #endif
         if !eventMonitors.isInstalled {
             eventMonitors.add(matching: .keyDown) { event in
-                findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
+                TasksDragCancellation.consumeEscape(event)
+                    || findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
                     || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
                     || tabPressed(event)
                     ? nil : event
@@ -370,7 +372,10 @@ struct TasksPage: View {
         // Hidden behind another page, the search lets the keyboard go: its
         // pending focus is cancelled and nothing typed reaches it (R2).
         .onChange(of: model.isPageShown) { _, shown in
-            if !shown, searchFocused { searchFocused = false }
+            if !shown {
+                cancelTransientState()
+                if searchFocused { searchFocused = false }
+            }
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
         .onChange(of: model.hasVisibleInlineFiles, initial: true) { _, _ in updateTypingLock() }
@@ -659,6 +664,7 @@ struct TasksPage: View {
     /// A drag in progress and a row's pickers end when the panel hides or
     /// the page changes (review 1); nothing stays lifted.
     private func cancelTransientState() {
+        TasksDragCancellation.cancel(in: pointer.view?.window)
         cancelDrag()
         if metaPopover != nil { metaPopover = nil }
         if selectionPicker != nil { selectionPicker = nil }
@@ -2601,9 +2607,8 @@ struct TasksPage: View {
         return height
     }
 
-    /// A drag began: a timer while it lasts reads Esc (SwiftUI's mouse
-    /// tracking holds key events until the button is up, so the key's own
-    /// state is read) and scrolls the list near its edges.
+    /// A drag began: common-mode timers read queued Escape during SwiftUI
+    /// mouse tracking and scroll the list near its edges.
     func prepareDragGeometry(group: [UUID], tab: TasksTab) -> TasksDragGeometry {
         let rows = Dictionary(uniqueKeysWithValues: model.rows(for: tab).map { ($0.id, $0) })
         return TasksDragGeometry(group: group) { id in
@@ -2613,6 +2618,7 @@ struct TasksPage: View {
     }
 
     private func beginDragSession(in tab: TasksTab) {
+        dragSession.cancellation.begin(in: pointer.view?.window) { cancelDrag() }
         dragSession.geometryTab = tab
         if let current = drag { dragSession.geometry = prepareDragGeometry(group: current.group, tab: tab) }
         dragSession.cachedScrollView = nil
@@ -2626,12 +2632,6 @@ struct TasksPage: View {
 
     private func dragTick(in tab: TasksTab) {
         guard let current = drag, !dragSession.isCancelled else { return }
-        // Esc while the button is down cancels: nothing moves, and the
-        // release commits nothing.
-        if CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(53)) {
-            cancelDrag()
-            return
-        }
         // Out of the panel's window, the reorder becomes a drag to another
         // app (owner-approved, 2026-10-01): a copy as text, nothing moves.
         if let location = dragSession.location, let view = pointer.view, let window = view.window,
@@ -2690,6 +2690,8 @@ struct TasksPage: View {
         let card = ids.count == 1 ? dragOutCard(for: current.id) : nil
         if card != nil { pointer.liftedCard.holdForHandOff() }
         cancelDrag()
+        // AppKit owns Escape after the hand-off to its native session.
+        dragSession.cancellation.end()
         guard let export, let view = pointer.view else {
             pointer.liftedCard.releaseHandOff()
             return
@@ -3671,6 +3673,91 @@ struct TasksLiftedCardLayer<Card: View>: View {
     }
 }
 
+/// SwiftUI tracks the mouse without necessarily dispatching queued keys.
+/// A Tasks drag owns Escape until release, even after it has sprung home.
+/// Only one pointer drag can be active; the weak link lets the page's key
+/// monitor give it precedence over every other Escape action.
+@MainActor
+final class TasksDragCancellation {
+    private static weak var active: TasksDragCancellation?
+    private weak var window: NSWindow?
+    private var wasKey = false
+    private var timer: Timer?
+    private var keyLoss: NSObjectProtocol?
+    private var onCancel: (() -> Void)?
+    private(set) var isTracking = false
+    private(set) var isCancelled = false
+
+    func begin(in window: NSWindow?, onCancel: @escaping () -> Void) {
+        guard !isTracking, let window else { return }
+        self.window = window
+        wasKey = window.isKeyWindow
+        self.onCancel = onCancel
+        isTracking = true
+        isCancelled = false
+        Self.active = self
+        keyLoss = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
+                                                         object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cancel() }
+        }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    /// Called before the page's editor, search, expansion or panel chain.
+    static func consumeEscape(_ event: NSEvent) -> Bool {
+        guard let active, active.isTracking, event.window === active.window,
+              AtticDragTracking.isCancel(event) else { return false }
+        active.cancel()
+        return true
+    }
+
+    static func cancel(in window: NSWindow?) {
+        guard let window, active?.window === window else { return }
+        active?.cancel()
+    }
+
+    func poll() {
+        guard isTracking else { return }
+        // Dequeue only Escape for this window. Other keys keep their place.
+        // This also catches a short press entirely between two timer ticks.
+        while let event = NSApp.nextEvent(matching: .keyDown, until: Date(), inMode: .eventTracking, dequeue: false),
+              event.window === window, AtticDragTracking.isCancel(event) {
+            _ = NSApp.nextEvent(matching: .keyDown, until: Date(), inMode: .eventTracking, dequeue: true)
+            cancel()
+        }
+        if window == nil || window?.isVisible != true || (wasKey && window?.isKeyWindow != true) { cancel() }
+    }
+
+    func cancel() {
+        guard isTracking, !isCancelled else { return }
+        isCancelled = true
+        let action = onCancel
+        onCancel = nil
+        action?()
+    }
+
+    func end() {
+        poll()
+        timer?.invalidate()
+        timer = nil
+        if let keyLoss { NotificationCenter.default.removeObserver(keyLoss) }
+        keyLoss = nil
+        onCancel = nil
+        window = nil
+        isTracking = false
+        if Self.active === self { Self.active = nil }
+    }
+
+    deinit {
+        timer?.invalidate()
+        if let keyLoss { NotificationCenter.default.removeObserver(keyLoss) }
+    }
+}
+
 /// One drag's live state outside view state (round 4, Astra's final 7):
 /// whether it was cancelled (Esc while tracking, a hide, a page change),
 /// where the pointer is, the last translation, the rows' control frames
@@ -3680,6 +3767,7 @@ final class TasksDragSession {
     /// Set when the drag is cancelled: nothing about this press moves or
     /// commits until the button comes up (`end`).
     private(set) var isCancelled = false
+    let cancellation = TasksDragCancellation()
     var translation: CGFloat = 0
     var location: CGPoint?
     var controlFrames: [TasksRowID: [CGRect]] = [:]
@@ -3763,6 +3851,7 @@ final class TasksDragSession {
 
     /// The press is over (released or cancelled by the system).
     func end() {
+        cancellation.end()
         press = nil
         isCancelled = false
         timer?.invalidate()
@@ -3938,6 +4027,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                 if past != pushedPast { pushedPast = past }
             }
             .onEnded { value in
+                // A queued Escape must be read before the release commits.
+                session.cancellation.poll()
                 // A cancelled press never commits on release.
                 guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
                       let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
