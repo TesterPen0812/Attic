@@ -504,8 +504,14 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         var target: NoteBlockDropPosition?
         var lift: NoteDragLiftView?
         var dim: NoteBlockDragDim?
+        #if DEBUG
+        var probe: NoteDragProbe?
+        #endif
         NSCursor.closedHand.push()
         defer {
+            #if DEBUG
+            probe?.end(dragging ? "done" : "click")
+            #endif
             NSCursor.pop()
             lift?.removeFromSuperview()
             dim?.restore()
@@ -553,6 +559,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                     hideBlockHandle()
                 }
                 guard dragging, let card = lift else { continue }
+                #if DEBUG
+                if probe == nil, NoteDragProbe.isEnabled {
+                    probe = NoteDragProbe.begin(in: self) { [weak self, weak card] in
+                        guard let self else { return (nil, nil) }
+                        let line = self.dropLine.isHidden ? nil : self.convert(self.dropLine.frame, to: nil).midY
+                        return (card.flatMap(NoteDragProbe.screenTop(of:)), line)
+                    }
+                }
+                let started = CACurrentMediaTime()
+                defer { probe?.eventHandled(since: started) }
+                #endif
                 autoscroll(with: next)
                 var frame = card.frame
                 if let (position, line) = dropTarget(at: point, moving: source) {
