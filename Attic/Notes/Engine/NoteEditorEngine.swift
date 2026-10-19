@@ -4441,16 +4441,28 @@ extension NoteEditorEngine {
             start = NSMaxRange(paragraph)
         }
         var ordinals: [Int: Int] = [:]
+        var listIdentities: [Int: ObjectIdentifier] = [:]
         var literals: [(Int, String)] = []
+        func numbered(_ list: NSTextList) -> Bool {
+            list.markerFormat == .decimal || list.markerFormat.rawValue == "{decimal}."
+        }
+        func supported(_ list: NSTextList) -> Bool {
+            numbered(list) || [.disc, .circle, .square].contains(list.markerFormat) ||
+                ["{disc}.", "{circle}.", "{square}."].contains(list.markerFormat.rawValue)
+        }
         for entry in paragraphs {
-            guard let list = entry.lists.last else { ordinals.removeAll(); continue }
+            guard let list = entry.lists.last else { ordinals.removeAll(); listIdentities.removeAll(); continue }
             let depth = entry.lists.count - 1
             ordinals = ordinals.filter { $0.key <= depth }
-            let ordinal = (ordinals[depth] ?? 0) + 1
+            listIdentities = listIdentities.filter { $0.key <= depth }
+            let first = listIdentities[depth] != ObjectIdentifier(list)
+            let previous = ordinals[depth] ?? list.startingItemNumber
+            let ordinal = first ? list.startingItemNumber : (previous < Int.max ? previous + 1 : previous)
             ordinals[depth] = ordinal
-            let supported = depth <= 2 && entry.lists.allSatisfy { $0.markerFormat == .disc || $0.markerFormat == .decimal }
-            if supported {
-                result.addAttribute(.noteBlockStyle, value: list.markerFormat == .decimal ? "number" : "bullet", range: entry.range)
+            listIdentities[depth] = ObjectIdentifier(list)
+            if depth <= 2 && entry.lists.allSatisfy(supported) {
+                result.addAttribute(.noteBlockStyle, value: numbered(list) ? "number" : "bullet", range: entry.range)
+                if first, numbered(list), ordinal > 1 { result.addAttribute(.noteListStart, value: ordinal, range: entry.range) }
                 if depth > 0 { result.addAttribute(.noteBlockIndent, value: depth, range: entry.range) }
             } else {
                 literals.append((entry.range.location, String(repeating: "  ", count: max(0, depth)) + list.marker(forItemNumber: ordinal) + " "))

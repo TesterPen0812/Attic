@@ -86,6 +86,47 @@ final class RoundFX1Tests: XCTestCase {
             XCTAssertTrue(engine.stagedAttachments(for: engine.document()).isEmpty)
         }
     }
+
+    func testHTMLListsKeepEditableStartsNestedKindsAndChecklistText() throws {
+        let engine = engine()
+        let html = "<ol start='7'><li>Seven<ul><li>Child</li></ul></li><li>Eight</li></ol><ul><li>[ ] Task</li><li>[x] Done</li></ul>"
+        XCTAssertTrue(engine.pasteRichText(Data(html.utf8), type: .html, at: NSRange(location: 6, length: 0)))
+        let blocks = Array(engine.document().blocks.dropFirst())
+        // The native HTML reader supplies a terminal paragraph; keep it too.
+        XCTAssertEqual(blocks.map(\.text), ["Seven", "Child", "Eight", "[ ] Task", "[x] Done", ""])
+        XCTAssertEqual(blocks.map(\.style), ["number", "bullet", "number", "bullet", "bullet", nil])
+        XCTAssertEqual(blocks.map(\.start), [7, nil, nil, nil, nil, nil])
+        XCTAssertEqual(blocks.map(\.indent), [nil, 1, nil, nil, nil, nil])
+        XCTAssertEqual(engine.listMarker(at: (engine.textStorage.string as NSString).range(of: "Eight").location), .number("8."))
+    }
+
+    func testOtherNativeListMarkersKeepTheirStartingOrdinalAndAdjacentRestarts() throws {
+        for marker in ["lower-alpha", "upper-alpha", "lower-roman", "upper-roman", "circle", "square"] {
+            let engine = engine()
+            let html = "<ol start='7' style='list-style-type: \(marker)'><li>Seven</li><li>Eight</li></ol>"
+            let read = try XCTUnwrap(NotePasteReader.read(Data(html.utf8), type: .html))
+            let list = try XCTUnwrap((read.text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.textLists.last)
+            XCTAssertTrue(engine.pasteRichText(Data(html.utf8), type: .html, at: NSRange(location: 6, length: 0)))
+            let bullets = ["circle", "square"].contains(marker)
+            XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), bullets ? ["Seven", "Eight", ""] :
+                [list.marker(forItemNumber: 7) + " Seven", list.marker(forItemNumber: 8) + " Eight", ""], marker)
+            XCTAssertEqual(engine.document().blocks.dropFirst().map(\.style), bullets ? ["bullet", "bullet", nil] : [nil, nil, nil])
+        }
+        let engine = engine()
+        XCTAssertTrue(engine.pasteRichText(Data("<ol start='7'><li>Seven</li></ol><ol start='12'><li>Twelve</li></ol>".utf8),
+            type: .html, at: NSRange(location: 6, length: 0)))
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.start), [7, 12, nil])
+    }
+
+    func testHTMLTypeAttributeKeepsLetterAndRomanMarkers() {
+        for (type, seven, eight) in [("a", "g.", "h."), ("A", "G.", "H."), ("i", "vii.", "viii."), ("I", "VII.", "VIII.")] {
+            let engine = engine()
+            let html = "<ol type='\(type)' start='7'><li>Seven</li><li>Eight</li></ol>"
+            XCTAssertTrue(engine.pasteRichText(Data(html.utf8), type: .html, at: NSRange(location: 6, length: 0)))
+            XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), [seven + " Seven", eight + " Eight", ""], type)
+            XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.style == nil })
+        }
+    }
 }
 
 /// Find-only regressions and controls against ce4eb33e. All fixtures are owned

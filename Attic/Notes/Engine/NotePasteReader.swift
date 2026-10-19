@@ -211,9 +211,10 @@ enum NotePasteReader {
             guard tags.contains(name) else { continue }
             if closing { result += "</\(name)>"; continue }
             result += "<\(name)"
-            for key in ["href", "style", "class", "id", "start", "value", "colspan", "rowspan", "color", "face"] {
+            for key in ["href", "style", "class", "id", "start", "value", "type", "colspan", "rowspan", "color", "face"] {
                 guard let value = attributes[key] else { continue }
                 if key == "href" && name != "a" { continue }
+                if key == "type" && !["ol", "ul", "li"].contains(name) { continue }
                 let safe: String
                 if key == "style" { safe = safeCSS(value) }
                 else if key == "href", let baseURL { safe = URL(string: value, relativeTo: baseURL)?.absoluteURL.absoluteString ?? value }
