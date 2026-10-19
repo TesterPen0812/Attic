@@ -306,8 +306,8 @@ build_arguments=(
     -derivedDataPath "$derived_data"
     "CONFIGURATION_BUILD_DIR=$build_products"
     "PRODUCT_BUNDLE_IDENTIFIER=$bundle_id"
-    "PRODUCT_NAME=$executable_name"
-    "EXECUTABLE_NAME=$executable_name"
+    "ATTIC_MACOS_PRODUCT_NAME=$executable_name"
+    "ATTIC_MACOS_EXECUTABLE_NAME=$executable_name"
     "INFOPLIST_FILE=$preview_info_plist"
     "OTHER_SWIFT_FLAGS=\$(inherited) -DATTIC_LOCAL_ONLY"
     CODE_SIGNING_ALLOWED=YES
