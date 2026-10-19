@@ -1407,7 +1407,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [NoteEditorEngine.fragmentType, NoteTablePaste.tableType, .fileURL, .png, .tiff] + NotePasteReader.richTypes + [.URL, .string]
+        // AppKit's pasteAsPlainText: restricts this list to NSStringPboardType,
+        // even when the clipboard advertises the modern .string equivalent.
+        [NoteEditorEngine.fragmentType, NoteTablePaste.tableType, .fileURL, .png, .tiff] + NotePasteReader.richTypes + [.URL, .string, .init("NSStringPboardType")]
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
