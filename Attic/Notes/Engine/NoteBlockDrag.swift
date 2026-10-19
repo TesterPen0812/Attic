@@ -293,6 +293,7 @@ final class NoteBlockDragSession: NSObject {
     private(set) var windowPoint: CGPoint
     private var link: CADisplayLink?
     private var lastFrame: CFTimeInterval?
+    private var lastFollowed: CGPoint?
     private lazy var ticker = NoteBlockDragTicker(owner: self)
     #if DEBUG
     private var probe: NoteDragProbe?
@@ -375,9 +376,10 @@ final class NoteBlockDragSession: NSObject {
         let size = stage.card.bounds.size
         var origin = CGPoint(x: local.x - grab.x, y: local.y - grab.y)
         // Along the column: the card moves up and down with the pointer and
-        // keeps to the page, as a native list's row does.
+        // stays whole on the page (over the header and the bottom row, never
+        // past the panel's edge), as a native list's row does.
         origin.x = stage.cardFrame.minX
-        origin.y = min(max(origin.y, -size.height / 2), stage.bounds.height - size.height / 2)
+        origin.y = min(max(origin.y, 0), max(0, stage.bounds.height - size.height))
         stage.place(origin: origin)
     }
 
@@ -422,9 +424,12 @@ final class NoteBlockDragSession: NSObject {
         let delta = lastFrame.map { link.timestamp - $0 } ?? (link.targetTimestamp - link.timestamp)
         lastFrame = link.timestamp
         guard let textView, let window = textView.window, let scroll = textView.enclosingScrollView else { return }
-        let pointer = window.mouseLocationOutsideOfEventStream
-        let moved = pointer != windowPoint
-        windowPoint = pointer
+        // The latest drag event's point: events come at least once per
+        // frame while the pointer moves, and it stays put when it doesn't.
+        let pointer = windowPoint
+        let moved = pointer != lastFollowed
+        lastFollowed = pointer
+        _ = window
         let clip = scroll.contentView
         let insets = clip.contentInsets
         var viewport = clip.bounds

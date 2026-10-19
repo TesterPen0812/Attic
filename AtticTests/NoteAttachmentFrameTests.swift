@@ -30,13 +30,16 @@ final class NoteAttachmentFrameTests: XCTestCase {
         let (scrollView, textView) = engine.makeView()
         scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: height)
         textView.textContainerInset = NSSize(width: 28, height: 0)
-        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        // Titled, key and on screen: TextKit hosts attachment views (and
+        // draws paragraphs in views of their own) only for a window that is
+        // on screen, and a cell keeps the keyboard (and its table parks
+        // when scrolled out) only in a key window.
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = scrollView
         windows.append(window)
-        // On screen: TextKit hosts attachment views (and draws paragraphs
-        // in views of their own) only for a window that is.
-        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(textView)
         let end = NSRange(location: engine.textStorage.length, length: 0)
         textView.setSelectedRange(end)

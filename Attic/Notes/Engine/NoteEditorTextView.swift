@@ -499,6 +499,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                     session = NoteBlockDragSession(textView: self, source: source, sourceRect: sourceRect,
                                                    pressPoint: event.locationInWindow)
                     hideBlockHandle()
+                    // The hovered block's Copy belongs to where the pointer
+                    // was; the moving block takes no chrome along.
+                    hoveredMonoLocation = nil
+                    placeMonoCopy()
                     lastBlockDrag = session
                 }
                 session?.pointerMoved(to: next.locationInWindow)
@@ -916,6 +920,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             // DG1: a table parked here (scrolled out with a cell's keyboard)
             // follows its text.
             for case let table as NoteTableView in subviews where table.isParked { table.placeParked() }
+            // Copy on a code block follows its block through relayouts
+            // (a resize, an appearance change, a move above it).
+            if monoCopyLocation != nil { placeMonoCopy() }
             onLayout?()
         }
         caretVisibility.refresh()

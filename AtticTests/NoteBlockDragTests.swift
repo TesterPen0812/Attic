@@ -84,7 +84,9 @@ final class NoteBlockDragTests: XCTestCase {
         let (engine, text) = editor(blocks)
         let source = engine.blockRange(at: location(of: "Charlie", in: engine))
         let slots = text.blockDropSlots(moving: source)
-        XCTAssertEqual(slots.blocks.count, 5, "every block below the title")
+        let names = slots.blocks.map { (engine.textStorage.string as NSString).substring(with: $0.range)
+            .trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        XCTAssertEqual(names, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"], "every block below the title, top to bottom")
         XCTAssertEqual(slots.blocks.map(\.rect.minY), slots.blocks.map(\.rect.minY).sorted())
         let charlie = try XCTUnwrap(slots.blocks.first { $0.range == source })
         XCTAssertNil(charlie.before, "no move over its own place")
