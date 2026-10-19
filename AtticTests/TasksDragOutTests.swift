@@ -900,7 +900,11 @@ final class TasksDragCancellationTests: XCTestCase {
         }
         defer { timers.forEach { $0.invalidate() } }
         var lifted = false
-        var returning: TasksLiftedCard.Lift?
+        // Every place the card is at (hosted off screen, an animation
+        // completes at once: the path is what shows how it returns).
+        var cardPath: [TasksLiftedCard.Lift?] = []
+        let watch = hosted.pointer.liftedCard.$lift.sink { cardPath.append($0) }
+        defer { watch.cancel() }
         after(0.15) { post(.leftMouseDragged, 7) }
         after(0.25) { post(.leftMouseDragged, distance) }
         after(0.45) {
@@ -915,8 +919,6 @@ final class TasksDragCancellationTests: XCTestCase {
             case .none: break
             }
         }
-        // Just after Escape, the cancelled task is still on its way home.
-        after(0.5) { returning = hosted.pointer.liftedCard.lift }
         // Restore the surface *before* moving/releasing: cancellation must be latched.
         after(0.7) {
             if interruption == .orderOut { hosted.window.orderFront(nil) }
@@ -936,9 +938,13 @@ final class TasksDragCancellationTests: XCTestCase {
         hosted.spin(0.3)
         if !subtask { XCTAssertTrue(lifted, "the separate in-list row gesture lifted its card") }
         if checksReturn {
-            let card = try XCTUnwrap(returning, "the card returns home: its row is not drawn again over the rows still moving")
-            XCTAssertEqual(card.id, parent.id)
-            XCTAssertEqual(card.y, card.origin.minY, accuracy: 0.5, "it settles into its own place")
+            let lifts = cardPath.compactMap { $0 }
+            let last = try XCTUnwrap(lifts.last, "the card was lifted")
+            XCTAssertEqual(last.id, parent.id)
+            XCTAssertEqual(last.y, last.origin.minY, accuracy: 0.5,
+                           "the card settles into its own place before it goes: its row is not drawn again over the rows still moving")
+            XCTAssertTrue(lifts.contains { abs($0.y - $0.origin.minY) > 20 }, "it had been carried away first")
+            XCTAssertNil(cardPath.last ?? nil, "then it goes")
         }
         XCTAssertTrue(hosted.model.expanded.contains(parent.id), "Escape belongs only to the drag; the task stays expanded")
         XCTAssertNil(hosted.pointer.liftedCard.lift)
