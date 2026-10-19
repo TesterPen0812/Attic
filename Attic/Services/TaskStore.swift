@@ -965,10 +965,6 @@ final class TaskStore: ObservableObject {
         update(task, tags: tags)
     }
 
-    @discardableResult
-    func setDueDay(_ dueDay: DueDay?, for task: TaskItem) -> Bool {
-        update(task, dueDay: .some(dueDay))
-    }
 
     /// The right-click menu's and a row popover's Date and Tags on several
     /// tasks (owner fixes 3 and 5): the due day set or removed, a tag added
@@ -2493,15 +2489,6 @@ final class TaskStore: ObservableObject {
         listedTask(withID: id).map(TaskEditableState.init)
     }
 
-    /// Brings a finished main task back to Now as to do, at the top of the
-    /// to-do group: a task still in today's done group simply reopens; one
-    /// the daily cleanup moved to the Done log comes back with its subtasks
-    /// (which keep their own state). Only the fields this changes are
-    /// written, on every replica, in one save.
-    @discardableResult
-    func restoreToNow(taskID: UUID) -> Bool {
-        restoreToNow(taskIDs: [taskID])
-    }
 
     /// Restore to Now for several finished tasks (round 4, Astra's final
     /// review 1): every task, its replicas and any family coming back from

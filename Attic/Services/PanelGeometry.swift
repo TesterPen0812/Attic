@@ -13,7 +13,6 @@ struct PanelWorkAreaPlacement: Equatable {
 
 enum PanelGeometry {
     static let triggerSize: CGFloat = 16
-    static let panelWidth: CGFloat = 320
     static let minimumHeight: CGFloat = 460
     static let preferredHeightCeiling: CGFloat = 700
     static let screenInset: CGFloat = 12
@@ -257,17 +256,6 @@ enum PanelGeometry {
         return min(max(header + composer + content + 16, minimumHeight), preferredHeightCeiling)
     }
 
-    static func preferredHeight(
-        noteCount: Int,
-        isComposing: Bool,
-        hasConflict: Bool = false
-    ) -> CGFloat {
-        let header: CGFloat = 76
-        let composer: CGFloat = isComposing ? (hasConflict ? 196 : 128) : 0
-        let rowHeight: CGFloat = 52
-        let content: CGFloat = noteCount == 0 ? 90 : CGFloat(noteCount) * rowHeight + 12
-        return min(max(header + composer + content + 16, minimumHeight), preferredHeightCeiling)
-    }
 
     static func preferredCanvasHeight() -> CGFloat {
         min(max(560, minimumHeight), preferredHeightCeiling)

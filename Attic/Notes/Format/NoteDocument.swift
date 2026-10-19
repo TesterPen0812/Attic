@@ -308,8 +308,6 @@ struct NoteMark: Equatable, Sendable {
 enum NoteHighlightColour: String, CaseIterable, Sendable {
     case grey, yellow, green, blue, pink, purple
 
-    /// The hues the highlighter's menu offers after Grey.
-    static let hues: [NoteHighlightColour] = [.yellow, .green, .blue, .pink, .purple]
 
     /// The one-click appearance; its command writes no colour key so
     /// the owner's October 10 build can still edit the note.

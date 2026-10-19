@@ -32,17 +32,6 @@ enum PanelCornerSize: Double, CaseIterable, Identifiable {
 
     var id: Double { rawValue }
 
-    var title: String {
-        switch self {
-        case .small: return "Small"
-        case .standard: return "Default"
-        case .large: return "Large"
-        case .extraLarge: return "Extra Large"
-        case .huge: return "Huge"
-        case .enormous: return "Enormous"
-        case .maximum: return "Maximum"
-        }
-    }
 
     static let min = PanelCornerSize.small.rawValue
     static let max = PanelCornerSize.maximum.rawValue
@@ -60,13 +49,6 @@ enum PanelContentSize: Double, CaseIterable, Identifiable {
 
     var id: Double { rawValue }
 
-    var title: String {
-        switch self {
-        case .standard: return "Default"
-        case .large: return "Large"
-        case .extraLarge: return "Extra Large"
-        }
-    }
 
     static let min = PanelContentSize.standard.rawValue
     static var max: Double {

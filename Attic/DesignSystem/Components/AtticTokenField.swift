@@ -107,8 +107,6 @@ final class AtticTokenFieldEditor {
         return true
     }
 
-    /// The insertion point (UTF-16), or nil when the field is not live.
-    var caret: Int? { textView?.selectedRange().location }
     var selection: NSRange? { textView?.selectedRange() }
 
     /// Gives the field the keyboard again (after a picker closes).
