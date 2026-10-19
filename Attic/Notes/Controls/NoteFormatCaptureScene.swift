@@ -27,7 +27,7 @@ enum NoteFormatCaptureScene {
     static func runIfRequested(controls: NoteFormatControls, chrome: NotesPageChrome, textView: NoteEditorTextView) {
         guard let scene = requestedScene, !scene.hasPrefix("history"), !didRun else { return }
         didRun = true
-        let delay = Double(ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NOTES_SCENE_DELAY"] ?? "2.5") ?? 2.5
+        let delay = 2.5
         // `ATTIC_UI_TEST_TYPE_AFTER=<text>`: once the scene is set, the text
         // is typed at the caret, as a person would (U-53's check that typing
         // keeps the caret's line clear of the bottom controls).
@@ -102,8 +102,7 @@ enum NoteFormatCaptureScene {
     /// R14: the owner's Codex Pages test page (`mockups/px-notes-r14-sheet`),
     /// pasted as one Markdown paste through the engine (E.2), then the two
     /// highlights (Markdown has none) and the folded section.
-    /// `ATTIC_UI_TEST_NOTES_SCROLL=<pt>` scrolls the note that far from its
-    /// top; `ATTIC_UI_TEST_HOVER_BLOCK=<text>` shows the block handle and
+    /// `ATTIC_UI_TEST_HOVER_BLOCK=<text>` shows the block handle and
     /// Copy as if the pointer were over the block holding that text.
     /// Round DG1: the owner's block-drag note of 10-19 (a title, a body
     /// line, a Plain-text code block, a quote, a callout, a Mermaid block
@@ -166,10 +165,6 @@ enum NoteFormatCaptureScene {
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         let environment = ProcessInfo.processInfo.environment
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            if let value = environment["ATTIC_UI_TEST_NOTES_SCROLL"].flatMap(Double.init), let scrollView = textView.enclosingScrollView {
-                scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top + CGFloat(value)))
-                scrollView.reflectScrolledClipView(scrollView.contentView)
-            }
             if let hovered = environment["ATTIC_UI_TEST_HOVER_BLOCK"]?.replacingOccurrences(of: "_", with: " ") {
                 // As a still pointer would: placed again as layout settles
                 // (the page may host the editor in a new view; far
@@ -404,32 +399,14 @@ enum NoteFormatCaptureScene {
         }
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
-        // `ATTIC_UI_TEST_NOTES_SCROLL=<pt>` scrolls the note that far from
-        // its top (the Mono block in view); `ATTIC_UI_TEST_MONO_COPY=1`
-        // shows the block's Copy as if the pointer were over it.
-        let environment = ProcessInfo.processInfo.environment
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            if let value = environment["ATTIC_UI_TEST_NOTES_SCROLL"].flatMap(Double.init), let scrollView = textView.enclosingScrollView {
-                scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top + CGFloat(value)))
-                scrollView.reflectScrolledClipView(scrollView.contentView)
-            }
-            if environment["ATTIC_UI_TEST_MONO_COPY"] == "1", let engine = textView.engine {
-                let code = (textView.string as NSString).range(of: "@inproceedings")
-                if code.location != NSNotFound, let block = engine.monoBlockRange(at: code.location),
-                   let rect = engine.monoBlockRect(for: block) {
-                    let origin = textView.textContainerOrigin
-                    textView.updateMonoCopy(at: NSPoint(x: rect.midX + origin.x, y: rect.midY + origin.y))
-                    textView.pinsMonoCopy = true
-                }
-            }
-        }
+
     }
 
     /// O14-10's measurement: "Type pay" in every line kind (title, body,
     /// the three headings, lists, checklist, quote, code, a table cell) and
     /// an empty last line (the "Type / for" hint). The caret then visits the
-    /// start of each line in turn, `ATTIC_UI_TEST_CARET_DWELL` seconds
-    /// (default 1.6) on each, for on-screen pixel measurement.
+    /// start of each line in turn, 1.6 seconds on each, for on-screen
+    /// pixel measurement.
     /// Round F3's on-screen states (O18-01…04, K-01…03, V-02): `f3-body`,
     /// `f3-heading`, `f3-hint` (an empty line with the hint), `f3-callout`
     /// (the caret inside one), `f3-callout-return` (Return inside it),
@@ -507,7 +484,7 @@ enum NoteFormatCaptureScene {
             starts.append(found.location)
             search = NSRange(location: NSMaxRange(found), length: text.length - NSMaxRange(found))
         }
-        let dwell = Double(ProcessInfo.processInfo.environment["ATTIC_UI_TEST_CARET_DWELL"] ?? "1.6") ?? 1.6
+        let dwell = 1.6
         var steps: [() -> Void] = starts.map { start in { textView.window?.makeFirstResponder(textView); textView.setSelectedRange(NSRange(location: start, length: 0)) } }
         steps.append { engine.tableViews().first?.activate(NoteTable.Position(row: 0, column: 0), caret: .start) }
         steps.append { textView.window?.makeFirstResponder(textView); textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0)) }
@@ -532,14 +509,6 @@ enum NoteFormatCaptureScene {
         controls.router.run(.paragraph(.body), from: .shortcut)
         type("The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication", into: textView)
         textView.insertNewline(nil)
-        // `ATTIC_UI_TEST_TABLE_RULE=1`: a `---` rule typed above the table
-        // (A39: a rule spans the text column only).
-        if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TABLE_RULE"] == "1" {
-            type("---", into: textView)
-            textView.insertNewline(nil)
-            type("Below the rule", into: textView)
-            textView.insertNewline(nil)
-        }
         let wide = state == "wide"
         let rows: [[String]] = wide
             ? [["Pillar", "What happened", "Control that failed", "Source"],
@@ -621,8 +590,7 @@ enum NoteFormatCaptureScene {
     /// a highlight beside inline code. `ATTIC_UI_TEST_CARET_AT=<text>` puts
     /// the caret at the end of the line containing that text (the last line
     /// when it is absent).
-    /// A file card and an image, one of them selected (F-06b's ring):
-    /// `ATTIC_UI_TEST_OBJECT=file|image` picks which.
+    /// A file card and an image, with the file selected (F-06b's ring).
     private static func writeObjectsSample(chrome: NotesPageChrome, controls: NoteFormatControls, textView: NoteEditorTextView) {
         type("Objects\nA file and an image below.\n", into: textView)
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-capture-objects", isDirectory: true)
@@ -639,13 +607,12 @@ enum NoteFormatCaptureScene {
             try? png.write(to: image)
         }
         chrome.captureImport?([file, image])
-        let which = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_OBJECT"] ?? "file"
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             let engine = controls.engine
             let length = engine.textStorage.length
             for location in 0..<length {
                 guard let object = engine.object(at: location) else { continue }
-                if (which == "image") == (object is NoteImageAttachment) {
+                if !(object is NoteImageAttachment) {
                     textView.setSelectedRange(NSRange(location: location, length: 1))
                     break
                 }
