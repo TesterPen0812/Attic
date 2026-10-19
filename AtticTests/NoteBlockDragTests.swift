@@ -191,13 +191,21 @@ final class NoteBlockDragTests: XCTestCase {
         clip.scroll(to: NSPoint(x: 0, y: targetRect.midY - 120))
         text.enclosingScrollView?.reflectScrolledClipView(clip)
         session.pointerMoved(to: text.convert(CGPoint(x: press.x, y: targetRect.midY + 4), to: nil))
+        XCTAssertEqual(session.target?.location, NSMaxRange(target), "after Filler 20")
         let line = try XCTUnwrap(session.slots.slot(for: session.choice)).line
         let lineOnPage = line.midY - clip.bounds.minY
+        let before = clip.bounds.minY
         XCTAssertTrue(session.drop())
+        let rightAfter = clip.bounds.minY
+        let landedAtDrop = text.rect(ofBlock: engine.blockRange(at: location(of: "Bravo", in: engine)))?.minY ?? -1
+        let order = engine.textStorage.string.components(separatedBy: "\n")
+        XCTAssertEqual(order.firstIndex(of: "Bravo"), (order.firstIndex(of: "Filler 20") ?? 0) + 1, "Bravo after Filler 20")
         for _ in 0..<3 { text.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         let landed = try XCTUnwrap(text.rect(ofBlock: engine.blockRange(at: location(of: "Bravo", in: engine))))
         XCTAssertEqual(landed.minY - clip.bounds.minY, lineOnPage, accuracy: AtticNoteType.paragraphGap,
-                       "the block is where the line was, not wherever the old caret is")
+                       "the block is where the line was, not wherever the old caret is: scroll \(before) → \(rightAfter) → "
+                       + "\(clip.bounds.minY); block at \(landedAtDrop) → \(landed.minY); line \(line.midY)")
     }
 
     func testEscapeCancelsABlockDragAndTheCardGoesHome() throws {

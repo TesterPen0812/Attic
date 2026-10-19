@@ -472,8 +472,14 @@ final class NoteBlockDragSession: NSObject {
         let lineOnPage = clip.map { line.midY - $0.bounds.minY }
         let moved = engine.moveBlock(source, to: target.location)
         guard moved else { end(at: home(in: textView), how: "drop-refused"); return false }
-        let landing = target.location < source.location ? target.location : target.location - source.length
+        // The move selects the block where it landed.
+        let landing = textView.selectedRange().location
         let block = engine.blockRange(at: min(max(landing, 0), max(0, engine.textStorage.length - 1)))
+        // Exact places for it: the edit left the text before it estimated.
+        if let layout = textView.textLayoutManager, let end = engine.textRange(for: block)?.endLocation,
+           let prefix = NSTextRange(location: layout.documentRange.location, end: end) {
+            layout.ensureLayout(for: prefix)
+        }
         let rect = textView.rect(ofBlock: block)
         // The block lands where the line was: the note keeps it there (no
         // reveal of the old caret, no jump when a block left from above).
