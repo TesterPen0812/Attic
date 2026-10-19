@@ -624,6 +624,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
         guard let bottom = engine.trailingBlockBottom() else { return }
         setFrameSize(frame.size)
+        // A fresh paste may leave TextKit's content surface at the old
+        // height even after fragment layout. Resize it before scrolling
+        // so the final attachment is not clipped by that stale surface.
+        needsLayout = true
+        layoutSubtreeIfNeeded()
         let clip = scroll.contentView
         let visible = convert(clip.bounds, from: clip)
         let shift = bottom + textContainerOrigin.y - (visible.maxY - scroll.contentInsets.bottom)
@@ -631,6 +636,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         bounds.origin.y += clip.isFlipped == isFlipped ? shift : -shift
         clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
         scroll.reflectScrolledClipView(clip)
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
     }
 
     override func scrollToEndOfDocument(_ sender: Any?) {

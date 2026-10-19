@@ -519,6 +519,26 @@ final class PhaseXHunt15LayoutTests: RoundF3TestCase {
         }
     }
 
+    func testEndAfterPastingATallFinalTableHostsItsVisibleBottom() throws {
+        let markdown = "| Row | Value |\n| --- | --- |\n" + (0..<32).map { "| \($0) | Value \($0) |" }.joined(separator: "\n")
+        for command in ["scrollToEndOfDocument:", "moveToEndOfDocument:"] {
+            let (engine, view) = editor([.text("Title"), .text("")], height: 460)
+            let scroll = try XCTUnwrap(view.enclosingScrollView)
+            scroll.automaticallyAdjustsContentInsets = false
+            scroll.contentInsets = NSEdgeInsets(top: 40, left: 0, bottom: 64, right: 0)
+            XCTAssertTrue(engine.pasteMarkdown(markdown, at: NSRange(location: engine.textStorage.length, length: 0)))
+            view.doCommand(by: NSSelectorFromString(command))
+            // Let AppKit draw naturally: settle() would explicitly lay out
+            // the viewport and could hide a missing command-time handoff.
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            let table = try XCTUnwrap(engine.tableViews().first, command)
+            XCTAssertTrue(table.isDescendant(of: view), command + ": table is actually hosted")
+            XCTAssertGreaterThan(table.canvas.visibleRect.height, 0, command + ": table bottom is painted")
+            XCTAssertLessThanOrEqual(table.bounds.maxY, table.visibleRect.maxY + 0.5, command + ": last row is visible")
+            XCTAssertFalse(view.window?.isVisible ?? true)
+        }
+    }
+
     func testTallFinalObjectsReachTheirRealEndAboveTheBottomControls() throws {
         let objects: [(String, NoteBlock)] = [
             ("table", .table(NoteTable(texts: (0..<32).map { ["Row \($0)", "Value \($0)"] }))),
