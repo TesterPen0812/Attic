@@ -83,7 +83,7 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', job)
         self.assertNotIn('-skip-testing:', job)
         self.assertIn('-only-testing:AtticRoundTripTests', job)
-        self.assertIn('s["passedTests"]==28', job)
+        self.assertIn('s["passedTests"]==31', job)
         self.assertIn('s["skippedTests"]==0', job)
         self.assertIn('s["failedTests"]==0', job)
         self.assertNotIn('ATTIC_FX3_SEEDS:', job)

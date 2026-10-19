@@ -1,472 +1,380 @@
 import Foundation
+import Markdown
 
-/// Offline CommonMark/GFM import. Foundation owns syntax parsing; this adapter
-/// maps its semantic intents to Attic's existing readable block vocabulary.
+/// An offline AST adapter. The parser sees the original source, with smart
+/// punctuation disabled. Its GFM table/strike/task extensions are enabled;
+/// the GFM autolink extension is not (CommonMark angle links still work).
 enum NoteMarkdownImport {
     static func shouldImport(_ text: String) -> Bool {
         if ["**", "`", "~~", "<u>", "<mark", "<strong>", "<em>", "==", "<br>", "&#"].contains(where: text.contains) { return true }
         return text.range(of: #"(?m)^(?: {4,}\S|\t[ \t]*\S| {0,3}#{1,6} |\s*[-*+] |\s*[1-9][0-9]*\. |> ?| {0,3}(?:---+|\*\*\*+|___+)\s*$|\s*\|.*\|)|\[[^\]]+\]\([^\)]+\)"#, options: .regularExpression) != nil
     }
 
-    private struct Paragraph {
-        var intents: [PresentationIntent.IntentType]
-        var block = NoteBlock.text("")
-        var startsWithChecklist = false
-        var startsWithAlert = false
-        var calloutStart = false
-        var emptyParagraph = false
-        var calloutBoundary = false
-    }
-
     static func document(_ markdown: String) throws -> NoteDocument {
-        // Foundation interprets undefined footnotes as links and consumes
-        // definitions. R14 keeps both as literal text instead.
-        let originalMarkdown = markdown
-        let prepared = try prepareExtensions(markdown)
-        let markdown = prepared.source
-        let source = NSMutableString(string: markdown)
-        // Parse-only tokens let Foundation retain empty paragraphs. Only an
-        // entire exported <br> line is structural; code stays literal.
-        let emptyParagraphToken = "atticEmptyParagraph" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        if markdown.contains("<br>") {
-            let codeRanges = protectedCode(in: markdown).all
-            let empty = try NSRegularExpression(pattern: #"(?m)^(?:#{1,6} |>[ \t]?(?:[^\n<>]* )?)?(<br>)$"#)
-            for match in empty.matches(in: markdown, range: NSRange(location: 0, length: source.length)).reversed()
-                where !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) {
-                source.replaceCharacters(in: match.range(at: 1), with: emptyParagraphToken)
-            }
-        }
-        let footnote = try NSRegularExpression(pattern: #"\[\^[^\]]+\]"#)
-        let footnoteSource = source as String
-        let matches = footnote.matches(in: footnoteSource, range: NSRange(location: 0, length: source.length))
-        if !matches.isEmpty {
-            // Ask the same parser for code source ranges before applying the
-            // prose workaround. Code's real backslashes must stay verbatim.
-            let codeRanges = protectedCode(in: footnoteSource).all
-            let units = Array(footnoteSource.utf16)
-            func escaped(at offset: Int) -> Bool {
-                var start = offset
-                while start > 0, units[start - 1] == 92 { start -= 1 }
-                return (offset - start) % 2 == 1
-            }
-            for match in matches.reversed() {
-                guard !escaped(at: match.range.location), !escaped(at: NSMaxRange(match.range) - 1),
-                      !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { continue }
-                let literal = source.substring(with: match.range)
-                source.replaceCharacters(in: match.range, with: literal.replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]"))
-            }
-        }
-        // Foundation emits no run for a truly empty list item. Give those
-        // items a temporary parse-only token, then remove it from their text.
-        // A unique token also restores literal lines inside fenced code.
-        let emptyItemToken = "atticEmptyItem" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let emptyItem = try NSRegularExpression(pattern: #"(?m)^[ \t]*(?:[-+*]|[0-9]{1,9}[.)])[ \t]+$"#)
-        for match in emptyItem.matches(in: source as String, range: NSRange(location: 0, length: source.length)).reversed() {
-            source.insert(emptyItemToken, at: NSMaxRange(match.range))
-        }
-        let sourceText = source as String
-        let parsed = try AttributedString(markdown: sourceText, options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true))
-        var paragraphs: [Paragraph] = []
-        var lastIdentity: Int?
-        for run in parsed.runs {
-            let intents = run.presentationIntent?.components ?? []
-            let identity = intents.first?.identity ?? -1
-            if lastIdentity != identity {
-                paragraphs.append(Paragraph(intents: intents))
-                lastIdentity = identity
-            }
-            if paragraphs.isEmpty { paragraphs.append(Paragraph(intents: intents)) }
-            var text = String(parsed[run.range].characters)
-            if text.contains(emptyParagraphToken) { paragraphs[paragraphs.count - 1].emptyParagraph = true }
-            text = text.replacingOccurrences(of: emptyParagraphToken, with: "")
-            text = text.replacingOccurrences(of: emptyItemToken, with: "")
-            let inline = run.inlinePresentationIntent ?? []
-            if inline.contains(.softBreak) { text = " " }
-            if inline.contains(.lineBreak) { text = "\u{2028}" }
-            // The parser's image run already contains the alt text. No fetch.
-            text = text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
-            let offset = (paragraphs[paragraphs.count - 1].block.text as NSString).length
-            let length = (text as NSString).length
-            if let position = run.markdownSourcePosition, let range = Range(position, in: sourceText) {
-                let raw = String(sourceText[range])
-                if offset == 0, !inline.contains(.code) {
-                    let lineStart = sourceText[..<range.lowerBound].lastIndex(of: "\n").map { sourceText.index(after: $0) } ?? sourceText.startIndex
-                    let before = String(sourceText[lineStart..<range.lowerBound])
-                    // Only container prefixes may precede a structural marker.
-                    // Inline delimiters, escapes and entities remain literal.
-                    let atBlockStart = before.range(of: #"^(?:[ \t]*(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+))*[ \t]*$"#, options: .regularExpression) != nil
-                    if atBlockStart {
-                        paragraphs[paragraphs.count - 1].calloutBoundary = raw == "<!-- attic:callout-start -->" && before.isEmpty
-                        paragraphs[paragraphs.count - 1].startsWithChecklist = raw.range(of: #"^\[( |x|X)\](?: |$)"#, options: .regularExpression) != nil
-                        paragraphs[paragraphs.count - 1].startsWithAlert = raw.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |$|\n)"#, options: .regularExpression) != nil
-                        paragraphs[paragraphs.count - 1].calloutStart = sourceText[..<lineStart].hasSuffix("<!-- attic:callout-start -->\n\n")
-                    }
-                }
-            }
-            var marks: [NoteMark] = []
-            for (intent, kind) in [(InlinePresentationIntent.stronglyEmphasized, NoteMark.Kind.bold), (.emphasized, .italic), (.strikethrough, .strikethrough), (.code, .code)] where inline.contains(intent) && length > 0 {
-                marks.append(NoteMark(kind, offset: offset, length: length))
-            }
-            if let url = run.link, length > 0 { marks.append(NoteMark(.link, offset: offset, length: length, url: url.absoluteString)) }
-            paragraphs[paragraphs.count - 1].block.text += text
-            paragraphs[paragraphs.count - 1].block.marks += marks
-        }
-
-        var blocks: [NoteBlock] = []
-        var seenLists = Set<Int>()
-        var alerts: [Int: String] = [:]
-        var seenQuotes = Set<Int>()
-        var explicitAlerts = Set<Int>()
-        var startedAlerts = Set<Int>()
-        var tableIndices: [Int: Int] = [:]
-        var nextCalloutStart = false
-        for (paragraphIndex, paragraph) in paragraphs.enumerated() {
-            let intents = paragraph.intents
-            var block = paragraph.block
-            if let replacement = prepared.tables[block.text] {
-                blocks.append(.table(replacement)); continue
-            }
-            if prepared.boundaries.contains(block.text) { nextCalloutStart = true; continue }
-            let isTask = prepared.tasks.contains { block.text.hasPrefix($0) }
-            let isAlert = prepared.alerts.contains { block.text.hasPrefix($0) }
-            var literalEmojiOffsets = Set<Int>()
-            restoreInline(&block, spans: prepared.spans, literals: prepared.literals, offsets: &literalEmojiOffsets)
-            let listHint = prepared.lists.first { entry in
-                block.text.hasPrefix(entry.key) || ["[x] ", "[X] ", "[ ] "].contains { prefix in block.text.hasPrefix(prefix + entry.key) }
-            }
-            if let listHint, block.text.hasPrefix(listHint.key) { removePrefix(listHint.key.utf16.count, from: &block) }
-            if let tableIntent = intents.first(where: { if case .table = $0.kind { true } else { false } }),
-               case let .table(columns) = tableIntent.kind,
-               let cellIntent = intents.first(where: { if case .tableCell = $0.kind { true } else { false } }),
-               case let .tableCell(column) = cellIntent.kind {
-                var row = 0
-                for intent in intents { if case let .tableRow(index) = intent.kind { row = index } }
-                guard columns.count <= NoteTable.maxColumns, row < NoteTable.maxRows else {
-                    return NoteDocument(blocks: originalMarkdown.components(separatedBy: "\n").map { .text($0) })
-                }
-                let index: Int
-                if let existing = tableIndices[tableIntent.identity] { index = existing }
-                else {
-                    index = blocks.count; tableIndices[tableIntent.identity] = index
-                    let alignments: [NoteTable.Column] = columns.map { value in
-                        NoteTable.Column(align: value.alignment == .center ? .center : (value.alignment == .right ? .right : .left))
-                    }
-                    blocks.append(.table(NoteTable(headerRow: true, columns: alignments, rows: [], extras: [:])))
-                }
-                var table = blocks[index].table!
-                while table.rows.count <= row { table.rows.append(.init(cells: Array(repeating: .empty, count: columns.count))) }
-                if table.columns.indices.contains(column) { table.rows[row].cells[column] = .init(block.text, marks: block.marks) }
-                blocks[index].table = table
-                continue
-            }
-            let quote = intents.last(where: { $0.kind == .blockQuote })
-            let list = intents.first(where: { $0.kind == .orderedList || $0.kind == .unorderedList })
-            let item = intents.first(where: { if case .listItem = $0.kind { true } else { false } })
-            var code = false
-            for intent in intents {
-                switch intent.kind {
-                case let .header(level): block.style = "heading"; block.level = min(6, max(1, level))
-                case let .codeBlock(language): block.style = "mono"; block.language = NoteCodeLanguage.normalize(language); code = true
-                case .thematicBreak: block = .divider()
-                default: break
-                }
-            }
-            // Foundation exposes raw HTML as text. Recognize only the exact
-            // standalone comment, never its escaped prose or code spelling.
-            if !code, quote == nil, list == nil, paragraph.calloutBoundary,
-               block.text.trimmingCharacters(in: .newlines) == "<!-- attic:callout-start -->" { continue }
-            if let list, let item, case let .listItem(ordinal) = item.kind {
-                let depth = intents.filter { $0.kind == .orderedList || $0.kind == .unorderedList }.count - 1
-                block.style = list.kind == .orderedList ? "number" : "bullet"
-                block.indent = min(2, max(0, depth)) == 0 ? nil : min(2, depth)
-                if seenLists.insert(list.identity).inserted, list.kind == .orderedList, ordinal != 1 { block.start = ordinal }
-                if paragraph.startsWithChecklist || isTask, let marker = block.text.range(of: #"^\[( |x|X)\](?: |$)"#, options: .regularExpression) {
-                    block.kind = .checklist; block.id = UUID(); block.checked = !block.text.hasPrefix("[ ]")
-                    removePrefix((String(block.text[marker]) as NSString).length, from: &block); block.style = nil; block.start = nil
-                }
-            }
-            if let entry = listHint, block.text.hasPrefix(entry.key), list != nil { removePrefix(entry.key.utf16.count, from: &block) }
-            if let hint = listHint?.value, list != nil {
-                if let indent = hint.indent { block.indent = indent }
-                if let start = hint.start { block.start = start }
-            }
-            if let quote {
-                if let item, case let .listItem(ordinal) = item.kind {
-                    let prefix = list?.kind == .orderedList ? "\(ordinal). " : "• "
-                    if block.kind == .checklist { prepend(block.checked ? "[x] " : "[ ] ", to: &block) }
-                    prepend(prefix, to: &block)
-                }
-                if seenQuotes.insert(quote.identity).inserted, paragraph.startsWithAlert || isAlert,
-                   let alert = block.text.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |\u2028|\n)?"#, options: .regularExpression) {
-                    let name = String(block.text[alert]).components(separatedBy: "]")[0].dropFirst(2)
-                    let defaults = ["NOTE": "", "TIP": "💡", "IMPORTANT": "❗", "WARNING": "⚠️", "CAUTION": "🛑"]
-                    let alertLength = (String(block.text[alert]) as NSString).length
-                    removePrefix(alertLength, from: &block)
-                    var icon = defaults[String(name)] ?? ""
-                    if !literalEmojiOffsets.contains(alertLength),
-                       let first = block.text.first, first.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.value > 127 && $0.properties.isEmoji) }) {
-                        icon = String(first); removePrefix((icon as NSString).length, from: &block)
-                        if block.text.hasPrefix(" ") { removePrefix(1, from: &block) }
-                    }
-                    alerts[quote.identity] = icon
-                    if paragraph.calloutStart || nextCalloutStart { explicitAlerts.insert(quote.identity) }
-                    nextCalloutStart = false
-                }
-                block.style = "quote"; block.level = nil; block.indent = nil; block.language = nil; block.start = nil
-                block.kind = .text; block.id = nil; block.checked = false
-                block.callout = alerts[quote.identity]
-                if block.text.isEmpty, !paragraph.emptyParagraph, block.callout != nil,
-                   paragraphs.dropFirst(paragraphIndex + 1).contains(where: { $0.intents.contains { $0.kind == .blockQuote && $0.identity == quote.identity } }) { continue }
-                if let icon = block.callout, startedAlerts.insert(quote.identity).inserted {
-                    block.calloutStart = explicitAlerts.contains(quote.identity) ||
-                        (blocks.last?.style == "quote" && blocks.last?.callout == icon)
-                }
-            }
-            if code || block.text.contains("\n") {
-                // One mono/quote paragraph per physical code line. The final
-                // fence separator isn't an extra empty line in the code.
-                var text = block.text
-                if text.hasSuffix("\n") { text.removeLast() }
-                for line in text.components(separatedBy: "\n") {
-                    var part = block; part.text = line; part.marks = []; blocks.append(part)
-                }
-            } else { blocks.append(block) }
-        }
-        // Keep over-limit Markdown tables readable as text rather than
-        // creating an invalid document or silently dropping any cells.
-        blocks = blocks.map { block in
-            guard let table = block.table, !table.isWithinLimits else { return block }
-            return .text(NoteTableText.tsv(table))
-        }
-        return NoteDocument(blocks: blocks.isEmpty ? [.text(prepared.boundaries.isEmpty ? originalMarkdown : "")] : blocks)
+        let reader = Reader(markdown)
+        let blocks = reader.blocks(Array(Document(parsing: markdown, options: [.disableSmartOpts]).children), preservingDefinitions: true)
+        return NoteDocument(blocks: blocks.isEmpty ? [.text("")] : blocks)
     }
 
-    /// Locate balanced inline HTML in one pass. A non-greedy paired-tag
-    /// regex rescans every unmatched opener and is quadratic on pasted junk.
-    private static func inlineHTMLRanges(in source: String) -> [NSRange] {
-        let regex = try! NSRegularExpression(pattern: #"<(\/?)(strong|em|u|s|mark|code|a)(?:\s+[^<>]*)?>"#)
-        let text = source as NSString
-        var stack: [String] = [], depth = 0, start = 0, invalid = false, result: [NSRange] = []
-        for match in regex.matches(in: source, range: NSRange(location: 0, length: text.length)) {
-            let tag = text.substring(with: match.range(at: 2))
-            if match.range(at: 1).length == 0 {
-                if depth == 0 { start = match.range.location; invalid = false }
-                depth += 1
-                if depth <= 32 { stack.append(tag) } else { invalid = true }
-            } else {
-                if depth > 32 { depth -= 1; continue }
-                guard depth > 0, stack.last == tag else { stack.removeAll(); depth = 0; continue }
-                stack.removeLast(); depth -= 1
-                if depth == 0, !invalid {
-                    let range = NSRange(location: start, length: NSMaxRange(match.range) - start)
-                    if !text.substring(with: range).contains("\n") { result.append(range) }
-                }
-            }
-        }
-        return result
-    }
+    /// Source positions are UTF-8 byte columns, not String or UTF-16 offsets.
+    /// Keep the immutable source alongside the AST for export-only extensions.
+    private final class Reader {
+        let source: [UInt8]
+        let lines: [Int]
+        var tableColumns: [Int: [Int]] = [:]
 
-    /// Source ranges reported by Foundation drift after hard breaks. Code
-    /// shielding must use literal source offsets, before any parse-only atoms
-    /// are inserted. This lexer recognizes fences, indented blocks and exact
-    /// backtick runs; it never interprets HTML or resolves a resource.
-    private static func protectedCode(in source: String) -> (all: [NSRange], blocks: [NSRange]) {
-        let text = source as NSString
-        var blocks: [NSRange] = [], offset = 0
-        var fence: (unit: UInt16, count: Int, start: Int)?
-        var previousBlank = true, indented = false, inList = false
-        for line in source.components(separatedBy: "\n") {
-            let length = line.utf16.count, full = min(length + 1, text.length - offset)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let active = fence {
-                let close = trimmed.utf16.prefix { $0 == active.unit }.count
-                if close >= active.count && trimmed.utf16.dropFirst(close).allSatisfy({ $0 == 32 || $0 == 9 }) {
-                    blocks.append(NSRange(location: active.start, length: offset + full - active.start)); fence = nil
+        init(_ source: String) {
+            let bytes = Array(source.utf8)
+            self.source = bytes
+            self.lines = [0] + bytes.indices.filter { bytes[$0] == 10 }.map { $0 + 1 }
+        }
+
+        func offset(_ location: SourceLocation) -> Int? {
+            guard location.line > 0, location.line <= lines.count, location.column > 0 else { return nil }
+            let offset = lines[location.line - 1] + location.column - 1
+            return offset <= source.count ? offset : nil
+        }
+
+        func raw(_ node: any Markup) -> String {
+            guard let range = node.range else { return "" }
+            return raw(range)
+        }
+
+        func raw(_ range: SourceRange) -> String {
+            guard let start = offset(range.lowerBound), let end = offset(range.upperBound), start <= end else { return "" }
+            return String(decoding: source[start..<end], as: UTF8.self)
+        }
+
+        /// cmark unescapes pipes before parsing a cell's inlines, but leaves
+        /// its inline columns in that shorter buffer. Translate those columns
+        /// back to the immutable source, relative to the enclosing AST cell.
+        func rawInline(_ range: SourceRange, node: any Markup, table: Bool) -> String {
+            guard table else { return raw(range) }
+            var parent = node.parent
+            while let value = parent, !(value is Markdown.Table.Cell) { parent = value.parent }
+            guard let cellRange = parent?.range, let start = offset(cellRange.lowerBound),
+                  let end = offset(cellRange.upperBound), let lower = offset(range.lowerBound),
+                  let upper = offset(range.upperBound), start <= end else { return raw(range) }
+            let columns: [Int]
+            if let existing = tableColumns[start] { columns = existing }
+            else {
+                var map: [Int] = [], cursor = start
+                while cursor < end {
+                    map.append(cursor)
+                    if source[cursor] == 92, cursor + 1 < end, source[cursor + 1] == 124 { cursor += 1 }
+                    cursor += 1
                 }
-            } else {
-                let list = line.range(of: #"^[ \t]*(?:[-+*]|[0-9]{1,9}[.)])[ \t]+"#, options: .regularExpression) != nil
-                if list { inList = true }
-                else if previousBlank, !line.hasPrefix(" "), !line.hasPrefix("\t"), !trimmed.isEmpty { inList = false }
-                if let match = line.range(of: #"^ {0,3}(?:>[ \t]?)*(`{3,}|~{3,})"#, options: .regularExpression) {
-                    let value = String(line[match].reversed().prefix { $0 == "`" || $0 == "~" }.reversed())
-                    if let unit = value.utf16.first { fence = (unit, value.utf16.count, offset) }
-                    indented = false
+                map.append(end); tableColumns[start] = map; columns = map
+            }
+            guard lower >= start, upper >= lower, upper - start < columns.count else { return raw(range) }
+            return String(decoding: source[columns[lower - start]..<columns[upper - start]], as: UTF8.self)
+        }
+
+        /// CommonMark removes link definitions from its tree. R14 reserves
+        /// footnote-like definitions as literal prose. Restore only source
+        /// lines not represented by any AST leaf, code block or HTML block.
+        func footnoteDefinitions(_ nodes: [any Markup]) -> [(line: Int, block: NoteBlock)] {
+            guard source.contains(94) else { return [] }
+            var covered: [Range<Int>] = []
+            func visit(_ node: any Markup) {
+                if node.childCount == 0 || node is CodeBlock || node is HTMLBlock {
+                    if let range = node.range, let start = offset(range.lowerBound), let end = offset(range.upperBound), start < end { covered.append(start..<end) }
+                } else { for child in node.children { visit(child) } }
+            }
+            for node in nodes { visit(node) }
+            covered.sort { $0.lowerBound < $1.lowerBound }
+            var result: [(Int, NoteBlock)] = [], index = 0, continuation = false
+            for (line, start) in lines.enumerated() {
+                let end = line + 1 < lines.count ? lines[line + 1] - 1 : source.count
+                let text = String(decoding: source[start..<end], as: UTF8.self)
+                let position = start + text.utf8.prefix { $0 == 32 || $0 == 9 }.count
+                while index < covered.count, covered[index].upperBound <= position { index += 1 }
+                let represented = index < covered.count && covered[index].contains(position)
+                let definition = text.range(of: #"^ {0,3}\[\^[^\]\n]+\]:"#, options: .regularExpression) != nil
+                if !represented, definition || (continuation && text.first?.isWhitespace == true && !text.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    result.append((line + 1, .text(text))); continuation = true
+                } else { continuation = false }
+            }
+            return result
+        }
+
+        func blocks(_ nodes: [any Markup], depth: Int = 0, preservingDefinitions: Bool = false) -> [NoteBlock] {
+            var result: [NoteBlock] = []
+            let definitions = preservingDefinitions ? footnoteDefinitions(nodes) : []
+            var definitionIndex = 0
+            var boundary = false, headerOff = false
+            var consumed = Set<Int>()
+            for (nodeIndex, node) in nodes.enumerated() {
+                if consumed.contains(nodeIndex) { continue }
+                while definitionIndex < definitions.count, definitions[definitionIndex].line <= (node.range?.lowerBound.line ?? 0) {
+                    result.append(definitions[definitionIndex].block); definitionIndex += 1
+                }
+                if let html = node as? HTMLBlock {
+                    let literal = html.rawHTML.trimmingCharacters(in: .newlines)
+                    if literal == "<!-- attic:callout-start -->" { boundary = true; continue }
+                    if literal == NoteTableText.headerOffComment { headerOff = true; continue }
+                    if literal == "<!-- attic:empty-item -->", html.parent is ListItem { result.append(.text("")); continue }
+                    if let end = literal.range(of: " -->"), listHint(String(literal[..<end.upperBound])) != nil,
+                       html.parent is ListItem {
+                        var tail = String(literal[end.upperBound...])
+                        // cmark ends a comment HTML block on this physical
+                        // line. Its following paragraph can still be the same
+                        // exported list item's hard-break continuation. Read
+                        // that contiguous source fragment together, without
+                        // changing any user text or introducing parse atoms.
+                        var line = html.range?.upperBound.line ?? 0
+                        var next = nodeIndex + 1
+                        while !tail.isEmpty, next < nodes.count, nodes[next] is Markdown.Paragraph,
+                              let range = nodes[next].range, range.lowerBound.line == line + 1 {
+                            tail += "\n" + raw(nodes[next]); consumed.insert(next)
+                            line = range.upperBound.line; next += 1
+                        }
+                        if tail.isEmpty || tail == "<!-- attic:empty-item -->" { result.append(.text("")) }
+                        else { result += Reader(tail).blocks(Array(Document(parsing: tail, options: [.disableSmartOpts]).children), depth: depth, preservingDefinitions: true) }
+                        continue
+                    }
+                    // An exact standalone <br> is the exported empty Body.
+                    if literal == "<br>" { result.append(.text("")); continue }
+                    result += literal.components(separatedBy: "\n").map { .text($0) }
+                } else if let table = node as? Markdown.Table {
+                    // Attic's pipe-table contract ends at the first line with
+                    // no pipe. cmark also admits such lines as implicit rows;
+                    // keep that trailing prose outside the grid (H17-04).
+                    let body = Array(table.body.children)
+                    let end = body.firstIndex { !raw($0).contains("|") } ?? body.count
+                    let rows = [Array(table.head.children)] + body[..<end].map { Array($0.children) }
+                    let alignments: [NoteTable.Alignment] = table.columnAlignments.map {
+                        switch $0 { case .center: return .center; case .right: return .right; default: return .left }
+                    }
+                    let cells = rows.map { row in row.map { node -> NoteTable.Cell in
+                        // swift-markdown enables cmark's non-GFM table spans.
+                        // A caret-only continuation cell has no AST text after
+                        // that pass. Attic has no merged-cell representation:
+                        // retain its literal source instead of dropping it.
+                        if let cell = node as? Markdown.Table.Cell, cell.rowspan == 0 {
+                            return .init(raw(cell).trimmingCharacters(in: .whitespaces))
+                        }
+                        return inline(Array(node.children), table: true)
+                    } }
+                    if cells.count > NoteTable.maxRows || table.maxColumnCount > NoteTable.maxColumns {
+                        // The model's existing limit is unchanged. Keep every
+                        // parsed cell readable without constructing an invalid table.
+                        result += cells.map { .text($0.map(\.text).joined(separator: "\t")) }
+                    } else {
+                        var value = NoteTable(texts: cells.map { $0.map(\.text) }, headerRow: !headerOff, alignments: alignments)
+                        for row in cells.indices { value.rows[row].cells = cells[row] }
+                        result.append(.table(value))
+                    }
+                    for row in body[end...] { result.append(.text(raw(row))) }
+                    headerOff = false
+                } else if let quote = node as? BlockQuote {
+                    var content = blocks(Array(quote.children), depth: depth)
+                    var icon: String?
+                    if let paragraph = quote.child(at: 0) as? Markdown.Paragraph,
+                       raw(paragraph).range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |$|\n)"#, options: .regularExpression) != nil,
+                       !content.isEmpty,
+                       let marker = content[0].text.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |\u2028|\n)?"#, options: .regularExpression) {
+                        let name = String(content[0].text[marker]).components(separatedBy: "]")[0].dropFirst(2)
+                        icon = ["NOTE": "", "TIP": "💡", "IMPORTANT": "❗", "WARNING": "⚠️", "CAUTION": "🛑"][String(name)] ?? ""
+                        removePrefix(String(content[0].text[marker]).utf16.count, from: &content[0])
+                        // The alert marker and text can be separate paragraphs.
+                        if content[0].text.isEmpty, content.count > 1, content[1].kind != .table { content.removeFirst() }
+                        let literal = raw(paragraph)
+                        let afterMarker = literal.components(separatedBy: "]").dropFirst().joined(separator: "]")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .replacingOccurrences(of: #"^> ?"#, with: "", options: .regularExpression)
+                        let entityEmoji = afterMarker.hasPrefix("&#") || afterMarker.range(of: #"^(?:<[^<>]+>)+&#"#, options: .regularExpression) != nil
+                        if !entityEmoji, let first = content[0].text.first,
+                           first.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || ($0.value > 127 && $0.properties.isEmoji) }) {
+                            icon = String(first); removePrefix(String(first).utf16.count, from: &content[0])
+                            if content[0].text.hasPrefix(" ") { removePrefix(1, from: &content[0]) }
+                        }
+                        if content[0].text == "\u{2028}", afterMarker.hasSuffix("<br>") {
+                            content[0].text = ""; content[0].marks = []
+                        }
+                    }
+                    var quoted = calloutParagraphs(content, icon: icon ?? "", preservingTables: true)
+                    if icon == nil { for index in quoted.indices { quoted[index].callout = nil } }
+                    if let icon, let first = quoted.firstIndex(where: { $0.kind == .text && $0.style == "quote" }) {
+                        quoted[first].calloutStart = boundary || (result.last?.style == "quote" && result.last?.callout == icon)
+                    }
+                    result += quoted; boundary = false
+                } else if node is UnorderedList || node is OrderedList {
+                    let start = (node as? OrderedList).map { Int($0.startIndex) }
+                    var first = true
+                    for child in node.children {
+                        guard let item = child as? ListItem else { continue }
+                        var parts = blocks(Array(item.children), depth: depth + 1)
+                        var checkbox = item.checkbox
+                        // GFM requires whitespace after a checkbox. R14 also
+                        // accepts the familiar empty '- [ ]' / '- [x]' form.
+                        if checkbox == nil, let paragraph = item.child(at: 0) as? Markdown.Paragraph {
+                            let literal = raw(paragraph)
+                            if ["[ ]", "[x]", "[X]"].contains(literal), !parts.isEmpty {
+                                checkbox = literal == "[ ]" ? .unchecked : .checked
+                                removePrefix(3, from: &parts[0])
+                            }
+                        }
+                        if parts.isEmpty { parts = [.text("")] }
+                        else if item.child(at: 0) is UnorderedList || item.child(at: 0) is OrderedList {
+                            parts.insert(.text(""), at: 0)
+                        }
+                        for index in parts.indices where parts[index].style != "mono" && parts[index].style != "quote" && parts[index].kind == .text && parts[index].style != "bullet" && parts[index].style != "number" {
+                            parts[index].style = start == nil ? "bullet" : "number"
+                            parts[index].level = nil
+                            parts[index].indent = depth == 0 ? nil : min(2, depth)
+                            if first, let start, start != 1 { parts[index].start = start }
+                            if let checkbox {
+                                parts[index].kind = .checklist; parts[index].id = UUID()
+                                parts[index].checked = checkbox == .checked
+                                parts[index].style = nil; parts[index].start = nil
+                            }
+                            applyListHint(item, to: &parts[index])
+                            first = false
+                        }
+                        result += parts
+                    }
+                } else if let code = node as? CodeBlock {
+                    var text = code.code
+                    if text.hasSuffix("\n") { text.removeLast() }
+                    result += text.components(separatedBy: "\n").map {
+                        var block = NoteBlock.text($0, style: "mono"); block.language = NoteCodeLanguage.normalize(code.language); return block
+                    }
+                } else if node is ThematicBreak {
+                    result.append(.divider())
+                } else if node is Markdown.Paragraph || node is Heading {
+                    let children = Array(node.children)
+                    var cell = inline(children)
+                    if children.count == 1, (children[0] as? InlineHTML)?.rawHTML == "<br>" { cell = .empty }
+                    var block = NoteBlock.text(cell.text); block.marks = cell.marks
+                    if let heading = node as? Heading { block.style = "heading"; block.level = heading.level }
+                    result.append(block)
                 } else {
-                    let hasIndent = line.hasPrefix("    ") || line.hasPrefix("\t")
-                    if hasIndent && !inList && (previousBlank || indented) {
-                        blocks.append(NSRange(location: offset, length: full)); indented = true
-                    } else if !trimmed.isEmpty { indented = false }
+                    let children = Array(node.children)
+                    if children.isEmpty { result.append(.text(raw(node))) }
+                    else { result += blocks(children, depth: depth) }
                 }
             }
-            previousBlank = trimmed.isEmpty
-            offset += length + 1
+            result += definitions.dropFirst(definitionIndex).map(\.block)
+            return result
         }
-        if let fence { blocks.append(NSRange(location: fence.start, length: text.length - fence.start)) }
-        let units = Array(source.utf16)
-        let htmlRanges = inlineHTMLRanges(in: source)
-        var all = blocks, index = 0, blockIndex = 0, htmlIndex = 0
-        var work = max(1, units.count) * 16
-        while index < units.count {
-            while blockIndex < blocks.count, NSMaxRange(blocks[blockIndex]) <= index { blockIndex += 1 }
-            if blockIndex < blocks.count, NSLocationInRange(index, blocks[blockIndex]) { index = NSMaxRange(blocks[blockIndex]); continue }
-            while htmlIndex < htmlRanges.count, NSMaxRange(htmlRanges[htmlIndex]) <= index { htmlIndex += 1 }
-            if htmlIndex < htmlRanges.count, htmlRanges[htmlIndex].location == index { index = NSMaxRange(htmlRanges[htmlIndex]); continue }
-            guard units[index] == 96 else { index += 1; continue }
-            var slash = index
-            while slash > 0, units[slash - 1] == 92 { slash -= 1 }
-            if (index - slash) % 2 == 1 { index += 1; continue }
-            var width = 1
-            while index + width < units.count, units[index + width] == 96 { width += 1 }
-            var close = index + width, found: Int?
-            let limit = blockIndex < blocks.count ? blocks[blockIndex].location : units.count
-            while close < limit {
-                guard work > 0 else { return ([NSRange(location: 0, length: text.length)], blocks) }
-                work -= 1
-                if units[close] != 96 { close += 1; continue }
-                var count = 1
-                while close + count < units.count, units[close + count] == 96 { count += 1 }
-                if count == width { found = close + count; break }
-                close += count
+
+        func listHint(_ literal: String) -> (indent: Int?, start: Int?)? {
+            guard literal.range(of: #"^<!-- attic:list(?: indent=[12])?(?: start=[0-9]+)? -->$"#, options: .regularExpression) != nil else { return nil }
+            var indent: Int?, start: Int?
+            for field in literal.split(separator: " ") {
+                let pair = field.split(separator: "=", maxSplits: 1)
+                guard pair.count == 2, let value = Int(pair[1]) else { continue }
+                if pair[0] == "indent" { indent = value }
+                if pair[0] == "start" { start = value }
             }
-            if let end = found { all.append(NSRange(location: index, length: end - index)); index = end }
-            else { index += width }
+            return (indent, start)
         }
-        return (all, blocks)
-    }
 
-    /// Replace supported source extensions with parse-only atoms before
-    /// CommonMark consumes them. Tokens are unique per parse and never saved.
-    private static func prepareExtensions(_ source: String) throws -> (source: String, tables: [String: NoteTable], spans: [String: NoteTable.Cell], lists: [String: (indent: Int?, start: Int?)], tasks: Set<String>, boundaries: Set<String>, alerts: Set<String>, literals: Set<String>) {
-        let protected = protectedCode(in: source)
-        let code = protected.all, fenced = protected.blocks
-        let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let sourceUnits = Array(source.utf16)
-        func escaped(at offset: Int) -> Bool {
-            var start = offset
-            while start > 0, sourceUnits[start - 1] == 92 { start -= 1 }
-            return (offset - start) % 2 == 1
+        func applyListHint(_ item: ListItem, to block: inout NoteBlock) {
+            let literal: String
+            if let html = item.child(at: 0) as? HTMLBlock { literal = html.rawHTML }
+            else if let paragraph = item.child(at: 0) as? Markdown.Paragraph,
+                    let html = paragraph.child(at: 0) as? InlineHTML { literal = html.rawHTML }
+            else { return }
+            guard let end = literal.range(of: " -->"), let hint = listHint(String(literal[..<end.upperBound])) else { return }
+            if let indent = hint.indent { block.indent = indent }
+            if let start = hint.start { block.start = start }
         }
-        let result = NSMutableString(string: source)
-        var replacements: [(NSRange, String)] = [], tables: [String: NoteTable] = [:], spans: [String: NoteTable.Cell] = [:]
-        var lists: [String: (indent: Int?, start: Int?)] = [:]
-        var tasks = Set<String>(), boundaries = Set<String>(), alerts = Set<String>(), literals = Set<String>()
-        let lines = source.components(separatedBy: "\n")
-        var line = 0, offset = 0
-        while line < lines.count {
-            let possibleTable = NoteTableText.commentFields(lines[line]) != nil ||
-                (lines[line].contains("|") && line + 1 < lines.count && NoteTableText.delimiterAlignments(lines[line + 1]) != nil)
-            if possibleTable, !fenced.contains(where: { NSLocationInRange(offset, $0) }),
-               let table = NoteTableText.parseMarkdown(lines: Array(lines[line...])) {
-                let length = lines[line..<(line + table.consumed)].joined(separator: "\n").utf16.count
-                let token = "atticTable" + nonce + String(tables.count) + "End"
-                tables[token] = table.table
-                replacements.append((NSRange(location: offset, length: length), token))
-                offset += length + 1; line += table.consumed
-            } else { offset += lines[line].utf16.count + 1; line += 1 }
-        }
-        // HTML is deliberately restricted to paired inline tags. Never parse
-        // code, escaped source, tables twice, or arbitrary document HTML.
-        let string = source as NSString
-        let highlight = try NSRegularExpression(pattern: #"==[^=\n]+=="#)
-        let inlineRanges = inlineHTMLRanges(in: source) + highlight.matches(in: source, range: NSRange(location: 0, length: string.length)).map(\.range)
-        for range in inlineRanges.sorted(by: { $0.location < $1.location }) {
-            guard !code.contains(where: { NSLocationInRange(range.location, $0) }),
-                  !replacements.contains(where: { NSIntersectionRange($0.0, range).length > 0 }) else { continue }
-            var escapeStart = range.location
-            while escapeStart > 0, string.character(at: escapeStart - 1) == 92 { escapeStart -= 1 }
-            guard (range.location - escapeStart) % 2 == 0 else { continue }
-            let raw = string.substring(with: range)
-            let cell: NoteTable.Cell?
-            if raw.hasPrefix("==") { cell = NoteTableText.inlineCell(raw) }
-            else { cell = NoteMarkdownInline.parse(raw) }
-            guard let cell else { continue }
-            let token = "atticSpan" + nonce + String(spans.count) + "End"
-            spans[token] = cell
-            if raw.range(of: #"^(?:<[^<>]+>)*&#"#, options: .regularExpression) != nil { literals.insert(token) }
-            replacements.append((range, token))
-        }
-        let emptyLine = try NSRegularExpression(pattern: #"(?m)^(?:#{1,6} |>[ \t]?(?:[^\n<>]* )?)?(<br>)$"#)
-        let emptyRanges = Set(emptyLine.matches(in: source, range: NSRange(location: 0, length: string.length)).map { $0.range(at: 1) })
-        let breaks = try NSRegularExpression(pattern: #"<br(?: ?/)?>"#)
-        for match in breaks.matches(in: source, range: NSRange(location: 0, length: string.length)) {
-            guard !escaped(at: match.range.location), !emptyRanges.contains(match.range), !code.contains(where: { NSLocationInRange(match.range.location, $0) }),
-                  !replacements.contains(where: { NSIntersectionRange($0.0, match.range).length > 0 }) else { continue }
-            let token = "atticSpan" + nonce + String(spans.count) + "End"
-            spans[token] = NoteTable.Cell("\u{2028}"); replacements.append((match.range, token))
-        }
-        let numeric = try NSRegularExpression(pattern: #"(?:&#(?:x[0-9a-fA-F]+|[0-9]+);)+"#)
-        for match in numeric.matches(in: source, range: NSRange(location: 0, length: string.length)) {
-            guard !escaped(at: match.range.location), !code.contains(where: { NSLocationInRange(match.range.location, $0) }),
-                  !replacements.contains(where: { NSIntersectionRange($0.0, match.range).length > 0 }) else { continue }
-            let token = "atticSpan" + nonce + String(spans.count) + "End"
-            spans[token] = NoteTable.Cell(NoteTableText.decodeEntities(string.substring(with: match.range)))
-            literals.insert(token); replacements.append((match.range, token))
-        }
-        let structural = try NSRegularExpression(pattern: #"(?m)^<!-- attic:callout-start -->$|^>[ \t]?(\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\])(?: |$)"#)
-        for match in structural.matches(in: source, range: NSRange(location: 0, length: string.length)) {
-            let range = match.range(at: 1).location == NSNotFound ? match.range : match.range(at: 1)
-            guard !code.contains(where: { NSLocationInRange(range.location, $0) }),
-                  !replacements.contains(where: { NSIntersectionRange($0.0, range).length > 0 }) else { continue }
-            let token = "atticSpan" + nonce + String(spans.count) + "End"
-            spans[token] = NoteTable.Cell(string.substring(with: range))
-            if match.range(at: 1).location == NSNotFound { boundaries.insert(token) } else { alerts.insert(token) }
-            replacements.append((range, token))
-        }
-        let task = try NSRegularExpression(pattern: #"(?m)^[ \t]*[-+*][ \t]+(\[(?: |x|X)\])(?: |$)"#)
-        for match in task.matches(in: source, range: NSRange(location: 0, length: string.length)) {
-            let range = match.range(at: 1)
-            guard !code.contains(where: { NSLocationInRange(range.location, $0) }),
-                  !replacements.contains(where: { NSIntersectionRange($0.0, range).length > 0 }) else { continue }
-            let token = "atticSpan" + nonce + String(spans.count) + "End"
-            spans[token] = NoteTable.Cell(string.substring(with: range)); tasks.insert(token)
-            replacements.append((range, token))
-        }
-        let hint = try NSRegularExpression(pattern: #"<!-- attic:list(?: indent=([12]))?(?: start=([0-9]+))? -->"#)
-        for match in hint.matches(in: source, range: NSRange(location: 0, length: string.length)) {
-            let line = string.lineRange(for: NSRange(location: match.range.location, length: 0))
-            let prefix = string.substring(with: NSRange(location: line.location, length: match.range.location - line.location))
-            guard prefix.range(of: #"^[ \t]*(?:[-+*]|[0-9]{1,9}[.)])[ \t]+(?:\[(?: |x|X)\] )?$"#, options: .regularExpression) != nil else { continue }
-            guard !code.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
-                  !replacements.contains(where: { NSIntersectionRange($0.0, match.range).length > 0 }) else { continue }
-            let indent = match.range(at: 1).location == NSNotFound ? nil : Int(string.substring(with: match.range(at: 1)))
-            let start = match.range(at: 2).location == NSNotFound ? nil : Int(string.substring(with: match.range(at: 2)))
-            let token = "atticList" + nonce + String(lists.count) + "End"
-            lists[token] = (indent, start); replacements.append((match.range, token))
-        }
-        for (range, token) in replacements.sorted(by: { $0.0.location > $1.0.location }) {
-            result.replaceCharacters(in: range, with: token)
-        }
-        return (result as String, tables, spans, lists, tasks, boundaries, alerts, literals)
-    }
 
-    private static func restoreInline(_ block: inout NoteBlock, spans: [String: NoteTable.Cell], literals: Set<String>, offsets: inout Set<Int>) {
-        var replacements: [(NSRange, NoteTable.Cell)] = []
-        let text = block.text as NSString
-        let regex = try! NSRegularExpression(pattern: #"atticSpan[A-F0-9]{32}[0-9]+End"#)
-        for match in regex.matches(in: block.text, range: NSRange(location: 0, length: text.length)) {
-            if let cell = spans[text.substring(with: match.range)] { replacements.append((match.range, cell)) }
-        }
-        for (range, cell) in replacements.sorted(by: { $0.0.location > $1.0.location }) {
-            let token = (block.text as NSString).substring(with: range)
-            let delta = cell.text.utf16.count - range.length
-            offsets = Set(offsets.map { $0 >= NSMaxRange(range) ? $0 + delta : $0 })
-            if literals.contains(token) { offsets.insert(range.location) }
-            block.marks = block.marks.map { mark in
-                var mark = mark
-                let end = mark.offset + mark.length
-                if mark.offset >= NSMaxRange(range) { mark.offset += delta }
-                else if end >= NSMaxRange(range) { mark.length += delta }
-                return mark
+        /// The legacy ==highlight== export predates paired <mark> spans.
+        /// Recognize it only in AST text with actual source delimiters; an
+        /// escape, entity or code leaf can never manufacture the extension.
+        func textCell(_ text: Markdown.Text, table: Bool) -> NoteTable.Cell {
+            guard let range = text.range else { return .init(text.string) }
+            let source = rawInline(range, node: text, table: table)
+            guard source.contains("=="), !source.contains("\\=") else { return .init(text.string) }
+            let regex = try! NSRegularExpression(pattern: #"(?<![\\=])==([^=\n]+)==(?![=])"#)
+            let literal = text.string as NSString
+            let matches = regex.matches(in: text.string, range: NSRange(location: 0, length: literal.length))
+            guard !matches.isEmpty,
+                  regex.numberOfMatches(in: source, range: NSRange(location: 0, length: source.utf16.count)) == matches.count else { return .init(text.string) }
+            var result = NoteTable.Cell(), cursor = 0
+            for match in matches {
+                result.text += literal.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+                let content = literal.substring(with: match.range(at: 1))
+                result.marks.append(NoteMark(.highlight, offset: result.text.utf16.count, length: content.utf16.count))
+                result.text += content; cursor = NSMaxRange(match.range)
             }
-            block.text = (block.text as NSString).replacingCharacters(in: range, with: cell.text)
-            block.marks += cell.marks.map { NoteMark($0.kind, offset: range.location + $0.offset, length: $0.length, url: $0.url, colour: $0.colour) }
+            result.text += literal.substring(from: cursor)
+            return result
         }
-        block.marks = NoteTableText.canonicalMarks(block.marks)
+
+        /// Interpret only balanced inline forms emitted by our exporter.
+        /// Pairing uses AST HTML leaves; code and escaped tags cannot enter it.
+        /// Raw source inside a recognized pair preserves punctuation literally,
+        /// even if CommonMark gave that punctuation additional inline structure.
+        func inline(_ nodes: [any Markup], table: Bool = false) -> NoteTable.Cell {
+            var pairs: [Int: Int] = [:], stack: [(String, Int)] = []
+            var invalid = false
+            for (index, node) in nodes.enumerated() {
+                guard let html = node as? InlineHTML,
+                      let tag = html.rawHTML.range(of: #"^(?:<(?:strong|em|u|s|code)>|<mark(?: data-attic-colour="[^"<>]*")?>|<a href="[^"<>]*">|</(?:strong|em|u|s|mark|code|a)>)$"#, options: .regularExpression) else { continue }
+                let literal = String(html.rawHTML[tag])
+                let name = String(literal.dropFirst(literal.hasPrefix("</") ? 2 : 1).prefix { $0.isLetter })
+                if literal.hasPrefix("</") {
+                    guard let last = stack.last, last.0 == name else { stack.removeAll(); invalid = false; continue }
+                    stack.removeLast()
+                    if stack.isEmpty { if !invalid { pairs[last.1] = index }; invalid = false }
+                } else {
+                    stack.append((name, index))
+                    if stack.count > 32 { invalid = true }
+                }
+            }
+            var result = NoteTable.Cell(), index = 0
+            func append(_ cell: NoteTable.Cell, mark: NoteMark.Kind? = nil, url: String? = nil) {
+                let offset = result.text.utf16.count
+                result.text += cell.text
+                result.marks += cell.marks.map { NoteMark($0.kind, offset: offset + $0.offset, length: $0.length, url: $0.url, colour: $0.colour) }
+                if let mark, !cell.text.isEmpty { result.marks.append(NoteMark(mark, offset: offset, length: cell.text.utf16.count, url: url)) }
+            }
+            while index < nodes.count {
+                let node = nodes[index]
+                if let end = pairs[index], let startRange = node.range, let endRange = nodes[end].range {
+                    var literal = rawInline(startRange.lowerBound..<endRange.upperBound, node: node, table: table)
+                    if table { literal = NoteTableText.unescape(literal, decodeHTML: false) }
+                    if let cell = NoteMarkdownInline.parse(literal) { append(cell); index = end + 1; continue }
+                }
+                if let text = node as? Markdown.Text { append(textCell(text, table: table)) }
+                else if let code = node as? InlineCode { append(.init(code.code), mark: .code) }
+                else if node is Strong { append(inline(Array(node.children), table: table), mark: .bold) }
+                else if node is Emphasis { append(inline(Array(node.children), table: table), mark: .italic) }
+                else if node is Strikethrough { append(inline(Array(node.children), table: table), mark: .strikethrough) }
+                else if let link = node as? Markdown.Link {
+                    let literal = link.range.map { rawInline($0, node: link, table: table) } ?? ""
+                    if literal.range(of: #"^\[\^[^\]]+\](?:\[\])?$"#, options: .regularExpression) != nil { append(.init(literal)) }
+                    else { append(inline(Array(node.children), table: table), mark: .link, url: link.destination) }
+                }
+                else if node is Image { append(inline(Array(node.children), table: table)) }
+                else if node is LineBreak { append(.init(table ? "\n" : "\u{2028}")) }
+                else if node is SoftBreak { append(.init(" ")) }
+                else if let html = node as? InlineHTML {
+                    if ["<br>", "<br/>", "<br />"].contains(html.rawHTML) { append(.init(table ? "\n" : "\u{2028}")) }
+                    else if html.rawHTML == "<!-- attic:empty-item -->", node.parent?.parent is ListItem { /* exported empty item */ }
+                    else if index == 0, html.rawHTML.range(of: #"^<!-- attic:list(?: indent=[12])?(?: start=[0-9]+)? -->$"#, options: .regularExpression) != nil,
+                            node.parent?.parent is ListItem { /* structural list metadata */ }
+                    else { append(.init(html.rawHTML)) }
+                } else { append(inline(Array(node.children), table: table)) }
+                index += 1
+            }
+            result.text = result.text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
+            result.marks = NoteTableText.canonicalMarks(result.marks)
+            return result
+        }
     }
 
-    static func calloutParagraphs(_ blocks: [NoteBlock], icon: String) -> [NoteBlock] {
+    static func calloutParagraphs(_ blocks: [NoteBlock], icon: String, preservingTables: Bool = false) -> [NoteBlock] {
         var ordinal = 0
         return blocks.flatMap { block -> [NoteBlock] in
+            // Source quotes cannot wrap a grid in our model. Keep the real
+            // table between quoted paragraphs rather than flattening its cells.
+            // Pasting into an existing callout retains the default projection.
+            if preservingTables, block.kind == .table { return [block] }
             var copy = block
             switch block.kind {
             case .text:

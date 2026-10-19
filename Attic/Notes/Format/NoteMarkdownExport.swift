@@ -115,8 +115,13 @@ enum NoteMarkdownExport {
             switch block.kind {
             case .text, .checklist:
                 let continuation = isList ? String(repeating: " ", count: column + (block.kind == .checklist ? 2 : prefix.count)) : (block.style == "quote" ? nesting + "> " : "")
-                let text = inlineText(block, calendar: calendar, locale: locale)
+                var text = inlineText(block, calendar: calendar, locale: locale)
                     .replacingOccurrences(of: "\u{2028}", with: block.style == "heading" ? "<br>" : "\\\n" + continuation)
+                // Bare empty items can become Setext underlines or close
+                // their list before a nested child. A comment ends on this
+                // line and keeps the item/children unambiguous (<br> opens an
+                // HTML block that can consume a following child list).
+                if isList, text.isEmpty { text = "<!-- attic:empty-item -->" }
                 if !isList, text.isEmpty {
                     // Whitespace alone is only a separator in Markdown.
                     // A normal HTML break keeps an empty formatted paragraph.
