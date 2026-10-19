@@ -484,33 +484,97 @@ final class PhaseXHunt15LayoutTests: RoundF3TestCase {
             ("file", .file(attachmentID: UUID(), filename: "owned.txt", contentTypeIdentifier: "public.plain-text", byteCount: 4)),
             ("divider", .divider())
         ]
-        for (label, block) in cases {
-            let original = NoteDocument(blocks: [.text("Title"), .text("Above"), .text(""), block])
-            let data = try NoteContentCodec.encode(original)
-            guard case let .editable(decoded) = NoteContentCodec.decode(data) else { return XCTFail("decode") }
-            for (route, source) in [("live", original), ("reopened", decoded)] {
-                let (engine, view) = editor(source.blocks, height: 60)
-                view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0)); settle(view)
-                let bottom = try XCTUnwrap(engine.trailingBlockBottom(), "\(label)/\(route)") + view.textContainerOrigin.y
-                XCTAssertLessThanOrEqual(bottom, view.bounds.maxY + 0.5, "\(label)/\(route): fragment fits")
-                engine.layoutManager?.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
-                    if let fragment = fragment as? NoteBlockLayoutFragment {
-                        let painted = fragment.paintedBottom + fragment.layoutFragmentFrame.minY + view.textContainerOrigin.y
-                        XCTAssertLessThanOrEqual(painted, view.bounds.maxY + 0.5, "\(label)/\(route): decoration fits")
+        // FX1b: the old 60 pt host is below the panel's 460 pt minimum.
+        // Retain every extent/scroll assertion at reachable panel sizes.
+        for (width, height): (CGFloat, CGFloat) in [(340, 460), (340, 560), (420, 460), (420, 560)] {
+            for (label, block) in cases {
+                let original = NoteDocument(blocks: [.text("Title"), .text("Above"), .text(""), block])
+                let data = try NoteContentCodec.encode(original)
+                guard case let .editable(decoded) = NoteContentCodec.decode(data) else { return XCTFail("decode") }
+                for (route, source) in [("live", original), ("reopened", decoded)] {
+                    let (engine, view) = editor(source.blocks, width: width, height: height)
+                    view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0)); settle(view)
+                    let bottom = try XCTUnwrap(engine.trailingBlockBottom(), "\(label)/\(route)") + view.textContainerOrigin.y
+                    XCTAssertLessThanOrEqual(bottom, view.bounds.maxY + 0.5, "\(label)/\(route): fragment fits")
+                    engine.layoutManager?.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
+                        if let fragment = fragment as? NoteBlockLayoutFragment {
+                            let painted = fragment.paintedBottom + fragment.layoutFragmentFrame.minY + view.textContainerOrigin.y
+                            XCTAssertLessThanOrEqual(painted, view.bounds.maxY + 0.5, "\(label)/\(route): decoration fits")
+                        }
+                        return true
                     }
-                    return true
+                    XCTAssertEqual(try NoteContentCodec.encode(engine.document()), data, "layout never edits \(label)/\(route)")
+                    view.scrollToEndOfDocument(nil); settle(view)
+                    // Native scrolling may animate. Wait for the requested geometry,
+                    // without changing the expected bottom or its half-point bound.
+                    let deadline = Date().addingTimeInterval(1)
+                    while bottom > view.visibleRect.maxY + 0.5, Date() < deadline {
+                        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                    }
+                    print("H15-EXTENT", label, route, "bottom", bottom, "document", view.frame, "visible", view.visibleRect)
+                    XCTAssertLessThanOrEqual(bottom, view.visibleRect.maxY + 0.5, "\(label)/\(route): scroll reaches bottom")
+                    XCTAssertFalse(view.window?.isVisible ?? true)
                 }
-                XCTAssertEqual(try NoteContentCodec.encode(engine.document()), data, "layout never edits \(label)/\(route)")
-                view.scrollToEndOfDocument(nil); settle(view)
-                // Native scrolling may animate. Wait for the requested geometry,
-                // without changing the expected bottom or its half-point bound.
-                let deadline = Date().addingTimeInterval(1)
-                while bottom > view.visibleRect.maxY + 0.5, Date() < deadline {
-                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
+        }
+    }
+
+    func testTallFinalObjectsReachTheirRealEndAboveTheBottomControls() throws {
+        let objects: [(String, NoteBlock)] = [
+            ("table", .table(NoteTable(texts: (0..<32).map { ["Row \($0)", "Value \($0)"] }))),
+            ("image", .image(attachmentID: UUID(), pixelWidth: 800, pixelHeight: 2400))
+        ]
+        for (width, height): (CGFloat, CGFloat) in [(340, 460), (340, 560), (420, 460), (420, 560)] {
+            for (label, object) in objects {
+                for blank in [false, true] {
+                    let original = NoteDocument(blocks: [.text("Title"), .text("Above"), object] + (blank ? [.text("")] : []))
+                    let data = try NoteContentCodec.encode(original)
+                    guard case let .editable(decoded) = NoteContentCodec.decode(data) else { return XCTFail("decode") }
+                    for (state, source) in [("live", original), ("reopened", decoded)] {
+                        for command in ["scrollToEndOfDocument:", "moveToEndOfDocument:", "scroll-to-end"] {
+                            let context = "\(label)/\(state)/\(width)x\(height)/blank=\(blank)/\(command)"
+                            let (engine, view) = editor(source.blocks, width: width, height: height)
+                            let scroll = try XCTUnwrap(view.enclosingScrollView)
+                            // V-02: the clip includes the floating controls. Only
+                            // the area outside these covered bands is clear; the
+                            // bottom inset includes the 12 pt resting margin.
+                            scroll.automaticallyAdjustsContentInsets = false
+                            scroll.contentInsets = NSEdgeInsets(top: 40, left: 0, bottom: 64, right: 0)
+                            view.setSelectedRange(NSRange(location: 0, length: 0)); settle(view)
+                            let objectRange = try XCTUnwrap(engine.objects().first?.1)
+                            let objectRect = try XCTUnwrap(engine.rect(for: objectRange))
+                            XCTAssertGreaterThan(objectRect.height, scroll.contentView.bounds.height, context + ": object exceeds viewport")
+                            let before = try NoteContentCodec.encode(engine.document())
+                            let selection = view.selectedRange()
+                            let bottom = try XCTUnwrap(engine.trailingBlockBottom()) + view.textContainerOrigin.y
+                            XCTAssertLessThanOrEqual(bottom, view.bounds.maxY + 0.5, context + ": fragment fits")
+                            if command == "scroll-to-end" {
+                                scroll.contentView.scroll(to: NSPoint(x: 0, y: view.bounds.maxY - scroll.contentSize.height + scroll.contentInsets.bottom))
+                                scroll.reflectScrolledClipView(scroll.contentView)
+                            } else {
+                                view.doCommand(by: NSSelectorFromString(command))
+                            }
+                            settle(view)
+                            func clearBottom() -> CGFloat {
+                                view.convert(scroll.contentView.bounds, from: scroll.contentView).maxY - scroll.contentInsets.bottom
+                            }
+                            let deadline = Date().addingTimeInterval(1)
+                            while bottom > clearBottom() + 0.5, Date() < deadline {
+                                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                            }
+                            print("FX1b-END", context, "object", objectRect, "bottom", bottom,
+                                  "document", view.frame, "clearBottom", clearBottom())
+                            XCTAssertLessThanOrEqual(bottom, clearBottom() + 0.5, context + ": scroll reaches real bottom plus margin")
+                            if command == "moveToEndOfDocument:" {
+                                XCTAssertEqual(view.selectedRange(), NSRange(location: engine.textStorage.length, length: 0), context)
+                            } else {
+                                XCTAssertEqual(view.selectedRange(), selection, context + ": scrolling preserves caret")
+                            }
+                            XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before, context + ": scrolling never edits")
+                            XCTAssertFalse(view.window?.isVisible ?? true)
+                        }
+                    }
                 }
-                print("H15-EXTENT", label, route, "bottom", bottom, "document", view.frame, "visible", view.visibleRect)
-                XCTAssertLessThanOrEqual(bottom, view.visibleRect.maxY + 0.5, "\(label)/\(route): scroll reaches bottom")
-                XCTAssertFalse(view.window?.isVisible ?? true)
             }
         }
     }
