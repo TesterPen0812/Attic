@@ -5,6 +5,7 @@ import XCTest
 
 @MainActor
 final class PerformanceSeedTests: XCTestCase {
+    #if ATTIC_GENERATED_TESTS
     func testDoneHistorySeedLivesOnlyInDoneLog() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let root = ownedTemporaryDirectory(prefix: "AtticPerformanceSeedTests")
@@ -43,4 +44,5 @@ final class PerformanceSeedTests: XCTestCase {
         XCTAssertTrue(store.snapshot(for: .tasks).sections
             .flatMap(\.tasks).allSatisfy { !loggedIDs.contains($0.id) })
     }
+    #endif
 }

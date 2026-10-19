@@ -7,6 +7,7 @@ import XCTest
 
 @MainActor
 final class TasksSubtaskTypingCostTests: XCTestCase {
+    #if ATTIC_GENERATED_TESTS
     func testSubtaskDraftPublicationWorkOnPerformanceSeed() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let root = ownedTemporaryDirectory(prefix: "AtticP1Seed")
@@ -61,6 +62,8 @@ final class TasksSubtaskTypingCostTests: XCTestCase {
             XCTAssertEqual(store.task(withID: child.id)?.title, keys + keys)
         }
     }
+    #endif
+    #if !ATTIC_GENERATED_TESTS
     func testActiveQuickLookObservesDraftAndClearsFieldAfterCommit() throws {
         let store = try makeTestStore()
         let parent = try XCTUnwrap(store.create(title: "Parent"))
@@ -90,5 +93,6 @@ final class TasksSubtaskTypingCostTests: XCTestCase {
         XCTAssertNil(field(in: host))
         XCTAssertFalse(store.tasks.contains { $0.title == "Cancelled" })
     }
+    #endif
 
 }

@@ -16,12 +16,16 @@ CHECKS = {
     'FINAL_STATE': 'final-worktree',
 }
 FULL_ONLY = {'FKA_TESTS', 'PERF_UI_TESTS'}
+PARALLEL_CHECKS = {
+    'MACOS_JOB': 'macos',
+    'ROUND_TRIPS': 'round-trips',
+}
 
 
-def gate(env):
+def gate(env, checks=CHECKS):
     rows = []
     failures = []
-    for key, name in CHECKS.items():
+    for key, name in checks.items():
         required = env.get('LANE') != 'fast' or key not in FULL_ONLY
         outcome = env.get(key) or 'missing'
         rows.append(f'| {name} | {outcome} | {"required" if required else "optional in fast"} |')
@@ -39,4 +43,4 @@ def gate(env):
 
 
 if __name__ == '__main__':
-    sys.exit(gate(os.environ))
+    sys.exit(gate(os.environ, PARALLEL_CHECKS if '--parallel' in sys.argv else CHECKS))

@@ -306,6 +306,7 @@ final class PhaseXHunt7Tests: XCTestCase {
         return nil
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testLongGeneratedReachableCommandsAgreeAfterEveryStep() async throws {
         for seed in 1...12 {
             var random = Random(state: UInt64(seed))
@@ -512,7 +513,9 @@ final class PhaseXHunt7Tests: XCTestCase {
             await notes.waitForAttachmentReconciliation()
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testAUserChosenInvalidCanvasImageHasADismissibleErrorAndKeepsEditing() async throws {
         let store = try makeTestCanvasStore()
         let session = CanvasSession(store: store)
@@ -529,6 +532,7 @@ final class PhaseXHunt7Tests: XCTestCase {
         XCTAssertEqual(session.semanticObjects.count, 1)
         XCTAssertNil(session.lastErrorMessage)
     }
+    #endif
 
     private func leaveUserDraftAfterFailedSave(_ root: URL, bytes: Data) async throws -> (UUID, UUID) {
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false,
@@ -571,6 +575,7 @@ final class PhaseXHunt7Tests: XCTestCase {
         return (id, fileID)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testReachableFailedSaveRecoveryRetainsTypedTextTagsAndImportedFileAcrossRestart() async throws {
         for _ in 0..<6 {
             let root = ownedTemporaryDirectory(prefix: "H9StartupRecovery")
@@ -640,7 +645,9 @@ final class PhaseXHunt7Tests: XCTestCase {
             XCTAssertEqual(store.subtasks(of: parent).map(\.title), ["Keep my child \(iteration)"])
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testReachableImageAndShapeSelectionNudgesUndoRedoAndFreshReadback() async throws {
         let root = ownedTemporaryDirectory(prefix: "H9CanvasUserFlow")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -703,5 +710,6 @@ final class PhaseXHunt7Tests: XCTestCase {
                 reopened.images.map { ($0.id, $0.transform.center) } + reopened.semanticObjects.map { ($0.id, $0.transform.center) }), expected)
         }
     }
+    #endif
 
 }

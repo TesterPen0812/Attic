@@ -5,6 +5,7 @@ import XCTest
 /// The design system's tokens and the automated appearance check.
 @MainActor
 final class AtticDesignSystemTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testA38PageSwitchKeepsContrastOnOpaqueSurfaces() {
         let contexts = [AtticPanelTheme.electricBlue, .seaGlass].flatMap { palette in
             [false, true].flatMap { reduced in
@@ -317,9 +318,11 @@ final class AtticDesignSystemTests: XCTestCase {
             }
         }
     }
+    #endif
 
     // MARK: The colour model
 
+    #if ATTIC_GENERATED_TESTS
     func testEveryCombinationKeepsItsReadabilityFloors() {
         var report = AtticAppearanceCheck.Report()
         let contexts = AtticAppearanceCheck.allContexts()
@@ -344,6 +347,7 @@ final class AtticDesignSystemTests: XCTestCase {
             }
         }
     }
+    #endif
 
     /// Phase 0's surface treatment for a context's colours.
     static func phase0Treatment(_ context: AtticDesignContext) -> AtticPanelSurfaceTreatment {
@@ -360,6 +364,7 @@ final class AtticDesignSystemTests: XCTestCase {
     /// owner kept in round 6: Readable Glass's backing (only the foundation
     /// opacity grows) and the defined dark edge (Dark only). Reduce
     /// Transparency still makes the surface Solid.
+    #if !ATTIC_GENERATED_TESTS
     func testGlassAndFrostedArePhase0sPlusTheReadableBacking() {
         for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid {
             let treatment = Self.phase0Treatment(context)
@@ -576,6 +581,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(empty, typed, "The send button's slot is reserved: the field never changes size")
         XCTAssertGreaterThan(empty.width, 200)
     }
+    #endif
 
     // MARK: The appearance check (representative subset)
 
@@ -588,6 +594,7 @@ final class AtticDesignSystemTests: XCTestCase {
     /// The full matrix (every combination, every family) and the contact
     /// sheets run separately: `Scripts/run_appearance_matrix.zsh`
     /// (`AtticAppearanceMatrixTests`).
+    #if ATTIC_GENERATED_TESTS
     func testRepresentativeAppearanceSubset() {
         let started = Date()
         let report = AtticAppearanceCheck.run(contexts: AtticAppearanceCheck.sheetContexts().map(\.context), scale: 2)
@@ -610,6 +617,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(report.geometryMeasured, 15)
         XCTAssertTrue(OpenRingException.remaining(Phase0TranslucentException.remaining(report.failures)).isEmpty, report.summary)
     }
+    #endif
 
     /// Renders `view` in capture mode at 2× on a flat panel background and
     /// runs the pixel contrast check on whatever it reported.
@@ -636,6 +644,7 @@ final class AtticDesignSystemTests: XCTestCase {
         return report
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testAProbeWhoseGlyphDrewNothingFails() throws {
         // A visible run passes and is counted.
         let visible = try pixelReport(AtticText(verbatim: "Book dentist", style: .rowTitle, ink: .body))
@@ -812,6 +821,7 @@ final class AtticDesignSystemTests: XCTestCase {
         )
         XCTAssertGreaterThan(abs((wrong?.radius ?? 10) - 10), 1)
     }
+    #endif
 }
 
 private extension AtticRGBA {
@@ -911,6 +921,7 @@ enum Phase0AccentException {
 extension AtticDesignSystemTests {
     /// U-07: a hovered row is visibly lighter than a selected one on every
     /// surface: selection at least twice hover's step from the panel.
+    #if !ATTIC_GENERATED_TESTS
     func testU07HoverIsLighterThanSelectionEverywhere() {
         for mode in [AtticDesignContext.Mode.light, .dark] {
             for surface in [PanelSurfaceStyle.solid, .glass, .frosted] {
@@ -947,4 +958,5 @@ extension AtticDesignSystemTests {
                            AtticDesignContext(mode: mode, surface: .solid).tokens.ink(.helper))
         }
     }
+    #endif
 }

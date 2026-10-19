@@ -9,6 +9,7 @@ final class RoundFX1Tests: XCTestCase {
         NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("")]))
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testRTFDMixedAttachmentsKeepExactBytesNamesOrderAndUndo() throws {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -166,6 +167,7 @@ final class RoundFX1Tests: XCTestCase {
         let prose = NoteDocument(blocks: [.text("Title"), .text("<br>"), .text("<!-- attic:callout-start -->")])
         XCTAssertEqual(try NoteMarkdownImport.document(NoteMarkdownExport.markdown(prose)).blocks.map(\.text), prose.blocks.map(\.text))
     }
+    #endif
 }
 
 /// Find-only regressions and controls against ce4eb33e. All fixtures are owned
@@ -176,6 +178,7 @@ final class PhaseXHunt15Tests: XCTestCase {
         try NoteContentCodec.encode(document)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH15_01SeparateCalloutsSurviveMarkdownExportImport() throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks:
             [.text("Title"), .text("First"), .text("Second")]))
@@ -284,6 +287,7 @@ final class PhaseXHunt15Tests: XCTestCase {
             engine.detachView()
         }
     }
+    #endif
 
     private struct Reference: Equatable {
         var texts = ["alpha", "beta"]
@@ -291,6 +295,7 @@ final class PhaseXHunt15Tests: XCTestCase {
         var cells = [["h1", "h2"], ["v1", "v2"]]
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testGeneratedCommandsUndoRedoAcrossNoteSwitches() async throws {
         for seed in 0..<6 {
             let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
@@ -421,10 +426,12 @@ final class PhaseXHunt15Tests: XCTestCase {
         }
         print("H15_GENERATED seeds=6 operations=360 with note switches, Undo, Redo and reopen")
     }
+    #endif
 }
 
 @MainActor
 final class PhaseXHunt15LayoutTests: RoundF3TestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testH15_05EndKeyReachesTheBottomOfTheFinalObject() throws {
         let objects: [(String, NoteBlock)] = [
             ("table", .table(NoteTable(texts: [["a", "b"], ["c\u{2028}d", "e"]]))),
@@ -469,7 +476,9 @@ final class PhaseXHunt15LayoutTests: RoundF3TestCase {
             }
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testTrailingBlocksAndTheirReopenedExtentsFitTheDocument() throws {
         let cases: [(String, NoteBlock)] = [
             ("body", .text("Mixed 👩🏽‍💻 e\u{301} text\u{2028}last")),
@@ -518,7 +527,9 @@ final class PhaseXHunt15LayoutTests: RoundF3TestCase {
             }
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testEndAfterPastingATallFinalTableHostsItsVisibleBottom() throws {
         let markdown = "| Row | Value |\n| --- | --- |\n" + (0..<32).map { "| \($0) | Value \($0) |" }.joined(separator: "\n")
         for command in ["scrollToEndOfDocument:", "moveToEndOfDocument:"] {
@@ -538,7 +549,9 @@ final class PhaseXHunt15LayoutTests: RoundF3TestCase {
             XCTAssertFalse(view.window?.isVisible ?? true)
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testTallFinalObjectsReachTheirRealEndAboveTheBottomControls() throws {
         let objects: [(String, NoteBlock)] = [
             ("table", .table(NoteTable(texts: (0..<32).map { ["Row \($0)", "Value \($0)"] }))),
@@ -598,12 +611,14 @@ final class PhaseXHunt15LayoutTests: RoundF3TestCase {
             }
         }
     }
+    #endif
 }
 
 /// Run separately with the existing key-window opt-in, under the Air lock.
 /// These are never-ordered stock/Attic fixtures, with no keyboard events.
 @MainActor
 final class PhaseXHunt15NativeTests: RoundF3TestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testMixedInlineFontsAndEmojiUseStocksNativeCaretFrame() throws {
         try requireKeyWindowTests()
         for paragraph in [NoteParagraphStyle.body, .heading(2)] {
@@ -655,4 +670,5 @@ final class PhaseXHunt15NativeTests: RoundF3TestCase {
             }
         }
     }
+    #endif
 }

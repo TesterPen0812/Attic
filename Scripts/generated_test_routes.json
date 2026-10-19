@@ -1,0 +1,90 @@
+{
+  "AtticDesignSystemTests.swift": [
+    "testEveryCombinationKeepsItsReadabilityFloors",
+    "testRepresentativeAppearanceSubset"
+  ],
+  "DataSizeCostTests.swift": [
+    "testP07DragWork",
+    "testP09DonePagesAndReveal",
+    "testP10LibraryRemount",
+    "testP05MiddleEditProjection"
+  ],
+  "NoteEditorEngineTests.swift": [
+    "testEditingSequenceFuzzRoundTripsAfterSplitsJoinsMovesAndMarks",
+    "testH14_09GeneratedTextAndBlockKindsAgreeAfterEditingUndoAndRedo",
+    "testFix14GeneratedEditingWithLanguageBoundariesUndoAndRedo"
+  ],
+  "NoteFormatTests.swift": [
+    "testMarkOffsetFuzzNeverProducesWritableShiftedRange"
+  ],
+  "NotesFormattingRouteTests.swift": [
+    "testEveryBlockRouteRestylesTypesReturnsAndUndoesInEveryState",
+    "testEveryInlineRouteMarksSelectionOrNextTypingAndHasOneUndoStep",
+    "testEverySlashEntryInEveryStateThroughAcceptanceTypingReturnAndUndo",
+    "testMarkdownRoutesTypeReturnAndLiteralUndoInEveryState",
+    "testInlineMarkdownAndDividerRoutesAcrossEveryState",
+    "testEveryAuxiliaryActionAndItsValidationTypingReturnUndo",
+    "testLinkAndRemoveLinkAcrossRoutesAndStates",
+    "testInsertMenusDispatchDateFileAndDividerInEveryState"
+  ],
+  "NotesLibraryOrganizeTests.swift": [
+    "testALargeLibraryDecodesEachNoteOnceAndOneSaveRereadsOnlyItself"
+  ],
+  "NotesPageControllerTests.swift": [
+    "testMeasuredColdOpenAndLaunchWithFiveThousandLineNote",
+    "testEveryStateEventPair",
+    "testStaleBaseNeverCommitsAcrossExternalEvents"
+  ],
+  "NotesPageRenderTests.swift": [
+    "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",
+    "testTablesRenderAtRestEditingAndScrolled"
+  ],
+  "PerformanceSeedTests.swift": [
+    "testDoneHistorySeedLivesOnlyInDoneLog"
+  ],
+  "PhaseXHunt15Tests.swift": [
+    "testGeneratedCommandsUndoRedoAcrossNoteSwitches",
+    "testTrailingBlocksAndTheirReopenedExtentsFitTheDocument",
+    "testTallFinalObjectsReachTheirRealEndAboveTheBottomControls"
+  ],
+  "PhaseXHunt16Tests.swift": [
+    "testGeneratedInlineMarkVisitsAndMarkdownRoundTripWithShrinking"
+  ],
+  "PhaseXHunt1GeneratedTests.swift": [
+    "testSeededEditorSequencesAgreeAfterEveryOperation",
+    "testHunt2GeneratedSelectionUndoAcrossAllEditKinds",
+    "testHunt2GeneratedMarkdownCellLiteralsAndMarksRoundTrip",
+    "testHunt4GeneratedWorkAreaSequencesPreservePreferencesAndRecoverRemovedDisplays",
+    "testHunt3GeneratedTaskReplicaMutationsRollbackAndFreshImports",
+    "testHunt3GeneratedAppearanceSettingsSurviveReload"
+  ],
+  "PhaseXHunt1bTests.swift": [
+    "testSeededOrganizeSequencesMatchAnIndependentLibraryReference",
+    "testHunt2GeneratedTagsUndoRedoAndAcceptPreserveWholeDraft",
+    "testHunt2GeneratedRestoreRevalidatesMutationsDuringWait",
+    "testRepeatedUnshownCoordinatorsReleasePanelsSettingsSessionsAndEngines",
+    "testGeneratedTasksNotesCanvasSequencesSurviveClosingAllContextsAndRelaunch",
+    "testGeneratedCleanupRestartsTimeZoneAndWakeKeepOneTimerAndOneMove",
+    "testGeneratedCanvasEditingUsesIndependentHistoryAndRoundTripsEveryKind",
+    "testGeneratedOwnershipInterleavesFacadesReplacementsCheckpointsAndFailedSaves"
+  ],
+  "PhaseXHunt7Tests.swift": [
+    "testLongGeneratedReachableCommandsAgreeAfterEveryStep",
+    "testRealShellSynchronousNotesLeaveAndReturnAcrossGeneratedNeighbours",
+    "testReachableHistoryRestoreProposalAndCrossFeatureNeighbours",
+    "testReachableImageAndShapeSelectionNudgesUndoRedoAndFreshReadback"
+  ],
+  "RoundD3CaretGeometryTests.swift": [
+    "testParagraphGeometryMatrix",
+    "testCompanionFontsForOffsetDesign"
+  ],
+  "TasksFollowup2Tests.swift": [
+    "testEveryTabFromEveryOther"
+  ],
+  "TasksRound6Tests.swift": [
+    "testEveryTabLandsOnItsOwnPageFromEveryOther"
+  ],
+  "TasksSubtaskTypingCostTests.swift": [
+    "testSubtaskDraftPublicationWorkOnPerformanceSeed"
+  ]
+}

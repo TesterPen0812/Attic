@@ -23,6 +23,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         library.groups(store: store, drafts: []).flatMap(\.rows)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH3_01LibraryRefreshInvalidatesBodyCacheForSameRevisionReplicaChange() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store, body: "Old preview")
@@ -157,6 +158,7 @@ final class PhaseXHunt1bTests: XCTestCase {
             XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, late)
         }
     }
+    #endif
 
     private func restoreDuringRecoveryWait(
         _ mutate: (NoteSession, NoteHistoryBrowser) -> Void
@@ -204,6 +206,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         return (result, page, session, browser)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testR2_02RestoreRefreshesCompositionBeforeCheckingLateEdits() async throws {
         var heldView: NoteEditorTextView?
         let (restored, page, session, browser) = try await restoreDuringRecoveryWait { session, _ in
@@ -522,6 +525,8 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertTrue(store.versions(noteID: id).contains { $0.id == base })
         XCTAssertFalse(store.historyRetainedVersionIDs.isEmpty)
     }
+    #endif
+    #if ATTIC_GENERATED_TESTS
     func testSeededOrganizeSequencesMatchAnIndependentLibraryReference() async throws {
         struct Expected { var title: String; var body: String; var tags: [String]; var deleted = false }
         var seed: UInt64 = 0x48554E543142
@@ -577,7 +582,9 @@ final class PhaseXHunt1bTests: XCTestCase {
         }
         print("ATTIC-H1B-ORGANIZE reference steps=240 seed=0x48554E543142")
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testRetentionDeletesAllIdenticalReplicasButKeepsDivergentAndRichFamilies() throws {
         let clock = Date(timeIntervalSince1970: 1_700_000_000)
         let store = try makeTestNoteStore(now: { clock }, attachmentFileStore: makeTestAttachmentFileStore())
@@ -602,7 +609,9 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(physical.filter { $0.id == divergentID }.count, 2)
         XCTAssertEqual(physical.filter { $0.id == richID }.count, 2)
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testHunt2GeneratedTagsUndoRedoAndAcceptPreserveWholeDraft() async throws {
         for seed in 0..<24 {
             let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
@@ -666,8 +675,10 @@ final class PhaseXHunt1bTests: XCTestCase {
             await XCTAssertTrueAsync(await page.preserveAllDurably())
         }
     }
+    #endif
 
 
+    #if !ATTIC_GENERATED_TESTS
     func testH6_01StartupRetainsFailureAndRetriesTheSameLoaderWithoutFallback() throws {
         let root = ownedTemporaryDirectory(prefix: "Hunt4Startup")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1045,6 +1056,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertTrue(store.versions(noteID: id).contains { $0.id == opaqueID })
         XCTAssertEqual(try XCTUnwrap(store.attachmentFamily(fileID).first).payload, bytes)
     }
+    #endif
 
 }
 
@@ -1081,6 +1093,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         try XCTUnwrap(Mirror(reflecting: owner).children.first { $0.label == name }?.value as? T)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH7_01ReleasedStoreDoesNotPermanentlyVetoSharedFileCollector() async throws {
         let files = makeTestAttachmentFileStore()
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -1324,6 +1337,7 @@ final class PhaseXHunt5Tests: XCTestCase {
         defer { deadline.cancel() }
         do { XCTAssertTrue(deadline.isCancelled) }
     }
+    #endif
 }
 
 @MainActor
@@ -1339,6 +1353,7 @@ extension PhaseXHunt5Tests {
             arguments: [], applicationSupportURL: root)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testRepeatedFailedCoordinatorOpensThenSameDiskSuccessNeverConstructEmptyFallback() async throws {
         for failures in [1, 3, 7] {
             let root = ownedTemporaryDirectory(prefix: "H7Startup"), disk = root.appendingPathComponent("Store")
@@ -1397,7 +1412,9 @@ extension PhaseXHunt5Tests {
         // AppDelegate's failed-startup terminateNow branch is source audited;
         // real menu/Quit delivery belongs to CI, not this headless seam.
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testRepeatedUnshownCoordinatorsReleasePanelsSettingsSessionsAndEngines() async throws {
         for _ in 0..<12 {
             let probes = try await releasedShellProbes()
@@ -1407,6 +1424,7 @@ extension PhaseXHunt5Tests {
             }
         }
     }
+    #endif
 
     private func releasedShellProbes() async throws -> [WeakProbe<AnyObject>] {
         let root = ownedTemporaryDirectory(prefix: "H7ShellRelease")
@@ -1585,6 +1603,7 @@ extension PhaseXHunt5Tests {
         return try diskRows(container)
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testGeneratedTasksNotesCanvasSequencesSurviveClosingAllContextsAndRelaunch() async throws {
         for seed in 1...8 {
             let root = ownedTemporaryDirectory(prefix: "H7MixedRelaunch")
@@ -1595,16 +1614,19 @@ extension PhaseXHunt5Tests {
             XCTAssertEqual(try diskRows(reopened), expected, "seed=\(seed)")
         }
     }
+    #endif
 }
 
 @MainActor
 extension PhaseXHunt5Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH7_05EngineReleasedAfterItsPageAndSessionClose() async throws {
         let probes = try await releasedNoteProbes()
         XCTAssertNil(probes[0].value)
         XCTAssertNil(probes[1].value)
         XCTAssertNil(probes[2].value)
     }
+    #endif
 
     private func releasedNoteProbes() async throws -> [WeakProbe<AnyObject>] {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
@@ -1619,6 +1641,7 @@ extension PhaseXHunt5Tests {
 
 @MainActor
 extension PhaseXHunt5Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testOtherAreaRollbackAndRevisionPublishingKeepUnsavedNoteDraft() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let taskGate = PersistenceGate(), canvasGate = PersistenceGate()
@@ -1659,7 +1682,9 @@ extension PhaseXHunt5Tests {
         XCTAssertEqual(observations.count, 3)
         await notes.waitForAttachmentReconciliation()
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testGeneratedCleanupRestartsTimeZoneAndWakeKeepOneTimerAndOneMove() async throws {
         let notifications = [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange,
             NSWorkspace.didWakeNotification, NSApplication.didBecomeActiveNotification]
@@ -1698,7 +1723,9 @@ extension PhaseXHunt5Tests {
             XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 1)
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testDeepAndMalformedUserJSONReturnsReadablePreservedErrorWithoutTrapping() {
         for depth in [32, 256, 1024, 4096] {
             let data = Data((String(repeating: "[", count: depth) + "0" + String(repeating: "]", count: depth)).utf8)
@@ -1711,10 +1738,12 @@ extension PhaseXHunt5Tests {
             XCTAssertEqual(original, data); XCTAssertTrue(reason.message.contains("kept"))
         }
     }
+    #endif
 }
 
 @MainActor
 extension PhaseXHunt5Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH7_04LiveCollectorRevalidatesStoreAndRecoveryRegistrationAfterSuspension() async throws {
         for replaceHook in [false, true] {
             let files = makeTestAttachmentFileStore()
@@ -1756,6 +1785,7 @@ extension PhaseXHunt5Tests {
             await store.waitForAttachmentReconciliation()
         }
     }
+    #endif
 }
 
 /// Round 6 adversarial ownership seams; no shown or key windows.
@@ -1765,6 +1795,7 @@ final class PhaseXHunt6Tests: XCTestCase {
         .init(id: UUID(), digest: NotePayloadDigest.sha256(bytes), filename: "owned.txt", payload: bytes)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH8_01CollectorsSharePathAuthorityAndRecheckLateRegistrations() async throws {
         for timing in 0..<3 {
             let root = ownedTemporaryDirectory(prefix: "H8Authority")
@@ -1788,6 +1819,7 @@ final class PhaseXHunt6Tests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "timing=\(timing)")
         }
     }
+    #endif
 
     /// Pauses a writer after its claim check but before its staged-directory
     /// creation. No product delay or assertion changes; every wait is bounded.
@@ -1811,6 +1843,7 @@ final class PhaseXHunt6Tests: XCTestCase {
         }
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH8_02TwoJournalFacadesCannotBothReplaceAnUnownedCheckpoint() async throws {
         let root = ownedTemporaryDirectory(prefix: "H8Checkpoint")
         let reached = expectation(description: "writer reached claim-to-write boundary")
@@ -1841,6 +1874,7 @@ final class PhaseXHunt6Tests: XCTestCase {
             XCTAssertEqual(entries.first?.0.content, expected)
         }
     }
+    #endif
 }
 
 private extension Result {
@@ -1849,6 +1883,7 @@ private extension Result {
 
 @MainActor
 extension PhaseXHunt6Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH8_02ACollectorKeepsAnotherLiveFacadesStagedBytesUntilRelease() async throws {
         let root = ownedTemporaryDirectory(prefix: "H8LiveJournal")
         var live: NoteDraftJournal? = NoteDraftJournal(directory: root)
@@ -1871,10 +1906,12 @@ extension PhaseXHunt6Tests {
         _ = try await collector.readRecoveryEntries()
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "Cleanup eventually follows release of the last live owner")
     }
+    #endif
 }
 
 @MainActor
 extension PhaseXHunt6Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH8_01EveryEarlierStoreIsRevalidatedAfterLaterProvidersAwait() async throws {
         let files = makeTestAttachmentFileStore()
         let a = try makeTestNoteStore(attachmentFileStore: files)
@@ -1929,6 +1966,7 @@ extension PhaseXHunt6Tests {
         _ = try await writer.readRecoveryEntries()
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
+    #endif
 }
 
 @MainActor
@@ -1966,6 +2004,7 @@ extension PhaseXHunt6Tests {
         }
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testGeneratedCanvasEditingUsesIndependentHistoryAndRoundTripsEveryKind() async throws {
         for seed in 1...16 {
             let gate = PersistenceGate()
@@ -2099,10 +2138,12 @@ extension PhaseXHunt6Tests {
             }
         }
     }
+    #endif
 }
 
 @MainActor
 extension PhaseXHunt6Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH8_04TransformsMaintainOneSelectedObjectKindWithoutCallerPreparation() throws {
         for imageFirst in [false, true] {
             let session = CanvasSession(store: try makeTestCanvasStore())
@@ -2131,6 +2172,7 @@ extension PhaseXHunt6Tests {
             }
         }
     }
+    #endif
 }
 
 @MainActor
@@ -2149,6 +2191,7 @@ extension PhaseXHunt6Tests {
         }
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH8_05InterruptedRetirementIsCollectedByEveryCleanupEntry() async throws {
         for route in 0..<3 {
             let root = ownedTemporaryDirectory(prefix: "H8Retirement")
@@ -2167,10 +2210,12 @@ extension PhaseXHunt6Tests {
             XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: retired.path).isEmpty) == true, "route=\(route)")
         }
     }
+    #endif
 }
 
 @MainActor
 extension PhaseXHunt6Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH8_06SavingAnOlderSnapshotCannotRetireNewerTextOrTags() async throws {
         for tagsOnly in [false, true] {
             let gate = PersistenceGate()
@@ -2200,6 +2245,7 @@ extension PhaseXHunt6Tests {
             XCTAssertEqual(store.note(withID: id)?.tags, tags)
         }
     }
+    #endif
 }
 
 @MainActor
@@ -2209,6 +2255,7 @@ extension PhaseXHunt6Tests {
         var unknown = false
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testGeneratedOwnershipInterleavesFacadesReplacementsCheckpointsAndFailedSaves() async throws {
         for seed in 1...8 {
             var rng = Hunt6Random(state: UInt64(seed))
@@ -2308,10 +2355,12 @@ extension PhaseXHunt6Tests {
             XCTAssertNil(remaining)
         }
     }
+    #endif
 }
 
 @MainActor
 extension PhaseXHunt6Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH8_06SynchronousCommitEditsRemainDirty() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text("A")])).get().noteID
@@ -2347,10 +2396,12 @@ extension PhaseXHunt6Tests {
             XCTAssertEqual(store.loadDocument(noteID: id)?.content.document, b)
         }
     }
+    #endif
 }
 
 @MainActor
 extension PhaseXHunt6Tests {
+    #if !ATTIC_GENERATED_TESTS
     func testH8_06OlderEmptyDraftSnapshotKeepsNewerContentPending() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let page = NotesPageController(store: store, journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "H8EmptySnapshot")),
@@ -2365,4 +2416,5 @@ extension PhaseXHunt6Tests {
         await XCTAssertTrueAsync(await page.preserveAllDurably())
         XCTAssertEqual(store.loadDocument(noteID: session.noteID)?.content.document, session.engine.document())
     }
+    #endif
 }
