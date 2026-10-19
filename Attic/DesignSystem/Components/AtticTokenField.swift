@@ -435,6 +435,11 @@ final class AtticTokenFieldView: NSView {
         scrollView.horizontalScrollElasticity = .none
         scrollView.verticalScrollElasticity = .none
         scrollView.contentView = clip
+        // O5-02: the scroll view turned off the background of the clip it
+        // had, not this one. A clip draws the control background (white in
+        // Light, black in Dark) by default: the text sits on the composer's
+        // own surface instead.
+        clip.drawsBackground = false
         scrollView.documentView = textView
         scrollView.focusRingType = .none
         addSubview(scrollView)

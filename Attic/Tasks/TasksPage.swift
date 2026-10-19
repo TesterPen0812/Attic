@@ -1050,7 +1050,7 @@ struct TasksPage: View {
     /// row (review UX 2), then a multi-selection clears. False when nothing
     /// was left for Esc to do, so it goes on to the panel.
     private func handleEscape(visible: [UUID], current: UUID?) -> Bool {
-        if drag != nil { cancelDrag(); return true }
+        if drag != nil { cancelDrag(returning: true); return true }
         if model.tab == .done, model.doneDetailID != nil { model.doneDetailID = nil; return true }
         // A search left with its query: Esc ends it (the tabs return).
         if !model.searchQuery(for: model.tab).isEmpty { endSearch(); return true }
@@ -2618,7 +2618,7 @@ struct TasksPage: View {
     }
 
     private func beginDragSession(in tab: TasksTab) {
-        dragSession.cancellation.begin(in: pointer.view?.window) { cancelDrag() }
+        dragSession.cancellation.begin(in: pointer.view?.window) { cancelDrag(returning: true) }
         dragSession.geometryTab = tab
         if let current = drag { dragSession.geometry = prepareDragGeometry(group: current.group, tab: tab) }
         dragSession.cachedScrollView = nil
@@ -2745,13 +2745,43 @@ struct TasksPage: View {
 
     /// Cancels the drag in progress: the row settles back, the neighbours
     /// return, and its release commits nothing.
-    private func cancelDrag() {
-        guard drag != nil else { return }
+    ///
+    /// `returning` (an Escape or a lost key, the page on screen): the card
+    /// goes home the way a drop lands (O5-03). The rows below give its place
+    /// back on the same spring while the row stays hidden, and the row (with
+    /// its open subtasks) is drawn again only once they are home, so the
+    /// following rows never draw over its subtasks. Otherwise (the page or
+    /// panel going, a drag out, Calm) it is at once. A landing already on
+    /// its way (a release, or a return) is left to finish.
+    private func cancelDrag(returning: Bool = false) {
+        guard let current = drag else { return }
+        if returning, current.landing { return }
         dragSession.cancel()
         dragSession.timer?.invalidate()
         dragSession.timer = nil
-        drag = nil
-        pointer.liftedCard.end()
+        guard returning, !design.reduceMotion, let lift = pointer.liftedCard.lift, lift.id == current.id,
+              pointer.view?.window?.isVisible == true, model.isPageShown, model.tab == current.tab else {
+            drag = nil
+            pointer.liftedCard.end()
+            return
+        }
+        var home = current
+        home.targetIndex = current.startIndex
+        home.landing = true
+        drag = home
+        let y = TasksLiftedCard.landing(of: home, originY: lift.origin.minY, heights: { rowHeight($0, in: current.tab) })
+        withAnimation(AtticMotionPreset.settle.animation(reduceMotion: false)) {
+            pointer.liftedCard.land(at: y)
+        } completion: {
+            // Only the return that settled (a new press may have begun).
+            guard drag?.id == current.id, drag?.landing == true, drag?.targetIndex == current.startIndex else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                drag = nil
+                pointer.liftedCard.end()
+            }
+        }
     }
 
     /// The lifted card: the row as it is, never interactive.
