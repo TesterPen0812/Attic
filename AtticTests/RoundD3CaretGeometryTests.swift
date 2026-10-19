@@ -287,6 +287,7 @@ final class RoundD3CaretGeometryTests: XCTestCase {
         }
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testParagraphGeometryMatrix() throws {
         let roles: [(String, AtticNoteType.Role)] = [("body", .init(size: 12.5, lineHeight: 18.5, weight: 400)),
             ("h1", AtticNoteType.titleStyle), ("h2", AtticNoteType.heading), ("h3", AtticNoteType.subheading)]
@@ -357,4 +358,5 @@ final class RoundD3CaretGeometryTests: XCTestCase {
             }
         }
     }
+    #endif
 }

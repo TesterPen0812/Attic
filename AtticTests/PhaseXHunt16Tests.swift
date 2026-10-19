@@ -15,6 +15,7 @@ final class PhaseXHunt16Tests: XCTestCase {
         return canonical(try NoteMarkdownImport.document(markdown))
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testBodyWhitespaceSurvivesMarkdownRoundTrip() throws {
         for text in ["    indented prose", " trailing  ", "   ", "\tTabbed", "one  two"] {
             let original = canonical(NoteDocument(blocks: [.text("Title"), .text(text), .text("After")]))
@@ -156,6 +157,7 @@ final class PhaseXHunt16Tests: XCTestCase {
         XCTAssertEqual(read.text, "abc")
         XCTAssertEqual(coverage(read), coverage(original))
     }
+    #endif
 
     private struct MarkStep: CustomStringConvertible {
         let kind: NoteMark.Kind
@@ -175,6 +177,7 @@ final class PhaseXHunt16Tests: XCTestCase {
     /// A separate character-by-character mark model, with real note visits
     /// between the edit, Undo and Redo. The existing H15 model covers the
     /// insert/delete/list/callout/code/table/move/paste command vocabulary.
+    #if ATTIC_GENERATED_TESTS
     func testGeneratedInlineMarkVisitsAndMarkdownRoundTripWithShrinking() async throws {
         func fails(_ steps: [MarkStep]) throws -> Bool {
             let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("abcdef")]))
@@ -238,6 +241,7 @@ final class PhaseXHunt16Tests: XCTestCase {
             }
         }
     }
+    #endif
 
 }
 
@@ -254,6 +258,7 @@ final class PhaseXHunt16GeometryTests: RoundF3TestCase {
         return try XCTUnwrap(rect).offsetBy(dx: text.textContainerOrigin.x, dy: text.textContainerOrigin.y)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testHeadlessNativeSegmentsMatchStockAndTypedBlankLineControls() throws {
         for width: CGFloat in [340, 420] {
             var mixed = NoteBlock.text("Body 👩🏽‍💻 e\u{301} inline\u{2028}\u{2028}after")
@@ -294,6 +299,7 @@ final class PhaseXHunt16GeometryTests: RoundF3TestCase {
             XCTAssertFalse(text.window?.isVisible ?? true)
         }
     }
+    #endif
 
     private func drawnHintBaseline(_ hint: NSView) throws -> CGFloat {
         let bitmap = try XCTUnwrap(hint.bitmapImageRepForCachingDisplay(in: hint.bounds))
@@ -311,6 +317,7 @@ final class PhaseXHunt16GeometryTests: RoundF3TestCase {
         return hint.frame.minY + CGFloat(bottom + 1) / scale
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testHeadlessReopenedHintBaselineMatchesTypedText() throws {
         for preceding in [NoteBlock.text("Body"), callout("Callout"), code("let x = 1")] {
             let original = NoteDocument(blocks: [.text("Title"), preceding, .text("")])
@@ -331,4 +338,5 @@ final class PhaseXHunt16GeometryTests: RoundF3TestCase {
             XCTAssertFalse(text.window?.isVisible ?? true)
         }
     }
+    #endif
 }

@@ -13,6 +13,7 @@ final class TasksRound6Tests: XCTestCase {
 
     /// The page hosted in a window, as the panel hosts it: selecting a tab
     /// (as a click does, with its slide) scrolls the pager exactly there.
+    #if ATTIC_GENERATED_TESTS
     func testEveryTabLandsOnItsOwnPageFromEveryOther() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -27,6 +28,7 @@ final class TasksRound6Tests: XCTestCase {
             }
         }
     }
+    #endif
 
     // MARK: - Done rows take clicks (the owner's item 23)
 
@@ -35,6 +37,7 @@ final class TasksRound6Tests: XCTestCase {
     /// above the add bar (round 5's CI: "Pay rent" sat in the lists' bottom
     /// margin, where a scroll view takes no clicks). Restore on the
     /// selection is one step.
+    #if !ATTIC_GENERATED_TESTS
     func testDoneRowsAreClickSelectableAndRestoreTogether() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -157,6 +160,7 @@ final class TasksRound6Tests: XCTestCase {
         let bottom = 100 + fraction * (visible - 34) + 34
         XCTAssertEqual(bottom, 520 - clearance, accuracy: 0.5)
     }
+    #endif
     // MARK: - CU recheck 4b (P2s)
 
     private func post(_ hosted: Hosted, key characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) throws {
@@ -185,6 +189,7 @@ final class TasksRound6Tests: XCTestCase {
     /// ↓ again: the field takes the keyboard back, and ↓ reaches the
     /// results again (CU recheck 4b, P2: the click left the keyboard with
     /// the panel and ↓ did nothing).
+    #if !ATTIC_GENERATED_TESTS
     func testAClickBackOnTheQueryTextLetsDownReachTheResultsAgain() throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
@@ -255,6 +260,7 @@ final class TasksRound6Tests: XCTestCase {
         XCTAssertEqual(added.count, 1, "the draft was added")
         XCTAssertEqual(opened, Array(added), "and its page opened")
     }
+    #endif
 
     // MARK: - Done's first results: a new query's rows in the last query's views
 
@@ -265,6 +271,7 @@ final class TasksRound6Tests: XCTestCase {
     /// `TasksDoneSlots`: a task keeps its row's view within a query; a new
     /// query takes the last query's views in order only when the page says
     /// the rows are interchangeable, and asks only when the query changed.
+    #if !ATTIC_GENERATED_TESTS
     func testDoneSlotsKeepATasksViewAndPassViewsOnOnlyForANewQuery() {
         let slots = TasksDoneSlots()
         let today = Date(timeIntervalSince1970: 1_800_000_000)
@@ -363,6 +370,7 @@ final class TasksRound6Tests: XCTestCase {
             check(query.isEmpty ? "all again" : query)
         }
     }
+    #endif
 }
 
 /// The Tasks page with the demo tasks in a window off screen, as the panel
@@ -587,6 +595,7 @@ final class TasksRound6ComposerTests: XCTestCase {
 
     // MARK: Picks sit on the buttons
 
+    #if !ATTIC_GENERATED_TESTS
     func testAPickNeverTouchesTheTextAndPickingAgainReplacesIt() {
         draft("Pay rent")
         model.pickDate(day("2026-10-01"), editor: editor)
@@ -735,6 +744,7 @@ final class TasksRound6ComposerTests: XCTestCase {
         XCTAssertEqual(TaskPriority.choices, [.none, .low, .medium, .high])
         XCTAssertEqual(TaskPriority.none.pickerTitle, "No Priority")
     }
+    #endif
 }
 
 /// Round 6: the Done search on the tabs line (owner item 17).
@@ -765,6 +775,7 @@ final class TasksRound6SearchTests: XCTestCase {
 
     /// "N of M done tasks": matches of all, each task once however many
     /// copies it has; nothing without a search.
+    #if !ATTIC_GENERATED_TESTS
     func testTheSearchCountsMatchesOfAllDoneTasksOnce() throws {
         let (_, model) = try model(logging: ["Send invoice", "Pay invoice", "Call the bank", "Renew passport"], duplicate: "Pay invoice")
         model.select(tab: .done)
@@ -814,4 +825,5 @@ final class TasksRound6SearchTests: XCTestCase {
         XCTAssertFalse(TasksPage.startsSearch("ab"))
         XCTAssertFalse(TasksPage.startsSearch(""))
     }
+    #endif
 }

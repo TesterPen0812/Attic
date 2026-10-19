@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ci_required_checks import CHECKS, FULL_ONLY, gate
+from ci_required_checks import CHECKS, FULL_ONLY, PARALLEL_CHECKS, gate
 
 
 class RequiredChecksTests(unittest.TestCase):
@@ -47,6 +47,18 @@ class RequiredChecksTests(unittest.TestCase):
                 env['FKA_TESTS'] = 'skipped'
                 self.assertEqual(gate(env), 1)
 
+    def test_both_parallel_lanes_are_required_in_fast_full_and_pull_requests(self):
+        for lane in ['fast', 'full', '']:
+            for key in PARALLEL_CHECKS:
+                for outcome in ['failure', 'skipped', 'cancelled', '']:
+                    with self.subTest(lane=lane, key=key, outcome=outcome):
+                        env = dict.fromkeys(PARALLEL_CHECKS, 'success')
+                        env['LANE'] = lane
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            self.assertEqual(gate(env, PARALLEL_CHECKS), 0)
+                            env[key] = outcome
+                            self.assertEqual(gate(env, PARALLEL_CHECKS), 1)
+
     def test_workflow_passes_actual_step_outcomes(self):
         import re
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
@@ -83,7 +95,7 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', job)
         self.assertNotIn('-skip-testing:', job)
         self.assertIn('-only-testing:AtticRoundTripTests', job)
-        self.assertIn('s["passedTests"]==28', job)
+        self.assertIn('s["passedTests"]==28+sum(map(len,routes.values()))', job)
         self.assertIn('s["skippedTests"]==0', job)
         self.assertIn('s["failedTests"]==0', job)
         self.assertNotIn('ATTIC_FX3_SEEDS:', job)
@@ -91,6 +103,37 @@ class RequiredChecksTests(unittest.TestCase):
         self.assertIn('scheme.add_test_target(round_trip_tests)', generator)
         self.assertIn('round_trip_scheme.add_test_target(round_trip_tests)', generator)
         self.assertIn('%w[RoundFX3Tests.swift TestSupport.swift InvisibleHostObserver.swift]', generator)
+        required = workflow.split('  required:', 1)[1].split('\n  ui:', 1)[0]
+        self.assertIn('needs: [validate-inputs, macos, round-trips]', required)
+        self.assertIn("always() && inputs.lane != 'costs' && inputs.lane != 'fka'", required)
+        self.assertIn('MACOS_JOB: ${{ needs.macos.result }}', required)
+        self.assertIn('ROUND_TRIPS: ${{ needs.round-trips.result }}', required)
+        self.assertIn('python3 Scripts/ci_required_checks.py --parallel', required)
+
+    def test_generated_methods_compile_in_exactly_one_lane(self):
+        import json
+        import re
+        root = Path(__file__).resolve().parent.parent
+        routes = json.loads((root / 'Scripts/generated_test_routes.json').read_text())
+        for filename, methods in routes.items():
+            with self.subTest(filename=filename):
+                source = (root / 'AtticTests' / filename).read_text()
+                routed = []
+                mode = None
+                for line in source.splitlines():
+                    if line.strip() in ['#if ATTIC_GENERATED_TESTS', '#if !ATTIC_GENERATED_TESTS']:
+                        self.assertIsNone(mode)
+                        mode = line.strip() == '#if ATTIC_GENERATED_TESTS'
+                    elif line == '    #endif':
+                        mode = None
+                    elif match := re.match(r'    (?:@\w+ )*func (test\w+)\(', line):
+                        self.assertIsNotNone(mode, f'Ungated test in shared source: {filename}:{match[1]}')
+                        if mode:
+                            routed.append(match[1])
+                self.assertCountEqual(routed, methods)
+        generator = (root / 'Scripts/generate_project.rb').read_text()
+        self.assertIn("generated_routes.keys + ['RoundF3Harness.swift']", generator)
+        self.assertIn("settings['OTHER_SWIFT_FLAGS'] += ' -DATTIC_GENERATED_TESTS'", generator)
 
     def test_focused_fka_includes_full_and_pull_request_scope(self):
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()

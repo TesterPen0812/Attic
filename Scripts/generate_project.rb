@@ -3,6 +3,7 @@
 
 require 'xcodeproj'
 require 'rexml/document'
+require 'json'
 
 # Every macOS sandbox profile can ship the Notes Print command.
 Dir.glob(File.expand_path('../Attic/*.entitlements', __dir__)).sort.each do |profile|
@@ -96,6 +97,14 @@ unit_tests.source_build_phase.add_file_reference(observer_loader)
   end
 end
 round_trip_tests.source_build_phase.add_file_reference(observer_loader)
+# Mixed regression files share their fixtures, but compile each test method in
+# exactly one bundle. Keep CIT routing separate from the FX3/Markdown sources.
+generated_routes = JSON.parse(File.read(File.join(ROOT, 'Scripts/generated_test_routes.json')))
+(generated_routes.keys + ['RoundF3Harness.swift']).each do |path|
+  reference = project.main_group['AtticTests'].files.find { |file| file.path == path }
+  abort "Missing generated-test source: #{path}" unless reference
+  round_trip_tests.source_build_phase.add_file_reference(reference)
+end
 add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
 add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
@@ -262,6 +271,7 @@ round_trip_tests.build_configurations.each do |config|
   settings = config.build_settings
   settings['ATTIC_MACOS_ROUND_TRIP_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.RoundTripTests'
   settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_ROUND_TRIP_TEST_BUNDLE_IDENTIFIER)'
+  settings['OTHER_SWIFT_FLAGS'] += ' -DATTIC_GENERATED_TESTS'
 end
 
 ui_tests.build_configurations.each do |config|

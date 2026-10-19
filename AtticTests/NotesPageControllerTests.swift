@@ -25,6 +25,7 @@ final class NotesPageControllerTests: XCTestCase {
 
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testFL3NoteSwitchEndsThePreviousTypingVisit() async throws {
         try await checkFL3TypingVisits(leaving: .openNote)
     }
@@ -40,6 +41,7 @@ final class NotesPageControllerTests: XCTestCase {
     func testFL3LibraryReopenEndsThePreviousTypingVisit() async throws {
         try await checkFL3TypingVisits(leaving: .library)
     }
+    #endif
 
     private func checkFL3TypingVisits(leaving reason: NotesPageController.LeaveReason) async throws {
         let controller = makeController()
@@ -88,6 +90,7 @@ final class NotesPageControllerTests: XCTestCase {
         withExtendedLifetime(scroll) {}
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testU05OversizedClipboardImageNeverCreatesAFileOrImport() async throws {
         let controller = makeController()
         await controller.startAndWait()
@@ -167,6 +170,7 @@ final class NotesPageControllerTests: XCTestCase {
                       "another recovery owner's bytes survive collection")
         withExtendedLifetime(peer) {}
     }
+    #endif
 
     private func makeController(journal: NoteDraftJournaling? = nil, delay: Duration = .seconds(60)) -> NotesPageController {
         NotesPageController(store: store, journal: journal ?? NoteDraftJournal(directory: directory),
@@ -227,6 +231,7 @@ final class NotesPageControllerTests: XCTestCase {
         return (controller, session, editID)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testS5TypingWhileAgentWritesStaysCurrentAndReviewedProposalSurvivesLeave() async throws {
         let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("My note")]))
         type(" while Claude writes", into: session)
@@ -357,7 +362,9 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(store.notes.contains { $0.id != session.noteID && $0.title == "My text unsaved newer" })
     }
     #endif
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testANewDraftIsSavedOnlyOnceItHasContent() async throws {
         let controller = makeController()
         await controller.startAndWait()
@@ -371,11 +378,13 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(store.notes.map(\.title), ["Groceries"])
         XCTAssertTrue(session.isPersisted)
     }
+    #endif
 
     #if !ATTIC_COST_REFERENCE_HOST
     /// Notes v2 tables: a cell edit (no character of the note changes) is
     /// an edit like any other: saved, journaled, and recovered after a
     /// failed save and a restart.
+    #if !ATTIC_GENERATED_TESTS
     func testATablesCellEditIsSavedJournaledAndRecovered() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
@@ -403,7 +412,9 @@ final class NotesPageControllerTests: XCTestCase {
                        "Encrypted")
     }
     #endif
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testInvalidCheckpointNeverWritesEmptyBytesOrClaimsRecoveryAfterRestart() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
@@ -470,6 +481,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(session.engine.history.redo())
         XCTAssertEqual(Set(session.engine.tags), ["picker", "external"])
     }
+    #endif
 
     private func waitForDeadlineWrite(_ journal: CountingDeadlineJournal, count: Int = 1) async throws {
         for _ in 0..<200 {
@@ -479,6 +491,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTFail("The durability deadline did not checkpoint")
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testIdleFailedStoreDoesNotRearmItsDurabilityDeadline() async throws {
         var attempts = 0
         let failingStore = try makeTestNoteStore(persist: { _ in
@@ -600,6 +613,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(store.notes.first?.title, "First second")
         XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
     }
+    #endif
 
     private func waitForPreparations(_ preparer: ControlledDeadlinePreparer, count: Int) async throws {
         for _ in 0..<200 {
@@ -609,6 +623,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTFail("Expected document preparation did not start")
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testDeadlineCommitsItsPreparedSnapshotAndLeavesNewerTextAndTagsDirty() async throws {
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
             saveDelay: .seconds(60), prepareDocument: { document in
@@ -693,7 +708,9 @@ final class NotesPageControllerTests: XCTestCase {
     func testMeasuredMainActorSaveOnFiveThousandLineNote() async throws {
         assertSaveBaseline(try await measureMainActorSave())
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testCheckpointRetirementKeepsMainActorWithinSaveTolerance() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
         let id = UUID()
@@ -763,7 +780,9 @@ final class NotesPageControllerTests: XCTestCase {
         // build's overhead medians/range, alongside the total recovered cost.
         print("ATTIC_INTEGRATION_COST recovery-overhead median_ms=\(recovered - baseline)")
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testRecoveryRetirementKeepsCheckpointOnFailedOrStaleDecode() async throws {
         for failure in ["decode", "bytes", "revision", "tags"] {
             let id = UUID()
@@ -799,6 +818,7 @@ final class NotesPageControllerTests: XCTestCase {
             XCTAssertTrue(session.notice?.contains("kept") == true, failure)
         }
     }
+    #endif
 
     // Historical fixed limits are replaced by three interleaved reference /
     // candidate runs in macos-ci.yml. Both sides use this exact fixture.
@@ -808,6 +828,7 @@ final class NotesPageControllerTests: XCTestCase {
         print("ATTIC_INTEGRATION_COST \(label)-prepared median_ms=\(sample.prepared)")
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
         let empty = try await makeSavePerformanceFixture()
         let emptyAttachment = try await makeSavePerformanceFixture(withAttachment: true)
@@ -895,6 +916,7 @@ final class NotesPageControllerTests: XCTestCase {
             print("NOTE_\(name)_MS_MEDIAN=\(samples.sorted()[samples.count / 2]) MAX=\(samples.max()!)")
         }
     }
+    #endif
 
     private func populatePerformanceStore() async throws {
         let context = store.modelContext
@@ -1011,6 +1033,7 @@ final class NotesPageControllerTests: XCTestCase {
         return result
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testFailedSaveIsCheckpointedBeforeNavigationAndRetrySavesIt() async throws {
         let controller = makeController()
         await controller.startAndWait()
@@ -1618,8 +1641,10 @@ final class NotesPageControllerTests: XCTestCase {
         await XCTAssertTrueAsync(try await journal.readRecoveryEntries().isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
+    #endif
 
     #if !ATTIC_COST_REFERENCE_HOST
+    #if !ATTIC_GENERATED_TESTS
     func testAR05RecoveryCopyIOFailureCarriesItsSourceFlag() async throws {
         let controller = makeController(journal: FailingJournal())
         await controller.startAndWait()
@@ -1644,9 +1669,11 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(session.engine.plainText, text)
         XCTAssertEqual(session.state, state)
     }
+    #endif
 
     #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testProposalStatusOnLongNoteDoesNotFetchOrExtractOnTyping() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
         guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
@@ -2116,6 +2143,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: stale))
         XCTAssertNotNil(defaults.object(forKey: current))
     }
+    #endif
 
     private func waitForImageRequests(_ loader: DelayedImageLoader, count: Int) async {
         for _ in 0..<100 {
@@ -2125,6 +2153,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTFail("image loader did not start \(count) requests")
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testRecoveryReadsValidEntriesBesideCorruptAndMissingImageEntries() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let bytes = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Valid")]))
@@ -2510,6 +2539,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .conflict(.changed))
         XCTAssertEqual(session.engine.document().title, "Mine later")
     }
+    #endif
 }
 
 @MainActor
@@ -2577,6 +2607,7 @@ private actor DelayedImageLoader {
 
 @MainActor
 final class NoteSessionPolicyTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testEveryGateInputCombination() async {
         let states: [NoteSession.State] = [
             .untouched, .clean, .dirty, .notSaved("failed"), .onlyInMemory("failed"),
@@ -2624,6 +2655,7 @@ final class NoteSessionPolicyTests: XCTestCase {
         }
         XCTAssertEqual(NoteSessionPolicy.agentDisposition(.released, state: nil, hasBatch: false), .direct)
     }
+    #endif
 }
 
 /// One fresh, real controller/engine/store fixture per transition. The table
@@ -2686,6 +2718,7 @@ final class NoteSessionMatrixTests: XCTestCase {
         (.titleTag,                "AAAAAARNNNNNAN")
     ]
 
+    #if ATTIC_GENERATED_TESTS
     func testEveryStateEventPair() async throws {
         XCTAssertEqual(expected.map(\.0), Event.allCases)
         XCTAssertEqual(Column.allCases.count, 14)
@@ -2733,6 +2766,7 @@ final class NoteSessionMatrixTests: XCTestCase {
             }
         }
     }
+    #endif
 
     @MainActor
     private final class MatrixJournal: NoteDraftJournaling {
@@ -3306,6 +3340,7 @@ private actor DeadlineWriteBarrier {
 }
 
 extension NotesPageControllerTests {
+    #if !ATTIC_GENERATED_TESTS
     func testA38PasteTailAgreesLiveSavedReopenedAndExportedWithAttachments() async throws {
         let image = try realImage()
         var heading = NoteBlock.text("Prefix Tail \u{FFFC}", style: "heading")
@@ -3339,6 +3374,7 @@ extension NotesPageControllerTests {
         XCTAssertTrue(session.engine.history.undo())
         XCTAssertEqual(session.engine.document(), before)
     }
+    #endif
 }
 
 /// A continuation barrier, with no clock or scheduler-order assumption.
@@ -3362,6 +3398,7 @@ private final class QuitImportBarrier {
 }
 
 extension NotesPageControllerTests {
+    #if !ATTIC_GENERATED_TESTS
     func testS17QuitAcceptsDurableImportWhenImportClearsTicketBeforeFinalCheck() async throws {
         try await assertQuitDuringImport(importResumesFirst: true)
     }
@@ -3381,6 +3418,7 @@ extension NotesPageControllerTests {
     func testS17QuitRefusesAClaimReplacedByImportCancellation() async throws {
         try await assertQuitDuringImport(importResumesFirst: true, refusal: .replacedClaim)
     }
+    #endif
 
     private enum QuitImportRefusal { case failedWrite, newerGeneration, replacedClaim }
 
@@ -3459,6 +3497,7 @@ extension NotesPageControllerTests {
 }
 
 extension NotesPageControllerTests {
+    #if !ATTIC_GENERATED_TESTS
     func testS17OpenAcceptsTheFinalImportWriteAfterItsTicketWasCleared() async throws {
         try await assertNavigationDuringImport(newDraft: false)
     }
@@ -3466,6 +3505,7 @@ extension NotesPageControllerTests {
     func testS17NewNoteAcceptsTheFinalImportWriteAfterItsTicketWasCleared() async throws {
         try await assertNavigationDuringImport(newDraft: true)
     }
+    #endif
 
     private func assertNavigationDuringImport(newDraft: Bool) async throws {
         let journal = CountingDeadlineJournal(directory: directory)

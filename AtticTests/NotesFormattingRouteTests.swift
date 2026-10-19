@@ -116,6 +116,7 @@ final class NotesFormattingRouteTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks, before, "\(label) Return Undo restores")
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testEveryBlockRouteRestylesTypesReturnsAndUndoesInEveryState() {
         for (surface, commands) in routes {
             for command in commands {
@@ -305,7 +306,9 @@ final class NotesFormattingRouteTests: XCTestCase {
             print("A22_DIVIDER_MARKDOWN route=markdown/divider/\(state) converted=\(eligible)")
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testOwnersExactSlashReturnTypingSequenceWithoutWindows() {
         for (query, expected) in [("/heading", NoteParagraphStyle.heading(2)), ("/quote", .quote), ("/list", .bullet)] {
             for state: State in [.empty, .lastEmpty] {
@@ -330,7 +333,9 @@ final class NotesFormattingRouteTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testEveryAuxiliaryActionAndItsValidationTypingReturnUndo() {
         for (surface, commands) in routes {
             for command in commands where [.indent, .outdent, .toggleChecklist, .moveUp, .moveDown].contains(command) {
@@ -383,7 +388,9 @@ final class NotesFormattingRouteTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testChangingChecklistStylePreservesTheTwoLineSelectionAndNextReplacement() {
         for (surface, commands) in routes {
             for command in commands {
@@ -427,7 +434,9 @@ final class NotesFormattingRouteTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testLinkAndRemoveLinkAcrossRoutesAndStates() {
         for (surface, commands) in routes where commands.contains(.mark(.link)) {
             for state in State.allCases {
@@ -502,7 +511,9 @@ final class NotesFormattingRouteTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testEmptyListAndQuoteReturnExitsAndOneUndoRestores() {
         for style: NoteParagraphStyle in [.bullet, .number, .checklist, .quote] {
             for state: State in [.empty, .lastEmpty] {
@@ -516,6 +527,7 @@ final class NotesFormattingRouteTests: XCTestCase {
             }
         }
     }
+    #endif
 
     // MARK: A24 review fixes
 
@@ -528,6 +540,7 @@ final class NotesFormattingRouteTests: XCTestCase {
         return (engine, view)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testReturnAtHeadingStartAddsABodyLineAboveAndKeepsTheHeading() {
         let (engine, view) = headingEngine(caret: 2)
         view.insertNewline(nil)
@@ -562,12 +575,14 @@ final class NotesFormattingRouteTests: XCTestCase {
         XCTAssertNil(blocks[2].style)
         XCTAssertEqual(engine.paragraphStyle(at: view.selectedRange().location), .body)
     }
+    #endif
 
     /// Reloads `engine`'s document into a fresh engine, as a save and reopen does.
     private func reloaded(_ engine: NoteEditorEngine) -> NoteDocument {
         NoteEditorEngine(noteID: UUID(), document: engine.document()).document()
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testMultiLinePlainPasteIntoAChecklistItemKeepsOnlyTheFirstLineAChecklistItem() {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .checklist("Item")]))
         _ = engine.makeView()
@@ -630,11 +645,13 @@ final class NotesFormattingRouteTests: XCTestCase {
         view.deleteBackward(nil)
         XCTAssertNil(view.typingAttributes[.noteMark(.bold)], "a backspace at a line start does not inherit bold")
     }
+    #endif
 }
 
 
 @MainActor
 final class A38NotesRegressionTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testMarkdownMarksEndAtTheClosingDelimiterAndDoNotReachTheNextParagraph() {
         for literal in ["**Bold**", "*Italic*", "_Italic_", "`Code`"] {
             let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("")]))
@@ -711,9 +728,11 @@ final class A38NotesRegressionTests: XCTestCase {
         let found = try await store.searchNoteIDs(matching: "#cuuniquetag")
         XCTAssertTrue(found.isEmpty)
     }
+    #endif
 }
 
 extension A38NotesRegressionTests {
+    #if !ATTIC_GENERATED_TESTS
     func testEscapeClosesFindBeforeTheFormatRowAndRemovesItsRenderingAttributes() throws {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("needle needle")]))
         let (scroll, view) = engine.makeView()
@@ -840,4 +859,5 @@ extension A38NotesRegressionTests {
         view.keyDown(with: try key(53, "\u{1b}", []))
         XCTAssertFalse(engine.find.isShown)
     }
+    #endif
 }

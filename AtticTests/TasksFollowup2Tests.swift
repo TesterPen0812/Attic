@@ -12,6 +12,7 @@ import XCTest
 final class TasksFollowup2Tests: XCTestCase {
     // MARK: - Low priority (option A)
 
+    #if !ATTIC_GENERATED_TESTS
     func testEveryPickerOffersAllFourPrioritiesWithTheirKeys() {
         XCTAssertEqual(TaskPriority.choices, [.none, .low, .medium, .high])
         XCTAssertEqual(TaskPriority.choices.map(\.shortcut), AtticTaskShortcut.priorities)
@@ -134,6 +135,7 @@ final class TasksFollowup2Tests: XCTestCase {
         hosted.page.actions(for: row.id, in: .done).openPage()
         XCTAssertNil(hosted.model.doneDetailID, "⌘Return again closes them")
     }
+    #endif
 }
 
 /// Item 6 (option A): Find and View Options on Now and Later. The view's
@@ -176,6 +178,7 @@ final class TasksViewOptionsTests: XCTestCase {
 
     /// Five tasks on Now (the mockup's): the filters show what they say,
     /// Now's view leaves Later alone, and the store's order never changes.
+    #if !ATTIC_GENERATED_TESTS
     func testFiltersAndSortsAreViewsOnly() throws {
         // New tasks go to the top: made last to first.
         try make("E high", .high)
@@ -313,6 +316,7 @@ final class TasksViewOptionsTests: XCTestCase {
         XCTAssertEqual(TasksViewOptions(priority: .highOnly).summary, "High priority only")
         XCTAssertFalse(TasksViewOptions(sort: .priority).filters, "a sort hides nothing: no dot")
     }
+    #endif
 
     // MARK: - On the page
 
@@ -329,6 +333,7 @@ final class TasksViewOptionsTests: XCTestCase {
 
     /// The View Options menu: Show, the priority filter, Sort by, Reset
     /// View, the current choices ticked; a choice changes only that page.
+    #if !ATTIC_GENERATED_TESTS
     func testTheViewOptionsMenu() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -409,6 +414,7 @@ final class TasksViewOptionsTests: XCTestCase {
         XCTAssertEqual(more.children.first { $0.title == "Move Up" }?.isDisabled, true)
         XCTAssertNil(hosted.page.actions(for: row.id, in: .now).moveUp)
     }
+    #endif
 }
 
 /// L7: the Tasks page remembers its page and each page's view across
@@ -429,6 +435,7 @@ final class TasksPageMemoryTests: XCTestCase {
         defaults = nil
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testThePageAndViewsSurviveARelaunch() throws {
         let store = try makeTestStore()
         let memory = TasksPageMemory(defaults: defaults)
@@ -467,6 +474,7 @@ final class TasksPageMemoryTests: XCTestCase {
         XCTAssertNil(memory.page)
         XCTAssertTrue(memory.viewOptions.isEmpty)
     }
+    #endif
 }
 
 /// L1–L4 (the owner's look decisions of 2026-09-30): the tab underline,
@@ -481,6 +489,7 @@ final class TasksLookDecisionTests: XCTestCase {
         return context.tokens
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testL4StepsOnlyDarkGlassAndFrosted() {
         for surface in [PanelSurfaceStyle.glass, .frosted] {
             let dark = tokens(.dark, surface)
@@ -502,11 +511,13 @@ final class TasksLookDecisionTests: XCTestCase {
         XCTAssertEqual(AtticRingMetrics.rowLineWidth, 1)
         XCTAssertEqual(AtticFlatSurfaceMetrics.hairline, 1)
     }
+    #endif
 }
 
 /// CI run 1: the UI test's tab sequence (every page from every other).
 @MainActor
 final class TasksTabSequenceTests: XCTestCase {
+    #if ATTIC_GENERATED_TESTS
     func testEveryTabFromEveryOther() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -517,4 +528,5 @@ final class TasksTabSequenceTests: XCTestCase {
             XCTAssertEqual(hosted.shownPage(), TasksTab.allCases.firstIndex(of: to), "\(from) → \(to)")
         }
     }
+    #endif
 }
