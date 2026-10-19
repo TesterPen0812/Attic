@@ -867,3 +867,128 @@ extension RoundFX3Tests {
         }
     }
 }
+
+@MainActor
+extension RoundFX3Tests {
+    /// External Markdown has an independent content oracle: these inputs never
+    /// pass through Attic's exporter before import. Each seed carries distinct
+    /// payloads so a dropped/duplicated block or cell cannot hide in a count.
+    func testGeneratedExternalMarkdownKeepsEveryPayloadWithoutMarkers() throws {
+        let count = Int(ProcessInfo.processInfo.environment["ATTIC_FX3_SEEDS"] ?? "2048") ?? 2048
+        for seed in 0..<count {
+            try autoreleasepool {
+                var rng = RNG(state: UInt64(seed) &+ 0x4D4431)
+                let literal = ["<u>x\(seed)</u>", "&#65;", "<br>", "| literal\(seed) |", "<img src=\"https://example.invalid/never\(seed)\">"][rng.next(5)]
+                let marker = ["-", "+", "*"][rng.next(3)]
+                let tick = String(repeating: "`", count: 3 + rng.next(3))
+                let checked = rng.next(2) == 0
+                let breaks = 1 + rng.next(4)
+                let before = "`before\(seed)", after = "`after\(seed)"
+                let address = "www.a\(seed).co a\(seed)@b.co https://example.invalid/plain\(seed)"
+                let html = "<section data-test=\"\(seed)\">\n<img src=\"https://example.invalid/image\(seed)\">\nraw &amp; **literal\(seed)**\n</section>"
+                let hard = "hard\(seed)" + String(repeating: "\\\n", count: breaks) + "end\(seed)"
+                let quoteGrid = rng.next(2) == 0
+                let gridLines = [NoteTableText.headerOffComment, "| Nested\(seed) |", "| :---: |", "| \\|<u>Q\(seed)</u><br><code>&amp;</code> |"]
+                let nested = quoteGrid ? gridLines.map { "> " + $0 }.joined(separator: "\n") : "- gridparent\(seed)\n\n" + gridLines.map { "  " + $0 }.joined(separator: "\n")
+                let source = "# README \(seed)\n\n\(marker) \(tick)html\n  \(literal)\n  \(tick)\n\n\(before)\n| H\(seed) | R\(seed) |\n| :--- | ---: |\n| X\(seed)<br>Y\(seed) | `&amp;` |\n\(after)\n\n\(address)\n\n\(html)\n\n\(nested)\n\n- parent\(seed)\n  - child\(seed)\n    - [\(checked ? "x" : " ")] task\(seed)\n\n\(hard)\n\n<https://example.invalid/explicit\(seed)>"
+                let target = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Target"), .text("")]))
+                let (_, view) = target.makeView(); defer { target.detachView() }
+                let initial = try NoteContentCodec.encode(target.document())
+                XCTAssertTrue(target.pasteMarkdown(source, at: NSRange(location: 7, length: 0)), "seed=\(seed)")
+                let doc = target.document()
+                let tables = doc.blocks.compactMap(\.table)
+                XCTAssertEqual(tables.count, 2, "seed=\(seed)")
+                XCTAssertEqual(tables.first?.texts, [["H\(seed)", "R\(seed)"], ["X\(seed)\nY\(seed)", "&amp;"]], "seed=\(seed)")
+                XCTAssertEqual(tables.first?.columns.map(\.align), [.left, .right])
+                XCTAssertEqual(tables.first?.rows[1].cells[1].marks, [NoteMark(.code, offset: 0, length: 5)])
+                let nestedTable = try XCTUnwrap(tables.last)
+                XCTAssertEqual(nestedTable.texts, [["Nested\(seed)"], ["|Q\(seed)\n&"]])
+                XCTAssertFalse(nestedTable.headerRow)
+                XCTAssertEqual(nestedTable.columns.map(\.align), [.center])
+                XCTAssertEqual(nestedTable.rows[1].cells[0].marks, [NoteMark(.code, offset: "Q\(seed)".utf16.count + 2, length: 1), NoteMark(.underline, offset: 1, length: "Q\(seed)".utf16.count)])
+
+                let body = doc.blocks.dropFirst().filter { $0.kind != .table }
+                let expected = ["README \(seed)", literal, before, after, address] + html.components(separatedBy: "\n") + (quoteGrid ? [] : ["gridparent\(seed)"]) + ["parent\(seed)", "child\(seed)", "task\(seed)", "hard\(seed)" + String(repeating: "\u{2028}", count: breaks) + "end\(seed)", "https://example.invalid/explicit\(seed)"]
+                XCTAssertEqual(body.map(\.text), expected, "seed=\(seed)")
+                XCTAssertEqual(body.first { $0.text == literal }?.style, "mono")
+                XCTAssertEqual(body.first { $0.text == address }?.marks, [])
+                XCTAssertEqual(body.first { $0.text == "child\(seed)" }?.indent, 1)
+                XCTAssertEqual(body.first { $0.text == "task\(seed)" }?.kind, .checklist)
+                XCTAssertEqual(body.first { $0.text == "task\(seed)" }?.checked, checked)
+                XCTAssertEqual(body.last?.marks, [NoteMark(.link, offset: 0, length: expected.last!.utf16.count, url: expected.last!)])
+                let bytes = try NoteContentCodec.encode(doc)
+                for marker in ["atticTable", "atticSpan", "atticList", "atticEmpty"] {
+                    XCTAssertFalse(String(decoding: bytes, as: UTF8.self).contains(marker), "seed=\(seed): \(marker)")
+                }
+                guard case let .editable(reopened) = NoteContentCodec.decode(bytes) else { return XCTFail("seed=\(seed): decode") }
+                XCTAssertEqual(try NoteContentCodec.encode(reopened), bytes)
+                XCTAssertTrue(target.history.undo()); XCTAssertEqual(try NoteContentCodec.encode(target.document()), initial)
+                XCTAssertTrue(target.history.redo()); XCTAssertEqual(try NoteContentCodec.encode(target.document()), bytes)
+            }
+            if !testRun!.hasSucceeded && testRun!.failureCount > 0 { return }
+        }
+        print("MD1 external Markdown seeds=\(count)")
+    }
+
+    func testMD1RawHTMLIsInertAndCodeIsLiteral() throws {
+        for source in ["<script src=\"https://example.invalid/x\">alert(1)</script>",
+                       "<div>\n<u>literal</u> &amp;\n</div>", "<iframe src=\"file:///private/test\"></iframe>"] {
+            let doc = try NoteMarkdownImport.document(source)
+            XCTAssertEqual(doc.blocks.map(\.text).joined(separator: "\n"), source)
+            XCTAssertTrue(doc.blocks.allSatisfy { $0.marks.isEmpty && $0.kind == .text })
+        }
+        for source in ["<span>literal</span>", "<u data-external=\"yes\">literal</u>"] {
+            let doc = try NoteMarkdownImport.document(source)
+            XCTAssertEqual(doc.blocks.map(\.text).joined(), source)
+            XCTAssertTrue(doc.blocks.allSatisfy { $0.marks.isEmpty })
+        }
+        let doc = try NoteMarkdownImport.document("- ```html\n  <u>x</u>\n  &#65;\n  <br>\n  ```\n\n`<u>x</u> &#65; <br>`")
+        XCTAssertEqual(doc.blocks.map(\.text), ["<u>x</u>", "&#65;", "<br>", "<u>x</u> &#65; <br>"])
+        XCTAssertEqual(doc.blocks.last?.marks, [NoteMark(.code, offset: 0, length: 19)])
+    }
+}
+
+@MainActor
+extension RoundFX3Tests {
+    func testMD1SourceRangesAndLegacyHighlightExtensions() throws {
+        let lines = [NoteTableText.headerOffComment, "| H | R |", "| --- | --- |", "| A<br>B | <u>C</u> |"]
+        let quote = lines.map { "> " + $0 }.joined(separator: "\n")
+        for source in [quote, "> [!NOTE]\n>\n" + quote, "- parent\n\n" + lines.map { "  " + $0 }.joined(separator: "\n")] {
+            let nested = try NoteMarkdownImport.document(source)
+            let table = try XCTUnwrap(nested.blocks.compactMap(\.table).first)
+            XCTAssertEqual(table.texts, [["H", "R"], ["A\nB", "C"]])
+            XCTAssertFalse(table.headerRow)
+            XCTAssertEqual(table.rows[1].cells[1].marks, [NoteMark(.underline, offset: 0, length: 1)])
+            XCTAssertNoThrow(try NoteContentCodec.encode(NoteDocument(blocks: [.text("Title")] + nested.blocks)))
+        }
+        let spans = try NoteMarkdownImport.document("| H | R |\n| --- | --- |\n| A | B |\n| ^ | ^ |")
+        XCTAssertEqual(spans.blocks.first?.table?.texts, [["H", "R"], ["A", "B"], ["^", "^"]], "GFM has no rowspan syntax; retain literal caret cells")
+        let compact = try NoteMarkdownImport.document("|H|R|S|\n|-|-|-|\n|A||C|")
+        XCTAssertEqual(compact.blocks.first?.table?.texts, [["H", "R", "S"], ["A", "", "C"]])
+        var empty = NoteBlock.text("", style: "bullet"); empty.indent = 1
+        try assertMarkdown([.text("parent", style: "bullet"), empty])
+        let export = NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("Title"), .text("parent", style: "bullet"), empty]))
+        XCTAssertEqual(export, "# Title\n\n- parent\n  - <!-- attic:empty-item -->")
+        var child = empty; child.indent = 2
+        try assertMarkdown([.checklist(""), empty, child])
+        for literal in ["|=", " |", "a|b|c", "👩🏽‍💻|e\u{301}", "\\|<br>"] {
+            for offset in 0..<literal.utf16.count where offset == 0 || literal.unicodeScalars.allSatisfy({ $0.isASCII }) {
+                var cell = NoteBlock.text(literal)
+                cell.marks = [NoteMark(.underline, offset: offset, length: literal.utf16.count - offset)]
+                var table = NoteTable(texts: [[literal, literal], [literal, literal]])
+                for row in table.rows.indices { for column in table.columns.indices { table.rows[row].cells[column] = .init(literal, marks: cell.marks) } }
+                try assertMarkdown([.table(table)])
+            }
+        }
+        for (source, expected) in [("==old==", "old"), ("==a &amp; b==", "a & b")] {
+            let doc = try NoteMarkdownImport.document(source)
+            XCTAssertEqual(doc.blocks.map(\.text), [expected])
+            XCTAssertEqual(doc.blocks[0].marks, [NoteMark(.highlight, offset: 0, length: expected.utf16.count)])
+        }
+        for source in ["\\=\\=literal\\=\\=", "&#61;&#61;literal&#61;&#61;", "`==literal==`"] {
+            let doc = try NoteMarkdownImport.document(source)
+            XCTAssertEqual(doc.blocks.map(\.text), ["==literal=="])
+            XCTAssertFalse(doc.blocks[0].marks.contains { $0.kind == .highlight })
+        }
+    }
+}

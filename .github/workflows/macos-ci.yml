@@ -179,6 +179,11 @@ jobs:
           bundle install --jobs 4 --retry 3
           bundle exec ruby Scripts/generate_project.rb
           bundle exec ruby Scripts/verify_project_generation.rb
+      - name: Resolve the committed parser versions
+        run: |
+          Scripts/xcodebuild_locked.sh -resolvePackageDependencies -onlyUsePackageVersionsFromResolvedFile \
+            -project Attic.xcodeproj -scheme AtticRoundTrips -configuration Local \
+            -derivedDataPath "$RUNNER_TEMP/AtticRoundTrips"
       - name: Run every generated model, matrix, stress test, and FX3 property
         run: |
           Scripts/xcodebuild_locked.sh test -project Attic.xcodeproj -scheme AtticRoundTrips \
@@ -189,7 +194,7 @@ jobs:
             -parallel-testing-enabled NO -only-testing:AtticRoundTripTests
           xcrun xcresulttool get test-results summary \
             --path "$RUNNER_TEMP/AtticRoundTrips.xcresult" --format json > "$RUNNER_TEMP/round-trips-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); routes=json.load(open("Scripts/generated_test_routes.json")); assert s["passedTests"]==28+sum(map(len,routes.values())) and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/round-trips-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); routes=json.load(open("Scripts/generated_test_routes.json")); assert s["passedTests"]==31+sum(map(len,routes.values())) and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/round-trips-summary.json"
       - name: Upload round-trip evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -276,6 +281,12 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_required_checks.py
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_input_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_content_privacy.py
+
+      - name: Resolve the committed parser versions
+        run: |
+          Scripts/xcodebuild_locked.sh -resolvePackageDependencies -onlyUsePackageVersionsFromResolvedFile \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -derivedDataPath "$RUNNER_TEMP/AtticBuild"
 
       - name: Build macOS target
         id: mac_build

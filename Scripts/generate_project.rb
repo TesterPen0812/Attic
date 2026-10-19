@@ -54,6 +54,22 @@ ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
+# Exact released parser dependency; only the macOS app and its invisible unit
+# host compile NoteMarkdownImport. Test bundles consume the host's adapter.
+markdown_package = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+markdown_package.repositoryURL = 'https://github.com/swiftlang/swift-markdown.git'
+markdown_package.requirement = { 'kind' => 'exactVersion', 'version' => '0.9.0' }
+project.root_object.package_references << markdown_package
+[app, unit_host].each do |target|
+  product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+  product.package = markdown_package
+  product.product_name = 'Markdown'
+  target.package_product_dependencies << product
+  build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+  build_file.product_ref = product
+  target.frameworks_build_phase.files << build_file
+end
+
 unit_tests.add_dependency(unit_host)
 round_trip_tests.add_dependency(unit_host)
 ui_tests.add_dependency(app)
@@ -160,6 +176,8 @@ end
 assets = app_group.new_file('Resources/Assets.xcassets')
 app.resources_build_phase.add_file_reference(assets)
 mobile_app.resources_build_phase.add_file_reference(assets)
+notice = app_group.new_file('Resources/ThirdPartyNotices.txt')
+[app, unit_host].each { |target| target.resources_build_phase.add_file_reference(notice) }
 privacy_manifest = app_group.new_file('Resources/PrivacyInfo.xcprivacy')
 app.resources_build_phase.add_file_reference(privacy_manifest)
 mobile_app.resources_build_phase.add_file_reference(privacy_manifest)
@@ -456,6 +474,15 @@ File.write(project_file, project_contents)
     scheme_contents.gsub!(target.uuid, stable_uuid)
   end
   File.write(scheme_file, scheme_contents)
+end
+
+# Package.resolved is resolver output, not generator output. Preserve the
+# checked-in lockfile across atomic regeneration, including --output checks.
+resolved = File.join(DEFAULT_PROJECT_PATH, 'project.xcworkspace/xcshareddata/swiftpm/Package.resolved')
+if File.file?(resolved)
+  destination = File.join(staged_project_path, 'project.xcworkspace/xcshareddata/swiftpm')
+  FileUtils.mkdir_p(destination)
+  FileUtils.cp(resolved, destination)
 end
 
 Xcodeproj::Project.open(staged_project_path)

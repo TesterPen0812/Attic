@@ -10,6 +10,7 @@ GENERATOR = File.join(__dir__, 'generate_project.rb')
 CHECKED_PROJECT = File.join(ROOT, 'Attic.xcodeproj')
 PROJECT_FILES = [
   'project.pbxproj',
+  'project.xcworkspace/xcshareddata/swiftpm/Package.resolved',
   'xcshareddata/xcschemes/Attic.xcscheme',
   'xcshareddata/xcschemes/AtticMobile.xcscheme',
   'xcshareddata/xcschemes/AtticRoundTrips.xcscheme'
