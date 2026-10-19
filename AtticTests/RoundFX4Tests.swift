@@ -236,6 +236,116 @@ final class RoundFX4Tests: XCTestCase {
         }
     }
 
+    /// FX5: use the shipping panel's key-equivalent entry point. FX4's
+    /// replacement Edit menu supplied a route the MenuBarExtra app lacks.
+    func testFX5PanelKeyEquivalentReachesEveryTextInputWithoutAnEditMenu() throws {
+        try withClipboard { board in
+            let savedMenu = NSApp.mainMenu
+            NSApp.mainMenu = NSMenu()
+            defer { NSApp.mainMenu = savedMenu }
+
+            @MainActor func check(_ root: NSView, responder: NSResponder, label: String) throws {
+                let panel = AtticPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500),
+                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                panel.isReleasedWhenClosed = false
+                panel.contentView = root
+                windows.append(panel)
+                XCTAssertTrue(panel.makeFirstResponder(responder))
+                let view = try XCTUnwrap(panel.firstResponder as? NSTextView, label)
+                view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+                let before = view.string
+                let action = #selector(NSTextView.pasteAsPlainText(_:))
+                let item = NSMenuItem(title: "Paste and Match Style", action: action, keyEquivalent: "V")
+                XCTAssertTrue(view.validateMenuItem(item), label)
+                let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                    modifierFlags: [.command, .option, .shift], timestamp: 0,
+                    windowNumber: panel.windowNumber, context: nil, characters: "◊",
+                    charactersIgnoringModifiers: "V", isARepeat: false, keyCode: 9))
+                XCTAssertTrue(panel.performKeyEquivalent(with: event), label)
+                XCTAssertEqual(view.string, before + "**FX5**", label)
+                XCTAssertTrue(panel.firstResponder === view, label)
+            }
+
+            for format in Format.allCases {
+                try fill(board, format, text: "**FX5**")
+                for title in [false, true] {
+                    let (engine, view) = makeEngine(NoteDocument(blocks: title
+                        ? [.text("Title")] : [.text("Title"), .text("Body")]))
+                    defer { engine.detachView() }
+                    try check(view.enclosingScrollView!, responder: view, label: "\(format) title=\(title)")
+                    XCTAssertEqual(engine.history.undoOps.count, 1)
+                }
+                let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"),
+                    .table(NoteTable(texts: [["A", "B"], ["C", "D"]]))]))
+                defer { engine.detachView() }
+                let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+                engine.enterTable(attachment, at: NoteTable.Position(row: 1, column: 0), caret: .end)
+                let before = attachment.table
+                try check(view.enclosingScrollView!, responder: attachment.tableView.editor, label: "\(format) cell")
+                XCTAssertEqual(attachment.table.texts, [["A", "B"], ["C**FX5**", "D"]])
+                engine.undoCommand()
+                XCTAssertEqual(attachment.table, before)
+                engine.redoCommand()
+                XCTAssertEqual(attachment.table.texts, [["A", "B"], ["C**FX5**", "D"]])
+                let bar = composer()
+                try withExtendedLifetime(bar.coordinator) {
+                    try check(bar.view, responder: bar.view.textView, label: "\(format) composer")
+                    XCTAssertEqual(bar.state.text.text, "Before|**FX5**")
+                }
+                let subtask = AtticSubtaskFieldEditor()
+                subtask.isRichText = false
+                subtask.string = "Subtask"
+                try check(subtask, responder: subtask, label: "\(format) subtask")
+                for field in [NSTextField(string: "Rename"), NSSearchField(string: "Search")] {
+                    try check(field, responder: field, label: "\(format) \(type(of: field))")
+                }
+            }
+        }
+    }
+
+    func testFX5MatchingStyleShortcutRespectsFocusEditabilityAndModifiers() throws {
+        try withClipboard { board in
+            try fill(board, .plain, text: "FX5")
+            let panel = AtticPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 500),
+                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.isReleasedWhenClosed = false
+            windows.append(panel)
+            let view = NSTextView()
+            view.string = "Before"
+            panel.contentView = view
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            let chord: NSEvent.ModifierFlags = [.command, .option, .shift]
+            func event(_ flags: NSEvent.ModifierFlags, window: NSWindow? = nil, key: String = "V") throws -> NSEvent {
+                try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                    modifierFlags: flags, timestamp: 0, windowNumber: (window ?? panel).windowNumber,
+                    context: nil, characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: 9))
+            }
+            for flags: NSEvent.ModifierFlags in [[.command, .option], [.command, .shift], chord.union(.control)] {
+                _ = panel.performKeyEquivalent(with: try event(flags))
+                XCTAssertEqual(view.string, "Before")
+            }
+            _ = panel.performKeyEquivalent(with: try event(chord, key: "B"))
+            XCTAssertEqual(view.string, "Before")
+            let other = mount(NSView())
+            XCTAssertFalse(panel.performKeyEquivalent(with: try event(chord, window: other)))
+            XCTAssertEqual(view.string, "Before")
+            view.isEditable = false
+            XCTAssertFalse(panel.performKeyEquivalent(with: try event(chord)))
+            XCTAssertEqual(view.string, "Before")
+            view.isEditable = true
+            XCTAssertTrue(panel.makeFirstResponder(panel))
+            XCTAssertFalse(panel.performKeyEquivalent(with: try event(chord)))
+            XCTAssertEqual(view.string, "Before")
+            XCTAssertTrue(panel.makeFirstResponder(view))
+            view.setSelectedRange(NSRange(location: 0, length: 6))
+            XCTAssertTrue(panel.performKeyEquivalent(with: try event(chord)))
+            XCTAssertEqual(view.string, "FX5", "the focused selection is replaced exactly once")
+            board.clearContents()
+            XCTAssertFalse(panel.performKeyEquivalent(with: try event(chord)))
+            XCTAssertEqual(view.string, "FX5")
+        }
+    }
+
     private final class KeyPanel: NSPanel {
         override var canBecomeKey: Bool { true }
     }
