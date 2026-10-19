@@ -33,7 +33,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     weak var engine: NoteEditorEngine? {
         didSet {
             if engine !== oldValue {
+                oldValue?.history.breakCoalescing()
                 pendingWindowPresentation = nil
+                rangeToRevealAfterLayout = nil
                 cancelCalloutIconSession(reason: "engine changed")
             }
             installCodeColouring()
@@ -63,7 +65,20 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        let center = NotificationCenter.default
+        center.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        center.removeObserver(self, name: NSApplication.didResignActiveNotification, object: nil)
+        if let window {
+            center.addObserver(self, selector: #selector(editorFocusDeparted(_:)), name: NSWindow.didResignKeyNotification, object: window)
+            center.addObserver(self, selector: #selector(editorFocusDeparted(_:)), name: NSApplication.didResignActiveNotification, object: NSApp)
+        }
         scheduleWindowPresentation()
+    }
+
+    /// Another window can take the key while this view remains its window's
+    /// first responder. End the run synchronously, before input can return.
+    @objc private func editorFocusDeparted(_ notification: Notification) {
+        engine?.history.breakCoalescing()
     }
 
     private func scheduleWindowPresentation() {
@@ -85,11 +100,15 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow !== window { cancelCalloutIconSession(reason: "leaving window") }
+        if newWindow !== window {
+            engine?.history.breakCoalescing()
+            cancelCalloutIconSession(reason: "leaving window")
+        }
         super.viewWillMove(toWindow: newWindow)
     }
 
     override func viewDidHide() {
+        engine?.history.breakCoalescing()
         cancelCalloutIconSession(reason: "editor hidden")
         super.viewDidHide()
     }
@@ -792,7 +811,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned { DispatchQueue.main.async { [weak self] in self?.placeMonoCopy() } }
+        if resigned {
+            engine?.history.breakCoalescing()
+            DispatchQueue.main.async { [weak self] in self?.placeMonoCopy() }
+        }
         return resigned
     }
 
@@ -872,8 +894,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: A person's own editing
 
     private func asUserEdit<T>(_ body: () -> T) -> T {
+        let generation = engine?.history.recordingGeneration
+        let selection = selectedRange()
         engine?.userEditDepth += 1
-        defer { engine?.userEditDepth -= 1 }
+        defer {
+            engine?.userEditDepth -= 1
+            // Native arrow commands run inside keyDown's user-edit scope,
+            // just like typing. Moving without editing still ends a run.
+            if generation == engine?.history.recordingGeneration, selectedRange() != selection {
+                engine?.history.breakCoalescing()
+            }
+        }
         return body()
     }
 
@@ -933,15 +964,20 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             onLayout?()
         }
         caretVisibility.refresh()
-        if revealsCaretAfterLayout {
+        if let range = rangeToRevealAfterLayout {
+            rangeToRevealAfterLayout = nil
+            revealsCaretAfterLayout = false
+            revealRangeClearOfBands(range)
+        } else if revealsCaretAfterLayout {
             revealsCaretAfterLayout = false
             revealCaretClearOfBands()
         }
     }
 
-    // MARK: The caret's line in view (V-02)
+    // MARK: Reveals clear of the floating controls (V-02 / O5-01)
 
     private var revealsCaretAfterLayout = false
+    private var rangeToRevealAfterLayout: NSRange?
 
     /// After an edit or a format picked here, the caret's line is brought
     /// into view clear of the floating controls once the edit is laid out
@@ -960,13 +996,36 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// being typed on is scrolled to clear them: above the bottom row,
     /// below the header. The insets are the bands; nothing fades.
     func revealCaretClearOfBands() {
-        guard let engine, let scroll = enclosingScrollView, selectedRange().length == 0,
-              let rect = engine.caretRect(at: selectedRange().location) else { return }
+        guard selectedRange().length == 0 else { return }
+        revealRangeClearOfBands(selectedRange())
+    }
+
+    private func revealRangeClearOfBands(_ range: NSRange) {
+        guard let engine, let scroll = enclosingScrollView,
+              range.location <= engine.textStorage.length,
+              range.length <= engine.textStorage.length - range.location else { return }
+        var rect: NSRect?
+        if range.length > 0 {
+            rect = engine.rect(for: range)
+        } else {
+            rect = engine.caretRect(at: range.location)
+            // Attachment-adjacent native carets can be shorter than the line.
+            if range.location > 0,
+               (engine.textStorage.string as NSString).character(at: range.location - 1) != 0x0A,
+               let glyph = engine.rect(for: NSRange(location: range.location - 1, length: 1)) {
+                rect = rect.map { $0.union(glyph) } ?? glyph
+            }
+        }
+        guard let rect else { return }
         let clip = scroll.contentView
         let insets = scroll.contentInsets
         let visible = convert(clip.bounds, from: clip)
-        let low = visible.maxY - insets.bottom, high = visible.minY + insets.top
-        let shift = rect.maxY > low ? rect.maxY - low : (rect.minY < high ? rect.minY - high : 0)
+        let high = visible.minY + insets.top + 8
+        let low = visible.maxY - insets.bottom - 8
+        guard low > high else { return }
+        // A range taller than the clear viewport starts at its leading edge.
+        let shift = rect.height > low - high ? rect.minY - high
+            : (rect.maxY > low ? rect.maxY - low : (rect.minY < high ? rect.minY - high : 0))
         guard abs(shift) > 0.5 else { return }
         var bounds = clip.bounds
         bounds.origin.y += clip.isFlipped == isFlipped ? shift : -shift
@@ -1005,6 +1064,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func didChangeText() {
+        rangeToRevealAfterLayout = nil
         super.didChangeText()
         updatePlaceholder()
         revealCaretAfterLayout()
@@ -1036,16 +1096,27 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         PerformanceSignposts.noteDidLayout()
     }
 
-    /// TextKit's attachment-adjacent caret can be shorter than the glyph
-    /// line. Reveal both, so typing after a block clears the footer inset.
+    /// Find, heading/navigation and restored selections all share the same
+    /// covered viewport. Resolve a distant target's preceding layout first:
+    /// TextKit's estimated positions differ when paragraphs wrap at 340/420.
     override func scrollRangeToVisible(_ range: NSRange) {
+        guard let engine else { return super.scrollRangeToVisible(range) }
+        guard range.location != NSNotFound,
+              range.location <= engine.textStorage.length,
+              range.length <= engine.textStorage.length - range.location else { return }
+        let visible = enclosingScrollView.map { convert($0.contentView.bounds, from: $0.contentView) }
+        let caretIsVisible = range.length == 0 && engine.caretRect(at: range.location).map { rect in
+            // Native caret segments can have zero width; CGRect.intersects
+            // would call those empty and relayout the prefix on every key.
+            visible.map { rect.maxY >= $0.minY && rect.minY <= $0.maxY } == true
+        } == true
+        if !caretIsVisible, let layout = textLayoutManager, let target = engine.textRange(for: range),
+           let prefix = NSTextRange(location: layout.documentRange.location, end: target.endLocation) {
+            layout.ensureLayout(for: prefix)
+        }
         super.scrollRangeToVisible(range)
-        guard let engine, range.location != NSNotFound, range.length == 0,
-              range.location > 0, range.location <= engine.textStorage.length,
-              (engine.textStorage.string as NSString).character(at: range.location - 1) != 0x0A,
-              let glyph = engine.rect(for: NSRange(location: range.location - 1, length: 1)) else { return }
-        let rect = engine.caretRect(at: range.location).map { $0.union(glyph) } ?? glyph
-        scrollToVisible(rect)
+        rangeToRevealAfterLayout = range
+        revealRangeClearOfBands(range)
     }
 
     /// A palette request has its own input client. Unexpected body input

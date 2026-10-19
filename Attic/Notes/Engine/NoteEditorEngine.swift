@@ -2064,9 +2064,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                selection != NSRange(location: NSMaxRange(request.target.range), length: 0) { pendingSlashFile = nil }
             if let target = pendingLinkTarget, selection != target.selection { pendingLinkTarget = nil }
         }
-        if !history.isChangeInFlight, let open = history.openStep,
-           !(selection.length == 0 && selection.location >= open.range.location && selection.location <= NSMaxRange(open.range)) {
-            history.breakCoalescing()
+        if userEditDepth == 0, engineEditDepth == 0 {
+            history.selectionMoved(to: selection)
         }
         let line = lineRange(at: selection.location)
         if line.length == 0 || line.location == 0 {
