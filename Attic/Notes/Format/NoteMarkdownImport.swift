@@ -14,25 +14,46 @@ enum NoteMarkdownImport {
         var literalEmojiOffsets = Set<Int>()
         var startsWithChecklist = false
         var startsWithAlert = false
+        var calloutStart = false
+        var emptyParagraph = false
+        var calloutBoundary = false
     }
 
     static func document(_ markdown: String) throws -> NoteDocument {
         // Foundation interprets undefined footnotes as links and consumes
         // definitions. R14 keeps both as literal text instead.
         let source = NSMutableString(string: markdown)
+        // Parse-only tokens let Foundation retain empty paragraphs. Only an
+        // entire exported <br> line is structural; code stays literal.
+        let emptyParagraphToken = "atticEmptyParagraph" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        if markdown.contains("<br>") {
+            let original = try AttributedString(markdown: markdown, options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true))
+            let codeRanges: [NSRange] = original.runs.compactMap { run in
+                let code = run.inlinePresentationIntent?.contains(.code) == true ||
+                    run.presentationIntent?.components.contains(where: { if case .codeBlock = $0.kind { true } else { false } }) == true
+                guard code, let position = run.markdownSourcePosition, let range = Range(position, in: markdown) else { return nil }
+                return NSRange(range, in: markdown)
+            }
+            let empty = try NSRegularExpression(pattern: #"(?m)^(?:#{1,6} |>[ \t]?(?:[^\n<>]* )?)?(<br>)$"#)
+            for match in empty.matches(in: markdown, range: NSRange(location: 0, length: source.length)).reversed()
+                where !codeRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) {
+                source.replaceCharacters(in: match.range(at: 1), with: emptyParagraphToken)
+            }
+        }
         let footnote = try NSRegularExpression(pattern: #"\[\^[^\]]+\]"#)
-        let matches = footnote.matches(in: markdown, range: NSRange(location: 0, length: source.length))
+        let footnoteSource = source as String
+        let matches = footnote.matches(in: footnoteSource, range: NSRange(location: 0, length: source.length))
         if !matches.isEmpty {
             // Ask the same parser for code source ranges before applying the
             // prose workaround. Code's real backslashes must stay verbatim.
-            let original = try AttributedString(markdown: markdown, options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true))
+            let original = try AttributedString(markdown: footnoteSource, options: .init(interpretedSyntax: .full, appliesSourcePositionAttributes: true))
             let codeRanges: [NSRange] = original.runs.compactMap { run in
                 let isCode = run.inlinePresentationIntent?.contains(.code) == true ||
                     run.presentationIntent?.components.contains(where: { if case .codeBlock = $0.kind { true } else { false } }) == true
-                guard isCode, let position = run.markdownSourcePosition, let range = Range(position, in: markdown) else { return nil }
-                return NSRange(range, in: markdown)
+                guard isCode, let position = run.markdownSourcePosition, let range = Range(position, in: footnoteSource) else { return nil }
+                return NSRange(range, in: footnoteSource)
             }
-            let units = Array(markdown.utf16)
+            let units = Array(footnoteSource.utf16)
             func escaped(at offset: Int) -> Bool {
                 var start = offset
                 while start > 0, units[start - 1] == 92 { start -= 1 }
@@ -66,6 +87,8 @@ enum NoteMarkdownImport {
             }
             if paragraphs.isEmpty { paragraphs.append(Paragraph(intents: intents)) }
             var text = String(parsed[run.range].characters)
+            if text.contains(emptyParagraphToken) { paragraphs[paragraphs.count - 1].emptyParagraph = true }
+            text = text.replacingOccurrences(of: emptyParagraphToken, with: "")
             text = text.replacingOccurrences(of: emptyItemToken, with: "")
             let inline = run.inlinePresentationIntent ?? []
             if inline.contains(.softBreak) { text = " " }
@@ -84,8 +107,10 @@ enum NoteMarkdownImport {
                     // Inline delimiters, escapes and entities remain literal.
                     let atBlockStart = before.range(of: #"^(?:[ \t]*(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+))*[ \t]*$"#, options: .regularExpression) != nil
                     if atBlockStart {
+                        paragraphs[paragraphs.count - 1].calloutBoundary = raw == "<!-- attic:callout-start -->" && before.isEmpty
                         paragraphs[paragraphs.count - 1].startsWithChecklist = raw.range(of: #"^\[( |x|X)\](?: |$)"#, options: .regularExpression) != nil
                         paragraphs[paragraphs.count - 1].startsWithAlert = raw.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |$|\n)"#, options: .regularExpression) != nil
+                        paragraphs[paragraphs.count - 1].calloutStart = sourceText[..<lineStart].hasSuffix("<!-- attic:callout-start -->\n\n")
                     }
                 }
             }
@@ -102,6 +127,8 @@ enum NoteMarkdownImport {
         var seenLists = Set<Int>()
         var alerts: [Int: String] = [:]
         var seenQuotes = Set<Int>()
+        var explicitAlerts = Set<Int>()
+        var startedAlerts = Set<Int>()
         var tableIndices: [Int: Int] = [:]
         for (paragraphIndex, paragraph) in paragraphs.enumerated() {
             let intents = paragraph.intents
@@ -142,6 +169,10 @@ enum NoteMarkdownImport {
                 default: break
                 }
             }
+            // Foundation exposes raw HTML as text. Recognize only the exact
+            // standalone comment, never its escaped prose or code spelling.
+            if !code, quote == nil, list == nil, paragraph.calloutBoundary,
+               block.text.trimmingCharacters(in: .newlines) == "<!-- attic:callout-start -->" { continue }
             if let list, let item, case let .listItem(ordinal) = item.kind {
                 let depth = intents.filter { $0.kind == .orderedList || $0.kind == .unorderedList }.count - 1
                 block.style = list.kind == .orderedList ? "number" : "bullet"
@@ -171,12 +202,17 @@ enum NoteMarkdownImport {
                         if block.text.hasPrefix(" ") { removePrefix(1, from: &block) }
                     }
                     alerts[quote.identity] = icon
+                    if paragraph.calloutStart { explicitAlerts.insert(quote.identity) }
                 }
                 block.style = "quote"; block.level = nil; block.indent = nil; block.language = nil; block.start = nil
                 block.kind = .text; block.id = nil; block.checked = false
                 block.callout = alerts[quote.identity]
-                if block.text.isEmpty, block.callout != nil,
+                if block.text.isEmpty, !paragraph.emptyParagraph, block.callout != nil,
                    paragraphs.dropFirst(paragraphIndex + 1).contains(where: { $0.intents.contains { $0.kind == .blockQuote && $0.identity == quote.identity } }) { continue }
+                if let icon = block.callout, startedAlerts.insert(quote.identity).inserted {
+                    block.calloutStart = explicitAlerts.contains(quote.identity) ||
+                        (blocks.last?.style == "quote" && blocks.last?.callout == icon)
+                }
             }
             if code || block.text.contains("\n") {
                 // One mono/quote paragraph per physical code line. The final

@@ -7,7 +7,8 @@ final class RoundFHPasteTests: XCTestCase {
     private let kept = "Keep bold italic link"
 
     private func exercise(_ resource: (String) throws -> Data, type: NSPasteboard.PasteboardType = .html,
-                          bypassSanitizer: Bool = false, images: Int = 0,
+                          bypassSanitizer: Bool = false, images: Int = 0, placeholders: Int = 0,
+                          secondParagraph: String = "Second paragraph",
                           file: StaticString = #filePath, line: UInt = #line) async throws {
         let server = try RoundUHTTPServer()
         try await server.start()
@@ -56,13 +57,14 @@ final class RoundFHPasteTests: XCTestCase {
             XCTAssertTrue(marks.contains { $0.kind == .link && $0.url == server.url.absoluteString + "/link" }, file: file, line: line)
             XCTAssertEqual(document.blocks.filter { $0.kind == .image }.count, images, file: file, line: line)
             XCTAssertFalse(view.string.contains("ATTICPASTEIMAGE"), file: file, line: line)
-            XCTAssertTrue(document.blocks.contains { $0.text == "Second paragraph" }, file: file, line: line)
+            XCTAssertTrue(document.blocks.contains { $0.text == secondParagraph }, file: file, line: line)
+            XCTAssertEqual(view.string.components(separatedBy: "[Attachment]").count - 1, placeholders, file: file, line: line)
             if type == .html || type == NotePasteReader.webArchiveType || type == NotePasteReader.publicWebArchiveType {
                 XCTAssertTrue(document.blocks.contains { $0.style == "bullet" && $0.text.contains("List item") }, file: file, line: line)
             }
             if images > 0 {
                 XCTAssertEqual(engine.stagedAttachments(for: document).count, images, file: file, line: line)
-                XCTAssertFalse(view.string.contains("[Attachment]"), file: file, line: line)
+                if placeholders == 0 { XCTAssertFalse(view.string.contains("[Attachment]"), file: file, line: line) }
                 let encoded = try NoteContentCodec.encode(document)
                 XCTAssertTrue(NoteContentCodec.decode(encoded).isEditable, file: file, line: line)
                 engine.undoCommand()
@@ -127,7 +129,7 @@ final class RoundFHPasteTests: XCTestCase {
         try await exercise({ base in
             let fields = #"{\field{\*\fldinst INCLUDEPICTURE ""# + base + #"/pixel.png"}{\fldrslt }}{\field{\*\fldinst INCLUDETEXT ""# + base + #"/text"}{\fldrslt }}{\NeXTGraphic "# + base + #"/next.png \width10 \height10}{\object\objlink{\*\objdata 0102}}"#
             return Data((self.rtf(base).dropLast() + fields + "}").utf8)
-        }, type: .rtf)
+        }, type: .rtf, placeholders: 1, secondParagraph: "Second paragraph[Attachment]")
     }
     func testFHRTFDKeepsEmbeddedImageWithoutResolvingRemotePaths() async throws {
         let png = try png()
@@ -135,7 +137,7 @@ final class RoundFHPasteTests: XCTestCase {
             let source = self.rtf(base).dropLast() + #"{\NeXTGraphic local.png \width10 \height10}{\NeXTGraphic "# + base + #"/remote.png \width10 \height10}}"#
             let wrapper = FileWrapper(directoryWithFileWrappers: ["TXT.rtf": FileWrapper(regularFileWithContents: Data(source.utf8)), "local.png": FileWrapper(regularFileWithContents: png), "remote.png": FileWrapper(symbolicLinkWithDestinationURL: URL(string: base + "/symlink.png")!)])
             return try XCTUnwrap(wrapper.serializedRepresentation)
-        }, type: .rtfd, images: 1)
+        }, type: .rtfd, images: 1, placeholders: 1)
     }
     func testFHNativeRTFDWithUnicodeImageFilenameSurvives() async throws {
         let png = try png()

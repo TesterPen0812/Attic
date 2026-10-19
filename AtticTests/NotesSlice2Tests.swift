@@ -518,6 +518,8 @@ final class NotesSlice2ControllerTests: XCTestCase {
 
         Launch is \(day).
 
+        <br>
+
         - [x] Final copy
         - [ ] Screenshots
 
@@ -525,6 +527,11 @@ final class NotesSlice2ControllerTests: XCTestCase {
 
         \\[image&#58; pricing\\-v2.png\\]
         """)
+        // FX1 owner request, 2026-10-19 (phase2/owner-decisions.md):
+        // the fixture's empty Body paragraph must survive Markdown.
+        let imported = try NoteMarkdownImport.document(markdown)
+        XCTAssertEqual(imported.blocks[2].text, "")
+        XCTAssertNil(imported.blocks[2].style)
         XCTAssertEqual(try NoteMarkdownImport.document(markdown).blocks.last?.text, "[image: pricing-v2.png]")
     }
 

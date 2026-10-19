@@ -635,6 +635,39 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         super.setFrameSize(size)
     }
 
+    /// End reveals the document's bottom edge, rather than asking AppKit
+    /// to fit the final attachment's entire line (which may exceed the
+    /// viewport). Use F3's painted extent and V-02's uncovered control band.
+    private func revealDocumentEnd() {
+        guard let engine, let scroll = enclosingScrollView else { return }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        guard let bottom = engine.trailingBlockBottom() else { return }
+        setFrameSize(frame.size)
+        // A fresh paste may leave TextKit's content surface at the old
+        // height even after fragment layout. Resize it before scrolling
+        // so the final attachment is not clipped by that stale surface.
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        let clip = scroll.contentView
+        let visible = convert(clip.bounds, from: clip)
+        let shift = bottom + textContainerOrigin.y - (visible.maxY - scroll.contentInsets.bottom)
+        var bounds = clip.bounds
+        bounds.origin.y += clip.isFlipped == isFlipped ? shift : -shift
+        clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+        scroll.reflectScrolledClipView(clip)
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+    }
+
+    override func scrollToEndOfDocument(_ sender: Any?) {
+        guard engine != nil else { return super.scrollToEndOfDocument(sender) }
+        revealDocumentEnd()
+    }
+
+    override func moveToEndOfDocument(_ sender: Any?) {
+        super.moveToEndOfDocument(sender)
+        revealDocumentEnd()
+    }
+
     // MARK: Copy on a Mono block
 
     /// The Mono block's Copy, shown while the pointer is over a block.
