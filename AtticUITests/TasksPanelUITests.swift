@@ -58,11 +58,6 @@ final class TasksPanelUITests: XCTestCase {
         XCTAssertTrue(condition(), message, file: file, line: line)
     }
 
-    /// The row's status circle: 16 pt, centred 24 pt in from the row's
-    /// leading edge on the title line (the 28 pt hit area takes 16 down).
-    private func circle(_ title: String) -> XCUICoordinate {
-        row(title).coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 24, dy: 16))
-    }
 
     /// A click on the row's title (it selects; the circle completes).
     private func select(_ title: String) {

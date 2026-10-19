@@ -690,31 +690,6 @@ private actor AttachmentProgressRecorder {
     }
 }
 
-@MainActor
-private final class FreshNoteContextGate {
-    struct Failure: LocalizedError {
-        var errorDescription: String? { "Injected fresh-context failure" }
-    }
-
-    private let container: ModelContainer
-    private var successfulContextsRemainingBeforeFailure: Int?
-
-    init(container: ModelContainer) {
-        self.container = container
-    }
-
-    func failAfterSuccessfulContexts(_ count: Int) {
-        successfulContextsRemainingBeforeFailure = max(count, 0)
-    }
-
-    func makeContext() throws -> ModelContext {
-        if let remaining = successfulContextsRemainingBeforeFailure {
-            guard remaining > 0 else { throw Failure() }
-            successfulContextsRemainingBeforeFailure = remaining - 1
-        }
-        return ModelContext(container)
-    }
-}
 
 private extension AttachmentFileStore {
     func rootURLContentsForTests() throws -> [URL] {

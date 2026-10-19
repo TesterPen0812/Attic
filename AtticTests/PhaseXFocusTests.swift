@@ -14,11 +14,6 @@ final class PhaseXFocusTests: XCTestCase {
         windows.removeAll()
     }
 
-    private func heading(_ text: String, level: Int) -> NoteBlock {
-        var block = NoteBlock.text(text, style: "heading")
-        block.level = level
-        return block
-    }
 
     private func makeEditor(_ blocks: [NoteBlock], width: CGFloat = 400,
                             design: AtticDesignContext = .default) -> (NoteEditorEngine, NoteEditorTextView) {
