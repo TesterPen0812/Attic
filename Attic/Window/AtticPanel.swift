@@ -1302,7 +1302,8 @@ final class AtticPanelContentContainer: NSView {
                                   cornerRadius: hostingView.panelCornerRadius,
                                   underlay: mode == .genie ? surface?.underlay : nil,
                                   translucent: surface?.translucent ?? false,
-                                  dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+                                  dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
+                                  hidesSurfaceMaterial: mode == .genieLiveGlass && surface?.live?.kind == .frosted)
         if mode == .genieLiveGlass, let live = surface?.live {
             let began = CACurrentMediaTime()
             liveGlassView.frame = bounds
@@ -1334,7 +1335,19 @@ final class AtticPanelContentContainer: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             if live != nil {
-                liveGlassView.isHidden = false
+                // On screen: the glass takes over from the live panel in this
+                // transaction. Off screen (a reveal): it appears with the
+                // first content frame that reaches the screen.
+                if window?.isVisible == true {
+                    genieView.onFirstPresented = nil
+                    liveGlassView.isHidden = false
+                } else {
+                    liveGlassView.isHidden = true
+                    genieView.onFirstPresented = { [weak self] in
+                        guard let self, self.alternateMode == .genieLiveGlass else { return }
+                        self.liveGlassView.isHidden = false
+                    }
+                }
                 genieView.frameObserver = { [weak self] uniforms in self?.liveGlassView.update(uniforms) }
             } else {
                 genieView.frameObserver = nil
@@ -1440,6 +1453,7 @@ final class AtticPanelContentContainer: NSView {
         if mode.usesGenieMesh {
             genieView.stop()
             genieView.frameObserver = nil
+            genieView.onFirstPresented = nil
             genieView.isHidden = true
             genieView.releaseSnapshot()
             if mode == .genieLiveGlass { liveGlassView.isHidden = true }

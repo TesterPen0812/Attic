@@ -116,6 +116,7 @@ final class PanelHideMotionBench: NSObject {
         if let mode = (record["mode"] as? String).flatMap(PanelHideAnimation.init(rawValue:)), mode.usesGenieMesh {
             record["snapshot_ms"] = PanelGenieView.lastSnapshotMilliseconds
             record["mask_us"] = PanelGenieLiveGlassView.lastMaskMicroseconds
+            record["material_layers"] = PanelGenieView.lastMaterialLayers
         }
         record["begin_ms"] = beginCost()
         guard let data = try? JSONSerialization.data(withJSONObject: record),

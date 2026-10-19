@@ -428,6 +428,14 @@ final class PanelGenieView: NSView {
     /// Called with every drawn frame's uniforms, in the frame's own
     /// transaction (the live glass's mask moves with it).
     var frameObserver: ((PanelGenieRenderer.Uniforms) -> Void)?
+    /// Called once, on the main thread, when a drawable with the snapshot
+    /// has really reached the screen (a window just ordered in drops its
+    /// first drawables; the live glass waits for the content).
+    var onFirstPresented: (() -> Void)? {
+        didSet { presentedGeneration += 1; droppedBeforeFirst = 0 }
+    }
+    private var presentedGeneration = 0
+    private var droppedBeforeFirst = 0
     private var completion: (() -> Void)?
     private(set) var progress: Double = 0
 
@@ -460,9 +468,12 @@ final class PanelGenieView: NSView {
     /// squircle first (the surface's own render of a mid-grey desktop).
     /// The last snapshot's cost (cache, composite, upload), for the bench.
     static var lastSnapshotMilliseconds: [String: Double] = [:]
+    /// The live Frosted material's layers kept out of the last snapshot.
+    static var lastMaterialLayers: [String] = []
 
     func captureSnapshot(
-        of view: NSView, surfaceRect: CGRect, cornerRadius: CGFloat, underlay: NSColor?, translucent: Bool, dark: Bool
+        of view: NSView, surfaceRect: CGRect, cornerRadius: CGFloat, underlay: NSColor?, translucent: Bool, dark: Bool,
+        hidesSurfaceMaterial: Bool = false
     ) {
         let began = CACurrentMediaTime()
         defer { Self.lastSnapshotMilliseconds["total"] = (CACurrentMediaTime() - began) * 1000 }
@@ -484,6 +495,16 @@ final class PanelGenieView: NSView {
         func walk(_ layer: CALayer) {
             let name = String(describing: type(of: layer))
             if name == "CASDFElementLayer" { elements.append(root.convert(layer.bounds, from: layer)) }
+            // Live Frosted: the panel's material is live under the mesh, so
+            // its fill (`CAChameleonLayer`, composited onto the backdrop,
+            // which a snapshot draws flat and opaque) stays out too.
+            if hidesSurfaceMaterial, name == "CAChameleonLayer", !layer.isHidden {
+                let frame = root.convert(layer.bounds, from: layer)
+                if abs(frame.width - surfaceRect.width) < 3, abs(frame.height - surfaceRect.height) < 3 {
+                    hidden.append(layer)
+                    Self.lastMaterialLayers = [name]
+                }
+            }
             if Self.glassLayerNames.contains(name), !layer.isHidden {
                 hidden.append(layer)
                 if name == "CASDFLayer" { groups.append(root.convert(layer.bounds, from: layer)) }
@@ -641,6 +662,21 @@ final class PanelGenieView: NSView {
         } else if let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) {
             encoder.endEncoding()
         }
+        if texture != nil, onFirstPresented != nil {
+            let generation = presentedGeneration
+            drawable.addPresentedHandler { [weak self] presented in
+                let time = presented.presentedTime
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, self.presentedGeneration == generation, let fire = self.onFirstPresented else { return }
+                        guard time > 0 else { self.droppedBeforeFirst += 1; return }
+                        Self.lastSnapshotMilliseconds["dropped_before_first"] = Double(self.droppedBeforeFirst)
+                        self.onFirstPresented = nil
+                        fire()
+                    }
+                }
+            }
+        }
         buffer.commit()
         buffer.waitUntilScheduled()
         drawable.present()
@@ -724,6 +760,9 @@ final class PanelGenieLiveGlassView: NSView {
                 host = made
             }
         }
+        // Its own appearance, not the window's: a reveal lays it out while
+        // the panel is still off screen.
+        host?.appearance = NSAppearance(named: material.colorScheme == .dark ? .darkAqua : .aqua)
         if host?.frame != surfaceRect { host?.frame = surfaceRect }
         maskLayer.frame = bounds
         guard bounds.width > 0, bounds.height > 0 else { outline = []; return }
