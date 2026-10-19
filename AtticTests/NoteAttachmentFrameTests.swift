@@ -34,6 +34,9 @@ final class NoteAttachmentFrameTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = scrollView
         windows.append(window)
+        // On screen: TextKit hosts attachment views (and draws paragraphs
+        // in views of their own) only for a window that is.
+        window.orderFrontRegardless()
         window.makeFirstResponder(textView)
         let end = NSRange(location: engine.textStorage.length, length: 0)
         textView.setSelectedRange(end)
@@ -157,6 +160,7 @@ final class NoteAttachmentFrameTests: XCTestCase {
         assertInPlace(engine, textView, "focused")
         scroll(textView, to: 4_000)
         settle(engine, textView)
+        XCTAssertTrue(view.isParked, "scrolled out with a cell's keyboard: parked")
         assertInPlace(engine, textView, "scrolled out (parked)")
         let quote = try block(engine, containing: "Testing qoutes")
         let after = try block(engine, containing: "Filler line 30 ")
@@ -218,6 +222,7 @@ final class NoteAttachmentFrameTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = scrollView
         windows.append(window)
+        window.orderFrontRegardless()
         settle(engine, reopened)
         // The old page stays up for its outgoing transition and lays out once more.
         textView.needsLayout = true

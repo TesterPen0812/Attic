@@ -314,14 +314,17 @@ final class NoteBlockDragSession: NSObject {
         slots = textView.blockDropSlots(moving: source)
         let snapshot = NoteDragLiftView.snapshot(of: sourceRect, in: textView)
         let pageFrame = parent.convert(scrollView.bounds, from: scrollView)
-        stage = NoteBlockDragStage(frame: pageFrame, snapshot: snapshot, size: sourceRect.size,
-                                   tokens: engine.style.tokens, scale: window.backingScaleFactor)
+        let stage = NoteBlockDragStage(frame: pageFrame, snapshot: snapshot, size: sourceRect.size,
+                                       tokens: engine.style.tokens, scale: window.backingScaleFactor)
+        self.stage = stage
+        // On top of every floating control (added last), before any
+        // conversion: the stage converts through its window.
+        parent.addSubview(stage, positioned: .above, relativeTo: nil)
         let home = Self.cardFrame(for: sourceRect, padding: stage.padding, in: stage, from: textView)
         let press = stage.convert(pressPoint, from: nil)
         grab = CGPoint(x: press.x - home.minX, y: press.y - home.minY)
         super.init()
         stage.place(origin: home.origin)
-        parent.addSubview(stage, positioned: .above, relativeTo: nil)
         stage.lift(animated: animated)
         dim = NoteBlockDragDim(textView: textView, block: source, rect: sourceRect)
         textView.dropLine.ink = engine.style.tokens.focusRing.nsColor
@@ -504,6 +507,9 @@ final class NoteBlockDragSession: NSObject {
         CATransaction.flush()
         let stage = stage
         stage.settle(at: origin, animated: animated && stage.window != nil) { stage.removeFromSuperview() }
+        // A window that never draws may not finish the animation: the card
+        // goes anyway once it would have.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { stage.removeFromSuperview() }
     }
 
     /// The drag is over in any way not yet handled (the view went away).
