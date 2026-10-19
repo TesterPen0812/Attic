@@ -171,6 +171,35 @@ final class NoteBlockDragTests: XCTestCase {
         XCTAssertNil(stage.superview, "the card is gone after it lands")
     }
 
+    /// The owner's drop below the table showed the top of the note: the
+    /// move revealed the old caret (in the title). The dropped block stays
+    /// where the line was.
+    func testADroppedBlockStaysWhereItWasDropped() throws {
+        var many = blocks
+        for index in 0..<40 { many.append(.text("Filler \(index)")) }
+        let (engine, text) = editor(many, height: 250)
+        text.setSelectedRange(NSRange(location: 0, length: 0))
+        let clip = try XCTUnwrap(text.enclosingScrollView?.contentView)
+        let source = engine.blockRange(at: location(of: "Bravo", in: engine))
+        let sourceRect = try XCTUnwrap(text.rect(ofBlock: source))
+        let target = engine.blockRange(at: location(of: "Filler 20", in: engine))
+        let targetRect = try XCTUnwrap(text.rect(ofBlock: target))
+        let press = CGPoint(x: sourceRect.minX - 10, y: sourceRect.midY)
+        let session = try XCTUnwrap(NoteBlockDragSession(textView: text, source: source, sourceRect: sourceRect,
+                                                         pressPoint: text.convert(press, to: nil)))
+        // The note scrolls down to the target (as autoscroll would) and the pointer is over its lower half.
+        clip.scroll(to: NSPoint(x: 0, y: targetRect.midY - 120))
+        text.enclosingScrollView?.reflectScrolledClipView(clip)
+        session.pointerMoved(to: text.convert(CGPoint(x: press.x, y: targetRect.midY + 4), to: nil))
+        let line = try XCTUnwrap(session.slots.slot(for: session.choice)).line
+        let lineOnPage = line.midY - clip.bounds.minY
+        XCTAssertTrue(session.drop())
+        for _ in 0..<3 { text.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        let landed = try XCTUnwrap(text.rect(ofBlock: engine.blockRange(at: location(of: "Bravo", in: engine))))
+        XCTAssertEqual(landed.minY - clip.bounds.minY, lineOnPage, accuracy: AtticNoteType.paragraphGap,
+                       "the block is where the line was, not wherever the old caret is")
+    }
+
     func testEscapeCancelsABlockDragAndTheCardGoesHome() throws {
         let (engine, text) = editor(blocks)
         let before = engine.textStorage.string

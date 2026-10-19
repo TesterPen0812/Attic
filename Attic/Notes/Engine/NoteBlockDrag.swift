@@ -464,15 +464,30 @@ final class NoteBlockDragSession: NSObject {
         dim?.restore()
         dim = nil
         textView.dropLine.isHidden = true
-        guard let target else {
+        guard let target, let line = slots.slot(for: choice)?.line else {
             end(at: home(in: textView), how: "drop-home")
             return false
         }
+        let clip = textView.enclosingScrollView?.contentView
+        let lineOnPage = clip.map { line.midY - $0.bounds.minY }
         let moved = engine.moveBlock(source, to: target.location)
         guard moved else { end(at: home(in: textView), how: "drop-refused"); return false }
         let landing = target.location < source.location ? target.location : target.location - source.length
         let block = engine.blockRange(at: min(max(landing, 0), max(0, engine.textStorage.length - 1)))
         let rect = textView.rect(ofBlock: block)
+        // The block lands where the line was: the note keeps it there (no
+        // reveal of the old caret, no jump when a block left from above).
+        textView.cancelPendingReveal()
+        if let clip, let scroll = textView.enclosingScrollView, let rect, let lineOnPage {
+            let insets = clip.contentInsets
+            var origin = clip.bounds.origin
+            origin.y = min(max(rect.minY - lineOnPage, -insets.top),
+                           max(-insets.top, textView.frame.height - clip.bounds.height + insets.bottom))
+            if origin != clip.bounds.origin {
+                clip.scroll(to: origin)
+                scroll.reflectScrolledClipView(clip)
+            }
+        }
         end(at: rect.map { visible(Self.cardFrame(for: $0, padding: stage.padding, in: stage, from: textView)) } ?? nil,
             how: "drop")
         return true

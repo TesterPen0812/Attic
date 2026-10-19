@@ -943,6 +943,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     private var revealsCaretAfterLayout = false
     private var rangeToRevealAfterLayout: NSRange?
 
+    /// DG1: a dropped block stays where it was dropped; the edit's own
+    /// reveal (of the selection as it was) must not scroll the note away.
+    func cancelPendingReveal() {
+        rangeToRevealAfterLayout = nil
+        revealsCaretAfterLayout = false
+    }
+
     /// After an edit or a format picked here, the caret's line is brought
     /// into view clear of the floating controls once the edit is laid out
     /// (the note may only grow then).
