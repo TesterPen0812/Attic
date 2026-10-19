@@ -4384,24 +4384,37 @@ extension NoteEditorEngine {
             let range = (imported.string as NSString).range(of: image.token)
             guard range.location != NSNotFound else { continue }
             let id = UUID()
-            let payload = StagedNoteAttachment(id: id, filename: "Pasted Image." + (image.type.preferredFilenameExtension ?? "png"),
+            let payload = StagedNoteAttachment(id: id, filename: image.filename ?? "Pasted Image." + (image.type.preferredFilenameExtension ?? "png"),
                 contentTypeIdentifier: image.type.identifier, byteCount: Int64(image.data.count),
                 digest: NotePayloadDigest.sha256(image.data), data: image.data)
             payloads[id] = payload
             let attachment = NoteImageAttachment(attachmentID: id, preferredWidthFraction: 1, pixelSize: image.size, extras: payload.identityExtras)
             imported.replaceCharacters(in: range, with: NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
         }
+        for file in read.files {
+            let range = (imported.string as NSString).range(of: file.token)
+            guard range.location != NSNotFound else { continue }
+            let id = UUID()
+            let payload = StagedNoteAttachment(id: id, filename: file.filename,
+                contentTypeIdentifier: file.type.identifier, byteCount: Int64(file.data.count),
+                digest: NotePayloadDigest.sha256(file.data), data: file.data)
+            payloads[id] = payload
+            let attachment = NoteFileAttachment(attachmentID: id, filename: payload.filename,
+                contentTypeIdentifier: payload.contentTypeIdentifier, byteCount: payload.byteCount, extras: payload.identityExtras)
+            imported.replaceCharacters(in: range, with: NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
+        }
         let source = NSMutableAttributedString(attributedString: imported)
         let raw = source.string as NSString
         for index in (0..<raw.length).reversed() where raw.character(at: index) == NoteDocument.objectUnit {
-            if !(source.attribute(.attachment, at: index, effectiveRange: nil) is NoteImageAttachment) {
+            let attachment = source.attribute(.attachment, at: index, effectiveRange: nil)
+            if !(attachment is NoteImageAttachment || attachment is NoteFileAttachment) {
                 source.replaceCharacters(in: NSRange(location: index, length: 1), with: "[Attachment]")
             }
         }
         let result = NSMutableAttributedString(string: source.string, attributes: style.bodyAttributes)
         source.enumerateAttributes(in: NSRange(location: 0, length: source.length)) { attributes, range, _ in
-            if let image = attributes[.attachment] as? NoteImageAttachment {
-                result.addAttribute(.attachment, value: image, range: range)
+            if let attachment = attributes[.attachment], attachment is NoteImageAttachment || attachment is NoteFileAttachment {
+                result.addAttribute(.attachment, value: attachment, range: range)
             }
             if let font = attributes[.font] as? NSFont {
                 let traits = font.fontDescriptor.symbolicTraits

@@ -3,6 +3,91 @@ import SwiftData
 import XCTest
 @testable import Attic
 
+@MainActor
+final class RoundFX1Tests: XCTestCase {
+    private func engine() -> NoteEditorEngine {
+        NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("")]))
+    }
+
+    func testRTFDMixedAttachmentsKeepExactBytesNamesOrderAndUndo() throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let pdfView = NSTextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
+        pdfView.string = "Owned PDF"
+        let fixtures: [(String, Data)] = [
+            ("contract.pdf", pdfView.dataWithPDF(inside: pdfView.bounds)),
+            ("café image.png", try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))),
+            ("résumé notes.txt", Data("Keep exact text\n日本語".utf8)),
+            ("payload {one}\\copy.bin", Data([0, 255, 1, 2, 3]))
+        ]
+        let source = NSMutableAttributedString(string: "Before ")
+        for (name, bytes) in fixtures {
+            let wrapper = FileWrapper(regularFileWithContents: bytes); wrapper.preferredFilename = name
+            source.append(NSAttributedString(attachment: NSTextAttachment(fileWrapper: wrapper)))
+            source.append(NSAttributedString(string: " Between "))
+        }
+        source.append(NSAttributedString(string: "After ¬ literal"))
+        let data = try source.data(from: NSRange(location: 0, length: source.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
+        let engine = engine(), before = try NoteContentCodec.encode(engine.document())
+        let (_, view) = engine.makeView(); defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        board.setData(data, forType: .rtfd); view.setSelectedRange(NSRange(location: 6, length: 0))
+        XCTAssertTrue(view.readSelection(from: board, type: .rtfd))
+        let document = engine.document()
+        let objects = document.blocks.filter { $0.kind == .file || $0.kind == .image }
+        XCTAssertEqual(objects.map(\.kind), [.file, .image, .file, .file])
+        let staged = engine.stagedAttachments(for: document)
+        for (object, fixture) in zip(objects, fixtures) {
+            let payload = try XCTUnwrap(staged.first { $0.id == object.attachmentID })
+            XCTAssertEqual(payload.filename, fixture.0)
+            XCTAssertEqual(payload.data, fixture.1)
+            XCTAssertTrue(payload.payloadIsVerified)
+        }
+        XCTAssertEqual(staged.count, fixtures.count)
+        XCTAssertTrue(document.blocks.first { $0.filename == "contract.pdf" }?.contentTypeIdentifier == "com.adobe.pdf")
+        let prose = document.blocks.filter { $0.kind == .text }.map(\.text).joined()
+        XCTAssertEqual(prose, "TitleBefore  Between  Between  Between  Between After ¬ literal")
+        XCTAssertFalse(prose.contains("\u{fffc}")); XCTAssertFalse(prose.contains("ATTICPASTE"))
+        let after = try NoteContentCodec.encode(document)
+        guard case let .editable(decoded) = NoteContentCodec.decode(after) else { return XCTFail("decode") }
+        XCTAssertEqual(try NoteContentCodec.encode(NoteEditorEngine(noteID: UUID(), document: decoded).document()), after)
+        engine.undoCommand(); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+        engine.redoCommand(); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), after)
+        XCTAssertEqual(engine.stagedAttachments(for: engine.document()).map(\.data), staged.map(\.data))
+        engine.onFragmentAdmission = { _, _ in "Owned refusal" }
+        XCTAssertFalse(engine.pasteRichText(data, type: .rtfd, at: NSRange(location: 6, length: 0)))
+        XCTAssertEqual(try NoteContentCodec.encode(engine.document()), after)
+        XCTAssertEqual(engine.stagedAttachments(for: engine.document()), staged)
+    }
+
+    func testUnavailableRTFDResourcesUsePlaceholderWithoutReadingPaths() throws {
+        let rtf = #"{\rtf1\ansi Before {\NeXTGraphic missing.pdf \width0 \height0}\'ac After {\NeXTGraphic https://example.invalid/file.pdf \width0 \height0}\'ac End}"#
+        let wrapper = FileWrapper(directoryWithFileWrappers: ["TXT.rtf": FileWrapper(regularFileWithContents: Data(rtf.utf8)),
+            "missing.pdf": FileWrapper(symbolicLinkWithDestinationURL: URL(fileURLWithPath: "/etc/hosts"))])
+        let engine = engine()
+        XCTAssertTrue(engine.pasteRichText(try XCTUnwrap(wrapper.serializedRepresentation), type: .rtfd,
+            at: NSRange(location: 6, length: 0)))
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["Before [Attachment] After [Attachment] End"])
+        XCTAssertTrue(engine.stagedAttachments(for: engine.document()).isEmpty)
+    }
+
+    func testRTFDUnstorableAttachmentsKeepReadablePlaceholders() throws {
+        for bytes in [Data(), Data(repeating: 1, count: Int(AttachmentLimits.maxBytesPerAttachment) + 1)] {
+            let rtf = #"{\rtf1\ansi Before {\NeXTGraphic owned.bin \width0 \height0}\'ac After}"#
+            let wrapper = FileWrapper(directoryWithFileWrappers: [
+                "TXT.rtf": FileWrapper(regularFileWithContents: Data(rtf.utf8)),
+                "owned.bin": FileWrapper(regularFileWithContents: bytes)])
+            let engine = engine()
+            XCTAssertTrue(engine.pasteRichText(try XCTUnwrap(wrapper.serializedRepresentation), type: .rtfd,
+                at: NSRange(location: 6, length: 0)))
+            XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["Before [Attachment] After"])
+            XCTAssertTrue(engine.stagedAttachments(for: engine.document()).isEmpty)
+        }
+    }
+}
+
 /// Find-only regressions and controls against ce4eb33e. All fixtures are owned
 /// by the test; no application store, general pasteboard or visible window.
 @MainActor
