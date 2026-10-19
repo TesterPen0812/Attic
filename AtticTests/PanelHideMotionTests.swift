@@ -26,19 +26,147 @@ final class PanelHideMotionTests: XCTestCase {
         XCTAssertFalse(run.isFinished(at: 10.1))
     }
 
-    func testDurationsMatchSlide() {
-        XCTAssertEqual(PanelHideMotionTuning.hideDuration, 0.22)
-        XCTAssertEqual(PanelHideMotionTuning.showDuration, 0.24)
+    func testEachAnimationOwnsItsDurationsStartingAtSlides() {
+        for mode in PanelHideAnimation.allCases {
+            XCTAssertEqual(mode.defaultHideDuration, 0.22, "\(mode)")
+            XCTAssertEqual(mode.defaultRevealDuration, 0.24, "\(mode)")
+        }
         XCTAssertEqual(PanelHideAnimation.defaultValue, .slide)
+    }
+
+    func testSpeedLabOverridesOneAnimationAndClamps() {
+        var lab = PanelHideSpeedLab()
+        XCTAssertTrue(lab.isDefault)
+        lab.setDuration(0.5, .swoop, hiding: true)
+        XCTAssertEqual(lab.duration(.swoop, hiding: true), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(lab.duration(.swoop, hiding: false), 0.24, accuracy: 1e-9)
+        XCTAssertEqual(lab.duration(.genie, hiding: true), 0.22, accuracy: 1e-9)
+        lab.setDuration(5, .genie, hiding: false)
+        XCTAssertEqual(lab.duration(.genie, hiding: false), 0.8, accuracy: 1e-9)
+        lab.setDuration(0.01, .slide, hiding: true)
+        XCTAssertEqual(lab.duration(.slide, hiding: true), 0.1, accuracy: 1e-9)
+        // Back at the default, the override is dropped.
+        for mode in PanelHideAnimation.allCases {
+            lab.setDuration(mode.defaultHideDuration, mode, hiding: true)
+            lab.setDuration(mode.defaultRevealDuration, mode, hiding: false)
+        }
+        XCTAssertTrue(lab.isDefault)
+    }
+
+    @MainActor
+    func testSpeedLabIsPreviewOnly() {
+        let suite = "PanelHideMotionTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preview = AppSettings(defaults: defaults, motionLabAvailable: true)
+        preview.hideSpeedLab.setDuration(0.6, .genie, hiding: true)
+        XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true)
+            .hideMotionDuration(.genie, hiding: true), 0.6, accuracy: 1e-9)
+        // The release identity never reads (or keeps) the lab's values.
+        let release = AppSettings(defaults: defaults, motionLabAvailable: false)
+        XCTAssertEqual(release.hideMotionDuration(.genie, hiding: true), 0.22, accuracy: 1e-9)
+        release.hideSpeedLab.setDuration(0.7, .slide, hiding: false)
+        XCTAssertTrue(release.hideSpeedLab.isDefault)
+        XCTAssertEqual(release.hideMotionDuration(.slide, hiding: false), 0.24, accuracy: 1e-9)
+    }
+
+    /// Owner report (2026-10-19): Swoop cut off on a straight line mid-
+    /// flight. Every animation, at every progress a hide, reveal or swipe
+    /// reaches, in every corner and at small to Extra Large sizes, draws the
+    /// panel's whole layer (surface and shadow margin) inside the window.
+    func testEveryAnimationStaysInsideItsWindow() {
+        let margin = AtticStyle.panelElevationMargin
+        let sizes = [CGSize(width: 280, height: 360), CGSize(width: 320, height: 560),
+                     CGSize(width: 380, height: 700), CGSize(width: 380, height: 900), CGSize(width: 600, height: 420)]
+        let columns = PanelHideMotionTuning.genieColumns, rows = PanelHideMotionTuning.genieRows
+        let tolerance: CGFloat = 0.5
+        for size in sizes {
+            let visible = CGRect(x: margin, y: margin, width: size.width, height: size.height)
+            let host = visible.insetBy(dx: -margin, dy: -margin)
+            let hostCorners = [CGPoint(x: host.minX, y: host.minY), CGPoint(x: host.maxX, y: host.minY),
+                               CGPoint(x: host.minX, y: host.maxY), CGPoint(x: host.maxX, y: host.maxY)]
+            for corner in ScreenCorner.allCases {
+                for step in 0...100 {
+                    let progress = Double(step) / 100
+                    let label = "\(size) \(corner) p=\(progress)"
+                    // Slide: the live layer, scaled about its corner.
+                    let anchor = CGPoint(x: host.midX, y: host.midY)
+                    let slide = PanelCollapseGeometry.transform(
+                        progress: progress, visibleBounds: visible, layerBounds: host,
+                        corner: corner, layerAnchor: anchor)
+                    for point in hostCorners {
+                        let local = CGPoint(x: point.x - anchor.x, y: point.y - anchor.y).applying(slide)
+                        assertInside(CGPoint(x: local.x + anchor.x, y: local.y + anchor.y), host, tolerance, "Slide \(label)")
+                    }
+                    // Swoop: the live layer under its 3D transform.
+                    let swoop = PanelSwoopGeometry.transform(
+                        progress: progress, visibleBounds: visible, hostBounds: host,
+                        layerAnchor: .zero, corner: corner)
+                    for point in hostCorners {
+                        assertInside(project(point, swoop), host, tolerance, "Swoop \(label)")
+                    }
+                    // Nor past its resting edge toward the menu bar (or the
+                    // Dock): the panel window sits under the menu bar.
+                    let top = corner == .topRight || corner == .topLeft
+                    for point in [CGPoint(x: visible.minX, y: visible.minY), CGPoint(x: visible.maxX, y: visible.minY),
+                                  CGPoint(x: visible.minX, y: visible.maxY), CGPoint(x: visible.maxX, y: visible.maxY)] {
+                        let drawn = project(point, swoop)
+                        if top {
+                            XCTAssertLessThanOrEqual(drawn.y, visible.maxY + tolerance, "Swoop toward the menu bar \(label)")
+                        } else {
+                            XCTAssertGreaterThanOrEqual(drawn.y, visible.minY - tolerance, "Swoop toward the Dock \(label)")
+                        }
+                    }
+                    // Both Genies: the mesh (and the live glass's outline,
+                    // which follows it) in the window-sized Metal view.
+                    let uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner)
+                    for row in 0...rows {
+                        for column in 0...columns where row == 0 || row == rows || column == 0 || column == columns {
+                            let p = PanelGenieRenderer.position(Float(column) / Float(columns), Float(row) / Float(rows), uniforms)
+                            let drawn = CGPoint(x: host.minX + CGFloat(p.x) * host.width,
+                                                y: host.minY + CGFloat(p.y) * host.height)
+                            assertInside(drawn, host, tolerance, "Genie \(label)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testSwoopKeepsItsShapeWhereItAlreadyFits() {
+        // The fit only acts where the motion would leave the window: at rest
+        // and near the corner the transform is the designed one.
+        let visible = CGRect(x: 28, y: 28, width: 320, height: 560)
+        let host = visible.insetBy(dx: -28, dy: -28)
+        for corner in ScreenCorner.allCases {
+            for progress in [0.0, 0.7, 0.9, 1.0] {
+                let designed = PanelSwoopGeometry.worldTransform(progress: progress, visibleBounds: visible, corner: corner)
+                let fitted = PanelSwoopGeometry.transform(progress: progress, visibleBounds: visible, hostBounds: host,
+                                                          layerAnchor: .zero, corner: corner)
+                XCTAssertTrue(CATransform3DEqualToTransform(designed, fitted), "\(corner) p=\(progress)")
+            }
+        }
+    }
+
+    private func assertInside(_ point: CGPoint, _ host: CGRect, _ tolerance: CGFloat, _ label: String,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        let inside = point.x >= host.minX - tolerance && point.x <= host.maxX + tolerance
+            && point.y >= host.minY - tolerance && point.y <= host.maxY + tolerance
+        if !inside {
+            XCTFail("\(label): drawn at (\(Int(point.x)), \(Int(point.y))) outside \(host)", file: file, line: line)
+        }
     }
 
     func testSwoopIsIdentityShownAndEndsInEachCorner() {
         let visible = CGRect(x: 28, y: 28, width: 320, height: 464)
         let anchor = CGPoint.zero
         XCTAssertTrue(CATransform3DIsIdentity(PanelSwoopGeometry.transform(
-            progress: 0, visibleBounds: visible, layerAnchor: anchor, corner: .topRight)))
+            progress: 0, visibleBounds: visible, hostBounds: visible.insetBy(dx: -28, dy: -28),
+            layerAnchor: anchor, corner: .topRight)))
         for corner in ScreenCorner.allCases {
-            let end = PanelSwoopGeometry.transform(progress: 1, visibleBounds: visible, layerAnchor: anchor, corner: corner)
+            let end = PanelSwoopGeometry.transform(progress: 1, visibleBounds: visible,
+                                                  hostBounds: visible.insetBy(dx: -28, dy: -28),
+                                                  layerAnchor: anchor, corner: corner)
             let centre = CGPoint(x: visible.midX, y: visible.midY)
             let projected = project(centre, end)
             let right = corner == .topRight || corner == .bottomRight

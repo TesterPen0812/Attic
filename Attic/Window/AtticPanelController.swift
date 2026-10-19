@@ -478,7 +478,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func animateShow(to finalFrame: CGRect, spring: AtticMotionSpring? = nil) {
         let generation = visibilityTransition.beginTransition()
         isShowing = true
-        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24, spring: spring,
+        animatePanel(to: finalFrame, collapseProgress: 0,
+                     duration: settings.hideMotionDuration(.slide, hiding: false), spring: spring,
                      reducedFade: spring != nil) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -535,7 +536,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
         let reducedFade = hideFadesWhenReduced
         hideFadesWhenReduced = false
-        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22, reducedFade: reducedFade) { [weak self] in
+        animatePanel(to: targetFrame, collapseProgress: 1,
+                     duration: settings.hideMotionDuration(.slide, hiding: true), reducedFade: reducedFade) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
@@ -1151,7 +1153,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             let target = Double(collapseProgress)
             let current = container.alternateMode == nil ? 0 : container.alternateProgress
             let hiding = collapseProgress >= 1
-            let base = hiding ? PanelHideMotionTuning.hideDuration : PanelHideMotionTuning.showDuration
+            let base = settings.hideMotionDuration(draft, hiding: hiding)
             let left = min(1, abs(current - target))
             let timedDuration = left > 0.001 ? max(0.08, base * sqrt(left)) : base
             // After a swipe: a short spring into the corner from the fingers'

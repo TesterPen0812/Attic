@@ -1373,7 +1373,7 @@ final class AtticPanelContentContainer: NSView {
     private func swoopTransform(_ progress: Double, corner: ScreenCorner) -> CATransform3D {
         guard let layer = motionView.layer else { return CATransform3DIdentity }
         return PanelSwoopGeometry.transform(
-            progress: progress, visibleBounds: hostingView.frame,
+            progress: progress, visibleBounds: hostingView.frame, hostBounds: layer.bounds,
             layerAnchor: CGPoint(
                 x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
                 y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height

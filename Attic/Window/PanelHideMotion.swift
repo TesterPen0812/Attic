@@ -29,6 +29,21 @@ enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
     /// Both Genies draw the content through the Metal mesh.
     var usesGenieMesh: Bool { self == .genie || self == .genieLiveGlass }
 
+    /// This animation's own hide and reveal durations: where each one's
+    /// shipped default lives. All four start at Slide's (0.22 s and 0.24 s);
+    /// the preview-only speed lab (`PanelHideSpeedLab`) tunes them on screen.
+    var defaultHideDuration: TimeInterval {
+        switch self {
+        case .slide, .genie, .swoop, .genieLiveGlass: 0.22
+        }
+    }
+
+    var defaultRevealDuration: TimeInterval {
+        switch self {
+        case .slide, .genie, .swoop, .genieLiveGlass: 0.24
+        }
+    }
+
     var title: String {
         switch self {
         case .slide: String(localized: "Slide")
@@ -39,11 +54,41 @@ enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Preview-only speed lab (owner, 2026-10-19): each animation's hide and
+/// reveal duration, tuned on screen. Only overrides are stored; the chosen
+/// values later become each animation's `defaultHideDuration` and
+/// `defaultRevealDuration`, and the lab is removed. Never read under the
+/// release identity (`AppSettings` ignores it unless `AtticMotionLab`).
+struct PanelHideSpeedLab: Codable, Equatable, Sendable {
+    /// Milliseconds the sliders cover.
+    static let range: ClosedRange<Double> = 100...800
+    static let step: Double = 10
+
+    /// "<animation>.hide" / "<animation>.reveal" → seconds.
+    private var overrides: [String: Double] = [:]
+
+    init() {}
+
+    private static func key(_ mode: PanelHideAnimation, hiding: Bool) -> String {
+        "\(mode.rawValue).\(hiding ? "hide" : "reveal")"
+    }
+
+    func duration(_ mode: PanelHideAnimation, hiding: Bool) -> TimeInterval {
+        overrides[Self.key(mode, hiding: hiding)] ?? (hiding ? mode.defaultHideDuration : mode.defaultRevealDuration)
+    }
+
+    mutating func setDuration(_ seconds: TimeInterval, _ mode: PanelHideAnimation, hiding: Bool) {
+        let fallback = hiding ? mode.defaultHideDuration : mode.defaultRevealDuration
+        let milliseconds = seconds.isFinite ? seconds * 1000 : fallback * 1000
+        let clamped = min(Self.range.upperBound, max(Self.range.lowerBound, milliseconds)) / 1000
+        overrides[Self.key(mode, hiding: hiding)] = abs(clamped - fallback) < 0.0005 ? nil : clamped
+    }
+
+    var isDefault: Bool { overrides.isEmpty }
+}
+
 /// Every tunable number of the two drafts in one place.
 enum PanelHideMotionTuning {
-    // Durations match Slide (`requestHide` 0.22 s, `animateShow` 0.24 s).
-    static let hideDuration: TimeInterval = 0.22
-    static let showDuration: TimeInterval = 0.24
     /// Time → progress. Hide eases in and out (the funnel forms, then the
     /// panel is drawn into the corner); a reveal decelerates like Slide.
     static let hideTiming = UnitBezier(0.42, 0.0, 0.58, 1.0)
@@ -218,10 +263,26 @@ enum PanelHideMotionCurve {
 
 enum PanelSwoopGeometry {
     /// The live panel's layer transform at `progress`. `visibleBounds` is
-    /// the visible surface in the layer's bounds coordinates.
+    /// the visible surface and `hostBounds` the whole layer (surface plus
+    /// its shadow margin, the window's own bounds), both in the layer's
+    /// bounds coordinates.
     static func transform(
-        progress: Double, visibleBounds: CGRect, layerAnchor: CGPoint, corner: ScreenCorner
+        progress: Double, visibleBounds: CGRect, hostBounds: CGRect, layerAnchor: CGPoint, corner: ScreenCorner
     ) -> CATransform3D {
+        let world = fitted(worldTransform(progress: progress, visibleBounds: visibleBounds, corner: corner),
+                           in: hostBounds, corner: corner, visibleBounds: visibleBounds)
+        // A layer transforms about its anchor point.
+        var layer = CATransform3DMakeTranslation(layerAnchor.x, layerAnchor.y, 0)
+        layer = CATransform3DConcat(layer, world)
+        return CATransform3DConcat(layer, CATransform3DMakeTranslation(-layerAnchor.x, -layerAnchor.y, 0))
+    }
+
+    /// The motion as designed, from layer-bounds points to where they are
+    /// drawn. Unfitted, its tilt brings the panel's far end toward the
+    /// viewer and swells it, and its bow carries it sideways, a quarter of
+    /// the way in, past the window's 28 pt margin; the window cut it off on
+    /// a straight line (owner, 2026-10-19). `fitted` keeps it inside.
+    static func worldTransform(progress: Double, visibleBounds: CGRect, corner: ScreenCorner) -> CATransform3D {
         let p = min(1, max(0, progress))
         guard p > 0 else { return CATransform3DIdentity }
         typealias T = PanelHideMotionTuning
@@ -229,12 +290,13 @@ enum PanelSwoopGeometry {
         let top = corner == .topRight || corner == .topLeft
         let cornerPoint = CGPoint(x: right ? visibleBounds.maxX : visibleBounds.minX,
                                   y: top ? visibleBounds.maxY : visibleBounds.minY)
-        // The line from the panel's centre to its corner, and its normal
-        // turned inward (away from the screen edge, so the window's margin
-        // never clips the curve).
+        // The line from the panel's centre to its corner, and the bow's
+        // direction: as far off that line as its normal, but inward on both
+        // axes, away from the side edge and from the menu bar or Dock edge.
+        // (Draft 2's normal lifted the panel toward the top or bottom edge,
+        // past its window and under the menu bar, at the top corners.)
         let angle = atan2(cornerPoint.y - visibleBounds.midY, cornerPoint.x - visibleBounds.midX)
-        let inward: CGFloat = right == top ? 1 : -1
-        let normal = CGPoint(x: -sin(angle) * inward, y: cos(angle) * inward)
+        let normal = CGPoint(x: (right ? -1 : 1) * abs(sin(angle)), y: (top ? -1 : 1) * abs(cos(angle)))
         let end = T.swoopEndScale
         let along = 1 - (1 - end) * pow(p, T.swoopAlongPower)
         let across = 1 - (1 - end) * smoothstep(0, T.swoopAcrossEnd, p)
@@ -249,12 +311,52 @@ enum PanelSwoopGeometry {
         world = CATransform3DConcat(world, CATransform3DMakeRotation(tilt, 0, 1, 0))
         world = CATransform3DConcat(world, perspective)
         world = CATransform3DConcat(world, CATransform3DMakeRotation(angle, 0, 0, 1))
-        world = CATransform3DConcat(world, CATransform3DMakeTranslation(
+        return CATransform3DConcat(world, CATransform3DMakeTranslation(
             cornerPoint.x + normal.x * bow, cornerPoint.y + normal.y * bow, 0))
-        // A layer transforms about its anchor point.
-        var layer = CATransform3DMakeTranslation(layerAnchor.x, layerAnchor.y, 0)
-        layer = CATransform3DConcat(layer, world)
-        return CATransform3DConcat(layer, CATransform3DMakeTranslation(-layerAnchor.x, -layerAnchor.y, 0))
+    }
+
+    /// Keeps the whole layer (surface and shadow) inside the window: where
+    /// the drawn layer would leave it, the motion is scaled down about the
+    /// panel's own corner (the point it hides into) just enough to stay in.
+    /// Where it already fits (from about halfway at the usual sizes) it is
+    /// the motion as designed. The scale is continuous in progress, so a
+    /// swipe and the keyframes see one shape, and it always pulls toward the
+    /// corner the motion is heading for.
+    static func fitted(_ world: CATransform3D, in hostBounds: CGRect, corner: ScreenCorner,
+                       visibleBounds: CGRect) -> CATransform3D {
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topRight || corner == .topLeft
+        let pivot = CGPoint(x: right ? visibleBounds.maxX : visibleBounds.minX,
+                            y: top ? visibleBounds.maxY : visibleBounds.minY)
+        guard hostBounds.insetBy(dx: 1, dy: 1).contains(pivot) else { return world }
+        // A rectangle under a perspective with every w > 0 draws a convex
+        // quad, so its bounding box is its corners'.
+        let drawn = [
+            CGPoint(x: hostBounds.minX, y: hostBounds.minY), CGPoint(x: hostBounds.maxX, y: hostBounds.minY),
+            CGPoint(x: hostBounds.minX, y: hostBounds.maxY), CGPoint(x: hostBounds.maxX, y: hostBounds.maxY)
+        ].map { project($0, world) }
+        guard drawn.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { return world }
+        var scale: CGFloat = 1
+        for point in drawn {
+            if point.x < hostBounds.minX { scale = min(scale, (pivot.x - hostBounds.minX) / (pivot.x - point.x)) }
+            if point.x > hostBounds.maxX { scale = min(scale, (hostBounds.maxX - pivot.x) / (point.x - pivot.x)) }
+            if point.y < hostBounds.minY { scale = min(scale, (pivot.y - hostBounds.minY) / (pivot.y - point.y)) }
+            if point.y > hostBounds.maxY { scale = min(scale, (hostBounds.maxY - pivot.y) / (point.y - pivot.y)) }
+        }
+        guard scale < 1 else { return world }
+        // Affine after the projection: it commutes with the divide by w.
+        var correction = CATransform3DMakeTranslation(-pivot.x, -pivot.y, 0)
+        correction = CATransform3DConcat(correction, CATransform3DMakeScale(scale, scale, 1))
+        correction = CATransform3DConcat(correction, CATransform3DMakeTranslation(pivot.x, pivot.y, 0))
+        return CATransform3DConcat(world, correction)
+    }
+
+    /// Where `transform` draws `point` (z = 0), after the perspective divide.
+    static func project(_ point: CGPoint, _ transform: CATransform3D) -> CGPoint {
+        let x = point.x * transform.m11 + point.y * transform.m21 + transform.m41
+        let y = point.x * transform.m12 + point.y * transform.m22 + transform.m42
+        let w = point.x * transform.m14 + point.y * transform.m24 + transform.m44
+        return CGPoint(x: x / w, y: y / w)
     }
 
     static func opacity(progress: Double) -> Float {
