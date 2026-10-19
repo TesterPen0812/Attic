@@ -853,8 +853,16 @@ final class TasksDragCancellationTests: XCTestCase {
     func testT7TabSwitchCancelsSubtaskDrag() throws { try exercise(.tabSwitch) }
     func testT7EscapeCancelsInListTaskReorderAndConsumesTheKey() throws { try exercise(.escape, subtask: false) }
     func testT7UninterruptedSubtaskDragStillReordersWithOneUndo() throws { try exercise(.none) }
+    /// O5-03: an expanded task's cancelled drag returns as a drop home does.
+    /// Its card settles into its own place while the rows below give it
+    /// back, so the row and its open subtasks are drawn again only once
+    /// nothing is left over them: they never show at once while the
+    /// following rows are still on their way down.
+    func testO5_03AnExpandedTaskReturnsHomeBeforeItsSubtasksShowAgain() throws {
+        try exercise(.escape, subtask: false, checksReturn: true)
+    }
 
-    private func exercise(_ interruption: Interruption, subtask: Bool = true) throws {
+    private func exercise(_ interruption: Interruption, subtask: Bool = true, checksReturn: Bool = false) throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 700)
         defer { hosted.close() }
@@ -892,6 +900,7 @@ final class TasksDragCancellationTests: XCTestCase {
         }
         defer { timers.forEach { $0.invalidate() } }
         var lifted = false
+        var returning: TasksLiftedCard.Lift?
         after(0.15) { post(.leftMouseDragged, 7) }
         after(0.25) { post(.leftMouseDragged, distance) }
         after(0.45) {
@@ -906,6 +915,8 @@ final class TasksDragCancellationTests: XCTestCase {
             case .none: break
             }
         }
+        // Just after Escape, the cancelled task is still on its way home.
+        after(0.5) { returning = hosted.pointer.liftedCard.lift }
         // Restore the surface *before* moving/releasing: cancellation must be latched.
         after(0.7) {
             if interruption == .orderOut { hosted.window.orderFront(nil) }
@@ -924,6 +935,11 @@ final class TasksDragCancellationTests: XCTestCase {
         Hosted.pumpEvents()
         hosted.spin(0.3)
         if !subtask { XCTAssertTrue(lifted, "the separate in-list row gesture lifted its card") }
+        if checksReturn {
+            let card = try XCTUnwrap(returning, "the card returns home: its row is not drawn again over the rows still moving")
+            XCTAssertEqual(card.id, parent.id)
+            XCTAssertEqual(card.y, card.origin.minY, accuracy: 0.5, "it settles into its own place")
+        }
         XCTAssertTrue(hosted.model.expanded.contains(parent.id), "Escape belongs only to the drag; the task stays expanded")
         XCTAssertNil(hosted.pointer.liftedCard.lift)
         if interruption == .none {

@@ -258,6 +258,67 @@ final class RoundO1Tests: XCTestCase {
         XCTAssertEqual(snapped.minY, line * 3, accuracy: 0.01, "it scrolls by whole lines")
     }
 
+    // MARK: - O5-02 · a composer's text sits on the composer's own surface
+
+    /// Every view between the composer's text and its surface, drawing
+    /// anything of its own.
+    private func backgroundDrawers(from view: NSView, to top: NSView) -> [String] {
+        var found: [String] = []
+        var current: NSView? = view
+        while let each = current {
+            if let text = each as? NSTextView, text.drawsBackground { found.append("text view") }
+            if let clip = each as? NSClipView, clip.drawsBackground { found.append("clip \(type(of: clip))") }
+            if let scroll = each as? NSScrollView, scroll.drawsBackground { found.append("scroll view") }
+            if let field = each as? NSTextField, field.drawsBackground { found.append("text field") }
+            if each === top { break }
+            current = each.superview
+        }
+        return found
+    }
+
+    /// The share of a view's pixels drawn opaque, the view rendered alone.
+    private func opaqueShare(of view: NSView) throws -> Double {
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        var opaque = 0
+        for x in 0..<rep.pixelsWide { for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 { opaque += 1 } }
+        return Double(opaque) / Double(max(1, rep.pixelsWide * rep.pixelsHigh))
+    }
+
+    /// O5-02: the add bar's text area (and the clip V-12 put in its scroll
+    /// view) draws no background: no white (Light) or black (Dark)
+    /// rectangle inside the glass composer, empty or grown.
+    func testO5_02TheAddBarTextDrawsNoBackgroundOfItsOwn() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let field = try XCTUnwrap(tokenFields(in: content).first { $0.textView.accessibilityLabel() == hosted.model.addPlaceholder })
+        XCTAssertEqual(backgroundDrawers(from: field.textView, to: field), [], "nothing between the text and the composer paints")
+        XCTAssertLessThan(try opaqueShare(of: field.textClip), 0.05, "empty, the text area is see-through")
+        hosted.model.addBarState.text.text = String(repeating: "A very long task title that keeps going ", count: 4)
+        hosted.spin(0.6)
+        XCTAssertEqual(backgroundDrawers(from: field.textView, to: field), [])
+        XCTAssertLessThan(try opaqueShare(of: field.textClip), 0.3, "grown, only the glyphs are drawn")
+    }
+
+    /// O5-02, the other inputs that grew in O1/V-12: a new subtask's entry
+    /// paints nothing behind its text, at rest or while its editor is up.
+    func testO5_02ASubtaskEntryDrawsNoBackgroundOfItsOwn() throws {
+        let hosted = try Hosted(height: 520, keyWindow: false)
+        defer { hosted.close() }
+        let parent = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.subtasks != nil })
+        hosted.model.beginAddingSubtask(to: parent.id)
+        hosted.spin(0.3)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let field = try XCTUnwrap(fields(in: content).first { $0.isEditable && $0.placeholderString == "Add subtask…" })
+        hosted.model.newSubtaskTitle = "Ask the landlord about the boiler service and the gas safety certificate before Friday"
+        hosted.spin(0.4)
+        XCTAssertEqual(backgroundDrawers(from: field, to: field), [])
+        if let editor = field.currentEditor() {
+            XCTAssertEqual(backgroundDrawers(from: editor, to: field), [], "its field editor and the editor's clip paint nothing")
+        }
+    }
+
     // MARK: - O17-06 · files in the composer
 
     private func makeFile(_ name: String, bytes: Int = 12) throws -> URL {
