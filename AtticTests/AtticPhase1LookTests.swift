@@ -185,37 +185,6 @@ final class AtticPhase1LookTests: XCTestCase {
         }
     }
 
-    /// The composited contrast the report quotes (owner item 7): the text
-    /// roles over black, mid-grey and white desktops, Glass and Frosted,
-    /// with and without Increase Contrast. Attached to
-    /// the test run and printed for the report.
-    func testGlassContrastReport() {
-        var lines = ["mode|surface|palette|IC|foundation|role|ink|black|midGrey|white"]
-        for mode in AtticDesignContext.Mode.allCases {
-            for surface in [PanelSurfaceStyle.glass, .frosted] {
-                for palette in [AtticPanelTheme.original, .midnightCobalt] {
-                    for ic in [false, true] {
-                        let context = AtticDesignContext(mode: mode, palette: palette, surface: surface, increaseContrast: ic)
-                        let tokens = context.tokens
-                        for (role, ink) in [("title", AtticInk.body), ("secondary", .helper), ("tag", .accentText), ("overdue", .dueText)] {
-                            let ratios = AtticSurfaceModel.Desktop.allCases.map { desktop in
-                                String(format: "%.2f", tokens.ink(ink).contrast(on: tokens.panel.composite(desktop, at: AtticSurfaceModel.contentTop)))
-                            }
-                            lines.append(([mode.title, PanelSurfaceStyle(context.effectiveSurface).title, palette.title, ic ? "IC" : "-",
-                                           "\(Int((tokens.panel.foundationOpacity * 100).rounded())) %", role, tokens.ink(ink).hexString] + ratios)
-                                .joined(separator: "|"))
-                        }
-                    }
-                }
-            }
-        }
-        let text = lines.joined(separator: "\n")
-        print("GLASS-CONTRAST-REPORT-BEGIN\n\(text)\nGLASS-CONTRAST-REPORT-END")
-        let attachment = XCTAttachment(string: text)
-        attachment.name = "glass-contrast-report"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
 
     // MARK: Quiet inactive controls (Astra 27)
 
