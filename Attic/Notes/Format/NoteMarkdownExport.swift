@@ -46,14 +46,18 @@ enum NoteMarkdownExport {
                 numbered.removeAll(); listColumns.removeAll(); listWidths.removeAll()
                 var box = [block]
                 while index < document.blocks.count, document.blocks[index].kind == .text,
-                      document.blocks[index].style == "quote", document.blocks[index].callout == icon {
+                      document.blocks[index].style == "quote", document.blocks[index].callout == icon,
+                      !document.blocks[index].calloutStart {
                     box.append(document.blocks[index]); index += 1
                 }
-                var text = "> [!NOTE]"
+                // An HTML comment separates adjacent CommonMark quotes and
+                // carries the explicit boundary without visible decoration.
+                var text = (block.calloutStart ? "<!-- attic:callout-start -->\n\n" : "") + "> [!NOTE]"
                 for (offset, paragraph) in box.enumerated() {
                     if offset > 0 { text += "\n>" }
                     var content = inlineText(paragraph, calendar: calendar, locale: locale)
                         .replacingOccurrences(of: "\u{2028}", with: "\\\n> ")
+                    if content.isEmpty, box.count > 1 { content = "<br>" }
                     // An entity denotes text, while a raw leading emoji is
                     // the external alert syntax for an icon.
                     if offset == 0, icon.isEmpty, let first = content.first,
@@ -99,7 +103,13 @@ enum NoteMarkdownExport {
                 let continuation = isList ? String(repeating: " ", count: column + prefix.count) : (block.style == "quote" ? nesting + "> " : "")
                 let text = inlineText(block, calendar: calendar, locale: locale)
                     .replacingOccurrences(of: "\u{2028}", with: "\\\n" + continuation)
-                if isList || !text.trimmingCharacters(in: .whitespaces).isEmpty { lines.append((nesting + prefix + text, isList)) }
+                if !isList, text.isEmpty {
+                    // Whitespace alone is only a separator in Markdown.
+                    // A normal HTML break keeps an empty formatted paragraph.
+                    lines.append((nesting + prefix + "<br>", false))
+                } else if isList || !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                    lines.append((nesting + prefix + text, isList))
+                }
             case .image:
                 lines.append((attachmentLabel("image", filename: block.attachmentID.flatMap(filename) ?? String(localized: "image")), false))
             case .file: lines.append((attachmentLabel("file", filename: block.filename ?? "file"), false))

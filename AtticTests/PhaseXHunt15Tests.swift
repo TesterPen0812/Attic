@@ -73,20 +73,6 @@ final class RoundFX1Tests: XCTestCase {
         XCTAssertTrue(engine.stagedAttachments(for: engine.document()).isEmpty)
     }
 
-    func testRTFDUnstorableAttachmentsKeepReadablePlaceholders() throws {
-        for bytes in [Data(), Data(repeating: 1, count: Int(AttachmentLimits.maxBytesPerAttachment) + 1)] {
-            let rtf = #"{\rtf1\ansi Before {\NeXTGraphic owned.bin \width0 \height0}\'ac After}"#
-            let wrapper = FileWrapper(directoryWithFileWrappers: [
-                "TXT.rtf": FileWrapper(regularFileWithContents: Data(rtf.utf8)),
-                "owned.bin": FileWrapper(regularFileWithContents: bytes)])
-            let engine = engine()
-            XCTAssertTrue(engine.pasteRichText(try XCTUnwrap(wrapper.serializedRepresentation), type: .rtfd,
-                at: NSRange(location: 6, length: 0)))
-            XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["Before [Attachment] After"])
-            XCTAssertTrue(engine.stagedAttachments(for: engine.document()).isEmpty)
-        }
-    }
-
     func testHTMLListsKeepEditableStartsNestedKindsAndChecklistText() throws {
         let engine = engine()
         let html = "<ol start='7'><li>Seven<ul><li>Child</li></ul></li><li>Eight</li></ol><ul><li>[ ] Task</li><li>[x] Done</li></ul>"
@@ -126,6 +112,59 @@ final class RoundFX1Tests: XCTestCase {
             XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), [seven + " Seven", eight + " Eight", ""], type)
             XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.style == nil })
         }
+    }
+
+    func testRTFDUnstorableAttachmentsKeepReadablePlaceholders() throws {
+        for bytes in [Data(), Data(repeating: 1, count: Int(AttachmentLimits.maxBytesPerAttachment) + 1)] {
+            let rtf = #"{\rtf1\ansi Before {\NeXTGraphic owned.bin \width0 \height0}\'ac After}"#
+            let wrapper = FileWrapper(directoryWithFileWrappers: [
+                "TXT.rtf": FileWrapper(regularFileWithContents: Data(rtf.utf8)),
+                "owned.bin": FileWrapper(regularFileWithContents: bytes)])
+            let engine = engine()
+            XCTAssertTrue(engine.pasteRichText(try XCTUnwrap(wrapper.serializedRepresentation), type: .rtfd,
+                at: NSRange(location: 6, length: 0)))
+            XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["Before [Attachment] After"])
+            XCTAssertTrue(engine.stagedAttachments(for: engine.document()).isEmpty)
+        }
+    }
+
+    func testMarkdownEmptyParagraphMatrixAndSeparateCalloutsRoundTripExactly() throws {
+        var heading = NoteBlock.text("", style: "heading"); heading.level = 3
+        var box = NoteBlock.text("First", style: "quote"); box.callout = "💡"
+        var separate = box; separate.text = ""; separate.calloutStart = true
+        var continued = box; continued.text = "Continued"
+        for empty in [NoteBlock.text(""), heading, .text("", style: "quote")] {
+            for tail in [[NoteBlock.text("After")], []] {
+                let original = NoteDocument(blocks: [.text("Title"), empty, empty] + tail)
+                let canonical = NoteEditorEngine(noteID: UUID(), document: original).document()
+                let markdown = NoteMarkdownExport.markdown(canonical)
+                let imported = NoteEditorEngine(noteID: UUID(), document: try NoteMarkdownImport.document(markdown)).document()
+                XCTAssertEqual(try NoteContentCodec.encode(imported), try NoteContentCodec.encode(canonical), markdown)
+            }
+        }
+        let original = NoteDocument(blocks: [.text("Title"), box, separate, continued])
+        let imported = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(original))
+        XCTAssertEqual(imported.blocks.map(\.text), original.blocks.map(\.text))
+        XCTAssertEqual(imported.blocks.map(\.calloutStart), [false, false, true, false])
+        let external = try NoteMarkdownImport.document("> [!TIP]\n> First\n\n> [!TIP]\n> Second")
+        XCTAssertEqual(external.blocks.map(\.text), ["First", "Second"])
+        XCTAssertEqual(external.blocks.map(\.calloutStart), [false, true])
+    }
+
+    func testMarkdownOrdinaryExportBytesAndLiteralHTMLCodeStayUnchanged() throws {
+        var box = NoteBlock.text("One", style: "quote"); box.callout = "💡"
+        var continued = box; continued.text = "Two"
+        var number = NoteBlock.text("Seven", style: "number"); number.start = 7
+        let doc = NoteDocument(blocks: [.text("Title"), .text("Body"), box, continued, number,
+            .text("Eight", style: "number"), .text("Quoted", style: "quote")])
+        XCTAssertEqual(NoteMarkdownExport.markdown(doc), "# Title\n\nBody\n\n> [!NOTE]\n> 💡 One\n>\n> Two\n\n7. Seven\n8. Eight\n\n> Quoted")
+        XCTAssertEqual(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("   "), .text("Body")])), "Body")
+        let literal = "<br>\n## <br>\n> <br>\n<!-- attic:callout-start -->\n\n> [!NOTE]"
+        let imported = try NoteMarkdownImport.document("```\n" + literal + "\n```")
+        XCTAssertEqual(imported.blocks.map(\.text).joined(separator: "\n"), literal)
+        XCTAssertTrue(imported.blocks.allSatisfy { $0.style == "mono" && !$0.calloutStart })
+        let prose = NoteDocument(blocks: [.text("Title"), .text("<br>"), .text("<!-- attic:callout-start -->")])
+        XCTAssertEqual(try NoteMarkdownImport.document(NoteMarkdownExport.markdown(prose)).blocks.map(\.text), prose.blocks.map(\.text))
     }
 }
 
