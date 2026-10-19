@@ -1820,9 +1820,6 @@ final class NoteUndoManagerShim: UndoManager {
         levelsOfUndo = 1
     }
 
-    private var history: NoteUndoHistory? {
-        MainActor.assumeIsolated { textView?.engine?.history }
-    }
 
     override var canUndo: Bool { MainActor.assumeIsolated { textView?.engine?.canUndoCommand ?? false } }
     override var canRedo: Bool { MainActor.assumeIsolated { textView?.engine?.canRedoCommand ?? false } }

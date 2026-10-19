@@ -60,12 +60,4 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
         }
     }
 
-    func activeSubtitle(count: Int) -> String {
-        switch self {
-        case .tasks: count == 1 ? "1 Active Task" : "\(count) Active Tasks"
-        case .backlog: count == 1 ? "1 Idea" : "\(count) Ideas"
-        case .notes: count == 1 ? "1 Note" : "\(count) Notes"
-        case .canvas: count == 1 ? "1 Stroke" : "\(count) Strokes"
-        }
-    }
 }

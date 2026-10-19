@@ -8,12 +8,6 @@ import SwiftUI
 extension TasksPageModel {
     // MARK: - Copy and Duplicate
 
-    /// What ⌘C puts on the pasteboard as plain text: each task's title, one
-    /// per line, in list order, so it pastes anywhere (and back into the
-    /// add bar as one task per line).
-    func copyText(_ ids: [UUID]) -> String? {
-        export(ids)?.titles
-    }
 
     /// The tasks as text for other apps (`TasksTextExport`): ⌘C and a drag
     /// out of the panel share it. Nil when none of them is listed.

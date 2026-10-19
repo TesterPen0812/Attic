@@ -300,9 +300,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    var visibleFrame: CGRect? {
-        panel.isVisible ? panel.visibleContentFrame : nil
-    }
 
     func containsScreenPoint(_ point: CGPoint) -> Bool {
         guard panel.isVisible, panel.frame.contains(point) else { return false }

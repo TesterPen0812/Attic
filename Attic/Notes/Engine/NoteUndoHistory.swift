@@ -71,8 +71,6 @@ final class NoteUndoHistory {
             self.group = group
         }
 
-        /// The text this step would restore (tests).
-        var restores: String { other.string }
     }
 
     struct TableSnapshot {
@@ -146,7 +144,6 @@ final class NoteUndoHistory {
     var undoActionName: String { undoOps.last?.name ?? "" }
     var redoActionName: String { redoOps.first?.name ?? "" }
     var isChangeInFlight: Bool { !pending.isEmpty }
-    var openStep: Op? { open }
 
     /// Bytes reachable by either side of Undo/Redo remain live until the
     /// history step is discarded. This is queried for purge, never per key.

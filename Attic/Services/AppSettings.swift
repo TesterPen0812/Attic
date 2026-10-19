@@ -493,17 +493,4 @@ final class AppSettings: ObservableObject {
         return max(value, minimum)
     }
 
-    /// A stored window frame Attic is willing to restore: a usable size, and
-    /// every component finite and within the magnitude a display could
-    /// justify. An origin may be negative — a window on a display left of or
-    /// below the main one — so only its magnitude is bounded.
-    static func isRestorableFrame(_ rect: CGRect) -> Bool {
-        guard rect.origin.x.isFinite, rect.origin.y.isFinite,
-              rect.width.isFinite, rect.height.isFinite else { return false }
-        guard rect.width >= 1, rect.height >= 1,
-              rect.width <= maximumRestorableDimension,
-              rect.height <= maximumRestorableDimension else { return false }
-        return abs(rect.origin.x) <= maximumRestorableDimension
-            && abs(rect.origin.y) <= maximumRestorableDimension
-    }
 }

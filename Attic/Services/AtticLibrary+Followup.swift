@@ -286,14 +286,6 @@ extension AtticLibrary {
         return .obsolete
     }
 
-    /// One outcome for a step made of several: applied when any part
-    /// applied and none failed; failed when one failed; obsolete when
-    /// nothing could apply again.
-    static func combined(_ outcomes: [UndoOutcome]) -> UndoOutcome {
-        if outcomes.contains(.failed) { return .failed }
-        if outcomes.contains(.applied) { return .applied }
-        return .obsolete
-    }
 
     private func performRestoreAll(
         items: [AtticItemRef],

@@ -153,14 +153,6 @@ private struct TaskReplicaSnapshot: Equatable {
     let completedFromRaw: String?
     let completedFromOrder: Int64?
 
-    /// The same snapshot without the attachment lists, which each replica
-    /// keeps as its own (they are never copied between replicas).
-    var ignoringAttachmentLists: TaskReplicaSnapshot {
-        var copy = self
-        copy.imageReferencesData = nil
-        copy.removedAttachmentsData = nil
-        return copy
-    }
 
     init(_ task: TaskItem) {
         id = task.id

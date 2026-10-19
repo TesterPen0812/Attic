@@ -240,12 +240,6 @@ extension NoteDraftJournaling {
         try retire(noteID: noteID, claim: claim, saved: { nil })
     }
 
-    /// A first checkpoint for a note with none.
-    @discardableResult
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws -> NoteRecoveryClaim {
-        try write(entry, staged: staged, replacing: nil)
-    }
-
     /// Readable checkpoints only (tests and presentation).
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] {
         try recoveryEntries().compactMap {

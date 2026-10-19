@@ -22,8 +22,6 @@ struct TagChangeSnapshot {
     fileprivate let changesByRow: [PersistentIdentifier: Change]
     var affectedItems: Set<AtticItemRef> = []
     var isEmpty: Bool { changesByRow.isEmpty }
-    /// How many physical rows the operation changed.
-    var rowCount: Int { changesByRow.count }
 }
 
 enum TagServiceError: LocalizedError {

@@ -50,9 +50,6 @@ final class NoteTableAttachment: NoteObjectAttachment {
     private var layoutCache: NoteTableLayout?
     private var cellHeights: [[CGFloat]] = []
 
-    /// The last row's height as last laid out (the caret after the table is
-    /// centred on it, D-24); nil before the first layout.
-    @MainActor var lastRowHeight: CGFloat? { layoutCache?.rowHeights.last }
 
     /// The table's layout in a column `width` wide.
     @MainActor func layout(width: CGFloat) -> NoteTableLayout {

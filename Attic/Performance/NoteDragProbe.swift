@@ -60,18 +60,5 @@ final class NoteDragProbe: NSObject {
         print(String(format: "ATTIC_DRAG_FRAME %.4f %.1f %.1f %.1f %.1f", link.timestamp, pointer, card ?? -1, line ?? -1, scrolled))
     }
 
-    /// The top edge of `view` in window coordinates, where its layer is on
-    /// screen now (mid-animation included).
-    static func screenTop(of view: NSView) -> CGFloat? {
-        guard let superview = view.superview, view.window != nil, !view.isHidden else { return nil }
-        var frame = view.frame
-        if let layer = view.layer, let shown = layer.presentation() {
-            // The layer's y runs the same way as the view's, or the other way.
-            let sameWay = abs(layer.frame.minY - view.frame.minY) < 0.5
-            let moved = shown.frame.minY - layer.frame.minY
-            frame.origin.y += sameWay ? moved : -moved
-        }
-        return superview.convert(frame, to: nil).maxY
-    }
 }
 #endif

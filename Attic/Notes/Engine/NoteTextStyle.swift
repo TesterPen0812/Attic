@@ -158,7 +158,6 @@ struct NoteTextStyle: Equatable {
     var quoteFont: NSFont { Self.font(for: T.quote) }
     var monoFont: NSFont { Self.font(for: T.mono) }
     var smallHeadingFont: NSFont { Self.font(for: T.smallHeading) }
-    var codeLabelFont: NSFont { Self.font(for: T.codeLabel) }
     /// Inline code's face: SF Mono at 11 in its chip, whatever the run's size.
     var inlineCodeFont: NSFont { Self.font(for: T.Role(size: T.inlineCodeSize, lineHeight: T.body.lineHeight, weight: 400, monospaced: true)) }
 
@@ -474,11 +473,6 @@ struct NoteTextStyle: Equatable {
         max(0, role.lineHeight - naturalLineHeight(font(for: role)))
     }
 
-    /// Extra space between lines that brings the font's own line to `lineHeight`.
-    static func lineSpacing(for font: NSFont, lineHeight: CGFloat) -> CGFloat {
-        let natural = font.ascender - font.descender + font.leading
-        return max(0, lineHeight - natural)
-    }
 
     // MARK: Table cells
 
