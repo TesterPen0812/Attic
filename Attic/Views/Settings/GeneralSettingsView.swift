@@ -64,14 +64,14 @@ struct GeneralSettingsView: View {
                 )
                 .help(String(localized: "Lively springs things in and away. Subtle does the same more quietly. Reduced fades or changes at once instead of moving."))
                 AtticGroupDivider()
-                // Experimental (phase-x/genie only): the drafts to compare.
+                // Phase-x/genie: the four hide animations, a user choice.
                 AtticPopUpRow(
                     label: String(localized: "Hide animation"),
                     choices: PanelHideAnimation.allCases.map { ($0, $0.title) },
                     selection: $settings.hideAnimation,
                     identifier: "setting-hide-animation"
                 )
-                .help(String(localized: "Slide shrinks the panel into its corner. Genie pours it in through a funnel. Swoop curves it in, narrowing toward the corner. Genie (live glass) pours it in with the real glass kept live."))
+                .help(String(localized: "Slide shrinks the panel into its corner. Swoop curves it in, narrowing toward the corner. Genie pours it in through a funnel, with the glass kept live. Genie Classic bends it in as a picture, like the Dock's minimise."))
             }
 
             // The Motion Lab: preview builds only (never the release

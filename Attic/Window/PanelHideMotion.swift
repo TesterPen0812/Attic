@@ -16,11 +16,15 @@ import SwiftUI
 
 /// Settings › Behaviour › Hide animation (this branch only).
 enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
+    // Declared in Settings' order (owner, 2026-10-20): Slide, Swoop, Genie,
+    // Genie Classic. The raw values stay as first stored, so a choice
+    // carries over the rename.
     case slide
-    case genie
     case swoop
-    /// Genie's bend with the real glass kept live under it (draft 3).
+    /// "Genie": the bend with the real glass kept live under it (draft 3).
     case genieLiveGlass
+    /// "Genie Classic": the panel bends as a picture, like the Dock's minimise.
+    case genie
 
     static let defaultValue: PanelHideAnimation = .slide
 
@@ -47,9 +51,9 @@ enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .slide: String(localized: "Slide")
-        case .genie: String(localized: "Genie")
         case .swoop: String(localized: "Swoop")
-        case .genieLiveGlass: String(localized: "Genie (live glass)")
+        case .genieLiveGlass: String(localized: "Genie")
+        case .genie: String(localized: "Genie Classic")
         }
     }
 }
@@ -591,36 +595,11 @@ final class PanelGenieView: NSView {
         // Glass's layers (backdrop and SDF rim) cannot render outside the
         // window server; hide them for the snapshot only (same transaction,
         // so the screen never sees it) and stand in for the small ones.
-        var hidden: [CALayer] = []
-        var groups: [CGRect] = []
-        var elements: [CGRect] = []
-        func walk(_ layer: CALayer) {
-            let name = String(describing: type(of: layer))
-            if name == "CASDFElementLayer" { elements.append(root.convert(layer.bounds, from: layer)) }
-            // Live Frosted: the panel's material is live under the mesh, so
-            // its fill (`CAChameleonLayer`, composited onto the backdrop,
-            // which a snapshot draws flat and opaque) stays out too.
-            if hidesSurfaceMaterial, name == "CAChameleonLayer", !layer.isHidden {
-                let frame = root.convert(layer.bounds, from: layer)
-                if abs(frame.width - surfaceRect.width) < 3, abs(frame.height - surfaceRect.height) < 3 {
-                    hidden.append(layer)
-                    Self.lastMaterialLayers = [name]
-                }
-            }
-            if Self.glassLayerNames.contains(name), !layer.isHidden {
-                hidden.append(layer)
-                if name == "CASDFLayer" { groups.append(root.convert(layer.bounds, from: layer)) }
-            }
-            for sublayer in layer.sublayers ?? [] { walk(sublayer) }
-        }
-        walk(root)
-        // A glass group merges its controls into one shape; stand in for
-        // each control, not the group. The panel's own surface needs none.
-        var glassPills: [CGRect] = []
-        for group in groups where group.width < surfaceRect.width - 1 || group.height < surfaceRect.height - 1 {
-            let inside = elements.filter { group.insetBy(dx: -1, dy: -1).contains($0) && $0.width < group.width - 1 }
-            glassPills += inside.isEmpty ? [group] : inside
-        }
+        let scan = Self.scanGlass(in: root, surfaceRect: surfaceRect, hidesSurfaceMaterial: hidesSurfaceMaterial)
+        let hidden = scan.hidden
+        if !scan.materialLayers.isEmpty { Self.lastMaterialLayers = scan.materialLayers }
+        Self.lastGlassStandIns = scan.pills.map { "\($0.rect.integral)" }
+        Self.lastGlassLeftOut = scan.leftOut.map { "\($0.integral)" }
         context.scaleBy(x: scale, y: scale)
         if let underlay {
             // The panel's own squircle (AtticPanelSurface).
@@ -656,10 +635,13 @@ final class PanelGenieView: NSView {
         context.setFillColor(!translucent && !dark
             ? NSColor(white: 0, alpha: 0.05).cgColor
             : NSColor(white: 1, alpha: dark ? 0.07 : 0.22).cgColor)
-        for rect in glassPills where rect.width > 4 && rect.height > 4 {
-            let radius = min(rect.width, rect.height) / 2
-            context.addPath(Path(roundedRect: rect, cornerRadius: radius, style: .continuous).cgPath)
+        for pill in scan.pills {
+            context.saveGState()
+            context.clip(to: pill.clip)
+            let radius = min(pill.rect.width, pill.rect.height) / 2
+            context.addPath(Path(roundedRect: pill.rect, cornerRadius: radius, style: .continuous).cgPath)
             context.fillPath()
+            context.restoreGState()
         }
         Self.lastSnapshotMilliseconds["render"] = (CACurrentMediaTime() - renderBegan) * 1000
         hidden.forEach { $0.isHidden = false }
@@ -677,6 +659,85 @@ final class PanelGenieView: NSView {
     }
 
     func releaseSnapshot() { texture = nil }
+
+    /// The last snapshot's glass stand-ins, and the glass it left out because
+    /// the panel never shows it (for the bench).
+    static var lastGlassStandIns: [String] = []
+    static var lastGlassLeftOut: [String] = []
+
+    /// One control's glass stand-in: the control's rect, drawn only inside
+    /// `clip`, the part of it the panel shows.
+    struct GlassPill: Equatable {
+        var rect: CGRect
+        var clip: CGRect
+    }
+
+    struct GlassScan {
+        /// The glass layers to hide while the snapshot renders.
+        var hidden: [CALayer] = []
+        var materialLayers: [String] = []
+        var pills: [GlassPill] = []
+        /// Glass the panel never shows (outside it, clipped away, hidden or
+        /// transparent), which gets no stand-in.
+        var leftOut: [CGRect] = []
+    }
+
+    /// Finds the glass the snapshot cannot render, and where a stand-in pill
+    /// goes for each control's glass. A stand-in is drawn only where the
+    /// control shows at rest: inside the panel's surface and every clipping
+    /// ancestor, and not under a hidden or transparent one. (Before draft 5,
+    /// glass the panel never shows got a pill too: the next Tasks page's
+    /// search row, transparent and parked just past the panel's side, drew a
+    /// pill at the window's edge in a hide's first frames and a reveal's last.)
+    static func scanGlass(
+        in root: CALayer, surfaceRect: CGRect, hidesSurfaceMaterial: Bool,
+        className: (CALayer) -> String = { String(describing: type(of: $0)) }
+    ) -> GlassScan {
+        var scan = GlassScan()
+        var groups: [(rect: CGRect, clip: CGRect)] = []
+        var elements: [(rect: CGRect, clip: CGRect)] = []
+        func walk(_ layer: CALayer, clip: CGRect, shown: Bool) {
+            let name = className(layer)
+            let shown = shown && !layer.isHidden && layer.opacity > 0.01
+            var clip = clip
+            // A mask's own frame says nothing about what it lets through (the
+            // panel's is zero-sized and draws its shape beyond its bounds), so
+            // only bounds clipping narrows the clip; the surface bounds it all.
+            if layer.masksToBounds { clip = clip.intersection(root.convert(layer.bounds, from: layer)) }
+            let frame = root.convert(layer.bounds, from: layer)
+            if name == "CASDFElementLayer" { elements.append((frame, shown ? clip : .null)) }
+            // Live Frosted: the panel's material is live under the mesh, so
+            // its fill (`CAChameleonLayer`, composited onto the backdrop,
+            // which a snapshot draws flat and opaque) stays out too.
+            if hidesSurfaceMaterial, name == "CAChameleonLayer", !layer.isHidden {
+                if abs(frame.width - surfaceRect.width) < 3, abs(frame.height - surfaceRect.height) < 3 {
+                    scan.hidden.append(layer)
+                    scan.materialLayers = [name]
+                }
+            }
+            if glassLayerNames.contains(name), !layer.isHidden {
+                scan.hidden.append(layer)
+                if name == "CASDFLayer" { groups.append((frame, shown ? clip : .null)) }
+            }
+            for sublayer in layer.sublayers ?? [] { walk(sublayer, clip: clip, shown: shown) }
+        }
+        walk(root, clip: surfaceRect, shown: true)
+        // A glass group merges its controls into one shape; stand in for
+        // each control, not the group. The panel's own surface needs none.
+        for group in groups where group.rect.width < surfaceRect.width - 1 || group.rect.height < surfaceRect.height - 1 {
+            let inside = elements.filter {
+                group.rect.insetBy(dx: -1, dy: -1).contains($0.rect) && $0.rect.width < group.rect.width - 1
+            }
+            for pill in inside.isEmpty ? [group] : inside where pill.rect.width > 4 && pill.rect.height > 4 {
+                if pill.clip.intersection(pill.rect).width > 0.5, pill.clip.intersection(pill.rect).height > 0.5 {
+                    scan.pills.append(GlassPill(rect: pill.rect, clip: pill.clip))
+                } else {
+                    scan.leftOut.append(pill.rect)
+                }
+            }
+        }
+        return scan
+    }
 
     private static let glassLayerNames: Set<String> = [
         // Only the material itself: `SDFLayer` and `SDFPortalLayer` also

@@ -271,8 +271,78 @@ final class PanelHideMotionTests: XCTestCase {
         }
     }
 
+    /// Draft 5: Genie's snapshot stood in a faint pill for every control's
+    /// glass, including glass the panel never shows. The next Tasks page's
+    /// search row sits transparent just past the panel's side; under the
+    /// mesh's first frames its pill showed at the window's edge.
+    func testGlassStandInsOnlyWhereThePanelShowsTheGlass() {
+        func layer(_ name: String, _ frame: CGRect, in parent: CALayer, clips: Bool = false) -> CALayer {
+            let made = CALayer()
+            made.name = name
+            made.frame = frame
+            made.masksToBounds = clips
+            parent.addSublayer(made)
+            return made
+        }
+        // A 380 x 700 panel in its window, with its 28 pt margin, shaped by a
+        // zero-sized mask (as the real surface's is), which clips nothing here.
+        let root = CALayer()
+        root.frame = CGRect(x: 0, y: 0, width: 436, height: 756)
+        let surfaceRect = CGRect(x: 28, y: 28, width: 380, height: 700)
+        let surface = layer("surface", surfaceRect, in: root)
+        surface.mask = CALayer()
+        surface.mask?.frame = CGRect(x: 0, y: 700, width: 0, height: 0)
+        // The shown page's search row: one pill per control.
+        let row = layer("CASDFLayer", CGRect(x: 10, y: 620, width: 120, height: 24), in: surface)
+        _ = layer("CASDFElementLayer", CGRect(x: 0, y: 0, width: 56, height: 24), in: row)
+        _ = layer("CASDFElementLayer", CGRect(x: 64, y: 0, width: 56, height: 24), in: row)
+        // The next page, transparent, 10 pt past the panel's side (the bug).
+        let nextPage = layer("page", CGRect(x: 390, y: 0, width: 380, height: 700), in: surface)
+        nextPage.opacity = 0
+        let nextRow = layer("CASDFLayer", CGRect(x: 0, y: 619, width: 102, height: 25), in: nextPage)
+        _ = layer("CASDFElementLayer", CGRect(x: 0, y: 0, width: 102, height: 25), in: nextRow)
+        // A hidden subtree inside the panel shows no glass either.
+        let hidden = layer("hidden", CGRect(x: 0, y: 400, width: 380, height: 40), in: surface)
+        hidden.isHidden = true
+        _ = layer("CASDFLayer", CGRect(x: 10, y: 8, width: 80, height: 24), in: hidden)
+        // A clipping ancestor: glass scrolled out of it gets none, and glass
+        // half past the panel's side is drawn only up to that side.
+        let list = layer("list", CGRect(x: 0, y: 100, width: 380, height: 200), in: surface, clips: true)
+        _ = layer("CASDFLayer", CGRect(x: 10, y: 220, width: 80, height: 24), in: list)
+        _ = layer("CASDFLayer", CGRect(x: 350, y: 40, width: 60, height: 24), in: list)
+        // Opaque glass outside the surface, with nothing clipping it.
+        _ = layer("CASDFLayer", CGRect(x: 412, y: 100, width: 20, height: 24), in: root)
+
+        let scan = PanelGenieView.scanGlass(in: root, surfaceRect: surfaceRect, hidesSurfaceMaterial: false,
+                                            className: { $0.name ?? "CALayer" })
+        XCTAssertEqual(scan.pills.map(\.rect), [
+            CGRect(x: 38, y: 648, width: 56, height: 24),
+            CGRect(x: 102, y: 648, width: 56, height: 24),
+            CGRect(x: 378, y: 168, width: 60, height: 24),
+        ])
+        for pill in scan.pills {
+            XCTAssertTrue(surfaceRect.contains(pill.clip), "stand-in drawn outside the panel: \(pill)")
+        }
+        XCTAssertEqual(scan.pills.last.map { $0.rect.intersection($0.clip).maxX }, surfaceRect.maxX)
+        XCTAssertEqual(scan.leftOut, [
+            CGRect(x: 418, y: 647, width: 102, height: 25),
+            CGRect(x: 38, y: 436, width: 80, height: 24),
+            CGRect(x: 38, y: 348, width: 80, height: 24),
+            CGRect(x: 412, y: 100, width: 20, height: 24),
+        ])
+        // Every glass layer is still hidden for the render, shown or not.
+        XCTAssertEqual(scan.hidden.count, 9)
+    }
+
+    /// Owner, 2026-10-20: Slide, Swoop, Genie, Genie Classic. The live-glass
+    /// Genie takes the plain name; the stored raw values never change.
+    func testHideAnimationsAreNamedAndOrderedForSettings() {
+        XCTAssertEqual(PanelHideAnimation.allCases.map(\.title), ["Slide", "Swoop", "Genie", "Genie Classic"])
+        XCTAssertEqual(PanelHideAnimation.allCases.map(\.rawValue), ["slide", "swoop", "genieLiveGlass", "genie"])
+    }
+
     func testLiveGlassIsAFourthOption() {
-        XCTAssertEqual(PanelHideAnimation.allCases, [.slide, .genie, .swoop, .genieLiveGlass])
+        XCTAssertEqual(PanelHideAnimation.allCases, [.slide, .swoop, .genieLiveGlass, .genie])
         XCTAssertTrue(PanelHideAnimation.genieLiveGlass.usesGenieMesh)
         XCTAssertFalse(PanelHideAnimation.swoop.usesGenieMesh)
     }
