@@ -61,6 +61,16 @@
                ReferencedContainer = "container:Attic.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F3330000000000000000000000000001"
+               BuildableName = "AtticRoundTripTests.xctest"
+               BlueprintName = "AtticRoundTripTests"
+               ReferencedContainer = "container:Attic.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <EnvironmentVariables>
          <EnvironmentVariable

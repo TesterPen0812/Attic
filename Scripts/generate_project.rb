@@ -48,11 +48,13 @@ project.add_build_configuration('Local', :debug)
 app = project.new_target(:application, 'Attic', :osx, '26.0')
 unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '26.0')
 unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '26.0')
+round_trip_tests = project.new_target(:unit_test_bundle, 'AtticRoundTripTests', :osx, '26.0')
 ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
 unit_tests.add_dependency(unit_host)
+round_trip_tests.add_dependency(unit_host)
 ui_tests.add_dependency(app)
 mobile_tests.add_dependency(mobile_app)
 mobile_ui_tests.add_dependency(mobile_app)
@@ -81,7 +83,19 @@ app_group.files.each do |reference|
 end
 unit_host.source_build_phase.add_file_reference(project.main_group['AtticUnitTestHost'].new_file('InvisiblePresentation.m'))
 add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
-unit_tests.source_build_phase.add_file_reference(project.main_group['AtticTests'].new_file('InvisibleHostObserverLoader.m'))
+observer_loader = project.main_group['AtticTests'].new_file('InvisibleHostObserverLoader.m')
+unit_tests.source_build_phase.add_file_reference(observer_loader)
+# Keep every FX3 assertion, but let CI schedule its thousands of generated
+# notes independently of the already near-budget legacy unit lane.
+%w[RoundFX3Tests.swift TestSupport.swift InvisibleHostObserver.swift].each do |path|
+  reference = project.main_group['AtticTests'].files.find { |file| file.path == path }
+  abort "Missing round-trip source: #{path}" unless reference
+  round_trip_tests.source_build_phase.add_file_reference(reference)
+  if path == 'RoundFX3Tests.swift'
+    unit_tests.source_build_phase.files.find { |file| file.file_ref == reference }.remove_from_project
+  end
+end
+round_trip_tests.source_build_phase.add_file_reference(observer_loader)
 add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
 add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
@@ -242,6 +256,14 @@ unit_tests.build_configurations.each do |config|
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 
+round_trip_tests.build_configurations.each do |config|
+  source = unit_tests.build_configurations.find { |candidate| candidate.name == config.name }
+  config.build_settings = Marshal.load(Marshal.dump(source.build_settings))
+  settings = config.build_settings
+  settings['ATTIC_MACOS_ROUND_TRIP_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.RoundTripTests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_ROUND_TRIP_TEST_BUNDLE_IDENTIFIER)'
+end
+
 ui_tests.build_configurations.each do |config|
   settings = config.build_settings
   settings['ATTIC_MACOS_UI_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticUITests'
@@ -350,10 +372,20 @@ scheme.add_build_target(unit_host, false)
 scheme.set_launch_target(app)
 scheme.launch_action.build_configuration = 'Local'
 scheme.add_test_target(unit_tests)
+scheme.add_test_target(round_trip_tests)
 scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
   { key: 'ATTIC_TESTING', value: '1', enabled: true }
 ])
 scheme.save_as(staged_project_path, 'Attic', true)
+
+round_trip_scheme = Xcodeproj::XCScheme.new
+round_trip_scheme.add_build_target(unit_host, false)
+round_trip_scheme.add_test_target(round_trip_tests)
+round_trip_scheme.test_action.build_configuration = 'Local'
+round_trip_scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
+  { key: 'ATTIC_TESTING', value: '1', enabled: true }
+])
+round_trip_scheme.save_as(staged_project_path, 'AtticRoundTrips', true)
 
 ui_scheme = Xcodeproj::XCScheme.new
 ui_scheme.add_build_target(app)
@@ -383,6 +415,7 @@ stable_target_uuids = {
   app => 'A7714C2169D9DBD5A01DC94837E1C051',
   unit_host => '91B51DB0FF2546EAAA06E2521BC7D6A8',
   unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
+  round_trip_tests => 'F3330000000000000000000000000001',
   ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',
   mobile_app => '6A9C0775F09BF19B3C70496EEC4AF237',
   mobile_tests => 'A7E2FBB4FDEEC93FE643B32D6940915E',
@@ -401,7 +434,7 @@ project_contents.gsub!(/^\s*minimizedProjectReferenceProxies = 0;\n/, '')
 project_contents.gsub!(/^\s*preferredProjectObjectVersion = 77;\n/, '')
 File.write(project_file, project_contents)
 
-['Attic', 'AtticUI', 'AtticMobile'].each do |scheme_name|
+['Attic', 'AtticUI', 'AtticMobile', 'AtticRoundTrips'].each do |scheme_name|
   scheme_file = File.join(
     staged_project_path,
     'xcshareddata',

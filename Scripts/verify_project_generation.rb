@@ -11,7 +11,8 @@ CHECKED_PROJECT = File.join(ROOT, 'Attic.xcodeproj')
 PROJECT_FILES = [
   'project.pbxproj',
   'xcshareddata/xcschemes/Attic.xcscheme',
-  'xcshareddata/xcschemes/AtticMobile.xcscheme'
+  'xcshareddata/xcschemes/AtticMobile.xcscheme',
+  'xcshareddata/xcschemes/AtticRoundTrips.xcscheme'
 ].freeze
 
 def generate(destination)

@@ -72,8 +72,25 @@ class RequiredChecksTests(unittest.TestCase):
                         env=dict(os.environ, LANE=lane, HEADLESS_COSTS=headless), capture_output=True, text=True)
                     self.assertEqual(result.returncode, int(headless == 'true' and lane != 'costs'))
                     if result.returncode: self.assertIn('::error::headless_costs=true requires lane=costs', result.stdout)
-        for job in ['fka', 'macos', 'ui', 'costs', 'performance', 'appearance', 'iphone']:
+        for job in ['fka', 'round-trips', 'macos', 'ui', 'costs', 'performance', 'appearance', 'iphone']:
             self.assertIn(f'  {job}:\n    needs: validate-inputs\n', workflow)
+
+    def test_round_trips_are_a_required_parallel_job_without_reducing_coverage(self):
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / '.github/workflows/macos-ci.yml').read_text()
+        job = workflow.split('  round-trips:', 1)[1].split('\n  macos:', 1)[0]
+        self.assertIn('timeout-minutes: 35', job)
+        self.assertNotIn('continue-on-error', job)
+        self.assertNotIn('-skip-testing:', job)
+        self.assertIn('-only-testing:AtticRoundTripTests', job)
+        self.assertIn('s["passedTests"]==28', job)
+        self.assertIn('s["skippedTests"]==0', job)
+        self.assertIn('s["failedTests"]==0', job)
+        self.assertNotIn('ATTIC_FX3_SEEDS:', job)
+        generator = (root / 'Scripts/generate_project.rb').read_text()
+        self.assertIn('scheme.add_test_target(round_trip_tests)', generator)
+        self.assertIn('round_trip_scheme.add_test_target(round_trip_tests)', generator)
+        self.assertIn('%w[RoundFX3Tests.swift TestSupport.swift InvisibleHostObserver.swift]', generator)
 
     def test_focused_fka_includes_full_and_pull_request_scope(self):
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/macos-ci.yml').read_text()
