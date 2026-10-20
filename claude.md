@@ -100,40 +100,39 @@ plan.
 
 ## Model Selection
 
-Rankings, higher = better. Cost reflects what I actually pay, not list price. Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
+Which model does what. These are defaults, not limits: if a model's output doesn't meet the bar, redo the work with a stronger one without asking. Judge the output, not the price; escalating costs less than shipping mediocre work. When axes conflict for anything that ships: intelligence > taste > cost.
 
-| model | cost | intelligence | taste |
-| --- | --- | --- | --- |
-| gpt-5.6-sol | 9 | 8 | 5 |
-| sonnet-5 | 5 | 5 | 7 |
-| opus-4.8 | 4 | 7 | 8 |
-| fable-5 | 2 | 9 | 9 |
+| Model | Use it for | Not for |
+| --- | --- | --- |
+| **Opus 5.5** (high; xhigh for the hardest problems) | Anything a person sees: UI, interaction, motion, copy and API design. Designing new screens and components, hard or unclear bugs, judgement calls about the owner's decisions, and reviewing Sol's work. | Routine fix lists. |
+| **GPT-6.1 Sol** (`gpt-6.1-sol`, through the Codex CLI; high to build, xhigh to review) | The engine and data safety, merges, CI and performance investigations, all computer use and on-screen checks, long multi-step jobs, and reviewing Opus's work. | Designing UI (its taste is weaker). |
+| **Sonnet 5.5** | Mechanical work only: a written fix list where each fix is already decided, or known CI failures back to green. | Root causes, design, reviews, anything visible. |
+| **Haiku 5.5** | Cheap, bounded lookups and searches where it saves cost. | Placeholder or no-op calls; anything that ships. |
+| **GPT-6 Pro** (ChatGPT, run by the owner) | Deep external reviews of a whole pull request or design. | Anything that needs the repo's tools. |
+| **Fable** | Never. | Everything. |
 
-How to apply:
+Rules:
 
-- These are defaults, not limits. You have standing permission to override them: if a cheaper model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
-- Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste > cost.
-- Don't let cost prevent you from using the right model for the job. Instead, take advantage of cheaper options to get more information and try things before moving the work to a more expensive option.
-- Bulk/mechanical work (clear-spec implementation, data analysis, migrations): gpt-5.6-sol (it uses the ChatGPT Codex usage limit, so it is not free).
-- Anything user-facing (UI, copy, API design) needs taste ≥ 7.
-- Reviews of plans/implementations: fable-5 or opus-4.8, optionally gpt-5.6-sol as an extra independent perspective.
-- Haiku 5.5 is allowed for cheap, bounded work (searches, mechanical lookups) where it saves cost; never for placeholder or no-op calls. Never use Fable.
-- Mechanics: gpt-5.6-sol is only reachable through the Codex CLI — `codex exec` / `codex review` (my `~/.codex/config.toml` defaults to gpt-5.6-sol). Use the codex-implementation, codex-review, and codex-computer-use skills; for work they don't cover (investigation, data analysis), run `codex exec -s read-only` directly with a self-contained prompt.
-- Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
+- **Never let a model review its own work.** Opus reviews Sol's work and Sol reviews Opus's.
+- Cost is a tie-breaker only. Use cheaper options to gather information and try things before moving the work to a stronger model; don't let cost keep the right model off the job.
+- Claude models run through the Agent/Workflow `model` parameter.
+- GPT-6.1 Sol is reachable only through the Codex CLI. Always pass the model and effort explicitly, and check the `model:` line at the top of the run log: `codex exec -m gpt-6.1-sol -c model_reasoning_effort=high` (or `xhigh` to review). Codex runs use the ChatGPT Codex usage limit, so they are not free.
+- Stagger parallel Codex starts; concurrent runs share one login.
+- Write Codex briefs in plain quality-work wording. Words like "adversarial" or "attack" can trip the content filter and stop a run midway.
 
-Using gpt-5.5 inside workflows and subagents (the model parameter only takes Claude models, so use a wrapper):
+Using GPT-6.1 Sol inside workflows and subagents (the `model` parameter only takes Claude models, so use a wrapper):
 
-- Spawn a thin Claude wrapper agent with `model: 'sonnet', effort: 'low'` whose prompt instructs it to write a self-contained codex prompt, run `codex exec` via Bash, and return the report (use `schema` on the wrapper to get structured output back).
-- Always label these agents with a `gpt-5.6-sol:` prefix, e.g. `{label: 'gpt-5.6-sol:review-auth'}` — the workflow UI shows the wrapper's Claude model, so the label is the only indication the real worker is gpt-5.6-sol.
-- Codex runs can exceed Bash's 10-minute timeout: pass an explicit timeout, or run in the background and poll for the report file.
-- Parallel gpt-5.6-sol implementation agents must use `isolation: 'worktree'` so codex edits don't collide in the shared checkout.
-- Workflow token budgets only count Claude tokens; codex work is invisible to `budget.spent()`, but it still uses the ChatGPT Codex usage limit.
+- Spawn a thin Claude wrapper agent with `model: 'sonnet', effort: 'low'` whose prompt has it write a self-contained Codex prompt, run `codex exec` through Bash, and return the report (use `schema` on the wrapper to get structured output back).
+- Label these agents with a `gpt-6.1-sol:` prefix, for example `{label: 'gpt-6.1-sol:review-auth'}`. The workflow UI shows the wrapper's Claude model, so the label is the only sign that the real worker is Sol.
+- Codex runs can exceed Bash's 10-minute timeout: pass an explicit timeout, or run in the background and wait for the report file.
+- Parallel Sol implementation agents must use `isolation: 'worktree'` so their edits don't collide.
+- Workflow token budgets only count Claude tokens; Codex work is invisible to `budget.spent()`, but it still uses the Codex usage limit.
 
 ## Long-running Codex Work
 
-gpt-5.6-sol is exceptionally capable on long-running tasks. Give it substantial, multi-step work when it is the right model for the job; do not split work up merely because it is large.
+GPT-6.1 Sol is very capable on long-running tasks. Give it substantial, multi-step work when it is the right model for the job; don't split work up merely because it is large.
 
 - The quality of the result depends on the prompt. Provide a detailed, self-contained brief: goal, relevant context, constraints, files or systems in scope, expected deliverables, and how to verify completion.
-- State important decisions and non-negotiable requirements explicitly. Do not assume the model will infer project-specific conventions or the desired tradeoffs from a short prompt.
-- For long tasks, ask it to inspect the current state first, execute the work end to end, and report the changes, verification, and any remaining risks.
-- If the work can safely run in parallel, keep each task's ownership and worktree boundaries explicit so agents do not overlap.
+- State important decisions and non-negotiable requirements explicitly. Don't assume the model will infer project-specific conventions or the desired tradeoffs from a short prompt.
+- For long tasks, ask it to inspect the current state first, execute the work end to end, and report the changes, verification and any remaining risks.
+- If the work can safely run in parallel, keep each task's ownership and worktree boundaries explicit so agents don't overlap.
