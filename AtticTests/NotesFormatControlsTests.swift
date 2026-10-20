@@ -1664,6 +1664,36 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(panelHides, 0)
     }
 
+    func testPRB1FormatMonitorLeavesAnotherWindowsEscapeAlone() throws {
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false; windows.append(other)
+        var forwarded = 0
+        let monitor = try XCTUnwrap(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.window === other { forwarded += 1 }
+            return event
+        })
+        defer { NSEvent.removeMonitor(monitor) }
+        let (controls, _, text) = make()
+        var closed = 0
+        controls.closeFormatBar = { closed += 1; controls.isFormatBarOpen = false }
+        controls.isFormatBarOpen = true
+        XCTAssertFalse(controls.handleKey(escape(in: other)))
+        NSApp.sendEvent(escape(in: other))
+        XCTAssertEqual(forwarded, 1, "the foreign event remains in NSApp's local-monitor path")
+        XCTAssertEqual(closed, 0)
+        XCTAssertTrue(controls.isFormatBarOpen)
+        controls.isFormatBarOpen = true
+        controls.formatModel.rowStyleListOpen = true
+        NSApp.sendEvent(escape(in: other))
+        XCTAssertEqual(forwarded, 2)
+        XCTAssertTrue(controls.formatModel.rowStyleListOpen)
+        NSApp.sendEvent(escape(in: try XCTUnwrap(text.window)))
+        XCTAssertFalse(controls.formatModel.rowStyleListOpen, "the owner-window monitor still closes its list")
+        NSApp.sendEvent(escape(in: text.window!))
+        XCTAssertEqual(closed, 1, "the owner-window monitor still closes its row")
+    }
+
     func testEscClosesTheFormatRowAndIsUsedUp() {
         let (controls, _, textView) = make()
         var closed = 0
