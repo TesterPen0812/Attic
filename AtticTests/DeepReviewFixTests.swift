@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Quartz
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -469,6 +470,103 @@ final class DeepReviewFixTests: XCTestCase {
         // Return edits the row that shows the keyboard.
         hosted.press("\r", keyCode: 36)
         XCTAssertEqual(hosted.model.editingTitleID, now[now.count - 2], "Return edits the row that shows the keyboard")
+    }
+
+    func testTabVisitsInlineFilesAndTheirActionsInBothDirections() async throws {
+        try requireKeyWindowTests()
+        let policy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.accessory)
+        defer { NSApp.setActivationPolicy(policy) }
+        let hosted = try Hosted(height: 680)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        NSApp.activate(ignoringOtherApps: true)
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-files-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let urls = try (0..<6).map { index -> URL in
+            let image = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            for x in 0..<2 { for y in 0..<2 {
+                image.setColor(NSColor(calibratedRed: CGFloat(index) / 6, green: 0.5, blue: 0.5, alpha: 1), atX: x, y: y)
+            } }
+            let url = root.appendingPathComponent("File \(index).png")
+            try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: url)
+            return url
+        }
+        let imported = await hosted.store.attachFiles(urls, to: id)
+        XCTAssertTrue(imported)
+        let files = try XCTUnwrap(hosted.store.task(withID: id)).attachments
+        XCTAssertEqual(files.count, 6)
+        var attached: [UUID] = []
+        hosted.model.services.chooseFiles = { attached.append($0) }
+        hosted.spin(0.5)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        XCTAssertTrue(hosted.model.expandedFiles.contains(id))
+        XCTAssertTrue(hosted.window.isKeyWindow)
+
+        func focused() -> String? {
+            // AppKit reports the NSHostingView for SwiftUI content focus.
+            // Read the live view's FocusState report, not the requested stop.
+            switch hosted.pointer.keyboardControl?()?.base as? TasksFileFocusID {
+            case let .file(_, file)?: "task-attachment-\(file.uuidString)"
+            case .more?: "tasks-files-more"
+            case .attach?: "tasks-files-attach"
+            case nil: nil
+            }
+        }
+        func preview(_ file: TaskImageReference) async throws {
+            let verified = try await hosted.store.taskImageFiles.verifiedURL(for: file)
+            let expected = try XCTUnwrap(verified)
+            hosted.press(" ", keyCode: 49)
+            let panel = try XCTUnwrap(QLPreviewPanel.shared())
+            defer { panel.orderOut(nil); hosted.window.makeKey(); hosted.spin(0.2) }
+            func url() -> URL? {
+                AttachmentQuickLookPresenter.shared.previewPanel(panel, previewItemAt: 0) as? URL
+            }
+            let end = Date().addingTimeInterval(5)
+            while url() != expected, Date() < end { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(url(), expected, "Space previews the exact file reached through Tab")
+            XCTAssertEqual(hosted.store.task(withID: id)?.status, .todo, "file activation never completes the selected parent")
+        }
+        let fileStops = files.map { "task-attachment-\($0.id.uuidString)" }
+        let collapsed = Array(fileStops.prefix(4)) + ["tasks-files-more", "tasks-files-attach"]
+        for expected in collapsed {
+            hosted.press("\t", keyCode: 48)
+            let actual = try XCTUnwrap(focused(), "Tab must land on a live inline control")
+            XCTAssertEqual(actual, expected, "Tab reaches each visible file/action")
+            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
+        }
+        for expected in collapsed.dropLast().reversed() {
+            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+            XCTAssertEqual(focused(), expected, "Shift-Tab retraces each visible file/action")
+        }
+        // A focused file owns Space, even while its parent is selected.
+        try await preview(files[0])
+
+        // Forward to More; its Space expands the list. Backward now reaches
+        // both newly visible files before the original four.
+        for _ in 0..<4 { hosted.press("\t", keyCode: 48) }
+        XCTAssertEqual(focused(), "tasks-files-more")
+        hosted.press(" ", keyCode: 49)
+        for expected in fileStops.reversed() {
+            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+            XCTAssertEqual(focused(), expected)
+            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
+        }
+        for expected in Array(fileStops.dropFirst()) + ["tasks-files-more", "tasks-files-attach"] {
+            hosted.press("\t", keyCode: 48)
+            XCTAssertEqual(focused(), expected)
+        }
+        hosted.press(" ", keyCode: 49)
+        XCTAssertEqual(attached, [id], "Attach file is reachable and acts on the owner")
+        XCTAssertNil(hosted.model.editingTitleID)
     }
 
     /// A8 P2-A8-1 (A10): in the combined app Tab reached rows out of view
