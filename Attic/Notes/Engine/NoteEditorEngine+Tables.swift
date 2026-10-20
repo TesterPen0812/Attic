@@ -614,10 +614,10 @@ extension NoteEditorEngine {
     @discardableResult
     func pasteTable(_ table: NoteTable, at selection: NSRange, sourceText: String) -> Bool {
         guard table.isWithinLimits else { return pasteOversizedTableAsText(sourceText, at: selection) }
-        let marker = history.marker()
+        _ = history.marker()
         guard insertTable(table, replacing: selection, name: String(localized: "Paste"), entering: false) else { return false }
-        tablePasteOffer = NoteTablePasteOffer(text: sourceText, selection: selection, steps: marker + 1)
-        onNotice?(NoteNotice(kind: .notice, detail: NoteTablePasteOffer.notice))
+        tablePasteOffer = NoteTablePasteOffer(text: sourceText, selection: selection, generation: history.recordingGeneration)
+        onNotice?(NoteNotice(kind: .tablePasted, detail: NoteTablePasteOffer.notice))
         return true
     }
 
@@ -630,10 +630,14 @@ extension NoteEditorEngine {
         return pasted
     }
 
+    var canPasteLastTableAsText: Bool {
+        tablePasteOffer.map { $0.generation == history.recordingGeneration } ?? false
+    }
+
     /// "Paste as Text": the table paste is undone and its text pasted instead.
     @discardableResult
     func pasteLastTableAsText() -> Bool {
-        guard let offer = tablePasteOffer, history.undoOps.count == offer.steps, history.undo() else {
+        guard let offer = tablePasteOffer, canPasteLastTableAsText, history.undo() else {
             tablePasteOffer = nil
             return false
         }
@@ -867,11 +871,17 @@ extension NoteEditorEngine {
             var typing = view.editor.typingAttributes
             let on = forced ?? (typing[.noteMark(kind)] == nil)
             typing[.noteMark(kind)] = on ? (url ?? true) as Any : nil
-            let base = (typing[.font] as? NSFont) ?? style.bodyFont
+            let header = view.table.headerRow && view.activeCell?.row == 0
+            let base = style.tableCellAttributes(header: header)
+            // Presentation is derived from the remaining semantic marks,
+            // never from the previously marked font or sparse decorations.
+            for key in [NSAttributedString.Key.font, .underlineStyle, .strikethroughStyle, .backgroundColor, .link, .underlineColor, .kern] {
+                typing[key] = nil
+            }
+            typing[.foregroundColor] = base[.foregroundColor]
             var marks: [NoteMark.Kind: Any] = [:]
             for mark in NoteMark.Kind.allCases { if let value = typing[.noteMark(mark)] { marks[mark] = value } }
-            typing.merge(style.markedAttributes(marks: marks, baseFont: view.table.headerRow && view.activeCell?.row == 0 ? style.tableHeaderFont : style.bodyFont)) { _, new in new }
-            if marks[.bold] == nil && marks[.italic] == nil && marks[.code] == nil { typing[.font] = base }
+            typing.merge(style.markedAttributes(marks: marks, baseFont: header ? style.tableHeaderFont : style.bodyFont)) { _, new in new }
             view.editor.typingAttributes = typing
             return true
         }
@@ -1044,10 +1054,10 @@ struct NoteCellLinkTarget: Equatable {
 }
 
 /// What "Paste as Text" takes back: the pasted text, where it went, and
-/// the history's depth just after the paste (it must still be the last step).
+/// the history's generation just after the paste (no later edit may intervene).
 struct NoteTablePasteOffer: Equatable {
     static let notice = String(localized: "Pasted as a table.")
     var text: String
     var selection: NSRange
-    var steps: Int
+    var generation: Int
 }

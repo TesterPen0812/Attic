@@ -501,7 +501,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             self.updateTextChecking()
         }
         history.canReplay = { [weak self] in self?.activity == .idle }
-        history.onWillReplay = { [weak self] in self?.textView?.cancelCalloutIconSession(reason: "history replay") }
+        history.onWillReplay = { [weak self] in
+            self?.textView?.cancelCalloutIconSession(reason: "history replay")
+            self?.tablePasteOffer = nil
+        }
         history.onTableSnapshot = { [weak self] id, table, focus in
             self?.restoreTable(id: id, table: table, focus: focus) ?? false
         }
@@ -2688,7 +2691,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let result = NSMutableAttributedString(attributedString: pasted)
         let string = textStorage.string as NSString
         let startsWithObject = fragment.blocks.first.map { $0.kind != .text } ?? false
-        let endsWithBlockObject = fragment.blocks.last.map { $0.kind == .image || $0.kind == .file || $0.kind == .opaque } ?? false
+        let endsWithBlockObject = fragment.blocks.last.map { [.image, .file, .divider, .table, .opaque].contains($0.kind) } ?? false
         let atLineStart = selection.location == 0 || string.character(at: selection.location - 1) == 0x0A
         if startsWithObject, !atLineStart || selection.location == 0 {
             result.insert(NSAttributedString(string: "\n", attributes: style.bodyAttributes), at: 0)
@@ -4249,12 +4252,15 @@ extension NoteEditorEngine {
         let caret = textView.selectedRange().location
         let line = lineRange(at: caret)
         let before = (textStorage.string as NSString).substring(with: NSRange(location: line.location, length: caret - line.location))
-        let token = before.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
+        guard let last = before.lastIndex(where: { !$0.isWhitespace }) else { return }
+        let end = before.index(after: last)
+        let start = before[..<end].lastIndex(where: { $0.isWhitespace }).map { before.index(after: $0) } ?? before.startIndex
+        let token = String(before[start..<end])
         let url = token.trimmingCharacters(in: CharacterSet(charactersIn: ".,;!?"))
-        guard NoteLinkPolicy.url(url) != nil else { return }
+        guard NoteLinkPolicy.url(url) != nil, let retained = token.range(of: url) else { return }
+        // Keep the original UTF-16 position through punctuation/space trimming.
         let length = (url as NSString).length
-        let location = caret - 1 - length
-        guard location >= line.location else { return }
+        let location = line.location + NSRange(start..<end, in: before).location + NSRange(retained, in: token).location
         _ = perform(.link(url), selection: NSRange(location: location, length: length))
         textView.setSelectedRange(NSRange(location: caret, length: 0))
     }
@@ -4730,7 +4736,20 @@ extension NoteEditorEngine {
     @discardableResult func setListStart(_ start: Int, at location: Int) -> Bool {
         guard paragraphStyle(at: location) == .number, start >= 1 else { return false }
         let first = firstNumberedItem(at: location)
-        return rewriteParagraphHint(.noteListStart, field: "start", value: start > 1 ? start : nil, at: first, name: "Restart Numbering")
+        // An adjacent run needs an explicit 1; without it the previous
+        // same-depth run supplies this segment's ordinal. A paragraph gap
+        // already supplies a boundary and keeps its implicit start.
+        let depth = indentAt(first) ?? 0
+        var previous = first
+        var adjacent = false
+        while previous > titleParagraphRange.length + 1 {
+            previous = paragraphRange(at: previous - 1).location
+            let priorDepth = indentAt(previous) ?? 0
+            if priorDepth > depth, isListItem(at: previous) { continue }
+            adjacent = paragraphStyle(at: previous) == .number && priorDepth == depth
+            break
+        }
+        return rewriteParagraphHint(.noteListStart, field: "start", value: start > 1 || adjacent ? start : nil, at: first, name: "Restart Numbering")
     }
     @discardableResult func continueNumbering(at location: Int) -> Bool {
         guard paragraphStyle(at: location) == .number else { return false }
@@ -4772,7 +4791,13 @@ extension NoteEditorEngine {
         let value = format.isCode ? "\n" : "\u{2028}"
         history.beginGroup(); defer { history.endGroup() }
         let atEnd = NSMaxRange(selection) == textStorage.length
-        guard performEdit(selection, with: NSAttributedString(string: value, attributes: attributes(forParagraphAt: selection.location)), name: "Line Break", selection: NSRange(location: selection.location + 1, length: 0)) else { return false }
+        var attributes = attributes(forParagraphAt: selection.location)
+        let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.filter { $0 != .link }.compactMap { kind in
+            textView.typingAttributes[.noteMark(kind)].map { (kind, $0) }
+        })
+        for (kind, value) in marks { attributes[.noteMark(kind)] = value }
+        attributes.merge(style.markedAttributes(marks: marks, baseFont: attributes[.font] as? NSFont ?? style.bodyFont)) { _, new in new }
+        guard performEdit(selection, with: NSAttributedString(string: value, attributes: attributes), name: "Line Break", selection: NSRange(location: selection.location + 1, length: 0)) else { return false }
         if format.isCode {
             if atEnd { carryEmptyContainer(format) }
             else { _ = rewriteParagraphHint(.noteCodeLanguage, field: "language", value: format.language, at: selection.location + 1, name: "Line Break") }

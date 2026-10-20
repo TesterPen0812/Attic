@@ -258,6 +258,25 @@ final class NoteTableTextCache {
         minimums.removeAll()
     }
 
+    private let today: () -> Date
+    private var relativeDay: (calendar: Calendar, interval: DateInterval)?
+
+    private func startOfToday() -> Date {
+        let now = today(), calendar = Calendar.current
+        if let relativeDay, relativeDay.calendar == calendar,
+           now >= relativeDay.interval.start, now < relativeDay.interval.end {
+            return relativeDay.interval.start
+        }
+        let start = calendar.startOfDay(for: now)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        relativeDay = (calendar, DateInterval(start: start, end: end))
+        return start
+    }
+
+    init(today: @escaping () -> Date = Date.init) {
+        self.today = today
+    }
+
     private func key(_ cell: NoteTable.Cell, header: Bool, width: CGFloat) -> Key {
         var hasher = Hasher()
         hasher.combine(cell.text)
@@ -268,6 +287,19 @@ final class NoteTableTextCache {
             hasher.combine(mark.length)
         }
         hasher.combine(cell.inlines.count)
+        var hasRelativeDate = false
+        for inline in cell.inlines {
+            switch inline.kind {
+            case let .date(day):
+                hasher.combine(0)
+                hasher.combine(day)
+                hasRelativeDate = true
+            case let .opaque(value):
+                hasher.combine(1)
+                hasher.combine(value)
+            }
+        }
+        if hasRelativeDate { hasher.combine(startOfToday()) }
         return Key(cell: hasher.finalize(), header: header, width: Int((width * 2).rounded()))
     }
 

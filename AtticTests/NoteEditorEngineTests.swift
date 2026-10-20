@@ -9,6 +9,193 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
+    func testPRB12InlineMeasurementsReuseWarmCache() throws {
+        let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
+        let today = NoteDay(date: Date())
+        let cells = (0..<300).map { index in
+            NoteTable.Cell("Due \u{FFFC} item \(index)", inlines: [NoteInline(id: UUID(), kind: .date(today))])
+        }
+        let cache = NoteTableTextCache()
+        var renders = 0
+        func pass() {
+            for cell in cells {
+                func text() -> NSAttributedString {
+                    renders += 1
+                    return NoteTextCodec.cellString(cell, attributes: style.tableCellAttributes(header: false), style: style) {
+                        renderer.apply(to: $0, today: today)
+                    }
+                }
+                _ = cache.natural(cell, header: false, string: text)
+                _ = cache.minimum(cell, header: false, string: text)
+                _ = cache.height(cell, header: false, width: 120, string: text)
+            }
+        }
+        pass()
+        let coldRenders = renders
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 { pass() }
+        print("PRB12_300_DATE_CHIPS_MS_PER_PASS=\((CFAbsoluteTimeGetCurrent() - start) * 1000 / 10)")
+        XCTAssertEqual(coldRenders, 900)
+        XCTAssertEqual(renders, coldRenders, "warm natural/minimum/height must not render the 300 unchanged date chips again")
+        let plainCache = NoteTableTextCache()
+        let plain = (0..<300).map { NoteTable.Cell("Due item \($0)") }
+        func plainPass() {
+            for cell in plain {
+                func text() -> NSAttributedString { NSAttributedString(string: cell.text, attributes: style.tableCellAttributes(header: false)) }
+                _ = plainCache.natural(cell, header: false, string: text)
+                _ = plainCache.minimum(cell, header: false, string: text)
+                _ = plainCache.height(cell, header: false, width: 120, string: text)
+            }
+        }
+        plainPass()
+        let plainStart = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 { plainPass() }
+        print("PRB12_300_PLAIN_CELLS_MS_PER_PASS=\((CFAbsoluteTimeGetCurrent() - plainStart) * 1000 / 10)")
+    }
+
+    func testPRB1TableMeasurementsDistinguishDatePayloadAndPresentation() throws {
+        let today = try XCTUnwrap(NoteDay(year: 2026, month: 10, day: 20))
+        let later = try XCTUnwrap(NoteDay(year: 2030, month: 12, day: 31))
+        let id = UUID(), style = NoteTextStyle()
+        let renderer = NoteObjectRenderer(design: style.design)
+        func cell(_ day: NoteDay) -> NoteTable.Cell {
+            .init("Due \u{FFFC} now", inlines: [NoteInline(id: id, kind: .date(day))])
+        }
+        func attributed(_ cell: NoteTable.Cell, today: NoteDay) -> NSAttributedString {
+            NoteTextCodec.cellString(cell, attributes: style.tableCellAttributes(header: false), style: style) {
+                renderer.apply(to: $0, today: today)
+            }
+        }
+        let first = cell(today), second = cell(later)
+        let firstText = attributed(first, today: today), secondText = attributed(second, today: today)
+        let freshFirst = NoteTableTextCache().natural(first, header: false) { firstText }
+        let freshSecond = NoteTableTextCache().natural(second, header: false) { secondText }
+        XCTAssertNotEqual(freshFirst, freshSecond, "precondition: the real date chips have different widths")
+        let width = CGFloat(try XCTUnwrap((56...152).first { width in
+            NoteTableTextCache.measure(firstText, width: CGFloat(width)) != NoteTableTextCache.measure(secondText, width: CGFloat(width))
+        }, "precondition: real chips wrap into different native heights"))
+        var measurementDate = today.date()
+        let shared = NoteTableTextCache(today: { measurementDate })
+        _ = shared.natural(first, header: false) { firstText }
+        _ = shared.minimum(first, header: false) { firstText }
+        _ = shared.height(first, header: false, width: width) { firstText }
+        var measurements = 0
+        XCTAssertEqual(shared.natural(second, header: false) { measurements += 1; return secondText }, freshSecond)
+        XCTAssertEqual(shared.minimum(second, header: false) { measurements += 1; return secondText },
+                       NoteTableTextCache().minimum(second, header: false) { secondText })
+        let height = NoteTableTextCache.measure(secondText, width: width)
+        XCTAssertEqual(shared.height(second, header: false, width: width) { measurements += 1; return secondText }, height)
+        XCTAssertEqual(measurements, 3)
+        // The same semantic cell changes geometry when its relative-day label changes.
+        measurementDate = later.date()
+        let changedText = attributed(first, today: later)
+        let freshChanged = NoteTableTextCache().natural(first, header: false) { changedText }
+        XCTAssertNotEqual(freshChanged, freshFirst)
+        XCTAssertEqual(shared.natural(first, header: false) { changedText }, freshChanged)
+        measurementDate = today.date()
+        var table = NoteTable(texts: [[""], [""]], headerRow: false)
+        table[.init(row: 0, column: 0)] = first; table[.init(row: 1, column: 0)] = second
+        table.columns[0].width = Double(width + 2 * AtticNoteTableMetrics.cellPaddingH)
+        let layout = NoteTableLayout.make(table, viewport: CGFloat(table.columns[0].width!), natural: { position in
+            shared.natural(table[position], header: false) { position.row == 0 ? firstText : secondText }
+        }, minimum: { position in
+            shared.minimum(table[position], header: false) { position.row == 0 ? firstText : secondText }
+        }, height: { position, width in
+            shared.height(table[position], header: false, width: width) { position.row == 0 ? firstText : secondText }
+        })
+        XCTAssertGreaterThanOrEqual(layout.rowHeights[1], height + 2 * AtticNoteTableMetrics.cellPaddingV)
+    }
+
+    func testPRB1NativeShiftReturnKeepsParagraphTypingMarks() throws {
+        var body = NoteBlock.text("ab"); body.marks = [NoteMark(.bold, offset: 0, length: 2)]
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+        let window = try XCTUnwrap(view.window)
+        XCTAssertTrue(window.makeFirstResponder(view))
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+        for (characters, code, flags) in [("\r", UInt16(36), NSEvent.ModifierFlags.shift), ("x", UInt16(7), [])] {
+            window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)))
+        }
+        XCTAssertEqual(view.string, "T\na\nxb", "AppKit maps Shift-Return to a paragraph break")
+        XCTAssertEqual(engine.document().blocks[2].marks, [NoteMark(.bold, offset: 0, length: 2)])
+    }
+
+    func testPRB1SoftBreakThroughWindowKeepsActiveMarks() throws {
+        for kind in [NoteMark.Kind.bold, .italic, .underline, .strikethrough, .code, .highlight] {
+            var body = NoteBlock.text("ab")
+            body.marks = [NoteMark(kind, offset: 0, length: 2)]
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+            defer { engine.detachView() }
+            let window = try XCTUnwrap(view.window)
+            XCTAssertTrue(window.makeFirstResponder(view))
+            view.setSelectedRange(NSRange(location: 3, length: 0))
+            XCTAssertNotNil(view.typingAttributes[.noteMark(kind)])
+            let original = engine.document()
+            func key(_ value: String, code: UInt16, flags: NSEvent.ModifierFlags = []) throws {
+                window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: value,
+                    charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
+            }
+            try key("\r", code: 36, flags: .control)
+            XCTAssertEqual(view.string, "T\na\u{2028}b", "Control-Return traversed native soft-break interpretation")
+            XCTAssertNotNil(view.typingAttributes[.noteMark(kind)], kind.rawValue)
+            try key("x", code: 7)
+            XCTAssertEqual(engine.document().blocks[1].text, "a\u{2028}xb")
+            XCTAssertEqual(engine.document().blocks[1].marks, [NoteMark(kind, offset: 0, length: 4)])
+            let typed = engine.document()
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1].text, "a\u{2028}b")
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+            XCTAssertTrue(engine.history.redo()); XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), typed)
+        }
+    }
+
+    func testPRB1RestartAtOneKeepsAdjacentNumberedSegmentsSeparate() throws {
+        var first = NoteBlock.text("one", style: "number"); first.start = 5
+        var second = NoteBlock.text("seven", style: "number"); second.start = 7
+        let original = NoteDocument(blocks: [.text("T"), first, second, .text("next", style: "number")], requires: ["structure-v1"])
+        let (engine, _) = makeEngine(original)
+        let at = location(of: "seven", in: engine)
+        XCTAssertEqual(engine.listMarker(at: at), .number("7."))
+        XCTAssertTrue(engine.setListStart(1, at: at))
+        XCTAssertEqual(engine.listMarker(at: at), .number("1."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "next", in: engine)), .number("2."))
+        XCTAssertEqual(engine.listMarker(at: 2), .number("5."))
+        let restarted = engine.document()
+        XCTAssertEqual(restarted.blocks[2].start, 1)
+        let saved = try NoteContentCodec.encode(restarted)
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+        let reopened = NoteEditorEngine(noteID: UUID(), document: loaded)
+        XCTAssertEqual(reopened.listMarker(at: at), .number("1."))
+        XCTAssertEqual(reopened.listMarker(at: location(of: "next", in: reopened)), .number("2."))
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), restarted)
+    }
+
+    func testPRB1TypedURLKeepsPunctuationAndWhitespaceOutsideItsMark() throws {
+        for suffix in [", ", ". ", "; ", "! ", "? ", ",   "] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            type("😀 https://example.com" + suffix, view)
+            let expected = [NoteMark(.link, offset: 3, length: 19, url: "https://example.com")]
+            XCTAssertEqual(engine.document().blocks[1].marks, expected, suffix)
+            let saved = try NoteContentCodec.encode(engine.document())
+            let reopened = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+            XCTAssertEqual(reopened.blocks[1].marks, expected, suffix)
+            let beforeUndo = engine.document()
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), beforeUndo)
+            XCTAssertEqual(engine.document().blocks[1].marks, expected)
+        }
+    }
+
+    #endif
+
     // Owner decision 2026-10-16: plain highlights stay yellow, with no saved key.
     #if !ATTIC_GENERATED_TESTS
     func testJPlainHighlightRendersYellowAndDefaultWritesNoColourKey() throws {

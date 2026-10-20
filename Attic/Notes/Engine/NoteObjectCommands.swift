@@ -240,13 +240,16 @@ extension NoteEditorEngine {
             if !changed { unstageImported(item.id) }
             return changed
         case .copyImage:
-            guard let image = object as? NoteImageAttachment,
-                  let data = await objectBytes(image) else { return false }
+            guard let image = object as? NoteImageAttachment else { return false }
+            // The byte read can suspend while the person edits or removes
+            // the image. Every representation belongs to the original copy.
+            let copied = textStorage.attributedSubstring(from: range)
+            guard let data = await objectBytes(image) else { return false }
             let board = NSPasteboard.general
             board.clearContents()
             let contentType = staged[image.attachmentID]?.contentTypeIdentifier
                 ?? UTType(filenameExtension: (image.filename as NSString).pathExtension)?.identifier ?? UTType.png.identifier
-            let fragment = writeSelection(range, to: board,
+            let fragment = writeSelection(copied, to: board,
                 types: [Self.fragmentType, .rtf, .string, NSPasteboard.PasteboardType(contentType)])
             let imageData = board.setData(data, forType: NSPasteboard.PasteboardType(contentType))
             return fragment && imageData

@@ -21,7 +21,7 @@ final class NoteTableAttachment: NoteObjectAttachment {
             guard table != oldValue else { return }
             MainActor.assumeIsolated {
                 updateLayout(from: oldValue)
-                hostedView?.modelDidChange()
+                hostedView?.modelDidChange(previousTable: oldValue)
             }
         }
     }
@@ -46,7 +46,7 @@ final class NoteTableAttachment: NoteObjectAttachment {
 
     // MARK: Layout
 
-    @MainActor let textCache = NoteTableTextCache()
+    @MainActor lazy var textCache = NoteTableTextCache()
     private var layoutCache: NoteTableLayout?
     private var cellHeights: [[CGFloat]] = []
 

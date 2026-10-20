@@ -341,7 +341,15 @@ final class NoteTableView: NSView {
     }
 
     /// The model changed (typing, a structure change, an Undo, an agent).
-    func modelDidChange() {
+    func modelDidChange(previousTable: NoteTable? = nil) {
+        // A presentation echo may wait for composition. A model replacement
+        // must win before any later input-client callback can write stale text.
+        if hasEditor, let activeCell, let previousTable, !editor.isApplyingOwnEdit,
+           previousTable.rows.map(\.id) != table.rows.map(\.id)
+            || previousTable.columns.map(\.id) != table.columns.map(\.id)
+            || !table.contains(activeCell) || previousTable[activeCell] != table[activeCell] {
+            editor.discardComposition()
+        }
         let heightBefore = grid.height
         if let activeCell, !table.contains(activeCell) { self.activeCell = nil }
         if let selection = cellSelection, !(table.contains(selection.anchor) && table.contains(selection.head)) {
@@ -484,6 +492,7 @@ final class NoteTableView: NSView {
             cellSelection = nil
             canvas.needsDisplay = true
         }
+        if changedCell, hasEditor, editor.hasMarkedText() { editor.unmarkText() }
         activeCell = position
         hasEditor = true
         if changedCell || editor.isHidden {
