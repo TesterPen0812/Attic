@@ -39,7 +39,8 @@
     "testIndentedQuotesKeepExplicitExportBytesAndDepth",
     "testIndentedQuoteHardBreakKeepsMarksAndDepth",
     "testLooseListsKeepContinuationInsideOneSourceItem",
-    "testObjectCharacterRemovalRebasesInlineMarks"
+    "testObjectCharacterRemovalRebasesInlineMarks",
+    "testListContinuationsStopAtInterveningBlocksAndNestedFirstHasNoBreak"
   ],
   "NotesPageRenderTests.swift": [
     "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",

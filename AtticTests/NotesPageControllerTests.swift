@@ -3695,4 +3695,25 @@ extension RoundPRAMarkdownTests {
         }
     }
 }
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testListContinuationsStopAtInterveningBlocksAndNestedFirstHasNoBreak() async throws {
+        var child = NoteBlock.text("child", style: "bullet"); child.indent = 1
+        var bold = NoteBlock.text("b", style: "number")
+        bold.marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let fixtures: [(String, [NoteBlock])] = [
+            ("- a\n  - child\n\n  b", [.text("a", style: "bullet"), child, .text("b", style: "bullet")]),
+            ("1. a\n\n   ```\n   code\n   ```\n\n   **b**", [.text("a", style: "number"), .text("code", style: "mono"), bold]),
+            ("- - child\n\n  b", [child, .text("b", style: "bullet")]),
+            ("- a\n\n  > quote\n\n  b", [.text("a", style: "bullet"), .text("quote", style: "quote"), .text("b", style: "bullet")]),
+            ("- a\n\n  | A | B |\n  | --- | --- |\n  | C | D |\n\n  b", [.text("a", style: "bullet"), .table(NoteTable(texts: [["A", "B"], ["C", "D"]])), .text("b", style: "bullet")])
+        ]
+        for (markdown, expected) in fixtures {
+            let imported = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(imported.blocks.map(\.text), expected.map(\.text), markdown)
+            XCTAssertEqual(imported.blocks.map(\.marks), expected.map(\.marks), markdown)
+            try await checkPaste(markdown, expected: expected)
+        }
+    }
+}
 #endif
