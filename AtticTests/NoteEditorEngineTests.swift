@@ -10,6 +10,50 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testPRB12InlineMeasurementsReuseWarmCache() throws {
+        let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
+        let today = NoteDay(date: Date())
+        let cells = (0..<300).map { index in
+            NoteTable.Cell("Due \u{FFFC} item \(index)", inlines: [NoteInline(id: UUID(), kind: .date(today))])
+        }
+        let cache = NoteTableTextCache()
+        var renders = 0
+        func pass() {
+            for cell in cells {
+                func text() -> NSAttributedString {
+                    renders += 1
+                    return NoteTextCodec.cellString(cell, attributes: style.tableCellAttributes(header: false), style: style) {
+                        renderer.apply(to: $0, today: today)
+                    }
+                }
+                _ = cache.natural(cell, header: false, string: text)
+                _ = cache.minimum(cell, header: false, string: text)
+                _ = cache.height(cell, header: false, width: 120, string: text)
+            }
+        }
+        pass()
+        let coldRenders = renders
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 { pass() }
+        print("PRB12_300_DATE_CHIPS_MS_PER_PASS=\((CFAbsoluteTimeGetCurrent() - start) * 1000 / 10)")
+        XCTAssertEqual(coldRenders, 900)
+        XCTAssertEqual(renders, coldRenders, "warm natural/minimum/height must not render the 300 unchanged date chips again")
+        let plainCache = NoteTableTextCache()
+        let plain = (0..<300).map { NoteTable.Cell("Due item \($0)") }
+        func plainPass() {
+            for cell in plain {
+                func text() -> NSAttributedString { NSAttributedString(string: cell.text, attributes: style.tableCellAttributes(header: false)) }
+                _ = plainCache.natural(cell, header: false, string: text)
+                _ = plainCache.minimum(cell, header: false, string: text)
+                _ = plainCache.height(cell, header: false, width: 120, string: text)
+            }
+        }
+        plainPass()
+        let plainStart = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 { plainPass() }
+        print("PRB12_300_PLAIN_CELLS_MS_PER_PASS=\((CFAbsoluteTimeGetCurrent() - plainStart) * 1000 / 10)")
+    }
+
     func testPRB1TableMeasurementsDistinguishDatePayloadAndPresentation() throws {
         let today = try XCTUnwrap(NoteDay(year: 2026, month: 10, day: 20))
         let later = try XCTUnwrap(NoteDay(year: 2030, month: 12, day: 31))
@@ -31,7 +75,8 @@ final class NoteEditorEngineTests: XCTestCase {
         let width = CGFloat(try XCTUnwrap((56...152).first { width in
             NoteTableTextCache.measure(firstText, width: CGFloat(width)) != NoteTableTextCache.measure(secondText, width: CGFloat(width))
         }, "precondition: real chips wrap into different native heights"))
-        let shared = NoteTableTextCache()
+        var measurementDate = today.date()
+        let shared = NoteTableTextCache(today: { measurementDate })
         _ = shared.natural(first, header: false) { firstText }
         _ = shared.minimum(first, header: false) { firstText }
         _ = shared.height(first, header: false, width: width) { firstText }
@@ -43,10 +88,12 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(shared.height(second, header: false, width: width) { measurements += 1; return secondText }, height)
         XCTAssertEqual(measurements, 3)
         // The same semantic cell changes geometry when its relative-day label changes.
+        measurementDate = later.date()
         let changedText = attributed(first, today: later)
         let freshChanged = NoteTableTextCache().natural(first, header: false) { changedText }
         XCTAssertNotEqual(freshChanged, freshFirst)
         XCTAssertEqual(shared.natural(first, header: false) { changedText }, freshChanged)
+        measurementDate = today.date()
         var table = NoteTable(texts: [[""], [""]], headerRow: false)
         table[.init(row: 0, column: 0)] = first; table[.init(row: 1, column: 0)] = second
         table.columns[0].width = Double(width + 2 * AtticNoteTableMetrics.cellPaddingH)

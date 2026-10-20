@@ -258,6 +258,25 @@ final class NoteTableTextCache {
         minimums.removeAll()
     }
 
+    private let today: () -> Date
+    private var relativeDay: (calendar: Calendar, interval: DateInterval)?
+
+    private func startOfToday() -> Date {
+        let now = today(), calendar = Calendar.current
+        if let relativeDay, relativeDay.calendar == calendar,
+           now >= relativeDay.interval.start, now < relativeDay.interval.end {
+            return relativeDay.interval.start
+        }
+        let start = calendar.startOfDay(for: now)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        relativeDay = (calendar, DateInterval(start: start, end: end))
+        return start
+    }
+
+    init(today: @escaping () -> Date = Date.init) {
+        self.today = today
+    }
+
     private func key(_ cell: NoteTable.Cell, header: Bool, width: CGFloat) -> Key {
         var hasher = Hasher()
         hasher.combine(cell.text)
@@ -268,14 +287,25 @@ final class NoteTableTextCache {
             hasher.combine(mark.length)
         }
         hasher.combine(cell.inlines.count)
+        var hasRelativeDate = false
+        for inline in cell.inlines {
+            switch inline.kind {
+            case let .date(day):
+                hasher.combine(0)
+                hasher.combine(day)
+                hasRelativeDate = true
+            case let .opaque(value):
+                hasher.combine(1)
+                hasher.combine(value)
+            }
+        }
+        if hasRelativeDate { hasher.combine(startOfToday()) }
         return Key(cell: hasher.finalize(), header: header, width: Int((width * 2).rounded()))
     }
 
     func natural(_ cell: NoteTable.Cell, header: Bool, string: () -> NSAttributedString) -> CGFloat {
         let key = key(cell, header: header, width: 0)
-        // Inline geometry also depends on rendered payload and relative-day
-        // presentation. Keep the bounded cache for plain cells only.
-        if cell.inlines.isEmpty, let cached = naturals[key] { return cached }
+        if let cached = naturals[key] { return cached }
         let text = string()
         var widest: CGFloat = 0
         // Each line of the cell, unwrapped.
@@ -293,7 +323,7 @@ final class NoteTableTextCache {
                 location += length + 1
             }
         }
-        if cell.inlines.isEmpty { naturals[key] = widest }
+        naturals[key] = widest
         return widest
     }
 
@@ -303,7 +333,7 @@ final class NoteTableTextCache {
     /// without breaking a word).
     func minimum(_ cell: NoteTable.Cell, header: Bool, string: () -> NSAttributedString) -> CGFloat {
         let key = key(cell, header: header, width: -1)
-        if cell.inlines.isEmpty, let cached = minimums[key] { return cached }
+        if let cached = minimums[key] { return cached }
         let text = string()
         let source = text.string as NSString
         var widest: CGFloat = 0
@@ -319,15 +349,15 @@ final class NoteTableTextCache {
             }
             location = end + max(1, gap.length)
         }
-        if cell.inlines.isEmpty { minimums[key] = widest }
+        minimums[key] = widest
         return widest
     }
 
     func height(_ cell: NoteTable.Cell, header: Bool, width: CGFloat, string: () -> NSAttributedString) -> CGFloat {
         let key = key(cell, header: header, width: width)
-        if cell.inlines.isEmpty, let cached = heights[key] { return cached }
+        if let cached = heights[key] { return cached }
         let value = Self.measure(string(), width: width)
-        if cell.inlines.isEmpty { heights[key] = value }
+        heights[key] = value
         return value
     }
 

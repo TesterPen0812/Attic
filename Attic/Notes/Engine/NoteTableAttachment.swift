@@ -46,7 +46,7 @@ final class NoteTableAttachment: NoteObjectAttachment {
 
     // MARK: Layout
 
-    @MainActor let textCache = NoteTableTextCache()
+    @MainActor lazy var textCache = NoteTableTextCache()
     private var layoutCache: NoteTableLayout?
     private var cellHeights: [[CGFloat]] = []
 
