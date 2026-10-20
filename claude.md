@@ -1,3 +1,5 @@
+# Attic Project Instructions
+
 <!-- BEGIN ATTIC DEVELOPMENT CONTRACT -->
 ## Development Contract — macOS-first and local-first
 
@@ -75,6 +77,24 @@ and `claude.md`. A future decision to make iPhone or CloudKit current product
 scope must update both files and include a written activation and validation
 plan.
 <!-- END ATTIC DEVELOPMENT CONTRACT -->
+
+## Working in this repository
+
+- Start with `README.md`: what ships, how to build a preview, and how the
+  tests and CI lanes are organised. `Docs/README.md` lists the few documents
+  that still govern current work. Older ledgers and handoffs were removed from
+  the working tree on 2026-10-20 and live only in Git history; do not treat
+  them as current.
+- Run `xcodebuild` through `Scripts/xcodebuild_locked.sh`, which serialises
+  builds and tests on one machine. Local unit tests run in the invisible
+  `AtticUnitTestHost` and must not show windows or take the keyboard; tests
+  that need a key window opt in with `TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS=1`.
+- Launch previews with `./script/build_and_run.sh` or
+  `Scripts/launch_local_preview.zsh` and a unique `com.taha.Attic.<preview>`
+  identity. Add `--optimized` when judging feel or speed.
+- Record design-system changes in `Attic/DesignSystem/CHANGELOG.md`.
+- The Canvas page is the pre-redesign implementation, kept as it is until its
+  rebuild. Do not extend it as part of other work.
 
 
 
