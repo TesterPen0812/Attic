@@ -30,6 +30,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     var isApplyingOwnEdit = false
     private var selectionBeforeEdit = NSRange(location: 0, length: 0)
     private var needsPresentationAfterComposition = false
+    private var isDiscardingComposition = false
     private var isHeader = false
     private var selectedEmptyCellText = false
 
@@ -118,7 +119,10 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     /// Shows `string`; keeps the caret where it was when asked (an Undo or
     /// an agent's change to the cell being edited).
     func load(_ string: NSAttributedString, keepingSelection: Bool) {
-        guard !hasMarkedText() else { needsPresentationAfterComposition = true; return }
+        if hasMarkedText() {
+            if keepingSelection { needsPresentationAfterComposition = true; return }
+            discardComposition()
+        }
         let selection = selectedRange()
         guard let storage = textStorage else { return }
         if !keepingSelection || !storage.isEqual(to: string) {
@@ -317,6 +321,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     func textDidChange(_ notification: Notification) {
+        guard !isDiscardingComposition else { return }
         selectedEmptyCellText = false
         table?.editorTextDidChange(selectionBefore: selectionBeforeEdit)
         refreshPresentationAfterComposition()
@@ -327,6 +332,15 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
         // The row grows with a composition; the model waits for its commit.
         table?.refreshEditorHeight()
+    }
+
+    /// End marked input without publishing its stale buffer over a newer model.
+    func discardComposition() {
+        guard hasMarkedText() else { return }
+        isDiscardingComposition = true
+        defer { isDiscardingComposition = false }
+        super.unmarkText()
+        inputContext?.discardMarkedText()
     }
 
     override func unmarkText() {

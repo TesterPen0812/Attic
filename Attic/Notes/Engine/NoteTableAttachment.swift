@@ -21,7 +21,7 @@ final class NoteTableAttachment: NoteObjectAttachment {
             guard table != oldValue else { return }
             MainActor.assumeIsolated {
                 updateLayout(from: oldValue)
-                hostedView?.modelDidChange()
+                hostedView?.modelDidChange(previousTable: oldValue)
             }
         }
     }

@@ -92,6 +92,46 @@ final class NotesV2TablesTests: XCTestCase {
             charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
     }
 
+    func testPRB12CompositionCommitsToOldCellBeforeActivation() throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let a = NoteTable.Position(row: 1, column: 0), b = NoteTable.Position(row: 1, column: 1)
+        view.activate(a)
+        view.editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.activate(b)
+        view.editor.unmarkText()
+        XCTAssertEqual(attachment.table[b].text, "Data taken from the IT network")
+        XCTAssertEqual(attachment.table[a].text, "Confidentiality日本")
+        XCTAssertEqual(view.editor.string, attachment.table[b].text)
+        XCTAssertFalse(view.editor.hasMarkedText())
+    }
+
+    func testPRB12AuthoritativeChangesDuringCompositionSurvive() throws {
+        for operation in ["agent", "undo", "row shift"] {
+            let (engine, _) = makeEngine(ciaBlocks())
+            let attachment = try tableAttachment(engine), view = try tableView(engine)
+            let a = NoteTable.Position(row: 1, column: 0)
+            view.activate(a)
+            if operation == "undo" { type("X", into: view.editor); engine.history.breakCoalescing() }
+            view.editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0),
+                                      replacementRange: NSRange(location: NSNotFound, length: 0))
+            switch operation {
+            case "agent": engine.changeTable(attachment, name: "Agent") { $0[a] = .init("Agent replacement") }
+            case "undo": XCTAssertTrue(engine.history.undo())
+            default: engine.changeTable(attachment, name: "Insert row") { $0.insertRow(at: 0) }
+            }
+            let expected = attachment.table
+            XCTAssertFalse(view.editor.hasMarkedText(), operation)
+            view.editor.unmarkText()
+            spin()
+            XCTAssertEqual(attachment.table, expected, operation)
+            XCTAssertEqual(view.editor.string, attachment.table[try XCTUnwrap(view.activeCell)].text, operation)
+            XCTAssertEqual(attachment.table[.init(row: operation == "row shift" ? 2 : 1, column: 0)].text,
+                           operation == "agent" ? "Agent replacement" : "Confidentiality", operation)
+        }
+    }
+
     func testPRB1CellMarkOffClearsNativePresentationBeforeTyping() throws {
         for header in [false, true] {
             for kind in [NoteMark.Kind.bold, .italic, .underline, .strikethrough, .highlight, .code, .link] {
