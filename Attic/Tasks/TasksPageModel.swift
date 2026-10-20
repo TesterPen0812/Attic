@@ -1757,8 +1757,8 @@ final class TasksPageModel: ObservableObject {
     var searchPlaceholder: String { String(localized: "Search done tasks") }
 
 
-    /// Return adds and keeps the bar focused; ⌘Return adds and opens the
-    /// task's page. Returns the new task.
+    /// Return adds and keeps the bar focused; ⌘Return reveals the new
+    /// task and opens its inline files. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
         guard addBarState.stagingFiles == 0 else { return nil }
@@ -1774,8 +1774,11 @@ final class TasksPageModel: ObservableObject {
         addBarState.clearDraft()
         // Files added while it was written go onto it (O17-06).
         attachComposerFiles(to: task.id)
-        if openingPage { expandedFiles.insert(task.id) }
         selectOnly(nil)
+        if openingPage {
+            expandedFiles.insert(task.id)
+            _ = show(task.id)
+        }
         addedRequest = ScrollRequest(id: task.id)
         // Added from Done, the task goes to Now, out of sight: say where.
         if tab == .done, !openingPage { showToast(String(localized: "Added to Now")) }

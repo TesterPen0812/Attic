@@ -472,6 +472,30 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(hosted.model.editingTitleID, now[now.count - 2], "Return edits the row that shows the keyboard")
     }
 
+    func testCommandReturnFromDoneRevealsTheNewTasksInlineFiles() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 560, addBarFocused: true)
+        defer { hosted.close() }
+        hosted.go(to: .done)
+        hosted.model.addBarState.text.text = "Command Return from Done"
+        hosted.spin(0.3)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.spin(1.2)
+        let task = try XCTUnwrap(hosted.store.tasks.first { $0.title == "Command Return from Done" })
+        XCTAssertEqual(task.status, .todo)
+        XCTAssertEqual(hosted.model.tab, .now)
+        XCTAssertEqual(hosted.shownPage(), TasksTab.now.rawValue)
+        XCTAssertTrue(hosted.model.expandedFiles.contains(task.id))
+        XCTAssertTrue(hosted.model.hasVisibleInlineFiles)
+        let open = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
+        hosted.model.setFilesExpanded(task.id, false)
+        hosted.spin(0.5)
+        let closed = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
+        XCTAssertEqual(open.height - closed.height, AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding, accuracy: 2,
+                       "the created task's inline Attach file line is rendered")
+        XCTAssertNotNil(hosted.window.firstResponder, "the keyboard remains in the window after navigation")
+    }
+
     func testTabVisitsInlineFilesAndTheirActionsInBothDirections() async throws {
         try requireKeyWindowTests()
         let policy = NSApp.activationPolicy()
