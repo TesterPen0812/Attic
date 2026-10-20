@@ -99,6 +99,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     /// Fonts and inks for the cell about to be edited.
     func prepare(header: Bool) {
         guard !hasMarkedText() else { needsPresentationAfterComposition = true; return }
+        needsPresentationAfterComposition = false
         selectedEmptyCellText = false
         isHeader = header
         guard let table else { return }
@@ -123,6 +124,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
             if keepingSelection { needsPresentationAfterComposition = true; return }
             discardComposition()
         }
+        needsPresentationAfterComposition = false
         let selection = selectedRange()
         guard let storage = textStorage else { return }
         if !keepingSelection || !storage.isEqual(to: string) {

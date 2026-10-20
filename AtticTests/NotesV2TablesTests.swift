@@ -92,6 +92,33 @@ final class NotesV2TablesTests: XCTestCase {
             charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
     }
 
+    func testPRB12DeferredPresentationCannotDropLaterBoldTyping() throws {
+        for reentry in ["prepare", "load"] {
+            let (engine, _) = makeEngine(ciaBlocks(.blank()))
+            let attachment = try tableAttachment(engine), view = try tableView(engine)
+            let cell = NoteTable.Position(row: 1, column: 0)
+            view.activate(cell)
+            let editor = view.editor
+            editor.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+            editor.prepare(header: false)
+            view.deactivate()
+            editor.unmarkText()
+            spin()
+            view.activate(cell)
+            // An explicit non-deferred presentation refresh also consumes the flag.
+            if reentry == "prepare" { editor.prepare(header: false) }
+            else { editor.load(view.cellString(cell), keepingSelection: true) }
+            try prb1Key("b", code: 11, flags: .command, in: editor)
+            try prb1Key("a", code: 0, in: editor)
+            spin()
+            XCTAssertNotNil(editor.typingAttributes[.noteMark(.bold)], reentry)
+            try prb1Key("b", code: 11, in: editor)
+            XCTAssertEqual(attachment.table[cell].text, "ab")
+            XCTAssertEqual(attachment.table[cell].marks, [NoteMark(.bold, offset: 0, length: 2)], reentry)
+        }
+    }
+
     func testPRB12CompositionCommitsToOldCellBeforeActivation() throws {
         let (engine, _) = makeEngine(ciaBlocks())
         let attachment = try tableAttachment(engine), view = try tableView(engine)
