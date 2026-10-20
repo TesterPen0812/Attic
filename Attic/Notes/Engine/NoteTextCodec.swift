@@ -232,7 +232,7 @@ enum NoteTextCodec {
         for (key, field) in [(NSAttributedString.Key.noteCodeLanguage, "language"), (.noteCalloutIcon, "callout")] {
             if let value = leading[key] as? String { result.extras[field] = .string(value) }
         }
-        if let start = leading[.noteListStart] as? Int, start >= 2 { result.extras["start"] = .int(Int64(start)) }
+        if let start = leading[.noteListStart] as? Int, start >= 1 { result.extras["start"] = .int(Int64(start)) }
         if let id = result.id { usedIDs.insert(id) }
         return result
     }

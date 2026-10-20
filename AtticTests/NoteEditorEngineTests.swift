@@ -9,6 +9,29 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
+    func testPRB1RestartAtOneKeepsAdjacentNumberedSegmentsSeparate() throws {
+        var first = NoteBlock.text("one", style: "number"); first.start = 5
+        var second = NoteBlock.text("seven", style: "number"); second.start = 7
+        let original = NoteDocument(blocks: [.text("T"), first, second, .text("next", style: "number")], requires: ["structure-v1"])
+        let (engine, _) = makeEngine(original)
+        let at = location(of: "seven", in: engine)
+        XCTAssertEqual(engine.listMarker(at: at), .number("7."))
+        XCTAssertTrue(engine.setListStart(1, at: at))
+        XCTAssertEqual(engine.listMarker(at: at), .number("1."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "next", in: engine)), .number("2."))
+        XCTAssertEqual(engine.listMarker(at: 2), .number("5."))
+        let restarted = engine.document()
+        XCTAssertEqual(restarted.blocks[2].start, 1)
+        let saved = try NoteContentCodec.encode(restarted)
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+        let reopened = NoteEditorEngine(noteID: UUID(), document: loaded)
+        XCTAssertEqual(reopened.listMarker(at: at), .number("1."))
+        XCTAssertEqual(reopened.listMarker(at: location(of: "next", in: reopened)), .number("2."))
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), restarted)
+    }
+
     func testPRB1TypedURLKeepsPunctuationAndWhitespaceOutsideItsMark() throws {
         for suffix in [", ", ". ", "; ", "! ", "? ", ",   "] {
             let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
@@ -27,6 +50,8 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertEqual(engine.document().blocks[1].marks, expected)
         }
     }
+
+    #endif
 
     // Owner decision 2026-10-16: plain highlights stay yellow, with no saved key.
     #if !ATTIC_GENERATED_TESTS

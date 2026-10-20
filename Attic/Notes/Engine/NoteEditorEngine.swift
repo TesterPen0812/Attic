@@ -4733,7 +4733,20 @@ extension NoteEditorEngine {
     @discardableResult func setListStart(_ start: Int, at location: Int) -> Bool {
         guard paragraphStyle(at: location) == .number, start >= 1 else { return false }
         let first = firstNumberedItem(at: location)
-        return rewriteParagraphHint(.noteListStart, field: "start", value: start > 1 ? start : nil, at: first, name: "Restart Numbering")
+        // An adjacent run needs an explicit 1; without it the previous
+        // same-depth run supplies this segment's ordinal. A paragraph gap
+        // already supplies a boundary and keeps its implicit start.
+        let depth = indentAt(first) ?? 0
+        var previous = first
+        var adjacent = false
+        while previous > titleParagraphRange.length + 1 {
+            previous = paragraphRange(at: previous - 1).location
+            let priorDepth = indentAt(previous) ?? 0
+            if priorDepth > depth, isListItem(at: previous) { continue }
+            adjacent = paragraphStyle(at: previous) == .number && priorDepth == depth
+            break
+        }
+        return rewriteParagraphHint(.noteListStart, field: "start", value: start > 1 || adjacent ? start : nil, at: first, name: "Restart Numbering")
     }
     @discardableResult func continueNumbering(at location: Int) -> Bool {
         guard paragraphStyle(at: location) == .number else { return false }
