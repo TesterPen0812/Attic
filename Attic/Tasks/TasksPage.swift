@@ -257,6 +257,7 @@ struct TasksPage: View {
     private func pageAppeared() {
         #if DEBUG
         pointer.keyboardControl = { [focusRequests] in focusRequests.current }
+        pointer.keyboardControlRequests = focusRequests
         #endif
         model.resetForReveal()
         // The page opens where the tab is, without a slide.
@@ -1122,7 +1123,7 @@ struct TasksPage: View {
         if AtticTextInput.hasKeyboard || addBarFocused || searchFocused {
             return typingFieldShortcutPressed(event, in: window)
         }
-        guard !(focusRequests.current?.base is TasksFileFocusID) else { return false }
+        if focusRequests.current?.base is TasksFileFocusID, case .file? = currentTabStop(in: tabStops()) { return false }
         let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
@@ -2506,7 +2507,7 @@ struct TasksPage: View {
         }
         // Inline files and their buttons own activation/removal keys,
         // even when their task remains selected.
-        if focusRequests.current?.base is TasksFileFocusID { return .ignored }
+        if focusRequests.current?.base is TasksFileFocusID, case .file? = currentTabStop(in: tabStops()) { return .ignored }
         // Typing on Done faster than the search field takes the keyboard
         // (it appears, then focuses): the letters join the query, never
         // lost (round 8, CI run 3: "inv" became "i").
@@ -4251,6 +4252,8 @@ final class TasksPointer {
     private(set) var drawnFocus: Set<TasksRowID> = []
     /// The focus reported by a live inline control, after a real key event.
     var keyboardControl: (() -> AnyHashable?)?
+    /// Tests can reproduce a late focus report after a control disappears.
+    weak var keyboardControlRequests: AtticFocusRequests?
 
     func noteDrawnFocus(_ row: TasksRowID, _ focused: Bool) {
         if focused { drawnFocus.insert(row) } else { drawnFocus.remove(row) }

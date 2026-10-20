@@ -496,6 +496,52 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertNotNil(hosted.window.firstResponder, "the keyboard remains in the window after navigation")
     }
 
+    func testDeletingFocusedFileLeavesPageShortcutsAndDoneTypingWorking() async throws {
+        try requireKeyWindowTests()
+        let policy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.accessory)
+        defer { NSApp.setActivationPolicy(policy) }
+        let hosted = try Hosted(height: 680)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        NSApp.activate(ignoringOtherApps: true)
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-delete-\(UUID()).txt")
+        try Data("file".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let imported = await hosted.store.attachFiles([url], to: id)
+        XCTAssertTrue(imported)
+        let file = try XCTUnwrap(hosted.store.task(withID: id)?.attachments.first)
+        hosted.spin(0.3)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.press("\t", keyCode: 48)
+        let target = TasksFileFocusID.file(owner: id, id: file.id)
+        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(target))
+        hosted.press("\u{F728}", keyCode: 117)
+        XCTAssertTrue(try XCTUnwrap(hosted.store.task(withID: id)).attachments.isEmpty)
+        // Reproduce SwiftUI resetting FocusState before disappearance can
+        // report blur, or delivering a final focus report after removal.
+        let requests = try XCTUnwrap(hosted.pointer.keyboardControlRequests)
+        requests.note(target, focused: true)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("1", keyCode: 18, modifiers: [.command, .option])
+        XCTAssertEqual(hosted.store.task(withID: id)?.priority, .low)
+        NSPasteboard.general.clearContents()
+        hosted.press("c", keyCode: 8, modifiers: .command)
+        XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
+            try XCTUnwrap(hosted.store.task(withID: id)).title) == true)
+        hosted.go(to: .done)
+        let done = try XCTUnwrap(hosted.model.doneDays().first?.rows.first?.id)
+        try hosted.clickRow(done, tab: .done)
+        requests.note(target, focused: true)
+        hosted.press("q", keyCode: 12)
+        XCTAssertEqual(hosted.model.searchQuery(for: .done), "q")
+    }
+
     func testTabVisitsInlineFilesAndTheirActionsInBothDirections() async throws {
         try requireKeyWindowTests()
         let policy = NSApp.activationPolicy()
