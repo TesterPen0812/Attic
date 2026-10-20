@@ -26,12 +26,16 @@ struct TasksFilesList: View {
     let onAttach: () -> Void
     let onRemove: (TaskImageReference) -> Void
     /// The page's Tab loop follows this list's currently drawn controls.
-    var onTabStopsChanged: ([TasksFileFocusID]) -> Void = { _ in }
+    var onTabStopsChanged: (TasksFileListID, [TasksFileFocusID]) -> Void = { _, _ in }
+    var onTabStopsRemoved: (TasksFileListID) -> Void = { _ in }
 
     /// Files shown before "N more…".
     static let collapsedCount = 4
 
     @State private var showsAll = false
+    @State private var instance = UUID()
+
+    private var listID: TasksFileListID { TasksFileListID(owner: owner, instance: instance) }
     @FocusState private var moreFocused: Bool
     @FocusState private var attachFocused: Bool
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
@@ -105,9 +109,9 @@ struct TasksFilesList: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Files"))
         .accessibilityIdentifier("tasks-files-\(owner.uuidString)")
-        .onAppear { onTabStopsChanged(tabStops) }
-        .onChange(of: tabStops) { _, stops in onTabStopsChanged(stops) }
-        .onDisappear { onTabStopsChanged([]) }
+        .onAppear { onTabStopsChanged(listID, tabStops) }
+        .onChange(of: tabStops) { _, stops in onTabStopsChanged(listID, stops) }
+        .onDisappear { onTabStopsRemoved(listID) }
     }
 }
 
@@ -322,4 +326,11 @@ enum TasksFileFocusID: Hashable {
     case file(owner: UUID, id: UUID)
     case more(UUID)
     case attach(UUID)
+}
+
+/// A task can have overlapping old/new lists during a removal transition.
+/// Disappearance may unregister only the instance that owns the stops.
+struct TasksFileListID: Hashable {
+    let owner: UUID
+    let instance: UUID
 }

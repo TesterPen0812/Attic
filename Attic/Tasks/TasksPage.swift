@@ -955,7 +955,7 @@ struct TasksPage: View {
         }
         let draft = !model.addBarState.text.text.trimmingCharacters(in: .whitespaces).isEmpty
         let files = Dictionary(uniqueKeysWithValues: ids.map { id in
-            (id, pointer.fileTabStops[TasksRowID(tab: tab, id: id)] ?? [])
+            (id, model.expandedFiles.contains(id) ? pointer.fileTabStops[TasksRowID(tab: tab, id: id)] ?? [] : [])
         })
         return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) }, files: files,
                                    strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled)
@@ -1704,7 +1704,15 @@ struct TasksPage: View {
                     onRemove: { file in
                         model.report(model.removeFile(file, from: id), on: id) { [weak model] in model?.removeFile(file, from: id) ?? .failed(.taskGone) }
                     },
-                    onTabStopsChanged: { pointer.fileTabStops[TasksRowID(tab: tab, id: id)] = $0 }
+                    onTabStopsChanged: { list, stops in
+                        pointer.registerFileTabStops(stops, for: TasksRowID(tab: tab, id: list.owner), instance: list.instance)
+                    },
+                    onTabStopsRemoved: { list in
+                        // A lazy row leaving the viewport is still in the
+                        // page's Tab order while its files remain expanded.
+                        guard !model.expandedFiles.contains(list.owner) else { return }
+                        pointer.unregisterFileTabStops(for: TasksRowID(tab: tab, id: list.owner), instance: list.instance)
+                    }
                 )
                 // It opens from under its row, as the quick look does.
                 .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top)
@@ -4244,7 +4252,19 @@ final class TasksPointer {
     /// row a Tab reached (deep review P2-04).
     var keyboardRow: TasksRowID?
     /// Inline lists register their visible stops without redrawing the page.
-    var fileTabStops: [TasksRowID: [TasksFileFocusID]] = [:]
+    private(set) var fileTabStops: [TasksRowID: [TasksFileFocusID]] = [:]
+    private var fileTabStopInstances: [TasksRowID: UUID] = [:]
+
+    func registerFileTabStops(_ stops: [TasksFileFocusID], for row: TasksRowID, instance: UUID) {
+        fileTabStopInstances[row] = instance
+        fileTabStops[row] = stops
+    }
+
+    func unregisterFileTabStops(for row: TasksRowID, instance: UUID) {
+        guard fileTabStopInstances[row] == instance else { return }
+        fileTabStopInstances[row] = nil
+        fileTabStops[row] = nil
+    }
 
     #if DEBUG
     /// Tests: the rows whose cells last drew them as the keyboard's row (with
