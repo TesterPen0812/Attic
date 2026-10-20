@@ -1775,15 +1775,17 @@ final class TasksPageModel: ObservableObject {
         // Files added while it was written go onto it (O17-06).
         attachComposerFiles(to: task.id)
         selectOnly(nil)
+        var revealed = false
         if openingPage {
             expandedFiles.insert(task.id)
-            _ = show(task.id)
+            revealed = show(task.id) == .shown
         }
         addedRequest = ScrollRequest(id: task.id)
-        // Added from Done, the task goes to Now, out of sight: say where.
-        if tab == .done, !openingPage { showToast(String(localized: "Added to Now")) }
+        // A requested reveal can be blocked by another unsaved edit. Only
+        // suppress the out-of-view feedback once the task is actually shown.
+        if tab == .done, !revealed { showToast(String(localized: "Added to Now")) }
         // Added where the view or a Find hides it (item 6): say so.
-        else if !openingPage, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
+        else if !revealed, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
             showToast(String(localized: "Added · hidden by this view"))
         }
         return task.id

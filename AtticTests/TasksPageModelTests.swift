@@ -274,6 +274,7 @@ final class TasksPageModelTests: XCTestCase {
             XCTAssertTrue(model.expandedFiles.contains(id))
             XCTAssertEqual(model.scrollRequest?.id, id)
             XCTAssertEqual(model.scrollRequest?.tab, target)
+            XCTAssertNil(model.toasts.current, "successful reveal needs no out-of-view toast")
             XCTAssertEqual(model.searchQuery(for: .done), "Keep this Done query", "navigation preserves the other tab's query")
         }
     }
