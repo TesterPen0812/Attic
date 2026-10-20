@@ -3729,4 +3729,34 @@ extension RoundPRAMarkdownTests {
         }
     }
 }
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testCalloutMarkersAcceptEverySourceLineEnding() async throws {
+        for eol in ["\n", "\r\n", "\r"] {
+            let markdown = "> [!NOTE]" + eol + "> text"
+            let imported = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(imported.blocks.map(\.text), ["text"], eol.debugDescription)
+            XCTAssertEqual(imported.blocks.first?.callout, "", eol.debugDescription)
+            XCTAssertNil(imported.blocks.first?.indent)
+            try await checkPaste(markdown, expected: [.text("text", style: "quote")])
+        }
+    }
+
+    func testPairedHTMLNormalizesSourceLineEndingsBeforeInlineParsing() throws {
+        let lf = try NoteMarkdownImport.document("<u>a\nb</u>")
+        XCTAssertEqual(lf.blocks.map(\.text), ["a\nb"])
+        XCTAssertEqual(lf.blocks.first?.marks, [NoteMark(.underline, offset: 0, length: 3)])
+        for eol in ["\r", "\r\n"] {
+            let imported = try NoteMarkdownImport.document("<u>a" + eol + "b</u>")
+            XCTAssertEqual(imported, lf, eol.debugDescription)
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: imported) else { return XCTFail("save") }
+            let fresh = ModelContext(store.container)
+            let row = try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+            XCTAssertEqual(NoteContentCodec.decode(try XCTUnwrap(row.content)).document,
+                NoteContentCodec.decode(try NoteContentCodec.encode(lf)).document)
+        }
+    }
+}
 #endif

@@ -41,7 +41,9 @@
     "testLooseListsKeepContinuationInsideOneSourceItem",
     "testObjectCharacterRemovalRebasesInlineMarks",
     "testListContinuationsStopAtInterveningBlocksAndNestedFirstHasNoBreak",
-    "testCalloutNestedQuotesDoNotKeepHiddenDepth"
+    "testCalloutNestedQuotesDoNotKeepHiddenDepth",
+    "testCalloutMarkersAcceptEverySourceLineEnding",
+    "testPairedHTMLNormalizesSourceLineEndingsBeforeInlineParsing"
   ],
   "NotesPageRenderTests.swift": [
     "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",

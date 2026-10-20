@@ -183,9 +183,9 @@ enum NoteMarkdownImport {
                     var content = blocks(Array(quote.children), depth: depth)
                     var icon: String?
                     if let paragraph = quote.child(at: 0) as? Markdown.Paragraph,
-                       raw(paragraph).range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |$|\n)"#, options: .regularExpression) != nil,
+                       raw(paragraph).range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |$|\r\n|\r|\n)"#, options: .regularExpression) != nil,
                        !content.isEmpty,
-                       let marker = content[0].text.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |\u2028|\n)?"#, options: .regularExpression) {
+                       let marker = content[0].text.range(of: #"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?: |\u2028|\r\n|\r|\n)?"#, options: .regularExpression) {
                         let name = String(content[0].text[marker]).components(separatedBy: "]")[0].dropFirst(2)
                         icon = ["NOTE": "", "TIP": "💡", "IMPORTANT": "❗", "WARNING": "⚠️", "CAUTION": "🛑"][String(name)] ?? ""
                         removePrefix(String(content[0].text[marker]).utf16.count, from: &content[0])
@@ -364,6 +364,7 @@ enum NoteMarkdownImport {
                 if let end = pairs[index], let startRange = node.range, let endRange = nodes[end].range {
                     var literal = rawInline(startRange.lowerBound..<endRange.upperBound, node: node, table: table)
                     if table { literal = NoteTableText.unescape(literal, decodeHTML: false) }
+                    literal = literal.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
                     // A balanced pair always has source bytes. Failed range
                     // extraction must fall back to the AST, never consume it
                     // as a successfully parsed empty span.
