@@ -243,9 +243,25 @@ final class DeepReviewFixTests: XCTestCase {
         hosted.spin(0.5)
         XCTAssertEqual(opened, [row], "the right-click menu's Open Files… opens the row's files")
 
+        // The pointer reports the entire cell, including its inline files.
+        // Wait for collapse to reach layout before clickRow uses its centre;
+        // otherwise that old centre can hit the space below the actual row.
+        func closeFilesAndWaitForLayout() throws {
+            for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
+            let deadline = Date().addingTimeInterval(2)
+            repeat {
+                content.layoutSubtreeIfNeeded()
+                hosted.spin(0.01)
+            } while abs((hosted.pointer.frames[TasksRowID(tab: .now, id: row)]?.height ?? .infinity) - frame.height) > 0.5
+                && Date() < deadline
+            XCTAssertEqual(try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)]).height,
+                           frame.height, accuracy: 0.5, "the files have collapsed in the rendered cell")
+        }
+
         // ⇧⌘I's menu: down to More (its eleventh item), into it, Return.
-        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
+        try closeFilesAndWaitForLayout()
         try hosted.clickRow(row, tab: .now)
+        XCTAssertEqual(hosted.model.selection, [row], "the menu's key is sent with its row selected")
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let actionTimers = schedule(Array(repeating: down, count: 11) + [("\u{F703}", 124), ("\r", 36)], in: hosted)
         hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
@@ -254,7 +270,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(opened, [row], "⇧⌘I's Open Files… opens them the same way")
 
         // ⌘Return on the selected row.
-        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
+        try closeFilesAndWaitForLayout()
         try hosted.clickRow(row, tab: .now)
         hosted.press("\r", keyCode: 36, modifiers: .command)
         hosted.spin(0.3)
