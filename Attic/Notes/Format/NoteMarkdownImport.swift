@@ -231,6 +231,22 @@ enum NoteMarkdownImport {
                         else if item.child(at: 0) is UnorderedList || item.child(at: 0) is OrderedList {
                             parts.insert(.text(""), at: 0)
                         }
+                        // One source ListItem owns one marker/checkbox. Its
+                        // continuation paragraphs are interior line breaks;
+                        // nested lists, quotes, code and tables stay separate.
+                        let paragraphs = parts.indices.filter {
+                            parts[$0].kind == .text && !["mono", "quote", "bullet", "number"].contains(parts[$0].style)
+                        }
+                        if let firstParagraph = paragraphs.first {
+                            for continuation in paragraphs.dropFirst() {
+                                let offset = parts[firstParagraph].text.utf16.count + 1
+                                parts[firstParagraph].text += "\u{2028}" + parts[continuation].text
+                                parts[firstParagraph].marks += parts[continuation].marks.map {
+                                    NoteMark($0.kind, offset: offset + $0.offset, length: $0.length, url: $0.url, colour: $0.colour)
+                                }
+                            }
+                            for continuation in paragraphs.dropFirst().reversed() { parts.remove(at: continuation) }
+                        }
                         for index in parts.indices where parts[index].style != "mono" && parts[index].style != "quote" && parts[index].kind == .text && parts[index].style != "bullet" && parts[index].style != "number" {
                             parts[index].style = start == nil ? "bullet" : "number"
                             parts[index].level = nil

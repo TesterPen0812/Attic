@@ -3577,6 +3577,11 @@ final class RoundPRAMarkdownTests: XCTestCase {
                 XCTAssertEqual(actual.indent ?? 0, wanted.indent ?? 0, file: file, line: line)
                 XCTAssertEqual(actual.start, wanted.start, file: file, line: line)
                 XCTAssertEqual(actual.checked, wanted.checked, file: file, line: line)
+                if wanted.kind == .checklist { XCTAssertNotNil(actual.id, file: file, line: line) }
+                if let table = wanted.table {
+                    XCTAssertEqual(actual.table?.rows.map { $0.cells.map(\.text) }, table.rows.map { $0.cells.map(\.text) }, file: file, line: line)
+                    XCTAssertEqual(actual.table?.rows.map { $0.cells.map(\.marks) }, table.rows.map { $0.cells.map(\.marks) }, file: file, line: line)
+                }
             }
         }
         assertExpected(engine.document())
@@ -3646,6 +3651,33 @@ extension RoundPRAMarkdownTests {
         let bytes = "# Title\n\n> > **Q**\\\n> > R"
         XCTAssertEqual(Array(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("Title"), quote])).utf8), Array(bytes.utf8))
         try await checkPaste("> > **Q**\\\n> > R", expected: [quote])
+    }
+}
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testLooseListsKeepContinuationInsideOneSourceItem() async throws {
+        let numbered = "7. first\n\n   **continuation**\n\n8. second"
+        var first = NoteBlock.text("first\u{2028}continuation", style: "number"); first.start = 7
+        first.marks = [NoteMark(.bold, offset: 6, length: 12)]
+        let second = NoteBlock.text("second", style: "number")
+        let document = try NoteMarkdownImport.document(numbered)
+        XCTAssertEqual(document.blocks.filter { $0.style == "number" }.count, 2)
+        XCTAssertEqual(document.blocks.map(\.text), ["first\u{2028}continuation", "second"])
+        XCTAssertEqual(document.blocks.first?.marks, first.marks)
+        try await checkPaste(numbered, expected: [first, second])
+        var checked = NoteBlock.checklist("first\u{2028}continuation")
+        checked.marks = [NoteMark(.bold, offset: 6, length: 12)]
+        let checklist = "- [ ] first\n\n  **continuation**"
+        let parsed = try NoteMarkdownImport.document(checklist)
+        XCTAssertEqual(parsed.blocks.filter { $0.kind == .checklist }.count, 1)
+        XCTAssertEqual(parsed.blocks.map(\.text), [checked.text])
+        XCTAssertEqual(Set(parsed.blocks.compactMap(\.id)).count, 1)
+        try await checkPaste(checklist, expected: [checked])
+        var child = NoteBlock.text("child", style: "bullet"); child.indent = 1
+        try await checkPaste("7. first\n\n   **continuation**\n\n   - child\n\n8. second", expected: [first, child, second])
+        let table = NoteTable(texts: [["A", "B"], ["C", "D"]])
+        try await checkPaste(checklist + "\n\n  | A | B |\n  | --- | --- |\n  | C | D |", expected: [checked, .table(table)])
     }
 }
 #endif

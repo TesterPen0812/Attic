@@ -37,7 +37,8 @@
     "testCalloutListStartAtIntMaxDoesNotOverflow",
     "testMarkdownSourceRangesKeepCRParagraphContent",
     "testIndentedQuotesKeepExplicitExportBytesAndDepth",
-    "testIndentedQuoteHardBreakKeepsMarksAndDepth"
+    "testIndentedQuoteHardBreakKeepsMarksAndDepth",
+    "testLooseListsKeepContinuationInsideOneSourceItem"
   ],
   "NotesPageRenderTests.swift": [
     "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",
