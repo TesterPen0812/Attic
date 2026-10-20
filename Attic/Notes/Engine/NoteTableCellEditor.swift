@@ -29,6 +29,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     /// model's echo must not reload the editor).
     var isApplyingOwnEdit = false
     private var selectionBeforeEdit = NSRange(location: 0, length: 0)
+    private var needsPresentationAfterComposition = false
     private var isHeader = false
     private var selectedEmptyCellText = false
 
@@ -94,6 +95,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     /// Fonts and inks for the cell about to be edited.
     func prepare(header: Bool) {
+        guard !hasMarkedText() else { needsPresentationAfterComposition = true; return }
         selectedEmptyCellText = false
         isHeader = header
         guard let table else { return }
@@ -114,6 +116,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     /// Shows `string`; keeps the caret where it was when asked (an Undo or
     /// an agent's change to the cell being edited).
     func load(_ string: NSAttributedString, keepingSelection: Bool) {
+        guard !hasMarkedText() else { needsPresentationAfterComposition = true; return }
         let selection = selectedRange()
         guard let storage = textStorage else { return }
         if !keepingSelection || !storage.isEqual(to: string) {
@@ -306,6 +309,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         selectedEmptyCellText = false
         table?.editorTextDidChange(selectionBefore: selectionBeforeEdit)
+        refreshPresentationAfterComposition()
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
@@ -318,6 +322,20 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     override func unmarkText() {
         super.unmarkText()
         table?.editorTextDidChange(selectionBefore: selectionBeforeEdit)
+        refreshPresentationAfterComposition()
+    }
+
+    /// A style/model echo waits for the input client's commit, then reads
+    /// the newly committed cell rather than the pre-composition model.
+    private func refreshPresentationAfterComposition() {
+        guard needsPresentationAfterComposition, !hasMarkedText() else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.needsPresentationAfterComposition, !self.hasMarkedText(),
+                  let table = self.table, let cell = table.activeCell, table.hasEditor else { return }
+            self.needsPresentationAfterComposition = false
+            self.prepare(header: table.table.headerRow && cell.row == 0)
+            table.modelDidChange()
+        }
     }
 
     func textView(_ textView: NSTextView, shouldChangeTypingAttributes oldTypingAttributes: [String: Any] = [:],

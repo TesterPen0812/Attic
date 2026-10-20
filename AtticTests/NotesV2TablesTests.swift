@@ -84,6 +84,43 @@ final class NotesV2TablesTests: XCTestCase {
         }
     }
 
+    func testPRB1AppearanceKeepsMarkedCellTextAndItsCommit() throws {
+        let (engine, text) = makeEngine(ciaBlocks(.blank()))
+        let window = try XCTUnwrap(text.window)
+        window.appearance = NSAppearance(named: .aqua)
+        spin()
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell, caret: .start)
+        let editor = view.editor
+        XCTAssertTrue(window.firstResponder === editor)
+        editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[cell].text, "")
+        let marked = editor.markedRange(), selected = editor.selectedRange()
+        window.appearance = NSAppearance(named: .darkAqua)
+        spin()
+        XCTAssertEqual(engine.style.design.mode, .dark, "native appearance callback reached the engine")
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(editor.string, "にほ")
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.markedRange(), marked)
+        XCTAssertEqual(editor.selectedRange(), selected)
+        XCTAssertEqual(attachment.table[cell].text, "", "composition stays out of the model")
+        editor.insertText("日本", replacementRange: editor.markedRange())
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[cell].text, "日本")
+        spin()
+        XCTAssertEqual(editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                       engine.style.tableCellAttributes(header: false)[.foregroundColor] as? NSColor)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "日本")
+    }
+
     // MARK: 1 · The table in the text (hosting and look)
 
     func testTheTableIsHostedAtTheColumnsWidthAndItsLineIsExactlyTheGrid() throws {
