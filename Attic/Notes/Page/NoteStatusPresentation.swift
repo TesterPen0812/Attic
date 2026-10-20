@@ -72,6 +72,14 @@ struct NoteNotice: Equatable, Sendable {
 /// § 3.12): the import's progress, the engine's pending guidance, and the
 /// damaged-recovery exit. Pure, so the wording is tested without a view.
 enum NoteStatusPresentation {
+    /// The page's table-conversion action, shared with its details renderer.
+    @MainActor
+    static func pasteAsTextAction(for notice: NoteNotice, engine: NoteEditorEngine,
+                                  handler: @escaping () -> Void) -> AtticStatusItem.Action? {
+        guard notice.kind == .tablePasted, engine.canPasteLastTableAsText else { return nil }
+        return .init(title: String(localized: "Paste as Text"), identifier: "notes-paste-as-text", handler: handler)
+    }
+
     /// "Adding 2 of 5" (the file being added now), "Adding a file" for one.
     static func importLabel(_ progress: NoteImportProgress?) -> String {
         guard let progress, progress.total > 1 else { return String(localized: "Adding a file") }

@@ -1022,14 +1022,10 @@ private struct NoteStatusSlot: View {
                 return AtticStatusItem(id: "pending", systemName: nil, title: notice.kind.headline, explanation: message, tone: .quiet)
             }
             var actions: [AtticStatusItem.Action] = []
-            if notice.kind == .tablePasted, session.engine.tablePasteOffer != nil {
-                // A tabular paste became a table: one click gives its text instead.
-                actions.append(.init(title: String(localized: "Paste as Text"), identifier: "notes-paste-as-text",
-                                     handler: details {
-                                         session.notice = nil
-                                         session.engine.pasteLastTableAsText()
-                                     }))
-            }
+            if let action = NoteStatusPresentation.pasteAsTextAction(for: notice, engine: session.engine, handler: details {
+                session.notice = nil
+                session.engine.pasteLastTableAsText()
+            }) { actions.append(action) }
             actions.append(.init(title: String(localized: "Dismiss"), identifier: "notes-notice-dismiss",
                                  handler: details { session.notice = nil }))
             // The pill says the headline; the details say the sentence (D-05).

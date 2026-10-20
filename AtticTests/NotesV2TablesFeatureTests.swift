@@ -731,16 +731,38 @@ final class NotesV2TablesFeatureTests: XCTestCase {
 
     // MARK: Paste and copy
 
+    func testPRB1PasteAsTextRefusesAnOfferAfterEditsOrUndo() throws {
+        for intervening in ["edit", "undo-replace", "undo-redo"] {
+            let (engine, _) = makeEngine([.text("T"), .text("body")])
+            XCTAssertTrue(engine.pastePlainText("a\tb\nc\td", at: NSRange(location: engine.textStorage.length, length: 0)))
+            XCTAssertNotNil(engine.tablePasteOffer)
+            if intervening != "edit" { XCTAssertTrue(engine.history.undo()) }
+            if intervening == "undo-redo" { XCTAssertTrue(engine.history.redo()) }
+            else {
+                XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                    with: NSAttributedString(string: "keep"), name: "Typing"))
+            }
+            let before = engine.document(), depth = engine.history.undoOps.count
+            XCTAssertNil(NoteStatusPresentation.pasteAsTextAction(for: NoteNotice(kind: .tablePasted, detail: NoteTablePasteOffer.notice),
+                engine: engine, handler: {}), "the page hides a stale action")
+            XCTAssertFalse(engine.pasteLastTableAsText(), intervening)
+            XCTAssertEqual(engine.document(), before, intervening)
+            XCTAssertEqual(engine.history.undoOps.count, depth, intervening)
+            XCTAssertNil(engine.tablePasteOffer)
+        }
+    }
+
     func testTabularPasteBecomesATableInOneStepWithPasteAsText() throws {
         let (engine, textView) = makeEngine([.text("Note"), .text("Intro")])
-        var notices: [String] = []
-        engine.onNotice = { notices.append($0.detail) }
+        var notices: [NoteNotice] = []
+        engine.onNotice = { notices.append($0) }
         let end = engine.textStorage.length
         XCTAssertTrue(engine.pastePlainText("Pillar\tWhat happened\nIntegrity\tEncrypted\n", at: NSRange(location: end, length: 0)))
         settle(engine, textView)
         XCTAssertEqual(engine.document().blocks.map(\.kind), [.text, .text, .table, .text])
         XCTAssertEqual(engine.document().blocks[1].text, "Intro", "the text before stays on its line")
-        XCTAssertEqual(notices.last, NoteTablePasteOffer.notice)
+        XCTAssertEqual(notices.last?.detail, NoteTablePasteOffer.notice)
+        XCTAssertEqual(notices.last?.kind, .tablePasted)
         XCTAssertNotNil(engine.tablePasteOffer)
         XCTAssertTrue(engine.pasteLastTableAsText())
         XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
@@ -754,7 +776,7 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         let huge = (0..<(NoteTable.maxRows + 1)).map { "r\($0)\tx" }.joined(separator: "\n")
         XCTAssertTrue(engine.pastePlainText(huge, at: NSRange(location: engine.textStorage.length, length: 0)))
         XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
-        XCTAssertTrue(notices.last?.contains("pasted as text") == true)
+        XCTAssertTrue(notices.last?.detail.contains("pasted as text") == true)
     }
 
     func testCopiedCellsPasteIntoAnotherCellAndGrowTheTable() throws {

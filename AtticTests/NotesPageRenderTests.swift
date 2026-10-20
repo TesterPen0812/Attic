@@ -494,6 +494,39 @@ final class NotesPageRenderTests: XCTestCase {
         write(harness.host, name: "library-light")
     }
 
+    func testPRB1InferredTableNoticeExposesAndRunsPasteAsText() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("body")]))
+        var emitted: NoteNotice?
+        engine.onNotice = { emitted = $0 }
+        let tsv = "Pillar\tWhat happened\nIntegrity\tEncrypted"
+        XCTAssertTrue(engine.pastePlainText(tsv, at: NSRange(location: engine.textStorage.length, length: 0)))
+        let notice = try XCTUnwrap(emitted)
+        XCTAssertEqual(notice.kind, .tablePasted)
+        let action = try XCTUnwrap(NoteStatusPresentation.pasteAsTextAction(for: notice, engine: engine) {
+            emitted = nil
+            XCTAssertTrue(engine.pasteLastTableAsText())
+        })
+        let host = NSHostingView(rootView: AtticStatusDetails(items: [AtticStatusItem(id: "notice", systemName: "info.circle",
+            title: notice.kind.headline, explanation: notice.detail, actions: [action])]).atticDesign(.default))
+        host.frame = NSRect(x: 0, y: 0, width: 320, height: 240)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; windows.append(window)
+        host.layoutSubtreeIfNeeded(); spin(0.2)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        let button = try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? nil) == "notes-paste-as-text" })
+        XCTAssertTrue(button.accessibilityPerformPress?() == true)
+        XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
+        XCTAssertTrue(engine.textStorage.string.contains(tsv))
+        XCTAssertNil(emitted)
+    }
+
     func testTheSlotShowsTheMostUrgentStateAndHowManyMore() throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
         let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })

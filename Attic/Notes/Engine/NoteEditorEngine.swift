@@ -501,7 +501,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             self.updateTextChecking()
         }
         history.canReplay = { [weak self] in self?.activity == .idle }
-        history.onWillReplay = { [weak self] in self?.textView?.cancelCalloutIconSession(reason: "history replay") }
+        history.onWillReplay = { [weak self] in
+            self?.textView?.cancelCalloutIconSession(reason: "history replay")
+            self?.tablePasteOffer = nil
+        }
         history.onTableSnapshot = { [weak self] id, table, focus in
             self?.restoreTable(id: id, table: table, focus: focus) ?? false
         }
