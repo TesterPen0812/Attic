@@ -26,7 +26,18 @@ enum NoteMarkdownImport {
         init(_ source: String) {
             let bytes = Array(source.utf8)
             self.source = bytes
-            self.lines = [0] + bytes.indices.filter { bytes[$0] == 10 }.map { $0 + 1 }
+            var starts = [0], index = 0
+            while index < bytes.count {
+                if bytes[index] == 13 {
+                    index += 1
+                    if index < bytes.count, bytes[index] == 10 { index += 1 }
+                    starts.append(index)
+                } else {
+                    if bytes[index] == 10 { starts.append(index + 1) }
+                    index += 1
+                }
+            }
+            self.lines = starts
         }
 
         func offset(_ location: SourceLocation) -> Int? {
@@ -85,7 +96,8 @@ enum NoteMarkdownImport {
             covered.sort { $0.lowerBound < $1.lowerBound }
             var result: [(Int, NoteBlock)] = [], index = 0, continuation = false
             for (line, start) in lines.enumerated() {
-                let end = line + 1 < lines.count ? lines[line + 1] - 1 : source.count
+                var end = line + 1 < lines.count ? lines[line + 1] : source.count
+                while end > start, source[end - 1] == 10 || source[end - 1] == 13 { end -= 1 }
                 let text = String(decoding: source[start..<end], as: UTF8.self)
                 let position = start + text.utf8.prefix { $0 == 32 || $0 == 9 }.count
                 while index < covered.count, covered[index].upperBound <= position { index += 1 }
@@ -338,7 +350,10 @@ enum NoteMarkdownImport {
                 if let end = pairs[index], let startRange = node.range, let endRange = nodes[end].range {
                     var literal = rawInline(startRange.lowerBound..<endRange.upperBound, node: node, table: table)
                     if table { literal = NoteTableText.unescape(literal, decodeHTML: false) }
-                    if let cell = NoteMarkdownInline.parse(literal) { append(cell); index = end + 1; continue }
+                    // A balanced pair always has source bytes. Failed range
+                    // extraction must fall back to the AST, never consume it
+                    // as a successfully parsed empty span.
+                    if !literal.isEmpty, let cell = NoteMarkdownInline.parse(literal) { append(cell); index = end + 1; continue }
                 }
                 if let text = node as? Markdown.Text { append(textCell(text, table: table)) }
                 else if let code = node as? InlineCode { append(.init(code.code), mark: .code) }

@@ -34,7 +34,8 @@
     "testMeasuredColdOpenAndLaunchWithFiveThousandLineNote",
     "testEveryStateEventPair",
     "testStaleBaseNeverCommitsAcrossExternalEvents",
-    "testCalloutListStartAtIntMaxDoesNotOverflow"
+    "testCalloutListStartAtIntMaxDoesNotOverflow",
+    "testMarkdownSourceRangesKeepCRParagraphContent"
   ],
   "NotesPageRenderTests.swift": [
     "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",

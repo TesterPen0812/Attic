@@ -3606,4 +3606,19 @@ final class RoundPRAMarkdownTests: XCTestCase {
         try await checkPaste(raw, expected: expected.map { .text($0, style: "quote") })
     }
 }
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testMarkdownSourceRangesKeepCRParagraphContent() async throws {
+        var underlined = NoteBlock.text("Important")
+        underlined.marks = [NoteMark(.underline, offset: 0, length: 9)]
+        for eol in ["\n", "\r\n", "\r"] {
+            let raw = "Intro" + eol + eol + "<u>Important</u>"
+            let document = try NoteMarkdownImport.document(raw)
+            XCTAssertEqual(document.blocks.map(\.text), ["Intro", "Important"], eol.debugDescription)
+            XCTAssertEqual(document.blocks.last?.marks, underlined.marks, eol.debugDescription)
+            try await checkPaste(raw, expected: [.text("Intro"), underlined])
+        }
+    }
+}
 #endif
