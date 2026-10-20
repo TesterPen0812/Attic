@@ -360,3 +360,55 @@ final class RoundPRADataSafetyTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), Data("private bytes".utf8))
     }
 }
+
+@MainActor
+extension RoundPRADataSafetyTests {
+    func testDoneLogOwnerKeepsAttachmentRecoveryAndCompletionState() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let root = ownedTemporaryDirectory(prefix: "PRADoneAttachment")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("plan.txt"), bytes = Data("done task attachment".utf8)
+        try bytes.write(to: source)
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
+        let store = TaskStore(container: container, now: { clock.value }, taskImageFiles: files)
+        let task = try XCTUnwrap(store.create(title: "Finished work"))
+        let attached = await store.attachFiles([source], to: task.id)
+        XCTAssertTrue(attached)
+        let reference = try XCTUnwrap(store.task(withID: task.id)?.attachments.first)
+        XCTAssertTrue(store.removeAttachment(reference.id, from: task.id))
+        let summary = try XCTUnwrap(store.recentlyDeletedAttachments().first)
+        XCTAssertTrue(store.setStatus(.done, for: try XCTUnwrap(store.task(withID: task.id))))
+        let completedAt = store.task(withID: task.id)?.completedAt
+        clock.value = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: clock.value))
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: calendar.startOfDay(for: clock.value)), 1)
+        XCTAssertNil(store.task(withID: task.id))
+        let logged = try XCTUnwrap(store.doneLog().first)
+        let loggedAt = try XCTUnwrap(logged.doneLoggedAt)
+        // A duplicate in the Done log must be restored too, without leaving Done.
+        let seed = ModelContext(container)
+        let sibling = TaskItem(id: task.id, title: logged.title, status: .done, createdAt: logged.createdAt, updatedAt: logged.updatedAt)
+        sibling.completedAt = completedAt; sibling.doneLoggedAt = loggedAt
+        sibling.removedAttachmentsData = logged.removedAttachmentsData; sibling.listOrderVersion = logged.listOrderVersion
+        seed.insert(sibling); try seed.save(); store.refresh()
+        let file = try await files.verifiedURL(for: reference)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(file)), bytes)
+        let summaries = store.recentlyDeletedAttachments()
+        XCTAssertEqual(summaries.map(\.attachmentID), [summary.attachmentID])
+        XCTAssertEqual(summaries.first?.owner, summary.owner)
+        XCTAssertEqual(summaries.first?.deletedAt, summary.deletedAt)
+        XCTAssertTrue(store.restoreAttachment(reference.id))
+        XCTAssertTrue(store.recentlyDeletedAttachments().isEmpty)
+        XCTAssertNil(store.task(withID: task.id))
+        let fresh = ModelContext(container), id = task.id
+        let rows = try fresh.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(rows.count, 2)
+        for row in rows {
+            XCTAssertEqual(row.attachments, [reference]); XCTAssertTrue(row.removedAttachments.isEmpty)
+            XCTAssertEqual(row.status, .done); XCTAssertEqual(row.completedAt, completedAt); XCTAssertEqual(row.doneLoggedAt, loggedAt)
+        }
+        let restoredFile = try await files.verifiedURL(for: reference)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(restoredFile)), bytes)
+    }
+}

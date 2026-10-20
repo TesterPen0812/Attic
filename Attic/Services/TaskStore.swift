@@ -1477,19 +1477,36 @@ final class TaskStore: ObservableObject {
         return (shown, removed)
     }
 
-    /// Attachments removed from tasks that are still shown, newest first.
+    /// Resolve all replicas before filtering owners: Done-log tasks retain
+    /// the same attachment recovery window as tasks in the active lists.
+    private func attachmentRecoveryOwners() throws -> [TaskItem] {
+        let candidates = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.removedAttachmentsData != nil }))
+        let ids = Array(Set(candidates.map(\.id)))
+        guard !ids.isEmpty else { return [] }
+        let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { ids.contains($0.id) }))
+        return Self.canonicalReplicas(from: replicas).filter { $0.deletedAt == nil }
+    }
+
+    /// Attachments removed from non-deleted tasks, including Done, newest first.
     func recentlyDeletedAttachments() -> [DeletedAttachmentSummary] {
-        tasks.flatMap { task in
-            task.removedAttachments.map {
-                DeletedAttachmentSummary(
-                    attachmentID: $0.reference.id,
-                    owner: AtticItemRef(.task, task.id),
-                    filename: $0.reference.filename,
-                    deletedAt: $0.removedAt
-                )
+        do {
+            return try attachmentRecoveryOwners().flatMap { task in
+                task.removedAttachments.map {
+                    DeletedAttachmentSummary(
+                        attachmentID: $0.reference.id,
+                        owner: AtticItemRef(.task, task.id),
+                        filename: $0.reference.filename,
+                        deletedAt: $0.removedAt
+                    )
+                }
             }
+            .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return []
         }
-        .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
     }
 
     /// Puts a removed attachment back at the end of its task's attachments,
@@ -1497,7 +1514,10 @@ final class TaskStore: ObservableObject {
     /// changed from its own lists, so references only a duplicate holds stay.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
-        guard let task = tasks.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
+        let owners: [TaskItem]
+        do { owners = try attachmentRecoveryOwners() }
+        catch { report(error.localizedDescription, owner: nil); return false }
+        guard let task = owners.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
               let entry = task.removedAttachments.first(where: { $0.reference.id == attachmentID }) else {
             report(TaskReplicaMutationError.attachmentNotRemoved(attachmentID).localizedDescription, owner: nil)
             return false
