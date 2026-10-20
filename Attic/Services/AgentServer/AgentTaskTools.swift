@@ -1031,6 +1031,7 @@ final class AgentTaskTools {
         switch noteStore.agentDelete(noteID: note.id, baseRevisionToken: base, agentName: agentName(arguments),
                                     disposition: noteStore.agentWriteDisposition(note.id)) {
         case .success(.applied):
+            library.recordCommittedDeletion(AtticItemRef(.note, note.id))
             return try encode(["deleted": note.id.uuidString, "kind": "note", "status": "applied",
                 "restorable_until": Self.dateFormatter.string(from: RecentlyDeletedPolicy.expiry(deletedAt: Date(), calendar: .autoupdatingCurrent))])
         case let .success(.pending(editID)):
