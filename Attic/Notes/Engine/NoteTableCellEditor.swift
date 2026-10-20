@@ -236,7 +236,12 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     override func keyDown(with event: NSEvent) {
         let selection = selectedRange(), generation = table?.engine?.history.recordingGeneration
-        defer { endTypingAfterSelectionMove(from: selection, generation: generation) }
+        let wasComposing = hasMarkedText()
+        defer {
+            if !wasComposing && !hasMarkedText() {
+                endTypingAfterSelectionMove(from: selection, generation: generation)
+            }
+        }
         if table?.engine?.find.handleKey(event) == true { return }
         if let table, let engine = table.engine, !hasMarkedText(), engine.handleTableShortcut(event, in: table) { return }
         if !(event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command &&

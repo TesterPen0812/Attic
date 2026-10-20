@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import XCTest
 @testable import Attic
 
@@ -90,6 +91,73 @@ final class NotesV2TablesTests: XCTestCase {
         window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
             timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: value,
             charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
+    }
+
+    func testPRB12DeadKeyAccentJoinsSurroundingTypingUndo() throws {
+        let (engine, _) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell)
+        // Synthetic NSEvents have no TSM dead-key session in an invisible
+        // window. Supply its native input-client callbacks inside keyDown,
+        // exercising both entry into composition and its committed accent.
+        let selector = #selector(NSResponder.interpretKeyEvents(_:))
+        let method = try XCTUnwrap(class_getInstanceMethod(NSTextView.self, selector))
+        typealias Interpret = @convention(c) (NSResponder, Selector, NSArray) -> Void
+        let original = method_getImplementation(method)
+        let invoke = unsafeBitCast(original, to: Interpret.self)
+        var compositionKeys = 0
+        let inputMethod: @convention(block) (NSResponder, NSArray) -> Void = { responder, events in
+            guard responder === view.editor, let event = events.firstObject as? NSEvent, event.keyCode == 14 else {
+                invoke(responder, selector, events)
+                return
+            }
+            compositionKeys += 1
+            if event.modifierFlags.contains(.option) {
+                view.editor.setMarkedText("´", selectedRange: NSRange(location: 1, length: 0),
+                                          replacementRange: NSRange(location: NSNotFound, length: 0))
+            } else {
+                view.editor.insertText("é", replacementRange: view.editor.markedRange())
+            }
+        }
+        let replacement = imp_implementationWithBlock(inputMethod)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        for (value, code) in [("c", UInt16(8)), ("a", 0), ("f", 3)] {
+            try prb1Key(value, code: code, in: view.editor)
+        }
+        try prb1Key("´", code: 14, flags: .option, in: view.editor)
+        XCTAssertTrue(view.editor.hasMarkedText(), "Option-e starts a native dead-key composition")
+        try prb1Key("e", code: 14, in: view.editor)
+        XCTAssertFalse(view.editor.hasMarkedText())
+        XCTAssertEqual(compositionKeys, 2)
+        XCTAssertEqual(attachment.table[cell].text, "café")
+        try prb1Key("s", code: 1, in: view.editor)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "", "one Undo removes surrounding typing and its accent")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "cafés")
+    }
+
+    func testPRB12MarkedInputCaretMovementDoesNotBreakTypingUndo() throws {
+        let (engine, _) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell)
+        type("abc", into: view.editor)
+        view.editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+        let generation = engine.history.recordingGeneration, selection = view.editor.selectedRange()
+        try prb1Key("\u{F702}", code: 123, in: view.editor)
+        XCTAssertNotEqual(view.editor.selectedRange(), selection, "composition caret moved")
+        XCTAssertEqual(engine.history.recordingGeneration, generation, "composition movement is not a model edit")
+        view.editor.insertText("日本", replacementRange: view.editor.markedRange())
+        type("d", into: view.editor)
+        XCTAssertEqual(attachment.table[cell].text, "abc日本d")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "", "IME commit joins the surrounding typing")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "abc日本d")
     }
 
     func testPRB12DeferredPresentationCannotDropLaterBoldTyping() throws {
