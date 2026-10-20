@@ -347,6 +347,75 @@ final class RoundO1Tests: XCTestCase {
         return (store, TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices()))
     }
 
+    private final class ComposerFileGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var reply: ((URL?, Bool, Error?) -> Void)?
+        let requested = XCTestExpectation(description: "provider requested")
+
+        func provider() -> NSItemProvider {
+            let provider = NSItemProvider()
+            provider.registerFileRepresentation(forTypeIdentifier: UTType.png.identifier, fileOptions: [], visibility: .all) { reply in
+                self.lock.withLock { self.reply = reply }
+                self.requested.fulfill()
+                return Progress(totalUnitCount: 1)
+            }
+            return provider
+        }
+
+        func release(_ url: URL) {
+            let callback = lock.withLock { let callback = reply; reply = nil; return callback }
+            callback?(url, false, nil)
+        }
+    }
+
+    private func waitForComposer(_ condition: () -> Bool) async {
+        let end = Date().addingTimeInterval(5)
+        while !condition(), Date() < end { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(condition(), "attachment operation completed")
+    }
+
+    func testPendingComposerFileKeepsSubmissionInItsDraft() async throws {
+        let (store, model) = try makeModel()
+        let source = try makeFile("Held.png")
+        try pngData().write(to: source)
+        let gate = ComposerFileGate()
+        model.addComposerFiles([gate.provider()])
+        await fulfillment(of: [gate.requested], timeout: 5)
+        model.addBarState.text.text = "Task A"
+        XCTAssertNil(model.submitAddBar(), "submission waits for the draft's pending files")
+        XCTAssertEqual(model.addBarState.text.text, "Task A")
+        gate.release(source)
+        await waitForComposer { model.addBarState.stagingFiles == 0 }
+        let a = try XCTUnwrap(model.submitAddBar())
+        model.addBarState.text.text = "Task B"
+        let b = try XCTUnwrap(model.submitAddBar())
+        await waitForComposer { store.task(withID: a)?.attachments.count == 1 }
+        XCTAssertEqual(store.task(withID: a)?.title, "Task A")
+        XCTAssertEqual(store.task(withID: b)?.attachments.count, 0)
+        XCTAssertTrue(model.addBarState.files.isEmpty)
+    }
+
+    func testClearInvalidatesPendingComposerFiles() async throws {
+        let (_, model) = try makeModel()
+        let source = try makeFile("Held.png")
+        try pngData().write(to: source)
+        let root = TaskAttachmentStaging.ownedRootURL
+        let before = Set((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+        let gate = ComposerFileGate()
+        model.addComposerFiles([gate.provider()])
+        await fulfillment(of: [gate.requested], timeout: 5)
+        let directories = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        let staged = try XCTUnwrap(directories.first { !before.contains($0) })
+        model.clearComposerFiles()
+        XCTAssertNil(model.composerFilesValue)
+        gate.release(source)
+        await waitForComposer { !FileManager.default.fileExists(atPath: staged.path) }
+        XCTAssertEqual(model.addBarState.stagingFiles, 0)
+        XCTAssertTrue(model.addBarState.files.isEmpty, "the cleared provider cannot return")
+        XCTAssertNil(model.composerFilesValue)
+        model.clearComposerFiles()
+    }
+
     func testFilesAddedWhileComposingGoOntoTheNewTaskThroughTheTaskImport() throws {
         let (store, model) = try makeModel()
         let file = try makeFile("Lease.pdf")

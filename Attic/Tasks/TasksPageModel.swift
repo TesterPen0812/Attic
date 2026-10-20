@@ -130,6 +130,8 @@ final class TasksAddBarState: ObservableObject {
     /// or the strip's × removes them.
     @Published var files: [TasksComposerFiles] = []
     @Published var stagingFiles = 0
+    /// Clear invalidates providers still staging for this draft.
+    var filesGeneration = UUID()
 
     /// The owner's side of the token field's undo: text and pieces step
     /// back together; nil when the draft has nothing to undo.
@@ -1759,6 +1761,7 @@ final class TasksPageModel: ObservableObject {
     /// task's page. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
+        guard addBarState.stagingFiles == 0 else { return nil }
         // Submitting finishes the words at the end (round 8, G1): a date or
         // priority typed after a pick, still at the caret (`Call !` then
         // Return), replaces the pick as a finished one does. Words that are
@@ -1786,6 +1789,7 @@ final class TasksPageModel: ObservableObject {
     /// Pasted lines: one task per line, or all of them as one task.
     /// The offer stays (with "Not saved · Retry") until the tasks exist.
     func acceptPaste(asOne: Bool) {
+        guard addBarState.stagingFiles == 0 else { return }
         guard let offer = pasteOffer else { return }
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
         let drafts = builder.drafts(from: offer.text, mode: asOne ? .single : .onePerLine)
