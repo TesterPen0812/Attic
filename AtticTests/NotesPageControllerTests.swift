@@ -3621,4 +3621,31 @@ extension RoundPRAMarkdownTests {
         }
     }
 }
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testIndentedQuotesKeepExplicitExportBytesAndDepth() async throws {
+        for (depth, bytes) in [(0, "# Title\n\n> Q"), (1, "# Title\n\n> > Q"), (2, "# Title\n\n> > > Q")] {
+            var quote = NoteBlock.text("Q", style: "quote"); quote.indent = depth == 0 ? nil : depth
+            let markdown = NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("Title"), quote]))
+            XCTAssertEqual(Array(markdown.utf8), Array(bytes.utf8))
+            let imported = try NoteMarkdownImport.document(bytes)
+            XCTAssertEqual(imported.blocks.last?.text, "Q")
+            XCTAssertEqual(imported.blocks.last?.style, "quote")
+            XCTAssertEqual(imported.blocks.last?.indent ?? 0, depth)
+            try await checkPaste(bytes.components(separatedBy: "\n\n")[1], expected: [quote])
+        }
+    }
+}
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testIndentedQuoteHardBreakKeepsMarksAndDepth() async throws {
+        var quote = NoteBlock.text("Q\u{2028}R", style: "quote"); quote.indent = 1
+        quote.marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let bytes = "# Title\n\n> > **Q**\\\n> > R"
+        XCTAssertEqual(Array(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("Title"), quote])).utf8), Array(bytes.utf8))
+        try await checkPaste("> > **Q**\\\n> > R", expected: [quote])
+    }
+}
 #endif

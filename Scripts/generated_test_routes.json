@@ -35,7 +35,9 @@
     "testEveryStateEventPair",
     "testStaleBaseNeverCommitsAcrossExternalEvents",
     "testCalloutListStartAtIntMaxDoesNotOverflow",
-    "testMarkdownSourceRangesKeepCRParagraphContent"
+    "testMarkdownSourceRangesKeepCRParagraphContent",
+    "testIndentedQuotesKeepExplicitExportBytesAndDepth",
+    "testIndentedQuoteHardBreakKeepsMarksAndDepth"
   ],
   "NotesPageRenderTests.swift": [
     "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",

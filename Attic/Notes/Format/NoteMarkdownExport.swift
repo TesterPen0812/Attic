@@ -99,7 +99,7 @@ enum NoteMarkdownExport {
                     // The hidden hint carries an otherwise unrepresentable
                     // start; later items continue from it in Attic.
                     prefix = "\(number > 999_999_999 ? 1 : number). "
-                case "quote": prefix = "> "
+                case "quote": prefix = String(repeating: "> ", count: depth + 1)
                 default: break
                 }
                 if block.style == "bullet" { numbered = numbered.filter { $0.key < depth } }
@@ -114,7 +114,7 @@ enum NoteMarkdownExport {
             }
             switch block.kind {
             case .text, .checklist:
-                let continuation = isList ? String(repeating: " ", count: column + (block.kind == .checklist ? 2 : prefix.count)) : (block.style == "quote" ? nesting + "> " : "")
+                let continuation = isList ? String(repeating: " ", count: column + (block.kind == .checklist ? 2 : prefix.count)) : (block.style == "quote" ? nesting + prefix : "")
                 var text = inlineText(block, calendar: calendar, locale: locale)
                     .replacingOccurrences(of: "\u{2028}", with: block.style == "heading" ? "<br>" : "\\\n" + continuation)
                 // Bare empty items can become Setext underlines or close

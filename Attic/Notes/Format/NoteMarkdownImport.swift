@@ -205,7 +205,7 @@ enum NoteMarkdownImport {
                             content[0].text = ""; content[0].marks = []
                         }
                     }
-                    var quoted = calloutParagraphs(content, icon: icon ?? "", preservingTables: true)
+                    var quoted = calloutParagraphs(content, icon: icon ?? "", preservingTables: true, preservingQuoteDepth: true)
                     if icon == nil { for index in quoted.indices { quoted[index].callout = nil } }
                     if let icon, let first = quoted.firstIndex(where: { $0.kind == .text && $0.style == "quote" }) {
                         quoted[first].calloutStart = boundary || (result.last?.style == "quote" && result.last?.callout == icon)
@@ -383,13 +383,15 @@ enum NoteMarkdownImport {
         }
     }
 
-    static func calloutParagraphs(_ blocks: [NoteBlock], icon: String, preservingTables: Bool = false) -> [NoteBlock] {
+    static func calloutParagraphs(_ blocks: [NoteBlock], icon: String, preservingTables: Bool = false,
+                                  preservingQuoteDepth: Bool = false) -> [NoteBlock] {
         var ordinal = 0
         return blocks.flatMap { block -> [NoteBlock] in
             // Source quotes cannot wrap a grid in our model. Keep the real
             // table between quoted paragraphs rather than flattening its cells.
             // Pasting into an existing callout retains the default projection.
             if preservingTables, block.kind == .table { return [block] }
+            let quoteIndent = preservingQuoteDepth && block.style == "quote" ? min(2, (block.indent ?? 0) + 1) : nil
             var copy = block
             switch block.kind {
             case .text:
@@ -399,7 +401,7 @@ enum NoteMarkdownImport {
             case .checklist: prepend(block.checked ? "• [x] " : "• [ ] ", to: &copy)
             default: copy = .text(NoteTextExport.plainLine(block))
             }
-            copy.kind = .text; copy.id = nil; copy.checked = false; copy.style = "quote"; copy.level = nil; copy.indent = nil
+            copy.kind = .text; copy.id = nil; copy.checked = false; copy.style = "quote"; copy.level = nil; copy.indent = quoteIndent
             copy.language = nil; copy.start = nil; copy.callout = icon
             if copy.text.contains("\n") {
                 return copy.text.components(separatedBy: "\n").map { line in
