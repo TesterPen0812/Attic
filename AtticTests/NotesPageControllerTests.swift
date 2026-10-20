@@ -3543,3 +3543,67 @@ extension NotesPageControllerTests {
         await controller.waitForImportWork()
     }
 }
+
+#if ATTIC_GENERATED_TESTS
+
+@MainActor
+final class RoundPRAMarkdownTests: XCTestCase {
+    /// Independent oracle at the reader, live paste, Undo/Redo, saved bytes and
+    /// fresh-context reopen. Identity-bearing blocks are checked by each caller.
+    private func checkPaste(_ markdown: String, expected: [NoteBlock],
+                            file: StaticString = #filePath, line: UInt = #line) async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let original = NoteDocument(blocks: [.text("Title"), .text("")])
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: original) else { return XCTFail("seed", file: file, line: line) }
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        let opened = await controller.openDurably(noteID: id)
+        XCTAssertTrue(opened, file: file, line: line)
+        let session = try XCTUnwrap(controller.active), engine = session.engine
+        let (scroll, view) = engine.makeView()
+        defer { engine.detachView(); withExtendedLifetime(scroll) {} }
+        let selection = NSRange(location: engine.textStorage.length, length: 0)
+        view.setSelectedRange(selection)
+        let before = engine.document()
+        XCTAssertTrue(engine.pasteMarkdown(markdown, at: selection), file: file, line: line)
+        func assertExpected(_ document: NoteDocument) {
+            let blocks = Array(document.blocks.dropFirst())
+            XCTAssertEqual(blocks.count, expected.count, file: file, line: line)
+            for (actual, wanted) in zip(blocks, expected) {
+                XCTAssertEqual(actual.text, wanted.text, file: file, line: line)
+                XCTAssertEqual(actual.marks, wanted.marks, file: file, line: line)
+                XCTAssertEqual(actual.style, wanted.style, file: file, line: line)
+                XCTAssertEqual(actual.kind, wanted.kind, file: file, line: line)
+                XCTAssertEqual(actual.indent ?? 0, wanted.indent ?? 0, file: file, line: line)
+                XCTAssertEqual(actual.start, wanted.start, file: file, line: line)
+                XCTAssertEqual(actual.checked, wanted.checked, file: file, line: line)
+            }
+        }
+        assertExpected(engine.document())
+        let pasted = engine.document(), afterSelection = view.selectedRange()
+        XCTAssertEqual(engine.history.undoOps.count, 1, file: file, line: line)
+        XCTAssertTrue(engine.history.undo(), file: file, line: line)
+        XCTAssertEqual(engine.document(), before, file: file, line: line)
+        XCTAssertEqual(view.selectedRange(), selection, file: file, line: line)
+        XCTAssertTrue(engine.history.redo(), file: file, line: line)
+        XCTAssertEqual(engine.document(), pasted, file: file, line: line)
+        XCTAssertEqual(view.selectedRange(), afterSelection, file: file, line: line)
+        let saved = await controller.preserveDurably(session)
+        XCTAssertTrue(saved, file: file, line: line)
+        let fresh = ModelContext(store.container)
+        let row = try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        let document = try XCTUnwrap(NoteContentCodec.decode(try XCTUnwrap(row.content)).document)
+        assertExpected(document)
+        XCTAssertEqual(document, pasted, file: file, line: line)
+    }
+
+    func testCalloutListStartAtIntMaxDoesNotOverflow() async throws {
+        var first = NoteBlock.text("one", style: "number"); first.start = Int.max
+        let expected = ["\(Int.max). one", "\(Int.max). two"]
+        XCTAssertEqual(NoteMarkdownImport.calloutParagraphs([first, .text("two", style: "number")], icon: "").map(\.text), expected)
+        let raw = "> 1. <!-- attic:list start=\(Int.max) -->one\n> 2. two"
+        XCTAssertEqual(try NoteMarkdownImport.document(raw).blocks.map(\.text), expected)
+        try await checkPaste(raw, expected: expected.map { .text($0, style: "quote") })
+    }
+}
+#endif

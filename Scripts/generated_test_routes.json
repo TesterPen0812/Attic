@@ -33,7 +33,8 @@
   "NotesPageControllerTests.swift": [
     "testMeasuredColdOpenAndLaunchWithFiveThousandLineNote",
     "testEveryStateEventPair",
-    "testStaleBaseNeverCommitsAcrossExternalEvents"
+    "testStaleBaseNeverCommitsAcrossExternalEvents",
+    "testCalloutListStartAtIntMaxDoesNotOverflow"
   ],
   "NotesPageRenderTests.swift": [
     "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",

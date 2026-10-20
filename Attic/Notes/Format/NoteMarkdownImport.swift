@@ -379,7 +379,7 @@ enum NoteMarkdownImport {
             switch block.kind {
             case .text:
                 if block.style == "bullet" { prepend("• ", to: &copy) }
-                if block.style == "number" { ordinal = block.start ?? ordinal + 1; prepend("\(ordinal). ", to: &copy) }
+                if block.style == "number" { ordinal = block.start ?? (ordinal < Int.max ? ordinal + 1 : ordinal); prepend("\(ordinal). ", to: &copy) }
                 else if block.style != "bullet" { ordinal = 0 }
             case .checklist: prepend(block.checked ? "• [x] " : "• [ ] ", to: &copy)
             default: copy = .text(NoteTextExport.plainLine(block))
