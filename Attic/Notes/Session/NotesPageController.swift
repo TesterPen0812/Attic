@@ -3109,7 +3109,10 @@ extension NotesPageController {
     /// its images and its tags, titled "… copy", and opened.
     @discardableResult
     func duplicateNote(noteID: UUID) async -> Bool {
-        guard !isDuplicatingNote else { return false }
+        guard !isDuplicatingNote else {
+            active?.showNotice(NoteNotice(kind: .notice, detail: String(localized: "This note is already being duplicated.")))
+            return false
+        }
         isDuplicatingNote = true
         defer { isDuplicatingNote = false }
         guard let newID = await makeDuplicate(noteID: noteID) else { return false }
@@ -3186,7 +3189,10 @@ extension NotesPageController {
               sourceSession.map({ NoteSessionPolicy.duplicateAllowed($0.state, activity: $0.engine.activity,
                   hasBatch: $0.isImporting, hasMarkedText: $0.engine.textView?.hasMarkedText() == true) }) ?? true,
               leaving.map({ NoteSessionPolicy.canLeave($0.engine.activity, hasMarkedText: $0.engine.textView?.hasMarkedText() == true)
-                  && !$0.isImporting }) ?? true else { return nil }
+                  && !$0.isImporting }) ?? true else {
+            active?.showNotice(NoteNotice(kind: .noDuplicate, detail: String(localized: "The note changed while it was being duplicated. Try again.")))
+            return nil
+        }
         guard var (copy, images) = replacementForDeletedNote(document, oldID: noteID, staged: staged) else {
             active?.showNotice(NoteNotice(kind: .imageGone, detail: String(localized: "An attachment is unavailable, so the note was not duplicated.")))
             return nil

@@ -527,6 +527,9 @@ extension RoundPRADataSafetyTests {
             }
             let duplicated = await controller.duplicateNote(noteID: source)
             XCTAssertFalse(duplicated, mutation)
+            XCTAssertEqual(controller.active?.noticeValue?.kind, .noDuplicate, mutation)
+            XCTAssertEqual(controller.active?.noticeValue?.detail,
+                "The note changed while it was being duplicated. Try again.", mutation)
             XCTAssertEqual(Set(store.notes.map(\.id)), mutation == "delete" ? ids.subtracting([source]) : ids, mutation)
             XCTAssertFalse(controller.canUndoLibrary, mutation)
             if mutation == "active session" { XCTAssertEqual(active.engine.document().title, "Changed Other") }
@@ -540,6 +543,9 @@ extension RoundPRADataSafetyTests {
         controller.duplicateAttachmentWillVerify = { _ in
             let repeated = await controller.duplicateNote(noteID: source)
             XCTAssertFalse(repeated)
+            XCTAssertEqual(controller.active?.noticeValue?.kind, .notice)
+            XCTAssertEqual(controller.active?.noticeValue?.severity, .information)
+            XCTAssertEqual(controller.active?.noticeValue?.detail, "This note is already being duplicated.")
         }
         let duplicated = await controller.duplicateNote(noteID: source)
         XCTAssertTrue(duplicated)
