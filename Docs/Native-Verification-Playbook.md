@@ -32,17 +32,13 @@ Record the PID, the executable path and the debug dylib path, and confirm the
 process maps the artefacts you just built. Re-check after any relaunch. A build
 that succeeded is not evidence that the thing on screen is that build.
 
-## 3. Reaching the task subpanel
+## 3. Finding your way around the panel
 
-- Single-clicking a task row opens that task's subpanel.
-- Right-clicking a task row also reveals it, and this is the more reliable route
-  when automation cannot otherwise see the panel.
-- If the task sub-panel does not open, open it manually using double-click,
-  then "Add Task". This setup may be necessary before the panel becomes
-  available for inspection.
-- The subpanel has two views, Subtasks and Attachments, switched from a control
-  beside the bottom composer. It must not dismiss on a two-finger swipe; that
-  gesture was deliberately removed.
+The panel changes between redesign phases, so this playbook does not describe
+routes to particular controls. Take them from the current source and the UI
+tests in `AtticUITests`, which use stable accessibility identifiers. The old
+Canvas is kept as it is until its rebuild; do not treat it as part of a pass
+unless the brief names it.
 
 ## 4. What the computer-use surface cannot drive
 
