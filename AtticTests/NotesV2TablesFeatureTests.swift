@@ -803,6 +803,51 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertEqual(attachment.table.rowCount, 4)
     }
 
+    func testPRB1AddChipsTrackReleaseBoundsThroughTheWindow() throws {
+        for column in [false, true] {
+            for release in ["inside", "outside", "return"] {
+                let (engine, text) = makeEngine(blocks(.blank()))
+                let tableView = try view(engine), attachment = try table(engine)
+                let cell = P(row: 1, column: 0)
+                tableView.activate(cell, caret: .start)
+                let chrome = NoteTableChrome(engine: engine, textView: text, design: .default)
+                defer { chrome.invalidate() }
+                let window = try XCTUnwrap(text.window)
+                window.orderFront(nil)
+                settle(engine, text)
+                chrome.place()
+                let chip = column ? chrome.addColumnChip : chrome.addRowChip
+                XCTAssertFalse(chip.isHidden)
+                XCTAssertNil(chip.onDrag)
+                let start = chip.convert(CGPoint(x: chip.bounds.midX, y: chip.bounds.midY), to: nil)
+                let hit = window.contentView?.hitTest(window.contentView!.superview!.convert(start, from: nil))
+                XCTAssertTrue(hit === chip, "native window hit test reaches the add chip: \(String(describing: hit))")
+                let outside = CGPoint(x: start.x - 80, y: start.y + 60)
+                let end = release == "outside" ? outside : start
+                func event(_ type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+                    try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                }
+                let before = engine.document(), selection = tableView.editor.selectedRange()
+                let depth = engine.history.undoOps.count
+                if release != "inside" { NSApp.postEvent(try event(.leftMouseDragged, at: outside), atStart: false) }
+                NSApp.postEvent(try event(.leftMouseUp, at: end), atStart: false)
+                window.sendEvent(try event(.leftMouseDown, at: start))
+                if release == "outside" {
+                    XCTAssertEqual(engine.document(), before, "releasing outside cancels the structural edit")
+                    XCTAssertEqual(engine.history.undoOps.count, depth)
+                    XCTAssertEqual(tableView.activeCell, cell)
+                    XCTAssertEqual(tableView.editor.selectedRange(), selection)
+                } else {
+                    XCTAssertEqual(attachment.table.rowCount, before.blocks[2].table!.rowCount + (column ? 0 : 1))
+                    XCTAssertEqual(attachment.table.columnCount, before.blocks[2].table!.columnCount + (column ? 1 : 0))
+                    XCTAssertTrue(engine.history.undo())
+                    XCTAssertEqual(engine.document(), before)
+                }
+            }
+        }
+    }
+
     func testPRB1PrivateBlockPasteSeparatesAndFormatsItsSurvivingTail() throws {
         for block in [NoteBlock.table(.blank()), NoteBlock.divider()] {
             let (source, _) = makeEngine([.text("Source"), block])

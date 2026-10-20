@@ -5,6 +5,10 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase X
 
+### 2026-10-20 · Table add-chip cancellation (owner review round PRB1, B7-01)
+
+- Releasing a table add-chip press outside its 28 pt target cancels the click. Returning inside before release still clicks; grip dragging and Escape cancellation keep their existing behavior.
+
 ### 2026-10-17 · Content shows under every floating control (owner, O17-01)
 
 - Content scrolls all the way under the Tasks tabs line, the composer, the corner buttons and the Notes header and footer rows, and stays visible through the 1.5 pt / 28 pt variable blur. No fade hides it: T-03 C's content fade on see-through panels, the opaque panel's surface fade over the blur, and the plain-line rules (content gone above a plain top line and 3 pt below it, or behind the composer's strip) are removed, with `AtticFloatingEdgesMask`, `atticFloatingEdgesMask`, `TasksViewport.maskStops` and the lists' masks. The scroll insets are unchanged.
