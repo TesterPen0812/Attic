@@ -82,6 +82,22 @@ private final class StoredImageProvider: NoteImageProviding {
 }
 
 @MainActor
+private final class PRB1DelayedImageProvider: NoteImageProviding {
+    let item: StagedNoteAttachment
+    var pending: CheckedContinuation<StagedNoteAttachment?, Never>?
+    func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? { nil }
+    init(_ item: StagedNoteAttachment) { self.item = item }
+    func fileURL(forAttachment id: UUID) async -> URL? { nil }
+    func filename(forAttachment id: UUID) -> String? { item.filename }
+    func hasAttachmentBytes(_ id: UUID) -> Bool { id == item.id }
+    func locateAttachment(_ id: UUID, at url: URL) async -> Bool { false }
+    func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? {
+        await withCheckedContinuation { pending = $0 }
+    }
+    func resume() { pending?.resume(returning: item); pending = nil }
+}
+
+@MainActor
 final class NoteSlice3bTests: XCTestCase {
     private func waitFor(_ condition: @MainActor () throws -> Bool) async throws {
         for _ in 0..<100 {
@@ -1130,6 +1146,36 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertTrue(protected.document().blocks.filter { $0.kind == .text }.map(\.text).joined().contains("body"))
         XCTAssertTrue(protected.history.undo())
         XCTAssertEqual(protected.document(), original)
+    }
+
+    func testPRB1CopyImageKeepsItsFragmentWhileByteReadSuspends() async throws {
+        for remove in [false, true] {
+            let image = try stagedImage()
+            let block = NoteBlock.image(attachmentID: image.id, pixelWidth: 8, pixelHeight: 8)
+            let provider = PRB1DelayedImageProvider(image)
+            let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("ab"), block]),
+                                          imageProvider: provider)
+            let copy = Task { await engine.perform(.copyImage, objectID: try XCTUnwrap(block.id)) }
+            try await waitFor { provider.pending != nil }
+            if remove {
+                let range = try XCTUnwrap(engine.objects().first).1
+                XCTAssertTrue(engine.performEdit(range, with: NSAttributedString(), name: "Delete"))
+            } else {
+                XCTAssertTrue(engine.performEdit(NSRange(location: 2, length: 0), with: NSAttributedString(string: "XYZ"), name: "Typing"))
+            }
+            let edited = engine.document()
+            provider.resume()
+            let copied = try await copy.value
+            XCTAssertTrue(copied)
+            let data = try XCTUnwrap(NSPasteboard.general.data(forType: NoteEditorEngine.fragmentType))
+            let fragment = try XCTUnwrap(NoteContentCodec.decode(data, context: .fragment).document)
+            XCTAssertEqual(fragment.blocks.count, 1)
+            XCTAssertEqual(fragment.blocks.first?.kind, .image)
+            XCTAssertEqual(fragment.blocks.first?.id, block.id)
+            XCTAssertEqual(fragment.blocks.first?.attachmentID, image.id)
+            XCTAssertEqual(NSPasteboard.general.data(forType: .png), image.data)
+            XCTAssertEqual(engine.document(), edited, "Copy never mutates the edited source")
+        }
     }
 
     func testR8SelectedImageCopyPublishesPasteableFragmentAndRawImagePasteUsesBatch() async throws {
