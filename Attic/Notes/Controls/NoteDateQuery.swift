@@ -23,7 +23,10 @@ enum NoteDateQuery {
         let counted = words.first == "in" ? Array(words.dropFirst()) : words
         if counted.count == 2, let count = Int(counted[0]) {
             if counted[1].hasPrefix("day") { return days(count) }
-            if counted[1].hasPrefix("week") { return days(count * 7) }
+            if counted[1].hasPrefix("week") {
+                let (offset, overflow) = count.multipliedReportingOverflow(by: 7)
+                return overflow ? nil : days(offset)
+            }
         }
 
         // A weekday, optionally after "next" (a week later than the plain one).
