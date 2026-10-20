@@ -517,7 +517,7 @@ final class NoteUndoHistory {
                            focusBefore: NoteTableFocus?, focusAfter: NoteTableFocus?, cell: NoteTable.Position? = nil) {
         guard !isReplaying, before != after else { return }
         if let cell, groupID == nil, let op = open, !op.isInert, var snapshot = op.tableSnapshot,
-           snapshot.id == id, snapshot.cell == cell {
+           snapshot.id == id, snapshot.cell == cell, snapshot.focusAfter == focusBefore {
             snapshot.after = after
             snapshot.focusAfter = focusAfter
             selectionCompletion = nil

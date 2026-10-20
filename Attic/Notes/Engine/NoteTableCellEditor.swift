@@ -56,6 +56,8 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let selection = selectedRange(), generation = table?.engine?.history.recordingGeneration
+        defer { endTypingAfterSelectionMove(from: selection, generation: generation) }
         selectedEmptyCellText = false
         super.mouseDown(with: event)
     }
@@ -227,6 +229,8 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
+        let selection = selectedRange(), generation = table?.engine?.history.recordingGeneration
+        defer { endTypingAfterSelectionMove(from: selection, generation: generation) }
         if table?.engine?.find.handleKey(event) == true { return }
         if let table, let engine = table.engine, !hasMarkedText(), engine.handleTableShortcut(event, in: table) { return }
         if !(event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command &&
@@ -239,6 +243,12 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         CATransaction.setCompletionBlock { PerformanceSignposts.noteDidDraw() }
         super.keyDown(with: event)
         CATransaction.commit()
+    }
+
+    private func endTypingAfterSelectionMove(from selection: NSRange, generation: Int?) {
+        guard let history = table?.engine?.history,
+              history.recordingGeneration == generation, selectedRange() != selection else { return }
+        history.breakCoalescing()
     }
 
     override func doCommand(by selector: Selector) {
@@ -440,6 +450,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned, let table {
+            if !table.keepsFocusThroughRehost { table.engine?.history.breakCoalescing() }
             DispatchQueue.main.async { [weak table] in
                 guard let table, !table.isFocused, table.cellSelection == nil, !table.keepsFocusThroughRehost else { return }
                 // The keyboard went to text elsewhere (the note's text,

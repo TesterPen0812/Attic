@@ -84,6 +84,54 @@ final class NotesV2TablesTests: XCTestCase {
         }
     }
 
+    private func prb1Key(_ value: String, code: UInt16, flags: NSEvent.ModifierFlags = [], in editor: NSTextView) throws {
+        let window = try XCTUnwrap(editor.window)
+        XCTAssertTrue(window.firstResponder === editor)
+        window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: value,
+            charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
+    }
+
+    func testPRB1CellTypingUndoStopsAtNativeCaretJumpAndControlDeparture() throws {
+        for boundary in ["caret", "roundtrip", "departure"] {
+            let departure = boundary == "departure"
+            let (engine, text) = makeEngine(ciaBlocks(.blank()))
+            let attachment = try tableAttachment(engine)
+            let view = try tableView(engine)
+            let cell = NoteTable.Position(row: 1, column: 0)
+            view.activate(cell, caret: .start)
+            try prb1Key("a", code: 0, in: view.editor)
+            try prb1Key("b", code: 11, in: view.editor)
+            XCTAssertEqual(attachment.table[cell].text, "ab")
+            if departure {
+                let button = NSButton(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+                text.window?.contentView?.addSubview(button)
+                XCTAssertTrue(text.window!.makeFirstResponder(button))
+                spin()
+                XCTAssertEqual(view.activeCell, cell)
+                XCTAssertTrue(view.hasEditor, "a temporary control departure retains the editor")
+                XCTAssertTrue(text.window!.makeFirstResponder(view.editor))
+            } else {
+                try prb1Key("\u{F702}", code: 123, in: view.editor)
+                try prb1Key("\u{F702}", code: 123, in: view.editor)
+                XCTAssertEqual(view.editor.selectedRange(), NSRange(location: 0, length: 0))
+                if boundary == "roundtrip" {
+                    try prb1Key("\u{F703}", code: 124, in: view.editor)
+                    try prb1Key("\u{F703}", code: 124, in: view.editor)
+                    XCTAssertEqual(view.editor.selectedRange(), NSRange(location: 2, length: 0))
+                }
+            }
+            try prb1Key("X", code: 7, flags: .shift, in: view.editor)
+            let typed = boundary == "caret" ? "Xab" : "abX"
+            XCTAssertEqual(attachment.table[cell].text, typed)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(attachment.table[cell].text, "ab", "Undo removes only typing after the boundary")
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(attachment.table[cell].text, typed)
+            XCTAssertTrue(engine.history.undo()); XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(attachment.table[cell].text, "", "ordinary a/b typing still coalesces")
+        }
+    }
+
     func testPRB1AppearanceKeepsMarkedCellTextAndItsCommit() throws {
         let (engine, text) = makeEngine(ciaBlocks(.blank()))
         let window = try XCTUnwrap(text.window)
