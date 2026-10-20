@@ -395,6 +395,42 @@ final class RoundO1Tests: XCTestCase {
         XCTAssertTrue(model.addBarState.files.isEmpty)
     }
 
+    func testPreparingFilesGivesFeedbackForReturnAndBothPasteChoices() async throws {
+        for route in 0..<4 {
+            let (store, model) = try makeModel()
+            let source = try makeFile("Preparing-\(route).png")
+            try pngData().write(to: source)
+            let gate = ComposerFileGate()
+            model.addComposerFiles([gate.provider()])
+            await fulfillment(of: [gate.requested], timeout: 5)
+            model.addBarState.text.text = "Keep this draft"
+            if route < 2 {
+                XCTAssertNil(model.submitAddBar(openingPage: route == 1))
+            } else {
+                model.pasteOffer = TaskPasteOffer("First\nSecond")
+                model.acceptPaste(asOne: route == 2)
+                XCTAssertNotNil(model.pasteOffer)
+            }
+            XCTAssertEqual(model.toasts.current?.message, "Preparing files · try again in a moment")
+            XCTAssertEqual(model.toasts.current?.actionTitle, "OK")
+            XCTAssertEqual(model.toasts.current?.answersUndoKey, false)
+            XCTAssertEqual(model.addBarState.text.text, "Keep this draft")
+            XCTAssertTrue(store.tasks.isEmpty)
+            gate.release(source)
+            await waitForComposer { model.addBarState.stagingFiles == 0 }
+            XCTAssertTrue(store.tasks.isEmpty, "feedback asks for explicit retry; it never submits a later draft")
+            XCTAssertEqual(model.addBarState.files.count, 1)
+            if route < 2 {
+                XCTAssertNotNil(model.submitAddBar(openingPage: route == 1))
+            } else {
+                model.acceptPaste(asOne: route == 2)
+                XCTAssertNil(model.pasteOffer)
+            }
+            XCTAssertFalse(store.tasks.isEmpty)
+            XCTAssertTrue(model.addBarState.files.isEmpty)
+        }
+    }
+
     func testClearInvalidatesPendingComposerFiles() async throws {
         let (_, model) = try makeModel()
         let source = try makeFile("Held.png")

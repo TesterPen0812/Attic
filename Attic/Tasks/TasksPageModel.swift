@@ -1761,7 +1761,7 @@ final class TasksPageModel: ObservableObject {
     /// task and opens its inline files. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
-        guard addBarState.stagingFiles == 0 else { return nil }
+        guard composerFilesReadyForSubmission() else { return nil }
         // Submitting finishes the words at the end (round 8, G1): a date or
         // priority typed after a pick, still at the caret (`Call !` then
         // Return), replaces the pick as a finished one does. Words that are
@@ -1789,10 +1789,19 @@ final class TasksPageModel: ObservableObject {
         return task.id
     }
 
+    /// Preparing a provider cannot consume this draft yet. Keep the choice
+    /// explicit: a later file callback must never submit a changed draft.
+    private func composerFilesReadyForSubmission() -> Bool {
+        guard addBarState.stagingFiles > 0 else { return true }
+        toasts.show(String(localized: "Preparing files · try again in a moment"),
+                    actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
+        return false
+    }
+
     /// Pasted lines: one task per line, or all of them as one task.
     /// The offer stays (with "Not saved · Retry") until the tasks exist.
     func acceptPaste(asOne: Bool) {
-        guard addBarState.stagingFiles == 0 else { return }
+        guard composerFilesReadyForSubmission() else { return }
         guard let offer = pasteOffer else { return }
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
         let drafts = builder.drafts(from: offer.text, mode: asOne ? .single : .onePerLine)
