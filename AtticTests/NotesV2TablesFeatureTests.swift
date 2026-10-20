@@ -781,6 +781,33 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         XCTAssertEqual(attachment.table.rowCount, 4)
     }
 
+    func testPRB1PrivateBlockPasteSeparatesAndFormatsItsSurvivingTail() throws {
+        for block in [NoteBlock.table(.blank()), NoteBlock.divider()] {
+            let (source, _) = makeEngine([.text("Source"), block])
+            let board = NSPasteboard(name: .init("PRB1-block-\(UUID())"))
+            defer { board.releaseGlobally() }
+            let object = try XCTUnwrap(source.objects().first)
+            XCTAssertTrue(source.writeSelection(object.1, to: board, types: [NoteEditorEngine.fragmentType]))
+            let data = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+            let (engine, text) = makeEngine([.text("T"), .text("abcd")])
+            text.setSelectedRange(NSRange(location: 4, length: 0))
+            XCTAssertTrue(engine.paste(fragmentData: data, at: text.selectedRange()))
+            XCTAssertEqual(engine.textStorage.string, "T\nab\n\u{FFFC}\ncd")
+            let pasted = engine.document()
+            let tail = (text.string as NSString).range(of: "cd")
+            XCTAssertTrue(engine.validate(.paragraph(.heading(2)), selection: tail).enabled)
+            XCTAssertTrue(engine.perform(.paragraph(.heading(2)), selection: tail))
+            XCTAssertEqual(engine.document().blocks.last?.style, "heading")
+            let saved = try NoteContentCodec.encode(engine.document())
+            let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(saved).document))
+            XCTAssertEqual(reopened.document(), engine.document())
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), pasted)
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.textStorage.string, "T\nabcd")
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.textStorage.string, "T\nab\n\u{FFFC}\ncd")
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), reopened.document())
+        }
+    }
+
     func testAWholeTableCopiesAsATableAndPastesBackWithNewIds() throws {
         let (engine, textView) = makeEngine(blocks())
         let attachment = try table(engine)

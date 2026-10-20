@@ -2688,7 +2688,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let result = NSMutableAttributedString(attributedString: pasted)
         let string = textStorage.string as NSString
         let startsWithObject = fragment.blocks.first.map { $0.kind != .text } ?? false
-        let endsWithBlockObject = fragment.blocks.last.map { $0.kind == .image || $0.kind == .file || $0.kind == .opaque } ?? false
+        let endsWithBlockObject = fragment.blocks.last.map { [.image, .file, .divider, .table, .opaque].contains($0.kind) } ?? false
         let atLineStart = selection.location == 0 || string.character(at: selection.location - 1) == 0x0A
         if startsWithObject, !atLineStart || selection.location == 0 {
             result.insert(NSAttributedString(string: "\n", attributes: style.bodyAttributes), at: 0)
