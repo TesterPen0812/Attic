@@ -10,6 +10,56 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testPRB1TableMeasurementsDistinguishDatePayloadAndPresentation() throws {
+        let today = try XCTUnwrap(NoteDay(year: 2026, month: 10, day: 20))
+        let later = try XCTUnwrap(NoteDay(year: 2030, month: 12, day: 31))
+        let id = UUID(), style = NoteTextStyle()
+        let renderer = NoteObjectRenderer(design: style.design)
+        func cell(_ day: NoteDay) -> NoteTable.Cell {
+            .init("Due \u{FFFC} now", inlines: [NoteInline(id: id, kind: .date(day))])
+        }
+        func attributed(_ cell: NoteTable.Cell, today: NoteDay) -> NSAttributedString {
+            NoteTextCodec.cellString(cell, attributes: style.tableCellAttributes(header: false), style: style) {
+                renderer.apply(to: $0, today: today)
+            }
+        }
+        let first = cell(today), second = cell(later)
+        let firstText = attributed(first, today: today), secondText = attributed(second, today: today)
+        let freshFirst = NoteTableTextCache().natural(first, header: false) { firstText }
+        let freshSecond = NoteTableTextCache().natural(second, header: false) { secondText }
+        XCTAssertNotEqual(freshFirst, freshSecond, "precondition: the real date chips have different widths")
+        let width = CGFloat(try XCTUnwrap((56...152).first { width in
+            NoteTableTextCache.measure(firstText, width: CGFloat(width)) != NoteTableTextCache.measure(secondText, width: CGFloat(width))
+        }, "precondition: real chips wrap into different native heights"))
+        let shared = NoteTableTextCache()
+        _ = shared.natural(first, header: false) { firstText }
+        _ = shared.minimum(first, header: false) { firstText }
+        _ = shared.height(first, header: false, width: width) { firstText }
+        var measurements = 0
+        XCTAssertEqual(shared.natural(second, header: false) { measurements += 1; return secondText }, freshSecond)
+        XCTAssertEqual(shared.minimum(second, header: false) { measurements += 1; return secondText },
+                       NoteTableTextCache().minimum(second, header: false) { secondText })
+        let height = NoteTableTextCache.measure(secondText, width: width)
+        XCTAssertEqual(shared.height(second, header: false, width: width) { measurements += 1; return secondText }, height)
+        XCTAssertEqual(measurements, 3)
+        // The same semantic cell changes geometry when its relative-day label changes.
+        let changedText = attributed(first, today: later)
+        let freshChanged = NoteTableTextCache().natural(first, header: false) { changedText }
+        XCTAssertNotEqual(freshChanged, freshFirst)
+        XCTAssertEqual(shared.natural(first, header: false) { changedText }, freshChanged)
+        var table = NoteTable(texts: [[""], [""]], headerRow: false)
+        table[.init(row: 0, column: 0)] = first; table[.init(row: 1, column: 0)] = second
+        table.columns[0].width = Double(width + 2 * AtticNoteTableMetrics.cellPaddingH)
+        let layout = NoteTableLayout.make(table, viewport: CGFloat(table.columns[0].width!), natural: { position in
+            shared.natural(table[position], header: false) { position.row == 0 ? firstText : secondText }
+        }, minimum: { position in
+            shared.minimum(table[position], header: false) { position.row == 0 ? firstText : secondText }
+        }, height: { position, width in
+            shared.height(table[position], header: false, width: width) { position.row == 0 ? firstText : secondText }
+        })
+        XCTAssertGreaterThanOrEqual(layout.rowHeights[1], height + 2 * AtticNoteTableMetrics.cellPaddingV)
+    }
+
     func testPRB1NativeShiftReturnKeepsParagraphTypingMarks() throws {
         var body = NoteBlock.text("ab"); body.marks = [NoteMark(.bold, offset: 0, length: 2)]
         let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)

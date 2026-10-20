@@ -273,7 +273,9 @@ final class NoteTableTextCache {
 
     func natural(_ cell: NoteTable.Cell, header: Bool, string: () -> NSAttributedString) -> CGFloat {
         let key = key(cell, header: header, width: 0)
-        if let cached = naturals[key] { return cached }
+        // Inline geometry also depends on rendered payload and relative-day
+        // presentation. Keep the bounded cache for plain cells only.
+        if cell.inlines.isEmpty, let cached = naturals[key] { return cached }
         let text = string()
         var widest: CGFloat = 0
         // Each line of the cell, unwrapped.
@@ -291,7 +293,7 @@ final class NoteTableTextCache {
                 location += length + 1
             }
         }
-        naturals[key] = widest
+        if cell.inlines.isEmpty { naturals[key] = widest }
         return widest
     }
 
@@ -301,7 +303,7 @@ final class NoteTableTextCache {
     /// without breaking a word).
     func minimum(_ cell: NoteTable.Cell, header: Bool, string: () -> NSAttributedString) -> CGFloat {
         let key = key(cell, header: header, width: -1)
-        if let cached = minimums[key] { return cached }
+        if cell.inlines.isEmpty, let cached = minimums[key] { return cached }
         let text = string()
         let source = text.string as NSString
         var widest: CGFloat = 0
@@ -317,15 +319,15 @@ final class NoteTableTextCache {
             }
             location = end + max(1, gap.length)
         }
-        minimums[key] = widest
+        if cell.inlines.isEmpty { minimums[key] = widest }
         return widest
     }
 
     func height(_ cell: NoteTable.Cell, header: Bool, width: CGFloat, string: () -> NSAttributedString) -> CGFloat {
         let key = key(cell, header: header, width: width)
-        if let cached = heights[key] { return cached }
+        if cell.inlines.isEmpty, let cached = heights[key] { return cached }
         let value = Self.measure(string(), width: width)
-        heights[key] = value
+        if cell.inlines.isEmpty { heights[key] = value }
         return value
     }
 
