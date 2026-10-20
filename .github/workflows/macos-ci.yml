@@ -104,7 +104,7 @@ jobs:
             -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests \
             -skip-testing:AtticTests/NotesKeyboardUndoTests/testTheToastNeverTakesKeyboardFocusDuringNativeFullKeyboardAccessTraversal
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" --format json > "$RUNNER_TEMP/fka-notes-normal-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==6 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
       - name: Run the native FKA test alone, then the H5-04 focus regressions
         if: always()
         env:
@@ -147,7 +147,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" CODE_SIGNING_ALLOWED=NO \
             -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests || status=1
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==8 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
           exit $status
       - name: Upload focused keyboard evidence
         if: always()
@@ -224,6 +224,7 @@ jobs:
       - name: Verify reveal probe and count gate plumbing
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_required_checks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_performance_probe.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
@@ -319,7 +320,7 @@ jobs:
         if: inputs.inspect_dropdown_sampling
         run: |
           git worktree add --detach "$RUNNER_TEMP/AtticIntegrationPreflight" "$INTEGRATION_COST_REFERENCE_COMMIT"
-          for fixture in DoneSearchCostTests NotesPageControllerTests TaskPerformanceGateTests TasksKeystrokeCostTests NoteSlice3bTests; do
+          for fixture in DoneSearchCostTests TaskPerformanceGateTests TasksKeystrokeCostTests; do
             cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationPreflight/AtticTests/$fixture.swift"
           done
           git -C "$RUNNER_TEMP/AtticIntegrationPreflight" diff --exit-code -- Attic Attic.xcodeproj
@@ -705,7 +706,8 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/AtticDoneSearchBaseline" "$DONE_SEARCH_BASELINE_COMMIT"
           git worktree add --detach "$RUNNER_TEMP/AtticIntegrationCostReference" "$INTEGRATION_COST_REFERENCE_COMMIT"
           # Test-only overlay: identical measurement code, pinned reference app.
-          for fixture in DoneSearchCostTests NotesPageControllerTests TaskPerformanceGateTests TasksKeystrokeCostTests NoteSlice3bTests; do
+          # Mixed functional/cost files receive only measured members below.
+          for fixture in DoneSearchCostTests TaskPerformanceGateTests TasksKeystrokeCostTests; do
             cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationCostReference/AtticTests/$fixture.swift"
           done
           git -C "$RUNNER_TEMP/AtticIntegrationCostReference" diff --exit-code -- Attic Attic.xcodeproj

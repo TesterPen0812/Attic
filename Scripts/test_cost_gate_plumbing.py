@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import unittest
 
-from prepare_cost_reference import ROOT, REPLACEMENTS, policy, prepare
+from prepare_cost_reference import ROOT, REPLACEMENTS, INTEGRATION_MEMBERS, member, policy, prepare
 from check_integration_costs import METRICS
 
 
@@ -22,19 +22,39 @@ def command(args, **kwargs):
 
 class CostGatePlumbingTests(unittest.TestCase):
     def test_integration_adapter_preserves_measurements_and_assertions(self):
-        original = (ROOT / "AtticTests/NotesPageControllerTests.swift").read_text()
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            path = directory / "AtticTests/NotesPageControllerTests.swift"
-            path.parent.mkdir()
-            path.write_text(original)
+            (directory / "AtticTests").mkdir()
+            originals = {}
+            for name in INTEGRATION_MEMBERS:
+                original = command(["git", "show", f"cb95a0e7:AtticTests/{name}"], cwd=ROOT, check=True).stdout
+                originals[name] = original
+                (directory / "AtticTests" / name).write_text(original)
             prepare(directory, "integration")
-            adapted = path.read_text()
-            addition = ",\n                                  subtaskPanels: SubtaskPanelController(store: taskStore, uiState: state, settings: settings)"
-            self.assertEqual(adapted.replace(addition, ""), original)
-            with self.assertRaises(ValueError):
+            for name, members in INTEGRATION_MEMBERS.items():
+                current = (ROOT / "AtticTests" / name).read_text()
+                adapted = (directory / "AtticTests" / name).read_text()
+                expected = originals[name]
+                for member_name in members:
+                    measured = member(current, member_name)
+                    self.assertEqual(member(adapted, member_name), measured)
+                    expected = expected.replace(member(expected, member_name), measured, 1)
+                self.assertEqual(adapted, expected, "unrelated historical tests stay intact")
+
+    def test_integration_overlay_fails_closed_before_writing_on_member_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "AtticTests").mkdir()
+            for name in INTEGRATION_MEMBERS:
+                source = command(["git", "show", f"cb95a0e7:AtticTests/{name}"], cwd=ROOT, check=True).stdout
+                if name == "NoteSlice3bTests.swift":
+                    source = source.replace("func testR9AccessibilityValidation", "func changedTestR9AccessibilityValidation")
+                (directory / "AtticTests" / name).write_text(source)
+            originals = {p: p.read_text() for p in (directory / "AtticTests").iterdir()}
+            with self.assertRaisesRegex(ValueError, "expected exactly one fixture member"):
                 prepare(directory, "integration")
-            self.assertEqual(path.read_text(), adapted, "drift fails closed without further edits")
+            for path, original in originals.items():
+                self.assertEqual(path.read_text(), original)
 
     @classmethod
     def setUpClass(cls):

@@ -2,11 +2,13 @@
 """Adapt test-only fixtures for pinned cost hosts without changing their apps.
 
 Frame/row and Done fixtures keep their historical measurement boundaries.
-The integration host uses today's overlaid fixtures with its old initializer.
+The integration host receives today's measured methods and their helpers,
+retaining its historical functional tests rather than compiling new APIs.
 Exact replacements fail closed if the pinned tests change. App sources and
 correctness assertions are untouched; no Xcode project input is added.
 """
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +26,43 @@ REPLACEMENTS = {
     ],
 }
 
+# Only these members participate in the integration measurements. Keep their
+# bodies byte-identical on both sides, including every functional assertion.
+# Other tests belong to their matching app revision, not the cost overlay.
+INTEGRATION_MEMBERS = {
+    "NotesPageControllerTests.swift": (
+        "setUp", "tearDown", "makeController", "type", "realImage",
+        "testMeasuredMainActorSaveOnFiveThousandLineNote",
+        "testCheckpointRetirementKeepsMainActorWithinSaveTolerance",
+        "assertSaveBaseline",
+        "testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents",
+        "populatePerformanceStore", "SavePerformanceFixture",
+        "makeSavePerformanceFixture", "measureMainActorSave",
+    ),
+    "NoteSlice3bTests.swift": (
+        "testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport",
+    ),
+}
+
+
+def member(source, name):
+    """Find one four-space-indented Swift member, failing closed on drift.
+
+    These fixture methods end with a four-space closing brace; nested bodies
+    are indented further. No brace counting through Swift string literals.
+    """
+    matches = list(re.finditer(
+        rf"^    (?:(?:private|override) )?(func|typealias) {re.escape(name)}\b[^\n]*", source, re.M))
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one fixture member: {name}")
+    start = matches[0].start()
+    if matches[0].group(1) == "typealias":
+        return matches[0].group()
+    end = re.search(r"^    }$", source[matches[0].end():], re.M)
+    if end is None:
+        raise ValueError(f"missing fixture member end: {name}")
+    return source[start:matches[0].end() + end.end()]
+
 
 def policy():
     source = (ROOT / "AtticTests/TasksFrameCostTests.swift").read_text()
@@ -32,17 +71,18 @@ def policy():
 
 def prepare(directory, fixture):
     if fixture == "integration":
-        # Today's functional fixture is overlaid on the pinned app alongside
-        # the timing fixtures. Its older initializer still needs this owner.
-        path = directory / "AtticTests/NotesPageControllerTests.swift"
-        source = path.read_text()
-        old = "uiState: state, settings: settings)\n"
-        if source.count(old) != 1:
-            raise ValueError(f"{path}: expected exactly one panel initializer")
-        source = source.replace(old, "uiState: state, settings: settings,\n"
-            "                                  subtaskPanels: SubtaskPanelController(store: taskStore, uiState: state, settings: settings))\n")
-        path.write_text(source)
-        print(f"Integration reference initializer adapter: {path}")
+        updated = {}
+        for name, members in INTEGRATION_MEMBERS.items():
+            path = directory / "AtticTests" / name
+            source = path.read_text()
+            current = (ROOT / "AtticTests" / name).read_text()
+            for member_name in members:
+                old, new = member(source, member_name), member(current, member_name)
+                source = source.replace(old, new, 1)
+            updated[path] = source
+        for path, source in updated.items():
+            path.write_text(source)
+            print(f"Integration reference measurement overlay: {path}")
         return
     names = ["TasksFrameCostTests.swift"]
     if fixture == "done":
