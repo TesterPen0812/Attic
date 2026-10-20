@@ -22,12 +22,13 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ### Tasks
 
-- **Tasks** (To do, In Progress, Done) and **Later**.
+- Three tabs: **Now**, **Later** and **Done**. A task in Now is To do or In
+  Progress.
 - Priorities, due dates, tags, subtasks one level deep, and file and image
   attachments.
 - Composers that grow as you type and accept attachments.
 - Drag to reorder, drag tasks and files out to other apps.
-- Finished tasks from earlier days move to a searchable Done log.
+- Finished tasks collect in Done, which has its own search.
 
 ### Notes
 
