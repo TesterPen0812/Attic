@@ -871,11 +871,17 @@ extension NoteEditorEngine {
             var typing = view.editor.typingAttributes
             let on = forced ?? (typing[.noteMark(kind)] == nil)
             typing[.noteMark(kind)] = on ? (url ?? true) as Any : nil
-            let base = (typing[.font] as? NSFont) ?? style.bodyFont
+            let header = view.table.headerRow && view.activeCell?.row == 0
+            let base = style.tableCellAttributes(header: header)
+            // Presentation is derived from the remaining semantic marks,
+            // never from the previously marked font or sparse decorations.
+            for key in [NSAttributedString.Key.font, .underlineStyle, .strikethroughStyle, .backgroundColor, .link, .underlineColor, .kern] {
+                typing[key] = nil
+            }
+            typing[.foregroundColor] = base[.foregroundColor]
             var marks: [NoteMark.Kind: Any] = [:]
             for mark in NoteMark.Kind.allCases { if let value = typing[.noteMark(mark)] { marks[mark] = value } }
-            typing.merge(style.markedAttributes(marks: marks, baseFont: view.table.headerRow && view.activeCell?.row == 0 ? style.tableHeaderFont : style.bodyFont)) { _, new in new }
-            if marks[.bold] == nil && marks[.italic] == nil && marks[.code] == nil { typing[.font] = base }
+            typing.merge(style.markedAttributes(marks: marks, baseFont: header ? style.tableHeaderFont : style.bodyFont)) { _, new in new }
             view.editor.typingAttributes = typing
             return true
         }

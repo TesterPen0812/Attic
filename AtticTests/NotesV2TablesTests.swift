@@ -92,6 +92,43 @@ final class NotesV2TablesTests: XCTestCase {
             charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
     }
 
+    func testPRB1CellMarkOffClearsNativePresentationBeforeTyping() throws {
+        for header in [false, true] {
+            for kind in [NoteMark.Kind.bold, .italic, .underline, .strikethrough, .highlight, .code, .link] {
+                let (engine, _) = makeEngine(ciaBlocks(.blank()))
+                let attachment = try tableAttachment(engine), view = try tableView(engine)
+                let cell = NoteTable.Position(row: header ? 0 : 1, column: 0)
+                view.activate(cell, caret: .start)
+                func toggle() throws {
+                    switch kind {
+                    case .bold: try prb1Key("b", code: 11, flags: .command, in: view.editor)
+                    case .italic: try prb1Key("i", code: 34, flags: .command, in: view.editor)
+                    case .underline: try prb1Key("u", code: 32, flags: .command, in: view.editor)
+                    case .strikethrough: try prb1Key("x", code: 7, flags: [.command, .shift], in: view.editor)
+                    default: XCTAssertTrue(engine.applyCellMark(kind, in: view, url: kind == .link ? "https://example.com" : nil))
+                    }
+                }
+                try toggle()
+                XCTAssertNotNil(view.editor.typingAttributes[.noteMark(kind)])
+                try prb1Key("a", code: 0, in: view.editor)
+                try toggle()
+                XCTAssertNil(view.editor.typingAttributes[.noteMark(kind)])
+                let base = engine.style.tableCellAttributes(header: header)
+                XCTAssertEqual(view.editor.typingAttributes[.font] as? NSFont, base[.font] as? NSFont, kind.rawValue)
+                for key in [NSAttributedString.Key.underlineStyle, .strikethroughStyle, .backgroundColor, .link, .underlineColor] {
+                    XCTAssertNil(view.editor.typingAttributes[key], "\(kind): stale \(key)")
+                }
+                XCTAssertEqual(view.editor.typingAttributes[.foregroundColor] as? NSColor, base[.foregroundColor] as? NSColor)
+                try prb1Key("b", code: 11, in: view.editor)
+                XCTAssertEqual(view.editor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont, base[.font] as? NSFont)
+                XCTAssertEqual(attachment.table[cell].marks, [NoteMark(kind, offset: 0, length: 1,
+                    url: kind == .link ? "https://example.com" : nil)])
+                view.editor.load(view.cellString(cell), keepingSelection: true)
+                XCTAssertEqual(view.editor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont, base[.font] as? NSFont)
+            }
+        }
+    }
+
     func testPRB1CellTypingUndoStopsAtNativeCaretJumpAndControlDeparture() throws {
         for boundary in ["caret", "roundtrip", "departure"] {
             let departure = boundary == "departure"
