@@ -9,6 +9,25 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    func testPRB1TypedURLKeepsPunctuationAndWhitespaceOutsideItsMark() throws {
+        for suffix in [", ", ". ", "; ", "! ", "? ", ",   "] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            type("😀 https://example.com" + suffix, view)
+            let expected = [NoteMark(.link, offset: 3, length: 19, url: "https://example.com")]
+            XCTAssertEqual(engine.document().blocks[1].marks, expected, suffix)
+            let saved = try NoteContentCodec.encode(engine.document())
+            let reopened = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+            XCTAssertEqual(reopened.blocks[1].marks, expected, suffix)
+            let beforeUndo = engine.document()
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), beforeUndo)
+            XCTAssertEqual(engine.document().blocks[1].marks, expected)
+        }
+    }
+
     // Owner decision 2026-10-16: plain highlights stay yellow, with no saved key.
     #if !ATTIC_GENERATED_TESTS
     func testJPlainHighlightRendersYellowAndDefaultWritesNoColourKey() throws {

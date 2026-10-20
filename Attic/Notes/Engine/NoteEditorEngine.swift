@@ -4249,12 +4249,15 @@ extension NoteEditorEngine {
         let caret = textView.selectedRange().location
         let line = lineRange(at: caret)
         let before = (textStorage.string as NSString).substring(with: NSRange(location: line.location, length: caret - line.location))
-        let token = before.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
+        guard let last = before.lastIndex(where: { !$0.isWhitespace }) else { return }
+        let end = before.index(after: last)
+        let start = before[..<end].lastIndex(where: { $0.isWhitespace }).map { before.index(after: $0) } ?? before.startIndex
+        let token = String(before[start..<end])
         let url = token.trimmingCharacters(in: CharacterSet(charactersIn: ".,;!?"))
-        guard NoteLinkPolicy.url(url) != nil else { return }
+        guard NoteLinkPolicy.url(url) != nil, let retained = token.range(of: url) else { return }
+        // Keep the original UTF-16 position through punctuation/space trimming.
         let length = (url as NSString).length
-        let location = caret - 1 - length
-        guard location >= line.location else { return }
+        let location = line.location + NSRange(start..<end, in: before).location + NSRange(retained, in: token).location
         _ = perform(.link(url), selection: NSRange(location: location, length: length))
         textView.setSelectedRange(NSRange(location: caret, length: 0))
     }
