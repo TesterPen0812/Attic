@@ -59,6 +59,29 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertEqual(store.task(withID: id)?.title, "New title")
     }
 
+    func testBlockedAlternateSubmissionFromDoneStillSaysAddedToNow() throws {
+        let store = try makeTestStore(persist: { context in
+            if try context.fetch(FetchDescriptor<TaskItem>()).contains(where: { $0.title == "Unsaved edit" }) {
+                throw PersistenceGate.Failure()
+            }
+            try context.save()
+        })
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let other = try XCTUnwrap(store.create(title: "Original title"))
+        model.select(tab: .done)
+        model.beginEditingTitle(other.id)
+        model.editingTitle = "Unsaved edit"
+        model.addBar.text = "Added despite blocked navigation"
+        let id = try XCTUnwrap(model.submitAddBar(openingPage: true))
+        XCTAssertEqual(store.task(withID: id)?.status, .todo)
+        XCTAssertEqual(model.tab, .done, "the failed edit keeps its page")
+        XCTAssertEqual(model.editingTitleID, other.id)
+        XCTAssertEqual(model.editingTitle, "Unsaved edit")
+        XCTAssertEqual(store.task(withID: other.id)?.title, "Original title")
+        XCTAssertEqual(model.toasts.current?.message, "Added to Now")
+        XCTAssertTrue(model.expandedFiles.contains(id))
+    }
+
     func testAFailedPasteKeepsTheOfferUntilTheTasksExist() throws {
         let gate = PersistenceGate()
         let store = try makeTestStore(persist: gate.save)

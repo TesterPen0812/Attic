@@ -535,24 +535,34 @@ final class AtticLibrary {
 
     // MARK: - Delete and restore
 
-    /// Moves any item to Recently Deleted as one step. Agents and people use
-    /// the same call; nothing here deletes permanently.
+    /// Moves any item to Recently Deleted as one step; nothing here
+    /// deletes permanently.
     @discardableResult
     func delete(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         undo.perform(in: history ?? Self.defaultHistory(for: ref)) {
             guard performDelete(ref) else { return nil }
-            // What this delete took, to keep Redo from taking more.
-            let owned = FamilyOwnership(ownedMembers(of: ref))
-            return UndoStep(
-                name: "Delete \(Self.noun(for: ref.kind))",
-                items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
-                undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
-                redoOutcome: { [weak self] in
-                    guard let self else { return .obsolete }
-                    return self.deleteOutcome(ref, owning: owned)
-                }
-            )
+            return committedDeletionStep(ref)
         }
+    }
+
+    /// A validating store command has already committed this deletion.
+    /// Pending proposals and refused writes must never call this recorder.
+    func recordCommittedDeletion(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) {
+        undo.record(committedDeletionStep(ref), in: history ?? Self.defaultHistory(for: ref))
+    }
+
+    private func committedDeletionStep(_ ref: AtticItemRef) -> UndoStep {
+        // What this delete took, to keep Redo from taking more.
+        let owned = FamilyOwnership(ownedMembers(of: ref))
+        return UndoStep(
+            name: "Delete \(Self.noun(for: ref.kind))",
+            items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
+            undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
+            redoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                return self.deleteOutcome(ref, owning: owned)
+            }
+        )
     }
 
     /// Restores an item from Recently Deleted, with what its delete took
