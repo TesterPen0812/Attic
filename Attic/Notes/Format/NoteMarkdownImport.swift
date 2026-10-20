@@ -205,7 +205,7 @@ enum NoteMarkdownImport {
                             content[0].text = ""; content[0].marks = []
                         }
                     }
-                    var quoted = calloutParagraphs(content, icon: icon ?? "", preservingTables: true, preservingQuoteDepth: true)
+                    var quoted = calloutParagraphs(content, icon: icon ?? "", preservingTables: true, preservingQuoteDepth: icon == nil)
                     if icon == nil { for index in quoted.indices { quoted[index].callout = nil } }
                     if let icon, let first = quoted.firstIndex(where: { $0.kind == .text && $0.style == "quote" }) {
                         quoted[first].calloutStart = boundary || (result.last?.style == "quote" && result.last?.callout == icon)

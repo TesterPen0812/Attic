@@ -3716,4 +3716,17 @@ extension RoundPRAMarkdownTests {
         }
     }
 }
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testCalloutNestedQuotesDoNotKeepHiddenDepth() async throws {
+        for marker in ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] {
+            let markdown = "> [!\(marker)]\n> a\n> > b"
+            let imported = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(imported.blocks.map(\.text), ["a", "b"])
+            XCTAssertTrue(imported.blocks.allSatisfy { $0.style == "quote" && $0.callout != nil })
+            XCTAssertTrue(imported.blocks.allSatisfy { $0.indent == nil }, marker)
+            try await checkPaste(markdown, expected: [.text("a", style: "quote"), .text("b", style: "quote")])
+        }
+    }
+}
 #endif
