@@ -1365,10 +1365,11 @@ struct TasksPage: View {
         .padding(.horizontal, cornerInset)
     }
 
-    /// The page's edge: the circles (16 in the page) sit on the content
-    /// line, 12 inside the controls' line at this corner size.
+    /// The page's edge: the circles (16 in the page) sit on Tasks' content
+    /// line, 8 inside the controls' line at this corner size (spacing B),
+    /// so the row pills' edges are on the controls' line.
     private var cornerInset: CGFloat {
-        max(0, layout.chromeInsets.leading + AtticLayout.contentFromChrome - AtticLayout.circleX)
+        AtticLayout.tasksPageEdge(chromeInset: layout.chromeInsets.leading)
     }
 
 

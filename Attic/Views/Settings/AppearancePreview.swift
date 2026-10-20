@@ -66,7 +66,7 @@ struct SettingsPanelMiniature: View {
         // grows with bigger corners, and the page follows it.
         let layout = PanelPageLayout(cornerSize: cornerSize, panelSize: AtticLayout.panelSize)
         let chrome = layout.chromeInsets.leading
-        let pageInset = max(0, chrome - AtticSpacing.panelMargin)
+        let pageInset = AtticLayout.tasksPageEdge(chromeInset: chrome)
         ZStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: layout.headerBottom + AtticLayout.pageTabsTop)

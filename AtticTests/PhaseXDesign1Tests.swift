@@ -104,7 +104,7 @@ final class PhaseXDesign1Tests: XCTestCase {
     }
 
     func testEveryNoticeHeadlineFitsTheSlotAt320() {
-        XCTAssertEqual(slotAt320, 162)
+        XCTAssertEqual(slotAt320, 168)
         for headline in NoteStatusPresentation.allNoticeHeadlines {
             let item = AtticStatusItem(id: "notice", systemName: "info.circle", title: headline, tone: .normal)
             let pending = AtticStatusItem(id: "pending", systemName: nil, title: headline, tone: .quiet)

@@ -787,7 +787,9 @@ struct AtticAddBar: View {
             AtticIcon(systemName: "arrow.up", size: AtticAddBarMetrics.sendGlyphSize, weight: .semibold, ink: .onInverse)
                 .frame(width: size.width, height: size.height)
                 .background(shape.fill(design.tokens.color(.inverseFill)))
-                .contentShape(shape)
+                // The 22 pt button still answers a 28 pt target (it reaches
+                // 3 past its edge, inside the bar's 4 pt inset).
+                .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: size.height)))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()

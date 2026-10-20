@@ -14,17 +14,17 @@ final class NotesV2ChromeTests: XCTestCase {
     // MARK: Tokens
 
     func testChromeBTokens() {
-        XCTAssertEqual(AtticControlSize.headerControl, 32)
-        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
-        XCTAssertEqual(AtticControlSize.addBarHeight, 32)
-        XCTAssertEqual(AtticControlSize.sendButton, CGSize(width: 24, height: 24))
+        XCTAssertEqual(AtticControlSize.headerControl, 30)
+        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 30, height: 30))
+        XCTAssertEqual(AtticControlSize.addBarHeight, 30)
+        XCTAssertEqual(AtticControlSize.sendButton, CGSize(width: 22, height: 22))
         XCTAssertEqual(AtticStyle.chromeMinimumInset, 16)
-        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 13.5, "the 42 % rule")
-        XCTAssertEqual(AtticPageButtonMetrics.segment, 24)
-        XCTAssertEqual(AtticNoteFormatMetrics.rowCellHeight, 24)
-        XCTAssertEqual(AtticNoteMetrics.pillHeight, 32)
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 12.5, "the 42 % rule")
+        XCTAssertEqual(AtticPageButtonMetrics.segment, 22)
+        XCTAssertEqual(AtticNoteFormatMetrics.rowCellHeight, 22)
+        XCTAssertEqual(AtticNoteMetrics.pillHeight, 30)
         XCTAssertEqual(AtticNoteMetrics.formatButtonGap, 12, "D-15: the spec's gap between separate controls")
-        XCTAssertEqual(AtticControlSize.raisedGlyph, 13)
+        XCTAssertEqual(AtticControlSize.raisedGlyph, 12.2)
     }
 
     /// Every control keeps at least a 28 pt target: the 32 pt buttons by
@@ -41,23 +41,25 @@ final class NotesV2ChromeTests: XCTestCase {
 
     // MARK: Lines
 
-    /// The controls sit 16 in; the content line (the note's column, the
-    /// Tasks circles and tabs) stays at 28, and the add bar's plus on the
-    /// circles' centre line (36).
+    /// The controls sit 16 in; the note's column stays at 28, Tasks'
+    /// content line (circles and tabs) is at 24 (spacing B, owner
+    /// 2026-10-20; it was 28), and the add bar's plus on the circles'
+    /// centre line (31.5; it was 36).
     func testContentLineStaysAt28AndTheAddBarPlusOnTheCircles() {
         let layout = PanelPageLayout(cornerSize: defaultCorner, panelSize: CGSize(width: 320, height: 520))
         XCTAssertEqual(layout.chromeInsets.leading, 16)
-        XCTAssertEqual(layout.headerBottom, 48)
+        XCTAssertEqual(layout.headerBottom, 46)
         XCTAssertEqual(layout.chromeInsets.leading + AtticNoteMetrics.columnInset, 28, "the note's column")
-        let tasksPageEdge = layout.chromeInsets.leading + AtticLayout.contentFromChrome - AtticLayout.circleX
-        XCTAssertEqual(tasksPageEdge + AtticLayout.circleX, 28, "the Tasks circles")
+        let tasksPageEdge = AtticLayout.tasksPageEdge(chromeInset: layout.chromeInsets.leading)
+        XCTAssertEqual(tasksPageEdge + AtticLayout.circleX, 24, "the Tasks circles")
         let plusCentre = layout.chromeInsets.leading + AtticAddBarMetrics.leadingPadding + AtticAddBarMetrics.iconSlot / 2
-        XCTAssertEqual(plusCentre, 28 + AtticControlSize.statusCircle / 2, "the plus on the circles' centre line")
-        XCTAssertEqual(plusCentre + AtticAddBarMetrics.iconSlot / 2 + AtticAddBarMetrics.gap, 56, "the text on the titles' line")
+        XCTAssertEqual(plusCentre, 24 + AtticControlSize.statusCircle / 2, "the plus on the circles' centre line")
+        XCTAssertEqual(plusCentre + AtticAddBarMetrics.iconSlot / 2 + AtticAddBarMetrics.gap, 47, "the text on the titles' line")
         // The draft (v2-04): the title's first line at 64, the last line 12
-        // above the bottom row (whose top is 48 from the bottom).
-        XCTAssertEqual(layout.headerBottom + AtticNoteMetrics.titleTopGap, 64)
-        XCTAssertEqual(layout.chromeInsets.bottom + AtticControlSize.panelButton.height + AtticSpacing.s12, 60)
+        // above the bottom row (whose top is 48 from the bottom). Medium's
+        // 30 pt controls make them 62 and 58 (46 from the bottom).
+        XCTAssertEqual(layout.headerBottom + AtticNoteMetrics.titleTopGap, 62)
+        XCTAssertEqual(layout.chromeInsets.bottom + AtticControlSize.panelButton.height + AtticSpacing.s12, 58)
     }
 
     /// Larger corners push the controls and the content line in together.
@@ -95,9 +97,10 @@ final class NotesV2ChromeTests: XCTestCase {
                 }
             }
         }
-        // The default 320 pt panel: 162 pt for the pill beside Aa (D-15's
-        // 12 pt between Aa and New note, 9 pt least around the pill).
-        XCTAssertEqual(AtticNoteMetrics.pillMaxWidth(panelWidth: 320, chromeInset: 16, showsFormat: true), 162)
+        // The default 320 pt panel: 168 pt for the pill beside Aa (D-15's
+        // 12 pt between Aa and New note, 9 pt least around the pill; 162
+        // with chrome B's 32 pt buttons, Medium's are 30).
+        XCTAssertEqual(AtticNoteMetrics.pillMaxWidth(panelWidth: 320, chromeInset: 16, showsFormat: true), 168)
     }
 
     // MARK: The root fills its window, whatever its content asks

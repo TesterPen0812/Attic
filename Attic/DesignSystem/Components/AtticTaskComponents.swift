@@ -1250,8 +1250,8 @@ struct AtticTaskRow: View {
             .padding(.horizontal, AtticLayout.rowHighlightInset)
             .animation(.linear(duration: isSelected ? 0.08 : 0.06), value: isSelected)
 
-            // The circle, centred on the title line (row top + 17), its
-            // 28 pt hit area around the 14 pt drawing.
+            // The circle, centred on the title line (row top + 16, or 14),
+            // its 28 pt hit area around the 15 pt drawing.
             AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false,
                               isEmphasised: showsFocusRing, onToggle: actions.toggleDone)
                 .atticForcedState(nil)
@@ -1326,7 +1326,7 @@ struct AtticTaskRow: View {
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
                                      })
-                        .frame(height: m.detailsLineHeight)
+                        .frame(height: m.rowDetailsLineHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1785,7 +1785,7 @@ private struct AtticDetailsCountButton: View {
         .disabled(disabled)
         .onHover { hovered = $0 }
         .padding(.horizontal, -m.horizontalPadding)
-        .frame(height: AtticTaskRowMetrics.detailsLineHeight)
+        .frame(height: AtticTaskRowMetrics.rowDetailsLineHeight)
         .atticRowControl()
         .help(isExpanded ? help.open : help.closed)
         .accessibilityLabel(spokenLabel)

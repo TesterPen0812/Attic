@@ -180,10 +180,13 @@ final class PhaseXPicksTests: XCTestCase {
 
     // MARK: - Design review
 
-    /// D-13: a two-line row's title sits where a one-line row's does.
+    /// D-13 put a two-line row's title where a one-line row's is (8 in
+    /// both). Spacing B (owner, 2026-10-20) supersedes it: the one-line
+    /// title is centred in its 32 pt row (7) and the two-line block moves
+    /// up, 3 into its 44 pt pill (5 in the row), 2 above the one-line one.
     func testATwoLineRowsTitleSitsWhereAOneLineRowsDoes() {
-        XCTAssertEqual(AtticTaskRowMetrics.titleTop(twoLine: true), AtticTaskRowMetrics.titleTop(twoLine: false))
-        XCTAssertEqual(AtticTaskRowMetrics.titleTop(twoLine: false), 8)
+        XCTAssertEqual(AtticTaskRowMetrics.titleTop(twoLine: true), AtticTaskRowMetrics.titleTop(twoLine: false) - 2)
+        XCTAssertEqual(AtticTaskRowMetrics.titleTop(twoLine: false), 7)
     }
 
     /// D-06: with text selected, Aa's row holds the marks in place of the

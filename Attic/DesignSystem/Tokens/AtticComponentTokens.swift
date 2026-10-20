@@ -107,29 +107,38 @@ enum AtticSubtaskMetrics {
     static let lineWidthIncreased: CGFloat = 1.8
     static let checkLineWidth: CGFloat = 1.5
     static let checkInset: CGFloat = 3.5
-    /// The checkbox's hit area (the glyph is 14).
-    static let hitSize: CGFloat = 22
+    /// The checkbox's hit area (the glyph is 13): the 28 pt minimum target
+    /// (it was 22; control size Medium keeps every hit area at 28 or more).
+    static let hitSize: CGFloat = AtticControlSize.minimumHitTarget
     /// Checkbox to title.
     static let titleGap: CGFloat = 8
 }
 
 // MARK: - Task row, quick look and card
 
-/// A task row (34 pt, 48 with a details line), from the row's top: the
-/// text block centred (the title's 18 pt line box at 8 in a 34 pt row;
-/// title, 2 pt, then the 16 pt details line at 6 in a 48 pt one), the
-/// circle centred on the title line (17, or 15), the 30 / 44 pt highlight
-/// 2 pt inside the row.
+/// A task row (32 pt, 48 with a details line; spacing B, owner
+/// 2026-10-20), from the row's top: the title's 18 pt line box at 7 in a
+/// 32 pt row (centred in its 28 pt pill); in a 48 pt one the title at 5
+/// (3 in the 44 pt pill), 2 pt, then the 14 pt details line, so the caps
+/// sit 7.5 from the pill's top and the tag fill 7 from its bottom. The
+/// circle is centred on the title line (16, or 14), the 28 / 44 pt
+/// highlight 2 pt inside the row.
 enum AtticTaskRowMetrics {
     static let titleLineHeight: CGFloat = 18
+    /// The details line of All notes' rows and the quick look card.
     static let detailsLineHeight: CGFloat = 16
+    /// A task row's details line (spacing B): the tag fill's own height,
+    /// so the fill ends 7 above the pill's bottom.
+    static let rowDetailsLineHeight: CGFloat = 14
     static let titleToDetails: CGFloat = 2
-    /// The title line sits 8 from the row's top in a 34 pt row and in a
-    /// 48 pt two-line one alike (D-13: centring the two-line block put its
-    /// title 2 pt high, so the circles' pitch read 32 then 50 around it;
-    /// now it is exactly 34 and 48).
+    /// The title's line box in a two-line pill (spacing B: 3, so the caps
+    /// sit 7.5 from the pill's top, matching the tag's 7 at the bottom).
+    static let twoLineTitleInset: CGFloat = 3
+    /// The title line in its row: centred in a one-line row (7 in 32);
+    /// in a two-line one, `twoLineTitleInset` into the pill (5 in 48).
+    /// (D-13 had both at 8; spacing B moves the two-line block up 3.)
     static func titleTop(twoLine: Bool) -> CGFloat {
-        (AtticLayout.rowPitch - titleLineHeight) / 2
+        twoLine ? pitchTopInset + twoLineTitleInset : (AtticLayout.rowPitch - titleLineHeight) / 2
     }
     /// The text block centred in its row (All notes' rows keep it: 6 from
     /// the top of a 48 pt row).
@@ -231,13 +240,13 @@ enum AtticRaisedButtonMetrics {
     static let labelIconSize: CGFloat = 13
 }
 
-/// The header's page button (Phase 0's mode dock): 32 pt (chrome B), inset
-/// 4, 24 pt segments 2 apart (32 shut, 84 open), 13 pt icons.
+/// The header's page button (Phase 0's mode dock): 30 pt (Medium), inset
+/// 4, 22 pt segments 2 apart (30 shut, 78 open), the raised glyph's size.
 enum AtticPageButtonMetrics {
     static let inset: CGFloat = 4
     static let segment: CGFloat = AtticControlSize.headerControl - 2 * inset
     static let gap: CGFloat = 2
-    static let iconSize: CGFloat = 13
+    static let iconSize: CGFloat = AtticControlSize.raisedGlyph
     /// Phase 0's hairline around an accented current page.
     static let accentStrokeWidth: CGFloat = 0.75
 }
@@ -251,12 +260,15 @@ enum AtticComposerMetrics {
 }
 
 enum AtticAddBarMetrics {
-    /// With the bar 16 from the panel's edge, the plus is centred on the
-    /// status circles' centre line (36 = 16 + 8 + 24 / 2) and the text
-    /// starts on the task titles' line (56 = 16 + 8 + 24 + 8).
-    static let leadingPadding: CGFloat = AtticLayout.contentFromChrome + AtticControlSize.statusCircle / 2 - iconSlot / 2
-    static let iconSlot: CGFloat = 24
-    static let gap: CGFloat = 8
+    /// The bar's plus stands where a row's circle does: with the bar on the
+    /// controls' 16 pt line, the plus is centred on the circles' centre
+    /// line (31.5 = 16 + 8 + 15 / 2) and the text starts on the task
+    /// titles' line (47 = 16 + 8 + 15 + 8). Spacing B (owner, 2026-10-20)
+    /// moved both lines; the bar's contents follow them (they were 36 and
+    /// 56, with a 24 pt slot).
+    static let leadingPadding: CGFloat = AtticLayout.tasksContentFromChrome
+    static let iconSlot: CGFloat = AtticControlSize.statusCircle
+    static let gap: CGFloat = AtticLayout.circleToTitle
     static let plusSize: CGFloat = 12.5
     static let sendGlyphSize: CGFloat = 12
 }

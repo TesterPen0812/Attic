@@ -797,7 +797,10 @@ final class TasksRound12Tests: XCTestCase {
             }
         }
         defer { covers.forEach { $0.removeFromSuperview() } }
-        let first = try capture(scrolledTo: 260)
+        // Inside the long list's scroll range, with rows under both bands
+        // (spacing B's 32 pt rows make it 776 tall in a 520 pt panel: 256 at
+        // most; it was 260 with 34 pt rows).
+        let first = try capture(scrolledTo: 240)
         let second = try capture(scrolledTo: 1_300)
         // The list itself moved, or the bands prove nothing.
         let moved = try share(first, second, from: tabsBottom + 40, to: barTop - 40)
