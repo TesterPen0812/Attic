@@ -1846,6 +1846,9 @@ struct AtticCompletedLine: View {
 /// appearance check judges.
 struct AtticSubtaskCheckbox: View {
     let isDone: Bool
+    /// Tasks' subtask box (13, control size Medium); Notes' checklists keep
+    /// their own 14 (`NoteChecklistAttachment.boxSize`).
+    var size: CGFloat = AtticControlSize.subtaskCheckbox
 
     @Environment(\.atticDesign) private var design
     @State private var checkProbeID = UUID()
@@ -1854,7 +1857,6 @@ struct AtticSubtaskCheckbox: View {
     var body: some View {
         let tokens = design.tokens
         let m = AtticSubtaskMetrics.self
-        let size = AtticControlSize.subtaskCheckbox
         // A true squircle (superellipse, n = 4): the owner's choice, 2026-09-26.
         let shape = Squircle(cornerRadius: size / 2, exponent: AtticRadius.subtaskCheckboxExponent)
         let lineWidth = design.increaseContrast ? m.lineWidthIncreased : m.lineWidth
