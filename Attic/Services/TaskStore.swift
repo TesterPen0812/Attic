@@ -1325,10 +1325,15 @@ final class TaskStore: ObservableObject {
             // kept (see `removeAttachment`).
             let timestamp = now()
             let shownCopy = TaskReplicaSnapshot(current)
-            for replica in try storedTasks(matching: ownerID) {
+            // Decode and encode the entire family before changing any row.
+            // A later malformed sibling must not leave a partial attachment.
+            let proposed = try storedTasks(matching: ownerID).map { replica in
                 let stamp = replica === current || TaskReplicaSnapshot(replica) == shownCopy
                 let shown = try Self.attachmentLists(of: replica).shown
-                replica.imageReferencesData = try Self.encodedAttachments(shown + imported)
+                return (replica, try Self.encodedAttachments(shown + imported), stamp)
+            }
+            for (replica, bytes, stamp) in proposed {
+                replica.imageReferencesData = bytes
                 if stamp { replica.updatedAt = timestamp }
             }
             guard save(owner: errorOwner) else {
@@ -1340,6 +1345,8 @@ final class TaskStore: ObservableObject {
             await taskImageFiles.remove(imported)
             return nil
         } catch {
+            context.rollback()
+            refresh()
             await taskImageFiles.remove(imported)
             reportAttachmentImportFailure(error, owner: errorOwner)
             return nil

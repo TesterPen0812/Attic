@@ -307,3 +307,56 @@ extension AttachmentRecentlyDeletedTests {
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 0)
     }
 }
+
+@MainActor
+final class RoundPRADataSafetyTests: XCTestCase {
+    private struct RawAttachments: Equatable {
+        let shown: Data?, removed: Data?, updatedAt: Date
+        init(_ row: TaskItem) {
+            shown = row.imageReferencesData; removed = row.removedAttachmentsData; updatedAt = row.updatedAt
+        }
+    }
+    func testFailedImportDoesNotLeaveAnyReplicaPointingAtRemovedFiles() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let root = ownedTemporaryDirectory(prefix: "PRAFailedTaskImport")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let storage = root.appendingPathComponent("storage")
+        let source = root.appendingPathComponent("plan.txt")
+        try Data("private bytes".utf8).write(to: source)
+        let files = TaskImageFiles(rootURL: storage)
+        var savedContext: ModelContext?
+        let store = TaskStore(container: container, persist: { context in
+            savedContext = context; try context.save()
+        }, taskImageFiles: files)
+        let task = try XCTUnwrap(store.create(title: "Owner"))
+        let other = try XCTUnwrap(store.create(title: "Other"))
+        let context = try XCTUnwrap(savedContext)
+        let replica = TaskItem(id: task.id, title: task.title, createdAt: task.createdAt, updatedAt: task.updatedAt)
+        replica.listOrderVersion = task.listOrderVersion
+        context.insert(replica); try context.save()
+        let ids = [task.id]
+        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) })
+        let ordered = try context.fetch(descriptor)
+        XCTAssertEqual(ordered.count, 2)
+        // Match the exact unsorted fetch used by storedTaskGroups: the healthy
+        // row is visited before the malformed row, regardless of SQLite order.
+        ordered[1].removedAttachmentsData = Data("malformed removal JSON".utf8)
+        try context.save()
+        XCTAssertEqual(try context.fetch(descriptor).map(\.persistentModelID), ordered.map(\.persistentModelID))
+        let before = ordered.map(RawAttachments.init), times = ordered.map(\.updatedAt)
+        let attached = await store.attachFiles([source], to: task.id)
+        XCTAssertFalse(attached)
+        XCTAssertEqual(ordered.map(RawAttachments.init), before, "failure must not leave unsaved references")
+        XCTAssertEqual(ordered.map(\.updatedAt), times)
+        XCTAssertNotNil(store.errorNotice)
+        XCTAssertTrue(store.update(other, title: "Unrelated save"))
+        let fresh = ModelContext(container)
+        let after = try fresh.fetch(descriptor)
+        let beforeByID = Dictionary(uniqueKeysWithValues: zip(ordered.map(\.persistentModelID), before))
+        for row in after { XCTAssertEqual(RawAttachments(row), beforeByID[row.persistentModelID]) }
+        let remaining = FileManager.default.enumerator(at: storage, includingPropertiesForKeys: [.isRegularFileKey])
+        let filesLeft = (remaining?.allObjects as? [URL] ?? []).filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+        XCTAssertEqual(filesLeft, [], "all unbound private copies are removed")
+        XCTAssertEqual(try Data(contentsOf: source), Data("private bytes".utf8))
+    }
+}
