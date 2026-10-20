@@ -1803,6 +1803,9 @@ final class TasksPageModel: ObservableObject {
         // The bar is empty once the tasks exist, as after a single add (round
         // 12, CU: the draft stayed behind the batch).
         addBarState.clearDraft()
+        // A paste consumes the same draft as Return. For one-per-line,
+        // its files belong to the first task, which the page reveals.
+        if let first = created.first { attachComposerFiles(to: first.id) }
         // The same observable success as a single add (round 4): the first
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.

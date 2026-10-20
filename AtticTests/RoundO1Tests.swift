@@ -416,6 +416,26 @@ final class RoundO1Tests: XCTestCase {
         model.clearComposerFiles()
     }
 
+    func testPastedTasksConsumeComposerFilesInsteadOfPassingThemToTheNextDraft() async throws {
+        for asOne in [true, false] {
+            let (store, model) = try makeModel()
+            let file = try makeFile("Lease.pdf")
+            model.addComposerFiles(urls: [file])
+            model.pasteOffer = TaskPasteOffer("Sign\nlease")
+            model.acceptPaste(asOne: asOne)
+            let first = try XCTUnwrap(model.addedRequest?.id)
+            XCTAssertTrue(model.addBarState.files.isEmpty, "paste consumes this draft's files")
+            await waitForComposer { store.task(withID: first)?.attachments.count == 1 }
+            XCTAssertEqual(store.task(withID: first)?.attachments.first?.filename, "Lease.pdf")
+            let pasted = model.rows(for: .now).filter { $0.id != first }
+            XCTAssertEqual(pasted.count, asOne ? 0 : 1)
+            XCTAssertTrue(pasted.allSatisfy { $0.files.isEmpty }, "a multi-task paste assigns files to its first task")
+            model.addBarState.text.text = "Unrelated task"
+            let next = try XCTUnwrap(model.submitAddBar())
+            XCTAssertEqual(store.task(withID: next)?.attachments.count, 0)
+        }
+    }
+
     func testFilesAddedWhileComposingGoOntoTheNewTaskThroughTheTaskImport() throws {
         let (store, model) = try makeModel()
         let file = try makeFile("Lease.pdf")
