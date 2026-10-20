@@ -412,3 +412,140 @@ extension RoundPRADataSafetyTests {
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(restoredFile)), bytes)
     }
 }
+
+@MainActor
+extension RoundPRADataSafetyTests {
+    func testDuplicateUnopenedNoteVerifiesOnlyItsColdAttachmentAndHasOneUndoStep() async throws {
+        let root = ownedTemporaryDirectory(prefix: "PRAColdDuplicate")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let schema = Schema(PersistenceController.appModelTypes), url = root.appendingPathComponent("notes.store")
+        func open() throws -> ModelContainer {
+            try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none))
+        }
+        let fileStore = AttachmentFileStore(rootURL: root.appendingPathComponent("files"))
+        let first = trackAttachmentReconciliation(of: NoteStore(container: try open(), attachmentFileStore: fileStore))
+        let bytes = Data("intact saved file".utf8)
+        let item = StagedNoteAttachment(id: UUID(), filename: "plan.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let sourceID = UUID(), unrelatedID = UUID(), otherID = UUID()
+        let original = NoteDocument(blocks: [.text("Source"), .checklist("Keep task"), .file(attachmentID: item.id,
+            filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        let otherFile = item.copying(id: UUID())
+        guard case .success = first.createDocumentNote(id: sourceID, document: original, staged: [item], tags: ["project"]),
+              case .success = first.createDocumentNote(id: unrelatedID, document: NoteDocument(blocks: [.text("Unrelated")])),
+              case .success = first.createDocumentNote(id: otherID, document: NoteDocument(blocks: [.text("Other file"),
+                .file(attachmentID: otherFile.id, filename: otherFile.filename, contentTypeIdentifier: otherFile.contentTypeIdentifier,
+                      byteCount: otherFile.byteCount)]), staged: [otherFile]) else { return XCTFail("seed") }
+        let originalBytes = try XCTUnwrap(first.note(withID: sourceID)?.content)
+        let originalDocument = try XCTUnwrap(first.loadDocument(noteID: sourceID)?.content.document)
+        await first.waitForAttachmentReconciliation()
+        let second = trackAttachmentReconciliation(of: NoteStore(container: try open(), attachmentFileStore: fileStore))
+        let controller = NotesPageController(store: second, journal: nil, saveDelay: .seconds(600))
+        let opened = await controller.openDurably(noteID: unrelatedID)
+        XCTAssertTrue(opened)
+        XCTAssertEqual(second.attachmentFamily(item.id).first?.payload, bytes)
+        XCTAssertNil(second.cachedVerifiedAttachmentBytes(item.id))
+        XCTAssertNil(second.cachedVerifiedAttachmentBytes(otherFile.id))
+        let duplicated = await controller.duplicateNote(noteID: sourceID)
+        XCTAssertTrue(duplicated)
+        guard duplicated else { return }
+        let copy = try XCTUnwrap(controller.active), copyID = copy.noteID
+        XCTAssertNotEqual(copyID, sourceID); XCTAssertNotEqual(copyID, unrelatedID)
+        XCTAssertEqual(second.notes.count, 4)
+        let document = try XCTUnwrap(second.loadDocument(noteID: copyID)?.content.document)
+        XCTAssertEqual(document.blocks.map(\.text), ["Source copy", "Keep task", ""])
+        XCTAssertNotEqual(document.blocks[1].id, originalDocument.blocks[1].id)
+        XCTAssertEqual(document.attachmentIDs.count, 1)
+        XCTAssertNotEqual(document.attachmentIDs.first, item.id)
+        XCTAssertEqual(try second.attachmentRows(forNoteID: copyID).first?.payload, bytes)
+        XCTAssertEqual(second.note(withID: copyID)?.tags, ["project"])
+        XCTAssertNil(second.cachedVerifiedAttachmentBytes(otherFile.id), "Duplicate must not read the library's other attachment bytes")
+        XCTAssertEqual(second.note(withID: sourceID)?.content, originalBytes)
+        XCTAssertEqual(second.note(withID: sourceID)?.tags, ["project"])
+        XCTAssertTrue(controller.undoLibrary()); XCTAssertNil(second.note(withID: copyID))
+        XCTAssertFalse(controller.undoLibrary(), "exactly one library Undo step")
+        XCTAssertTrue(controller.redoLibrary())
+        XCTAssertEqual(second.loadDocument(noteID: copyID)?.content.document, document)
+        let fresh = ModelContext(second.container)
+        let rows = try fresh.fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(rows.first { $0.id == sourceID }?.content, originalBytes)
+        XCTAssertEqual(rows.first { $0.id == copyID }?.tags, ["project"])
+        XCTAssertEqual(try fresh.fetch(FetchDescriptor<NoteAttachment>()).first { $0.noteID == copyID }?.payload, bytes)
+    }
+}
+
+@MainActor
+extension RoundPRADataSafetyTests {
+    private func coldDuplicateFixture() async throws -> (NoteStore, NotesPageController, UUID, UUID, UUID) {
+        let files = makeTestAttachmentFileStore()
+        let first = try makeTestNoteStore(attachmentFileStore: files)
+        let bytes = Data("saved attachment".utf8)
+        let item = StagedNoteAttachment(id: UUID(), filename: "plan.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let source = UUID(), other = UUID(), third = UUID()
+        guard case .success = first.createDocumentNote(id: source, document: NoteDocument(blocks: [.text("Source"),
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)]), staged: [item]),
+              case .success = first.createDocumentNote(id: other, document: NoteDocument(blocks: [.text("Other")])),
+              case .success = first.createDocumentNote(id: third, document: NoteDocument(blocks: [.text("Third")])) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        await first.waitForAttachmentReconciliation()
+        let store = trackAttachmentReconciliation(of: NoteStore(container: first.container, attachmentFileStore: files))
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(600))
+        let opened = await controller.openDurably(noteID: other)
+        XCTAssertTrue(opened); XCTAssertNil(store.cachedVerifiedAttachmentBytes(item.id))
+        return (store, controller, source, third, item.id)
+    }
+
+    func testDuplicateRevalidatesSourceAndPresentationAfterVerificationSuspends() async throws {
+        for mutation in ["revision", "tags", "source session", "active session", "navigation", "delete", "refresh"] {
+            let (store, controller, source, third, attachment) = try await coldDuplicateFixture()
+            let active = try XCTUnwrap(controller.active)
+            var sourceSession: NoteSession?
+            if mutation == "source session" {
+                XCTAssertTrue(controller.open(noteID: source)); sourceSession = controller.active
+                XCTAssertTrue(controller.open(noteID: active.noteID))
+            }
+            let ids = Set(store.notes.map(\.id))
+            controller.duplicateAttachmentWillVerify = { id in
+                XCTAssertEqual(id, attachment)
+                switch mutation {
+                case "revision":
+                    let load = try! XCTUnwrap(store.loadDocument(noteID: source))
+                    var document = load.content.document!; document.blocks[0].text = "Changed while verifying"
+                    guard case .success = store.saveDocument(noteID: source, document: document, baseRevisionID: load.revisionID) else { return XCTFail("save") }
+                case "tags": XCTAssertTrue(store.setTags(["changed"], for: store.note(withID: source)!))
+                case "source session":
+                    let engine = sourceSession!.engine
+                    XCTAssertTrue(engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Changed "), name: "Type"))
+                case "active session":
+                    XCTAssertTrue(active.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Changed "), name: "Type"))
+                case "navigation": XCTAssertTrue(controller.open(noteID: third))
+                case "delete": XCTAssertTrue(store.delete(store.note(withID: source)!))
+                default: store.refresh()
+                }
+            }
+            let duplicated = await controller.duplicateNote(noteID: source)
+            XCTAssertFalse(duplicated, mutation)
+            XCTAssertEqual(Set(store.notes.map(\.id)), mutation == "delete" ? ids.subtracting([source]) : ids, mutation)
+            XCTAssertFalse(controller.canUndoLibrary, mutation)
+            if mutation == "active session" { XCTAssertEqual(active.engine.document().title, "Changed Other") }
+            if mutation == "source session" { XCTAssertEqual(sourceSession?.engine.document().title, "Changed Source") }
+            if mutation == "navigation" { XCTAssertEqual(controller.active?.noteID, third) }
+        }
+    }
+
+    func testRepeatedDuplicateDuringVerificationCreatesOnlyOneCopy() async throws {
+        let (store, controller, source, _, _) = try await coldDuplicateFixture()
+        controller.duplicateAttachmentWillVerify = { _ in
+            let repeated = await controller.duplicateNote(noteID: source)
+            XCTAssertFalse(repeated)
+        }
+        let duplicated = await controller.duplicateNote(noteID: source)
+        XCTAssertTrue(duplicated)
+        XCTAssertEqual(store.notes.count, 4)
+        XCTAssertTrue(controller.undoLibrary()); XCTAssertEqual(store.notes.count, 3)
+        XCTAssertFalse(controller.undoLibrary())
+        XCTAssertTrue(controller.redoLibrary()); XCTAssertEqual(store.notes.count, 4)
+    }
+}

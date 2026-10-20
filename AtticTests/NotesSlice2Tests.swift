@@ -471,7 +471,7 @@ final class NotesSlice2ControllerTests: XCTestCase {
         ]), staged: [image], tags: ["launch"]) else { return XCTFail("fixture") }
         let controller = makeController()
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
-        XCTAssertTrue(controller.duplicateNote(noteID: id))
+        await XCTAssertTrueAsync(await controller.duplicateNote(noteID: id))
         let copy = try XCTUnwrap(controller.active)
         XCTAssertNotEqual(copy.noteID, id)
         XCTAssertEqual(copy.engine.document().title, "Pricing copy")
@@ -611,7 +611,7 @@ final class NotesLibraryModelTests: XCTestCase {
             switch route {
             case .dismiss: controller.dismissLibrary()
             case .newNote: XCTAssertTrue(controller.requestNewNote())
-            case .duplicate: XCTAssertTrue(controller.duplicateNote(noteID: initial.noteID))
+            case .duplicate: await XCTAssertTrueAsync(await controller.duplicateNote(noteID: initial.noteID))
             case .openNote: await XCTAssertTrueAsync(await controller.openDurably(noteID: initial.noteID)); controller.dismissLibrary()
             case .failedDraft: XCTAssertTrue(controller.openFailedDraft(sessionID: initial.id))
             }

@@ -510,7 +510,9 @@ struct NotesEditorPage: View {
             Button("") { chrome.presentMenu() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
                 .disabled(!showsEditor)
-            Button("") { if let id = currentNoteID { controller.duplicateNote(noteID: id) } }
+            Button("") {
+                if let id = currentNoteID { Task { @MainActor in _ = await controller.duplicateNote(noteID: id) } }
+            }
                 .keyboardShortcut("d", modifiers: .command)
                 .disabled(!showsEditor || !(controller.active?.isPersisted ?? false))
             Button("") { if let id = currentNoteID { controller.copyMarkdown(noteID: id) } }
@@ -680,7 +682,7 @@ struct NotesEditorPage: View {
         if editable {
             commands.append(AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
                                              isDisabled: !session.isPersisted, identifier: "notes-menu-duplicate") {
-                controller.duplicateNote(noteID: id)
+                Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
             })
         }
         if controller.canSaveRecoveryCopy(session) {
@@ -719,7 +721,7 @@ struct NotesEditorPage: View {
             AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
                              isDisabled: stored?.usesDocumentFormat != true,
                              identifier: NotesLibraryView.duplicateIdentifier) {
-                controller.duplicateNote(noteID: id)
+                Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
             },
             AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
                              isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }

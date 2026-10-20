@@ -149,7 +149,7 @@ final class NotesAuditTests: XCTestCase {
         let a = try create([.text("Alpha")])
         let b = try create([.text("Beta")])
         XCTAssertTrue(controller.setPinned(true, noteID: a))
-        XCTAssertTrue(controller.duplicateNote(noteID: b))
+        await XCTAssertTrueAsync(await controller.duplicateNote(noteID: b))
         let copies = liveIDs().subtracting([a, b])
         XCTAssertEqual(copies.count, 1)
         XCTAssertTrue(controller.showLibrary())

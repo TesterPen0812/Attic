@@ -250,6 +250,11 @@ final class NotesPageController: ObservableObject {
     let imageLoader: @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)?
     private let decodeRecoveryDocument: @Sendable (Data) async -> NoteDocument?
     private var openRequestGeneration: UInt64 = 0
+    private var isDuplicatingNote = false
+    #if DEBUG
+    /// Deterministic suspension boundary for source/navigation revalidation tests.
+    var duplicateAttachmentWillVerify: ((UUID) async -> Void)?
+    #endif
     private let decodeOpenDocument: @Sendable (Data) async -> (content: NoteContent, onMainThread: Bool)
     private(set) var coldDecodeCount = 0
     private(set) var coldDecodeOnMainCount = 0
@@ -3103,13 +3108,16 @@ extension NotesPageController {
     /// Duplicate (⌘D): a new note with this note's current text, copies of
     /// its images and its tags, titled "… copy", and opened.
     @discardableResult
-    func duplicateNote(noteID: UUID) -> Bool {
-        guard let newID = makeDuplicate(noteID: noteID) else { return false }
+    func duplicateNote(noteID: UUID) async -> Bool {
+        guard !isDuplicatingNote else { return false }
+        isDuplicatingNote = true
+        defer { isDuplicatingNote = false }
+        guard let newID = await makeDuplicate(noteID: noteID) else { return false }
         undoRoute.record(duplicateStep(newID: newID), in: .notesLibrary)
         return true
     }
 
-    private func makeDuplicate(noteID: UUID) -> UUID? {
+    private func makeDuplicate(noteID: UUID) async -> UUID? {
         // 1. The gates, before anything is read or written: the source's
         //    activity (composition, Writing Tools), a loading batch, and
         //    leaving the note on screen. A refusal creates nothing.
@@ -3128,10 +3136,12 @@ extension NotesPageController {
                 return nil
             }
         }
-        guard prepareToLeave(.openNote) else { return nil }
+        let leaving = active, leaveRequest = openRequestGeneration
+        guard await prepareToLeaveDurably(.openNote), active === leaving,
+              openRequestGeneration == leaveRequest, !Task.isCancelled else { return nil }
         // 2. The source as it is now (its latest text was just preserved).
         let document: NoteDocument
-        let staged: [StagedNoteAttachment]
+        var staged: [StagedNoteAttachment]
         let tags: [String]
         if let session = cache[noteID] {
             document = session.engine.document()
@@ -3144,8 +3154,41 @@ extension NotesPageController {
         } else {
             return nil
         }
+        let sourceSession = cache[noteID], sourceEngine = cache[noteID]?.engine
+        let sourceGeneration = sourceSession?.editGeneration
+        let sourceRow = store.note(withID: noteID)
+        let sourceRevision = sourceRow?.revisionID, sourceContent = sourceRow?.content, sourceTags = sourceRow?.tags
+        let storeGeneration = store.revision, request = openRequestGeneration
+        let leavingEngine = leaving?.engine, leavingGeneration = leaving?.editGeneration
+        let sourceStaged = staged
+        for id in Set(document.attachmentIDs) where !staged.contains(where: { $0.id == id }) {
+            #if DEBUG
+            if let hook = duplicateAttachmentWillVerify { await hook(id) }
+            #endif
+            guard let bytes = await store.verifiedAttachmentBytes(id) else {
+                active?.showNotice(NoteNotice(kind: .imageGone, detail: String(localized: "An attachment is unavailable, so the note was not duplicated.")))
+                return nil
+            }
+            staged.append(bytes)
+        }
+        // Byte verification yields. Navigation, edits, tags, deletion, imports
+        // or a replaced store context cannot authorize copying the old snapshot.
+        sourceEngine?.refreshCompositionActivity()
+        leavingEngine?.refreshCompositionActivity()
+        guard !Task.isCancelled, request == openRequestGeneration, active === leaving,
+              leaving?.engine === leavingEngine, leaving?.editGeneration == leavingGeneration,
+              cache[noteID] === sourceSession, sourceSession?.engine === sourceEngine,
+              sourceSession?.editGeneration == sourceGeneration, store.revision == storeGeneration,
+              store.note(withID: noteID)?.revisionID == sourceRevision,
+              store.note(withID: noteID)?.content == sourceContent,
+              store.note(withID: noteID)?.tags == sourceTags,
+              sourceEngine?.stagedAttachments(for: document) ?? [] == sourceStaged,
+              sourceSession.map({ NoteSessionPolicy.duplicateAllowed($0.state, activity: $0.engine.activity,
+                  hasBatch: $0.isImporting, hasMarkedText: $0.engine.textView?.hasMarkedText() == true) }) ?? true,
+              leaving.map({ NoteSessionPolicy.canLeave($0.engine.activity, hasMarkedText: $0.engine.textView?.hasMarkedText() == true)
+                  && !$0.isImporting }) ?? true else { return nil }
         guard var (copy, images) = replacementForDeletedNote(document, oldID: noteID, staged: staged) else {
-            active?.showNotice(NoteNotice(kind: .imageGone, detail: String(localized: "An image is unavailable, so the note was not duplicated.")))
+            active?.showNotice(NoteNotice(kind: .imageGone, detail: String(localized: "An attachment is unavailable, so the note was not duplicated.")))
             return nil
         }
         if let first = copy.blocks.first, first.kind == .text, !first.displayText.trimmingCharacters(in: .whitespaces).isEmpty {

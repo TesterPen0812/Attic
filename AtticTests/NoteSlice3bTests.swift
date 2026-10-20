@@ -2776,7 +2776,7 @@ extension NoteSlice3bTests {
             XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(item.id), "successful local reload preserves unrelated proof")
             if duplicate {
                 XCTAssertTrue(controller.open(noteID: source))
-                XCTAssertTrue(controller.duplicateNote(noteID: source))
+                await XCTAssertTrueAsync(await controller.duplicateNote(noteID: source))
                 let copy = try XCTUnwrap(controller.active)
                 let copiedID = try XCTUnwrap(copy.engine.document().attachmentIDs.first)
                 XCTAssertNotEqual(copiedID, item.id)
@@ -2840,7 +2840,7 @@ extension NoteSlice3bTests {
             XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(item.id), "unrelated prose save preserves the family's proof")
             if duplicate {
                 XCTAssertTrue(controller.open(noteID: source))
-                XCTAssertTrue(controller.duplicateNote(noteID: source))
+                await XCTAssertTrueAsync(await controller.duplicateNote(noteID: source))
                 let copy = try XCTUnwrap(controller.active)
                 let copiedID = try XCTUnwrap(copy.engine.document().attachmentIDs.first)
                 XCTAssertNotEqual(copiedID, item.id)
