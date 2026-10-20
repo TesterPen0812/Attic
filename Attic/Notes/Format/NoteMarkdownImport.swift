@@ -393,7 +393,21 @@ enum NoteMarkdownImport {
                 } else { append(inline(Array(node.children), table: table)) }
                 index += 1
             }
-            result.text = result.text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
+            if result.text.contains(NoteDocument.objectCharacter) {
+                // Marks use UTF-16 boundaries. Removing a placeholder must
+                // translate both ends, including spans parsed from paired HTML.
+                let units = Array(result.text.utf16)
+                var boundaries = [0]
+                for unit in units { boundaries.append(boundaries.last! + (unit == 0xFFFC ? 0 : 1)) }
+                result.marks = result.marks.compactMap { mark in
+                    guard mark.offset >= 0, mark.length > 0, mark.offset <= units.count,
+                          mark.length <= units.count - mark.offset else { return nil }
+                    let lower = boundaries[mark.offset], upper = boundaries[mark.offset + mark.length]
+                    guard upper > lower else { return nil }
+                    return NoteMark(mark.kind, offset: lower, length: upper - lower, url: mark.url, colour: mark.colour)
+                }
+                result.text = result.text.replacingOccurrences(of: String(NoteDocument.objectCharacter), with: "")
+            }
             result.marks = NoteTableText.canonicalMarks(result.marks)
             return result
         }

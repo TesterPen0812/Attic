@@ -3680,4 +3680,19 @@ extension RoundPRAMarkdownTests {
         try await checkPaste(checklist + "\n\n  | A | B |\n  | --- | --- |\n  | C | D |", expected: [checked, .table(table)])
     }
 }
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testObjectCharacterRemovalRebasesInlineMarks() async throws {
+        var ordinary = NoteBlock.text("bx"); ordinary.marks = [NoteMark(.bold, offset: 0, length: 1)]
+        var paired = NoteBlock.text("ab"); paired.marks = [NoteMark(.underline, offset: 0, length: 2)]
+        var unicode = NoteBlock.text("😀bx"); unicode.marks = [NoteMark(.bold, offset: 2, length: 1)]
+        for (markdown, expected) in [("\u{FFFC}**b**x", ordinary), ("<u>a\u{FFFC}b</u>", paired), ("😀\u{FFFC}**b**x", unicode)] {
+            let document = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(document.blocks.map(\.text), [expected.text])
+            XCTAssertEqual(document.blocks.first?.marks, expected.marks)
+            try await checkPaste(markdown, expected: [expected])
+        }
+    }
+}
 #endif

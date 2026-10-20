@@ -38,7 +38,8 @@
     "testMarkdownSourceRangesKeepCRParagraphContent",
     "testIndentedQuotesKeepExplicitExportBytesAndDepth",
     "testIndentedQuoteHardBreakKeepsMarksAndDepth",
-    "testLooseListsKeepContinuationInsideOneSourceItem"
+    "testLooseListsKeepContinuationInsideOneSourceItem",
+    "testObjectCharacterRemovalRebasesInlineMarks"
   ],
   "NotesPageRenderTests.swift": [
     "testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances",
