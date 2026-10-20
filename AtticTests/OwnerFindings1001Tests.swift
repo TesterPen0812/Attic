@@ -69,6 +69,28 @@ final class OwnerFindings1001Tests: XCTestCase {
 /// `AtticPanel.sendEvent`, which makes the panel key before the press.)
 @MainActor
 final class O14FirstMouseTests: XCTestCase {
+    private final class RefusingScrollView: NSScrollView {
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+    }
+
+    func testNativeScrollFirstMousePolicyFollowsItsWindow() {
+        let scroll = RefusingScrollView()
+        let panel = AtticPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let ordinary = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        ordinary.isReleasedWhenClosed = false
+        defer { panel.close(); ordinary.close() }
+        ordinary.contentView = scroll
+        XCTAssertFalse(scroll.acceptsFirstMouse(for: nil))
+        AtticPanelFirstMouseHooks.install(on: scroll)
+        XCTAssertFalse(scroll.acceptsFirstMouse(for: nil), "ordinary windows keep the native policy")
+        panel.contentView = scroll
+        XCTAssertTrue(scroll.acceptsFirstMouse(for: nil), "a panel's first press is accepted")
+        AtticPanelFirstMouseHooks.install(on: scroll)
+        ordinary.contentView = scroll
+        XCTAssertFalse(scroll.acceptsFirstMouse(for: nil), "moving out restores the native answer, even after repeated hits")
+    }
+
     func testEveryViewUnderAPressOnThePanelAcceptsTheFirstMouse() throws {
         let suite = "O14FirstMouse.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

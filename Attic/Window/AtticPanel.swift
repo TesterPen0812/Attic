@@ -1308,7 +1308,15 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         ) {
             return self
         }
-        return super.hitTest(point) ?? self
+        let hit = super.hitTest(point) ?? self
+        // SwiftUI owns the scroll view, including the bare content-margin
+        // strips. Its activation-events modifier does not reach those strips.
+        // Keep the native scroll target (and its scrolling) while giving it
+        // the same first-press policy as the panel's own native editors.
+        if hit is NSScrollView || hit is NSClipView {
+            AtticPanelFirstMouseHooks.install(on: hit)
+        }
+        return hit
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -1882,5 +1890,32 @@ enum AtticHostDragHooks {
                 class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
             }
         }
+    }
+}
+
+
+/// SwiftUI creates its scroll/clip view classes itself, so they cannot be
+/// supplied as Attic subclasses. Add the panel policy to each encountered
+/// native class once; preserve its original answer in every other window.
+@MainActor
+enum AtticPanelFirstMouseHooks {
+    private static var installed: Set<ObjectIdentifier> = []
+
+    static func install(on view: NSView) {
+        guard let cls: AnyClass = object_getClass(view),
+              installed.insert(ObjectIdentifier(cls)).inserted else { return }
+        let selector = #selector(NSView.acceptsFirstMouse(for:))
+        guard let method = class_getInstanceMethod(cls, selector) else { return }
+        typealias Original = @convention(c) (NSView, Selector, NSEvent?) -> ObjCBool
+        let original = unsafeBitCast(method_getImplementation(method), to: Original.self)
+        let block: @convention(block) (NSView, NSEvent?) -> ObjCBool = { view, event in
+            MainActor.assumeIsolated {
+                if AtticPanel.acceptsEveryFirstMouse(in: view.window) { return true }
+                return original(view, selector, event)
+            }
+        }
+        // Replace on this class, never on the class that supplied an
+        // inherited method (which might be NSView itself).
+        class_replaceMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
     }
 }
