@@ -10,6 +10,52 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testPRB1NativeShiftReturnKeepsParagraphTypingMarks() throws {
+        var body = NoteBlock.text("ab"); body.marks = [NoteMark(.bold, offset: 0, length: 2)]
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+        let window = try XCTUnwrap(view.window)
+        XCTAssertTrue(window.makeFirstResponder(view))
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+        for (characters, code, flags) in [("\r", UInt16(36), NSEvent.ModifierFlags.shift), ("x", UInt16(7), [])] {
+            window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)))
+        }
+        XCTAssertEqual(view.string, "T\na\nxb", "AppKit maps Shift-Return to a paragraph break")
+        XCTAssertEqual(engine.document().blocks[2].marks, [NoteMark(.bold, offset: 0, length: 2)])
+    }
+
+    func testPRB1SoftBreakThroughWindowKeepsActiveMarks() throws {
+        for kind in [NoteMark.Kind.bold, .italic, .underline, .strikethrough, .code, .highlight] {
+            var body = NoteBlock.text("ab")
+            body.marks = [NoteMark(kind, offset: 0, length: 2)]
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+            defer { engine.detachView() }
+            let window = try XCTUnwrap(view.window)
+            XCTAssertTrue(window.makeFirstResponder(view))
+            view.setSelectedRange(NSRange(location: 3, length: 0))
+            XCTAssertNotNil(view.typingAttributes[.noteMark(kind)])
+            let original = engine.document()
+            func key(_ value: String, code: UInt16, flags: NSEvent.ModifierFlags = []) throws {
+                window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: value,
+                    charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
+            }
+            try key("\r", code: 36, flags: .control)
+            XCTAssertEqual(view.string, "T\na\u{2028}b", "Control-Return traversed native soft-break interpretation")
+            XCTAssertNotNil(view.typingAttributes[.noteMark(kind)], kind.rawValue)
+            try key("x", code: 7)
+            XCTAssertEqual(engine.document().blocks[1].text, "a\u{2028}xb")
+            XCTAssertEqual(engine.document().blocks[1].marks, [NoteMark(kind, offset: 0, length: 4)])
+            let typed = engine.document()
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1].text, "a\u{2028}b")
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+            XCTAssertTrue(engine.history.redo()); XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), typed)
+        }
+    }
+
     func testPRB1RestartAtOneKeepsAdjacentNumberedSegmentsSeparate() throws {
         var first = NoteBlock.text("one", style: "number"); first.start = 5
         var second = NoteBlock.text("seven", style: "number"); second.start = 7

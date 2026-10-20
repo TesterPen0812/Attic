@@ -4788,7 +4788,13 @@ extension NoteEditorEngine {
         let value = format.isCode ? "\n" : "\u{2028}"
         history.beginGroup(); defer { history.endGroup() }
         let atEnd = NSMaxRange(selection) == textStorage.length
-        guard performEdit(selection, with: NSAttributedString(string: value, attributes: attributes(forParagraphAt: selection.location)), name: "Line Break", selection: NSRange(location: selection.location + 1, length: 0)) else { return false }
+        var attributes = attributes(forParagraphAt: selection.location)
+        let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.filter { $0 != .link }.compactMap { kind in
+            textView.typingAttributes[.noteMark(kind)].map { (kind, $0) }
+        })
+        for (kind, value) in marks { attributes[.noteMark(kind)] = value }
+        attributes.merge(style.markedAttributes(marks: marks, baseFont: attributes[.font] as? NSFont ?? style.bodyFont)) { _, new in new }
+        guard performEdit(selection, with: NSAttributedString(string: value, attributes: attributes), name: "Line Break", selection: NSRange(location: selection.location + 1, length: 0)) else { return false }
         if format.isCode {
             if atEnd { carryEmptyContainer(format) }
             else { _ = rewriteParagraphHint(.noteCodeLanguage, field: "language", value: format.language, at: selection.location + 1, name: "Line Break") }
