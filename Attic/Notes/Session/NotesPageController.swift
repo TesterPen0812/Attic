@@ -1207,6 +1207,8 @@ final class NotesPageController: ObservableObject {
     /// host closes that task's page and shows the note (with the patch and
     /// its operation for "Task removed permanently · Undo").
     var taskNoteMaterialized: ((WorkspaceMaterializationPatch, UUID) -> Void)?
+    /// Make Task from Note (the ⋯ of an ordinary note); nil hides it.
+    var makeTaskFromNote: ((UUID) -> Void)?
 
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
@@ -3793,6 +3795,24 @@ extension NotesPageController {
         session.engine.detachView()
         cache[noteID] = nil
         if wasActive { _ = open(noteID: noteID) }
+    }
+
+    /// Make Task from Note (or its Undo) rewrote `noteID` in the other
+    /// form: the editor built for the old form leaves (an ordinary one
+    /// can't show a task's note, nor the reverse); the store is re-read.
+    func retireConvertedNote(_ noteID: UUID) {
+        store.refresh()
+        guard let session = cache[noteID], !session.usesWorkspaceBinding else { return }
+        session.saveTask?.cancel(); session.saveTask = nil
+        session.durabilityTask?.cancel(); session.durabilityTask = nil
+        session.pauseTask?.cancel(); session.pauseTask = nil
+        let wasActive = active === session
+        session.engine.detachView()
+        cache[noteID] = nil
+        if wasActive {
+            active = nil
+            if store.note(withID: noteID)?.taskID == nil { _ = open(noteID: noteID) }
+        }
     }
 
     /// Drops the retired task-note editor once its page has left.

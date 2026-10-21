@@ -638,4 +638,50 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(tasks.task(withID: sub.id)?.status, .todo)
         XCTAssertFalse(presenter.model.needsReopen(toggling: sub.id))
     }
+
+    // MARK: Make Task from Note (§ 2.1)
+
+    func testMakeTaskFromNoteMakesTheSameDocumentTheTasksOwnNoteAndUndoReturnsItAsItWas() async throws {
+        makeStores()
+        let noteID = UUID()
+        let original = NoteDocument(blocks: [.text("Plan the offsite"), .text("Venue ideas"), .checklist("Ask Sam", checked: true)])
+        guard case .success = notes.store.createDocumentNote(id: noteID, document: original, tags: ["team"]) else { return XCTFail() }
+        XCTAssertTrue(notes.open(noteID: noteID))
+        let outcome = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks)
+        guard case let .made(taskID) = outcome else { return XCTFail("\(outcome)") }
+        let task = try XCTUnwrap(tasks.task(withID: taskID))
+        XCTAssertEqual(task.title, "Plan the offsite")
+        XCTAssertEqual(task.tags, ["team"], "the task takes the note's title and tags")
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == taskID && $0.tags.isEmpty }, "same identity; its own tags go to the task")
+        let stored = try storedDocument(noteID)
+        XCTAssertTrue(stored.requires.contains("taskNote"))
+        XCTAssertEqual(stored.blocks.dropFirst().map(\.kind), [.text, .checklist], "body checkboxes stay note checkboxes")
+        XCTAssertEqual(try associations(note: noteID).filter { $0.detachedAt == nil }.map(\.taskID), [taskID])
+        let presenter = try open(taskID)
+        XCTAssertEqual(presenter.session?.noteID, noteID, "the same document is the task's page")
+        await close(presenter)
+        let undone = await notes.undoRoute.replay(in: .notesLibrary, redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertNil(tasks.task(withID: taskID), "Undo: the task goes to Recently Deleted")
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == nil && $0.tags == ["team"] })
+        XCTAssertEqual(try storedDocument(noteID), original, "the note returns exactly as it was")
+        let redone = await notes.undoRoute.replay(in: .notesLibrary, redo: true)
+        XCTAssertEqual(redone, .applied)
+        XCTAssertNotNil(tasks.task(withID: taskID), "Redo brings the same task back")
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == taskID })
+    }
+
+    func testMakeTaskFromNoteRefusesATasksNoteAndAnUntitledNote() async throws {
+        let id = try seed(.boundary)
+        let own = try XCTUnwrap(try ownNotes(id).first?.id)
+        let refused = await TaskNoteConversion.makeTask(fromNote: own, notes: notes, tasks: tasks)
+        XCTAssertNotEqual(refused, .made(taskID: id), "a task's note never becomes a second task")
+        XCTAssertTrue(try rows(own).allSatisfy { $0.taskID == id })
+        let untitled = UUID()
+        guard case .success = notes.store.createDocumentNote(id: untitled, document: NoteDocument(blocks: [.text(""), .text("body")])) else { return XCTFail() }
+        XCTAssertTrue(notes.open(noteID: untitled))
+        let outcome = await TaskNoteConversion.makeTask(fromNote: untitled, notes: notes, tasks: tasks)
+        XCTAssertEqual(outcome, .refused("Give the note a title first"))
+        XCTAssertTrue(try rows(untitled).allSatisfy { $0.taskID == nil })
+    }
 }

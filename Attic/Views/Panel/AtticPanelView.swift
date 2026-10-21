@@ -243,6 +243,25 @@ struct AtticPanelView: View {
     /// and, if it was showing, the note opens in Notes.
     private func installTaskNotePurgePresentation() {
         let pages = noteDraft.pages
+        // Make Task from Note: the same document opens as the task's page.
+        pages.makeTaskFromNote = { [store, uiState, toasts] noteID in
+            Task { @MainActor in
+                switch await TaskNoteConversion.makeTask(fromNote: noteID, notes: pages, tasks: store) {
+                case let .made(taskID):
+                    uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
+                    toasts.show(String(localized: "Made a task from the note"), answersUndoKey: false, performingAsync: {
+                        if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
+                            return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
+                        }
+                        TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
+                        return await pages.undoRoute.replay(in: .notesLibrary, redo: false) == .applied ? .applied
+                            : .failed(CommandFailure(String(localized: "Couldn't undo")))
+                    })
+                case let .refused(reason):
+                    pages.active?.showNotice(NoteNotice(kind: .didntWork, detail: reason))
+                }
+            }
+        }
         pages.taskNoteMaterialized = { [store, uiState, toasts] patch, operationID in
             Task { @MainActor in
                 await TaskNotePurgePresentation.finish(patch, operationID: operationID, tasks: store, notes: pages,

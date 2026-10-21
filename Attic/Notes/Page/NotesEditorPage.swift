@@ -697,6 +697,12 @@ struct NotesEditorPage: View {
                 Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
             })
         }
+        // Phase 3 (§ 2.1): the whole note becomes a task's own note. No
+        // shortcut.
+        if editable, noteStore.note(withID: id)?.taskID == nil, let makeTask = controller.makeTaskFromNote {
+            commands.append(AtticMenuCommand("Make Task from Note", isDisabled: !session.isPersisted,
+                                             identifier: "notes-menu-make-task") { makeTask(id) })
+        }
         if controller.canSaveRecoveryCopy(session) {
             commands.append(AtticMenuCommand("Save Recovery Copy…", shortcut: Self.saveRecoveryCopyShortcut,
                                              startsSection: true, identifier: Self.saveRecoveryCopyIdentifier) {
