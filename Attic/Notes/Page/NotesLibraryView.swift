@@ -81,8 +81,8 @@ struct NotesLibraryView: View {
         // header, faintly, as on Tasks; the line floats over them.
         ZStack(alignment: .top) {
             list(groups, selected: selected)
-            // The variable blur, its own layer under the label line and the
-            // bottom row (never an overlay of the list).
+            // The variable blur, its own layer under the label line (the
+            // bottom row has none; never an overlay of the list).
             AtticEdgeBlurBackdrops(Self.edges(layout: layout, bottomControls: bottomControls))
             // The label line's band owns its clicks, as Tasks' tabs band: a
             // row scrolled under it is not clickable through it.
@@ -372,8 +372,8 @@ struct NotesLibraryView: View {
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
             // Floating controls (owner, 2026-10-14), as on Tasks: rows run
-            // on under the label line and the bottom row, visible through
-            // the variable blur (owner, 2026-10-17).
+            // on under the label line, visible through the variable blur
+            // (owner, 2026-10-17), and under the bottom row, sharp (10-22).
             .overlay { AtticFloatingControlsBand(height: bottomControls) }
             .coordinateSpace(Self.space)
             // Right-click anywhere the rows are not (all of it, with none):

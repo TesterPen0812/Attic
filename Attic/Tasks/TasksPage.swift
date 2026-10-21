@@ -180,13 +180,13 @@ struct TasksPage: View {
 
     /// The page, its overlays, its keys and its monitors.
     private var frame: some View {
-        // A15: each list runs under the controls, visible through the blur
-        // (owner, 2026-10-17). The controls retain their page-level layer
+        // A15: each list runs under the controls, visible through the top
+        // blur (owner, 2026-10-17) and sharp at the bottom (2026-10-22). The controls retain their page-level layer
         // and hit points; the lifted card stays above both.
         ZStack(alignment: .top) {
             // Floating controls (owner, 2026-10-14): the rows run on under
-            // the controls, into the variable blur, drawn once for the whole
-            // pager. The native soft edge stays off.
+            // the controls, into the top variable blur, drawn once for the
+            // whole pager. The native soft edge stays off.
             pager
             TasksEdgeBackdrops(top: viewportTop, stack: bottomStack, bottomInset: bottomInset)
             // The controls float over the lists in both, in the page's own
@@ -4706,22 +4706,23 @@ private struct TasksListEdges: ViewModifier {
                 .contentMargins(.top, listTop, for: .scrollIndicators)
                 .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
                 .atticScrollEdgeEffect()
-                // No mask: the rows stay visible under the tabs line and the
-                // bottom stack, blurred (owner, 2026-10-17).
+                // No mask: the rows stay visible under the tabs line,
+                // blurred (owner, 2026-10-17), and under the bottom stack,
+                // sharp (owner, 2026-10-22).
     }
 }
 
 /// The page's two backdrops, once for the whole pager (not per list): the
-/// variable blur behind the header and the tabs line, and behind the
-/// bottom stack as it is measured.
+/// variable blur behind the header and the tabs line; behind the bottom
+/// stack, as it is measured, only the Reduce Transparency surface (no
+/// bottom blur, owner 2026-10-22).
 struct TasksEdgeBackdrops: View {
     let top: CGFloat
     @ObservedObject var stack: TasksBottomStackHeight
     let bottomInset: CGFloat
 
     var body: some View {
-        AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset),
-                               bottomPlateau: TasksViewport.controlsPlateau(stack: stack.height, bottomInset: bottomInset))
+        AtticEdgeBlurBackdrops(top: top, bottom: TasksViewport.controlsInset(stack: stack.height, bottomInset: bottomInset))
     }
 }
 
@@ -4746,19 +4747,6 @@ enum TasksViewport {
         let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
         let visible = stack <= idle + 0.5 ? AtticControlSize.addBarHeight : stack
         return max(visible, AtticControlSize.addBarHeight) + bottomInset
-    }
-
-    /// How deep the bottom blur stays at full strength (S3-01): with a row
-    /// over the add bar (the composer's Date, Tag and Priority, plain
-    /// labels with no surface of their own) the content under it is
-    /// blurred as much as at the panel's edge, so the labels read; the blur
-    /// then eases out over its usual reach past the row. It rises with the
-    /// row as it opens (the stack's measured height follows its spring) and
-    /// goes with it; the bar alone keeps the approved blur (none).
-    static func controlsPlateau(stack: CGFloat, bottomInset: CGFloat) -> CGFloat {
-        let idle = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar
-        let risen = min(1, max(0, (stack - idle) / AtticControlSize.smallHeight))
-        return risen * controlsInset(stack: stack, bottomInset: bottomInset)
     }
 
     /// The tabs' plain text line, its underline included, down from the

@@ -41,13 +41,14 @@ struct NoteHistoryPage: View {
                     scrollOverride: browser.scrollOffset - layout.headerBottom - 76)
                     .id(session.id)
                     // Floating controls (owner, 2026-10-14): the preview runs on
-                    // under the version line and the bottom row, visible
-                    // through the variable blur (owner, 2026-10-17).
+                    // under the version line, visible through the variable
+                    // blur (owner, 2026-10-17), and under the bottom row,
+                    // sharp (owner, 2026-10-22).
                     .overlay { AtticFloatingControlsBand(height: Self.bottomControls(layout)) }
                     .accessibilityIdentifier("notes-history-preview")
             }
-            // The variable blur, its own layer under the version line and
-            // the bottom row (never an overlay of the text view).
+            // The variable blur, its own layer under the version line (the
+            // bottom row has none; never an overlay of the text view).
             if browser.preview != nil { AtticEdgeBlurBackdrops(Self.edges(layout)) }
             VStack(spacing: 6) {
                 // U-30: the app's own monochrome selected state (as the

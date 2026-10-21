@@ -165,8 +165,8 @@ final class PhaseXPicksTests: XCTestCase {
     }
 
     // N-6 D (content fades before the controls) was replaced by the
-    // floating controls with the variable blur (owner, 2026-10-14):
-    // `FloatingControlsTests`.
+    // floating controls with the variable blur (owner, 2026-10-14; top
+    // only since 2026-10-22): `FloatingControlsTests`.
 
     // MARK: - N-5: the active cell
 

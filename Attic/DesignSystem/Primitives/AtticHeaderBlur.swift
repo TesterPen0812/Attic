@@ -2,13 +2,13 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
-// MARK: - Floating controls over a variable blur (owner, 2026-10-12 / 2026-10-14)
+// MARK: - Floating controls over a variable blur (owner, 2026-10-12 / 2026-10-14 / 2026-10-22)
 
 /// Every page's fixed controls float over its scrolling content: the
 /// content runs on to the panel's edge, under the controls, and a variable
-/// blur sits behind the controls at the top and the bottom, strongest at
-/// the panel's edge and clear `reach` points inside the controls (the
-/// owner's lab settings, "perfect": 1.5 pt, 28 pt). It replaces N-6 D
+/// blur sits behind the top controls, strongest at the panel's edge and
+/// clear `reach` points inside the controls (the owner's lab settings,
+/// "perfect": 1.5 pt, 28 pt). It replaces N-6 D
 /// (content fades out before the controls, 2026-10-11) and Clean cut
 /// (2026-10-03). Attic is not for the Mac App Store (owner, 2026-10-12),
 /// so the private Core Animation variable blur is allowed, behind
@@ -22,6 +22,13 @@ import SwiftUI
 /// blur, and the rule that content is gone above (and 3 pt below) a plain
 /// top line or behind the composer's plain strip (10-06, o16). The scroll
 /// insets still let the first and last rows rest clear of the controls.
+///
+/// No blur at the bottom (owner, 2026-10-22, Tasks and Notes): content
+/// scrolls under the bottom controls sharp, with no blur and no fade; the
+/// controls keep their own glass. It supersedes the bottom half of the
+/// 10-12/10-14 blur and S3-01 (the blur held at full strength under the
+/// Tasks composer's plain Date, Tag and Priority row). The top is
+/// unchanged.
 ///
 /// - Reduce Transparency, or no variable blur: the blur gives way to an
 ///   opaque surface under the controls and a short fade past them (U-02),
@@ -96,29 +103,28 @@ struct AtticFloatingEdges: Equatable, Sendable {
 
 // MARK: - The blur behind the controls
 
-/// One edge's backdrop: the variable blur, strongest at the panel's edge
-/// and clear at its inner end. `extent` is the controls' depth from the
-/// edge (a plain line among them included); the backdrop reaches the lab's
-/// `reach` past it. Content shows through it, blurred, on every surface
-/// (owner, 2026-10-17). With no blur (Reduce Transparency, or a system
-/// without the filter) an opaque panel draws its solid surface under the
-/// controls instead (U-02).
+/// One edge's backdrop. At the top: the variable blur, strongest at the
+/// panel's edge and clear at its inner end; content shows through it,
+/// blurred, on every surface (owner, 2026-10-17). At the bottom: nothing,
+/// so content shows sharp (owner, 2026-10-22). `extent` is the controls'
+/// depth from the edge (a plain line among them included); the backdrop
+/// reaches the lab's `reach` past it. With no blur (Reduce Transparency,
+/// or a system without the filter) an opaque panel draws its solid surface
+/// under the controls instead, at both edges (U-02).
 struct AtticEdgeBlurBackdrop: View {
     let edge: VerticalEdge
     let extent: CGFloat
-    /// How far in from the edge the blur stays at full strength before it
-    /// eases out (S3-01: under a plain row of controls, such as the Tasks
-    /// composer's Date, Tag and Priority, so they read over the content).
-    /// 0 is the approved blur, easing from the edge itself.
-    var plateau: CGFloat = 0
     @ObservedObject private var lab = AtticEdgeBlurLab.shared
     @Environment(\.atticDesign) private var design
 
-    init(edge: VerticalEdge, extent: CGFloat, plateau: CGFloat = 0) {
+    init(edge: VerticalEdge, extent: CGFloat) {
         self.edge = edge
         self.extent = extent
-        self.plateau = plateau
     }
+
+    /// Which edge carries the variable blur: the top only (owner,
+    /// 2026-10-22: content runs under the bottom controls sharp).
+    static func blursEdge(_ edge: VerticalEdge) -> Bool { edge == .top }
 
     /// With no blur: solid to the controls' inner edge, clear `solidFade`
     /// past it (locations in a backdrop `height` tall).
@@ -128,8 +134,8 @@ struct AtticEdgeBlurBackdrop: View {
         return (solid, min(1, max(solid, (extent + AtticEdgeBlurMetrics.solidFade) / height)))
     }
 
-    /// Whether the variable blur draws (not with Reduce Transparency, nor
-    /// where the system has none).
+    /// Whether the variable blur can draw (not with Reduce Transparency,
+    /// nor where the system has none); only `blursEdge` edges draw it.
     static func blurs(_ design: AtticDesignContext, available: Bool = AtticVariableBlur.isAvailable) -> Bool {
         available && !design.reduceTransparency
     }
@@ -145,7 +151,7 @@ struct AtticEdgeBlurBackdrop: View {
         let alignment: Alignment = edge == .top ? .top : .bottom
         ZStack(alignment: alignment) {
             if Self.blurs(design) {
-                AtticVariableBlur(radius: CGFloat(lab.radius), edge: edge, plateau: min(plateau, height))
+                if Self.blursEdge(edge) { AtticVariableBlur(radius: CGFloat(lab.radius), edge: edge) }
             } else if Self.drawsSolidSurface(design) {
                 solidSurface(height: height)
             }
@@ -168,20 +174,17 @@ struct AtticEdgeBlurBackdrop: View {
 }
 
 /// The top and bottom backdrops for one page (an edge with no controls has
-/// none). The page draws them as its own layer between its content and
+/// none; the bottom one draws only the Reduce Transparency surface). The page draws them as its own layer between its content and
 /// its controls, never as an overlay of the content: an AppKit view
 /// overlaid on the text view's AppKit host re-hosted it, and the text lost
 /// the key (NotesKeyboardUndoTests on CI).
 struct AtticEdgeBlurBackdrops: View {
     let top: CGFloat
     let bottom: CGFloat
-    /// The bottom blur's full-strength depth (`AtticEdgeBlurBackdrop.plateau`).
-    var bottomPlateau: CGFloat = 0
 
-    init(top: CGFloat, bottom: CGFloat, bottomPlateau: CGFloat = 0) {
+    init(top: CGFloat, bottom: CGFloat) {
         self.top = top
         self.bottom = bottom
-        self.bottomPlateau = bottomPlateau
     }
 
     init(_ edges: AtticFloatingEdges) {
@@ -191,7 +194,7 @@ struct AtticEdgeBlurBackdrops: View {
     var body: some View {
         ZStack {
             if top > 0 { AtticEdgeBlurBackdrop(edge: .top, extent: top) }
-            if bottom > 0 { AtticEdgeBlurBackdrop(edge: .bottom, extent: bottom, plateau: bottomPlateau) }
+            if bottom > 0 { AtticEdgeBlurBackdrop(edge: .bottom, extent: bottom) }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -201,8 +204,7 @@ struct AtticEdgeBlurBackdrops: View {
 /// The bottom controls' band takes every press across their height, as
 /// Apple's toolbars do: content scrolled under the gaps between the
 /// controls is never clicked, right-clicked or dragged through them (the
-/// Tasks rule, round 7 R4). The blur's reach beyond the controls is the
-/// content's own.
+/// Tasks rule, round 7 R4). The content past the controls is its own.
 struct AtticFloatingControlsBand: View {
     let height: CGFloat
 
@@ -227,20 +229,16 @@ struct AtticFloatingControlsBand: View {
 struct AtticVariableBlur: NSViewRepresentable {
     var radius: CGFloat = AtticEdgeBlurMetrics.radius
     var edge: VerticalEdge = .top
-    var plateau: CGFloat = 0
 
     nonisolated static var isAvailable: Bool { AtticVariableBlurView.makeFilter() != nil && AtticVariableBlurView.backdropClass != nil }
 
     func makeNSView(context: Context) -> AtticVariableBlurView {
-        let view = AtticVariableBlurView(radius: radius, edge: edge)
-        view.plateau = plateau
-        return view
+        AtticVariableBlurView(radius: radius, edge: edge)
     }
 
     func updateNSView(_ view: AtticVariableBlurView, context: Context) {
         view.radius = radius
         view.edge = edge
-        view.plateau = plateau
     }
 }
 
@@ -253,16 +251,9 @@ final class AtticVariableBlurView: NSView {
     var edge: VerticalEdge {
         didSet { if edge != oldValue { applyFilter() } }
     }
-    /// Full strength this far in from `edge` (points). It changes with
-    /// the frame as a row of controls comes and goes, so the next layout
-    /// makes the one new mask for both.
-    var plateau: CGFloat = 0 {
-        didSet { if abs(plateau - oldValue) > 0.25 { needsLayout = true } }
-    }
 
     private let backdrop: CALayer?
     private var maskSize: CGSize = .zero
-    private var maskPlateau: CGFloat = 0
 
     init(radius: CGFloat, edge: VerticalEdge) {
         self.radius = radius
@@ -291,8 +282,8 @@ final class AtticVariableBlurView: NSView {
         CATransaction.setDisableActions(true)
         backdrop?.frame = bounds
         CATransaction.commit()
-        // Only a new size (or plateau) makes a new mask: scrolling never does.
-        if bounds.size != maskSize || abs(plateau - maskPlateau) > 0.25 { applyFilter() }
+        // Only a new size makes a new mask: scrolling never does.
+        if bounds.size != maskSize { applyFilter() }
     }
 
     override func viewDidChangeBackingProperties() {
@@ -310,9 +301,8 @@ final class AtticVariableBlurView: NSView {
 
     private func applyFilter() {
         guard let backdrop, bounds.width > 0, bounds.height > 0,
-              let filter = Self.makeFilter(), let mask = Self.maskImage(height: bounds.height, edge: edge, plateau: plateau) else { return }
+              let filter = Self.makeFilter(), let mask = Self.maskImage(height: bounds.height, edge: edge) else { return }
         maskSize = bounds.size
-        maskPlateau = plateau
         filter.setValue(radius, forKey: "inputRadius")
         filter.setValue(mask, forKey: "inputMaskImage")
         filter.setValue(true, forKey: "inputNormalizeEdges")
@@ -320,20 +310,18 @@ final class AtticVariableBlurView: NSView {
     }
 
     /// One column, opaque at `edge` (full blur) easing to clear at the
-    /// other end (no blur), opaque all the way for its first `plateau`
-    /// points. The filter stretches it across the width.
-    nonisolated static func maskImage(height: CGFloat, edge: VerticalEdge = .top, plateau: CGFloat = 0) -> CGImage? {
+    /// other end (no blur). The filter stretches it across the width.
+    nonisolated static func maskImage(height: CGFloat, edge: VerticalEdge = .top) -> CGImage? {
         let rows = max(2, Int(height.rounded(.up)))
         guard let context = CGContext(data: nil, width: 1, height: rows, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
               let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
         // Bitmap rows run top to bottom in memory; black at the eased alpha.
-        let full = min(max(0, Double(plateau)), Double(rows - 1))
-        let span = Double(rows - 1) - full
+        let span = Double(rows - 1)
         for row in 0..<rows {
             let fromEdge = edge == .top ? Double(row) : Double(rows - 1 - row)
-            let strength = span <= 0 || fromEdge <= full ? 1 : max(0, 1 - (fromEdge - full) / span)
+            let strength = max(0, 1 - fromEdge / span)
             let eased = strength * strength * (3 - 2 * strength)
             let offset = row * context.bytesPerRow
             data[offset] = 0; data[offset + 1] = 0; data[offset + 2] = 0

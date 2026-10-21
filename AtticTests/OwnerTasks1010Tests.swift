@@ -624,8 +624,9 @@ final class OwnerTasks1010Tests: XCTestCase {
     /// Run the real list modifier over coloured rows, rather than merely
     /// asserting a constant that the rendered list might never use. The
     /// owner's 10-17 decision: rows stay visible beneath the composer's
-    /// plain strip (Date / Tag / Priority) and under the tabs, blurred by
-    /// the page's backdrop, never faded out (was o16: invisible there).
+    /// plain strip (Date / Tag / Priority; sharp, no bottom blur since
+    /// 10-22) and under the tabs (blurred by the page's backdrop), never
+    /// faded out (was o16: invisible there).
     func testComposerStripAndTabsKeepTheRowsBehindThemVisible() throws {
         let stack = TasksBottomStackHeight()
         stack.height = TasksViewport.reservedStack
