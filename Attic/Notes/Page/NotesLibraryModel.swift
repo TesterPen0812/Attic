@@ -430,15 +430,15 @@ final class NotesLibraryModel: ObservableObject {
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
         // A task's own note (Phase 3): its task's circle and "Task note".
-        let taskState = note.taskID.map { taskState?($0) ?? .todo }
+        let rowTaskState: AtticTaskState? = note.taskID.map { self.taskState?($0) ?? AtticTaskState.todo }
         let taskNote = String(localized: "Task note")
-        let preview = taskState == nil ? summary.preview
+        let preview = rowTaskState == nil ? summary.preview
             : (summary.preview.isEmpty ? taskNote : taskNote + " · " + summary.preview)
         let spoken = summary.spoken(time: time, needsAttention: attention.contains(note.id)) + (hasProposal ? ", proposal waiting" : "")
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,
             preview: preview, checklist: summary.checklist, images: summary.images, files: summary.files,
-            spoken: taskState == nil ? spoken : taskNote + ", " + spoken, taskState: taskState
+            spoken: rowTaskState == nil ? spoken : taskNote + ", " + spoken, taskState: rowTaskState
         )
     }
 
