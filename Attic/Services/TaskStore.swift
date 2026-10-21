@@ -1452,6 +1452,9 @@ final class TaskStore: ObservableObject {
         defer { importingAttachmentTaskIDs.remove(ownerID) }
         var imported: [TaskImageReference] = []
         do {
+            // Refuse malformed physical families before creating private copies.
+            // The post-import read below still revalidates across the await.
+            for replica in try storedTasks(matching: ownerID) { _ = try Self.attachmentLists(of: replica) }
             imported = try await importing(ownerID, initial.attachments)
             guard let current = tasks.first(where: { $0.id == ownerID }) else {
                 await taskImageFiles.remove(imported)

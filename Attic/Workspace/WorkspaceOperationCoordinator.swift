@@ -1181,7 +1181,13 @@ extension WorkspaceOperationCoordinator {
                              preDraft: NoteDraftJournalEntry? = nil,
                              confirmed: (([WorkspaceOwner: WorkspaceModelToken]) -> Void)? = nil,
                              stage: (ModelContext) throws -> Void) throws {
-        let previous = save; save = writer; defer { save = previous }
+        let previous = save
+        var writeError: Error?
+        save = { context in
+            do { try writer(context) }
+            catch { writeError = error; throw error }
+        }
+        defer { save = previous }
         if plain {
             guard plainSave(tokens: tokens, scopes: scopes, writes: writes, confirmed: confirmed, stage: stage) == .committed else {
                 throw WorkspaceFoundationError.unknown
@@ -1199,7 +1205,10 @@ extension WorkspaceOperationCoordinator {
         if result == .notCommitted || result == .conflict {
             retainAbortedCompatibility(envelope, claim: claim)
         }
-        guard result == .publicationPending else { throw WorkspaceFoundationError.unknown }
+        guard result == .publicationPending else {
+            if result == .notCommitted, let writeError { throw writeError }
+            throw WorkspaceFoundationError.unknown
+        }
         compatibilityPending.insert(envelope.id)
         do { try finalizeCompatibility(envelope, claim: claim) }
         catch {

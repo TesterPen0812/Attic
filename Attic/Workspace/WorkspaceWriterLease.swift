@@ -33,6 +33,10 @@ final class WorkspaceWriterLease: @unchecked Sendable {
     }
     private let descriptor: Int32
     init(storeURL: URL) throws {
+        // SwiftData creates a new store directory on first open. The lease
+        // precedes that open, so it must establish the same parent first.
+        try FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
         let lockURL = URL(fileURLWithPath: storeURL.path + ".workspace-writer.lock")
         descriptor = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }

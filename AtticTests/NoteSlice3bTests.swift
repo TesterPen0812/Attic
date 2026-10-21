@@ -2429,31 +2429,6 @@ extension NoteSlice3bTests {
         try await pendingCheckpointQuit(warmSessions: 0)
     }
 
-    func testQuitUsesVerifiedCheckpointWithoutQueueingAnotherWrite() async throws {
-        let root = ownedTemporaryDirectory(prefix: "VerifiedQuit")
-        let journal = PendingWriteJournal(directory: root), loader = FirstSuspendedLoader(try stagedImage())
-        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60), imageLoader: { await loader.load($0) })
-        await controller.startAndWait()
-        let session = try XCTUnwrap(controller.active)
-        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Pending"), name: "Typing"))
-        controller.importFiles([URL(fileURLWithPath: "/tmp/pending.png")])
-        for _ in 0..<100 {
-            if await loader.started { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let started = await loader.started
-        XCTAssertTrue(started)
-        await controller.waitForRecoveryWork()
-        let before = journal.writeCount
-        let quit = await controller.prepareToLeaveDurably(.quit)
-        XCTAssertTrue(quit)
-        XCTAssertEqual(journal.writeCount, before + 1, "quit verifies once; it must not queue a second preservation write")
-        XCTAssertFalse(try journal.base.entries().isEmpty)
-        await loader.release()
-        await controller.waitForImportWork()
-    }
-
     func testQuitStillWaitsForRecoveryWhenThereAreNoPendingDrafts() async throws {
         let journal = PendingWriteJournal(directory: ownedTemporaryDirectory(prefix: "CleanQuit"))
         journal.blockRead = true

@@ -96,18 +96,20 @@ final class NoteDocumentStoreTests: XCTestCase {
             filename: "orphan.txt", payload: Data("orphan".utf8))
         _ = try await files.ensureMaterialized(orphan)
         let notes = try makeTestNoteStore(attachmentFileStore: files)
-        let entered = expectation(description: "old reconciliation reading recovery ownership")
-        let newerEntered = expectation(description: "replacement reconciliation reading recovery ownership")
-        var held: CheckedContinuation<Set<UUID>, Never>?
-        defer { held?.resume(returning: []) }
+        let entered = expectation(description: "old reconciliation begins")
+        let newerEntered = expectation(description: "replacement reconciliation begins")
+        var held: CheckedContinuation<Void, Never>?
+        defer { held?.resume() }
         var calls = 0
-        notes.recoveryReferencedAttachmentIDsDurably = {
+        // Collection leases now serialize the retention providers themselves.
+        // Hold the actual reconciliation task before IO, so this still proves
+        // a drain includes superseded work even after the replacement finishes.
+        notes.attachmentReconciliationWillBegin = {
             calls += 1
             if calls == 1 {
                 return await withCheckedContinuation { held = $0; entered.fulfill() }
             }
             if calls == 2 { newerEntered.fulfill() }
-            return []
         }
         await fulfillment(of: [entered], timeout: 3)
         XCTAssertNotNil(held)
@@ -135,8 +137,8 @@ final class NoteDocumentStoreTests: XCTestCase {
         // A bounded negative assertion: the controlled provider cannot
         // complete before we release it, however fast the newer pass runs.
         await fulfillment(of: [premature], timeout: 0.1)
-        XCTAssertFalse(drained, "a cancelled pass still in its provider must finish before root teardown")
-        held?.resume(returning: [])
+        XCTAssertFalse(drained, "a cancelled reconciliation pass must finish before root teardown")
+        held?.resume()
         held = nil
         await drain.value
         XCTAssertTrue(drained)

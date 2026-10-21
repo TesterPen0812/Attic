@@ -420,12 +420,16 @@ enum WorkspaceLegacyBridge {
         let requiredScopes = WorkspaceScopeToken.scopes(for: reads)
         if plain {
             var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
+            var writeError: Error?
             let result = state.coordinator.commitInPlace(source, before: reads, requiredScopes: requiredScopes,
                 scopes: { try scopeTokens(requiredScopes, state: state, in: source) },
-                after: writes.map { after[$0]! }, capturedOwners: state.capturedOwners, using: writer,
-                confirmed: { confirmed = $0 })
+                after: writes.map { after[$0]! }, capturedOwners: state.capturedOwners, using: { context in
+                    do { try writer(context) }
+                    catch { writeError = error; throw error }
+                }, confirmed: { confirmed = $0 })
             guard result == .committed else {
                 if result == .unknown { throw CommitHeld() }
+                if result == .notCommitted, let writeError { throw writeError }
                 throw result == .conflict ? WorkspaceFoundationError.conflict : WorkspaceFoundationError.unknown
             }
             try updateScopeGuards(confirmed, state: state, in: source)

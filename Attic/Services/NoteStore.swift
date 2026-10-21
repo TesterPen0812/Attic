@@ -424,6 +424,10 @@ final class NoteStore: ObservableObject {
     /// Cancellation does not finish a suspended actor call. Keep every pass
     /// and post-save unlink until it returns, including superseded passes.
     private var attachmentFileTasks: [UUID: Task<Void, Never>] = [:]
+    #if ATTIC_OPERATION_CRASH_TESTS
+    /// Barrier for proving that drains include superseded work before IO.
+    var attachmentReconciliationWillBegin: (() async -> Void)?
+    #endif
     private var attachmentReconciliationGeneration: UInt64 = 0
     private var reconciledAttachmentSignature: Int?
     /// Test/diagnostic seam: how many full metadata reconciliations ran.
@@ -510,8 +514,9 @@ final class NoteStore: ObservableObject {
                 // Retry this requested sweep with fresh ownership if a save
                 // crossed the worker. Never authorize destruction from stale
                 // results or leave cleanup waiting for another unrelated event.
-                guard !Task.isCancelled, !context.hasChanges else { return nil }
-                guard revision == generation else { continue }
+                guard !Task.isCancelled else { return nil }
+                guard self.context === context, revision == generation else { continue }
+                guard !context.hasChanges else { return nil }
                 if let durableRecovery = recoveryReferencedAttachmentIDsDurably {
                     ids.formUnion(try await durableRecovery())
                 } else {
@@ -519,9 +524,10 @@ final class NoteStore: ObservableObject {
                 }
                 // A released controller requires a fresh journal read. Saves,
                 // imports or a replacement controller may cross that await.
-                guard !Task.isCancelled, !context.hasChanges else { return nil }
-                guard revision == generation,
+                guard !Task.isCancelled else { return nil }
+                guard self.context === context, revision == generation,
                       attachmentRetentionSource.recoveryGeneration == recoveryGeneration else { continue }
+                guard !context.hasChanges else { return nil }
                 let retained = ids
                 return AttachmentByteOwnership(ids: retained) { [weak self] in
                     guard let self, self.context === context, !context.hasChanges,
@@ -1640,6 +1646,9 @@ final class NoteStore: ObservableObject {
             guard let self else { return }
             defer { attachmentFileTasks[workID] = nil }
             do {
+                #if ATTIC_OPERATION_CRASH_TESTS
+                await attachmentReconciliationWillBegin?()
+                #endif
                 try Task.checkCancellation()
                 try await WorkspaceLegacyBridge.coordinator(for: container).finishRegisteredLaunch()
                 try Task.checkCancellation()

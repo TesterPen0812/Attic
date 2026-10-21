@@ -84,10 +84,13 @@ final class SchemaMigrationTests: XCTestCase {
             XCTAssertTrue(entity.relationshipsByName.isEmpty)
             XCTAssertTrue(destination.relationshipsByName.isEmpty)
             for attribute in entity.attributesByName.values {
-                let retained = try XCTUnwrap(destination.attributesByName[attribute.name])
+                let storageName = attribute.renamingIdentifier ?? attribute.name
+                let retained = try XCTUnwrap(destination.attributesByName.values.first {
+                    ($0.renamingIdentifier ?? $0.name) == storageName
+                })
                 XCTAssertEqual(retained.attributeType, attribute.attributeType)
                 XCTAssertEqual(retained.isOptional, attribute.isOptional)
-                XCTAssertEqual(retained.renamingIdentifier, attribute.renamingIdentifier)
+                XCTAssertEqual(retained.renamingIdentifier ?? retained.name, attribute.renamingIdentifier ?? attribute.name)
                 XCTAssertEqual(retained.allowsExternalBinaryDataStorage, attribute.allowsExternalBinaryDataStorage)
             }
             for attribute in destination.attributesByName.values where entity.attributesByName[attribute.name] == nil {
@@ -96,7 +99,8 @@ final class SchemaMigrationTests: XCTestCase {
             }
         }
         XCTAssertEqual(Set(current.entitiesByName.keys).subtracting(old.entitiesByName.keys),
-                       ["ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance", "TagColour"])
+                       ["ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance", "TagColour",
+                        "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation"])
         XCTAssertEqual(current.entitiesByName["NoteItem"]?.attributesByName["contentFormat"]?.defaultValue as? Int, 0)
         XCTAssertEqual(current.entitiesByName["TaskItem"]?.attributesByName["listOrderVersion"]?.defaultValue as? Int, 0)
         _ = try NSMappingModel.inferredMappingModel(forSourceModel: old, destinationModel: current)

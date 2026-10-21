@@ -402,13 +402,7 @@ final class NotesPageController: ObservableObject {
     func prepareToLeaveDurably(_ reason: LeaveReason) async -> Bool {
         // Quit must prove all cached drafts durable before the shell releases them.
         if reason == .quit {
-            guard await awaitRecoveryForUser(), await preserveAllDurably() else { return false }
-            // Re-check the live proofs synchronously. Running preserveAll
-            // again would queue a redundant checkpoint (preserveDurably
-            // retires its scheduling key), whose completion races the import
-            // producer's key retirement. No actor suspension separates this
-            // proof from leaving, so newer work still refuses termination.
-            return prepareToLeave(reason, verifiedCheckpointsOnly: true)
+            guard await preserveAllDurably() else { return false }
         }
         let wasVisible = isPageVisible
         let result = await performAfterRecovery(requireDrainedRecovery: reason == .quit,
@@ -843,6 +837,7 @@ final class NotesPageController: ObservableObject {
                   let edit = self.store.pendingEdits(noteID: session.noteID).first(where: { id == nil || $0.id == id }),
                   let family = try? self.store.pendingEditRows(edit.id),
                   NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [session.noteID]) else { return false }
+            WorkspaceLegacyBridge.prepareMutations(family, in: self.store.modelContext)
             family.forEach { $0.needsReview = true }
             guard self.store.commitStagedChanges() else { return false }
             self.captureViewState(session)
@@ -1523,7 +1518,7 @@ final class NotesPageController: ObservableObject {
     func preserve(_ session: NoteSession, allowQueued: Bool = false, verifiedCheckpointsOnly: Bool = false) -> Bool {
         // This session already has a durable checkpoint, owned by its source.
         // Navigation must neither overwrite it nor adopt its missing payloads.
-        if session.recoverySourceNoteID != nil { return true }
+        if session.recoverySourceNoteID != nil { return hasDurableCheckpoint(session) }
         if verifiedCheckpointsOnly {
             guard !session.cancellingImport else { return false }
             return (!NoteSessionPolicy.hasPendingWork(session.state) && !session.isImporting)

@@ -535,7 +535,7 @@ extension NoteStore {
                 context.rollback()
                 return .failure(.saveFailed("The proposal changed. Review it again."))
             }
-            family.forEach(context.delete)
+            family.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
         }
         context.insert(note)
         try? WorkspaceLegacyBridge.coordinator(for: context.container).observePreparedDocument(projection)
@@ -679,10 +679,20 @@ extension NoteStore {
     private func stageValidated(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
                                 projection: PreparedNoteDocument, tags: String? = nil) -> UUID {
         let revisionID = UUID()
+        let canonical = canonical(replicas)
         Self.stageDocumentContent(projection, format: document.format, on: replicas,
                                   timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
         for replica in replicas {
             documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks, projection.hasTaskNote)
+            if let canonical, canonical !== replica {
+                replica.createdAt = canonical.createdAt
+                replica.tagsRaw = canonical.tagsRaw
+                replica.taskID = canonical.taskID
+                replica.pinnedAt = canonical.pinnedAt
+                replica.externalEditorName = canonical.externalEditorName
+                replica.externalEditedAt = canonical.externalEditedAt
+            }
+            if let tags { replica.tagsRaw = tags }
         }
         return revisionID
     }
@@ -1214,9 +1224,9 @@ extension NoteStore {
         let timestamp = currentDate
         if disposition == .proposal {
             // The proposal and the exact base it compared with commit together.
-            let baseAttachmentIDs: [UUID]
-            do { baseAttachmentIDs = try attachmentRows(forNoteID: noteID).map(\.id) }
-            catch { return .failure(.saveFailed(error.localizedDescription)) }
+            // Exact encoded base bytes retain decoded ownership even when
+            // attachment metadata cannot be read (main's conservative fallback).
+            let baseAttachmentIDs = (try? attachmentRows(forNoteID: noteID).map(\.id)) ?? []
             let baseVersionID = UUID()
             modelContext.insert(NoteVersion(id: baseVersionID, noteID: noteID, createdAt: timestamp,
                                             reason: .beforeAgentEdit, content: current.content,
@@ -1386,6 +1396,10 @@ extension NoteStore {
 
     /// Resolves precisely one complete proposal UUID family, never its siblings.
     func discardProposal(_ id: UUID, noteID: UUID) -> Bool {
+        // An import can add a physical replica after the proposal was shown.
+        // Read and guard the complete current family before staging deletion.
+        refresh()
+        guard lastErrorMessage == nil else { return false }
         guard let rows = try? pendingEditRows(id),
               NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]) else { return false }
         rows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
