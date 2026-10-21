@@ -102,6 +102,7 @@ final class TaskNotePresenter: ObservableObject {
         model.onFocusWriting = { [weak self] atTop in self?.host.focusWriting(atTop: atTop) }
         host.onHeaderProgress = { [weak self] progress in self?.headerTitleProgress = progress }
         model.deletedNote = deletedNoteID != nil
+        if session?.isPersisted == true { model.alternateNotes = coordinator.sessions.alternateOwnNotes(taskID) }
         if deletedNoteID != nil { engine.bodyPlaceholder = String(localized: "Write a new note") }
         Self.live[taskID] = WeakPresenter(presenter: self)
         // Writing in that draft made the new own note: the old one is now
@@ -135,7 +136,8 @@ final class TaskNotePresenter: ObservableObject {
 
     private static func blockView(_ model: TaskNotePageModel, design: AtticDesignContext, menus: TaskNoteMenuRelay) -> AnyView {
         return AnyView(TaskNoteSubtasksBlock(model: model, restoreNote: { menus.restoreNote() },
-                                                     subtaskMenu: { menus.subtaskMenu($0) })
+                                                     subtaskMenu: { menus.subtaskMenu($0) },
+                                                     reviewAlternate: { menus.reviewAlternate() })
             .environment(\.atticDesign, design).atticKeyboardFocusTracking(focusTracker))
     }
 
@@ -210,6 +212,8 @@ final class TaskNoteMenuRelay {
     var restoreNote: () -> Void = {}
     /// A subtask row's menu (Rename, Make Note Checkbox, Delete Subtask).
     var subtaskMenu: (UUID) -> [AtticMenuCommand] = { _ in [] }
+    /// S10's Review menu.
+    var reviewAlternate: () -> [AtticMenuCommand] = { [] }
 }
 
 /// Where a task's page lives (OD-1: one place at a time).
@@ -426,6 +430,7 @@ struct TaskNotePage: View {
         presenter.menus.taskMenu = { taskCommands() }
         presenter.menus.restoreNote = { restoreNote() }
         presenter.menus.subtaskMenu = { id in subtaskCommands(id) }
+        presenter.menus.reviewAlternate = { reviewCommands() }
     }
 
     /// The note's ⋯: Insert and Format, then the note's own commands.
@@ -597,6 +602,43 @@ struct TaskNotePage: View {
             AtticMenuCommand(verbatim: String(localized: "Delete Subtask"), shortcut: AtticTaskShortcut.delete,
                              isDestructive: true, startsSection: true) { model.delete(id) }.identified("task-note-subtask-delete"),
         ]
+    }
+
+    /// S10's Review (`p3-12` states): the oldest other note first.
+    func reviewCommands() -> [AtticMenuCommand] {
+        guard let alternate = model.alternateNotes.first else { return [] }
+        let title = noteStore.note(withID: alternate).map { NoteRowSummary(note: $0, attachments: []).title } ?? ""
+        var commands: [AtticMenuCommand] = []
+        if !title.isEmpty { commands.append(AtticMenuCommand(verbatim: title, isDisabled: true) {}) }
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Merge into This Note"),
+                                         isDisabled: presenter.session?.isReadOnly != false) {
+            mergeAlternate(alternate)
+        }.identified("task-note-merge-alternate"))
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Keep as Separate Note")) {
+            keepAlternateSeparate(alternate)
+        }.identified("task-note-keep-alternate"))
+        return commands
+    }
+
+    private func mergeAlternate(_ id: UUID) {
+        let presenter = presenter, model = model, controller = controller, toasts = toasts
+        Task { @MainActor in
+            switch await presenter.mergeAlternate(id, tasks: model.store, notes: controller) {
+            case let .made(entryID, _, _):
+                Self.showUndoToast(String(localized: "Notes merged"), entryID: entryID, presenter: presenter, toasts: toasts)
+            case let .refused(reason): model.reportUnavailable(reason)
+            case .madeCheckbox: break
+            }
+        }
+    }
+
+    private func keepAlternateSeparate(_ id: UUID) {
+        guard noteStore.keepAsSeparateNote(noteID: id) else {
+            model.reportUnavailable(noteStore.lastErrorMessage ?? String(localized: "Couldn't keep it as a separate note"))
+            return
+        }
+        model.alternateNotes.removeAll { $0 == id }
+        toasts?.show(String(localized: "Kept as a separate note"), actionTitle: String(localized: "OK"), answersUndoKey: false) {}
     }
 
     func makeNoteCheckbox(_ id: UUID) {

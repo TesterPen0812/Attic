@@ -771,6 +771,32 @@ final class NoteStore: ObservableObject {
         return true
     }
 
+    /// S10 "Keep as Separate Note": another live note claiming a task
+    /// becomes an ordinary note (materialized as § 2.12 says), in one gated
+    /// save. Refused when the task has no other live own note.
+    @discardableResult
+    func keepAsSeparateNote(noteID: UUID) -> Bool {
+        do {
+            let replicas = try storedNotesIncludingDeleted(matching: noteID)
+            guard !replicas.isEmpty, replicas.allSatisfy({ $0.deletedAt == nil }) else {
+                throw NoteDocumentStoreError.noteMissing(noteID)
+            }
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+            guard try stageSeparationIfTaskHasNewerNote(noteID: noteID, replicas: replicas) else {
+                throw NoteDocumentStoreError.saveFailed(String(localized: "This is the task's only note."))
+            }
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+        guard save() else { return false }
+        do { try reloadModels() } catch {
+            lastErrorMessage = "Saved, but the list could not be refreshed: \(error.localizedDescription)"
+        }
+        return true
+    }
+
     /// Removes for good the notes deleted before `cutoff`, with their
     /// attachment rows and private files. A note is purged only when every
     /// replica agrees and its attachments are exactly what the delete hid

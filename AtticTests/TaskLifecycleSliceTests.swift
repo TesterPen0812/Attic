@@ -456,4 +456,65 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(presenter.session?.isPersisted, false)
         XCTAssertEqual(presenter.host.textView.string, "", "the writing is untouched")
     }
+
+    // MARK: S10: two notes claim one task
+
+    /// A second live note claiming the task (as a replica merge could
+    /// leave), made after the seeded one.
+    private func addAlternate(to taskID: UUID, body: String = "Notes from the other Mac") throws -> UUID {
+        let context = ModelContext(container)
+        let id = UUID()
+        let note = NoteItem(id: id, createdAt: Date().addingTimeInterval(3_600), updatedAt: Date().addingTimeInterval(3_600))
+        note.taskID = taskID
+        let document = try NoteDocument(blocks: [.text("Finalize launch checklist"), .text(body)]).taskSnapshot(title: "Finalize launch checklist")
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(document), format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
+        context.insert(note)
+        context.insert(TaskNoteAssociation(taskID: taskID, noteID: id))
+        try context.save()
+        return id
+    }
+
+    func testTwoNotesClaimingOneTaskOpenTheOlderAndOfferTheOtherForReview() async throws {
+        let id = try seed(.boundary)
+        let own = try XCTUnwrap(try ownNotes(id).first?.id)
+        let alternate = try addAlternate(to: id)
+        makeStores()
+        let presenter = try open(id)
+        XCTAssertEqual(presenter.session?.noteID, own, "(createdAt, UUID): the older note is the task's note")
+        XCTAssertEqual(presenter.model.alternateNotes, [alternate], "Another note for this task · Review")
+        XCTAssertTrue(try rows(alternate).allSatisfy { $0.deletedAt == nil && $0.taskID == id }, "nothing merges by itself")
+    }
+
+    func testKeepAsSeparateNoteMakesTheAlternateAnOrdinaryNote() async throws {
+        let id = try seed(.boundary)
+        let alternate = try addAlternate(to: id)
+        makeStores()
+        XCTAssertTrue(notes.store.keepAsSeparateNote(noteID: alternate))
+        XCTAssertTrue(try rows(alternate).allSatisfy { $0.deletedAt == nil && $0.taskID == nil })
+        XCTAssertFalse(try storedDocument(alternate).requires.contains("taskNote"))
+        XCTAssertEqual(try storedDocument(alternate).blocks.last?.text, "Notes from the other Mac", "its writing is kept")
+        XCTAssertTrue(try associations(note: alternate).allSatisfy { $0.detachedAt != nil })
+        let presenter = try open(id)
+        XCTAssertTrue(presenter.model.alternateNotes.isEmpty)
+        XCTAssertFalse(notes.store.keepAsSeparateNote(noteID: try XCTUnwrap(presenter.session?.noteID)),
+                       "the task's only note is never separated")
+    }
+
+    func testMergeIntoThisNoteJoinsTheWritingInOneStepAndUndoSplitsThemAgain() async throws {
+        let id = try seed(.boundary)
+        let alternate = try addAlternate(to: id)
+        makeStores()
+        let presenter = try open(id)
+        let before = NSAttributedString(attributedString: presenter.host.textView.textStorage!)
+        let result = await presenter.mergeAlternate(alternate, tasks: tasks, notes: notes)
+        guard case let .made(entryID, _, _) = result else { return XCTFail("\(result)") }
+        XCTAssertTrue(presenter.host.textView.string.hasSuffix("\nNotes from the other Mac"))
+        XCTAssertEqual(try storedDocument(try XCTUnwrap(presenter.session?.noteID)).blocks.last?.text, "Notes from the other Mac")
+        XCTAssertTrue(try rows(alternate).allSatisfy { $0.deletedAt != nil }, "the other note goes to Recently Deleted")
+        XCTAssertTrue(presenter.model.alternateNotes.isEmpty)
+        let undone = await presenter.page.history.undoLatest(stepID: entryID)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertTrue(presenter.host.textView.textStorage!.isEqual(to: before))
+        XCTAssertTrue(try rows(alternate).allSatisfy { $0.deletedAt == nil && $0.taskID == id })
+    }
 }

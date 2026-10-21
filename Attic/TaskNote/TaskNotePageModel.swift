@@ -251,7 +251,7 @@ final class TaskNotePageModel: ObservableObject {
     /// The block's height: the 28 pt header; unfolded, a 28 pt line per row,
     /// Add subtask and the bottom padding (`TaskNoteSubtasksBlock`).
     var blockHeight: CGFloat {
-        let notice = deletedNote ? TaskNoteMetrics.noticeHeight : 0
+        let notice = CGFloat(noticeCount) * TaskNoteMetrics.noticeHeight
         let header = TaskNoteMetrics.blockHeader
         guard !isFolded else { return header + notice }
         // A deleted task's snapshot has no Add subtask line.
@@ -261,9 +261,18 @@ final class TaskNotePageModel: ObservableObject {
 
     /// The task's note is in Recently Deleted (§ 5.6): a line under the
     /// block offers Restore Note; the writing below stays empty.
-    var deletedNote = false {
+    @Published var deletedNote = false {
         didSet { if deletedNote != oldValue { onGeometryChange?() } }
     }
+
+    /// S10: other live notes that claim this task ("Another note for this
+    /// task · Review"), oldest first.
+    @Published var alternateNotes: [UUID] = [] {
+        didSet { if alternateNotes.isEmpty != oldValue.isEmpty { onGeometryChange?() } }
+    }
+
+    /// How many quiet lines sit under the block.
+    var noticeCount: Int { (deletedNote ? 1 : 0) + (alternateNotes.isEmpty ? 0 : 1) }
 
     var countLabel: String {
         head.subtasks.total == 0 ? String(localized: "Subtasks")

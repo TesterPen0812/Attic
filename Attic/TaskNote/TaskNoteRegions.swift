@@ -215,6 +215,8 @@ struct TaskNoteSubtasksBlock: View {
     var restoreNote: () -> Void = {}
     /// A row's menu (right-click), from the page.
     var subtaskMenu: (UUID) -> [AtticMenuCommand] = { _ in [] }
+    /// S10's Review: Merge into This Note, Keep as Separate Note.
+    var reviewAlternate: () -> [AtticMenuCommand] = { [] }
 
     /// What has the keyboard inside the block.
     enum Field: Hashable { case row(UUID), add }
@@ -228,6 +230,7 @@ struct TaskNoteSubtasksBlock: View {
         VStack(alignment: .leading, spacing: 0) {
             blockShape
             if model.deletedNote { deletedNoteLine }
+            if !model.alternateNotes.isEmpty { alternateNoteLine }
         }
             // The native host commits the arithmetic block height at once.
             // A SwiftUI fold transition would animate inside that final
@@ -258,6 +261,31 @@ struct TaskNoteSubtasksBlock: View {
         .frame(height: TaskNoteMetrics.noticeHeight, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task-note-deleted-note")
+    }
+
+    /// S10: another note claims this task. Nothing merges by itself; the
+    /// person reviews it here.
+    private var alternateNoteLine: some View {
+        HStack(spacing: 6) {
+            AtticText(model.alternateNotes.count == 1 ? "Another note for this task" : "Other notes for this task",
+                      style: .rowMeta, ink: .helper)
+            AtticText(verbatim: "·", style: .rowMeta, ink: .helper)
+            Menu {
+                AtticMenuItems(commands: reviewAlternate())
+            } label: {
+                Text(String(localized: "Review"))
+                    .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
+                    .foregroundStyle(design.tokens.color(.heading))
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityIdentifier("task-note-review-alternate")
+        }
+        .frame(height: TaskNoteMetrics.noticeHeight, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("task-note-alternate-note")
     }
 
     /// The block's shape (`p3-19` column 2): radius 17, the recessed fill;

@@ -107,7 +107,10 @@ final class WorkspaceSessionRegistry {
             // A linked note without a `taskID` row is checked on its own.
             return try (rows.isEmpty ? notes(id: id) : rows).contains { $0.deletedAt == nil }
         }
-        guard own.count <= 1 else { throw WorkspaceFoundationError.conflict }
+        // S10: two different notes claiming one task. The one made first
+        // (createdAt, then UUID) is the task's note; the others are
+        // alternates the page offers to review. Nothing merges by itself.
+        if own.count > 1 { own = [try Self.orderedOwnNotes(own, in: context)[0]] }
         if let noteID = own.first {
             let rows = try notes(id: noteID)
             let associations = try links(noteID: noteID)
@@ -154,6 +157,27 @@ final class WorkspaceSessionRegistry {
 }
 
 extension WorkspaceSessionRegistry {
+    /// Live notes claiming one task, in S10 order: earliest `createdAt`
+    /// across each note's replicas, then UUID.
+    static func orderedOwnNotes(_ ids: Set<UUID>, in context: ModelContext) throws -> [UUID] {
+        var created: [UUID: Date] = [:]
+        for id in ids {
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+            created[id] = rows.map(\.createdAt).min() ?? .distantFuture
+        }
+        return ids.sorted { (created[$0]!, $0.uuidString) < (created[$1]!, $1.uuidString) }
+    }
+
+    /// The other live notes that claim this task besides its own (S10,
+    /// "Another note for this task · Review"), in order.
+    func alternateOwnNotes(_ taskID: UUID) -> [UUID] {
+        guard let context = coordinator?.freshContext() else { return [] }
+        let owned = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID && $0.deletedAt == nil }))) ?? []
+        let ids = Set(owned.map(\.id))
+        guard ids.count > 1, let ordered = try? Self.orderedOwnNotes(ids, in: context) else { return [] }
+        return Array(ordered.dropFirst())
+    }
+
     /// The task's own note is in Recently Deleted (and no live one exists):
     /// the page offers Restore Note instead of a new draft (§ 5.6).
     func hasDeletedOwnNote(_ taskID: UUID) -> Bool { deletedOwnNoteID(taskID) != nil }

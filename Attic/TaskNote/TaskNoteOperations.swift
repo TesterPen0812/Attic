@@ -338,6 +338,71 @@ extension TaskNotePresenter {
     }
 }
 
+extension TaskNotePresenter {
+    /// S10 "Merge into This Note": the alternate note's writing joins the
+    /// end of this one, and the alternate goes to Recently Deleted, in one
+    /// commit (Undo brings both back). An alternate with files is kept
+    /// apart: files move between notes only with slice 2's migration.
+    func mergeAlternate(_ alternateID: UUID, tasks: TaskStore, notes: NotesPageController) async -> OperationResult {
+        guard let session, lease != nil, !session.isReadOnly, session.isPersisted else {
+            return .refused(String(localized: "Couldn't merge the notes"))
+        }
+        guard notes.store.attachments(for: alternateID).isEmpty else {
+            return .refused(String(localized: "That note has files: keep it as a separate note"))
+        }
+        guard let loaded = notes.store.loadDocument(noteID: alternateID), let other = loaded.content.document,
+              other.isWritableByThisBuild else {
+            return .refused(String(localized: "That note can't be merged here"))
+        }
+        let engine = session.engine
+        guard engine.textView?.hasMarkedText() != true, engine.activity == .idle else {
+            return .refused(String(localized: "Finish typing first"))
+        }
+        let source = NSAttributedString(attributedString: engine.textStorage)
+        guard notes.settleForWorkspaceOperation(session), source.isEqual(to: engine.textStorage),
+              let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else {
+            return .refused(String(localized: "Couldn't save the note first"))
+        }
+        // Its body (block 0 is its title snapshot or title).
+        let body = Array(other.blocks.dropFirst())
+        let added = engine.bodyText(for: body)
+        let candidate = NSMutableAttributedString(attributedString: source)
+        if source.length > 0, added.length > 0 {
+            candidate.append(NSAttributedString(string: "\n", attributes: added.attributes(at: 0, effectiveRange: nil)))
+        }
+        candidate.append(added)
+        let selection = engine.textView?.selectedRange() ?? NSRange(location: 0, length: 0)
+        let edit = TaskNoteTextEdit(engine: engine, session: session, notes: notes, tasks: tasks,
+                                    coordinator: coordinator, history: page.history, noteID: session.noteID,
+                                    parentID: taskID, selectionBefore: selection, caretAfter: selection.location)
+        func stageDeleted(_ deleted: Bool, in commit: ModelContext) throws {
+            let rows = try commit.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == alternateID }))
+            guard !rows.isEmpty else { throw WorkspaceFoundationError.conflict }
+            WorkspaceLegacyBridge.prepareMutations(rows, in: commit)
+            let now = Date()
+            for row in rows { row.deletedAt = deleted ? now : nil; row.deletedAttachmentIDsRaw = nil }
+        }
+        let entry = UUID()
+        let owner = WorkspaceOwner(entity: .note, id: alternateID)
+        let outcome = await edit.perform(name: String(localized: "Merge Notes"), candidate: candidate, entryID: entry,
+            forwardWrites: [owner], forward: { try stageDeleted(true, in: $0) },
+            inverse: { redo in
+                TaskNoteTextEdit.TaskStep(writes: [owner], check: { context in
+                    let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == alternateID }))
+                    guard !rows.isEmpty, rows.allSatisfy({ ($0.deletedAt == nil) == redo }) else { throw WorkspaceFoundationError.conflict }
+                }, preservations: [:], stage: { commit, _ in try stageDeleted(redo, in: commit) })
+            })
+        switch outcome {
+        case .committed, .publicationPending:
+            notes.store.refresh()
+            model.alternateNotes.removeAll { $0 == alternateID }
+            return .made(entryID: entry, count: 0, kept: 0)
+        case .notCommitted, .conflict, .unknown:
+            return .refused(String(localized: "Couldn't merge the notes"))
+        }
+    }
+}
+
 /// One workspace operation that changes a task's note's writing together
 /// with task rows (S1, S11). The forward commit and its replays share the
 /// write gate, the journal, the session's adoption of the new revision and
