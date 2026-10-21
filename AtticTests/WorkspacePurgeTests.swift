@@ -50,6 +50,42 @@ final class WorkspacePurgeTests: XCTestCase {
     private func tasks() throws -> Int { try coordinator.freshContext().fetchCount(FetchDescriptor<TaskItem>()) }
     private func records() throws -> [TaskDeletionPreservation] { try coordinator.freshContext().fetch(FetchDescriptor<TaskDeletionPreservation>()) }
 
+    func testP3_1RestoredAndPurgedTasksReleasePreservationDependencies() async throws {
+        try seed(note: true)
+        let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
+        XCTAssertTrue(store.restoreDeleted(taskID: taskID))
+        XCTAssertTrue(store.delete(taskIDs: [taskID]))
+        XCTAssertTrue(try WorkspacePurge.preservationOwners(in: coordinator.freshContext()).contains(.init(entity: .note, id: noteID)))
+        XCTAssertTrue(store.restoreDeleted(taskID: taskID))
+        XCTAssertFalse(try WorkspacePurge.preservationOwners(in: coordinator.freshContext()).contains(.init(entity: .note, id: noteID)))
+        XCTAssertTrue(store.delete(taskIDs: [taskID]))
+        expectEqual(await purge().outcome, .committed)
+        XCTAssertFalse(try WorkspacePurge.preservationOwners(in: coordinator.freshContext()).contains(.init(entity: .note, id: noteID)))
+        let notes = NoteStore(container: coordinator.container)
+        XCTAssertTrue(notes.delete(try XCTUnwrap(notes.note(withID: noteID))))
+        XCTAssertEqual(notes.purgeDeleted(before: .distantFuture), [noteID])
+        XCTAssertTrue(try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>()).isEmpty)
+    }
+
+    func testP3_1RestoredLegacyTaskCanExpireAfterItsNoteIsPurgedAndKeepsTombstone() throws {
+        try seed(note: true)
+        let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
+        XCTAssertTrue(store.restoreDeleted(taskID: taskID))
+        XCTAssertTrue(store.delete(taskIDs: [taskID]))
+        XCTAssertTrue(store.restoreDeleted(taskID: taskID))
+        let notes = NoteStore(container: coordinator.container)
+        XCTAssertTrue(notes.delete(try XCTUnwrap(notes.note(withID: noteID))))
+        XCTAssertEqual(notes.purgeDeleted(before: .distantFuture), [noteID])
+        XCTAssertTrue(store.delete(taskIDs: [taskID]))
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [taskID])
+        XCTAssertTrue(try tasks() == 0)
+        XCTAssertTrue(try records().contains { $0.purgedAt != nil && $0.retiredAt != nil })
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        XCTAssertEqual(coordinator.plainSave(tokens: [.init(owner: owner, replicas: [])], writes: [owner]) {
+            $0.insert(TaskItem(id: self.taskID, title: "cannot resurrect"))
+        }, .notCommitted)
+    }
+
     func testP3NewDeletionCapturesEveryReplicaAndDependenciesWithSoftDelete() async throws {
         let context = coordinator.freshContext(), task = TaskItem(id: taskID, title: "Before deletion")
         task.listOrderVersion = TaskItem.currentListOrderVersion

@@ -399,7 +399,9 @@ enum WorkspaceModelFields {
                 WorkspaceField("capturedAt", \TaskDeletionPreservation.capturedAt),
                 WorkspaceField("provenance", \TaskDeletionPreservation.provenance),
                 WorkspaceField("snapshot", \TaskDeletionPreservation.snapshot),
-                WorkspaceField("purgedAt", \TaskDeletionPreservation.purgedAt)
+                WorkspaceField("purgedAt", \TaskDeletionPreservation.purgedAt),
+                WorkspaceField("retiredAt", \TaskDeletionPreservation.retiredAt),
+                WorkspaceField("dependencyOwnersData", \TaskDeletionPreservation.dependencyOwnersData)
             ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as CanvasBoardItem:
             return try record(row, fieldTable(for: row) { [

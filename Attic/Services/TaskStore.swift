@@ -2104,6 +2104,7 @@ final class TaskStore: ObservableObject {
                 }
             }
         }
+        try WorkspacePurge.stageRetirement(rootIDs: Set(batches.keys), timestamp: now(), in: context)
         WorkspaceLegacyBridge.prepareMutations(batches.values.flatMap { $0 }, in: context)
         for batch in batches.values {
             for replica in batch {
@@ -2165,6 +2166,7 @@ final class TaskStore: ObservableObject {
             throw WorkspaceFoundationError.protectedOwner
         }
         let ids = Set(rows.map(\.id))
+        try WorkspacePurge.stageRetirement(rootIDs: [rootID], timestamp: Date(), purged: true, in: context)
         rows.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
         return ids
     }
@@ -2244,6 +2246,7 @@ final class TaskStore: ObservableObject {
         WorkspaceLegacyBridge.prepareMutations(removed, in: context)
         removed.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
         do {
+            try WorkspacePurge.stageRetirement(rootIDs: Set(removed.map { $0.deletionRootID ?? $0.id }), timestamp: now(), purged: true, in: context)
             try alongside?(context, purgedIDs)
         } catch {
             context.rollback()

@@ -92,25 +92,49 @@ enum WorkspacePurge {
         let dependencies = try preservationDependencies(taskIDs: Set(rows.map(\.id)), in: context)
         let snapshot = Preservation(rootID: rootID, title: head.title, members: members,
             originals: refs.map { .init(reference: $0, wasMissing: nil) }, dependencies: dependencies)
-        context.insert(TaskDeletionPreservation(id: id, rootID: rootID, deletedAt: deletedAt,
-            capturedAt: deletedAt, provenance: "soft deletion", snapshot: try WorkspaceModelFields.encode(snapshot)))
+        let record = TaskDeletionPreservation(id: id, rootID: rootID, deletedAt: deletedAt,
+            capturedAt: deletedAt, provenance: "soft deletion", snapshot: try WorkspaceModelFields.encode(snapshot))
+        record.dependencyOwnersData = try WorkspaceModelFields.encode(dependencies.map(\.owner))
+        context.insert(record)
     }
 
     private static func uniqueReferences(_ references: [TaskImageReference]) -> [TaskImageReference] {
         references.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
     }
 
-    /// Preservation records are independent row owners. Older records without
-    /// a dependency inventory are unknown, so collection must defer.
+    /// Only an outstanding deletion owns dependencies. Purged records retain
+    /// their immutable title/tombstone, not indefinite rights over ordinary
+    /// notes. The compact owner index avoids decoding historical snapshots.
     static func preservationOwners(in context: ModelContext) throws -> Set<WorkspaceOwner> {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return [] }
         var owners = Set<WorkspaceOwner>()
-        for record in try context.fetch(FetchDescriptor<TaskDeletionPreservation>()) {
-            let snapshot = try JSONDecoder().decode(Preservation.self, from: record.snapshot)
-            guard let dependencies = snapshot.dependencies else { throw WorkspaceFoundationError.unknown }
-            owners.formUnion(dependencies.map(\.owner))
+        let active = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(
+            predicate: #Predicate { $0.retiredAt == nil && $0.purgedAt == nil }))
+        let deleted = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.deletedAt != nil }))
+        for record in active {
+            // Also handles rows restored before retirement metadata existed.
+            guard deleted.contains(where: { $0.id == record.rootID && $0.deletedAt == record.deletedAt }) else { continue }
+            if let indexed = record.dependencyOwnersData {
+                owners.formUnion(try JSONDecoder().decode([WorkspaceOwner].self, from: indexed))
+            } else {
+                let snapshot = try JSONDecoder().decode(Preservation.self, from: record.snapshot)
+                guard let dependencies = snapshot.dependencies else { throw WorkspaceFoundationError.unknown }
+                owners.formUnion(dependencies.map(\.owner))
+            }
         }
         return owners
+    }
+
+    static func stageRetirement(rootIDs: Set<UUID>, timestamp: Date, purged: Bool = false, in context: ModelContext) throws {
+        guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
+        let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter {
+            rootIDs.contains($0.rootID) && $0.retiredAt == nil
+        }
+        WorkspaceLegacyBridge.prepareMutations(records, in: context)
+        records.forEach {
+            $0.retiredAt = timestamp
+            if purged && $0.purgedAt == nil { $0.purgedAt = timestamp }
+        }
     }
 
     private static func preservationDependencies(taskIDs: Set<UUID>, in context: ModelContext) throws -> [Preservation.Dependency] {
@@ -245,7 +269,7 @@ enum WorkspacePurge {
                 originals: uniqueReferences(originals.map(\.reference)).sorted { ($0.id.uuidString, $0.digest) < ($1.id.uuidString, $1.digest) }.map { reference in originals.first { $0.reference == reference }! },
                 dependencies: try preservationDependencies(taskIDs: ids, in: context))
             let snapshotBytes = try WorkspaceModelFields.encode(snapshot)
-            let existing = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.rootID == rootID && $0.deletedAt == deletedAt }
+            let existing = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.rootID == rootID && $0.deletedAt == deletedAt && $0.retiredAt == nil }
             let preservationID = existing.first?.id ?? UUID()
             for record in existing {
                 guard record.id == preservationID, record.purgedAt == nil else { return refused() }
@@ -324,8 +348,10 @@ enum WorkspacePurge {
                 if records.isEmpty {
                     let record = TaskDeletionPreservation(id: preservationID, rootID: rootID, deletedAt: deletedAt,
                         capturedAt: Date(), provenance: "legacy intact-row capture", snapshot: snapshotBytes)
-                    record.purgedAt = Date(); commit.insert(record)
-                } else { records.forEach { $0.purgedAt = Date() } }
+                    record.purgedAt = Date(); record.retiredAt = record.purgedAt
+                    record.dependencyOwnersData = try WorkspaceModelFields.encode(snapshot.dependencies?.map(\.owner) ?? [])
+                    commit.insert(record)
+                } else { records.forEach { $0.purgedAt = Date(); $0.retiredAt = $0.purgedAt } }
                 for (id, document) in ownership.drafts {
                     let old = try PreparedNoteDocument(document), row = notes.first(where: { $0.id == id })!
                     commit.insert(NoteVersion(id: draftVersionIDs[id]!, noteID: id, createdAt: Date(), reason: .replacedByDraft,

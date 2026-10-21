@@ -53,6 +53,10 @@ final class TaskDeletionPreservation {
     var provenance: String = "soft-deletion"
     var snapshot: Data = Data()
     var purgedAt: Date? = nil
+    /// Snapshot/tombstone stays immutable; dependency ownership ends when the
+    /// deletion is restored or the coordinated purge materializes its notes.
+    var retiredAt: Date? = nil
+    var dependencyOwnersData: Data? = nil
     init(id: UUID = UUID(), rootID: UUID, deletedAt: Date, capturedAt: Date,
          provenance: String, snapshot: Data) {
         self.id = id; self.rootID = rootID; self.deletedAt = deletedAt

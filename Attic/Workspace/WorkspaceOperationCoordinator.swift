@@ -1092,8 +1092,8 @@ extension WorkspaceOperationCoordinator {
     /// Permanent deletion is an irreversible boundary for every writer,
     /// including compatibility store wrappers and old replay payloads.
     /// Purged records are permanent UUID tombstones. Preservation snapshots
-    /// retain their row/byte dependencies independently of the task lifetime.
-    /// Current sweeps have no authorized last-owner retirement protocol.
+    /// retain their immutable snapshots. Dependency ownership is retired only
+    /// alongside restoration or permanent removal of the recorded task.
     private func validatePreservationLifetime(_ context: ModelContext, before: [WorkspaceModelToken]) throws {
         guard !context.deletedModelsArray.contains(where: { $0 is TaskDeletionPreservation }) else {
             throw WorkspaceFoundationError.protectedOwner
@@ -1104,9 +1104,20 @@ extension WorkspaceOperationCoordinator {
                 throw WorkspaceFoundationError.unknown
             }
             let fields = try WorkspaceModelFields.fingerprint(record)
-            guard fields.filter({ $0.key != "purgedAt" }) == original.fields.filter({ $0.key != "purgedAt" }),
+            let lifetimeFields: Set<String> = ["purgedAt", "retiredAt"]
+            guard fields.filter({ !lifetimeFields.contains($0.key) }) == original.fields.filter({ !lifetimeFields.contains($0.key) }),
                   original.fields["purgedAt"] == (try WorkspaceModelFields.encode(Date?.none)) || fields["purgedAt"] == original.fields["purgedAt"] else {
                 throw WorkspaceFoundationError.protectedOwner
+            }
+            if fields["retiredAt"] != original.fields["retiredAt"] {
+                guard original.fields["retiredAt"] == (try WorkspaceModelFields.encode(Date?.none)),
+                      record.retiredAt != nil else { throw WorkspaceFoundationError.protectedOwner }
+                let rootID = record.rootID
+                let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == rootID }))
+                guard before.contains(where: { $0.owner == .init(entity: .task, id: rootID) && !$0.replicas.isEmpty }),
+                      tasks.allSatisfy({ $0.deletedAt == nil }) || record.purgedAt != nil || tasks.isEmpty else {
+                    throw WorkspaceFoundationError.protectedOwner
+                }
             }
         }
     }

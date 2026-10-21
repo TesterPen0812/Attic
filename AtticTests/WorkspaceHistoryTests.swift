@@ -150,6 +150,11 @@ final class WorkspaceHistoryTests: XCTestCase {
                     var writes = Set<WorkspaceOwner>([.init(entity: .task, id: childID), .init(entity: .note, id: noteID)])
                         .union(versions.values.map { .init(entity: .version, id: $0) })
                     if !redo { writes.insert(.init(entity: .preservation, id: preservation)) }
+                    else {
+                        writes.formUnion(try context.fetch(FetchDescriptor<TaskDeletionPreservation>())
+                            .filter { $0.rootID == childID && $0.retiredAt == nil }
+                            .map { .init(entity: .preservation, id: $0.id) })
+                    }
                     let envelope = try coordinator.newEnvelope(intent: "Replay Make Subtask", reads: coordinator.capture(writes.union([.init(entity: .task, id: parent)])), writes: writes,
                         afterDocuments: [noteID: prepared.content], historyEffect: WorkspaceModelFields.encode(effect), replayOf: operation)
                     return .init(envelope: envelope, text: (adapter, text), textDocument: (noteID, prepared.content), stage: { commit in
