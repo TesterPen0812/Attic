@@ -84,6 +84,9 @@ final class TaskNoteComposedHost: NSObject {
         documentView.autoresizingMask = [.width]
         scrollView.documentView = documentView
         for view in [headController.view, blockController.view] {
+            // Presses on the head and the block are theirs, never the page
+            // marquee's blank-space click (which starts a line below the text).
+            view.identifier = AtticMarqueeController.embeddedRegion
             view.translatesAutoresizingMaskIntoConstraints = true
             documentView.addSubview(view)
         }

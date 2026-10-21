@@ -97,6 +97,10 @@ final class AtticMarqueeController: NSObject {
     private let overlay = MarqueeOverlay()
     private lazy var ticker = MarqueeTicker(owner: self)
 
+    /// Native regions stacked in the document beside the text (a task
+    /// page's head and Subtasks block): their presses are theirs.
+    static let embeddedRegion = NSUserInterfaceItemIdentifier("attic.marquee.embedded-region")
+
     init(scrollView: NSScrollView) {
         self.scrollView = scrollView
         super.init()
@@ -184,7 +188,8 @@ final class AtticMarqueeController: NSObject {
                 while let view = hit, view !== document {
                     // A table's grips and "+" chips sit in the column's
                     // margin; their press is theirs, not a marquee (F5a V-05).
-                    if view is NSControl || view is NSTextView || view is AtticNoteTableControlView {
+                    if view is NSControl || view is NSTextView || view is AtticNoteTableControlView
+                        || view.identifier == AtticMarqueeController.embeddedRegion {
                         embeddedClick(); return event
                     }
                     hit = view.superview

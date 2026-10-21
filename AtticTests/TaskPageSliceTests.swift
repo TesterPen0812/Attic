@@ -315,6 +315,31 @@ final class TaskPageSliceTests: XCTestCase {
         }
     }
 
+    /// The page's marquee (box selection over blank document space) must
+    /// leave presses on the head and the Subtasks block to them: on screen
+    /// it took a click on a subtask's box or Restore Note as a click below
+    /// the writing and started a new line there.
+    func testTheMarqueeLeavesPressesOnTheHeadAndTheBlockToThem() throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let host = presenter.host
+        host.scrollToTop()
+        settle(host.textView)
+        let controller = try XCTUnwrap(host.textView.marquee?.controller)
+        let before = host.engine.textStorage.string
+        for (name, region) in [("head", host.headView), ("block", host.blockView)] {
+            let inWindow = region.convert(NSPoint(x: region.bounds.midX, y: region.bounds.midY), to: nil)
+            func event(_ type: NSEvent.EventType) -> NSEvent {
+                NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                   windowNumber: region.window!.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+            }
+            XCTAssertNotNil(controller.handle(event(.leftMouseDown)), "a press on the \(name) is the \(name)'s, not a marquee")
+            _ = controller.handle(event(.leftMouseUp))
+        }
+        settle(host.textView)
+        XCTAssertEqual(host.engine.textStorage.string, before, "no new line was started below the writing")
+    }
+
     // MARK: All notes (`p3-22` row 3)
 
     func testAllNotesShowsATaskNoteWithItsCircleAndTaskNote() throws {
