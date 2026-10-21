@@ -611,8 +611,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.cancelInteractiveDismissal()
             }
         }
-        panel.onContentMayChange = { [weak self] in
-            self?.contentContainer?.noteContentMayChange()
+        panel.onContentMayChange = { [weak self] hoverOnly in
+            self?.contentContainer?.noteContentMayChange(hoverOnly: hoverOnly)
             self?.scheduleIdlePrepare()
         }
         panel.onTrackpadDismissProgress = { [weak self] distance in
@@ -1282,7 +1282,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, let container = self.contentContainer, !self.isInteractiveDismissal,
                   self.panel.isVisible == hiding, self.settings.hideAnimation == mode else { return }
-            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode))
+            // The pointer has just left (or arrived in the corner): hover fresh.
+            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), hoverFresh: true)
         }
         expectedChangeWork = work
         let lead = max(0, delay - PanelHideMotionTuning.geniePrepareLead)
@@ -1303,10 +1304,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard mode.usesGenieMesh, !AtticMotionPreference.reducesMotion else { return }
         let lifetime = PanelHideMotionTuning.genieIdlePreparedLifetime
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.panel.isVisible, !self.isPanelMotionActive, !self.isInteractiveDismissal,
-                  self.settings.hideAnimation == mode, let container = self.contentContainer,
-                  container.alternateMode == nil else { return }
-            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), lifetime: lifetime)
+            guard let self, self.panel.isVisible, self.settings.hideAnimation == mode,
+                  let container = self.contentContainer else { return }
+            // A motion still running: try again once it is done.
+            guard !self.isPanelMotionActive, !self.isInteractiveDismissal, container.alternateMode == nil else {
+                self.scheduleIdlePrepare()
+                return
+            }
+            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), lifetime: lifetime, hoverFresh: true)
             // Renewed before it lapses, while the panel stays open and idle.
             let renew = DispatchWorkItem { [weak self] in self?.scheduleIdlePrepare() }
             self.idlePrepareWork = renew

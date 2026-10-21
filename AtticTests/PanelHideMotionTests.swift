@@ -464,7 +464,8 @@ final class PanelHideMotionShipTests: XCTestCase {
         panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
         panel.trackpadDismissCorner = .topRight
         var changes = 0
-        panel.onContentMayChange = { changes += 1 }
+        var hovers = 0
+        panel.onContentMayChange = { hoverOnly in if hoverOnly { hovers += 1 } else { changes += 1 } }
         let point = CGPoint(x: 10, y: 10)
         func scroll(dx: Int32 = 0, dy: Int32 = 0, phase: Int64, momentum: Int64 = 0) throws -> NSEvent {
             let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
@@ -706,6 +707,11 @@ final class PanelHideMotionShipTests: XCTestCase {
         rig.content.prepareAlternateSnapshot(.genieLiveGlass, surface: solid, lifetime: 30)
         RunLoop.current.run(until: Date().addingTimeInterval(PanelHideMotionTuning.geniePreparedLifetime + 0.3))
         XCTAssertTrue(rig.content.hasPreparedSnapshot(.genieLiveGlass, surface: solid), "past the short lifetime")
+        // The pointer moving: a swipe may still start from it; a timed hide
+        // or reveal takes a fresh one.
+        rig.content.noteContentMayChange(hoverOnly: true)
+        XCTAssertTrue(rig.content.hasPreparedSnapshot(.genieLiveGlass, surface: solid))
+        XCTAssertFalse(rig.content.hasPreparedSnapshot(.genieLiveGlass, surface: solid, hoverFresh: true))
         rig.content.noteContentMayChange()
         XCTAssertFalse(rig.content.hasPreparedSnapshot(.genieLiveGlass, surface: solid))
     }

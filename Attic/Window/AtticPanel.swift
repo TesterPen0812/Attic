@@ -44,10 +44,11 @@ final class AtticPanel: NSPanel {
         }
     }
     var canBeginTrackpadSwipe: ((NSEvent) -> Bool)?
-    /// Something may have changed what the panel shows (a key, a click, the
-    /// pointer over it, content scrolling): a snapshot prepared before it is
-    /// stale. The swipe's own scroll events, routed to the hide, are not.
-    var onContentMayChange: (() -> Void)?
+    /// Something may have changed what the panel shows: a key, a click or
+    /// content scrolling (`hoverOnly` false), or the pointer moving over it,
+    /// which changes hover highlights only (true). A snapshot prepared
+    /// before it is stale. The swipe's own scroll events are not.
+    var onContentMayChange: ((_ hoverOnly: Bool) -> Void)?
     private var trackpadDismissTracker = PanelTrackpadDismissTracker()
     private enum SwipeRoute { case hide, notes, content }
     private var swipeRoute: SwipeRoute?
@@ -304,7 +305,11 @@ final class AtticPanel: NSPanel {
     private(set) var lastScrollEventTime: TimeInterval = 0
 
     override func sendEvent(_ event: NSEvent) {
-        defer { if changesContent(event) { onContentMayChange?() } }
+        defer {
+            if changesContent(event) {
+                onContentMayChange?([.mouseMoved, .mouseEntered, .mouseExited].contains(event.type))
+            }
+        }
         if event.type == .scrollWheel { lastScrollEventTime = event.timestamp }
         // One click both activates the panel and acts (owner, 2026-10-01):
         // the panel becomes key before AppKit sees the press, so the press
@@ -1327,16 +1332,22 @@ final class AtticPanelContentContainer: NSView {
         var surface: PanelGenieSurface?
         var contentGeneration: Int
     }
-    private var prepared: (key: PreparedSnapshotKey, time: CFTimeInterval, expires: CFTimeInterval)?
+    private var prepared: (key: PreparedSnapshotKey, time: CFTimeInterval, expires: CFTimeInterval, hover: Int)?
     /// Bumped by anything that may change what the panel shows (a key, a
     /// click, scrolling content, the pointer over it): a snapshot taken
     /// before it is stale.
     private var contentGeneration = 0
 
-    /// The panel's content may have changed (`AtticPanel.onContentMayChange`).
-    func noteContentMayChange() {
-        contentGeneration &+= 1
+    /// The panel's content may have changed (`AtticPanel.onContentMayChange`);
+    /// `hoverOnly`: only hover highlights may have (the pointer moved).
+    func noteContentMayChange(hoverOnly: Bool = false) {
+        if hoverOnly { hoverGeneration &+= 1 } else { contentGeneration &+= 1 }
     }
+    /// Bumped by the pointer moving over the panel: a swipe may still start
+    /// from a snapshot taken before (at worst a row's hover tint differs for
+    /// a frame; re-taking it then froze the swipe, g6 gesture checks), but a
+    /// timed hide or reveal takes a fresh one.
+    private var hoverGeneration = 0
 
     private func snapshotKey(_ mode: PanelHideAnimation, surface: PanelGenieSurface?) -> PreparedSnapshotKey {
         PreparedSnapshotKey(
@@ -1346,10 +1357,12 @@ final class AtticPanelContentContainer: NSView {
         )
     }
 
-    /// Whether a prepared snapshot of `mode` is still good now.
-    func hasPreparedSnapshot(_ mode: PanelHideAnimation, surface: PanelGenieSurface?) -> Bool {
+    /// Whether a prepared snapshot of `mode` is still good now (with
+    /// `hoverFresh`, also taken since the pointer last moved).
+    func hasPreparedSnapshot(_ mode: PanelHideAnimation, surface: PanelGenieSurface?, hoverFresh: Bool = false) -> Bool {
         guard let prepared, genieView.hasSnapshot else { return false }
         return prepared.key == snapshotKey(mode, surface: surface) && CACurrentMediaTime() < prepared.expires
+            && (!hoverFresh || prepared.hover == hoverGeneration)
     }
 
     /// Ahead of a likely Genie flight (the panel idle, or a timed hide or
@@ -1358,15 +1371,16 @@ final class AtticPanelContentContainer: NSView {
     /// first frame. Nothing on screen changes. It stays good for
     /// `lifetime` unless something that may change the panel happens.
     func prepareAlternateSnapshot(_ mode: PanelHideAnimation, surface: PanelGenieSurface?,
-                                  lifetime: CFTimeInterval = PanelHideMotionTuning.geniePreparedLifetime) {
+                                  lifetime: CFTimeInterval = PanelHideMotionTuning.geniePreparedLifetime,
+                                  hoverFresh: Bool = false) {
         let visible = window?.isVisible == true
         guard mode.usesGenieMesh, !visible || alternateMode == nil, !genieView.isAnimating else { return }
         let now = CACurrentMediaTime()
-        if hasPreparedSnapshot(mode, surface: surface), let current = prepared {
+        if hasPreparedSnapshot(mode, surface: surface, hoverFresh: hoverFresh), let current = prepared {
             prepared?.expires = max(current.expires, now + lifetime)
         } else {
             captureGenie(mode, surface: surface)
-            prepared = (snapshotKey(mode, surface: surface), now, now + lifetime)
+            prepared = (snapshotKey(mode, surface: surface), now, now + lifetime, hoverGeneration)
         }
         let time = prepared?.time
         let expires = prepared?.expires ?? now
