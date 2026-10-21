@@ -910,6 +910,7 @@ final class PanelGenieView: NSView {
         var groups: [(rect: CGRect, clip: CGRect)] = []
         var elements: [(rect: CGRect, clip: CGRect)] = []
         var backdrops: [GlassBand] = []
+        var materialParents: [CALayer] = []
         func surfaceSized(_ frame: CGRect) -> Bool {
             abs(frame.width - surfaceRect.width) < 3 && abs(frame.height - surfaceRect.height) < 3
         }
@@ -923,14 +924,8 @@ final class PanelGenieView: NSView {
             if layer.masksToBounds { clip = clip.intersection(root.convert(layer.bounds, from: layer)) }
             let frame = root.convert(layer.bounds, from: layer)
             if name == "CASDFElementLayer" { elements.append((frame, shown ? clip : .null)) }
-            // Live Frosted: the panel's material is live under the mesh, so
-            // its fill (`CAChameleonLayer`, composited onto the backdrop,
-            // which a snapshot draws flat and opaque) stays out too.
-            if hidesSurfaceMaterial, name == "CAChameleonLayer", !layer.isHidden {
-                if abs(frame.width - surfaceRect.width) < 3, abs(frame.height - surfaceRect.height) < 3 {
-                    scan.hidden.append(layer)
-                    scan.materialLayers = [name]
-                }
+            if hidesSurfaceMaterial, name == "CABackdropLayer", surfaceSized(frame), let parent = layer.superlayer {
+                materialParents.append(parent)
             }
             if name == "CABackdropLayer", shown, !surfaceSized(frame), frame.width > 4, frame.height > 4 {
                 let blur = variableBlur(of: layer)
@@ -943,6 +938,19 @@ final class PanelGenieView: NSView {
             for sublayer in layer.sublayers ?? [] { walk(sublayer, clip: clip, shown: shown) }
         }
         walk(root, clip: surfaceRect, shown: true)
+        // Live Frosted: the panel's material is live under the mesh, so all
+        // of it stays out of the snapshot: beside its backdrop, a fill
+        // composited with a blend mode (`darkenBlendMode`) and a
+        // `CAChameleonLayer`, which a render draws flat and opaque. (Drafts
+        // left the blended fill in: Frosted read white and opaque in flight.)
+        for parent in materialParents {
+            for sibling in parent.sublayers ?? [] where !sibling.isHidden && className(sibling) != "CABackdropLayer" {
+                let frame = root.convert(sibling.bounds, from: sibling)
+                guard surfaceSized(frame), sibling.compositingFilter != nil || className(sibling) == "CAChameleonLayer" else { continue }
+                scan.hidden.append(sibling)
+                scan.materialLayers.append(className(sibling))
+            }
+        }
         // A backdrop inside a control's glass is that glass; the rest are
         // the edges' variable blurs, strongest at the panel's edge.
         let controls = groups.filter { !surfaceSized($0.rect) }.map { $0.rect.insetBy(dx: -1, dy: -1) }

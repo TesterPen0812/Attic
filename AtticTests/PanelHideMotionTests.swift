@@ -560,6 +560,47 @@ final class PanelHideMotionShipTests: XCTestCase {
         }
     }
 
+    /// Frosted's material is live under the mesh, so none of it is in the
+    /// snapshot: beside its backdrop, the fill composited with a blend mode
+    /// and the chameleon layer (a render draws both flat: Frosted read white
+    /// and opaque in flight). The surface's own fills stay.
+    func testFrostedLeavesItsWholeMaterialOutOfTheSnapshot() {
+        let surface = CGRect(x: 28, y: 28, width: 320, height: 560)
+        let root = CALayer()
+        root.frame = CGRect(x: 0, y: 0, width: 376, height: 616)
+        let host = CALayer()
+        host.frame = root.bounds
+        root.addSublayer(host)
+        var names: [ObjectIdentifier: String] = [:]
+        func layer(_ name: String, _ frame: CGRect, filter: String? = nil) -> CALayer {
+            let made = CALayer()
+            made.frame = frame
+            made.compositingFilter = filter
+            names[ObjectIdentifier(made)] = name
+            host.addSublayer(made)
+            return made
+        }
+        let fill = layer("ColorShapeLayer", surface)
+        let backdrop = layer("CABackdropLayer", surface)
+        let darken = layer("CALayer", surface, filter: "darkenBlendMode")
+        let chameleon = layer("CAChameleonLayer", surface)
+        let row = layer("CGDrawingLayer", CGRect(x: 50, y: 300, width: 200, height: 20))
+        let scan = PanelGenieView.scanGlass(in: root, surfaceRect: surface, hidesSurfaceMaterial: true) {
+            names[ObjectIdentifier($0)] ?? "CALayer"
+        }
+        let hidden = Set(scan.hidden.map(ObjectIdentifier.init))
+        XCTAssertTrue(hidden.contains(ObjectIdentifier(backdrop)))
+        XCTAssertTrue(hidden.contains(ObjectIdentifier(darken)), "the blended fill")
+        XCTAssertTrue(hidden.contains(ObjectIdentifier(chameleon)))
+        XCTAssertFalse(hidden.contains(ObjectIdentifier(fill)), "the surface's own fill stays")
+        XCTAssertFalse(hidden.contains(ObjectIdentifier(row)))
+        // Glass (no live Frosted): the blended fill is not Frosted's.
+        let glass = PanelGenieView.scanGlass(in: root, surfaceRect: surface, hidesSurfaceMaterial: false) {
+            names[ObjectIdentifier($0)] ?? "CALayer"
+        }
+        XCTAssertFalse(Set(glass.hidden.map(ObjectIdentifier.init)).contains(ObjectIdentifier(darken)))
+    }
+
     /// The hover monitor announces a timed reveal (pointer resting in the
     /// corner) and a timed hide (pointer gone), so Genie can prepare.
     func testTimedRevealsAndHidesAreAnnouncedAhead() throws {
