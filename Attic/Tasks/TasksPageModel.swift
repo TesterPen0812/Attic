@@ -831,6 +831,12 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var noteOwners: Set<UUID> = []
     private(set) var noteOwnersRevision: UInt64 = 0
 
+    private var noteOwnersObservation: AnyCancellable?
+
+    func observeNoteOwners(_ owners: AnyPublisher<Set<UUID>, Never>) {
+        noteOwnersObservation = owners.receive(on: DispatchQueue.main).sink { [weak self] in self?.setNoteOwners($0) }
+    }
+
     func setNoteOwners(_ owners: Set<UUID>) {
         guard owners != noteOwners else { return }
         noteOwners = owners

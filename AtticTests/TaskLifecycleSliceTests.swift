@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -785,5 +786,29 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(demo.host.textView.string.contains("Record a backup video"))
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskDeletionPreservation>())
             .contains { $0.rootID == ids[.deletedTask] }, "the deleted task has its preservation record")
+    }
+
+    /// The panel's Tasks page learns which tasks have notes from the note
+    /// store, as the app wires it (the row glyph on screen).
+    func testTheTasksPageHostFeedsTheNoteOwnersToItsRows() throws {
+        let id = try seed(.boundary)
+        let suite = "TaskLife.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let state = TasksPageState()
+        let services = TaskNoteEntryServices(open: { _, _ in }, addFiles: { _, _ in },
+            noteOwners: notes.store.$notes.map { Set($0.compactMap(\.taskID)) }.removeDuplicates().eraseToAnyPublisher())
+        let host = TasksPageHost(store: tasks, uiState: PanelUIState(), settings: AppSettings(defaults: defaults), state: state,
+            layout: PanelPageLayout(cornerSize: 24, panelSize: panel), chromeInteractionState: PanelChromeInteractionState(),
+            primaryInputFocusRequest: 0, taskNotes: services)
+        let hosting = NSHostingView(rootView: host)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        windows.append(window)
+        for _ in 0..<20 { hosting.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        let model = state.model(for: tasks, toasts: nil)
+        XCTAssertTrue(model.noteOwners.contains(id))
+        XCTAssertEqual(model.rows(for: .now).first { $0.id == id }?.model.hasPage, true)
     }
 }

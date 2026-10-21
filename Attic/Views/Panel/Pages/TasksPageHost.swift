@@ -82,6 +82,9 @@ struct TasksPageHost: View {
             taskNotes.open(id, String(localized: "Back to \(model?.tab.title ?? TasksTab.now.title)"))
         }
         model.services.addFilesToTaskNote = taskNotes.addFiles
+        // The row glyph follows the note store (owned by the model, outside
+        // view updates).
+        model.observeNoteOwners(taskNotes.noteOwners)
     }
 
     /// The host's callbacks, also exercised without the Tasks page's own
@@ -223,7 +226,6 @@ struct TasksPageHost: View {
         // Tasks alone: they arrive while Tasks is already showing, too.
         // Search (the menu-bar item): the Done page's search, focused.
         .onReceive(uiState.$searchRequest) { request in handleSearchRequest(model, request: request) }
-        .onReceive(taskNotes?.noteOwners ?? Just([]).eraseToAnyPublisher()) { model.setNoteOwners($0) }
         // Reveal and hide come from the panel controller (Astra 7); a
         // covered or off-Space window is still open and keeps its place.
         .onReceive(uiState.$revealCount.dropFirst()) { _ in model.resetForReveal() }
