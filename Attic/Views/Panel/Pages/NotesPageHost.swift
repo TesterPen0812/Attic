@@ -34,7 +34,9 @@ struct NotesPageHost: View {
             taskStore.listedTask(withID: id).map { TaskRowPresentation.state($0.status) }
         }
         pages.openTaskPage = { [taskStore, uiState] taskID in
-            guard taskStore.task(withID: taskID) != nil else { return false }
+            // A deleted task's note opens its page too, in the quiet
+            // "Task deleted · Restore" state (§ 2.7.2), not as a plain note.
+            guard taskStore.task(withID: taskID) != nil || taskStore.deletedFamily(rootID: taskID) != nil else { return false }
             uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to All notes"))
             return true
         }

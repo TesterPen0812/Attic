@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The panel's shell: the surface, the header (Pin and the page switch), the
@@ -231,7 +232,11 @@ struct AtticPanelView: View {
                 TaskNoteFiles.add(staging, to: id, tasks: store, controller: noteDraft.pages, toasts: toasts) {
                     uiState.openTaskNote(id, from: .tasks, row: id, backTitle: nil)
                 }
-            })
+            },
+            noteOwners: noteDraft.pages.store.$notes
+                .map { Set($0.compactMap(\.taskID)) }
+                .removeDuplicates()
+                .eraseToAnyPublisher())
     }
 
     /// The header controls' frames in panel coordinates (top-left origin).

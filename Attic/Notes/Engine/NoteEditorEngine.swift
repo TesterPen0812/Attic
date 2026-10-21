@@ -146,6 +146,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// shown, selected, edited or read as a heading; the head shows the
     /// task's live title instead.
     let isBodyOnly: Bool
+    /// A task's page whose note is in Recently Deleted invites a new one
+    /// ("Write a new note", § 2.7.2); nil keeps "Write, or drop a file".
+    var bodyPlaceholder: String?
     private var compatibilityTitleBlock: NoteBlock?
     private(set) var style: NoteTextStyle
     private let renderer: NoteObjectRenderer

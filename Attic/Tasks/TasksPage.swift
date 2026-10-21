@@ -2192,7 +2192,8 @@ struct TasksPage: View {
             }
             list.append(.submenu(String(localized: "More"), more))
         }
-        list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
+        // § 2.7.1: every command names what it deletes (renamed from "Delete").
+        list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete Task") : String(localized: "Delete \(targets.count) Tasks"),
                                      shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
             // A menu's Delete key equivalent never reaches past a field
             // that is typing (round 5, the owner's blocker).
@@ -2294,7 +2295,7 @@ struct TasksPage: View {
                     return outcome
                 }
             },
-            AtticMenuCommand(verbatim: String(localized: "Delete"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
+            AtticMenuCommand(verbatim: String(localized: "Delete Subtask"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
                              startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
                 run { [weak model] in model?.deleteSubtask(subtask.id) ?? .failed(.taskGone) }

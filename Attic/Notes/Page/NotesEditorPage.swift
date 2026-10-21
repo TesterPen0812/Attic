@@ -154,6 +154,12 @@ struct NotesEditorPage: View {
             Self.lifetimeProbe?(chrome, library)
             #endif
             hasShownNote = controller.active != nil
+            // Back from a task's page opened in All notes: its search is
+            // still there (Phase 3 slice 1 carry-over).
+            if let kept = controller.libraryQueryAcrossTaskPage {
+                controller.libraryQueryAcrossTaskPage = nil
+                library.query = kept
+            }
             controller.update(design: design)
             controller.start()
             controller.present()
@@ -574,7 +580,8 @@ struct NotesEditorPage: View {
     private func openFromLibrary(_ id: UUID) {
         // A task's own note opens as its task's page (§ 5.3), over Notes.
         if let taskID = noteStore.note(withID: id)?.taskID, controller.openTaskPage?(taskID) == true {
-            library.clearSearch()
+            // The search is kept for Back to All notes.
+            controller.libraryQueryAcrossTaskPage = library.query.isEmpty ? nil : library.query
             return
         }
         if let draft = controller.failedDrafts.first(where: { $0.noteID == id }), noteStore.note(withID: id) == nil {

@@ -139,7 +139,9 @@ final class WorkspaceSessionRegistry {
         }
         let key = Key(domain: domain, workspace: canonical)
         let session = try WorkspacePageSession(key: key, controller: notes, coordinator: coordinator, noteID: noteID)
-        if noteID == nil, case let .task(taskID) = canonical, !hasDeletedOwnNote(taskID) {
+        // A task whose note is in Recently Deleted still gets a draft:
+        // writing in it starts a new, separate own note (§ 2.7.2).
+        if noteID == nil, case let .task(taskID) = canonical {
             try session.attachDraft(taskID: taskID)
         }
         session.onRelease = { [weak self] page in

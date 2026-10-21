@@ -23,7 +23,13 @@ enum WorkspaceRestoreNormalization {
             guard let task = tasks.first, tasks.allSatisfy({ $0.title == task.title && $0.deletedAt == task.deletedAt }) else { throw WorkspaceFoundationError.conflict }
             return try document.taskSnapshot(title: task.title)
         }
-        if !associations.isEmpty {
+        // A note restored as a separate note (§ 2.7.2: the task had a newer
+        // one) keeps its detached links without a preservation: it is
+        // ordinary already, and nothing about the task is re-applied.
+        let purged = associations.filter { $0.detachedPreservationID != nil }
+        guard associations.allSatisfy({ $0.detachedAt != nil }) || !purged.isEmpty else { throw WorkspaceFoundationError.conflict }
+        if !purged.isEmpty {
+            let associations = purged
             let ids = Set(associations.compactMap(\.detachedPreservationID))
             guard ids.count == 1, associations.allSatisfy({ $0.detachedAt != nil && $0.detachedPreservationID == ids.first }),
                   schema.contains("TaskDeletionPreservation"), let id = ids.first else { throw WorkspaceFoundationError.unknown }

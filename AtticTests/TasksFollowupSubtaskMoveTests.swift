@@ -286,7 +286,7 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         let titles = AtticMenuCommand.titles(in: commands)
         XCTAssertTrue(titles.contains("Move to Task…"), "\(titles)")
         XCTAssertTrue(titles.contains("Make Standalone Task"), "\(titles)")
-        XCTAssertLessThan(try XCTUnwrap(titles.firstIndex(of: "Make Standalone Task")), try XCTUnwrap(titles.firstIndex(of: "Delete")))
+        XCTAssertLessThan(try XCTUnwrap(titles.firstIndex(of: "Make Standalone Task")), try XCTUnwrap(titles.firstIndex(of: "Delete Subtask")))
 
         var shown = 0
         XCTAssertEqual(AtticMenuCommand.performSubtaskKey(key: "i", characters: "I", modifiers: [.command, .shift],

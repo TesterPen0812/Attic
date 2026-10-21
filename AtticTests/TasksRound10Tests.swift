@@ -416,7 +416,7 @@ final class TasksRound10Tests: XCTestCase {
         let commands = hosted.page.taskCommands(row.id, tab: .now)
         let titles = AtticMenuCommand.titles(in: commands)
         for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later", "Add Subtask",
-                      "Show Files", "Move Up", "Move Down", "Copy", "Duplicate", "Delete", "Pick a Date…", "All Tags…"] {
+                      "Show Files", "Move Up", "Move Down", "Copy", "Duplicate", "Delete Task", "Pick a Date…", "All Tags…"] {
             XCTAssertTrue(titles.contains(title), "\(title) in \(titles)")
         }
         func key(_ title: String) -> KeyboardShortcut? {
@@ -433,7 +433,7 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertEqual(key("Move Down"), AtticTaskShortcut.moveDown)
         XCTAssertEqual(key("Copy"), AtticTaskShortcut.copy)
         XCTAssertEqual(key("Duplicate"), AtticTaskShortcut.duplicate)
-        XCTAssertEqual(key("Delete"), AtticTaskShortcut.delete)
+        XCTAssertEqual(key("Delete Task"), AtticTaskShortcut.delete)
         XCTAssertEqual(key("Edit Title"), AtticTaskShortcut.editTitle)
         XCTAssertEqual(AtticMenuCommand.command(for: AtticTaskShortcut.duplicate, in: commands)?.title, "Duplicate")
         XCTAssertEqual(AtticMenuCommand.command(for: AtticTaskShortcut.copy, in: commands)?.title, "Copy")
@@ -442,7 +442,7 @@ final class TasksRound10Tests: XCTestCase {
         hosted.go(to: .done)
         let done = try XCTUnwrap(hosted.model.doneDays().flatMap(\.rows).first { $0.model.title == "Pay rent" })
         let doneTitles = AtticMenuCommand.titles(in: hosted.page.taskCommands(done.id, tab: .done))
-        for title in ["Restore to Now", "Mark as Not Done", "Edit Title", "Date", "Tags", "Priority", "Copy", "Duplicate", "Delete"] {
+        for title in ["Restore to Now", "Mark as Not Done", "Edit Title", "Date", "Tags", "Priority", "Copy", "Duplicate", "Delete Task"] {
             XCTAssertTrue(doneTitles.contains(title), "Done offers \(title): \(doneTitles)")
         }
         XCTAssertFalse(doneTitles.contains("Move Up"), "a Done log keeps its order")

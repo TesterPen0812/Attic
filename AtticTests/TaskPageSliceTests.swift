@@ -222,7 +222,12 @@ final class TaskPageSliceTests: XCTestCase {
         let deleted = await notes.deleteNoteDurably(noteID: noteID)
         XCTAssertTrue(deleted)
         let presenter = try open(id)
-        XCTAssertNil(presenter.session, "no new draft while the note is in Recently Deleted")
+        // § 2.7.2: the writing reads "Write a new note": a never-saved draft
+        // owned by the task, beside the quiet Restore Note line.
+        let draft = try XCTUnwrap(presenter.session)
+        XCTAssertFalse(draft.isPersisted, "nothing is stored by opening")
+        XCTAssertEqual(draft.pendingTaskID, id)
+        XCTAssertNotEqual(draft.noteID, noteID, "a new note, never the deleted one")
         XCTAssertEqual(presenter.deletedNoteID, noteID)
         XCTAssertTrue(presenter.model.deletedNote)
         XCTAssertNotNil(tasks.task(withID: id), "deleting the note never deletes the task")
@@ -262,7 +267,7 @@ final class TaskPageSliceTests: XCTestCase {
         }
         let first = try await mounted { $0.deletedNoteID == noteID }
         presenters.append(first)
-        XCTAssertNil(first.session)
+        XCTAssertEqual(first.session?.isPersisted, false, "an untouched \"Write a new note\" draft")
         first.menus.restoreNote()
         let reopened = try await mounted { $0 !== first && $0.session?.noteID == noteID }
         presenters.append(reopened)

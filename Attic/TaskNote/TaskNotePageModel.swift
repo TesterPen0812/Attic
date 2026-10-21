@@ -195,6 +195,23 @@ final class TaskNotePageModel: ObservableObject {
             let today = DueDay(date: parser.now(), calendar: calendar)
             next.due = TaskRowPresentation.due(day, today: today, calendar: calendar, locale: locale)
         }
+        // A page opened on a task that is already deleted (from All notes,
+        // § 2.7.2 row 1): the head and the block read as they were.
+        if task == nil, !head.exists, rows.isEmpty, let deleted = store.deletedFamily(rootID: taskID) {
+            var was = Head(title: deleted.root.title, state: TaskRowPresentation.state(deleted.root.status),
+                           priority: TaskRowPresentation.priority(deleted.root.priority), due: nil,
+                           tags: deleted.root.tags,
+                           subtasks: (deleted.subtasks.filter { $0.status == .done }.count, deleted.subtasks.count),
+                           exists: false)
+            if let day = deleted.root.dueDay {
+                was.due = TaskRowPresentation.due(day, today: DueDay(date: parser.now(), calendar: calendar),
+                                                  calendar: calendar, locale: locale)
+            }
+            head = was
+            rows = deleted.subtasks.map { Row(id: $0.id, title: $0.title, isDone: $0.status == .done) }
+            onGeometryChange?()
+            return
+        }
         // Task deleted (`p3-22` row 1): the block keeps the subtasks as they
         // were, read only, until Restore brings the live head back.
         if task == nil, head.exists || !rows.isEmpty {

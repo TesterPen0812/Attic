@@ -4114,3 +4114,22 @@ extension TaskStore {
         #endif
     }
 }
+
+// MARK: - Phase 3: a deleted task's page
+
+extension TaskStore {
+    /// A deleted task and its subtasks as they were deleted (their rows stay
+    /// unchanged in Recently Deleted), in canonical order: open subtasks by
+    /// manual order, then done ones. Nil for a task that is not deleted (or
+    /// is gone). Read through a fresh context: nothing here is written.
+    func deletedFamily(rootID: UUID) -> (root: TaskItem, subtasks: [TaskItem])? {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == rootID })),
+              let root = Self.canonicalReplicas(from: rows).first, root.deletedAt != nil else { return nil }
+        let children = (try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == rootID }))) ?? []
+        let family = Self.canonicalReplicas(from: children).filter { $0.deletedAt != nil && $0.deletionRootID == rootID }
+        let ordered = family.map(SubtaskSortKey.init).sorted(by: SubtaskSortKey.comesBefore).map(\.task)
+        return (root, ordered)
+    }
+}

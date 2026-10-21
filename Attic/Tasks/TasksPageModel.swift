@@ -486,6 +486,8 @@ final class TasksPageModel: ObservableObject {
                                             calendar: services.calendar(), locale: services.locale)
         // Find's matches are marked in the title (item 6, as on Done).
         if let match, !match.isEmpty { model.titleMatch = match }
+        // Phase 3 (`p3-06`, D11): the note glyph after the subtask count.
+        model.hasPage = noteOwners.contains(task.id)
         return TasksListRow(
             id: task.id,
             model: model,
@@ -498,6 +500,7 @@ final class TasksPageModel: ObservableObject {
     private struct RowsKey: Equatable {
         let tab: TasksTab
         let revision: UInt64
+        let noteOwners: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
         let expandedFiles: Set<UUID>
@@ -514,6 +517,7 @@ final class TasksPageModel: ObservableObject {
     struct PageToken: Equatable {
         let tab: TasksTab
         let revision: UInt64
+        let noteOwners: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
         let expandedFiles: Set<UUID>
@@ -531,7 +535,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func pageToken(_ tab: TasksTab) -> PageToken {
-        PageToken(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), owner: self.tab == tab && isPageShown)
@@ -556,7 +560,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
-        let key = RowsKey(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
@@ -822,6 +826,17 @@ final class TasksPageModel: ObservableObject {
     /// panel: it is where it was, on the tab it was left on (round 12, CU
     /// bug 3: it returned to Now). Only a reveal of the panel starts on Now
     /// (`resetForReveal`).
+    /// The tasks with a live note of their own (Phase 3): their rows show
+    /// the note glyph, and deleting one says the note is kept (§ 2.7.1).
+    @Published private(set) var noteOwners: Set<UUID> = []
+    private(set) var noteOwnersRevision: UInt64 = 0
+
+    func setNoteOwners(_ owners: Set<UUID>) {
+        guard owners != noteOwners else { return }
+        noteOwners = owners
+        noteOwnersRevision &+= 1
+    }
+
     /// Back from a task's page: the anchor row takes the keyboard again
     /// (UX plan § 5.3). The page observes the count.
     @Published private(set) var returnFocusRequest: UInt64 = 0
@@ -1512,8 +1527,15 @@ final class TasksPageModel: ObservableObject {
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
         expandedFiles.subtract(live)
+        // § 2.7.1: deleting never takes the note with it, and the toast
+        // says so ("note kept").
+        let kept = live.filter(noteOwners.contains).count
         if let title {
-            showToast(String(localized: "Deleted “\(title)”"))
+            showToast(kept > 0 ? String(localized: "Deleted “\(title)” · note kept")
+                : String(localized: "Deleted “\(title)”"))
+        } else if kept > 0 {
+            showToast(kept == 1 ? String(localized: "Deleted \(live.count) tasks · 1 note kept")
+                : String(localized: "Deleted \(live.count) tasks · \(kept) notes kept"))
         } else {
             showToast(String(localized: "Deleted \(live.count) tasks"))
         }

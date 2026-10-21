@@ -1161,6 +1161,9 @@ final class NotesPageController: ObservableObject {
 
     /// Called after a task draft's first save created its note.
     var taskNoteCreated: ((_ taskID: UUID, _ noteID: UUID) -> Void)?
+    /// All notes' search while a task's page opened from it is shown; the
+    /// library takes it back on Back (slice 1).
+    var libraryQueryAcrossTaskPage: String?
 
     func refreshWorkspaceSession(_ session: NoteSession) -> NoteSession? {
         store.refresh()
@@ -3367,6 +3370,30 @@ extension NotesPageController {
         guard store.restoreDeleted(noteID: noteID) else { return false }
         if reopen, open(noteID: noteID) { isLibraryPresented = false }
         return true
+    }
+
+    /// Restore Note on a task's page (§ 2.7.2) as its own Undo step: Undo
+    /// sends the note back to Recently Deleted, Redo restores it again.
+    /// Returns nil when the store refused; else whether it came back as a
+    /// separate, ordinary note (the task had a newer own note) and the
+    /// step's id (the toast's Undo targets exactly that step).
+    func restoreTaskNote(noteID: UUID) -> (separate: Bool, stepID: UUID?)? {
+        guard store.restoreDeleted(noteID: noteID) else { return nil }
+        let separate = store.lastRestoreWasSeparate
+        undoRoute.record(UndoStep(
+            name: String(localized: "Restore Note"),
+            items: { [AtticItemRef(.note, noteID)] },
+            undoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                guard self.store.note(withID: noteID) != nil else { return .obsolete }
+                return self.removeNote(noteID: noteID) ? .applied : .failed
+            },
+            redoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                if self.store.restoreDeleted(noteID: noteID) { return .applied }
+                return self.store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete
+            }), in: .notesLibrary)
+        return (separate, undoRoute.undoStepID(in: .notesLibrary))
     }
 
     /// Duplicate (⌘D): a new note with this note's current text, copies of

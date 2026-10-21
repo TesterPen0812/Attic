@@ -32,6 +32,7 @@ final class TaskNotePresenter: ObservableObject {
     /// The title riding in the header (0 hidden, 1 shown).
     @Published private(set) var headerTitleProgress: CGFloat = 0
     private var engineObservation: AnyCancellable?
+    private var persistedObservation: AnyCancellable?
     private var hasMounted = false
     private var closeWork: Task<Bool, Never>?
     var isClosing: Bool { closeWork != nil }
@@ -67,7 +68,9 @@ final class TaskNotePresenter: ObservableObject {
         self.taskID = taskID
         self.design = design
         session = page.note
-        deletedNoteID = page.note == nil ? coordinator.sessions.deletedOwnNoteID(taskID) : nil
+        // The note is in Recently Deleted: the page holds a never-saved
+        // draft ("Write a new note") beside the quiet Restore Note line.
+        deletedNoteID = page.note?.isPersisted == true ? nil : coordinator.sessions.deletedOwnNoteID(taskID)
         let cached = session?.taskNotePresentation
         session?.taskNotePresentation = nil
         let canReuse = cached.map { $0.model.taskID == taskID && $0.model.store === tasks
@@ -99,7 +102,13 @@ final class TaskNotePresenter: ObservableObject {
         model.onFocusWriting = { [weak self] atTop in self?.host.focusWriting(atTop: atTop) }
         host.onHeaderProgress = { [weak self] progress in self?.headerTitleProgress = progress }
         model.deletedNote = deletedNoteID != nil
+        if deletedNoteID != nil { engine.bodyPlaceholder = String(localized: "Write a new note") }
         Self.live[taskID] = WeakPresenter(presenter: self)
+        // Writing in that draft made the new own note: the old one is now
+        // just a deleted note, and the line about it goes.
+        persistedObservation = session?.$isPersisted.removeDuplicates().sink { [weak model] persisted in
+            if persisted { model?.deletedNote = false }
+        }
         if canReuse {
             // New regions every time: their menus belong to this presenter.
             host.setRegions(head: Self.headView(model, design: design, menus: menus), block: Self.blockView(model, design: design, menus: menus))
@@ -224,6 +233,7 @@ struct TaskNotePage: View {
     let onBack: () -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticPanelToasts) private var toasts
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var damaged: NoteDamagedRecoveryExit
     @State private var confirming: Confirmation?
@@ -384,7 +394,7 @@ struct TaskNotePage: View {
     func noteCommands() -> [AtticMenuCommand] {
         var commands: [AtticMenuCommand] = []
         let session = presenter.session
-        let persisted = session?.isPersisted == true && presenter.deletedNoteID == nil
+        let persisted = session?.isPersisted == true && !model.deletedNote
         if let session, !session.isReadOnly {
             let router = chrome.controls?.router ?? NoteCommandRouter(engine: session.engine)
             commands += router.menuCommands(from: .noteMenu)
@@ -406,7 +416,7 @@ struct TaskNotePage: View {
                 Task { _ = await engine.printNote() }
             })
         }
-        if presenter.deletedNoteID != nil {
+        if presenter.deletedNoteID != nil, model.deletedNote {
             commands.append(AtticMenuCommand("Restore Note", startsSection: !commands.isEmpty,
                                              identifier: "task-note-menu-restore-note") { restoreNote() })
         }
@@ -524,21 +534,40 @@ struct TaskNotePage: View {
         }
     }
 
+    /// Restore Note (§ 2.7.2) is its own Undo step, with its toast. The
+    /// page leaves first, durably: writing already in its "Write a new
+    /// note" draft becomes the task's note, and the restored one then
+    /// returns as a separate note (the task has a newer one).
     private func restoreNote() {
-        guard let id = presenter.deletedNoteID else {
+        guard let id = presenter.deletedNoteID, model.deletedNote else {
             Self.log.notice("Restore Note: no deleted note on this page")
             return
         }
+        let taskID = presenter.taskID, toasts = toasts, controller = controller, reopen = onReopen
         Task { @MainActor in
-            guard controller.restoreDeletedNote(noteID: id, reopen: false) else {
-                Self.log.notice("Restore Note refused by the store")
-                return
-            }
             guard await presenter.close() else {
                 Self.log.notice("Restore Note: the page could not close to reopen")
                 return
             }
-            onReopen()
+            guard let restored = controller.restoreTaskNote(noteID: id) else {
+                Self.log.notice("Restore Note refused by the store")
+                reopen()
+                return
+            }
+            reopen()
+            let message = restored.separate ? String(localized: "Note restored as a separate note")
+                : String(localized: "Note restored")
+            toasts?.show(message, answersUndoKey: false, performingAsync: {
+                // Only the step the toast named: anything newer makes it stale.
+                guard let step = restored.stepID, controller.undoRoute.undoStepID(in: .notesLibrary) == step else { return .applied }
+                // The page lets go of the note before it leaves again.
+                if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
+                    return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
+                }
+                let undone = controller.undoRoute.undo(in: .notesLibrary)
+                reopen()
+                return undone ? .applied : .failed(CommandFailure(String(localized: "Couldn't undo the restore")))
+            })
         }
     }
 }

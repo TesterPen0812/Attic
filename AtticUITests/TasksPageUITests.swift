@@ -721,7 +721,7 @@ final class TasksPageUITests: XCTestCase {
         let more = menuItem("More")
         XCTAssertTrue(more.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
         for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
-                      "Add Subtask", "Copy", "Duplicate", "More", "Delete"] {
+                      "Add Subtask", "Copy", "Duplicate", "More", "Delete Task"] {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
@@ -765,7 +765,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(merge.waitForExistence(timeout: 3), "the quick look lists the subtasks")
         merge.rightClick()
         XCTAssertTrue(menuItem("Rename").waitForExistence(timeout: 3), "its menu offers Rename")
-        XCTAssertTrue(menuItem("Delete").exists)
+        XCTAssertTrue(menuItem("Delete Subtask").exists)
         XCTAssertTrue(menuItem("Move Up").exists)
         openItem("Rename").click()
         let field = app.textFields.matching(NSPredicate(format: "label == %@", "Rename subtask")).firstMatch

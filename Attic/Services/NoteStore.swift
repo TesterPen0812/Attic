@@ -683,13 +683,17 @@ final class NoteStore: ObservableObject {
     /// save. Its place in the list is where it was (its `updatedAt` is kept).
     @discardableResult
     func restoreDeleted(noteID: UUID) -> Bool {
+        lastRestoreWasSeparate = false
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
-            for replica in replicas {
+            // § 2.7.2: a task's note restored while the task has a newer own
+            // note returns as an ordinary note, materialized, in this save.
+            let separated = try stageSeparationIfTaskHasNewerNote(noteID: noteID, replicas: replicas)
+            for replica in replicas where !separated {
                 guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
                     if context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }),
                        try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains(where: { $0.noteID == noteID && $0.detachedPreservationID != nil }) {
@@ -708,6 +712,7 @@ final class NoteStore: ObservableObject {
                 replica.deletedAt = nil
                 replica.deletedAttachmentIDsRaw = nil
             }
+            lastRestoreWasSeparate = separated
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
@@ -722,6 +727,46 @@ final class NoteStore: ObservableObject {
             try reloadModels()
         } catch {
             lastErrorMessage = "Restored, but the list could not be refreshed: \(error.localizedDescription)"
+        }
+        return true
+    }
+
+    /// The last `restoreDeleted` returned a task's note as a separate,
+    /// ordinary note (§ 2.7.2: the task had a newer own note).
+    private(set) var lastRestoreWasSeparate = false
+
+    /// Stages the "task has a newer note" restore (§ 2.7.2, § 2.12): every
+    /// replica becomes ordinary (block 0 the task's title, `taskNote`
+    /// removed, the task's tags copied), its task link and open
+    /// associations are cleared, all in the caller's one save. False (and
+    /// nothing staged) when the note's task has no other live own note.
+    private func stageSeparationIfTaskHasNewerNote(noteID: UUID, replicas: [NoteItem]) throws -> Bool {
+        let owners = Set(replicas.compactMap(\.taskID))
+        guard owners.count == 1, let taskID = owners.first,
+              context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }) else { return false }
+        let others = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID && $0.deletedAt == nil }))
+            .filter { $0.id != noteID }
+        guard !others.isEmpty else { return false }
+        let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
+        let task = TaskStore.canonicalReplicas(from: tasks).first
+        let now = currentDate
+        for replica in replicas {
+            guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
+                // Unreadable or newer-format bytes are never rewritten.
+                throw NoteDocumentStoreError.readOnly
+            }
+            let ordinary = try document.ordinarySnapshot(title: task?.title ?? document.title)
+            Self.stageDocumentContent(try PreparedNoteDocument(ordinary), format: ordinary.format,
+                on: [replica], timestamp: now, revision: replica.revision, revisionID: UUID())
+            if let task, replica.tags.isEmpty, !task.tags.isEmpty { replica.tags = task.tags }
+            replica.taskID = nil
+            replica.associationGeneration += 1
+        }
+        let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == noteID && $0.detachedAt == nil }))
+        WorkspaceLegacyBridge.prepareMutations(links, in: context)
+        for link in links {
+            link.detachedAt = now
+            link.noteGeneration += 1
         }
         return true
     }

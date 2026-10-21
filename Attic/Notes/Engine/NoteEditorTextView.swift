@@ -1088,7 +1088,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let origin = textContainerOrigin
         // A task's note has no title in its text (§ 2.12): its empty writing
         // invites writing instead (§ 5.5).
-        let placeholder = NSAttributedString(string: engine.isBodyOnly ? String(localized: "Write, or drop a file")
+        let placeholder = NSAttributedString(string: engine.isBodyOnly ? (engine.bodyPlaceholder ?? String(localized: "Write, or drop a file"))
                                                                        : String(localized: "Title"), attributes: [
             .font: engine.isBodyOnly ? engine.style.bodyFont : engine.style.titleFont,
             .foregroundColor: engine.style.placeholderColor

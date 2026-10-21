@@ -578,8 +578,13 @@ extension NoteStore {
               let task = tasks.first,
               let owned = try? context.fetchCount(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID && $0.deletedAt == nil })),
               owned == 0,
-              let links = try? context.fetchCount(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil })),
-              links == 0 else { return nil }
+              let links = try? context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil })) else { return nil }
+        // An association whose note is in Recently Deleted does not hold the
+        // slot: writing on the task's page starts a new own note (§ 2.7.2).
+        for noteID in Set(links.map(\.noteID)) {
+            guard let live = try? context.fetchCount(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID && $0.deletedAt == nil })) else { return nil }
+            if live > 0 { return nil }
+        }
         return tasks.map(\.associationGeneration).max() ?? task.associationGeneration
     }
 

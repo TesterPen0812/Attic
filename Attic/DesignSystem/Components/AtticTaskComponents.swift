@@ -1069,7 +1069,7 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
     var links = 0
     var subtasks: (done: Int, total: Int)?
     var inWindow = false
-    /// The task has a page (notes written into it).
+    /// The task has a live note of its own (Phase 3, the `doc.text` glyph).
     var hasPage = false
     /// A search the title matches: its matches are highlighted (the Done
     /// search, owner item 17).
@@ -1116,6 +1116,7 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
         if let due { parts.append(String(localized: "due \(due.text)")) }
         if !tags.isEmpty { parts.append(String(localized: "tagged \(tags.joined(separator: ", "))")) }
         if let subtasks { parts.append(String(localized: "\(subtasks.done) of \(subtasks.total) subtasks")) }
+        if hasPage { parts.append(String(localized: "has a note")) }
         return parts.joined(separator: ", ")
     }
 }
@@ -1627,12 +1628,13 @@ struct AtticTaskDetails: View {
                 .layoutPriority(1)
             }
             if model.hasPage {
-                HStack(spacing: m.detailsIconGap) {
-                    AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon)
-                    AtticText("Page", style: .rowMeta, ink: text)
-                }
-                .fixedSize()
-                .layoutPriority(1)
+                // Phase 3 (`p3-06`, D11): the task has a note of its own. The
+                // glyph has no count; files keep the paperclip and theirs.
+                AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon)
+                    .help(String(localized: "Has a note"))
+                    .accessibilityLabel(String(localized: "Has a note"))
+                    .fixedSize()
+                    .layoutPriority(1)
             }
             if model.attachments > 0 {
                 if let onToggleFiles {
