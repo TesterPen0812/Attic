@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import QuartzCore
+import SwiftData
 import SwiftUI
 
 enum PanelWorkAreaEvent: Equatable {
@@ -267,6 +268,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.$dockingPreviewCorner.sink { [weak self] corner in
             self?.updateDockingIndicator(corner: corner)
         }.store(in: &cancellables)
+        // Saved data may change what the panel shows, hidden or not: a
+        // snapshot taken before it is stale.
+        NotificationCenter.default.publisher(for: ModelContext.didSave).receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.contentContainer?.noteContentMayChange() }
+            .store(in: &cancellables)
         // Genie's shader compiles off the main thread before its first use.
         settings.$hideAnimation.sink { mode in
             if mode.usesGenieMesh { PanelGenieRenderer.shared.prewarm() }

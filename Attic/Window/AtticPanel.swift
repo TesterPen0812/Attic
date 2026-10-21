@@ -1360,8 +1360,7 @@ final class AtticPanelContentContainer: NSView {
     /// Ahead of a likely Genie flight (a timed hide or reveal about to
     /// happen, or fingers resting where a swipe could close): take the
     /// snapshot (and lay out the live material) now, while nothing moves,
-    /// and show the mesh's layer with a clear frame, so the flight starts
-    /// on its first frame. Nothing on screen changes.
+    /// so the flight starts on its first frame. Nothing on screen changes.
     func prepareAlternateSnapshot(_ mode: PanelHideAnimation, surface: PanelGenieSurface?) {
         let visible = window?.isVisible == true
         guard mode.usesGenieMesh, !visible || alternateMode == nil, !genieView.isAnimating else { return }
@@ -1369,13 +1368,12 @@ final class AtticPanelContentContainer: NSView {
             captureGenie(mode, surface: surface)
             prepared = (snapshotKey(mode, surface: surface), CACurrentMediaTime())
         }
-        if visible { genieView.prewarm() }
         let time = prepared?.time
         DispatchQueue.main.asyncAfter(deadline: .now() + PanelHideMotionTuning.geniePreparedLifetime + 0.05) { [weak self] in
             guard let self, self.prepared?.time == time, !self.genieView.isAnimating,
                   self.alternateMode == nil || self.window?.isVisible != true else { return }
             self.prepared = nil
-            self.genieView.cancelFlight()
+            self.genieView.stop()
             self.genieView.isHidden = true
             self.genieView.releaseSnapshot()
         }
@@ -1395,7 +1393,7 @@ final class AtticPanelContentContainer: NSView {
             CATransaction.commit()
         }
         let live = surface?.live
-        genieView.captureSnapshot(of: motionView, surfaceRect: hostingView.frame,
+        genieView.captureSnapshot(of: motionView, tiers: hostingView.layer, surfaceRect: hostingView.frame,
                                   cornerRadius: hostingView.panelCornerRadius,
                                   translucent: surface?.translucent ?? false,
                                   dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
@@ -1415,31 +1413,25 @@ final class AtticPanelContentContainer: NSView {
         }
         #if DEBUG
         if ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_DUMP"] == "1" {
-            PanelHideMotionTrace.layerDump = Self.dumpLayers(motionView.layer, root: layer, surface: hostingView.frame, tag: "panel")
-                + Self.dumpLayers(liveGlassView.layer, root: liveGlassView.layer, surface: hostingView.frame, tag: "live")
+            // The whole tree, one layer a line, to a file beside the bench's.
+            var lines: [String] = []
+            func walk(_ layer: CALayer, _ depth: Int, _ path: String) {
+                guard let root = motionView.layer else { return }
+                let frame = root.convert(layer.bounds, from: layer).integral
+                let filters = (layer.filters ?? []).map { ($0 as? NSObject)?.value(forKey: "name").map { "\($0)" } ?? "?" }
+                lines.append("\(String(repeating: " ", count: depth))\(path) \(type(of: layer)) \(frame) op=\(layer.opacity)"
+                    + (layer.isHidden ? " HID" : "") + (filters.isEmpty ? "" : " f=\(filters)")
+                    + (layer.compositingFilter.map { " cf=\($0)" } ?? "") + (layer.mask != nil ? " MASK" : "")
+                    + (layer.delegate.map { " d=\(type(of: $0))" } ?? ""))
+                for (index, sublayer) in (layer.sublayers ?? []).enumerated() { walk(sublayer, depth + 1, "\(path).\(index)") }
+            }
+            if let root = motionView.layer { walk(root, 0, "0") }
+            try? lines.joined(separator: "\n").write(to: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("layers.txt"),
+                                                    atomically: true, encoding: .utf8)
         }
         #endif
     }
 
-    #if DEBUG
-    /// The bench: the big layers under `layer` (at least a third of the
-    /// surface), where a surface's material lives.
-    private static func dumpLayers(_ layer: CALayer?, root: CALayer?, surface: CGRect, tag: String, depth: Int = 0) -> [String] {
-        guard let layer, let root, depth < 24 else { return [] }
-        let frame = root.convert(layer.bounds, from: layer)
-        var lines: [String] = []
-        if frame.width * frame.height >= surface.width * surface.height / 3 {
-            let filter = layer.compositingFilter.map { "\($0)" } ?? "-"
-            let fill = layer.backgroundColor.map { "\($0.components ?? [])" } ?? "-"
-            lines.append("\(tag) \(depth) \(type(of: layer)) \(frame.integral) op=\(layer.opacity) hid=\(layer.isHidden) "
-                + "filter=\(filter) bg=\(fill) filters=\(layer.filters?.count ?? 0) subs=\(layer.sublayers?.count ?? 0)")
-        }
-        for sublayer in layer.sublayers ?? [] {
-            lines += dumpLayers(sublayer, root: root, surface: surface, tag: tag, depth: depth + 1)
-        }
-        return lines
-    }
-    #endif
 
     private func beginAlternate(
         _ mode: PanelHideAnimation, at progress: Double, corner: ScreenCorner, surface: PanelGenieSurface?
@@ -1451,18 +1443,17 @@ final class AtticPanelContentContainer: NSView {
         #endif
         let reused = mode.usesGenieMesh && hasPreparedSnapshot(mode, surface: surface)
         prepared = nil
+        // While the panel is still at rest.
+        if mode.usesGenieMesh, !reused { captureGenie(mode, surface: surface) }
         alternateMode = mode
         switch mode {
         case .genieLiveGlass:
             PanelHideMotionTrace.note("reused", reused ? 1 : 0)
-            if !reused { captureGenie(mode, surface: surface) }
             PanelHideMotionTrace.note("prepare", (CACurrentMediaTime() - began) * 1000)
             let live = surface?.live != nil
             genieView.frameObserver = live ? { [weak self] uniforms in self?.liveGlassView.update(uniforms) } : nil
-            // The mesh takes over from the live panel once its first frame
-            // reaches the screen (`PanelGenieHandover`). Until then a hide
-            // keeps showing the live panel; a reveal (still off screen)
-            // shows nothing yet.
+            // The mesh's first frame, the live panel stepping aside and the
+            // live material coming in under it land in one transaction.
             let takeOver: () -> Void = { [weak self] in
                 guard let self, self.alternateMode == mode, let layer = self.motionView.layer else { return }
                 CATransaction.begin()
@@ -1575,7 +1566,7 @@ final class AtticPanelContentContainer: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if mode.usesGenieMesh {
-            genieView.cancelFlight()
+            genieView.stop()
             genieView.frameObserver = nil
             genieView.isHidden = true
             if !(keepsPrepared && prepared != nil) { genieView.releaseSnapshot() }

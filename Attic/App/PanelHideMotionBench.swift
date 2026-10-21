@@ -30,8 +30,6 @@ final class PanelHideMotionBench: NSObject {
     var acceptsInput: () -> Bool = { false }
     /// The last animation start's cost (snapshot and live-material set-up, ms).
     var beginCost: () -> Double = { 0 }
-    /// SIGINFO: a one-off probe's result, written as its own line.
-    var info: () -> [String: Any] = { [:] }
     /// Anything else worth a line (the snapshot's own costs).
     var trace: () -> [String: Any] = { [:] }
     private var window: CFTimeInterval = 0.6
@@ -67,7 +65,6 @@ final class PanelHideMotionBench: NSObject {
         bench.listen(SIGUSR1) { bench.toggle(interrupt: false) }
         bench.listen(SIGUSR2) { bench.toggle(interrupt: true) }
         bench.listen(SIGURG) { bench.begin(kind: "swipe", window: 1.4) }
-        bench.listen(SIGINFO) { bench.writeInfo() }
         return bench
     }
 
@@ -111,15 +108,6 @@ final class PanelHideMotionBench: NSObject {
             self.mark("reversed")
             if hiding { self.reveal() } else { self.hide { [weak self] in self?.mark("hide_completed") } }
         }
-    }
-
-    private func writeInfo() {
-        finish()
-        record = info()
-        record["kind"] = "info"
-        stamps = []
-        link = nil
-        append()
     }
 
     private func begin(kind: String, window: CFTimeInterval = 0.6) {
@@ -170,46 +158,3 @@ final class PanelHideMotionBench: NSObject {
 }
 #endif
 
-#if DEBUG
-/// A probe: can the app read its own panel window's composited pixels
-/// (glass, in-window blurs and all) from the window server without Screen
-/// Recording? `CGWindowListCreateImage` is out of the SDK but still exported.
-@MainActor
-enum PanelWindowCaptureProbe {
-    private typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
-
-    static func run(window: NSWindow) -> [String: Any] {
-        var result: [String: Any] = ["preflight": CGPreflightScreenCaptureAccess()]
-        guard let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_NOW),
-              let symbol = dlsym(handle, "CGWindowListCreateImage") else {
-            result["symbol"] = false
-            return result
-        }
-        result["symbol"] = true
-        let create = unsafeBitCast(symbol, to: CreateImage.self)
-        // kCGWindowListOptionIncludingWindow = 8; image options: bounds
-        // ignore framing (1) | best resolution (8).
-        for (name, options) in [("best", UInt32(1 | 8)), ("nominal", UInt32(1 | 16))] {
-            let began = CACurrentMediaTime()
-            let image = create(.null, 8, UInt32(window.windowNumber), options)?.takeRetainedValue()
-            result["\(name)_ms"] = (CACurrentMediaTime() - began) * 1000
-            guard let image else { result["\(name)"] = "nil"; continue }
-            result["\(name)"] = "\(image.width)x\(image.height)"
-            // How much of it is lit (an empty or desktop-only image is not).
-            if let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) {
-                let count = CFDataGetLength(data), stride = max(4, image.bitsPerPixel / 8)
-                var lit = 0, total = 0
-                var offset = 0
-                while offset + stride <= count { if bytes[offset + 3] > 10 { lit += 1 }; total += 1; offset += stride * 97 }
-                result["\(name)_lit"] = Double(lit) / Double(max(1, total))
-            }
-            let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("capture-\(name).png")
-            if let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) {
-                CGImageDestinationAddImage(destination, image, nil)
-                CGImageDestinationFinalize(destination)
-            }
-        }
-        return result
-    }
-}
-#endif

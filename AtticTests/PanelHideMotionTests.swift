@@ -384,34 +384,46 @@ final class PanelHideMotionTests: XCTestCase {
     }
 }
 
-/// Genie's ship round (g6): the handover that ended the blank first frame,
-/// the crisp snapshot, snapshots prepared ahead of a timed hide or reveal.
+/// Genie's ship round (g6): the first frame (in step with the take-over,
+/// with the controls' glass), the crisp snapshot, snapshots prepared ahead.
 @MainActor
 final class PanelHideMotionShipTests: XCTestCase {
-    // MARK: The blank first frame
+    // MARK: The first frame
 
-    /// A flight takes over from the live panel only once one of its
-    /// drawables has reached the screen; before that the live panel stays.
-    /// (Draft 5: an empty window for a frame, 1 hide in 21, when the live
-    /// panel stepped aside in a transaction whose drawable came late.)
-    func testAFlightTakesOverOnlyOnceAFrameHasReachedTheScreen() {
-        var handover = PanelGenieHandover(maxFrames: 4)
-        XCTAssertFalse(handover.begin(), "a layer just shown waits")
-        XCTAssertTrue(handover.isWaiting)
-        XCTAssertFalse(handover.waitedOneFrame())
-        XCTAssertFalse(handover.presented(generation: handover.generation - 1), "a frame from before the reset is not it")
-        XCTAssertTrue(handover.isWaiting)
-        XCTAssertTrue(handover.presented(generation: handover.generation), "the first presented frame takes over")
-        XCTAssertFalse(handover.isWaiting)
-        XCTAssertTrue(handover.begin(), "established: the next flight takes over at once")
-
-        handover.reset()
-        XCTAssertFalse(handover.begin(), "hidden or off screen since: it waits again")
-        for _ in 0..<3 { XCTAssertFalse(handover.waitedOneFrame()) }
-        XCTAssertTrue(handover.waitedOneFrame(), "and gives up waiting after its frames")
-        XCTAssertFalse(handover.isWaiting)
-        XCTAssertFalse(handover.presented(generation: handover.generation), "a late frame after giving up starts nothing")
-        XCTAssertTrue(handover.isEstablished)
+    /// A flight's first frame is drawn, and the live panel steps aside, in
+    /// the same call (one Core Animation transaction). Drafts drew into a
+    /// CAMetalLayer whose drawable reached the screen a frame or two after
+    /// the live panel had stepped aside: an empty, then a glass-only panel
+    /// as a hide began (owner, 2026-10-21).
+    func testTheFirstFrameAndTheTakeOverLandTogether() throws {
+        try XCTSkipIf(PanelGenieRenderer.shared.device == nil, "no Metal device")
+        PanelGenieRenderer.shared.prewarm()
+        let deadline = Date().addingTimeInterval(5)
+        while PanelGenieRenderer.shared.state() == nil, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        let size = CGSize(width: 200, height: 300)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSView(frame: CGRect(origin: .zero, size: size))
+        let content = NSView(frame: root.bounds)
+        content.wantsLayer = true
+        content.addSubview(NSTextField(labelWithString: "Attic"))
+        let genie = PanelGenieView(frame: root.bounds)
+        root.addSubview(content)
+        root.addSubview(genie)
+        window.contentView = root
+        genie.layoutSubtreeIfNeeded()
+        genie.captureSnapshot(of: content, tiers: nil, surfaceRect: root.bounds.insetBy(dx: 20, dy: 20), cornerRadius: 30,
+                              translucent: false, dark: false)
+        XCTAssertNil(genie.shownFrame)
+        var tookOver = false
+        genie.beginFlight(progress: 0, corner: .topRight) {
+            XCTAssertNotNil(genie.shownFrame, "the frame is there before the live panel steps aside")
+            tookOver = true
+        }
+        XCTAssertTrue(tookOver)
+        XCTAssertFalse(genie.isHidden)
     }
 
     /// The snapshot is taken at the window's backing scale (crisp text in
@@ -432,7 +444,7 @@ final class PanelHideMotionShipTests: XCTestCase {
         root.addSubview(genie)
         window.contentView = root
         let surface = root.bounds.insetBy(dx: 20, dy: 20)
-        genie.captureSnapshot(of: content, surfaceRect: surface, cornerRadius: 30, translucent: true, dark: false)
+        genie.captureSnapshot(of: content, tiers: nil, surfaceRect: surface, cornerRadius: 30, translucent: true, dark: false)
         let scale = window.backingScaleFactor
         XCTAssertGreaterThanOrEqual(scale, 1)
         XCTAssertEqual(genie.snapshotPixelSize, CGSize(width: 200 * scale, height: 300 * scale))

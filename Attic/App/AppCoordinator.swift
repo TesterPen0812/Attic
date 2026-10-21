@@ -921,24 +921,15 @@ final class AppCoordinator: ObservableObject {
                     self?.panelController.prepareForExpectedVisibilityChange((hiding, delay))
                 }
             )
-            hideMotionBench?.info = { [weak self] in
-                guard let self else { return [:] }
-                return PanelWindowCaptureProbe.run(window: self.panelController.panelForTesting)
-            }
             hideMotionBench?.trace = { [weak self] in
                 guard self?.settings.hideAnimation.usesGenieMesh == true else { return [:] }
-                var trace: [String: Any] = [
+                return [
                     "snapshot_ms": PanelHideMotionTrace.snapshotMilliseconds,
                     "mask_us": PanelHideMotionTrace.maskMicroseconds,
                     "material_layers": PanelHideMotionTrace.materialLayers,
                     "glass_standins": PanelHideMotionTrace.glassStandIns,
                     "glass_left_out": PanelHideMotionTrace.glassLeftOut
                 ]
-                if !PanelHideMotionTrace.layerDump.isEmpty {
-                    trace["layer_dump"] = PanelHideMotionTrace.layerDump
-                    PanelHideMotionTrace.layerDump = []
-                }
-                return trace
             }
             hideMotionBench?.acceptsInput = { [weak self] in self?.panelController.acceptsInputForProbe ?? false }
             hideMotionBench?.beginCost = { [weak self] in self?.panelController.alternateBeginCostForProbe ?? 0 }
