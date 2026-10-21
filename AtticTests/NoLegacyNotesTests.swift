@@ -33,37 +33,89 @@ final class NoLegacyNotesTests: XCTestCase {
         _ = try tools.call(name: "create_note", arguments: ["title": "Agent", "body": "text"])
         XCTAssertEqual(try XCTUnwrap(notes.notes.first).contentFormat, 1)
     }
+    // PRA A1-01: owner changed the old unsafe mixed-family purge expectation.
     func testMixedStorePurgesOnlyExplicitOldUUIDFamilies() throws {
-        let container = try rawContainer(), context = ModelContext(container)
-        let oldID = UUID(), newID = UUID()
+        let root = ownedTemporaryDirectory(prefix: "PRAMixedPurge")
+        let url = root.appendingPathComponent("notes.store")
+        let schema = Schema(PersistenceController.appModelTypes)
+        func open() throws -> ModelContainer {
+            try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none))
+        }
+        let container = try open(), context = ModelContext(container)
+        let oldID = UUID(), mixedID = UUID(), futureID = UUID(), newID = UUID()
         context.insert(old(oldID)); context.insert(old(oldID))
-        context.insert(NoteItem(id: oldID, title: "Different-format physical replica"))
-        let current = NoteItem(id: newID, title: "Keep")
-        current.contentFormat = 1; current.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Keep")]))
-        current.tags = ["shared"]
-        context.insert(current)
         let task = TaskItem(title: "Keep task"); task.tags = ["shared"]; context.insert(task)
         let canvas = CanvasBoardItem(name: "Keep canvas"); context.insert(canvas)
-        for id in [oldID, newID] {
-            context.insert(NoteAttachment(noteID: id, originalFilename: "file", byteCount: 1, sortIndex: 0, contentDigest: "digest", payload: Data([1])))
-            context.insert(NoteVersion(noteID: id, createdAt: Date(), reason: .pause, content: current.content,
-                contentFormat: 1, title: "Version", body: "", attachmentIDs: [], sourceRevisionID: nil))
-            context.insert(NotePendingEdit(noteID: id, baseRevisionToken: "initial", proposedContent: try XCTUnwrap(current.content), agentName: "agent", createdAt: Date()))
+        let damaged = NoteItem(title: "Damaged current"); damaged.content = nil; context.insert(damaged)
+        let recovery = root.appendingPathComponent("draft-recovery.json")
+        let attachments = root.appendingPathComponent("Attachments")
+        var contents: [UUID: Data] = [:], payloads: [UUID: Data] = [:]
+        var checkpoints: [URL: Data] = [:], files: [URL: Data] = [:]
+        var links: [UUID: AtticItemRef] = [:]
+        for id in [oldID, mixedID, futureID, newID] {
+            let attachmentID = UUID(), payload = Data("intact \(id)".utf8)
+            let content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Keep \(id)"),
+                .file(attachmentID: attachmentID, filename: "saved.bin", contentTypeIdentifier: "public.data", byteCount: Int64(payload.count))]))
+            if id != oldID {
+                let note = NoteItem(id: id, title: "Keep")
+                note.content = content; note.contentFormat = id == futureID ? 2 : 1; note.tags = ["shared"]
+                context.insert(note)
+            }
+            if id == mixedID || id == futureID { context.insert(old(id)) }
+            context.insert(NoteAttachment(id: attachmentID, noteID: id, originalFilename: "saved.bin",
+                byteCount: Int64(payload.count), sortIndex: 0, contentDigest: NotePayloadDigest.sha256(payload), payload: payload))
+            context.insert(NoteVersion(noteID: id, createdAt: Date(), reason: .pause, content: content,
+                contentFormat: 1, title: "Version", body: "", attachmentIDs: [attachmentID], sourceRevisionID: nil))
+            context.insert(NotePendingEdit(noteID: id, baseRevisionToken: "initial", proposedContent: content, agentName: "agent", createdAt: Date()))
+            let link = ItemLink(source: AtticItemRef(.task, task.id), target: AtticItemRef(.note, id), kind: .reference)
+            context.insert(link)
+            try checkpoint(NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil, content: content,
+                selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), recovery: recovery)
+            let checkpointURL = root.appendingPathComponent("NoteDrafts/" + id.uuidString + ".json")
+            let file = attachments.appendingPathComponent(attachmentID.uuidString + "/bytes")
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try payload.write(to: file)
+            if id != oldID {
+                contents[id] = content; payloads[id] = payload; links[link.id] = link.target
+                checkpoints[checkpointURL] = try Data(contentsOf: checkpointURL); files[file] = payload
+            }
         }
-        // Missing bytes are not evidence of old format.
-        let damaged = NoteItem(title: "Damaged current"); damaged.contentFormat = 1; damaged.content = nil; context.insert(damaged)
         try context.save()
         let counts = try OldNotesPurge.run(in: container)
-        XCTAssertEqual(counts.notes, 3); XCTAssertEqual(counts.attachments, 1)
+        XCTAssertEqual(counts.notes, 2); XCTAssertEqual(counts.attachments, 1)
         XCTAssertEqual(counts.versions, 1); XCTAssertEqual(counts.proposals, 1)
-        let fresh = ModelContext(container)
-        XCTAssertEqual(Set(try fresh.fetch(FetchDescriptor<NoteItem>()).map(\.id)), [newID, damaged.id])
-        XCTAssertEqual(try fresh.fetch(FetchDescriptor<NoteAttachment>()).map(\.noteID), [newID])
-        XCTAssertEqual(try fresh.fetch(FetchDescriptor<NoteVersion>()).map(\.noteID), [newID])
-        XCTAssertEqual(try fresh.fetch(FetchDescriptor<NotePendingEdit>()).map(\.noteID), [newID])
-        XCTAssertEqual(try fresh.fetch(FetchDescriptor<TaskItem>()).map(\.id), [task.id])
-        XCTAssertEqual(try fresh.fetch(FetchDescriptor<CanvasBoardItem>()).map(\.id), [canvas.id])
-        XCTAssertEqual(try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteItem>()).first { $0.id == newID }).tags, ["shared"])
+        func assertSurvivors(_ container: ModelContainer) throws {
+            let fresh = ModelContext(container), notes = try fresh.fetch(FetchDescriptor<NoteItem>())
+            XCTAssertEqual(notes.count, 6)
+            XCTAssertEqual(Set(notes.map(\.id)), [mixedID, futureID, newID, damaged.id])
+            for (id, bytes) in contents {
+                XCTAssertEqual(notes.first { $0.id == id && $0.contentFormat != 0 }?.content, bytes)
+                XCTAssertEqual(notes.first { $0.id == id && $0.contentFormat != 0 }?.tags, ["shared"])
+            }
+            let rows = try fresh.fetch(FetchDescriptor<NoteAttachment>())
+            XCTAssertEqual(rows.count, 3)
+            for row in rows { XCTAssertEqual(row.payload, payloads[row.noteID]) }
+            let versions = try fresh.fetch(FetchDescriptor<NoteVersion>())
+            XCTAssertEqual(versions.count, 3)
+            for row in versions { XCTAssertEqual(row.content, contents[row.noteID]) }
+            let proposals = try fresh.fetch(FetchDescriptor<NotePendingEdit>())
+            XCTAssertEqual(proposals.count, 3)
+            for row in proposals { XCTAssertEqual(row.proposedContent, contents[row.noteID]) }
+            let savedLinks = try fresh.fetch(FetchDescriptor<ItemLink>())
+            XCTAssertEqual(savedLinks.count, 3)
+            for row in savedLinks { XCTAssertEqual(row.target, links[row.id]); XCTAssertEqual(row.source, AtticItemRef(.task, task.id)) }
+            XCTAssertEqual(try fresh.fetch(FetchDescriptor<TaskItem>()).map(\.id), [task.id])
+            XCTAssertEqual(try fresh.fetch(FetchDescriptor<CanvasBoardItem>()).map(\.id), [canvas.id])
+        }
+        try assertSurvivors(container)
+        try OldNotesPurge.cleanup(in: container, recoveryURL: recovery, attachmentRoot: attachments)
+        for (url, bytes) in checkpoints.merging(files, uniquingKeysWith: { a, _ in a }) { XCTAssertEqual(try Data(contentsOf: url), bytes) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("NoteDrafts/" + oldID.uuidString + ".json").path))
+        let reopened = try open()
+        try assertSurvivors(reopened)
+        XCTAssertEqual(try OldNotesPurge.run(in: reopened), OldNotesPurge.Counts())
+        try OldNotesPurge.cleanup(in: reopened, recoveryURL: recovery, attachmentRoot: attachments)
+        for (url, bytes) in checkpoints.merging(files, uniquingKeysWith: { a, _ in a }) { XCTAssertEqual(try Data(contentsOf: url), bytes) }
     }
     func testSecondOpenNeverPurgesEvenIfAnOldWriterReturns() throws {
         let container = try rawContainer()

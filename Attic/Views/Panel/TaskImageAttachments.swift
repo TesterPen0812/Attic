@@ -121,8 +121,6 @@ final class TaskAttachmentPickerSession {
     private var closeObservation: NSObjectProtocol?
     private var screenObservation: NSObjectProtocol?
 
-    /// Test seam: the session's panel.
-    var panelForTesting: NSOpenPanel { panel }
     var isFinished: Bool { completion == nil }
 
     static func present(owner: UUID?, parentWindow: NSWindow? = nil, allowedTypes: [UTType] = [.data],

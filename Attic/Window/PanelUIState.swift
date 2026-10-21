@@ -67,9 +67,6 @@ final class PanelUIState: ObservableObject {
     @Published private(set) var selectedSection: PanelSection = .tasks
     @Published private var managedInteractionLocks: Set<PanelInteractionLockReason> = []
 
-    /// Tasks/Backlog still drive `TaskStore`; Notes and Canvas use their own
-    /// focused stores and surfaces.
-    var selectedScope: TaskScope { selectedSection.taskScope ?? .tasks }
 
 
     var interactionLockReasons: Set<PanelInteractionLockReason> {

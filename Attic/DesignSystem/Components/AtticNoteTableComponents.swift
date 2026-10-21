@@ -35,7 +35,7 @@ class AtticNoteTableControlView: NSView {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
-    /// A click (the pointer moved less than 3 pt).
+    /// A click released inside the hit target (without starting a grip drag).
     var onClick: (() -> Void)?
     /// A drag: the pointer in the window, and whether it ended.
     var onDrag: ((_ windowPoint: CGPoint, _ ended: Bool) -> Void)? {
@@ -74,9 +74,11 @@ class AtticNoteTableControlView: NSView {
             let point = next.locationInWindow
             if !dragging, hypot(point.x - start.x, point.y - start.y) >= 3, onDrag != nil { dragging = true; NSCursor.closedHand.push() }
             if dragging { onDrag?(point, next.type == .leftMouseUp) }
-            if next.type == .leftMouseUp { break }
+            if next.type == .leftMouseUp {
+                if !dragging, bounds.contains(convert(point, from: nil)) { onClick?() }
+                break
+            }
         }
-        if !dragging { onClick?() }
     }
 
     override func accessibilityPerformPress() -> Bool {

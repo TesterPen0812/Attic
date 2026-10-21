@@ -1038,9 +1038,10 @@ final class TasksPageUITests: XCTestCase {
         let field = app.descendants(matching: .textField)
             .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens")
-        // The card's left edge sits on the tags (its field 10 pt in), not
-        // centred on the row.
-        XCTAssertLessThan(abs(field.frame.minX - (rowFrame.minX + 44 + 10)), 16,
+        // Measure the card edge: the text field follows the card inset (6),
+        // field padding (9), and U-13's leading magnifier column (12 + 10).
+        let cardLeading = field.frame.minX - (6 + 9 + 12 + 10)
+        XCTAssertLessThan(abs(cardLeading - (rowFrame.minX + 44)), 16,
                           "the list \(field.frame) opens from the tags near \(tagPoint), not the row \(rowFrame)")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(!field.exists, "Esc closes it")

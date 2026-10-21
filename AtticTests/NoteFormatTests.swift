@@ -7,6 +7,7 @@ import XCTest
 /// kept as their original bytes, opaque unknown blocks (requirement 1).
 final class NoteFormatTests: XCTestCase {
 
+    #if !ATTIC_GENERATED_TESTS
     func testU18PlainTextBoundsHeadingAndIndent() {
         var heading = NoteBlock.text("x", style: "heading"); heading.level = 7
         XCTAssertEqual(NoteTextExport.plainLine(heading), "###### x")
@@ -66,6 +67,7 @@ final class NoteFormatTests: XCTestCase {
         XCTAssertEqual(restored.blocks.dropFirst().map(\.style), blocks.dropFirst().map(\.style))
         XCTAssertEqual(restored.blocks.map(\.start), blocks.map(\.start))
     }
+    #endif
 
     private let dateID = UUID()
     private let checklistID = UUID()
@@ -84,6 +86,7 @@ final class NoteFormatTests: XCTestCase {
         ])
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testDocumentRoundTripsThroughBytes() throws {
         let document = sampleDocument()
         let data = try NoteContentCodec.encode(document)
@@ -246,7 +249,9 @@ final class NoteFormatTests: XCTestCase {
         guard case let .readOnly(original, .unsupportedContent, _) = NoteContentCodec.decode(corrupt) else { return XCTFail() }
         XCTAssertEqual(original, corrupt)
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testMarkOffsetFuzzNeverProducesWritableShiftedRange() {
         for offset in -2...7 {
             for length in -1...7 {
@@ -260,7 +265,9 @@ final class NoteFormatTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testEncoderRefusesMarkAcrossObjectOrEmojiBoundary() {
         var block = NoteBlock.text("A😀\u{FFFC}B")
         block.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
@@ -351,11 +358,13 @@ final class NoteFormatTests: XCTestCase {
         expected.blocks[1].checked = true
         XCTAssertEqual(ticked, expected, "wire edits keep all metadata when the text survives")
     }
+    #endif
 }
 
 /// Command metadata and routing without a window or application host.
 @MainActor
 final class NotesShortcutMetadataTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testOwnerShortcutsAreSharedByEveryFormatMenuAndHaveNoNotesCollisions() {
         let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
         let router = NoteCommandRouter(engine: engine)
@@ -393,10 +402,12 @@ final class NotesShortcutMetadataTests: XCTestCase {
             XCTAssertNil(NoteCommandCatalog.command(for: event))
         }
     }
+    #endif
 }
 
 @MainActor
 final class PlainNoteTitleTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testR12StoredTitleMarksSurviveLoadRestyleEditSaveAndReopen() throws {
         var title = NoteBlock.text("Plain title")
         title.marks = [.init(.italic, offset: 0, length: 5),
@@ -485,4 +496,5 @@ final class PlainNoteTitleTests: XCTestCase {
         XCTAssertNil(engine.textStorage.attribute(.underlineStyle, at: 2, effectiveRange: nil))
         XCTAssertEqual(engine.document().blocks[0].marks.first(where: { $0.kind == .link })?.url, "https://example.com")
     }
+    #endif
 }

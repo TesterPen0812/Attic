@@ -32,6 +32,17 @@ extension NoteEditorEngine {
         tableAttachment(id: attachment.objectID).flatMap { $0.0 === attachment ? $0.1 : nil }
     }
 
+    /// DG1: where the attachment at `location` is in the text view (its
+    /// layout fragment's attachment frame), or nil while it isn't laid out.
+    func attachmentFrame(at location: Int) -> CGRect? {
+        guard let layoutManager, let textView, let start = textRange(for: NSRange(location: location, length: 0))?.location,
+              let fragment = layoutManager.textLayoutFragment(for: start) else { return nil }
+        let frame = fragment.frameForTextAttachment(at: start)
+        guard frame.width > 0 || frame.height > 0 else { return nil }
+        let origin = textView.textContainerOrigin
+        return frame.offsetBy(dx: fragment.layoutFragmentFrame.minX + origin.x, dy: fragment.layoutFragmentFrame.minY + origin.y)
+    }
+
     /// The table the keyboard is in (a cell, or whole cells selected), or
     /// was in before one of the page's controls took it for a moment.
     var focusedTable: NoteTableView? {
@@ -603,10 +614,10 @@ extension NoteEditorEngine {
     @discardableResult
     func pasteTable(_ table: NoteTable, at selection: NSRange, sourceText: String) -> Bool {
         guard table.isWithinLimits else { return pasteOversizedTableAsText(sourceText, at: selection) }
-        let marker = history.marker()
+        _ = history.marker()
         guard insertTable(table, replacing: selection, name: String(localized: "Paste"), entering: false) else { return false }
-        tablePasteOffer = NoteTablePasteOffer(text: sourceText, selection: selection, steps: marker + 1)
-        onNotice?(NoteNotice(kind: .notice, detail: NoteTablePasteOffer.notice))
+        tablePasteOffer = NoteTablePasteOffer(text: sourceText, selection: selection, generation: history.recordingGeneration)
+        onNotice?(NoteNotice(kind: .tablePasted, detail: NoteTablePasteOffer.notice))
         return true
     }
 
@@ -619,10 +630,14 @@ extension NoteEditorEngine {
         return pasted
     }
 
+    var canPasteLastTableAsText: Bool {
+        tablePasteOffer.map { $0.generation == history.recordingGeneration } ?? false
+    }
+
     /// "Paste as Text": the table paste is undone and its text pasted instead.
     @discardableResult
     func pasteLastTableAsText() -> Bool {
-        guard let offer = tablePasteOffer, history.undoOps.count == offer.steps, history.undo() else {
+        guard let offer = tablePasteOffer, canPasteLastTableAsText, history.undo() else {
             tablePasteOffer = nil
             return false
         }
@@ -856,11 +871,17 @@ extension NoteEditorEngine {
             var typing = view.editor.typingAttributes
             let on = forced ?? (typing[.noteMark(kind)] == nil)
             typing[.noteMark(kind)] = on ? (url ?? true) as Any : nil
-            let base = (typing[.font] as? NSFont) ?? style.bodyFont
+            let header = view.table.headerRow && view.activeCell?.row == 0
+            let base = style.tableCellAttributes(header: header)
+            // Presentation is derived from the remaining semantic marks,
+            // never from the previously marked font or sparse decorations.
+            for key in [NSAttributedString.Key.font, .underlineStyle, .strikethroughStyle, .backgroundColor, .link, .underlineColor, .kern] {
+                typing[key] = nil
+            }
+            typing[.foregroundColor] = base[.foregroundColor]
             var marks: [NoteMark.Kind: Any] = [:]
             for mark in NoteMark.Kind.allCases { if let value = typing[.noteMark(mark)] { marks[mark] = value } }
-            typing.merge(style.markedAttributes(marks: marks, baseFont: view.table.headerRow && view.activeCell?.row == 0 ? style.tableHeaderFont : style.bodyFont)) { _, new in new }
-            if marks[.bold] == nil && marks[.italic] == nil && marks[.code] == nil { typing[.font] = base }
+            typing.merge(style.markedAttributes(marks: marks, baseFont: header ? style.tableHeaderFont : style.bodyFont)) { _, new in new }
             view.editor.typingAttributes = typing
             return true
         }
@@ -938,11 +959,25 @@ enum NoteTablePaste {
     static func table(fromHTML html: String, onOversized: () -> Void = {}) -> NoteTable? {
         guard let parsed = NoteTableText.parseHTML(html) else { return nil }
         guard let start = html.range(of: "<table", options: .caseInsensitive),
-              let end = html.range(of: "</table>", options: [.caseInsensitive, .backwards]) else { return nil }
-        let outside = NoteTableText.htmlText(String(html[..<start.lowerBound]) + String(html[end.upperBound...]))
-        guard outside.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+              let end = html.range(of: "</table>", options: .caseInsensitive),
+              html.range(of: "<table\\b", options: [.regularExpression, .caseInsensitive], range: start.upperBound..<html.endIndex) == nil else { return nil }
+        let remainder = String(html[..<start.lowerBound]) + String(html[end.upperBound...])
+        let outside = NoteTableText.htmlText(remainder)
+        // A text-only check cannot see images or embedded objects. Those must
+        // go through the complete, resource-denying rich reader.
+        guard outside.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              html.range(of: "<(img|object|embed|svg|video|audio)\\b", options: [.regularExpression, .caseInsensitive]) == nil else { return nil }
         guard NoteTable.admits(parsed.rows) else { onOversized(); return nil }
-        return NoteTable(texts: parsed.rows, headerRow: true)
+        guard let read = NotePasteReader.read(Data(html.utf8), type: .html), read.images.isEmpty, read.files.isEmpty else { return nil }
+        return singleTable(in: NoteRichTextImport.document(from: read.text, style: NoteTextStyle()))
+    }
+
+    /// A complete grid, with at most the native reader's terminal Body
+    /// paragraph. Explicit empty paragraphs before/after a grid are content.
+    static func singleTable(in document: NoteDocument) -> NoteTable? {
+        guard let table = document.blocks.first?.table, document.blocks.count <= 2,
+              document.blocks.dropFirst().allSatisfy({ $0.kind == .text && $0.style == nil && $0.text.isEmpty }) else { return nil }
+        return table
     }
 
     /// Plain fallback from raw cells, without rectangularizing a rejected grid.
@@ -960,10 +995,17 @@ enum NoteTablePaste {
            let table = document.blocks.first(where: { $0.kind == .table })?.table {
             return table.withFreshIDs()
         }
-        if let html = pasteboard.string(forType: .html) {
-            var oversized = false
-            if let table = table(fromHTML: html, onOversized: { oversized = true; onOversized() }) { return table }
-            if oversized { return nil }
+        // Rich formats own their semantics. Querying string(forType:)
+        // can synthesize plain text even when that flavor was not declared;
+        // a literal tab in RTF must never become an inferred TSV grid.
+        let types = Set(pasteboard.types ?? [])
+        for type in NotePasteReader.richTypes where types.contains(type) {
+            if type == .html, let html = pasteboard.string(forType: type) {
+                return table(fromHTML: html, onOversized: onOversized)
+            }
+            guard let data = pasteboard.data(forType: type), let read = NotePasteReader.read(data, type: type),
+                  read.images.isEmpty, read.files.isEmpty else { return nil }
+            return singleTable(in: NoteRichTextImport.document(from: read.text, style: NoteTextStyle()))
         }
         if let tsv = pasteboard.string(forType: tsvType), let rows = NoteTableText.parseTSV(tsv) {
             guard NoteTable.admits(rows) else { onOversized(); return nil }
@@ -1012,10 +1054,10 @@ struct NoteCellLinkTarget: Equatable {
 }
 
 /// What "Paste as Text" takes back: the pasted text, where it went, and
-/// the history's depth just after the paste (it must still be the last step).
+/// the history's generation just after the paste (no later edit may intervene).
 struct NoteTablePasteOffer: Equatable {
     static let notice = String(localized: "Pasted as a table.")
     var text: String
     var selection: NSRange
-    var steps: Int
+    var generation: Int
 }

@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import XCTest
 @testable import Attic
 
@@ -82,6 +83,262 @@ final class NotesV2TablesTests: XCTestCase {
         for character in text {
             editor.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
         }
+    }
+
+    private func prb1Key(_ value: String, code: UInt16, flags: NSEvent.ModifierFlags = [], in editor: NSTextView) throws {
+        let window = try XCTUnwrap(editor.window)
+        XCTAssertTrue(window.firstResponder === editor)
+        window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: value,
+            charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
+    }
+
+    func testPRB12DeadKeyAccentJoinsSurroundingTypingUndo() throws {
+        let (engine, _) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell)
+        // Synthetic NSEvents have no TSM dead-key session in an invisible
+        // window. Supply its native input-client callbacks inside keyDown,
+        // exercising both entry into composition and its committed accent.
+        let selector = #selector(NSResponder.interpretKeyEvents(_:))
+        let method = try XCTUnwrap(class_getInstanceMethod(NSTextView.self, selector))
+        typealias Interpret = @convention(c) (NSResponder, Selector, NSArray) -> Void
+        let original = method_getImplementation(method)
+        let invoke = unsafeBitCast(original, to: Interpret.self)
+        var compositionKeys = 0
+        let inputMethod: @convention(block) (NSResponder, NSArray) -> Void = { responder, events in
+            guard responder === view.editor, let event = events.firstObject as? NSEvent, event.keyCode == 14 else {
+                invoke(responder, selector, events)
+                return
+            }
+            compositionKeys += 1
+            if event.modifierFlags.contains(.option) {
+                view.editor.setMarkedText("´", selectedRange: NSRange(location: 1, length: 0),
+                                          replacementRange: NSRange(location: NSNotFound, length: 0))
+            } else {
+                view.editor.insertText("é", replacementRange: view.editor.markedRange())
+            }
+        }
+        let replacement = imp_implementationWithBlock(inputMethod)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        for (value, code) in [("c", UInt16(8)), ("a", 0), ("f", 3)] {
+            try prb1Key(value, code: code, in: view.editor)
+        }
+        try prb1Key("´", code: 14, flags: .option, in: view.editor)
+        XCTAssertTrue(view.editor.hasMarkedText(), "Option-e starts a native dead-key composition")
+        try prb1Key("e", code: 14, in: view.editor)
+        XCTAssertFalse(view.editor.hasMarkedText())
+        XCTAssertEqual(compositionKeys, 2)
+        XCTAssertEqual(attachment.table[cell].text, "café")
+        try prb1Key("s", code: 1, in: view.editor)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "", "one Undo removes surrounding typing and its accent")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "cafés")
+    }
+
+    func testPRB12MarkedInputCaretMovementDoesNotBreakTypingUndo() throws {
+        let (engine, _) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell)
+        type("abc", into: view.editor)
+        view.editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+        let generation = engine.history.recordingGeneration, selection = view.editor.selectedRange()
+        try prb1Key("\u{F702}", code: 123, in: view.editor)
+        XCTAssertNotEqual(view.editor.selectedRange(), selection, "composition caret moved")
+        XCTAssertEqual(engine.history.recordingGeneration, generation, "composition movement is not a model edit")
+        view.editor.insertText("日本", replacementRange: view.editor.markedRange())
+        type("d", into: view.editor)
+        XCTAssertEqual(attachment.table[cell].text, "abc日本d")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "", "IME commit joins the surrounding typing")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "abc日本d")
+    }
+
+    func testPRB12DeferredPresentationCannotDropLaterBoldTyping() throws {
+        for reentry in ["prepare", "load"] {
+            let (engine, _) = makeEngine(ciaBlocks(.blank()))
+            let attachment = try tableAttachment(engine), view = try tableView(engine)
+            let cell = NoteTable.Position(row: 1, column: 0)
+            view.activate(cell)
+            let editor = view.editor
+            editor.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+            editor.prepare(header: false)
+            view.deactivate()
+            editor.unmarkText()
+            spin()
+            view.activate(cell)
+            // An explicit non-deferred presentation refresh also consumes the flag.
+            if reentry == "prepare" { editor.prepare(header: false) }
+            else { editor.load(view.cellString(cell), keepingSelection: true) }
+            try prb1Key("b", code: 11, flags: .command, in: editor)
+            try prb1Key("a", code: 0, in: editor)
+            spin()
+            XCTAssertNotNil(editor.typingAttributes[.noteMark(.bold)], reentry)
+            try prb1Key("b", code: 11, in: editor)
+            XCTAssertEqual(attachment.table[cell].text, "ab")
+            XCTAssertEqual(attachment.table[cell].marks, [NoteMark(.bold, offset: 0, length: 2)], reentry)
+        }
+    }
+
+    func testPRB12CompositionCommitsToOldCellBeforeActivation() throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let a = NoteTable.Position(row: 1, column: 0), b = NoteTable.Position(row: 1, column: 1)
+        view.activate(a)
+        view.editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.activate(b)
+        view.editor.unmarkText()
+        XCTAssertEqual(attachment.table[b].text, "Data taken from the IT network")
+        XCTAssertEqual(attachment.table[a].text, "Confidentiality日本")
+        XCTAssertEqual(view.editor.string, attachment.table[b].text)
+        XCTAssertFalse(view.editor.hasMarkedText())
+    }
+
+    func testPRB12AuthoritativeChangesDuringCompositionSurvive() throws {
+        for operation in ["agent", "undo", "row shift"] {
+            let (engine, _) = makeEngine(ciaBlocks())
+            let attachment = try tableAttachment(engine), view = try tableView(engine)
+            let a = NoteTable.Position(row: 1, column: 0)
+            view.activate(a)
+            if operation == "undo" { type("X", into: view.editor); engine.history.breakCoalescing() }
+            view.editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0),
+                                      replacementRange: NSRange(location: NSNotFound, length: 0))
+            switch operation {
+            case "agent": engine.changeTable(attachment, name: "Agent") { $0[a] = .init("Agent replacement") }
+            case "undo": XCTAssertTrue(engine.history.undo())
+            default: engine.changeTable(attachment, name: "Insert row") { $0.insertRow(at: 0) }
+            }
+            let expected = attachment.table
+            XCTAssertFalse(view.editor.hasMarkedText(), operation)
+            view.editor.unmarkText()
+            spin()
+            XCTAssertEqual(attachment.table, expected, operation)
+            XCTAssertEqual(view.editor.string, attachment.table[try XCTUnwrap(view.activeCell)].text, operation)
+            XCTAssertEqual(attachment.table[.init(row: operation == "row shift" ? 2 : 1, column: 0)].text,
+                           operation == "agent" ? "Agent replacement" : "Confidentiality", operation)
+        }
+    }
+
+    func testPRB1CellMarkOffClearsNativePresentationBeforeTyping() throws {
+        for header in [false, true] {
+            for kind in [NoteMark.Kind.bold, .italic, .underline, .strikethrough, .highlight, .code, .link] {
+                let (engine, _) = makeEngine(ciaBlocks(.blank()))
+                let attachment = try tableAttachment(engine), view = try tableView(engine)
+                let cell = NoteTable.Position(row: header ? 0 : 1, column: 0)
+                view.activate(cell, caret: .start)
+                func toggle() throws {
+                    switch kind {
+                    case .bold: try prb1Key("b", code: 11, flags: .command, in: view.editor)
+                    case .italic: try prb1Key("i", code: 34, flags: .command, in: view.editor)
+                    case .underline: try prb1Key("u", code: 32, flags: .command, in: view.editor)
+                    case .strikethrough: try prb1Key("x", code: 7, flags: [.command, .shift], in: view.editor)
+                    default: XCTAssertTrue(engine.applyCellMark(kind, in: view, url: kind == .link ? "https://example.com" : nil))
+                    }
+                }
+                try toggle()
+                XCTAssertNotNil(view.editor.typingAttributes[.noteMark(kind)])
+                try prb1Key("a", code: 0, in: view.editor)
+                try toggle()
+                XCTAssertNil(view.editor.typingAttributes[.noteMark(kind)])
+                let base = engine.style.tableCellAttributes(header: header)
+                XCTAssertEqual(view.editor.typingAttributes[.font] as? NSFont, base[.font] as? NSFont, kind.rawValue)
+                for key in [NSAttributedString.Key.underlineStyle, .strikethroughStyle, .backgroundColor, .link, .underlineColor] {
+                    XCTAssertNil(view.editor.typingAttributes[key], "\(kind): stale \(key)")
+                }
+                XCTAssertEqual(view.editor.typingAttributes[.foregroundColor] as? NSColor, base[.foregroundColor] as? NSColor)
+                try prb1Key("b", code: 11, in: view.editor)
+                XCTAssertEqual(view.editor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont, base[.font] as? NSFont)
+                XCTAssertEqual(attachment.table[cell].marks, [NoteMark(kind, offset: 0, length: 1,
+                    url: kind == .link ? "https://example.com" : nil)])
+                view.editor.load(view.cellString(cell), keepingSelection: true)
+                XCTAssertEqual(view.editor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont, base[.font] as? NSFont)
+            }
+        }
+    }
+
+    func testPRB1CellTypingUndoStopsAtNativeCaretJumpAndControlDeparture() throws {
+        for boundary in ["caret", "roundtrip", "departure"] {
+            let departure = boundary == "departure"
+            let (engine, text) = makeEngine(ciaBlocks(.blank()))
+            let attachment = try tableAttachment(engine)
+            let view = try tableView(engine)
+            let cell = NoteTable.Position(row: 1, column: 0)
+            view.activate(cell, caret: .start)
+            try prb1Key("a", code: 0, in: view.editor)
+            try prb1Key("b", code: 11, in: view.editor)
+            XCTAssertEqual(attachment.table[cell].text, "ab")
+            if departure {
+                let button = NSButton(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+                text.window?.contentView?.addSubview(button)
+                XCTAssertTrue(text.window!.makeFirstResponder(button))
+                spin()
+                XCTAssertEqual(view.activeCell, cell)
+                XCTAssertTrue(view.hasEditor, "a temporary control departure retains the editor")
+                XCTAssertTrue(text.window!.makeFirstResponder(view.editor))
+            } else {
+                try prb1Key("\u{F702}", code: 123, in: view.editor)
+                try prb1Key("\u{F702}", code: 123, in: view.editor)
+                XCTAssertEqual(view.editor.selectedRange(), NSRange(location: 0, length: 0))
+                if boundary == "roundtrip" {
+                    try prb1Key("\u{F703}", code: 124, in: view.editor)
+                    try prb1Key("\u{F703}", code: 124, in: view.editor)
+                    XCTAssertEqual(view.editor.selectedRange(), NSRange(location: 2, length: 0))
+                }
+            }
+            try prb1Key("X", code: 7, flags: .shift, in: view.editor)
+            let typed = boundary == "caret" ? "Xab" : "abX"
+            XCTAssertEqual(attachment.table[cell].text, typed)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(attachment.table[cell].text, "ab", "Undo removes only typing after the boundary")
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(attachment.table[cell].text, typed)
+            XCTAssertTrue(engine.history.undo()); XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(attachment.table[cell].text, "", "ordinary a/b typing still coalesces")
+        }
+    }
+
+    func testPRB1AppearanceKeepsMarkedCellTextAndItsCommit() throws {
+        let (engine, text) = makeEngine(ciaBlocks(.blank()))
+        let window = try XCTUnwrap(text.window)
+        window.appearance = NSAppearance(named: .aqua)
+        spin()
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell, caret: .start)
+        let editor = view.editor
+        XCTAssertTrue(window.firstResponder === editor)
+        editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[cell].text, "")
+        let marked = editor.markedRange(), selected = editor.selectedRange()
+        window.appearance = NSAppearance(named: .darkAqua)
+        spin()
+        XCTAssertEqual(engine.style.design.mode, .dark, "native appearance callback reached the engine")
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(editor.string, "にほ")
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.markedRange(), marked)
+        XCTAssertEqual(editor.selectedRange(), selected)
+        XCTAssertEqual(attachment.table[cell].text, "", "composition stays out of the model")
+        editor.insertText("日本", replacementRange: editor.markedRange())
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[cell].text, "日本")
+        spin()
+        XCTAssertEqual(editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                       engine.style.tableCellAttributes(header: false)[.foregroundColor] as? NSColor)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "日本")
     }
 
     // MARK: 1 · The table in the text (hosting and look)

@@ -114,6 +114,7 @@ final class NotesPageRenderTests: XCTestCase {
         store.setPinned(true, noteID: groceries)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testTitleAccessoriesSitOnTheTitleAndTheTagsPushTheBodyDown() throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
         let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
@@ -231,7 +232,9 @@ final class NotesPageRenderTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testAR04SettledTitlePixelsSurviveFastReversalsInBothAppearances() throws {
         for mode in AtticDesignContext.Mode.allCases {
             for width: CGFloat in [320, 420] {
@@ -284,7 +287,9 @@ final class NotesPageRenderTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testAR04HeaderAppearsOnlyAfterTheLastTitleLineLeavesTheVisibleTop() {
         for bottom: CGFloat in [90, 70, 50, 40] {
             XCTAssertEqual(NoteTitleAccessories.headerProgress(titleBottom: bottom, visibleTop: 40), 0)
@@ -328,6 +333,7 @@ final class NotesPageRenderTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(history.contentInsets.bottom,
                                     layout.chromeInsets.bottom + AtticControlSize.panelButton.height - 0.5)
     }
+    #endif
 
     /// From the scroll view's bottom edge to the host's.
     private static func bottomGap(_ scroll: NSScrollView, in host: NSView) -> CGFloat {
@@ -335,6 +341,7 @@ final class NotesPageRenderTests: XCTestCase {
         return host.isFlipped ? host.bounds.maxY - frame.maxY : frame.minY - host.bounds.minY
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH13FastScrollBackRestoresEveryTitleLine() throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { store in
             _ = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks:
@@ -371,10 +378,12 @@ final class NotesPageRenderTests: XCTestCase {
             XCTAssertTrue(type(of: fragment) == NSTextLayoutFragment.self)
         }
     }
+    #endif
 
     /// Notes v2 tables, sheet 3's sample in the real page, off screen (drawn
     /// controls; no Liquid Glass): at rest, editing a cell (ring, grips,
     /// chips), and a wide table scrolled sideways; Light and Dark.
+    #if ATTIC_GENERATED_TESTS
     func testTablesRenderAtRestEditingAndScrolled() throws {
         for mode in [AtticDesignContext.Mode.light, .dark] {
             for wide in [false, true] {
@@ -438,9 +447,11 @@ final class NotesPageRenderTests: XCTestCase {
             }
         }
     }
+    #endif
 
     /// An idle note does no layout work, and typing costs one pass per key:
     /// the title's accessories never feed a layout loop.
+    #if !ATTIC_GENERATED_TESTS
     func testAnIdleNoteDoesNotLayOutAgainAndAgain() throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
         let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
@@ -481,6 +492,39 @@ final class NotesPageRenderTests: XCTestCase {
         XCTAssertTrue(harness.controller.showLibrary())
         spin(0.5)
         write(harness.host, name: "library-light")
+    }
+
+    func testPRB1InferredTableNoticeExposesAndRunsPasteAsText() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), .text("body")]))
+        var emitted: NoteNotice?
+        engine.onNotice = { emitted = $0 }
+        let tsv = "Pillar\tWhat happened\nIntegrity\tEncrypted"
+        XCTAssertTrue(engine.pastePlainText(tsv, at: NSRange(location: engine.textStorage.length, length: 0)))
+        let notice = try XCTUnwrap(emitted)
+        XCTAssertEqual(notice.kind, .tablePasted)
+        let action = try XCTUnwrap(NoteStatusPresentation.pasteAsTextAction(for: notice, engine: engine) {
+            emitted = nil
+            XCTAssertTrue(engine.pasteLastTableAsText())
+        })
+        let host = NSHostingView(rootView: AtticStatusDetails(items: [AtticStatusItem(id: "notice", systemName: "info.circle",
+            title: notice.kind.headline, explanation: notice.detail, actions: [action])]).atticDesign(.default))
+        host.frame = NSRect(x: 0, y: 0, width: 320, height: 240)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; windows.append(window)
+        host.layoutSubtreeIfNeeded(); spin(0.2)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        let button = try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? nil) == "notes-paste-as-text" })
+        XCTAssertTrue(button.accessibilityPerformPress?() == true)
+        XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
+        XCTAssertTrue(engine.textStorage.string.contains(tsv))
+        XCTAssertNil(emitted)
     }
 
     func testTheSlotShowsTheMostUrgentStateAndHowManyMore() throws {
@@ -558,6 +602,7 @@ final class NotesPageRenderTests: XCTestCase {
         spin(0.5)
         write(harness.host, name: "library-dark")
     }
+    #endif
 }
 
 /// The panel around the Notes page: its surface, the header and the notices.

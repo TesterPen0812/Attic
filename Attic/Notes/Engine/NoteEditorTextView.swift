@@ -33,7 +33,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     weak var engine: NoteEditorEngine? {
         didSet {
             if engine !== oldValue {
+                oldValue?.history.breakCoalescing()
                 pendingWindowPresentation = nil
+                rangeToRevealAfterLayout = nil
                 cancelCalloutIconSession(reason: "engine changed")
             }
             installCodeColouring()
@@ -63,7 +65,20 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        let center = NotificationCenter.default
+        center.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        center.removeObserver(self, name: NSApplication.didResignActiveNotification, object: nil)
+        if let window {
+            center.addObserver(self, selector: #selector(editorFocusDeparted(_:)), name: NSWindow.didResignKeyNotification, object: window)
+            center.addObserver(self, selector: #selector(editorFocusDeparted(_:)), name: NSApplication.didResignActiveNotification, object: NSApp)
+        }
         scheduleWindowPresentation()
+    }
+
+    /// Another window can take the key while this view remains its window's
+    /// first responder. End the run synchronously, before input can return.
+    @objc private func editorFocusDeparted(_ notification: Notification) {
+        engine?.history.breakCoalescing()
     }
 
     private func scheduleWindowPresentation() {
@@ -85,11 +100,15 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow !== window { cancelCalloutIconSession(reason: "leaving window") }
+        if newWindow !== window {
+            engine?.history.breakCoalescing()
+            cancelCalloutIconSession(reason: "leaving window")
+        }
         super.viewWillMove(toWindow: newWindow)
     }
 
     override func viewDidHide() {
+        engine?.history.breakCoalescing()
         cancelCalloutIconSession(reason: "editor hidden")
         super.viewDidHide()
     }
@@ -307,8 +326,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// A location in the block the handle belongs to.
     private(set) var handleBlockLocation: Int?
     private var handleHiddenForTyping = false
-    private lazy var dropLine: NoteDropLineView = {
+    private(set) lazy var dropLine: NoteDropLineView = {
         let line = NoteDropLineView(frame: .zero)
+        // Its own layer: a glide between gaps is Core Animation's.
+        line.wantsLayer = true
         line.isHidden = true
         addSubview(line)
         return line
@@ -420,7 +441,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     #endif
 
     /// The block's rectangle in this view (its fragments' union).
-    private func rect(ofBlock block: NSRange) -> CGRect? {
+    func rect(ofBlock block: NSRange) -> CGRect? {
         guard let engine, let layoutManager = textLayoutManager, let range = engine.textRange(for: block) else { return nil }
         var union: CGRect?
         layoutManager.enumerateTextLayoutFragments(from: range.location, options: [.ensuresLayout]) { fragment in
@@ -440,122 +461,56 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y) }
     }
 
-    /// Where a block dragged to `point` lands: before or after the block
-    /// under it (never inside the dragged block itself), with its line.
-    private func dropTarget(at point: NSPoint, moving source: NSRange) -> (NoteBlockDropPosition, CGRect)? {
-        guard let engine, let (_, location) = fragment(nearViewPoint: point) else { return nil }
-        guard location >= engine.titleParagraphRange.length else { return nil }
-        let block = engine.blockRange(at: location)
-        guard let rect = rect(ofBlock: block) else { return nil }
-        let after = point.y > rect.midY
-        guard NSIntersectionRange(block, source).length == 0, block.location != source.location,
-              let position = engine.blockDropPosition(at: block.location, after: after),
-              position.location != source.location, position.location != NSMaxRange(source),
-              position.location > engine.titleParagraphRange.length - 1 else { return nil }
-        // The line sits in the gap between the two blocks, at the drop's depth.
-        let gapY: CGFloat
-        if after {
-            let below = position.location < engine.textStorage.length ? self.rect(ofBlock: engine.blockRange(at: position.location)) : nil
-            gapY = below.map { (rect.maxY + $0.minY) / 2 } ?? rect.maxY + AtticNoteType.paragraphGap / 2
-        } else {
-            let above = block.location > engine.titleParagraphRange.length ? self.rect(ofBlock: engine.blockRange(at: block.location - 1)) : nil
-            gapY = above.map { ($0.maxY + rect.minY) / 2 } ?? rect.minY - AtticNoteType.paragraphGap / 2
-        }
-        let indent = CGFloat(position.depth) * AtticNoteType.listLevelStep
-        let width = (textContainer?.size.width ?? bounds.width) - indent
-        let line = CGRect(x: textContainerOrigin.x + indent, y: gapY - AtticNoteType.dropLineThickness / 2,
-                          width: max(0, width), height: AtticNoteType.dropLineThickness)
-        return (position, line)
-    }
-
     /// A click on the handle selects the block; a drag moves it (Esc or a
     /// drop where it started cancels; the move is one Undo step).
     ///
-    /// V-06: the block lifts onto a card (the dropdowns' surface, so nothing
-    /// shows through it) while its place in the text dims. The card hangs
-    /// from the drop line, gliding from gap to gap, so the line runs along
-    /// its top edge and never through its text; with no drop (over the
-    /// block itself) it settles back over its source.
+    /// DG1: the block lifts onto a card that follows the pointer one to
+    /// one, above the page's floating controls, while its place dims; the
+    /// drop line glides from gap to gap, and the note scrolls each display
+    /// frame near its top or bottom edge (`NoteBlockDragSession`). Slots
+    /// come from block frames measured once, so a pointer move lays
+    /// nothing out.
     private func trackBlockHandle(with event: NSEvent) {
         guard let engine, let window, let location = handleBlockLocation else { return }
         let source = engine.blockRange(at: location)
         guard let sourceRect = rect(ofBlock: source) else { return }
         let start = convert(event.locationInWindow, from: nil)
-        var dragging = false
-        var target: NoteBlockDropPosition?
-        var lift: NoteDragLiftView?
-        var dim: NoteBlockDragDim?
+        var session: NoteBlockDragSession?
         NSCursor.closedHand.push()
         defer {
             NSCursor.pop()
-            lift?.removeFromSuperview()
-            dim?.restore()
-            dropLine.isHidden = true
+            session?.finish()
         }
-        let animated = !engine.style.design.reduceMotion
         // O4-02: Esc, the panel losing key status or hiding, or the page
         // going away cancels the drag: the card glides back over its
         // source and the block stays where it was.
         let tracking = AtticDragTracking(view: self, window: window)
-        func cancel(waitingForRelease: Bool) {
-            if let card = lift {
-                lift = nil
-                let home = CGRect(x: sourceRect.minX - card.padding.width, y: sourceRect.minY - card.padding.height,
-                                  width: card.frame.width, height: card.frame.height)
-                if animated, card.frame != home, card.window != nil {
-                    NSAnimationContext.runAnimationGroup({ context in
-                        context.duration = AtticMotionScale.fast
-                        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                        context.allowsImplicitAnimation = true
-                        card.animator().frame = home
-                    }, completionHandler: { MainActor.assumeIsolated { card.removeFromSuperview() } })
-                } else {
-                    card.removeFromSuperview()
-                }
-            }
-            dim?.restore()
-            dim = nil
-            dropLine.isHidden = true
-            CATransaction.flush()
-            if waitingForRelease { tracking.waitForRelease() }
-        }
         tracking: while true {
             let next = tracking.nextEvent()
-            if tracking.isInterrupted { return cancel(waitingForRelease: false) }
+            if tracking.isInterrupted { session?.cancel(); return }
             guard let next else { continue }
-            if AtticDragTracking.isCancel(next) { return cancel(waitingForRelease: true) }
+            if AtticDragTracking.isCancel(next) {
+                session?.cancel()
+                tracking.waitForRelease()
+                return
+            }
             switch next.type {
             case .leftMouseDragged:
                 let point = convert(next.locationInWindow, from: nil)
-                if !dragging, hypot(point.x - start.x, point.y - start.y) > 3 {
-                    dragging = true
-                    lift = makeBlockLift(sourceRect)
-                    dim = NoteBlockDragDim(textView: self, block: source, rect: sourceRect)
+                if session == nil, hypot(point.x - start.x, point.y - start.y) > 3 {
+                    session = NoteBlockDragSession(textView: self, source: source, sourceRect: sourceRect,
+                                                   pressPoint: event.locationInWindow)
                     hideBlockHandle()
+                    // The hovered block's Copy belongs to where the pointer
+                    // was; the moving block takes no chrome along.
+                    hoveredMonoLocation = nil
+                    placeMonoCopy()
+                    lastBlockDrag = session
                 }
-                guard dragging, let card = lift else { continue }
-                autoscroll(with: next)
-                var frame = card.frame
-                if let (position, line) = dropTarget(at: point, moving: source) {
-                    target = position
-                    dropLine.ink = engine.style.tokens.focusRing.nsColor
-                    dropLine.frame = line
-                    dropLine.isHidden = false
-                    dropLine.needsDisplay = true
-                    frame.origin.y = line.maxY + Self.liftGapBelowDropLine
-                } else {
-                    target = nil
-                    dropLine.isHidden = true
-                    frame.origin.y = sourceRect.minY - card.padding.height
-                }
-                card.move(to: frame, animated: animated)
+                session?.pointerMoved(to: next.locationInWindow)
             case .leftMouseUp:
-                if dragging {
-                    // Undimmed before the edit: the dim names the block's
-                    // place as it was.
-                    dim?.restore()
-                    dim = nil
-                    if let target { engine.moveBlock(source, to: target.location) }
+                if let session {
+                    session.drop()
                 } else {
                     window.makeFirstResponder(self)
                     setSelectedRange(source)
@@ -567,19 +522,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         }
     }
 
-    /// The lifted card's top edge under the drop line.
-    static let liftGapBelowDropLine: CGFloat = 3
-
-    private func makeBlockLift(_ rect: CGRect) -> NoteDragLiftView? {
-        guard let engine else { return nil }
-        let image = NoteDragLiftView.snapshot(of: rect, in: self)
-        let padding = CGSize(width: 6, height: 4)
-        let card = NoteDragLiftView(snapshot: image, size: rect.size, padding: padding, tokens: engine.style.tokens)
-        card.frame.origin = CGPoint(x: rect.minX - padding.width, y: rect.minY - padding.height)
-        card.unregisterDraggedTypes()
-        addSubview(card)
-        return card
-    }
+    /// The latest block drag (tests read its slots and card).
+    private(set) var lastBlockDrag: NoteBlockDragSession?
 
     /// VoiceOver's Move Block Up / Down: past the block above or below.
     private func moveHandledBlock(up: Bool) -> Bool {
@@ -614,6 +558,39 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             isSizingForTrailingBlock = false
         }
         super.setFrameSize(size)
+    }
+
+    /// End reveals the document's bottom edge, rather than asking AppKit
+    /// to fit the final attachment's entire line (which may exceed the
+    /// viewport). Use F3's painted extent and V-02's uncovered control band.
+    private func revealDocumentEnd() {
+        guard let engine, let scroll = enclosingScrollView else { return }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        guard let bottom = engine.trailingBlockBottom() else { return }
+        setFrameSize(frame.size)
+        // A fresh paste may leave TextKit's content surface at the old
+        // height even after fragment layout. Resize it before scrolling
+        // so the final attachment is not clipped by that stale surface.
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        let clip = scroll.contentView
+        let visible = convert(clip.bounds, from: clip)
+        let shift = bottom + textContainerOrigin.y - (visible.maxY - scroll.contentInsets.bottom)
+        var bounds = clip.bounds
+        bounds.origin.y += clip.isFlipped == isFlipped ? shift : -shift
+        clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+        scroll.reflectScrolledClipView(clip)
+        engine.layoutManager?.textViewportLayoutController.layoutViewport()
+    }
+
+    override func scrollToEndOfDocument(_ sender: Any?) {
+        guard engine != nil else { return super.scrollToEndOfDocument(sender) }
+        revealDocumentEnd()
+    }
+
+    override func moveToEndOfDocument(_ sender: Any?) {
+        super.moveToEndOfDocument(sender)
+        revealDocumentEnd()
     }
 
     // MARK: Copy on a Mono block
@@ -792,7 +769,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned { DispatchQueue.main.async { [weak self] in self?.placeMonoCopy() } }
+        if resigned {
+            engine?.history.breakCoalescing()
+            DispatchQueue.main.async { [weak self] in self?.placeMonoCopy() }
+        }
         return resigned
     }
 
@@ -872,8 +852,17 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: A person's own editing
 
     private func asUserEdit<T>(_ body: () -> T) -> T {
+        let generation = engine?.history.recordingGeneration
+        let selection = selectedRange()
         engine?.userEditDepth += 1
-        defer { engine?.userEditDepth -= 1 }
+        defer {
+            engine?.userEditDepth -= 1
+            // Native arrow commands run inside keyDown's user-edit scope,
+            // just like typing. Moving without editing still ends a run.
+            if generation == engine?.history.recordingGeneration, selectedRange() != selection {
+                engine?.history.breakCoalescing()
+            }
+        }
         return body()
     }
 
@@ -930,18 +919,36 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             PerformanceSignposts.noteDidLayout()
             updatePlaceholder()
             engine?.updateHeadingControls()
+            // DG1: a table parked here (scrolled out with a cell's keyboard)
+            // follows its text.
+            for case let table as NoteTableView in subviews where table.isParked { table.placeParked() }
+            // Copy on a code block follows its block through relayouts
+            // (a resize, an appearance change, a move above it).
+            if monoCopyLocation != nil { placeMonoCopy() }
             onLayout?()
         }
         caretVisibility.refresh()
-        if revealsCaretAfterLayout {
+        if let range = rangeToRevealAfterLayout {
+            rangeToRevealAfterLayout = nil
+            revealsCaretAfterLayout = false
+            revealRangeClearOfBands(range)
+        } else if revealsCaretAfterLayout {
             revealsCaretAfterLayout = false
             revealCaretClearOfBands()
         }
     }
 
-    // MARK: The caret's line in view (V-02)
+    // MARK: Reveals clear of the floating controls (V-02 / O5-01)
 
     private var revealsCaretAfterLayout = false
+    private var rangeToRevealAfterLayout: NSRange?
+
+    /// DG1: a dropped block stays where it was dropped; the edit's own
+    /// reveal (of the selection as it was) must not scroll the note away.
+    func cancelPendingReveal() {
+        rangeToRevealAfterLayout = nil
+        revealsCaretAfterLayout = false
+    }
 
     /// After an edit or a format picked here, the caret's line is brought
     /// into view clear of the floating controls once the edit is laid out
@@ -960,13 +967,36 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// being typed on is scrolled to clear them: above the bottom row,
     /// below the header. The insets are the bands; nothing fades.
     func revealCaretClearOfBands() {
-        guard let engine, let scroll = enclosingScrollView, selectedRange().length == 0,
-              let rect = engine.caretRect(at: selectedRange().location) else { return }
+        guard selectedRange().length == 0 else { return }
+        revealRangeClearOfBands(selectedRange())
+    }
+
+    private func revealRangeClearOfBands(_ range: NSRange) {
+        guard let engine, let scroll = enclosingScrollView,
+              range.location <= engine.textStorage.length,
+              range.length <= engine.textStorage.length - range.location else { return }
+        var rect: NSRect?
+        if range.length > 0 {
+            rect = engine.rect(for: range)
+        } else {
+            rect = engine.caretRect(at: range.location)
+            // Attachment-adjacent native carets can be shorter than the line.
+            if range.location > 0,
+               (engine.textStorage.string as NSString).character(at: range.location - 1) != 0x0A,
+               let glyph = engine.rect(for: NSRange(location: range.location - 1, length: 1)) {
+                rect = rect.map { $0.union(glyph) } ?? glyph
+            }
+        }
+        guard let rect else { return }
         let clip = scroll.contentView
         let insets = scroll.contentInsets
         let visible = convert(clip.bounds, from: clip)
-        let low = visible.maxY - insets.bottom, high = visible.minY + insets.top
-        let shift = rect.maxY > low ? rect.maxY - low : (rect.minY < high ? rect.minY - high : 0)
+        let high = visible.minY + insets.top + 8
+        let low = visible.maxY - insets.bottom - 8
+        guard low > high else { return }
+        // A range taller than the clear viewport starts at its leading edge.
+        let shift = rect.height > low - high ? rect.minY - high
+            : (rect.maxY > low ? rect.maxY - low : (rect.minY < high ? rect.minY - high : 0))
         guard abs(shift) > 0.5 else { return }
         var bounds = clip.bounds
         bounds.origin.y += clip.isFlipped == isFlipped ? shift : -shift
@@ -1005,6 +1035,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func didChangeText() {
+        rangeToRevealAfterLayout = nil
         super.didChangeText()
         updatePlaceholder()
         revealCaretAfterLayout()
@@ -1036,16 +1067,27 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         PerformanceSignposts.noteDidLayout()
     }
 
-    /// TextKit's attachment-adjacent caret can be shorter than the glyph
-    /// line. Reveal both, so typing after a block clears the footer inset.
+    /// Find, heading/navigation and restored selections all share the same
+    /// covered viewport. Resolve a distant target's preceding layout first:
+    /// TextKit's estimated positions differ when paragraphs wrap at 340/420.
     override func scrollRangeToVisible(_ range: NSRange) {
+        guard let engine else { return super.scrollRangeToVisible(range) }
+        guard range.location != NSNotFound,
+              range.location <= engine.textStorage.length,
+              range.length <= engine.textStorage.length - range.location else { return }
+        let visible = enclosingScrollView.map { convert($0.contentView.bounds, from: $0.contentView) }
+        let caretIsVisible = range.length == 0 && engine.caretRect(at: range.location).map { rect in
+            // Native caret segments can have zero width; CGRect.intersects
+            // would call those empty and relayout the prefix on every key.
+            visible.map { rect.maxY >= $0.minY && rect.minY <= $0.maxY } == true
+        } == true
+        if !caretIsVisible, let layout = textLayoutManager, let target = engine.textRange(for: range),
+           let prefix = NSTextRange(location: layout.documentRange.location, end: target.endLocation) {
+            layout.ensureLayout(for: prefix)
+        }
         super.scrollRangeToVisible(range)
-        guard let engine, range.location != NSNotFound, range.length == 0,
-              range.location > 0, range.location <= engine.textStorage.length,
-              (engine.textStorage.string as NSString).character(at: range.location - 1) != 0x0A,
-              let glyph = engine.rect(for: NSRange(location: range.location - 1, length: 1)) else { return }
-        let rect = engine.caretRect(at: range.location).map { $0.union(glyph) } ?? glyph
-        scrollToVisible(rect)
+        rangeToRevealAfterLayout = range
+        revealRangeClearOfBands(range)
     }
 
     /// A palette request has its own input client. Unexpected body input
@@ -1303,7 +1345,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [NoteEditorEngine.fragmentType, NoteTablePaste.tableType, .fileURL, .png, .tiff] + NotePasteReader.richTypes + [.URL, .string]
+        // AppKit's pasteAsPlainText: restricts this list to NSStringPboardType,
+        // even when the clipboard advertises the modern .string equivalent.
+        [NoteEditorEngine.fragmentType, NoteTablePaste.tableType, .fileURL, .png, .tiff] + NotePasteReader.richTypes + [.URL, .string, .init("NSStringPboardType")]
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
@@ -1324,7 +1368,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         }
         // Tabular data (cells copied from a table, a spreadsheet, a web
         // page's table, a Markdown table) pastes as a table.
-        if !engine.isPastingAsPlainText, [NoteTablePaste.tableType, .rtf, .html, .string].contains(type) || type == NoteTablePaste.tsvType {
+        if !engine.isPastingAsPlainText, [NoteTablePaste.tableType, .html, .string].contains(type) || type == NoteTablePaste.tsvType {
             var oversized = false
             if let table = NoteTablePaste.table(from: pboard, onOversized: { oversized = true }) {
                 let source = pboard.string(forType: NoteTablePaste.tsvType) ?? pboard.string(forType: .string) ?? NoteTableText.tsv(table)
@@ -1776,9 +1820,6 @@ final class NoteUndoManagerShim: UndoManager {
         levelsOfUndo = 1
     }
 
-    private var history: NoteUndoHistory? {
-        MainActor.assumeIsolated { textView?.engine?.history }
-    }
 
     override var canUndo: Bool { MainActor.assumeIsolated { textView?.engine?.canUndoCommand ?? false } }
     override var canRedo: Bool { MainActor.assumeIsolated { textView?.engine?.canRedoCommand ?? false } }

@@ -29,6 +29,8 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     /// model's echo must not reload the editor).
     var isApplyingOwnEdit = false
     private var selectionBeforeEdit = NSRange(location: 0, length: 0)
+    private var needsPresentationAfterComposition = false
+    private var isDiscardingComposition = false
     private var isHeader = false
     private var selectedEmptyCellText = false
 
@@ -55,6 +57,8 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let selection = selectedRange(), generation = table?.engine?.history.recordingGeneration
+        defer { endTypingAfterSelectionMove(from: selection, generation: generation) }
         selectedEmptyCellText = false
         super.mouseDown(with: event)
     }
@@ -94,6 +98,8 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     /// Fonts and inks for the cell about to be edited.
     func prepare(header: Bool) {
+        guard !hasMarkedText() else { needsPresentationAfterComposition = true; return }
+        needsPresentationAfterComposition = false
         selectedEmptyCellText = false
         isHeader = header
         guard let table else { return }
@@ -114,6 +120,11 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     /// Shows `string`; keeps the caret where it was when asked (an Undo or
     /// an agent's change to the cell being edited).
     func load(_ string: NSAttributedString, keepingSelection: Bool) {
+        if hasMarkedText() {
+            if keepingSelection { needsPresentationAfterComposition = true; return }
+            discardComposition()
+        }
+        needsPresentationAfterComposition = false
         let selection = selectedRange()
         guard let storage = textStorage else { return }
         if !keepingSelection || !storage.isEqual(to: string) {
@@ -224,6 +235,13 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
+        let selection = selectedRange(), generation = table?.engine?.history.recordingGeneration
+        let wasComposing = hasMarkedText()
+        defer {
+            if !wasComposing && !hasMarkedText() {
+                endTypingAfterSelectionMove(from: selection, generation: generation)
+            }
+        }
         if table?.engine?.find.handleKey(event) == true { return }
         if let table, let engine = table.engine, !hasMarkedText(), engine.handleTableShortcut(event, in: table) { return }
         if !(event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command &&
@@ -236,6 +254,12 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         CATransaction.setCompletionBlock { PerformanceSignposts.noteDidDraw() }
         super.keyDown(with: event)
         CATransaction.commit()
+    }
+
+    private func endTypingAfterSelectionMove(from selection: NSRange, generation: Int?) {
+        guard let history = table?.engine?.history,
+              history.recordingGeneration == generation, selectedRange() != selection else { return }
+        history.breakCoalescing()
     }
 
     override func doCommand(by selector: Selector) {
@@ -304,8 +328,10 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     func textDidChange(_ notification: Notification) {
+        guard !isDiscardingComposition else { return }
         selectedEmptyCellText = false
         table?.editorTextDidChange(selectionBefore: selectionBeforeEdit)
+        refreshPresentationAfterComposition()
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
@@ -315,9 +341,32 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
         table?.refreshEditorHeight()
     }
 
+    /// End marked input without publishing its stale buffer over a newer model.
+    func discardComposition() {
+        guard hasMarkedText() else { return }
+        isDiscardingComposition = true
+        defer { isDiscardingComposition = false }
+        super.unmarkText()
+        inputContext?.discardMarkedText()
+    }
+
     override func unmarkText() {
         super.unmarkText()
         table?.editorTextDidChange(selectionBefore: selectionBeforeEdit)
+        refreshPresentationAfterComposition()
+    }
+
+    /// A style/model echo waits for the input client's commit, then reads
+    /// the newly committed cell rather than the pre-composition model.
+    private func refreshPresentationAfterComposition() {
+        guard needsPresentationAfterComposition, !hasMarkedText() else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.needsPresentationAfterComposition, !self.hasMarkedText(),
+                  let table = self.table, let cell = table.activeCell, table.hasEditor else { return }
+            self.needsPresentationAfterComposition = false
+            self.prepare(header: table.table.headerRow && cell.row == 0)
+            table.modelDidChange()
+        }
     }
 
     func textView(_ textView: NSTextView, shouldChangeTypingAttributes oldTypingAttributes: [String: Any] = [:],
@@ -343,11 +392,31 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
 
     // MARK: Pasteboard
 
-    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.html, .string] }
+    private var isPastingAsPlainText = false
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        guard isEditable, !hasMarkedText(), let engine = table?.engine else { return }
+        isPastingAsPlainText = true
+        let generation = engine.history.recordingGeneration
+        engine.history.breakCoalescing()
+        engine.history.beginGroup()
+        defer {
+            engine.history.endGroup()
+            if engine.history.recordingGeneration != generation { engine.history.renameLast(String(localized: "Paste")) }
+            engine.history.breakCoalescing()
+            isPastingAsPlainText = false
+        }
+        // AppKit can insert converted rich text directly, bypassing our
+        // cell-line normalization. Always use the cell's own plain reader.
+        _ = readSelection(from: .general, type: .string)
+    }
+
+    // As in the note body, AppKit's plain-paste action requires the legacy alias.
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.html, .string, .init("NSStringPboardType")] }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         guard let table, let engine = table.engine, let cell = table.activeCell else { return false }
-        if NoteTablePaste.table(from: pboard) != nil {
+        if !isPastingAsPlainText, NoteTablePaste.table(from: pboard) != nil {
             return engine.pasteIntoTable(table, at: cell, from: pboard)
         }
         guard let text = pboard.string(forType: .string) else { return false }
@@ -402,6 +471,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned, let table {
+            if !table.keepsFocusThroughRehost { table.engine?.history.breakCoalescing() }
             DispatchQueue.main.async { [weak table] in
                 guard let table, !table.isFocused, table.cellSelection == nil, !table.keepsFocusThroughRehost else { return }
                 // The keyboard went to text elsewhere (the note's text,

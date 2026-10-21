@@ -123,7 +123,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         textView.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0),
                                replacementRange: NSRange(location: NSNotFound, length: 0))
         let before = store.notes.count
-        XCTAssertFalse(controller.duplicateNote(noteID: id))
+        await XCTAssertFalseAsync(await controller.duplicateNote(noteID: id))
         XCTAssertEqual(store.notes.count, before, "no provisional copy")
         XCTAssertTrue(controller.active === session)
         XCTAssertNotNil(session.notice)
@@ -142,12 +142,12 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         let before = store.notes.count
         session.engine.writingToolsWillBegin()
         XCTAssertNotEqual(session.engine.activity, .idle)
-        XCTAssertFalse(controller.duplicateNote(noteID: id))
+        await XCTAssertFalseAsync(await controller.duplicateNote(noteID: id))
         XCTAssertEqual(store.notes.count, before)
         session.engine.writingToolsDidEnd()
         controller.importImages([URL(fileURLWithPath: "/tmp/slow.png")])
         XCTAssertTrue(session.isImporting)
-        XCTAssertFalse(controller.duplicateNote(noteID: id))
+        await XCTAssertFalseAsync(await controller.duplicateNote(noteID: id))
         XCTAssertEqual(store.notes.count, before)
         controller.cancelActiveImport()
     }
@@ -162,7 +162,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         type("Unsaved", into: draft)
         gate.shouldFail = true
         let before = store.notes.count
-        XCTAssertFalse(controller.duplicateNote(noteID: source), "leaving an only-in-memory draft is refused")
+        await XCTAssertFalseAsync(await controller.duplicateNote(noteID: source), "leaving an only-in-memory draft is refused")
         gate.shouldFail = false
         XCTAssertEqual(store.notes.count, before, "zero copies")
         XCTAssertTrue(controller.active === draft)
@@ -175,7 +175,7 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         let session = try XCTUnwrap(controller.active)
         type(" latest", into: session)
         let before = store.notes.count
-        XCTAssertTrue(controller.duplicateNote(noteID: id))
+        await XCTAssertTrueAsync(await controller.duplicateNote(noteID: id))
         XCTAssertEqual(store.notes.count, before + 1, "exactly one copy")
         let copy = try XCTUnwrap(controller.active)
         XCTAssertNotEqual(copy.noteID, id)

@@ -142,6 +142,21 @@ final class AtticPanel: NSPanel {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if Self.isUndoKey(event) { removeDepartedUndoParticipants() }
+        // MenuBarExtra does not supply the Edit menu's matching-style
+        // shortcut. NSTextView handles ordinary Paste itself, but this chord
+        // otherwise falls through (only the note body had a keyDown fallback).
+        // Route it to the actual text responder, including native field editors.
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        if event.type == .keyDown, event.window == nil || event.window === self,
+           flags == [.command, .option, .shift], event.charactersIgnoringModifiers?.lowercased() == "v",
+           let editor = firstResponder as? NSTextView, editor.window === self,
+           editor.isEditable, !editor.hasMarkedText() {
+            let item = NSMenuItem(title: "", action: #selector(NSTextView.pasteAsPlainText(_:)), keyEquivalent: "")
+            if editor.validateMenuItem(item) {
+                editor.pasteAsPlainText(self)
+                return true
+            }
+        }
         return super.performKeyEquivalent(with: event)
     }
 

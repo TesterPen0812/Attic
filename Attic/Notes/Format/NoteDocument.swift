@@ -191,8 +191,8 @@ struct NoteBlock: Equatable, Sendable {
     /// R14 display hints deliberately live in extras. Int12 reads, edits and
     /// writes these fields without recognizing any new style or capability.
     var start: Int? {
-        get { extras["start"]?.intValue.flatMap { $0 >= 2 ? $0 : nil } }
-        set { extras["start"] = newValue.flatMap { $0 >= 2 ? .int(Int64($0)) : nil } }
+        get { extras["start"]?.intValue.flatMap { $0 >= 1 ? $0 : nil } }
+        set { extras["start"] = newValue.flatMap { $0 >= 1 ? .int(Int64($0)) : nil } }
     }
     var language: String? {
         get { extras["language"]?.stringValue }
@@ -308,8 +308,6 @@ struct NoteMark: Equatable, Sendable {
 enum NoteHighlightColour: String, CaseIterable, Sendable {
     case grey, yellow, green, blue, pink, purple
 
-    /// The hues the highlighter's menu offers after Grey.
-    static let hues: [NoteHighlightColour] = [.yellow, .green, .blue, .pink, .purple]
 
     /// The one-click appearance; its command writes no colour key so
     /// the owner's October 10 build can still edit the note.

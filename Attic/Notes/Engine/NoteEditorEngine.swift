@@ -501,7 +501,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             self.updateTextChecking()
         }
         history.canReplay = { [weak self] in self?.activity == .idle }
-        history.onWillReplay = { [weak self] in self?.textView?.cancelCalloutIconSession(reason: "history replay") }
+        history.onWillReplay = { [weak self] in
+            self?.textView?.cancelCalloutIconSession(reason: "history replay")
+            self?.tablePasteOffer = nil
+        }
         history.onTableSnapshot = { [weak self] id, table, focus in
             self?.restoreTable(id: id, table: table, focus: focus) ?? false
         }
@@ -2064,9 +2067,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                selection != NSRange(location: NSMaxRange(request.target.range), length: 0) { pendingSlashFile = nil }
             if let target = pendingLinkTarget, selection != target.selection { pendingLinkTarget = nil }
         }
-        if !history.isChangeInFlight, let open = history.openStep,
-           !(selection.length == 0 && selection.location >= open.range.location && selection.location <= NSMaxRange(open.range)) {
-            history.breakCoalescing()
+        if userEditDepth == 0, engineEditDepth == 0 {
+            history.selectionMoved(to: selection)
         }
         let line = lineRange(at: selection.location)
         if line.length == 0 || line.location == 0 {
@@ -2689,7 +2691,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let result = NSMutableAttributedString(attributedString: pasted)
         let string = textStorage.string as NSString
         let startsWithObject = fragment.blocks.first.map { $0.kind != .text } ?? false
-        let endsWithBlockObject = fragment.blocks.last.map { $0.kind == .image || $0.kind == .file || $0.kind == .opaque } ?? false
+        let endsWithBlockObject = fragment.blocks.last.map { [.image, .file, .divider, .table, .opaque].contains($0.kind) } ?? false
         let atLineStart = selection.location == 0 || string.character(at: selection.location - 1) == 0x0A
         if startsWithObject, !atLineStart || selection.location == 0 {
             result.insert(NSAttributedString(string: "\n", attributes: style.bodyAttributes), at: 0)
@@ -4250,12 +4252,15 @@ extension NoteEditorEngine {
         let caret = textView.selectedRange().location
         let line = lineRange(at: caret)
         let before = (textStorage.string as NSString).substring(with: NSRange(location: line.location, length: caret - line.location))
-        let token = before.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
+        guard let last = before.lastIndex(where: { !$0.isWhitespace }) else { return }
+        let end = before.index(after: last)
+        let start = before[..<end].lastIndex(where: { $0.isWhitespace }).map { before.index(after: $0) } ?? before.startIndex
+        let token = String(before[start..<end])
         let url = token.trimmingCharacters(in: CharacterSet(charactersIn: ".,;!?"))
-        guard NoteLinkPolicy.url(url) != nil else { return }
+        guard NoteLinkPolicy.url(url) != nil, let retained = token.range(of: url) else { return }
+        // Keep the original UTF-16 position through punctuation/space trimming.
         let length = (url as NSString).length
-        let location = caret - 1 - length
-        guard location >= line.location else { return }
+        let location = line.location + NSRange(start..<end, in: before).location + NSRange(retained, in: token).location
         _ = perform(.link(url), selection: NSRange(location: location, length: length))
         textView.setSelectedRange(NSRange(location: caret, length: 0))
     }
@@ -4384,69 +4389,37 @@ extension NoteEditorEngine {
             let range = (imported.string as NSString).range(of: image.token)
             guard range.location != NSNotFound else { continue }
             let id = UUID()
-            let payload = StagedNoteAttachment(id: id, filename: "Pasted Image." + (image.type.preferredFilenameExtension ?? "png"),
+            let payload = StagedNoteAttachment(id: id, filename: image.filename ?? "Pasted Image." + (image.type.preferredFilenameExtension ?? "png"),
                 contentTypeIdentifier: image.type.identifier, byteCount: Int64(image.data.count),
                 digest: NotePayloadDigest.sha256(image.data), data: image.data)
             payloads[id] = payload
             let attachment = NoteImageAttachment(attachmentID: id, preferredWidthFraction: 1, pixelSize: image.size, extras: payload.identityExtras)
             imported.replaceCharacters(in: range, with: NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
         }
+        for file in read.files {
+            let range = (imported.string as NSString).range(of: file.token)
+            guard range.location != NSNotFound else { continue }
+            let id = UUID()
+            let payload = StagedNoteAttachment(id: id, filename: file.filename,
+                contentTypeIdentifier: file.type.identifier, byteCount: Int64(file.data.count),
+                digest: NotePayloadDigest.sha256(file.data), data: file.data)
+            payloads[id] = payload
+            let attachment = NoteFileAttachment(attachmentID: id, filename: payload.filename,
+                contentTypeIdentifier: payload.contentTypeIdentifier, byteCount: payload.byteCount, extras: payload.identityExtras)
+            imported.replaceCharacters(in: range, with: NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
+        }
         let source = NSMutableAttributedString(attributedString: imported)
         let raw = source.string as NSString
         for index in (0..<raw.length).reversed() where raw.character(at: index) == NoteDocument.objectUnit {
-            if !(source.attribute(.attachment, at: index, effectiveRange: nil) is NoteImageAttachment) {
+            let attachment = source.attribute(.attachment, at: index, effectiveRange: nil)
+            if !(attachment is NoteImageAttachment || attachment is NoteFileAttachment) {
                 source.replaceCharacters(in: NSRange(location: index, length: 1), with: "[Attachment]")
             }
         }
-        let result = NSMutableAttributedString(string: source.string, attributes: style.bodyAttributes)
-        source.enumerateAttributes(in: NSRange(location: 0, length: source.length)) { attributes, range, _ in
-            if let image = attributes[.attachment] as? NoteImageAttachment {
-                result.addAttribute(.attachment, value: image, range: range)
-            }
-            if let font = attributes[.font] as? NSFont {
-                let traits = font.fontDescriptor.symbolicTraits
-                if traits.contains(.bold) { result.addAttribute(.noteMark(.bold), value: true, range: range) }
-                if traits.contains(.italic) { result.addAttribute(.noteMark(.italic), value: true, range: range) }
-                if traits.contains(.monoSpace) { result.addAttribute(.noteMark(.code), value: true, range: range) }
-            }
-            if attributes[.underlineStyle] != nil { result.addAttribute(.noteMark(.underline), value: true, range: range) }
-            if attributes[.strikethroughStyle] != nil { result.addAttribute(.noteMark(.strikethrough), value: true, range: range) }
-            if attributes[.backgroundColor] != nil { result.addAttribute(.noteMark(.highlight), value: true, range: range) }
-            if let url = (attributes[.link] as? URL)?.absoluteString ?? attributes[.link] as? String {
-                result.addAttribute(.noteMark(.link), value: url, range: range)
-            }
+        let normalized = NoteRichTextImport.document(from: source, style: style)
+        if payloads.isEmpty, let table = NoteTablePaste.singleTable(in: normalized) {
+            return pasteTable(table, at: selection, sourceText: NoteTableText.tsv(table))
         }
-        // List identity is a paragraph property. A foreign list kind or an
-        // unsupported depth stays readable as literal marker text.
-        var paragraphs: [(range: NSRange, lists: [NSTextList])] = []
-        let sourceString = source.string as NSString
-        var start = 0
-        while start < sourceString.length {
-            let paragraph = sourceString.paragraphRange(for: NSRange(location: start, length: 0))
-            let lists = (source.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle)?.textLists ?? []
-            paragraphs.append((paragraph, lists))
-            start = NSMaxRange(paragraph)
-        }
-        var ordinals: [Int: Int] = [:]
-        var literals: [(Int, String)] = []
-        for entry in paragraphs {
-            guard let list = entry.lists.last else { ordinals.removeAll(); continue }
-            let depth = entry.lists.count - 1
-            ordinals = ordinals.filter { $0.key <= depth }
-            let ordinal = (ordinals[depth] ?? 0) + 1
-            ordinals[depth] = ordinal
-            let supported = depth <= 2 && entry.lists.allSatisfy { $0.markerFormat == .disc || $0.markerFormat == .decimal }
-            if supported {
-                result.addAttribute(.noteBlockStyle, value: list.markerFormat == .decimal ? "number" : "bullet", range: entry.range)
-                if depth > 0 { result.addAttribute(.noteBlockIndent, value: depth, range: entry.range) }
-            } else {
-                literals.append((entry.range.location, String(repeating: "  ", count: max(0, depth)) + list.marker(forItemNumber: ordinal) + " "))
-            }
-        }
-        for (at, marker) in literals.reversed() {
-            result.insert(NSAttributedString(string: marker, attributes: style.bodyAttributes), at: at)
-        }
-        let normalized = NoteTextCodec.document(from: result, firstBlockIsTitle: false)
         return insertFragment(normalized, at: selection, resolved: payloads)
     }
 }
@@ -4686,8 +4659,19 @@ extension NoteEditorEngine {
         history.beginGroup(); defer { history.endGroup() }
         guard performEdit(paste.range, with: paste.text, name: "Paste", selection: NSRange(location: selection.location + attributed.length, length: 0)) else { return false }
         if let last = fragment.blocks.last, last.text.isEmpty, attributed.string.hasSuffix("\n"), selection.location + attributed.length == textStorage.length {
-            let format: NoteParagraphStyle = last.style == "mono" ? .mono(language: last.language) : (last.callout.map { .callout(icon: $0) } ?? .body)
-            if format.isCode || format.isCallout { carryEmptyContainer(format) }
+            let format: NoteParagraphStyle = switch last.style {
+            case "heading": .heading(last.level ?? 2)
+            case "quote": last.callout.map { .callout(icon: $0) } ?? .quote
+            case "mono": .mono(language: last.language)
+            case "bullet": .bullet
+            case "number": .number
+            default: last.kind == .checklist ? .checklist : .body
+            }
+            let location = textStorage.length
+            history.recordParagraphStyleChange(location: location,
+                before: .init(style: .body, indent: 0),
+                after: .init(style: format, indent: last.indent ?? 0, block: last))
+            setPendingParagraphStyle(format, indent: last.indent ?? 0, at: location, metadata: last)
         }
         history.renameLast("Paste")
         return true
@@ -4752,7 +4736,20 @@ extension NoteEditorEngine {
     @discardableResult func setListStart(_ start: Int, at location: Int) -> Bool {
         guard paragraphStyle(at: location) == .number, start >= 1 else { return false }
         let first = firstNumberedItem(at: location)
-        return rewriteParagraphHint(.noteListStart, field: "start", value: start > 1 ? start : nil, at: first, name: "Restart Numbering")
+        // An adjacent run needs an explicit 1; without it the previous
+        // same-depth run supplies this segment's ordinal. A paragraph gap
+        // already supplies a boundary and keeps its implicit start.
+        let depth = indentAt(first) ?? 0
+        var previous = first
+        var adjacent = false
+        while previous > titleParagraphRange.length + 1 {
+            previous = paragraphRange(at: previous - 1).location
+            let priorDepth = indentAt(previous) ?? 0
+            if priorDepth > depth, isListItem(at: previous) { continue }
+            adjacent = paragraphStyle(at: previous) == .number && priorDepth == depth
+            break
+        }
+        return rewriteParagraphHint(.noteListStart, field: "start", value: start > 1 || adjacent ? start : nil, at: first, name: "Restart Numbering")
     }
     @discardableResult func continueNumbering(at location: Int) -> Bool {
         guard paragraphStyle(at: location) == .number else { return false }
@@ -4794,7 +4791,13 @@ extension NoteEditorEngine {
         let value = format.isCode ? "\n" : "\u{2028}"
         history.beginGroup(); defer { history.endGroup() }
         let atEnd = NSMaxRange(selection) == textStorage.length
-        guard performEdit(selection, with: NSAttributedString(string: value, attributes: attributes(forParagraphAt: selection.location)), name: "Line Break", selection: NSRange(location: selection.location + 1, length: 0)) else { return false }
+        var attributes = attributes(forParagraphAt: selection.location)
+        let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.filter { $0 != .link }.compactMap { kind in
+            textView.typingAttributes[.noteMark(kind)].map { (kind, $0) }
+        })
+        for (kind, value) in marks { attributes[.noteMark(kind)] = value }
+        attributes.merge(style.markedAttributes(marks: marks, baseFont: attributes[.font] as? NSFont ?? style.bodyFont)) { _, new in new }
+        guard performEdit(selection, with: NSAttributedString(string: value, attributes: attributes), name: "Line Break", selection: NSRange(location: selection.location + 1, length: 0)) else { return false }
         if format.isCode {
             if atEnd { carryEmptyContainer(format) }
             else { _ = rewriteParagraphHint(.noteCodeLanguage, field: "language", value: format.language, at: selection.location + 1, name: "Line Break") }

@@ -1,19 +1,25 @@
-## 2026-10-17 · Content shows under every floating control (owner, O17-01)
+# Design system change log
+
+The design system was frozen when the owner signed off the Phase 0 gallery.
+Every later change is recorded here: what changed, why, and who asked.
+
+## Phase X
+
+### 2026-10-20 · Table add-chip cancellation (owner review round PRB1, B7-01)
+
+- Releasing a table add-chip press outside its 28 pt target cancels the click. Returning inside before release still clicks; grip dragging and Escape cancellation keep their existing behavior.
+
+### 2026-10-17 · Content shows under every floating control (owner, O17-01)
 
 - Content scrolls all the way under the Tasks tabs line, the composer, the corner buttons and the Notes header and footer rows, and stays visible through the 1.5 pt / 28 pt variable blur. No fade hides it: T-03 C's content fade on see-through panels, the opaque panel's surface fade over the blur, and the plain-line rules (content gone above a plain top line and 3 pt below it, or behind the composer's strip) are removed, with `AtticFloatingEdgesMask`, `atticFloatingEdgesMask`, `TasksViewport.maskStops` and the lists' masks. The scroll insets are unchanged.
 - With no blur (Reduce Transparency, or no filter), an opaque panel keeps the solid surface under the controls and a 12 pt fade past them (U-02).
 
-## 2026-10-16 · Settled comparisons retired
+### 2026-10-16 · Settled comparisons retired
 
 - Native scroll edges use a parameterless, always-hidden policy. Former defaults and environment values have no reader; negative hosted/UI checks remain.
 - Corner buttons use Liquid Glass, with the existing Flat rendering for Reduce Transparency and non-glass/non-key controls. The Glass/Flat picker and override are retired. Row hover always tints.
 - Animations keeps Lively, Subtle and Reduced. Preview feel/style pickers, tuning sliders and motion overrides are retired. Blur strength/reach sliders, the native-popover experiment, scroller/lift overrides, gallery and glass lab routes remain.
 - Proposal previews keep their live scroll offset across document replacement without an unwritten binding. Duplicate exit-animation API, unused scroll-mask wrapper and unreferenced TaskStatusButton are removed.
-
-# Design system change log
-
-The design system was frozen when the owner signed off the Phase 0 gallery.
-Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 

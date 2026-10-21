@@ -15,8 +15,11 @@ enum OldNotesPurge {
         guard try context.fetch(FetchDescriptor<StoreMaintenance>()).allSatisfy({ $0.key != key }) else { return Counts() }
         do {
             let notes = try context.fetch(FetchDescriptor<NoteItem>())
-            // Explicit stored discriminator. Nil content alone is never old.
-            let ids = Set(notes.filter { $0.contentFormat == 0 }.map(\.id))
+            // A UUID owns shared dependents: every physical row must be old.
+            // A modern or future-format sibling protects the whole family.
+            let ids = Set(Dictionary(grouping: notes, by: \.id).compactMap { id, rows in
+                rows.allSatisfy { $0.contentFormat == 0 } ? id : nil
+            })
             let removed = notes.filter { ids.contains($0.id) }
             let attachments = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { ids.contains($0.noteID) }
             let versions = try context.fetch(FetchDescriptor<NoteVersion>()).filter { ids.contains($0.noteID) }

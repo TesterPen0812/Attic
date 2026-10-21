@@ -80,7 +80,7 @@ import XCTest
     }
     func testDuplicateWritesDocumentFormat() async throws {
         let store = try store(), source = try XCTUnwrap(store.create(title: "Source", body: "Body")), page = await page(store)
-        XCTAssertTrue(page.open(noteID: source.id)); XCTAssertTrue(page.duplicateNote(noteID: source.id))
+        XCTAssertTrue(page.open(noteID: source.id)); await XCTAssertTrueAsync(await page.duplicateNote(noteID: source.id))
         let copy = try XCTUnwrap(page.active)
         XCTAssertNotEqual(copy.noteID, source.id); try assertFormat(store, copy.noteID)
         XCTAssertEqual(store.note(withID: copy.noteID)?.body, "Body")

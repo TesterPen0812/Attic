@@ -153,14 +153,6 @@ private struct TaskReplicaSnapshot: Equatable {
     let completedFromRaw: String?
     let completedFromOrder: Int64?
 
-    /// The same snapshot without the attachment lists, which each replica
-    /// keeps as its own (they are never copied between replicas).
-    var ignoringAttachmentLists: TaskReplicaSnapshot {
-        var copy = self
-        copy.imageReferencesData = nil
-        copy.removedAttachmentsData = nil
-        return copy
-    }
 
     init(_ task: TaskItem) {
         id = task.id
@@ -973,10 +965,6 @@ final class TaskStore: ObservableObject {
         update(task, tags: tags)
     }
 
-    @discardableResult
-    func setDueDay(_ dueDay: DueDay?, for task: TaskItem) -> Bool {
-        update(task, dueDay: .some(dueDay))
-    }
 
     /// The right-click menu's and a row popover's Date and Tags on several
     /// tasks (owner fixes 3 and 5): the due day set or removed, a tag added
@@ -1337,10 +1325,15 @@ final class TaskStore: ObservableObject {
             // kept (see `removeAttachment`).
             let timestamp = now()
             let shownCopy = TaskReplicaSnapshot(current)
-            for replica in try storedTasks(matching: ownerID) {
+            // Decode and encode the entire family before changing any row.
+            // A later malformed sibling must not leave a partial attachment.
+            let proposed = try storedTasks(matching: ownerID).map { replica in
                 let stamp = replica === current || TaskReplicaSnapshot(replica) == shownCopy
                 let shown = try Self.attachmentLists(of: replica).shown
-                replica.imageReferencesData = try Self.encodedAttachments(shown + imported)
+                return (replica, try Self.encodedAttachments(shown + imported), stamp)
+            }
+            for (replica, bytes, stamp) in proposed {
+                replica.imageReferencesData = bytes
                 if stamp { replica.updatedAt = timestamp }
             }
             guard save(owner: errorOwner) else {
@@ -1352,6 +1345,8 @@ final class TaskStore: ObservableObject {
             await taskImageFiles.remove(imported)
             return nil
         } catch {
+            context.rollback()
+            refresh()
             await taskImageFiles.remove(imported)
             reportAttachmentImportFailure(error, owner: errorOwner)
             return nil
@@ -1482,19 +1477,36 @@ final class TaskStore: ObservableObject {
         return (shown, removed)
     }
 
-    /// Attachments removed from tasks that are still shown, newest first.
+    /// Resolve all replicas before filtering owners: Done-log tasks retain
+    /// the same attachment recovery window as tasks in the active lists.
+    private func attachmentRecoveryOwners() throws -> [TaskItem] {
+        let candidates = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.removedAttachmentsData != nil }))
+        let ids = Array(Set(candidates.map(\.id)))
+        guard !ids.isEmpty else { return [] }
+        let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { ids.contains($0.id) }))
+        return Self.canonicalReplicas(from: replicas).filter { $0.deletedAt == nil }
+    }
+
+    /// Attachments removed from non-deleted tasks, including Done, newest first.
     func recentlyDeletedAttachments() -> [DeletedAttachmentSummary] {
-        tasks.flatMap { task in
-            task.removedAttachments.map {
-                DeletedAttachmentSummary(
-                    attachmentID: $0.reference.id,
-                    owner: AtticItemRef(.task, task.id),
-                    filename: $0.reference.filename,
-                    deletedAt: $0.removedAt
-                )
+        do {
+            return try attachmentRecoveryOwners().flatMap { task in
+                task.removedAttachments.map {
+                    DeletedAttachmentSummary(
+                        attachmentID: $0.reference.id,
+                        owner: AtticItemRef(.task, task.id),
+                        filename: $0.reference.filename,
+                        deletedAt: $0.removedAt
+                    )
+                }
             }
+            .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return []
         }
-        .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
     }
 
     /// Puts a removed attachment back at the end of its task's attachments,
@@ -1502,7 +1514,10 @@ final class TaskStore: ObservableObject {
     /// changed from its own lists, so references only a duplicate holds stay.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
-        guard let task = tasks.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
+        let owners: [TaskItem]
+        do { owners = try attachmentRecoveryOwners() }
+        catch { report(error.localizedDescription, owner: nil); return false }
+        guard let task = owners.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
               let entry = task.removedAttachments.first(where: { $0.reference.id == attachmentID }) else {
             report(TaskReplicaMutationError.attachmentNotRemoved(attachmentID).localizedDescription, owner: nil)
             return false
@@ -2501,15 +2516,6 @@ final class TaskStore: ObservableObject {
         listedTask(withID: id).map(TaskEditableState.init)
     }
 
-    /// Brings a finished main task back to Now as to do, at the top of the
-    /// to-do group: a task still in today's done group simply reopens; one
-    /// the daily cleanup moved to the Done log comes back with its subtasks
-    /// (which keep their own state). Only the fields this changes are
-    /// written, on every replica, in one save.
-    @discardableResult
-    func restoreToNow(taskID: UUID) -> Bool {
-        restoreToNow(taskIDs: [taskID])
-    }
 
     /// Restore to Now for several finished tasks (round 4, Astra's final
     /// review 1): every task, its replicas and any family coming back from

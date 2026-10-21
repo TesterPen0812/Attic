@@ -71,8 +71,6 @@ final class NoteUndoHistory {
             self.group = group
         }
 
-        /// The text this step would restore (tests).
-        var restores: String { other.string }
     }
 
     struct TableSnapshot {
@@ -146,7 +144,6 @@ final class NoteUndoHistory {
     var undoActionName: String { undoOps.last?.name ?? "" }
     var redoActionName: String { redoOps.first?.name ?? "" }
     var isChangeInFlight: Bool { !pending.isEmpty }
-    var openStep: Op? { open }
 
     /// Bytes reachable by either side of Undo/Redo remain live until the
     /// history step is discarded. This is queried for purge, never per key.
@@ -173,6 +170,13 @@ final class NoteUndoHistory {
     }
 
     func breakCoalescing() { open = nil }
+
+    /// A caret jump inside the text of a coalesced edit is still a boundary,
+    /// even if the next navigation command returns to the old typing edge.
+    func selectionMoved(to selection: NSRange) {
+        guard !isChangeInFlight, !isReplaying, let open, selection != open.selectionAfter else { return }
+        breakCoalescing()
+    }
 
     /// Steps recorded between `beginGroup` and `endGroup` undo as one.
     func beginGroup() {
@@ -513,7 +517,7 @@ final class NoteUndoHistory {
                            focusBefore: NoteTableFocus?, focusAfter: NoteTableFocus?, cell: NoteTable.Position? = nil) {
         guard !isReplaying, before != after else { return }
         if let cell, groupID == nil, let op = open, !op.isInert, var snapshot = op.tableSnapshot,
-           snapshot.id == id, snapshot.cell == cell {
+           snapshot.id == id, snapshot.cell == cell, snapshot.focusAfter == focusBefore {
             snapshot.after = after
             snapshot.focusAfter = focusAfter
             selectionCompletion = nil
@@ -682,6 +686,7 @@ final class NoteUndoHistory {
             // Even setting the same caret makes AppKit rederive typing
             // attributes from the text, discarding pending inline marks.
             if textView.selectedRange() != restored { textView.setSelectedRange(restored) }
+            textView.scrollRangeToVisible(restored)
         }
     }
 

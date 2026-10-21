@@ -641,7 +641,7 @@ final class NoteFormatControls: NSObject {
     /// isn't this chain's.
     func closeInnermostOnEscape(_ event: NSEvent) -> Bool? {
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        guard event.type == .keyDown, flags.isEmpty, let window = textView?.window else { return nil }
+        guard event.type == .keyDown, flags.isEmpty, let window = textView?.window, event.window === window else { return nil }
         // An input method keeps its Esc wherever the keyboard is.
         if let editor = (event.window ?? window).firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
         if formatModel.rowStyleListOpen {

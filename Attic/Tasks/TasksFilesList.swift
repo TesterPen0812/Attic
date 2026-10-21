@@ -25,15 +25,31 @@ struct TasksFilesList: View {
     let isImporting: Bool
     let onAttach: () -> Void
     let onRemove: (TaskImageReference) -> Void
+    /// The page's Tab loop follows this list's currently drawn controls.
+    var onTabStopsChanged: (TasksFileListID, [TasksFileFocusID]) -> Void = { _, _ in }
+    var onTabStopsRemoved: (TasksFileListID) -> Void = { _ in }
 
     /// Files shown before "N more…".
     static let collapsedCount = 4
 
     @State private var showsAll = false
+    @State private var instance = UUID()
+
+    private var listID: TasksFileListID { TasksFileListID(owner: owner, instance: instance) }
+    @FocusState private var moreFocused: Bool
+    @FocusState private var attachFocused: Bool
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @Environment(\.atticDesign) private var design
 
     private var shown: [TaskImageReference] {
         showsAll || files.count <= Self.collapsedCount + 1 ? files : Array(files.prefix(Self.collapsedCount))
+    }
+
+    private var tabStops: [TasksFileFocusID] {
+        var stops = shown.map { TasksFileFocusID.file(owner: owner, id: $0.id) }
+        if files.count > Self.collapsedCount + 1 { stops.append(.more(owner)) }
+        if canAttach { stops.append(.attach(owner)) }
+        return stops
     }
 
     /// Lines the collapsed list draws for `files` files: the first few,
@@ -41,6 +57,10 @@ struct TasksFilesList: View {
     /// a row's height before it is measured).
     static func lineCount(files: Int) -> Int {
         files > collapsedCount + 1 ? collapsedCount + 2 : files + 1
+    }
+
+    private func toggleShownFiles() {
+        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) { showsAll.toggle() }
     }
 
     var body: some View {
@@ -53,8 +73,16 @@ struct TasksFilesList: View {
                     // Its label lines up with the names above it.
                     systemName: showsAll ? "chevron.up" : "chevron.down",
                     title: showsAll ? String(localized: "Show fewer") : String(localized: "\(files.count - Self.collapsedCount) more…"),
-                    action: { withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) { showsAll.toggle() } }
+                    action: toggleShownFiles
                 )
+                .focusable()
+                .focused($moreFocused)
+                .onKeyPress(.space) { toggleShownFiles(); return .handled }
+                .onKeyPress(.return) { toggleShownFiles(); return .handled }
+                .focusEffectDisabled()
+                .atticFocusRing(moreFocused && keyboardFocusVisible, cornerRadius: AtticRadius.control(height: AtticQuietActionMetrics.height))
+                .atticFocusRequestTarget(TasksFileFocusID.more(owner), focused: $moreFocused)
+                .id(TasksFileFocusID.more(owner))
                 .accessibilityIdentifier("tasks-files-more")
             }
             AtticQuietAction(
@@ -63,6 +91,14 @@ struct TasksFilesList: View {
                 action: onAttach
             )
             .disabled(!canAttach)
+            .focusable()
+            .focused($attachFocused)
+            .onKeyPress(.space) { if canAttach { onAttach() }; return .handled }
+            .onKeyPress(.return) { if canAttach { onAttach() }; return .handled }
+            .focusEffectDisabled()
+            .atticFocusRing(attachFocused && keyboardFocusVisible, cornerRadius: AtticRadius.control(height: AtticQuietActionMetrics.height))
+            .atticFocusRequestTarget(TasksFileFocusID.attach(owner), focused: $attachFocused)
+            .id(TasksFileFocusID.attach(owner))
             .accessibilityIdentifier("tasks-files-attach")
         }
         .padding(.leading, AtticLayout.textX)
@@ -73,6 +109,9 @@ struct TasksFilesList: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Files"))
         .accessibilityIdentifier("tasks-files-\(owner.uuidString)")
+        .onAppear { onTabStopsChanged(listID, tabStops) }
+        .onChange(of: tabStops) { _, stops in onTabStopsChanged(listID, stops) }
+        .onDisappear { onTabStopsRemoved(listID) }
     }
 }
 
@@ -134,9 +173,11 @@ struct TasksFileRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
-        .focusable(interactions: .activate)
+        .focusable()
         .focusEffectDisabled()
         .focused($focused)
+        .atticFocusRequestTarget(TasksFileFocusID.file(owner: owner, id: file.id), focused: $focused)
+        .id(TasksFileFocusID.file(owner: owner, id: file.id))
         .onTapGesture(count: 2) { if canOpen { open() } else { preview() } }
         .onTapGesture(perform: preview)
         .onKeyPress(.space) { preview(); return .handled }
@@ -278,4 +319,18 @@ struct TaskFileDragPreview: View {
                 }
         }
     }
+}
+
+/// A file list's focus targets, shared with the page-owned Tab loop.
+enum TasksFileFocusID: Hashable {
+    case file(owner: UUID, id: UUID)
+    case more(UUID)
+    case attach(UUID)
+}
+
+/// A task can have overlapping old/new lists during a removal transition.
+/// Disappearance may unregister only the instance that owns the stops.
+struct TasksFileListID: Hashable {
+    let owner: UUID
+    let instance: UUID
 }

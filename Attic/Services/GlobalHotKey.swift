@@ -247,9 +247,6 @@ final class GlobalHotKey: ObservableObject {
     /// advertising one that never fires.
     @Published private(set) var registration: GlobalHotKeyRegistration = .notRegistered
 
-    convenience init(action: (@MainActor () -> Void)? = nil) {
-        self.init(combination: .newTask, action: action)
-    }
 
     init(combination: GlobalHotKeyCombination, action: (@MainActor () -> Void)? = nil) {
         self.combination = combination

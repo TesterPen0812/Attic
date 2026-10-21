@@ -12,6 +12,7 @@ final class DataSizeCostTests: XCTestCase {
         return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testP07DragWork() throws {
         for count in [500, 6000] {
             let container = try PersistenceController.makeContainer(inMemory: true)
@@ -36,6 +37,8 @@ final class DataSizeCostTests: XCTestCase {
             XCTAssertEqual(TasksDragGeometry.comparisonCount, count == 500 ? 9 : 13)
         }
     }
+    #endif
+    #if !ATTIC_GENERATED_TESTS
     func testP07ScrollViewCache() throws {
         for count in [500, 6000] {
             let page = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 500))
@@ -78,7 +81,9 @@ final class DataSizeCostTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testP09DonePagesAndReveal() throws {
         for count in [500, 5000] {
             let container = try PersistenceController.makeContainer(inMemory: true)
@@ -115,7 +120,9 @@ final class DataSizeCostTests: XCTestCase {
             XCTAssertEqual(store.donePageReadCount - p, 2)
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testP02WarmCodeRanges() {
         for count in [1000, 5000] {
             let blocks = [NoteBlock.text("Title")] + (0..<count).map { .text("let value\($0) = \($0)", style: "mono") }
@@ -183,7 +190,9 @@ final class DataSizeCostTests: XCTestCase {
             print("P2_TABLE rows=\(rows) columns=20 height_visits=\(editVisits) ms=\(ms)")
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testP10LibraryRemount() throws {
         for count in [30, 300] {
             let container = try PersistenceController.makeContainer(inMemory: true)
@@ -217,7 +226,9 @@ final class DataSizeCostTests: XCTestCase {
             print("P2_LIBRARY size=\(count) cold_decodes=\(first.bodyDecodeCount) remount_decodes=\(remount.bodyDecodeCount) cold_ms=\(coldMS) remount_ms=\(warmMS)")
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testP10DemandSummariesPreserveCountsAndRejectChangedContentWithSameToken() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let document = NoteDocument(blocks: [.text("Title"), .checklist("Checked", checked: true), .checklist("Open"), .text("Preview words")])
@@ -327,7 +338,9 @@ final class DataSizeCostTests: XCTestCase {
             print("P2_COLD_OPEN size=\(count) decodes=\(controller.coldDecodeCount) main_decodes=\(controller.coldDecodeOnMainCount) total_ms=\(ms)")
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testP05MiddleEditProjection() throws {
         for count in [1000, 5000] {
             var blocks: [NoteBlock] = [.text("Title")]
@@ -362,6 +375,7 @@ final class DataSizeCostTests: XCTestCase {
             engine.detachView()
         }
     }
+    #endif
 }
 
 private actor OpenDecodeGate {

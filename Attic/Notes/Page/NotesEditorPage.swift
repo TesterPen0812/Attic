@@ -510,7 +510,9 @@ struct NotesEditorPage: View {
             Button("") { chrome.presentMenu() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
                 .disabled(!showsEditor)
-            Button("") { if let id = currentNoteID { controller.duplicateNote(noteID: id) } }
+            Button("") {
+                if let id = currentNoteID { Task { @MainActor in _ = await controller.duplicateNote(noteID: id) } }
+            }
                 .keyboardShortcut("d", modifiers: .command)
                 .disabled(!showsEditor || !(controller.active?.isPersisted ?? false))
             Button("") { if let id = currentNoteID { controller.copyMarkdown(noteID: id) } }
@@ -680,7 +682,7 @@ struct NotesEditorPage: View {
         if editable {
             commands.append(AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
                                              isDisabled: !session.isPersisted, identifier: "notes-menu-duplicate") {
-                controller.duplicateNote(noteID: id)
+                Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
             })
         }
         if controller.canSaveRecoveryCopy(session) {
@@ -719,7 +721,7 @@ struct NotesEditorPage: View {
             AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
                              isDisabled: stored?.usesDocumentFormat != true,
                              identifier: NotesLibraryView.duplicateIdentifier) {
-                controller.duplicateNote(noteID: id)
+                Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
             },
             AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
                              isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }
@@ -1020,14 +1022,10 @@ private struct NoteStatusSlot: View {
                 return AtticStatusItem(id: "pending", systemName: nil, title: notice.kind.headline, explanation: message, tone: .quiet)
             }
             var actions: [AtticStatusItem.Action] = []
-            if notice.kind == .tablePasted, session.engine.tablePasteOffer != nil {
-                // A tabular paste became a table: one click gives its text instead.
-                actions.append(.init(title: String(localized: "Paste as Text"), identifier: "notes-paste-as-text",
-                                     handler: details {
-                                         session.notice = nil
-                                         session.engine.pasteLastTableAsText()
-                                     }))
-            }
+            if let action = NoteStatusPresentation.pasteAsTextAction(for: notice, engine: session.engine, handler: details {
+                session.notice = nil
+                session.engine.pasteLastTableAsText()
+            }) { actions.append(action) }
             actions.append(.init(title: String(localized: "Dismiss"), identifier: "notes-notice-dismiss",
                                  handler: details { session.notice = nil }))
             // The pill says the headline; the details say the sentence (D-05).

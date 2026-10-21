@@ -1,5 +1,12 @@
 # Attic performance harness and Baseline A
 
+> **Status (2026-10-20):** this is the Phase 0 record. Its baselines are not
+> the current comparison point. Today a change is judged against the last
+> accepted build: on screen with `Scripts/perf_onscreen.zsh --baseline <app>
+> --candidate <app>`, and in CI by the cost gates, whose reference commits are
+> set in `.github/workflows/macos-ci.yml`. The rule below still holds: a clear
+> regression against a comparable baseline fails; no absolute number does.
+
 This is the Phase 0 measurement contract for the local-only macOS app. The
 machine-readable Baseline A is [performance-baseline-A.json](performance-baseline-A.json).
 The first Baseline A in commit `9e0f99a` is superseded: its Tasks and Canvas

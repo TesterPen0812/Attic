@@ -15,4 +15,4 @@ Tasks cover title, all persisted metadata fields, active/subtask/done/deleted ro
 
 The nonempty purge marker records an intentionally removed format-0 fixture note. That removal is the owner-approved 2026-10-09 policy. Tests require the marker to survive and prevent a second purge, and require current recovery files and staged bytes to survive cleanup.
 
-Generation source, commands, measurements in both directions, file hashes, and CI are retained beside the external report: `/Users/taha/Projects/attic/attic-redesign-assets/phaseX/compat-c-report.md`. The historical worktrees and their temporary tools are removed after measurement. Do not regenerate these golden stores with the current build.
+The detailed generation report (source, commands, measurements in both directions, file hashes, and CI evidence) is retained privately and is unavailable in this repository. The historical worktrees and their temporary tools were removed after measurement. Do not regenerate these golden stores with the current build.

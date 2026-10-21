@@ -130,6 +130,8 @@ final class TasksAddBarState: ObservableObject {
     /// or the strip's × removes them.
     @Published var files: [TasksComposerFiles] = []
     @Published var stagingFiles = 0
+    /// Clear invalidates providers still staging for this draft.
+    var filesGeneration = UUID()
 
     /// The owner's side of the token field's undo: text and pieces step
     /// back together; nil when the draft has nothing to undo.
@@ -1755,10 +1757,11 @@ final class TasksPageModel: ObservableObject {
     var searchPlaceholder: String { String(localized: "Search done tasks") }
 
 
-    /// Return adds and keeps the bar focused; ⌘Return adds and opens the
-    /// task's page. Returns the new task.
+    /// Return adds and keeps the bar focused; ⌘Return reveals the new
+    /// task and opens its inline files. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
+        guard composerFilesReadyForSubmission() else { return nil }
         // Submitting finishes the words at the end (round 8, G1): a date or
         // priority typed after a pick, still at the caret (`Call !` then
         // Return), replaces the pick as a finished one does. Words that are
@@ -1771,21 +1774,36 @@ final class TasksPageModel: ObservableObject {
         addBarState.clearDraft()
         // Files added while it was written go onto it (O17-06).
         attachComposerFiles(to: task.id)
-        if openingPage { expandedFiles.insert(task.id) }
         selectOnly(nil)
+        var revealed = false
+        if openingPage {
+            expandedFiles.insert(task.id)
+            revealed = show(task.id) == .shown
+        }
         addedRequest = ScrollRequest(id: task.id)
-        // Added from Done, the task goes to Now, out of sight: say where.
-        if tab == .done, !openingPage { showToast(String(localized: "Added to Now")) }
+        // A requested reveal can be blocked by another unsaved edit. Only
+        // suppress the out-of-view feedback once the task is actually shown.
+        if tab == .done, !revealed { showToast(String(localized: "Added to Now")) }
         // Added where the view or a Find hides it (item 6): say so.
-        else if !openingPage, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
+        else if !revealed, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
             showToast(String(localized: "Added · hidden by this view"))
         }
         return task.id
     }
 
+    /// Preparing a provider cannot consume this draft yet. Keep the choice
+    /// explicit: a later file callback must never submit a changed draft.
+    private func composerFilesReadyForSubmission() -> Bool {
+        guard addBarState.stagingFiles > 0 else { return true }
+        toasts.show(String(localized: "Preparing files · try again in a moment"),
+                    actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
+        return false
+    }
+
     /// Pasted lines: one task per line, or all of them as one task.
     /// The offer stays (with "Not saved · Retry") until the tasks exist.
     func acceptPaste(asOne: Bool) {
+        guard composerFilesReadyForSubmission() else { return }
         guard let offer = pasteOffer else { return }
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
         let drafts = builder.drafts(from: offer.text, mode: asOne ? .single : .onePerLine)
@@ -1799,6 +1817,9 @@ final class TasksPageModel: ObservableObject {
         // The bar is empty once the tasks exist, as after a single add (round
         // 12, CU: the draft stayed behind the batch).
         addBarState.clearDraft()
+        // A paste consumes the same draft as Return. For one-per-line,
+        // its files belong to the first task, which the page reveals.
+        if let first = created.first { attachComposerFiles(to: first.id) }
         // The same observable success as a single add (round 4): the first
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.

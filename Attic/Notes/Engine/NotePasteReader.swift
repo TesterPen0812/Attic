@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import ImageIO
 
 /// Clipboard documents are untrusted. Never hand HTML/archive resource URLs to
-/// a platform importer. Local image bytes take a separate path, and WebKit has
+/// a platform importer. Embedded attachment bytes take a separate path, and WebKit has
 /// an independent deny-all delegate in case the HTML allowlist misses something.
 @MainActor
 enum NotePasteReader {
@@ -17,19 +17,28 @@ enum NotePasteReader {
         let data: Data
         let type: UTType
         let size: CGSize
+        var filename: String? = nil
+    }
+    struct File {
+        let token: String
+        let data: Data
+        let filename: String
+        let type: UTType
     }
     struct Result {
         let text: NSAttributedString
         let images: [Image]
+        let files: [File]
     }
 
     static func read(_ data: Data, type: NSPasteboard.PasteboardType) -> Result? {
         var images: [Image] = []
+        var attachments: [File] = []
         let text: NSAttributedString?
         switch type {
         case .html:
             guard let html = decodeHTML(data) else { return nil }
-            text = importHTML(sanitizeHTML(html, images: &images))
+            text = importSanitizedHTML(sanitizeHTML(html, images: &images))
         case webArchiveType, publicWebArchiveType:
             // Decode the property list ourselves, never WebArchive/WebView:
             // archive URLs are identifiers, not permission to fetch anything.
@@ -43,7 +52,7 @@ enum NotePasteReader {
                     resources[url] = bytes
                 }
             }
-            text = importHTML(sanitizeHTML(html, resources: resources, baseURL: (main["WebResourceURL"] as? String).flatMap(URL.init(string:)), images: &images))
+            text = importSanitizedHTML(sanitizeHTML(html, resources: resources, baseURL: (main["WebResourceURL"] as? String).flatMap(URL.init(string:)), images: &images))
         case .rtf:
             guard let safe = sanitizeRTF(data, images: &images) else { return nil }
             // Explicit RTF reader: no format sniffing and no HTML/WebKit path.
@@ -58,23 +67,27 @@ enum NotePasteReader {
             }
             // Do not invoke the RTFD reader: it can resolve NeXTGraphic paths.
             // Replace only attachments physically contained in this wrapper.
-            guard let safe = sanitizeRTF(rtf, resources: resources, images: &images) else { return nil }
+            guard let safe = sanitizeRTF(rtf, resources: resources, images: &images, files: &attachments) else { return nil }
             text = NSAttributedString(rtf: safe, documentAttributes: nil)
         default: return nil
         }
         guard let text else { return nil }
         let result = NSMutableAttributedString(attributedString: text)
-        var attachments: [(NSRange, Data)] = []
+        var nativeAttachments: [(NSRange, NSTextAttachment)] = []
         result.enumerateAttribute(.attachment, in: NSRange(location: 0, length: result.length)) { value, range, _ in
-            if let attachment = value as? NSTextAttachment,
-               let bytes = attachment.fileWrapper?.regularFileContents ?? attachment.contents {
-                attachments.append((range, bytes))
+            if let attachment = value as? NSTextAttachment {
+                nativeAttachments.append((range, attachment))
             }
         }
-        for (range, bytes) in attachments.reversed() {
-            result.replaceCharacters(in: range, with: image(bytes, images: &images))
+        for (range, attachment) in nativeAttachments.reversed() {
+            let wrapper = attachment.fileWrapper
+            let token = (wrapper?.regularFileContents ?? attachment.contents).map {
+                embedded($0, filename: wrapper?.preferredFilename ?? wrapper?.filename ?? "Pasted Attachment",
+                         images: &images, files: &attachments)
+            } ?? "[Attachment]"
+            result.replaceCharacters(in: range, with: token)
         }
-        return Result(text: result, images: images)
+        return Result(text: result, images: images, files: attachments)
     }
 
     private static func decodeHTML(_ data: Data, encoding: String? = nil) -> String? {
@@ -100,6 +113,23 @@ enum NotePasteReader {
         }
     }
 
+    /// With a resource delegate AppKit uses its legacy HTML path, which
+    /// turns an empty native paragraph's sole <br> into an extra soft break.
+    /// Keep that paragraph with a parse-only atom, then remove the atom.
+    private static func importSanitizedHTML(_ html: String) -> NSAttributedString? {
+        let token = "ATTICPASTEEMPTY" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let regex = try! NSRegularExpression(pattern: #"(<(p|div|li|h[1-6])(?:\s+[^<>]*)?>)[ \t]*<br>[ \t]*(</\2>)"#)
+        let source = regex.stringByReplacingMatches(in: html, range: NSRange(location: 0, length: (html as NSString).length), withTemplate: "$1" + token + "$3")
+        guard let imported = importHTML(source) else { return nil }
+        let result = NSMutableAttributedString(attributedString: imported)
+        while true {
+            let range = (result.string as NSString).range(of: token)
+            guard range.location != NSNotFound else { break }
+            result.deleteCharacters(in: range)
+        }
+        return result
+    }
+
     private final class DenyResources: NSObject, WebResourceLoadDelegate {
         nonisolated func webView(_ sender: WebView!, resource identifier: Any!, willSend request: URLRequest!,
                                  redirectResponse: URLResponse!, from dataSource: WebDataSource!) -> URLRequest? {
@@ -107,7 +137,7 @@ enum NotePasteReader {
         }
     }
 
-    private static func image(_ bytes: Data, images: inout [Image]) -> String {
+    private static func image(_ bytes: Data, filename: String? = nil, images: inout [Image]) -> String {
         guard bytes.count <= AttachmentLimits.maxBytesPerAttachment,
               let source = CGImageSourceCreateWithData(bytes as CFData, nil),
               let identifier = CGImageSourceGetType(source),
@@ -116,7 +146,19 @@ enum NotePasteReader {
               [UTType.png, .jpeg, .tiff, .gif, .heic, .bmp, .webP].contains(type),
               let size = NoteImageDecoder.pixelSize(of: bytes) else { return "" }
         let token = "ATTICPASTEIMAGE" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        images.append(Image(token: token, data: bytes, type: type, size: size))
+        images.append(Image(token: token, data: bytes, type: type, size: size, filename: filename))
+        return token
+    }
+
+    private static func embedded(_ bytes: Data, filename: String, images: inout [Image], files: inout [File]) -> String {
+        guard !bytes.isEmpty, bytes.count <= AttachmentLimits.maxBytesPerAttachment,
+              filename.utf8.count <= AttachmentLimits.maxFilenameUTF8Bytes else { return "[Attachment]" }
+        let raster = image(bytes, filename: filename, images: &images)
+        if !raster.isEmpty { return raster }
+        // Non-raster resources are inert file cards, never decoded or opened.
+        let token = "ATTICPASTEFILE" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let type = UTType(filenameExtension: (filename as NSString).pathExtension) ?? .data
+        files.append(File(token: token, data: bytes, filename: filename, type: type))
         return token
     }
 
@@ -186,9 +228,10 @@ enum NotePasteReader {
             guard tags.contains(name) else { continue }
             if closing { result += "</\(name)>"; continue }
             result += "<\(name)"
-            for key in ["href", "style", "class", "id", "start", "value", "colspan", "rowspan", "color", "face"] {
+            for key in ["href", "style", "class", "id", "start", "value", "type", "colspan", "rowspan", "color", "face"] {
                 guard let value = attributes[key] else { continue }
                 if key == "href" && name != "a" { continue }
+                if key == "type" && !["ol", "ul", "li"].contains(name) { continue }
                 let safe: String
                 if key == "style" { safe = safeCSS(value) }
                 else if key == "href", let baseURL { safe = URL(string: value, relativeTo: baseURL)?.absoluteURL.absoluteString ?? value }
@@ -226,7 +269,7 @@ enum NotePasteReader {
     }
 
     private static func safeCSS(_ css: String) -> String {
-        let properties: Set<String> = ["font-weight", "font-style", "font-family", "font-size", "text-decoration", "text-decoration-line", "color", "background-color", "text-align", "white-space", "list-style-type"]
+        let properties: Set<String> = ["font", "font-weight", "font-style", "font-family", "font-size", "min-height", "margin", "text-decoration", "text-decoration-line", "color", "background-color", "text-align", "white-space", "list-style-type"]
         return css.split(separator: ";").compactMap { entry -> String? in
             let parts = entry.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             guard parts.count == 2, properties.contains(parts[0]) else { return nil }
@@ -243,6 +286,19 @@ enum NotePasteReader {
     /// keep HYPERLINK instructions (inert destinations), never INCLUDEPICTURE,
     /// INCLUDETEXT, objects, file tables, HTML alternatives or external graphics.
     static func sanitizeRTF(_ data: Data, resources: [String: Data] = [:], images: inout [Image]) -> Data? {
+        var files: [File] = []
+        guard let safe = sanitizeRTF(data, resources: resources, images: &images, files: &files) else { return nil }
+        // Callers without a file channel still receive the promised label.
+        var result = safe
+        for file in files {
+            while let range = result.range(of: Data(file.token.utf8)) {
+                result.replaceSubrange(range, with: Data("[Attachment]".utf8))
+            }
+        }
+        return result
+    }
+
+    private static func sanitizeRTF(_ data: Data, resources: [String: Data], images: inout [Image], files: inout [File]) -> Data? {
         let bytes = [UInt8](data)
         guard bytes.starts(with: Array("{\\rtf".utf8)) else { return nil }
         var index = 0
@@ -262,24 +318,38 @@ enum NotePasteReader {
                         guard rasterPicture else { return Array("[Attachment]".utf8) }
                         if picture.isEmpty {
                             let digits = Array(hex.utf8)
-                            guard digits.count.isMultiple(of: 2) else { return [] }
+                            guard digits.count.isMultiple(of: 2) else { return Array("[Attachment]".utf8) }
                             for offset in stride(from: 0, to: digits.count, by: 2) {
-                                guard let byte = UInt8(String(decoding: digits[offset...offset + 1], as: UTF8.self), radix: 16) else { return [] }
+                                guard let byte = UInt8(String(decoding: digits[offset...offset + 1], as: UTF8.self), radix: 16) else { return Array("[Attachment]".utf8) }
                                 picture.append(byte)
                             }
                         }
-                        return Array(image(Data(picture), images: &images).utf8)
+                        let token = image(Data(picture), images: &images)
+                        return Array((token.isEmpty ? "[Attachment]" : token).utf8)
                     }
                     if destination == "nextgraphic" {
+                        // Apple's RTFD writer appends one legacy attachment
+                        // fallback byte after the destination. Consume only
+                        // that byte here; a person's literal ¬ stays intact.
+                        if index < bytes.count, bytes[index] == 0xac { index += 1 }
+                        else if index + 4 <= bytes.count,
+                                String(decoding: bytes[index..<index + 4], as: UTF8.self).lowercased() == "\\'ac" { index += 4 }
                         let raw = String(decoding: bytes[start..<index], as: UTF8.self)
                         // A wrapper filename is a flat exact key, never a URL/path.
-                        let pattern = #"^\{\\NeXTGraphic\s+([^\\{}]+)"#
+                        let pattern = #"^\{\\NeXTGraphic (?:[^\\{}]|\\[\\{}])+"#
                         if let range = raw.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
-                            let name = String(raw[range]).replacingOccurrences(of: #"^\{\\NeXTGraphic\s+"#,
-                                with: "", options: [.regularExpression, .caseInsensitive]).trimmingCharacters(in: .whitespacesAndNewlines)
-                            if let payload = resources[name] { return Array(image(payload, images: &images).utf8) }
+                            var name = String(raw[range]).replacingOccurrences(of: #"^\{\\NeXTGraphic "#,
+                                with: "", options: [.regularExpression, .caseInsensitive])
+                            // One space separates the filename from the next
+                            // control word; escaped braces/backslashes belong
+                            // to the exact wrapper key, including its spaces.
+                            if name.hasSuffix(" ") { name.removeLast() }
+                            name = name.replacingOccurrences(of: #"\\([\\{}])"#, with: "$1", options: .regularExpression)
+                            if let payload = resources[name] {
+                                return Array(embedded(payload, filename: name, images: &images, files: &files).utf8)
+                            }
                         }
-                        return []
+                        return Array("[Attachment]".utf8)
                     }
                     if destination == "fldinst" {
                         let raw = String(decoding: output, as: UTF8.self)

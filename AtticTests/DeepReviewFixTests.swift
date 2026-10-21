@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Quartz
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -471,6 +472,169 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(hosted.model.editingTitleID, now[now.count - 2], "Return edits the row that shows the keyboard")
     }
 
+    func testCommandReturnFromDoneRevealsTheNewTasksInlineFiles() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 560, addBarFocused: true)
+        defer { hosted.close() }
+        hosted.go(to: .done)
+        hosted.model.addBarState.text.text = "Command Return from Done"
+        hosted.spin(0.3)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.spin(1.2)
+        let task = try XCTUnwrap(hosted.store.tasks.first { $0.title == "Command Return from Done" })
+        XCTAssertEqual(task.status, .todo)
+        XCTAssertEqual(hosted.model.tab, .now)
+        XCTAssertEqual(hosted.shownPage(), TasksTab.now.rawValue)
+        XCTAssertTrue(hosted.model.expandedFiles.contains(task.id))
+        XCTAssertTrue(hosted.model.hasVisibleInlineFiles)
+        let open = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
+        hosted.model.setFilesExpanded(task.id, false)
+        hosted.spin(0.5)
+        let closed = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
+        XCTAssertEqual(open.height - closed.height, AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding, accuracy: 2,
+                       "the created task's inline Attach file line is rendered")
+        XCTAssertNotNil(hosted.window.firstResponder, "the keyboard remains in the window after navigation")
+    }
+
+    func testDeletingFocusedFileLeavesPageShortcutsAndDoneTypingWorking() async throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 680)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-delete-\(UUID()).txt")
+        try Data("file".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let imported = await hosted.store.attachFiles([url], to: id)
+        XCTAssertTrue(imported)
+        let file = try XCTUnwrap(hosted.store.task(withID: id)?.attachments.first)
+        hosted.spin(0.3)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.press("\t", keyCode: 48)
+        let target = TasksFileFocusID.file(owner: id, id: file.id)
+        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(target))
+        hosted.press("\u{F728}", keyCode: 117)
+        XCTAssertTrue(try XCTUnwrap(hosted.store.task(withID: id)).attachments.isEmpty)
+        // Reproduce SwiftUI resetting FocusState before disappearance can
+        // report blur, or delivering a final focus report after removal.
+        let requests = try XCTUnwrap(hosted.pointer.keyboardControlRequests)
+        requests.note(target, focused: true)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("1", keyCode: 18, modifiers: [.command, .option])
+        XCTAssertEqual(hosted.store.task(withID: id)?.priority, .low)
+        NSPasteboard.general.clearContents()
+        hosted.press("c", keyCode: 8, modifiers: .command)
+        XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
+            try XCTUnwrap(hosted.store.task(withID: id)).title) == true)
+        hosted.go(to: .done)
+        let done = try XCTUnwrap(hosted.model.doneDays().first?.rows.first?.id)
+        try hosted.clickRow(done, tab: .done)
+        requests.note(target, focused: true)
+        hosted.press("q", keyCode: 12)
+        XCTAssertEqual(hosted.model.searchQuery(for: .done), "q")
+    }
+
+    func testTabVisitsInlineFilesAndTheirActionsInBothDirections() async throws {
+        try requireKeyWindowTests()
+        let policy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.accessory)
+        defer { NSApp.setActivationPolicy(policy) }
+        let hosted = try Hosted(height: 680)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        NSApp.activate(ignoringOtherApps: true)
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-files-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let urls = try (0..<6).map { index -> URL in
+            let image = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            for x in 0..<2 { for y in 0..<2 {
+                image.setColor(NSColor(calibratedRed: CGFloat(index) / 6, green: 0.5, blue: 0.5, alpha: 1), atX: x, y: y)
+            } }
+            let url = root.appendingPathComponent("File \(index).png")
+            try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: url)
+            return url
+        }
+        let imported = await hosted.store.attachFiles(urls, to: id)
+        XCTAssertTrue(imported)
+        let files = try XCTUnwrap(hosted.store.task(withID: id)).attachments
+        XCTAssertEqual(files.count, 6)
+        var attached: [UUID] = []
+        hosted.model.services.chooseFiles = { attached.append($0) }
+        hosted.spin(0.5)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        XCTAssertTrue(hosted.model.expandedFiles.contains(id))
+        XCTAssertTrue(hosted.window.isKeyWindow)
+
+        func focused() -> String? {
+            // AppKit reports the NSHostingView for SwiftUI content focus.
+            // Read the live view's FocusState report, not the requested stop.
+            switch hosted.pointer.keyboardControl?()?.base as? TasksFileFocusID {
+            case let .file(_, file)?: "task-attachment-\(file.uuidString)"
+            case .more?: "tasks-files-more"
+            case .attach?: "tasks-files-attach"
+            case nil: nil
+            }
+        }
+        func preview(_ file: TaskImageReference) async throws {
+            let verified = try await hosted.store.taskImageFiles.verifiedURL(for: file)
+            let expected = try XCTUnwrap(verified)
+            hosted.press(" ", keyCode: 49)
+            let panel = try XCTUnwrap(QLPreviewPanel.shared())
+            defer { panel.orderOut(nil); hosted.window.makeKey(); hosted.spin(0.2) }
+            func url() -> URL? {
+                AttachmentQuickLookPresenter.shared.previewPanel(panel, previewItemAt: 0) as? URL
+            }
+            let end = Date().addingTimeInterval(5)
+            while url() != expected, Date() < end { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(url(), expected, "Space previews the exact file reached through Tab")
+            XCTAssertEqual(hosted.store.task(withID: id)?.status, .todo, "file activation never completes the selected parent")
+        }
+        let fileStops = files.map { "task-attachment-\($0.id.uuidString)" }
+        let collapsed = Array(fileStops.prefix(4)) + ["tasks-files-more", "tasks-files-attach"]
+        for expected in collapsed {
+            hosted.press("\t", keyCode: 48)
+            let actual = try XCTUnwrap(focused(), "Tab must land on a live inline control")
+            XCTAssertEqual(actual, expected, "Tab reaches each visible file/action")
+            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
+        }
+        for expected in collapsed.dropLast().reversed() {
+            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+            XCTAssertEqual(focused(), expected, "Shift-Tab retraces each visible file/action")
+        }
+        // A focused file owns Space, even while its parent is selected.
+        try await preview(files[0])
+
+        // Forward to More; its Space expands the list. Backward now reaches
+        // both newly visible files before the original four.
+        for _ in 0..<4 { hosted.press("\t", keyCode: 48) }
+        XCTAssertEqual(focused(), "tasks-files-more")
+        hosted.press(" ", keyCode: 49)
+        for expected in fileStops.reversed() {
+            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+            XCTAssertEqual(focused(), expected)
+            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
+        }
+        for expected in Array(fileStops.dropFirst()) + ["tasks-files-more", "tasks-files-attach"] {
+            hosted.press("\t", keyCode: 48)
+            XCTAssertEqual(focused(), expected)
+        }
+        hosted.press(" ", keyCode: 49)
+        XCTAssertEqual(attached, [id], "Attach file is reachable and acts on the owner")
+        XCTAssertNil(hosted.model.editingTitleID)
+    }
+
     /// A8 P2-A8-1 (A10): in the combined app Tab reached rows out of view
     /// (`R12` while rows 1–7 showed), with no ring and no scroll, and a
     /// filtered list's cycle had blank stops and skipped Find. In a list
@@ -543,6 +707,96 @@ final class DeepReviewFixTests: XCTestCase {
             XCTAssertEqual(next, cycle[(index + 1) % cycle.count], "Tab after \(stop)")
         }
         XCTAssertTrue(filtered.contains(.find), "Find is on the way")
+    }
+
+    private final class FileListPresence: ObservableObject {
+        @Published var original = true
+        @Published var replacement = false
+    }
+
+    private struct FileListLifetimeProbe: View {
+        @ObservedObject var presence: FileListPresence
+        let store: TaskStore
+        let owner: UUID
+        let pointer: TasksPointer
+
+        private var list: some View {
+            TasksFilesList(files: [], store: store, owner: owner, canAttach: true,
+                           isImporting: false, onAttach: {}, onRemove: { _ in },
+                           onTabStopsChanged: { list, stops in
+                               pointer.registerFileTabStops(stops, for: TasksRowID(tab: .now, id: list.owner), instance: list.instance)
+                           }, onTabStopsRemoved: { list in
+                               pointer.unregisterFileTabStops(for: TasksRowID(tab: .now, id: list.owner), instance: list.instance)
+                           })
+        }
+
+        var body: some View {
+            VStack {
+                if presence.original { list }
+                if presence.replacement { list }
+            }
+        }
+    }
+
+    func testDisappearingFileListCannotClearReplacementStops() throws {
+        let hosted = try Hosted(height: 520, keyWindow: false)
+        defer { hosted.close() }
+        let presence = FileListPresence(), pointer = TasksPointer(), owner = UUID()
+        hosted.window.contentView = NSHostingView(rootView: FileListLifetimeProbe(
+            presence: presence, store: hosted.store, owner: owner, pointer: pointer)
+            .atticDesign(AtticDesignContext(mode: .light)))
+        hosted.spin(0.2)
+        let row = TasksRowID(tab: .now, id: owner)
+        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)])
+        presence.replacement = true
+        hosted.spin(0.2)
+        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)])
+        presence.original = false
+        hosted.spin(0.2)
+        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)], "a late old disappearance cannot erase the visible list")
+        presence.replacement = false
+        hosted.spin(0.2)
+        XCTAssertTrue(pointer.fileTabStops[row]?.isEmpty ?? true, "the last list unregisters its own stops")
+    }
+
+    func testShiftTabReachesFilesAfterTheirListScrollsOut() async throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520, long: true)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        hosted.model.services.chooseFiles = { _ in }
+        let owner = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-scroll-\(UUID()).txt")
+        try Data("file".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let imported = await hosted.store.attachFiles([url], to: owner)
+        XCTAssertTrue(imported)
+        hosted.spin(0.3)
+        try hosted.clickRow(owner, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.press("\t", keyCode: 48) // File.
+        hosted.press("\t", keyCode: 48) // Attach.
+        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(TasksFileFocusID.attach(owner)))
+        hosted.press("\t", keyCode: 48) // Next task.
+        XCTAssertNotNil(hosted.pointer.keyboardRow)
+        XCTAssertNotEqual(hosted.pointer.keyboardRow?.id, owner)
+        let next = try XCTUnwrap(hosted.pointer.keyboardRow?.id)
+        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: next)])
+        let list = try shownList(hosted)
+        let listTop = TasksViewport.listTop(tabsTop: layout(hosted).headerBottom + AtticLayout.pageTabsTop)
+        let clip = list.contentView
+        clip.scroll(to: CGPoint(x: 0, y: clip.bounds.origin.y + frame.minY - listTop))
+        list.reflectScrolledClipView(clip)
+        hosted.spin(0.5)
+        try hosted.clickRow(next, tab: .now)
+        XCTAssertEqual(hosted.pointer.keyboardRow?.id, next, "the next row stays visible and owns Shift-Tab")
+        XCTAssertFalse(hosted.pointer.fileTabStops[TasksRowID(tab: .now, id: owner)]?.isEmpty ?? true,
+                       "lazy disappearance must retain the expanded list's stops")
+        hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(TasksFileFocusID.attach(owner)))
     }
 
     // MARK: - P3-01: the strip's values in full

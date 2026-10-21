@@ -1592,6 +1592,17 @@ final class NotesFormatControlsTests: XCTestCase {
         }
     }
 
+    func testPRB1DateQueryRejectsOverflowingWeekCounts() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 30)))
+        for query in ["\(Int.max) weeks", "\(Int.min) weeks", "in \(Int.max / 7 + 1) weeks", "\(Int.min / 7 - 1) weeks"] {
+            XCTAssertNil(NoteDateQuery.parse(query, today: today, calendar: calendar), query)
+        }
+        XCTAssertEqual(NoteDateQuery.parse("in 2 weeks", today: today, calendar: calendar),
+                       calendar.date(byAdding: .day, value: 14, to: today))
+    }
+
     func testDateQueriesReadCommonWords() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
@@ -1651,6 +1662,36 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(controls.formatModel.barKeyboardIndex)
         XCTAssertTrue(controls.formatModel.barShown, "the first Esc only leaves the bar's keyboard mode")
         XCTAssertEqual(panelHides, 0)
+    }
+
+    func testPRB1FormatMonitorLeavesAnotherWindowsEscapeAlone() throws {
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false; windows.append(other)
+        var forwarded = 0
+        let monitor = try XCTUnwrap(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.window === other { forwarded += 1 }
+            return event
+        })
+        defer { NSEvent.removeMonitor(monitor) }
+        let (controls, _, text) = make()
+        var closed = 0
+        controls.closeFormatBar = { closed += 1; controls.isFormatBarOpen = false }
+        controls.isFormatBarOpen = true
+        XCTAssertFalse(controls.handleKey(escape(in: other)))
+        NSApp.sendEvent(escape(in: other))
+        XCTAssertEqual(forwarded, 1, "the foreign event remains in NSApp's local-monitor path")
+        XCTAssertEqual(closed, 0)
+        XCTAssertTrue(controls.isFormatBarOpen)
+        controls.isFormatBarOpen = true
+        controls.formatModel.rowStyleListOpen = true
+        NSApp.sendEvent(escape(in: other))
+        XCTAssertEqual(forwarded, 2)
+        XCTAssertTrue(controls.formatModel.rowStyleListOpen)
+        NSApp.sendEvent(escape(in: try XCTUnwrap(text.window)))
+        XCTAssertFalse(controls.formatModel.rowStyleListOpen, "the owner-window monitor still closes its list")
+        NSApp.sendEvent(escape(in: text.window!))
+        XCTAssertEqual(closed, 1, "the owner-window monitor still closes its row")
     }
 
     func testEscClosesTheFormatRowAndIsUsedUp() {

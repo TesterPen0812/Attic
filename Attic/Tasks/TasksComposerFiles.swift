@@ -27,6 +27,7 @@ extension TasksPageModel {
     /// A batch that cannot be staged says why, as a drop on a row does.
     func addComposerFiles(_ providers: [NSItemProvider]) {
         guard !providers.isEmpty else { return }
+        let generation = addBarState.filesGeneration
         addBarState.stagingFiles += 1
         // The providers are handed over whole and never touched here again
         // (a drop on a row hands its own over the same way).
@@ -35,10 +36,12 @@ extension TasksPageModel {
             do {
                 let staging = try await TaskDroppedFiles.stage(batch)
                 guard let self else { staging.discard(); return }
+                guard self.addBarState.filesGeneration == generation else { staging.discard(); return }
                 self.addBarState.stagingFiles -= 1
                 self.appendComposerFiles(staging)
             } catch {
                 guard let self else { return }
+                guard self.addBarState.filesGeneration == generation else { return }
                 self.addBarState.stagingFiles -= 1
                 self.store.reportAttachmentImportFailure(error)
             }
@@ -65,6 +68,8 @@ extension TasksPageModel {
     /// The strip's × on the files: none go onto the new task. Staged copies
     /// Attic made are removed; originals are never touched.
     func clearComposerFiles() {
+        addBarState.filesGeneration = UUID()
+        addBarState.stagingFiles = 0
         let files = addBarState.files
         addBarState.files = []
         files.forEach { $0.staging.discard() }

@@ -662,12 +662,14 @@ final class MCPRequestHandlerTests: XCTestCase {
 
     // MARK: - Phase 0: Recently Deleted, tags, dates and links
 
-    private func makeLibraryHandler() throws -> (AtticLibrary, MCPRequestHandler) {
+    private func makeLibraryHandler(
+        persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) throws -> (AtticLibrary, MCPRequestHandler) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
         let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 24, hour: 10))!
         // Every store shares the task store's container, as in the app.
-        let noteStore = trackAttachmentReconciliation(of: NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let noteStore = trackAttachmentReconciliation(of: NoteStore(container: store.container, persist: persist, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: CanvasStore(container: store.container))
         let handler = MCPRequestHandler(
             tools: AgentTaskTools(
@@ -817,6 +819,83 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 0)
         XCTAssertTrue(try toolError(handler, "restore_item", ["kind": "task", "id": task.id.uuidString])
             .contains("Recently Deleted"))
+    }
+
+    func testDirectAgentNoteDeletionRecordsUndoAndRedoForBothTools() throws {
+        for tool in ["delete_note", "delete_item"] {
+            let (library, handler) = try makeLibraryHandler()
+            let notes = try XCTUnwrap(library.notes)
+            let note = try XCTUnwrap(notes.create(title: "Undo target", body: "Keep this body"))
+            let id = note.id
+            let content = note.content
+            let before = library.undo.totalStepCount
+            let result = try callNoteTool(handler, tool, ["kind": "note", "id": id.uuidString,
+                "base_revision": note.revisionToken])
+            XCTAssertEqual(result["status"] as? String, "applied")
+            XCTAssertNil(notes.note(withID: id))
+            XCTAssertEqual(library.undo.totalStepCount, before + 1)
+            XCTAssertEqual(library.undo.undoName(in: .note(id)), "Delete Note")
+            XCTAssertTrue(library.undo.undo(in: .note(id)))
+            let restored = notes.note(withID: id)
+            XCTAssertNotNil(restored)
+            XCTAssertEqual(restored?.title, "Undo target")
+            XCTAssertEqual(restored?.body, "Keep this body")
+            XCTAssertEqual(restored?.content, content)
+            XCTAssertTrue(library.undo.redo(in: .note(id)))
+            XCTAssertNil(notes.note(withID: id))
+            XCTAssertEqual(library.undo.totalStepCount, before + 1, "Undo/Redo reuse the same command")
+        }
+    }
+
+    func testAgentNoteDeletionRecordsNoUndoForProposalsOrRefusedWrites() throws {
+        for tool in ["delete_note", "delete_item"] {
+            for scenario in ["stale", "divergent", "save", "proposal", "refused", "missing"] {
+                var failSave = false
+                let (library, handler) = try makeLibraryHandler { context in
+                    if failSave { throw NSError(domain: "PRB2", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Injected delete save failure"]) }
+                    try context.save()
+                }
+                let notes = try XCTUnwrap(library.notes)
+                let note = try XCTUnwrap(notes.create(title: "Preserved \(scenario)", body: "Original body"))
+                let id = note.id
+                var arguments: [String: Any] = ["kind": "note", "id": id.uuidString, "base_revision": note.revisionToken]
+                switch scenario {
+                case "stale": arguments["base_revision"] = "stale revision"
+                case "divergent":
+                    let context = ModelContext(store.container)
+                    let replica = NoteItem(id: id, title: note.title, body: "Divergent body",
+                        createdAt: note.createdAt, updatedAt: note.updatedAt.addingTimeInterval(-1))
+                    replica.revisionID = note.revisionID
+                    replica.revision = note.revision
+                    context.insert(replica)
+                    try context.save()
+                    notes.refresh()
+                case "save": failSave = true
+                case "proposal": notes.agentWriteDisposition = { _ in .proposal }
+                case "refused": notes.agentWriteDisposition = { _ in .refuse("Busy with unsaved text") }
+                case "missing": arguments["base_revision"] = nil
+                default: XCTFail("unknown scenario")
+                }
+                let before = library.undo.totalStepCount
+                if scenario == "proposal" {
+                    let result = try callNoteTool(handler, tool, arguments)
+                    XCTAssertEqual(result["status"] as? String, "pending")
+                    XCTAssertTrue(notes.pendingEdits(noteID: id).contains { $0.isDeletion })
+                } else {
+                    let message = try toolError(handler, tool, arguments)
+                    if scenario == "divergent" { XCTAssertTrue(message.contains("replicas disagree")) }
+                    if scenario == "save" { XCTAssertTrue(message.contains("Injected delete save failure")) }
+                }
+                XCTAssertEqual(library.undo.totalStepCount, before, "\(tool): \(scenario) is not an applied deletion")
+                XCTAssertNotNil(notes.note(withID: id))
+                let rows = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>())
+                    .filter { $0.id == id }
+                XCTAssertEqual(rows.count, scenario == "divergent" ? 2 : 1)
+                XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil }, "no replica was deleted")
+                failSave = false
+            }
+        }
     }
 
     func testDeleteNoteNowMovesTheNoteToRecentlyDeleted() throws {

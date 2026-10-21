@@ -731,16 +731,38 @@ final class NotesV2TablesFeatureTests: XCTestCase {
 
     // MARK: Paste and copy
 
+    func testPRB1PasteAsTextRefusesAnOfferAfterEditsOrUndo() throws {
+        for intervening in ["edit", "undo-replace", "undo-redo"] {
+            let (engine, _) = makeEngine([.text("T"), .text("body")])
+            XCTAssertTrue(engine.pastePlainText("a\tb\nc\td", at: NSRange(location: engine.textStorage.length, length: 0)))
+            XCTAssertNotNil(engine.tablePasteOffer)
+            if intervening != "edit" { XCTAssertTrue(engine.history.undo()) }
+            if intervening == "undo-redo" { XCTAssertTrue(engine.history.redo()) }
+            else {
+                XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                    with: NSAttributedString(string: "keep"), name: "Typing"))
+            }
+            let before = engine.document(), depth = engine.history.undoOps.count
+            XCTAssertNil(NoteStatusPresentation.pasteAsTextAction(for: NoteNotice(kind: .tablePasted, detail: NoteTablePasteOffer.notice),
+                engine: engine, handler: {}), "the page hides a stale action")
+            XCTAssertFalse(engine.pasteLastTableAsText(), intervening)
+            XCTAssertEqual(engine.document(), before, intervening)
+            XCTAssertEqual(engine.history.undoOps.count, depth, intervening)
+            XCTAssertNil(engine.tablePasteOffer)
+        }
+    }
+
     func testTabularPasteBecomesATableInOneStepWithPasteAsText() throws {
         let (engine, textView) = makeEngine([.text("Note"), .text("Intro")])
-        var notices: [String] = []
-        engine.onNotice = { notices.append($0.detail) }
+        var notices: [NoteNotice] = []
+        engine.onNotice = { notices.append($0) }
         let end = engine.textStorage.length
         XCTAssertTrue(engine.pastePlainText("Pillar\tWhat happened\nIntegrity\tEncrypted\n", at: NSRange(location: end, length: 0)))
         settle(engine, textView)
         XCTAssertEqual(engine.document().blocks.map(\.kind), [.text, .text, .table, .text])
         XCTAssertEqual(engine.document().blocks[1].text, "Intro", "the text before stays on its line")
-        XCTAssertEqual(notices.last, NoteTablePasteOffer.notice)
+        XCTAssertEqual(notices.last?.detail, NoteTablePasteOffer.notice)
+        XCTAssertEqual(notices.last?.kind, .tablePasted)
         XCTAssertNotNil(engine.tablePasteOffer)
         XCTAssertTrue(engine.pasteLastTableAsText())
         XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
@@ -754,7 +776,7 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         let huge = (0..<(NoteTable.maxRows + 1)).map { "r\($0)\tx" }.joined(separator: "\n")
         XCTAssertTrue(engine.pastePlainText(huge, at: NSRange(location: engine.textStorage.length, length: 0)))
         XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
-        XCTAssertTrue(notices.last?.contains("pasted as text") == true)
+        XCTAssertTrue(notices.last?.detail.contains("pasted as text") == true)
     }
 
     func testCopiedCellsPasteIntoAnotherCellAndGrowTheTable() throws {
@@ -779,6 +801,78 @@ final class NotesV2TablesFeatureTests: XCTestCase {
         engine.clearCells(in: view, range: view.cellSelection!, name: "Cut")
         XCTAssertEqual(attachment.table.rows[1].cells.map(\.text), ["", ""])
         XCTAssertEqual(attachment.table.rowCount, 4)
+    }
+
+    func testPRB1AddChipsTrackReleaseBoundsThroughTheWindow() throws {
+        for column in [false, true] {
+            for release in ["inside", "outside", "return"] {
+                let (engine, text) = makeEngine(blocks(.blank()))
+                let tableView = try view(engine), attachment = try table(engine)
+                let cell = P(row: 1, column: 0)
+                tableView.activate(cell, caret: .start)
+                let chrome = NoteTableChrome(engine: engine, textView: text, design: .default)
+                defer { chrome.invalidate() }
+                let window = try XCTUnwrap(text.window)
+                window.orderFront(nil)
+                settle(engine, text)
+                chrome.place()
+                let chip = column ? chrome.addColumnChip : chrome.addRowChip
+                XCTAssertFalse(chip.isHidden)
+                XCTAssertNil(chip.onDrag)
+                let start = chip.convert(CGPoint(x: chip.bounds.midX, y: chip.bounds.midY), to: nil)
+                let hit = window.contentView?.hitTest(window.contentView!.superview!.convert(start, from: nil))
+                XCTAssertTrue(hit === chip, "native window hit test reaches the add chip: \(String(describing: hit))")
+                let outside = CGPoint(x: start.x - 80, y: start.y + 60)
+                let end = release == "outside" ? outside : start
+                func event(_ type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+                    try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                }
+                let before = engine.document(), selection = tableView.editor.selectedRange()
+                let depth = engine.history.undoOps.count
+                if release != "inside" { NSApp.postEvent(try event(.leftMouseDragged, at: outside), atStart: false) }
+                NSApp.postEvent(try event(.leftMouseUp, at: end), atStart: false)
+                window.sendEvent(try event(.leftMouseDown, at: start))
+                if release == "outside" {
+                    XCTAssertEqual(engine.document(), before, "releasing outside cancels the structural edit")
+                    XCTAssertEqual(engine.history.undoOps.count, depth)
+                    XCTAssertEqual(tableView.activeCell, cell)
+                    XCTAssertEqual(tableView.editor.selectedRange(), selection)
+                } else {
+                    XCTAssertEqual(attachment.table.rowCount, before.blocks[2].table!.rowCount + (column ? 0 : 1))
+                    XCTAssertEqual(attachment.table.columnCount, before.blocks[2].table!.columnCount + (column ? 1 : 0))
+                    XCTAssertTrue(engine.history.undo())
+                    XCTAssertEqual(engine.document(), before)
+                }
+            }
+        }
+    }
+
+    func testPRB1PrivateBlockPasteSeparatesAndFormatsItsSurvivingTail() throws {
+        for block in [NoteBlock.table(.blank()), NoteBlock.divider()] {
+            let (source, _) = makeEngine([.text("Source"), block])
+            let board = NSPasteboard(name: .init("PRB1-block-\(UUID())"))
+            defer { board.releaseGlobally() }
+            let object = try XCTUnwrap(source.objects().first)
+            XCTAssertTrue(source.writeSelection(object.1, to: board, types: [NoteEditorEngine.fragmentType]))
+            let data = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+            let (engine, text) = makeEngine([.text("T"), .text("abcd")])
+            text.setSelectedRange(NSRange(location: 4, length: 0))
+            XCTAssertTrue(engine.paste(fragmentData: data, at: text.selectedRange()))
+            XCTAssertEqual(engine.textStorage.string, "T\nab\n\u{FFFC}\ncd")
+            let pasted = engine.document()
+            let tail = (text.string as NSString).range(of: "cd")
+            XCTAssertTrue(engine.validate(.paragraph(.heading(2)), selection: tail).enabled)
+            XCTAssertTrue(engine.perform(.paragraph(.heading(2)), selection: tail))
+            XCTAssertEqual(engine.document().blocks.last?.style, "heading")
+            let saved = try NoteContentCodec.encode(engine.document())
+            let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(saved).document))
+            XCTAssertEqual(reopened.document(), engine.document())
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), pasted)
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.textStorage.string, "T\nabcd")
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.textStorage.string, "T\nab\n\u{FFFC}\ncd")
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), reopened.document())
+        }
     }
 
     func testAWholeTableCopiesAsATableAndPastesBackWithNewIds() throws {

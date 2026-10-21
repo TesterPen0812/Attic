@@ -257,6 +257,28 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.toasts.current?.message, "Added to Now")
     }
 
+    func testAlternateSubmissionRevealsItsOwningTabAndClearsOnlyItsNarrowingView() throws {
+        for source in [TasksTab.done, .now, .backlog] {
+            let target: TasksTab = source == .backlog ? .backlog : .now
+            model.setSearchQuery("Keep this Done query", for: .done)
+            var options = model.viewOptions(for: target)
+            options.priority = .highOnly
+            model.setViewOptions(options, for: target)
+            model.setSearchQuery("Hides the new task", for: target)
+            model.select(tab: source)
+            model.addBar.text = "Alternate submission"
+            let id = try XCTUnwrap(model.submitAddBar(openingPage: true))
+            XCTAssertEqual(store.task(withID: id)?.status, source == .backlog ? .backlog : .todo)
+            XCTAssertEqual(model.tab, target)
+            XCTAssertTrue(model.rows(for: target).contains { $0.id == id }, "the promised files belong to a visible task")
+            XCTAssertTrue(model.expandedFiles.contains(id))
+            XCTAssertEqual(model.scrollRequest?.id, id)
+            XCTAssertEqual(model.scrollRequest?.tab, target)
+            XCTAssertNil(model.toasts.current, "successful reveal needs no out-of-view toast")
+            XCTAssertEqual(model.searchQuery(for: .done), "Keep this Done query", "navigation preserves the other tab's query")
+        }
+    }
+
     func testChipsFormOnceAWordIsFinishedAndBackspaceTurnsOneBackIntoText() throws {
         var bar = TaskAddBarText(text: "Call fri #home")
         let parser = model.parser

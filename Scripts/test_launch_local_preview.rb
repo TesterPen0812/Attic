@@ -67,6 +67,18 @@ class LaunchLocalPreviewTest < Minitest::Test
     assert_includes stderr, "single path-safe component"
   end
 
+  def test_executable_name_reaches_only_the_app_target
+    stdout, stderr, status = dry_run("--executable-name", "AtticLedgerPreview")
+
+    assert status.success?, stderr
+    assert_includes stdout, "ATTIC_MACOS_PRODUCT_NAME=AtticLedgerPreview"
+    assert_includes stdout, "ATTIC_MACOS_EXECUTABLE_NAME=AtticLedgerPreview"
+    # A command-line PRODUCT_NAME renames the Swift package targets too
+    # (cmark-gfm), and the build fails with "Multiple commands produce".
+    refute_match(/(^|[\s'"])PRODUCT_NAME=/, stdout)
+    refute_match(/(^|[\s'"])EXECUTABLE_NAME=/, stdout)
+  end
+
   def test_launcher_never_uses_broad_process_name_kills
     source = File.read(SCRIPT)
 

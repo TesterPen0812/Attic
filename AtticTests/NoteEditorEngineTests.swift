@@ -9,7 +9,195 @@ import XCTest
 /// identity, IME over a selection, VoiceOver elements.
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
+    func testPRB12InlineMeasurementsReuseWarmCache() throws {
+        let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
+        let today = NoteDay(date: Date())
+        let cells = (0..<300).map { index in
+            NoteTable.Cell("Due \u{FFFC} item \(index)", inlines: [NoteInline(id: UUID(), kind: .date(today))])
+        }
+        let cache = NoteTableTextCache()
+        var renders = 0
+        func pass() {
+            for cell in cells {
+                func text() -> NSAttributedString {
+                    renders += 1
+                    return NoteTextCodec.cellString(cell, attributes: style.tableCellAttributes(header: false), style: style) {
+                        renderer.apply(to: $0, today: today)
+                    }
+                }
+                _ = cache.natural(cell, header: false, string: text)
+                _ = cache.minimum(cell, header: false, string: text)
+                _ = cache.height(cell, header: false, width: 120, string: text)
+            }
+        }
+        pass()
+        let coldRenders = renders
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 { pass() }
+        print("PRB12_300_DATE_CHIPS_MS_PER_PASS=\((CFAbsoluteTimeGetCurrent() - start) * 1000 / 10)")
+        XCTAssertEqual(coldRenders, 900)
+        XCTAssertEqual(renders, coldRenders, "warm natural/minimum/height must not render the 300 unchanged date chips again")
+        let plainCache = NoteTableTextCache()
+        let plain = (0..<300).map { NoteTable.Cell("Due item \($0)") }
+        func plainPass() {
+            for cell in plain {
+                func text() -> NSAttributedString { NSAttributedString(string: cell.text, attributes: style.tableCellAttributes(header: false)) }
+                _ = plainCache.natural(cell, header: false, string: text)
+                _ = plainCache.minimum(cell, header: false, string: text)
+                _ = plainCache.height(cell, header: false, width: 120, string: text)
+            }
+        }
+        plainPass()
+        let plainStart = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 { plainPass() }
+        print("PRB12_300_PLAIN_CELLS_MS_PER_PASS=\((CFAbsoluteTimeGetCurrent() - plainStart) * 1000 / 10)")
+    }
+
+    func testPRB1TableMeasurementsDistinguishDatePayloadAndPresentation() throws {
+        let today = try XCTUnwrap(NoteDay(year: 2026, month: 10, day: 20))
+        let later = try XCTUnwrap(NoteDay(year: 2030, month: 12, day: 31))
+        let id = UUID(), style = NoteTextStyle()
+        let renderer = NoteObjectRenderer(design: style.design)
+        func cell(_ day: NoteDay) -> NoteTable.Cell {
+            .init("Due \u{FFFC} now", inlines: [NoteInline(id: id, kind: .date(day))])
+        }
+        func attributed(_ cell: NoteTable.Cell, today: NoteDay) -> NSAttributedString {
+            NoteTextCodec.cellString(cell, attributes: style.tableCellAttributes(header: false), style: style) {
+                renderer.apply(to: $0, today: today)
+            }
+        }
+        let first = cell(today), second = cell(later)
+        let firstText = attributed(first, today: today), secondText = attributed(second, today: today)
+        let freshFirst = NoteTableTextCache().natural(first, header: false) { firstText }
+        let freshSecond = NoteTableTextCache().natural(second, header: false) { secondText }
+        XCTAssertNotEqual(freshFirst, freshSecond, "precondition: the real date chips have different widths")
+        let width = CGFloat(try XCTUnwrap((56...152).first { width in
+            NoteTableTextCache.measure(firstText, width: CGFloat(width)) != NoteTableTextCache.measure(secondText, width: CGFloat(width))
+        }, "precondition: real chips wrap into different native heights"))
+        var measurementDate = today.date()
+        let shared = NoteTableTextCache(today: { measurementDate })
+        _ = shared.natural(first, header: false) { firstText }
+        _ = shared.minimum(first, header: false) { firstText }
+        _ = shared.height(first, header: false, width: width) { firstText }
+        var measurements = 0
+        XCTAssertEqual(shared.natural(second, header: false) { measurements += 1; return secondText }, freshSecond)
+        XCTAssertEqual(shared.minimum(second, header: false) { measurements += 1; return secondText },
+                       NoteTableTextCache().minimum(second, header: false) { secondText })
+        let height = NoteTableTextCache.measure(secondText, width: width)
+        XCTAssertEqual(shared.height(second, header: false, width: width) { measurements += 1; return secondText }, height)
+        XCTAssertEqual(measurements, 3)
+        // The same semantic cell changes geometry when its relative-day label changes.
+        measurementDate = later.date()
+        let changedText = attributed(first, today: later)
+        let freshChanged = NoteTableTextCache().natural(first, header: false) { changedText }
+        XCTAssertNotEqual(freshChanged, freshFirst)
+        XCTAssertEqual(shared.natural(first, header: false) { changedText }, freshChanged)
+        measurementDate = today.date()
+        var table = NoteTable(texts: [[""], [""]], headerRow: false)
+        table[.init(row: 0, column: 0)] = first; table[.init(row: 1, column: 0)] = second
+        table.columns[0].width = Double(width + 2 * AtticNoteTableMetrics.cellPaddingH)
+        let layout = NoteTableLayout.make(table, viewport: CGFloat(table.columns[0].width!), natural: { position in
+            shared.natural(table[position], header: false) { position.row == 0 ? firstText : secondText }
+        }, minimum: { position in
+            shared.minimum(table[position], header: false) { position.row == 0 ? firstText : secondText }
+        }, height: { position, width in
+            shared.height(table[position], header: false, width: width) { position.row == 0 ? firstText : secondText }
+        })
+        XCTAssertGreaterThanOrEqual(layout.rowHeights[1], height + 2 * AtticNoteTableMetrics.cellPaddingV)
+    }
+
+    func testPRB1NativeShiftReturnKeepsParagraphTypingMarks() throws {
+        var body = NoteBlock.text("ab"); body.marks = [NoteMark(.bold, offset: 0, length: 2)]
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+        let window = try XCTUnwrap(view.window)
+        XCTAssertTrue(window.makeFirstResponder(view))
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+        for (characters, code, flags) in [("\r", UInt16(36), NSEvent.ModifierFlags.shift), ("x", UInt16(7), [])] {
+            window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)))
+        }
+        XCTAssertEqual(view.string, "T\na\nxb", "AppKit maps Shift-Return to a paragraph break")
+        XCTAssertEqual(engine.document().blocks[2].marks, [NoteMark(.bold, offset: 0, length: 2)])
+    }
+
+    func testPRB1SoftBreakThroughWindowKeepsActiveMarks() throws {
+        for kind in [NoteMark.Kind.bold, .italic, .underline, .strikethrough, .code, .highlight] {
+            var body = NoteBlock.text("ab")
+            body.marks = [NoteMark(kind, offset: 0, length: 2)]
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), body]), window: true)
+            defer { engine.detachView() }
+            let window = try XCTUnwrap(view.window)
+            XCTAssertTrue(window.makeFirstResponder(view))
+            view.setSelectedRange(NSRange(location: 3, length: 0))
+            XCTAssertNotNil(view.typingAttributes[.noteMark(kind)])
+            let original = engine.document()
+            func key(_ value: String, code: UInt16, flags: NSEvent.ModifierFlags = []) throws {
+                window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: value,
+                    charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
+            }
+            try key("\r", code: 36, flags: .control)
+            XCTAssertEqual(view.string, "T\na\u{2028}b", "Control-Return traversed native soft-break interpretation")
+            XCTAssertNotNil(view.typingAttributes[.noteMark(kind)], kind.rawValue)
+            try key("x", code: 7)
+            XCTAssertEqual(engine.document().blocks[1].text, "a\u{2028}xb")
+            XCTAssertEqual(engine.document().blocks[1].marks, [NoteMark(kind, offset: 0, length: 4)])
+            let typed = engine.document()
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1].text, "a\u{2028}b")
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+            XCTAssertTrue(engine.history.redo()); XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), typed)
+        }
+    }
+
+    func testPRB1RestartAtOneKeepsAdjacentNumberedSegmentsSeparate() throws {
+        var first = NoteBlock.text("one", style: "number"); first.start = 5
+        var second = NoteBlock.text("seven", style: "number"); second.start = 7
+        let original = NoteDocument(blocks: [.text("T"), first, second, .text("next", style: "number")], requires: ["structure-v1"])
+        let (engine, _) = makeEngine(original)
+        let at = location(of: "seven", in: engine)
+        XCTAssertEqual(engine.listMarker(at: at), .number("7."))
+        XCTAssertTrue(engine.setListStart(1, at: at))
+        XCTAssertEqual(engine.listMarker(at: at), .number("1."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "next", in: engine)), .number("2."))
+        XCTAssertEqual(engine.listMarker(at: 2), .number("5."))
+        let restarted = engine.document()
+        XCTAssertEqual(restarted.blocks[2].start, 1)
+        let saved = try NoteContentCodec.encode(restarted)
+        let loaded = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+        let reopened = NoteEditorEngine(noteID: UUID(), document: loaded)
+        XCTAssertEqual(reopened.listMarker(at: at), .number("1."))
+        XCTAssertEqual(reopened.listMarker(at: location(of: "next", in: reopened)), .number("2."))
+        XCTAssertTrue(engine.history.undo()); XCTAssertEqual(engine.document(), original)
+        XCTAssertTrue(engine.history.redo()); XCTAssertEqual(engine.document(), restarted)
+    }
+
+    func testPRB1TypedURLKeepsPunctuationAndWhitespaceOutsideItsMark() throws {
+        for suffix in [", ", ". ", "; ", "! ", "? ", ",   "] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            defer { engine.detachView() }
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            type("😀 https://example.com" + suffix, view)
+            let expected = [NoteMark(.link, offset: 3, length: 19, url: "https://example.com")]
+            XCTAssertEqual(engine.document().blocks[1].marks, expected, suffix)
+            let saved = try NoteContentCodec.encode(engine.document())
+            let reopened = try XCTUnwrap(NoteContentCodec.decode(saved).document)
+            XCTAssertEqual(reopened.blocks[1].marks, expected, suffix)
+            let beforeUndo = engine.document()
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), beforeUndo)
+            XCTAssertEqual(engine.document().blocks[1].marks, expected)
+        }
+    }
+
+    #endif
+
     // Owner decision 2026-10-16: plain highlights stay yellow, with no saved key.
+    #if !ATTIC_GENERATED_TESTS
     func testJPlainHighlightRendersYellowAndDefaultWritesNoColourKey() throws {
         for mode in [AtticDesignContext.Mode.light, .dark] {
             let style = NoteTextStyle(design: AtticDesignContext(mode: mode))
@@ -440,6 +628,7 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(engine.document().blocks[2].text.contains("日"))
         XCTAssertEqual(engine.document().blocks[1].callout, "💡")
     }
+    #endif
 
     /// An associated notice follows the receiver itself. A view child can
     /// be retained independently by AppKit's accessibility/layout work.
@@ -450,6 +639,7 @@ final class NoteEditorEngineTests: XCTestCase {
         deinit { released.fulfill() }
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testG05AutomaticPageFocusRestorationPreservesThePaletteInputClient() throws {
         let (engine, view) = g05Engine()
         defer { engine.detachView() }
@@ -490,6 +680,7 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === live, "the live editor can still restore focus")
         engine.detachView()
     }
+    #endif
 
     private func mountFLPresentation(_ session: NoteSession, chrome: NotesPageChrome, in existingWindow: NSWindow? = nil) -> NSWindow {
         let root = NoteEditorRepresentable(session: session, chrome: chrome, columnInset: 20,
@@ -508,6 +699,7 @@ final class NoteEditorEngineTests: XCTestCase {
         return window // No run-loop turn: presentation's queued callback is still pending.
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testFL3AnUnattachedPresentationDoesNotRetainItsSession() throws {
         weak var releasedSession: NoteSession?
         try autoreleasepool {
@@ -718,12 +910,14 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertTrue(window.firstResponder === live)
         }
     }
+    #endif
 
     private func g05Engine() -> (NoteEditorEngine, NoteEditorTextView) {
         var box = NoteBlock.text("tip", id: UUID(), style: "quote"); box.callout = "💡"
         return makeEngine(NoteDocument(blocks: [.text("T"), box, .text("body")]), window: true)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testG07LineSeparatorTokensUseLFLineRulesAndOriginalUTF16Offsets() throws {
         let fixtures = [
             ("javascript", "// 💡 comment\nconst answer = 42;"),
@@ -1600,6 +1794,7 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertEqual(engine.document().blocks[1].text, literal + "Tail")
         }
     }
+    #endif
 
     private let checklistID = UUID()
     private let dateID = UUID()
@@ -1619,6 +1814,105 @@ final class NoteEditorEngineTests: XCTestCase {
         ])
     }
 
+    #if !ATTIC_GENERATED_TESTS
+    func testFX2WindowResignationEndsTypingEvenWhenEditorStaysFirstResponder() throws {
+        try checkFX2TypingBoundary { _, view in
+            NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: view.window)
+        }
+    }
+
+    func testFX2AppDeactivationEndsTypingEvenWhenEditorStaysFirstResponder() throws {
+        try checkFX2TypingBoundary { _, _ in
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        }
+    }
+
+    func testFX2ResponderDepartureEndsTyping() throws {
+        try checkFX2TypingBoundary { _, view in
+            XCTAssertTrue(view.window!.makeFirstResponder(nil))
+            XCTAssertTrue(view.window!.makeFirstResponder(view))
+        }
+    }
+
+    func testFX2HiddenEditorEndsTyping() throws {
+        try checkFX2TypingBoundary { _, view in
+            view.isHidden = true
+            view.isHidden = false
+        }
+    }
+
+    func testFX2WindowDetachmentEndsTyping() throws {
+        try checkFX2TypingBoundary { _, view in
+            let window = view.window!
+            let scroll = view.enclosingScrollView!
+            window.contentView = nil
+            window.contentView = scroll
+            XCTAssertTrue(window.makeFirstResponder(view))
+        }
+    }
+
+    func testFX2CaretReturnEndsTypingInsideTheOpenStep() throws {
+        try checkFX2TypingBoundary { _, view in
+            let end = view.selectedRange()
+            view.moveLeft(nil)
+            XCTAssertEqual(view.selectedRange().location, end.location - 1)
+            view.moveRight(nil)
+            XCTAssertEqual(view.selectedRange(), end)
+        }
+    }
+
+    func testFX2NativeArrowKeyReturnEndsTypingInsideTheOpenStep() throws {
+        try checkFX2TypingBoundary { _, view in
+            let end = view.selectedRange()
+            for (code, characters) in [(UInt16(123), "\u{F702}"), (UInt16(124), "\u{F703}")] {
+                let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: view.window!.windowNumber,
+                    context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+                view.keyDown(with: event)
+            }
+            XCTAssertEqual(view.selectedRange(), end)
+        }
+    }
+
+    func testFX2OtherWindowNotificationDoesNotSplitContinuousTyping() throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: []), window: true)
+        defer { engine.detachView() }
+        type("before", view)
+        let other = NSWindow(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: other)
+        type("after", view)
+        XCTAssertEqual(engine.history.undoOps.count, 1)
+        view.undo(nil)
+        XCTAssertEqual(engine.plainText, "")
+    }
+    #endif
+
+    private func checkFX2TypingBoundary(_ depart: (NoteEditorEngine, NoteEditorTextView) throws -> Void) throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: []), window: true)
+        defer { engine.detachView() }
+        XCTAssertTrue(view.window!.makeFirstResponder(view))
+        for character in "Focus trial" { type(String(character), view) }
+        view.insertNewline(nil)
+        for character in "Earlier body" { type(String(character), view) }
+        let earlier = engine.plainText
+        XCTAssertEqual(earlier, "Focus trial\nEarlier body")
+        XCTAssertEqual(engine.history.undoOps.count, 1)
+        try depart(engine, view)
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        for character in " later" { type(String(character), view) }
+        let latest = engine.plainText
+        view.undo(nil)
+        XCTAssertEqual(engine.plainText, earlier, "first Undo preserves title and the earlier run")
+        view.undo(nil)
+        XCTAssertEqual(engine.plainText, "")
+        view.redo(nil)
+        XCTAssertEqual(engine.plainText, earlier)
+        view.redo(nil)
+        XCTAssertEqual(engine.plainText, latest)
+    }
+
     private func makeEngine(_ document: NoteDocument? = nil, window: Bool = false, staged: [StagedNoteAttachment] = []) -> (NoteEditorEngine, NoteEditorTextView) {
         let engine = NoteEditorEngine(noteID: UUID(), document: document ?? sample(), stagedAttachments: staged)
         let (scrollView, textView) = engine.makeView()
@@ -1633,6 +1927,7 @@ final class NoteEditorEngineTests: XCTestCase {
         return (engine, textView)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testPerf3OpeningFiftyImagesWithoutAViewportReadsNoFiles() async {
         let provider = StubImages(bytes: [:])
         let blocks = [NoteBlock.text("Image heavy")] + (0..<50).map { _ in
@@ -1821,6 +2116,7 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.checkpointDocument().attachmentIDs, document.attachmentIDs)
         XCTAssertFalse(engine.history.canUndo)
     }
+    #endif
 
     private func roundFViewportFixture() throws -> (NoteDocument, [StagedNoteAttachment]) {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
@@ -1836,6 +2132,7 @@ final class NoteEditorEngineTests: XCTestCase {
         }), items)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testRoundFImageReconciliationRespectsNavigationAwayFromTheHeldTail() async throws {
         let (document, items) = try roundFViewportFixture()
         let (engine, view) = makeEngine(document, window: true, staged: items)
@@ -2082,6 +2379,7 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(image.isMissing, "the missing file still has a recoverable placeholder")
         XCTAssertTrue(image.accessibilityDescription.contains("pending.png"))
     }
+    #endif
 
     private var windows: [NSWindow] = []
 
@@ -2100,6 +2398,7 @@ final class NoteEditorEngineTests: XCTestCase {
     }
 
     // H12-02: normal slash insertion and typing, in an unshown window.
+    #if !ATTIC_GENERATED_TESTS
     func testH12_02TypingAfterDividerKeepsTheWholeLineAboveFooter() throws {
         for withImage in [false, true] {
             var blocks: [NoteBlock] = [.text("Long note")]
@@ -2203,6 +2502,7 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertFalse(view.window!.isKeyWindow)
         engine.detachView()
     }
+    #endif
 
     // MARK: Drawing
 
@@ -2225,6 +2525,7 @@ final class NoteEditorEngineTests: XCTestCase {
 
     /// Sixty compressed minutes: rotate twelve notes, type 40 characters,
     /// save/leave, and add/rename/complete a task per minute. No visible UI.
+    #if !ATTIC_GENERATED_TESTS
     func testPerf2SimulatedHourRetainsOnlyTheWarmNoteSessions() async throws {
         try requireSoakTests()
         let notes = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
@@ -3468,7 +3769,9 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertFalse(engine.handleShortcut(event))
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testEditingSequenceFuzzRoundTripsAfterSplitsJoinsMovesAndMarks() throws {
         let (engine, _) = makeEngine(NoteDocument(blocks: [
             .text("T"), .text("abcdefgh"), .checklist("object"), .text("tail")
@@ -3508,7 +3811,9 @@ final class NoteEditorEngineTests: XCTestCase {
             XCTAssertEqual(NoteTextKitRoundTrip.document(afterRoundTrip: document).blocks, document.blocks, "step \(step)")
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testListContinuationIndentMarkerFirstBackspaceAndMove() {
         let initial = NoteDocument(blocks: [.text("T"), .text("Previous", style: "bullet"), .text("First"), .text("Second")])
         let (engine, textView) = makeEngine(initial)
@@ -3671,6 +3976,7 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(imeEngine.document().blocks[1].text, "# ")
         XCTAssertNil(imeEngine.document().blocks[1].style)
     }
+    #endif
 }
 
 private final class StockUndoDelegate: NSObject, NSTextViewDelegate {
@@ -3771,6 +4077,7 @@ final class PhaseXHunt14Tests: XCTestCase {
         return Array(try NoteMarkdownImport.document(markdown).blocks.dropFirst())
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testH14_01MarkdownRoundTripKeepsLiteralDelimiters() throws {
         let literal = "Keep **these stars** and [this](https://example.com) literally"
         let restored = try roundTrip([.text(literal)])
@@ -3835,6 +4142,7 @@ final class PhaseXHunt14Tests: XCTestCase {
         XCTAssertEqual(restored.blocks.map(\.text), imported.blocks.map(\.text))
         XCTAssertEqual(restored.blocks.map(\.language), imported.blocks.map(\.language), "H14-08: separately pasted code blocks must keep their language")
     }
+    #endif
 
     private struct H14Line: Equatable, CustomStringConvertible {
         var text: String
@@ -3968,6 +4276,7 @@ final class PhaseXHunt14Tests: XCTestCase {
         }
         return result
     }
+    #if ATTIC_GENERATED_TESTS
     func testH14_09GeneratedTextAndBlockKindsAgreeAfterEditingUndoAndRedo() {
         for seed in 1...128 {
             var random = H14RNG(state: UInt64(seed))
@@ -3986,8 +4295,10 @@ final class PhaseXHunt14Tests: XCTestCase {
             }
         }
     }
+    #endif
 
 
+    #if !ATTIC_GENERATED_TESTS
     func testH14_09MultilinePlainPasteIntoEmptyNumberEndsInBody() {
         let (engine, view) = editor([.text("")])
         view.setSelectedRange(NSRange(location: 2, length: 0))
@@ -4034,6 +4345,7 @@ final class PhaseXHunt14Tests: XCTestCase {
             XCTAssertEqual(engine.paragraphStyle(at: 2), format, "H14-10: Redo must retain the emptied block's kind")
         }
     }
+    #endif
 
 }
 
@@ -4176,6 +4488,7 @@ final class PhaseXFix14GeneratedTests: XCTestCase {
         }
         return result
     }
+    #if ATTIC_GENERATED_TESTS
     func testFix14GeneratedEditingWithLanguageBoundariesUndoAndRedo() {
         for seed in 1...1024 {
             var random = Fix14RNG(state: UInt64(seed))
@@ -4188,6 +4501,7 @@ final class PhaseXFix14GeneratedTests: XCTestCase {
             }
         }
     }
+    #endif
 
 
 }

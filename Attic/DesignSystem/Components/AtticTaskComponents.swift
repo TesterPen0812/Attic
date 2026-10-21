@@ -365,13 +365,6 @@ struct AtticRowFocus {
     /// would leave them deaf.
     let isActive: () -> Bool
 
-    init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isActive: @escaping () -> Bool = { true }) {
-        self.binding = binding
-        self.id = id
-        self.isActive = isActive
-        isFocused = isActive() && binding.wrappedValue == id
-    }
-
     /// With the list's own record of which row has the keyboard: a lazy
     /// list's cell that reads the focus state reads it as it was when the
     /// list was built (the Tasks page, deep review P2-04), so the list

@@ -255,6 +255,10 @@ struct TasksPage: View {
     }
 
     private func pageAppeared() {
+        #if DEBUG
+        pointer.keyboardControl = { [focusRequests] in focusRequests.current }
+        pointer.keyboardControlRequests = focusRequests
+        #endif
         model.resetForReveal()
         // The page opens where the tab is, without a slide.
         model.showPagerPage(animated: false)
@@ -950,7 +954,10 @@ struct TasksPage: View {
             }
         }
         let draft = !model.addBarState.text.text.trimmingCharacters(in: .whitespaces).isEmpty
-        return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) },
+        let files = Dictionary(uniqueKeysWithValues: ids.map { id in
+            (id, model.expandedFiles.contains(id) ? pointer.fileTabStops[TasksRowID(tab: tab, id: id)] ?? [] : [])
+        })
+        return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) }, files: files,
                                    strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled)
     }
 
@@ -959,6 +966,7 @@ struct TasksPage: View {
         if searchFocused { return .find }
         if addBarFocused { return .addBar }
         if let strip = focusRequests.current?.base as? AtticStripFocusID { return .strip(strip) }
+        if let file = focusRequests.current?.base as? TasksFileFocusID, stops.contains(.file(file)) { return .file(file) }
         if let subtask = model.focusedSubtaskID, stops.contains(.subtask(subtask)) { return .subtask(subtask) }
         if let id = focusedID { return .row(id) }
         return nil
@@ -992,6 +1000,17 @@ struct TasksPage: View {
             }
             settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts, landed: { focusedID == id }, revealing: id) {
                 setFocus(id)
+            }
+        case let .file(target):
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            // The list supplies IDs for its visible controls. Centre the
+            // actual file/action, including one far down a Show more list.
+            listProxies.lists[tab]?.scrollTo(target, anchor: .center)
+            settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts,
+                           landed: { focusRequests.current == AnyHashable(target) }, revealing: nil) {
+                focusRequests.focus(target)
             }
         case let .subtask(id):
             focusedRow = nil
@@ -1050,7 +1069,7 @@ struct TasksPage: View {
     /// row (review UX 2), then a multi-selection clears. False when nothing
     /// was left for Esc to do, so it goes on to the panel.
     private func handleEscape(visible: [UUID], current: UUID?) -> Bool {
-        if drag != nil { cancelDrag(); return true }
+        if drag != nil { cancelDrag(returning: true); return true }
         if model.tab == .done, model.doneDetailID != nil { model.doneDetailID = nil; return true }
         // A search left with its query: Esc ends it (the tabs return).
         if !model.searchQuery(for: model.tab).isEmpty { endSearch(); return true }
@@ -1104,6 +1123,7 @@ struct TasksPage: View {
         if AtticTextInput.hasKeyboard || addBarFocused || searchFocused {
             return typingFieldShortcutPressed(event, in: window)
         }
+        if focusRequests.current?.base is TasksFileFocusID, case .file? = currentTabStop(in: tabStops()) { return false }
         let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
@@ -1683,6 +1703,15 @@ struct TasksPage: View {
                     onAttach: { model.services.chooseFiles?(id) },
                     onRemove: { file in
                         model.report(model.removeFile(file, from: id), on: id) { [weak model] in model?.removeFile(file, from: id) ?? .failed(.taskGone) }
+                    },
+                    onTabStopsChanged: { list, stops in
+                        pointer.registerFileTabStops(stops, for: TasksRowID(tab: tab, id: list.owner), instance: list.instance)
+                    },
+                    onTabStopsRemoved: { list in
+                        // A lazy row leaving the viewport is still in the
+                        // page's Tab order while its files remain expanded.
+                        guard !model.expandedFiles.contains(list.owner) else { return }
+                        pointer.unregisterFileTabStops(for: TasksRowID(tab: tab, id: list.owner), instance: list.instance)
                     }
                 )
                 // It opens from under its row, as the quick look does.
@@ -2484,6 +2513,9 @@ struct TasksPage: View {
             if modifiers == .command { model.undo(); return .handled }
             if modifiers == [.command, .shift] { model.redo(); return .handled }
         }
+        // Inline files and their buttons own activation/removal keys,
+        // even when their task remains selected.
+        if focusRequests.current?.base is TasksFileFocusID, case .file? = currentTabStop(in: tabStops()) { return .ignored }
         // Typing on Done faster than the search field takes the keyboard
         // (it appears, then focuses): the letters join the query, never
         // lost (round 8, CI run 3: "inv" became "i").
@@ -2618,7 +2650,7 @@ struct TasksPage: View {
     }
 
     private func beginDragSession(in tab: TasksTab) {
-        dragSession.cancellation.begin(in: pointer.view?.window) { cancelDrag() }
+        dragSession.cancellation.begin(in: pointer.view?.window) { cancelDrag(returning: true) }
         dragSession.geometryTab = tab
         if let current = drag { dragSession.geometry = prepareDragGeometry(group: current.group, tab: tab) }
         dragSession.cachedScrollView = nil
@@ -2745,13 +2777,43 @@ struct TasksPage: View {
 
     /// Cancels the drag in progress: the row settles back, the neighbours
     /// return, and its release commits nothing.
-    private func cancelDrag() {
-        guard drag != nil else { return }
+    ///
+    /// `returning` (an Escape or a lost key, the page on screen): the card
+    /// goes home the way a drop lands (O5-03). The rows below give its place
+    /// back on the same spring while the row stays hidden, and the row (with
+    /// its open subtasks) is drawn again only once they are home, so the
+    /// following rows never draw over its subtasks. Otherwise (the page or
+    /// panel going, a drag out, Calm) it is at once. A landing already on
+    /// its way (a release, or a return) is left to finish.
+    private func cancelDrag(returning: Bool = false) {
+        guard let current = drag else { return }
+        if returning, current.landing { return }
         dragSession.cancel()
         dragSession.timer?.invalidate()
         dragSession.timer = nil
-        drag = nil
-        pointer.liftedCard.end()
+        guard returning, !design.reduceMotion, let lift = pointer.liftedCard.lift, lift.id == current.id,
+              pointer.view?.window?.isVisible == true, model.isPageShown, model.tab == current.tab else {
+            drag = nil
+            pointer.liftedCard.end()
+            return
+        }
+        var home = current
+        home.targetIndex = current.startIndex
+        home.landing = true
+        drag = home
+        let y = TasksLiftedCard.landing(of: home, originY: lift.origin.minY, heights: { rowHeight($0, in: current.tab) })
+        withAnimation(AtticMotionPreset.settle.animation(reduceMotion: false)) {
+            pointer.liftedCard.land(at: y)
+        } completion: {
+            // Only the return that settled (a new press may have begun).
+            guard drag?.id == current.id, drag?.landing == true, drag?.targetIndex == current.startIndex else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                drag = nil
+                pointer.liftedCard.end()
+            }
+        }
     }
 
     /// The lifted card: the row as it is, never interactive.
@@ -4189,11 +4251,29 @@ final class TasksPointer {
     /// The row that has the keyboard (the page's focus), for tests: which
     /// row a Tab reached (deep review P2-04).
     var keyboardRow: TasksRowID?
+    /// Inline lists register their visible stops without redrawing the page.
+    private(set) var fileTabStops: [TasksRowID: [TasksFileFocusID]] = [:]
+    private var fileTabStopInstances: [TasksRowID: UUID] = [:]
+
+    func registerFileTabStops(_ stops: [TasksFileFocusID], for row: TasksRowID, instance: UUID) {
+        fileTabStopInstances[row] = instance
+        fileTabStops[row] = stops
+    }
+
+    func unregisterFileTabStops(for row: TasksRowID, instance: UUID) {
+        guard fileTabStopInstances[row] == instance else { return }
+        fileTabStopInstances[row] = nil
+        fileTabStops[row] = nil
+    }
 
     #if DEBUG
     /// Tests: the rows whose cells last drew them as the keyboard's row (with
     /// its ring), so a test can tell a focus the row never drew (P2-04).
     private(set) var drawnFocus: Set<TasksRowID> = []
+    /// The focus reported by a live inline control, after a real key event.
+    var keyboardControl: (() -> AnyHashable?)?
+    /// Tests can reproduce a late focus report after a control disappears.
+    weak var keyboardControlRequests: AtticFocusRequests?
 
     func noteDrawnFocus(_ row: TasksRowID, _ focused: Bool) {
         if focused { drawnFocus.insert(row) } else { drawnFocus.remove(row) }
@@ -4850,6 +4930,7 @@ enum TasksTabStop: Hashable {
     case find
     case row(UUID)
     case subtask(UUID)
+    case file(TasksFileFocusID)
     case addBar
     case strip(AtticStripFocusID)
 }
@@ -4857,16 +4938,17 @@ enum TasksTabStop: Hashable {
 /// The Tasks page's Tab order (A10), restoring Phase 1's: top to bottom as
 /// drawn, every stop visible. Find while it shows on the tabs' line; each
 /// row of the page shown (the filtered rows when a query or a view narrows
-/// it), with the subtask lines of its open quick look under it; the add bar;
+/// it), with its open subtask lines and visible inline files/actions; the add bar;
 /// then the strip's buttons while a draft shows them and keyboard
 /// navigation is on (buttons are Tab stops on the Mac only then). Tab after
 /// the last stop goes round to the first: never to an unseen stop.
 enum TasksTabOrder {
-    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], strip: Bool) -> [TasksTabStop] {
+    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], files: [UUID: [TasksFileFocusID]] = [:], strip: Bool) -> [TasksTabStop] {
         var stops: [TasksTabStop] = find ? [.find] : []
         for row in rows {
             stops.append(.row(row.id))
             stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
+            stops.append(contentsOf: (files[row.id] ?? []).map(TasksTabStop.file))
         }
         stops.append(.addBar)
         if strip { stops.append(contentsOf: AtticStripFocusID.all.map(TasksTabStop.strip)) }
@@ -4886,7 +4968,7 @@ enum TasksTabOrder {
     /// that row is built and the list's own reveal is enough.
     static func isListNeighbour(_ current: TasksTabStop?, of stop: TasksTabStop, in stops: [TasksTabStop]) -> Bool {
         switch current {
-        case .row?, .subtask?: break
+        case .row?, .subtask?, .file?: break
         default: return false
         }
         guard let current, let a = stops.firstIndex(of: current), let b = stops.firstIndex(of: stop) else { return false }

@@ -16,6 +16,14 @@ final class BuildCompatibilityTests: XCTestCase {
         try await checkFixture("81c124d6")
     }
 
+    func testFixtureProvenanceDoesNotPublishPrivateHomeDirectoryPaths() throws {
+        let readme = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Compatibility/README.md")
+        let text = try String(contentsOf: readme, encoding: .utf8)
+        XCTAssertFalse(text.contains("/Users/"), "public provenance must not point to a developer's home directory")
+        XCTAssertFalse(text.contains("/home/"), "public provenance must not point to a developer's home directory")
+    }
+
     private func checkFixture(_ commit: String) async throws {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/Compatibility/\(commit)")

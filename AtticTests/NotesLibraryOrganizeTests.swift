@@ -48,6 +48,7 @@ final class NotesLibraryOrganizeTests: XCTestCase {
 
     // MARK: The filter
 
+    #if !ATTIC_GENERATED_TESTS
     func testATagFilterShowsOnlyItsNotesAndASearchLooksInsideIt() async throws {
         let launch = try create("Launch plan", "kyoto offsite", tags: ["launch"])
         let both = try create("Pricing", "kyoto pricing", tags: ["launch", "work"])
@@ -323,12 +324,14 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         inner.removeFromSuperview()
         XCTAssertNil(panel.notesSwipeTarget, "a page no longer in the window never gets the slot back")
     }
+    #endif
 
     // MARK: Derived summaries on a large library
 
     /// The rows' summaries are read once per note revision: a rebuild after
     /// one save decodes that note only, and the cached rows answer at once.
     /// Timings are printed for the report (a measured baseline, not a gate).
+    #if ATTIC_GENERATED_TESTS
     func testALargeLibraryDecodesEachNoteOnceAndOneSaveRereadsOnlyItself() async throws {
         let count = 2_000
         let tags = ["launch", "work", "home", "travel", "reading", "ideas"]
@@ -370,4 +373,5 @@ final class NotesLibraryOrganizeTests: XCTestCase {
         print("ATTIC-S4-PROFILE notes=\(count) cold=\(cold) warm=\(warm) afterTagChange=\(afterTags) "
               + "filtered=\(filtered) recentTags=\(recent) searchIncludingDebounce=\(search)")
     }
+    #endif
 }

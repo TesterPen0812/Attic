@@ -107,8 +107,6 @@ final class AtticTokenFieldEditor {
         return true
     }
 
-    /// The insertion point (UTF-16), or nil when the field is not live.
-    var caret: Int? { textView?.selectedRange().location }
     var selection: NSRange? { textView?.selectedRange() }
 
     /// Gives the field the keyboard again (after a picker closes).
@@ -429,17 +427,17 @@ final class AtticTokenFieldView: NSView {
         textView.focusRingType = .none
         textView.setAccessibilityRole(.textField)
         textView.setAccessibilityIdentifier("AtticTokenField")
+        scrollView.drawsBackground = false
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.horizontalScrollElasticity = .none
         scrollView.verticalScrollElasticity = .none
         scrollView.contentView = clip
-        // After the clip view is in place: `drawsBackground` is the clip
-        // view's own, and a new NSClipView draws the control background (a
-        // white bar behind the text, faint over glass at rest and bright
-        // white under a hide animation's transform or snapshot).
+        // O5-02: the scroll view turned off the background of the clip it
+        // had, not this one. A clip draws the control background (white in
+        // Light, black in Dark) by default: the text sits on the composer's
+        // own surface instead.
         clip.drawsBackground = false
-        scrollView.drawsBackground = false
         scrollView.documentView = textView
         scrollView.focusRingType = .none
         addSubview(scrollView)

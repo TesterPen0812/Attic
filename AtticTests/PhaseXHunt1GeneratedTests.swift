@@ -225,6 +225,7 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
         return result
     }
 
+    #if ATTIC_GENERATED_TESTS
     func testSeededEditorSequencesAgreeAfterEveryOperation() {
         let long = ProcessInfo.processInfo.environment["ATTIC_PHASEX_LONG"] == "1"
         let count = long ? 20_000 : 3_000
@@ -247,7 +248,9 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
         }
         print("PHASEX_GENERATED sequences=\(count) steps=\(count * length) seconds=\(Date().timeIntervalSince(started))")
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testMovingIdenticalEmptyColumnsStillRecordsAnUndoStep() {
         // Seed 383 minimized to four steps. The original mismatch was in
         // the reference: equal cell texts do not make a column-ID move a no-op.
@@ -255,8 +258,10 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
                      Step(kind: 15, a: 0, b: 1), Step(kind: 9, a: 0, b: 0)]
         XCTAssertNil(replay(steps))
     }
+    #endif
     /// Generated endpoint checks complement the independent text/style model.
     /// Each seed changes the selection and command order; no window is created.
+    #if ATTIC_GENERATED_TESTS
     func testHunt2GeneratedSelectionUndoAcrossAllEditKinds() throws {
         for seed in 0..<80 {
             try autoreleasepool {
@@ -336,7 +341,9 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
             XCTAssertEqual(copy.rows[1].cells[0].marks, table.rows[1].cells[0].marks, "seed=\(seed)")
         }
     }
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testH4_03MarkdownTableEdgeWhitespaceSurvivesEveryExporter() throws {
         for text in [" a ", "\t", "  ", "\ta\t", "\u{00a0}a\u{00a0}", " \n ", " \u{2003}x\t"] {
             let table = NoteTable(texts: [["Header"], [text]])
@@ -351,7 +358,9 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
             }
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testHunt4GeneratedWorkAreaSequencesPreservePreferencesAndRecoverRemovedDisplays() {
         let roomy = CGRect(x: -8000, y: -4000, width: 16000, height: 9000)
         for seed in 1...64 {
@@ -505,5 +514,6 @@ final class PhaseXHunt1GeneratedTests: XCTestCase {
             }
         }
     }
+    #endif
 
 }

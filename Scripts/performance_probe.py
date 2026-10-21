@@ -166,7 +166,7 @@ def build_preview(identity):
     command(build_command, "build", "-project", "Attic.xcodeproj", "-scheme", "Attic",
             "-configuration", "Local", "-destination", "platform=macOS",
             "-derivedDataPath", str(derived), f"PRODUCT_BUNDLE_IDENTIFIER={bundle}",
-            f"PRODUCT_NAME={name}", f"EXECUTABLE_NAME={name}",
+            f"ATTIC_MACOS_PRODUCT_NAME={name}", f"ATTIC_MACOS_EXECUTABLE_NAME={name}",
             f"INFOPLIST_FILE={info}", "OTHER_SWIFT_FLAGS=$(inherited) -DATTIC_LOCAL_ONLY",
             *flags, cwd=ROOT, stdout=(BUILD / "preview-build.log").open("w"),
             stderr=subprocess.STDOUT)

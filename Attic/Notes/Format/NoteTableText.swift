@@ -67,6 +67,7 @@ enum NoteTableText {
                 result.append(character)
             }
         }
+        guard decodeHTML else { return result }
         let breaks = result.replacingOccurrences(of: "<br>", with: "\n")
             .replacingOccurrences(of: "<br/>", with: "\n")
             .replacingOccurrences(of: "<br />", with: "\n")
@@ -153,7 +154,7 @@ enum NoteTableText {
         let input = Array(markdown)
         let delimiters: [(String, String, NoteMark.Kind)] = [
             ("**", "**", .bold), ("*", "*", .italic), ("~~", "~~", .strikethrough),
-            ("`", "`", .code), ("==", "==", .highlight), ("<u>", "</u>", .underline)
+            ("==", "==", .highlight), ("<u>", "</u>", .underline)
         ]
         var remainingWork = max(1, input.count) * 16
         func matches(_ token: String, at index: Int) -> Bool {
@@ -206,6 +207,53 @@ enum NoteTableText {
                         }
                     }
                 }
+                if let lineBreak = ["<br>", "<br/>", "<br />"].first(where: { matches($0, at: index) }) {
+                    literal += "\n"; index += lineBreak.count; continue
+                }
+                // Code spans are literal, with a fence as long as the
+                // opening backtick run. Never recursively parse their text.
+                if input[index] == "`" {
+                    var width = 1
+                    while index + width < input.count, input[index + width] == "`" { width += 1 }
+                    var close = index + width, closed = false
+                    while close < input.count {
+                        guard remainingWork > 0 else { break }
+                        remainingWork -= 1
+                        if input[close] == "`" {
+                            var count = 1
+                            while close + count < input.count, input[close + count] == "`" { count += 1 }
+                            if count == width { closed = true; break }
+                            close += count
+                        } else { close += 1 }
+                    }
+                    if closed {
+                        var literalCode = String(input[(index + width)..<close])
+                        if literalCode.hasPrefix(" "), literalCode.hasSuffix(" "), literalCode.contains(where: { $0 != " " }) {
+                            literalCode.removeFirst(); literalCode.removeLast()
+                        }
+                        append(NoteTable.Cell(literalCode), kind: .code)
+                        index = close + width; continue
+                    }
+                    literal += String(repeating: "`", count: width)
+                    index += width; continue
+                }
+                // Inline HTML can occur after ordinary text or between
+                // other marked spans. Recognize it before Markdown escapes.
+                if input[index] == "<", depth < 32 {
+                    let tail = String(input[index...])
+                    if let open = tail.range(of: #"^<(strong|em|u|s|mark|code|a)(?:\s+[^<>]*)?>"#, options: .regularExpression) {
+                        let tag = tail[open].dropFirst().prefix { $0.isLetter }
+                        if let close = tail.range(of: "</" + tag + ">"),
+                           let span = NoteMarkdownInline.parse(String(tail[..<close.upperBound])) {
+                            flush()
+                            let offset = cell.text.utf16.count
+                            cell.text += span.text
+                            cell.marks += span.marks.map { NoteMark($0.kind, offset: offset + $0.offset, length: $0.length, url: $0.url, colour: $0.colour) }
+                            index += tail[..<close.upperBound].count
+                            continue
+                        }
+                    }
+                }
                 var consumed = false
                 if depth < 32 {
                     for (open, close, kind) in delimiters where matches(open, at: index) {
@@ -226,7 +274,7 @@ enum NoteTableText {
 
     /// Inner marks are appended first by the parser. At an overlap they
     /// keep their payload, with outer marks filling the surrounding spans.
-    private static func canonicalMarks(_ marks: [NoteMark]) -> [NoteMark] {
+    static func canonicalMarks(_ marks: [NoteMark]) -> [NoteMark] {
         var result: [NoteMark] = []
         for kind in NoteMark.Kind.allCases.sorted(by: { $0.rawValue < $1.rawValue }) {
             var starts: [Int: [Int]] = [:], ends: [Int: [Int]] = [:]

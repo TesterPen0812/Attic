@@ -258,6 +258,67 @@ final class RoundO1Tests: XCTestCase {
         XCTAssertEqual(snapped.minY, line * 3, accuracy: 0.01, "it scrolls by whole lines")
     }
 
+    // MARK: - O5-02 · a composer's text sits on the composer's own surface
+
+    /// Every view between the composer's text and its surface, drawing
+    /// anything of its own.
+    private func backgroundDrawers(from view: NSView, to top: NSView) -> [String] {
+        var found: [String] = []
+        var current: NSView? = view
+        while let each = current {
+            if let text = each as? NSTextView, text.drawsBackground { found.append("text view") }
+            if let clip = each as? NSClipView, clip.drawsBackground { found.append("clip \(type(of: clip))") }
+            if let scroll = each as? NSScrollView, scroll.drawsBackground { found.append("scroll view") }
+            if let field = each as? NSTextField, field.drawsBackground { found.append("text field") }
+            if each === top { break }
+            current = each.superview
+        }
+        return found
+    }
+
+    /// The share of a view's pixels drawn opaque, the view rendered alone.
+    private func opaqueShare(of view: NSView) throws -> Double {
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        var opaque = 0
+        for x in 0..<rep.pixelsWide { for y in 0..<rep.pixelsHigh where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 { opaque += 1 } }
+        return Double(opaque) / Double(max(1, rep.pixelsWide * rep.pixelsHigh))
+    }
+
+    /// O5-02: the add bar's text area (and the clip V-12 put in its scroll
+    /// view) draws no background: no white (Light) or black (Dark)
+    /// rectangle inside the glass composer, empty or grown.
+    func testO5_02TheAddBarTextDrawsNoBackgroundOfItsOwn() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let field = try XCTUnwrap(tokenFields(in: content).first { $0.textView.accessibilityLabel() == hosted.model.addPlaceholder })
+        XCTAssertEqual(backgroundDrawers(from: field.textView, to: field), [], "nothing between the text and the composer paints")
+        XCTAssertLessThan(try opaqueShare(of: field.textClip), 0.05, "empty, the text area is see-through")
+        hosted.model.addBarState.text.text = String(repeating: "A very long task title that keeps going ", count: 4)
+        hosted.spin(0.6)
+        XCTAssertEqual(backgroundDrawers(from: field.textView, to: field), [])
+        XCTAssertLessThan(try opaqueShare(of: field.textClip), 0.3, "grown, only the glyphs are drawn")
+    }
+
+    /// O5-02, the other inputs that grew in O1/V-12: a new subtask's entry
+    /// paints nothing behind its text, at rest or while its editor is up.
+    func testO5_02ASubtaskEntryDrawsNoBackgroundOfItsOwn() throws {
+        let hosted = try Hosted(height: 520, keyWindow: false)
+        defer { hosted.close() }
+        let parent = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.subtasks != nil })
+        hosted.model.beginAddingSubtask(to: parent.id)
+        hosted.spin(0.3)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let field = try XCTUnwrap(fields(in: content).first { $0.isEditable && $0.placeholderString == "Add subtask…" })
+        hosted.model.newSubtaskTitle = "Ask the landlord about the boiler service and the gas safety certificate before Friday"
+        hosted.spin(0.4)
+        XCTAssertEqual(backgroundDrawers(from: field, to: field), [])
+        if let editor = field.currentEditor() {
+            XCTAssertEqual(backgroundDrawers(from: editor, to: field), [], "its field editor and the editor's clip paint nothing")
+        }
+    }
+
     // MARK: - O17-06 · files in the composer
 
     private func makeFile(_ name: String, bytes: Int = 12) throws -> URL {
@@ -284,6 +345,131 @@ final class RoundO1Tests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
         return (store, TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices()))
+    }
+
+    private final class ComposerFileGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var reply: ((URL?, Bool, Error?) -> Void)?
+        let requested = XCTestExpectation(description: "provider requested")
+
+        func provider() -> NSItemProvider {
+            let provider = NSItemProvider()
+            provider.registerFileRepresentation(forTypeIdentifier: UTType.png.identifier, fileOptions: [], visibility: .all) { reply in
+                self.lock.withLock { self.reply = reply }
+                self.requested.fulfill()
+                return Progress(totalUnitCount: 1)
+            }
+            return provider
+        }
+
+        func release(_ url: URL) {
+            let callback = lock.withLock { let callback = reply; reply = nil; return callback }
+            callback?(url, false, nil)
+        }
+    }
+
+    private func waitForComposer(_ condition: () -> Bool) async {
+        let end = Date().addingTimeInterval(5)
+        while !condition(), Date() < end { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(condition(), "attachment operation completed")
+    }
+
+    func testPendingComposerFileKeepsSubmissionInItsDraft() async throws {
+        let (store, model) = try makeModel()
+        let source = try makeFile("Held.png")
+        try pngData().write(to: source)
+        let gate = ComposerFileGate()
+        model.addComposerFiles([gate.provider()])
+        await fulfillment(of: [gate.requested], timeout: 5)
+        model.addBarState.text.text = "Task A"
+        XCTAssertNil(model.submitAddBar(), "submission waits for the draft's pending files")
+        XCTAssertEqual(model.addBarState.text.text, "Task A")
+        gate.release(source)
+        await waitForComposer { model.addBarState.stagingFiles == 0 }
+        let a = try XCTUnwrap(model.submitAddBar())
+        model.addBarState.text.text = "Task B"
+        let b = try XCTUnwrap(model.submitAddBar())
+        await waitForComposer { store.task(withID: a)?.attachments.count == 1 }
+        XCTAssertEqual(store.task(withID: a)?.title, "Task A")
+        XCTAssertEqual(store.task(withID: b)?.attachments.count, 0)
+        XCTAssertTrue(model.addBarState.files.isEmpty)
+    }
+
+    func testPreparingFilesGivesFeedbackForReturnAndBothPasteChoices() async throws {
+        for route in 0..<4 {
+            let (store, model) = try makeModel()
+            let source = try makeFile("Preparing-\(route).png")
+            try pngData().write(to: source)
+            let gate = ComposerFileGate()
+            model.addComposerFiles([gate.provider()])
+            await fulfillment(of: [gate.requested], timeout: 5)
+            model.addBarState.text.text = "Keep this draft"
+            if route < 2 {
+                XCTAssertNil(model.submitAddBar(openingPage: route == 1))
+            } else {
+                model.pasteOffer = TaskPasteOffer("First\nSecond")
+                model.acceptPaste(asOne: route == 2)
+                XCTAssertNotNil(model.pasteOffer)
+            }
+            XCTAssertEqual(model.toasts.current?.message, "Preparing files · try again in a moment")
+            XCTAssertEqual(model.toasts.current?.actionTitle, "OK")
+            XCTAssertEqual(model.toasts.current?.answersUndoKey, false)
+            XCTAssertEqual(model.addBarState.text.text, "Keep this draft")
+            XCTAssertTrue(store.tasks.isEmpty)
+            gate.release(source)
+            await waitForComposer { model.addBarState.stagingFiles == 0 }
+            XCTAssertTrue(store.tasks.isEmpty, "feedback asks for explicit retry; it never submits a later draft")
+            XCTAssertEqual(model.addBarState.files.count, 1)
+            if route < 2 {
+                XCTAssertNotNil(model.submitAddBar(openingPage: route == 1))
+            } else {
+                model.acceptPaste(asOne: route == 2)
+                XCTAssertNil(model.pasteOffer)
+            }
+            XCTAssertFalse(store.tasks.isEmpty)
+            XCTAssertTrue(model.addBarState.files.isEmpty)
+        }
+    }
+
+    func testClearInvalidatesPendingComposerFiles() async throws {
+        let (_, model) = try makeModel()
+        let source = try makeFile("Held.png")
+        try pngData().write(to: source)
+        let root = TaskAttachmentStaging.ownedRootURL
+        let before = Set((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+        let gate = ComposerFileGate()
+        model.addComposerFiles([gate.provider()])
+        await fulfillment(of: [gate.requested], timeout: 5)
+        let directories = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        let staged = try XCTUnwrap(directories.first { !before.contains($0) })
+        model.clearComposerFiles()
+        XCTAssertNil(model.composerFilesValue)
+        gate.release(source)
+        await waitForComposer { !FileManager.default.fileExists(atPath: staged.path) }
+        XCTAssertEqual(model.addBarState.stagingFiles, 0)
+        XCTAssertTrue(model.addBarState.files.isEmpty, "the cleared provider cannot return")
+        XCTAssertNil(model.composerFilesValue)
+        model.clearComposerFiles()
+    }
+
+    func testPastedTasksConsumeComposerFilesInsteadOfPassingThemToTheNextDraft() async throws {
+        for asOne in [true, false] {
+            let (store, model) = try makeModel()
+            let file = try makeFile("Lease.pdf")
+            model.addComposerFiles(urls: [file])
+            model.pasteOffer = TaskPasteOffer("Sign\nlease")
+            model.acceptPaste(asOne: asOne)
+            let first = try XCTUnwrap(model.addedRequest?.id)
+            XCTAssertTrue(model.addBarState.files.isEmpty, "paste consumes this draft's files")
+            await waitForComposer { store.task(withID: first)?.attachments.count == 1 }
+            XCTAssertEqual(store.task(withID: first)?.attachments.first?.filename, "Lease.pdf")
+            let pasted = model.rows(for: .now).filter { $0.id != first }
+            XCTAssertEqual(pasted.count, asOne ? 0 : 1)
+            XCTAssertTrue(pasted.allSatisfy { $0.files.isEmpty }, "a multi-task paste assigns files to its first task")
+            model.addBarState.text.text = "Unrelated task"
+            let next = try XCTUnwrap(model.submitAddBar())
+            XCTAssertEqual(store.task(withID: next)?.attachments.count, 0)
+        }
     }
 
     func testFilesAddedWhileComposingGoOntoTheNewTaskThroughTheTaskImport() throws {

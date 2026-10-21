@@ -25,6 +25,7 @@ final class NotesPageControllerTests: XCTestCase {
 
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testFL3NoteSwitchEndsThePreviousTypingVisit() async throws {
         try await checkFL3TypingVisits(leaving: .openNote)
     }
@@ -40,6 +41,7 @@ final class NotesPageControllerTests: XCTestCase {
     func testFL3LibraryReopenEndsThePreviousTypingVisit() async throws {
         try await checkFL3TypingVisits(leaving: .library)
     }
+    #endif
 
     private func checkFL3TypingVisits(leaving reason: NotesPageController.LeaveReason) async throws {
         let controller = makeController()
@@ -88,6 +90,7 @@ final class NotesPageControllerTests: XCTestCase {
         withExtendedLifetime(scroll) {}
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testU05OversizedClipboardImageNeverCreatesAFileOrImport() async throws {
         let controller = makeController()
         await controller.startAndWait()
@@ -167,6 +170,7 @@ final class NotesPageControllerTests: XCTestCase {
                       "another recovery owner's bytes survive collection")
         withExtendedLifetime(peer) {}
     }
+    #endif
 
     private func makeController(journal: NoteDraftJournaling? = nil, delay: Duration = .seconds(60)) -> NotesPageController {
         NotesPageController(store: store, journal: journal ?? NoteDraftJournal(directory: directory),
@@ -227,6 +231,7 @@ final class NotesPageControllerTests: XCTestCase {
         return (controller, session, editID)
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testS5TypingWhileAgentWritesStaysCurrentAndReviewedProposalSurvivesLeave() async throws {
         let (controller, session, id) = try await s5Fixture(NoteDocument(blocks: [.text("My note")]))
         type(" while Claude writes", into: session)
@@ -357,7 +362,9 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(store.notes.contains { $0.id != session.noteID && $0.title == "My text unsaved newer" })
     }
     #endif
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testANewDraftIsSavedOnlyOnceItHasContent() async throws {
         let controller = makeController()
         await controller.startAndWait()
@@ -371,11 +378,13 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(store.notes.map(\.title), ["Groceries"])
         XCTAssertTrue(session.isPersisted)
     }
+    #endif
 
     #if !ATTIC_COST_REFERENCE_HOST
     /// Notes v2 tables: a cell edit (no character of the note changes) is
     /// an edit like any other: saved, journaled, and recovered after a
     /// failed save and a restart.
+    #if !ATTIC_GENERATED_TESTS
     func testATablesCellEditIsSavedJournaledAndRecovered() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
@@ -403,7 +412,9 @@ final class NotesPageControllerTests: XCTestCase {
                        "Encrypted")
     }
     #endif
+    #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testInvalidCheckpointNeverWritesEmptyBytesOrClaimsRecoveryAfterRestart() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let controller = makeController(journal: journal)
@@ -470,6 +481,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(session.engine.history.redo())
         XCTAssertEqual(Set(session.engine.tags), ["picker", "external"])
     }
+    #endif
 
     private func waitForDeadlineWrite(_ journal: CountingDeadlineJournal, count: Int = 1) async throws {
         for _ in 0..<200 {
@@ -479,6 +491,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTFail("The durability deadline did not checkpoint")
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testIdleFailedStoreDoesNotRearmItsDurabilityDeadline() async throws {
         var attempts = 0
         let failingStore = try makeTestNoteStore(persist: { _ in
@@ -600,6 +613,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(store.notes.first?.title, "First second")
         XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
     }
+    #endif
 
     private func waitForPreparations(_ preparer: ControlledDeadlinePreparer, count: Int) async throws {
         for _ in 0..<200 {
@@ -609,6 +623,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTFail("Expected document preparation did not start")
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testDeadlineCommitsItsPreparedSnapshotAndLeavesNewerTextAndTagsDirty() async throws {
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
             saveDelay: .seconds(60), prepareDocument: { document in
@@ -799,6 +814,7 @@ final class NotesPageControllerTests: XCTestCase {
             XCTAssertTrue(session.notice?.contains("kept") == true, failure)
         }
     }
+    #endif
 
     // Historical fixed limits are replaced by three interleaved reference /
     // candidate runs in macos-ci.yml. Both sides use this exact fixture.
@@ -808,6 +824,7 @@ final class NotesPageControllerTests: XCTestCase {
         print("ATTIC_INTEGRATION_COST \(label)-prepared median_ms=\(sample.prepared)")
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents() async throws {
         let empty = try await makeSavePerformanceFixture()
         let emptyAttachment = try await makeSavePerformanceFixture(withAttachment: true)
@@ -852,7 +869,9 @@ final class NotesPageControllerTests: XCTestCase {
             print("ATTIC_COST_SAMPLES metric=scaling-\(label.lowercased())-prepared raw_ms=\(preparedDifferences)")
         }
     }
+    #endif
 
+    #if ATTIC_GENERATED_TESTS
     func testMeasuredColdOpenAndLaunchWithFiveThousandLineNote() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
         guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
@@ -895,6 +914,7 @@ final class NotesPageControllerTests: XCTestCase {
             print("NOTE_\(name)_MS_MEDIAN=\(samples.sorted()[samples.count / 2]) MAX=\(samples.max()!)")
         }
     }
+    #endif
 
     private func populatePerformanceStore() async throws {
         let context = store.modelContext
@@ -1011,6 +1031,7 @@ final class NotesPageControllerTests: XCTestCase {
         return result
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testFailedSaveIsCheckpointedBeforeNavigationAndRetrySavesIt() async throws {
         let controller = makeController()
         await controller.startAndWait()
@@ -1618,8 +1639,10 @@ final class NotesPageControllerTests: XCTestCase {
         await XCTAssertTrueAsync(try await journal.readRecoveryEntries().isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
+    #endif
 
     #if !ATTIC_COST_REFERENCE_HOST
+    #if !ATTIC_GENERATED_TESTS
     func testAR05RecoveryCopyIOFailureCarriesItsSourceFlag() async throws {
         let controller = makeController(journal: FailingJournal())
         await controller.startAndWait()
@@ -1644,9 +1667,11 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(session.engine.plainText, text)
         XCTAssertEqual(session.state, state)
     }
+    #endif
 
     #endif
 
+    #if !ATTIC_GENERATED_TESTS
     func testProposalStatusOnLongNoteDoesNotFetchOrExtractOnTyping() async throws {
         let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
         guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
@@ -2116,6 +2141,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: stale))
         XCTAssertNotNil(defaults.object(forKey: current))
     }
+    #endif
 
     private func waitForImageRequests(_ loader: DelayedImageLoader, count: Int) async {
         for _ in 0..<100 {
@@ -2125,6 +2151,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTFail("image loader did not start \(count) requests")
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testRecoveryReadsValidEntriesBesideCorruptAndMissingImageEntries() async throws {
         let journal = NoteDraftJournal(directory: directory)
         let bytes = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Valid")]))
@@ -2510,6 +2537,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(session.state, .conflict(.changed))
         XCTAssertEqual(session.engine.document().title, "Mine later")
     }
+    #endif
 }
 
 @MainActor
@@ -2577,6 +2605,7 @@ private actor DelayedImageLoader {
 
 @MainActor
 final class NoteSessionPolicyTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
     func testEveryGateInputCombination() async {
         let states: [NoteSession.State] = [
             .untouched, .clean, .dirty, .notSaved("failed"), .onlyInMemory("failed"),
@@ -2624,6 +2653,7 @@ final class NoteSessionPolicyTests: XCTestCase {
         }
         XCTAssertEqual(NoteSessionPolicy.agentDisposition(.released, state: nil, hasBatch: false), .direct)
     }
+    #endif
 }
 
 /// One fresh, real controller/engine/store fixture per transition. The table
@@ -2686,6 +2716,7 @@ final class NoteSessionMatrixTests: XCTestCase {
         (.titleTag,                "AAAAAARNNNNNAN")
     ]
 
+    #if ATTIC_GENERATED_TESTS
     func testEveryStateEventPair() async throws {
         XCTAssertEqual(expected.map(\.0), Event.allCases)
         XCTAssertEqual(Column.allCases.count, 14)
@@ -2733,6 +2764,7 @@ final class NoteSessionMatrixTests: XCTestCase {
             }
         }
     }
+    #endif
 
     @MainActor
     private final class MatrixJournal: NoteDraftJournaling {
@@ -3306,6 +3338,7 @@ private actor DeadlineWriteBarrier {
 }
 
 extension NotesPageControllerTests {
+    #if !ATTIC_GENERATED_TESTS
     func testA38PasteTailAgreesLiveSavedReopenedAndExportedWithAttachments() async throws {
         let image = try realImage()
         var heading = NoteBlock.text("Prefix Tail \u{FFFC}", style: "heading")
@@ -3339,6 +3372,7 @@ extension NotesPageControllerTests {
         XCTAssertTrue(session.engine.history.undo())
         XCTAssertEqual(session.engine.document(), before)
     }
+    #endif
 }
 
 /// A continuation barrier, with no clock or scheduler-order assumption.
@@ -3362,6 +3396,7 @@ private final class QuitImportBarrier {
 }
 
 extension NotesPageControllerTests {
+    #if !ATTIC_GENERATED_TESTS
     func testS17QuitAcceptsDurableImportWhenImportClearsTicketBeforeFinalCheck() async throws {
         try await assertQuitDuringImport(importResumesFirst: true)
     }
@@ -3381,6 +3416,7 @@ extension NotesPageControllerTests {
     func testS17QuitRefusesAClaimReplacedByImportCancellation() async throws {
         try await assertQuitDuringImport(importResumesFirst: true, refusal: .replacedClaim)
     }
+    #endif
 
     private enum QuitImportRefusal { case failedWrite, newerGeneration, replacedClaim }
 
@@ -3459,6 +3495,7 @@ extension NotesPageControllerTests {
 }
 
 extension NotesPageControllerTests {
+    #if !ATTIC_GENERATED_TESTS
     func testS17OpenAcceptsTheFinalImportWriteAfterItsTicketWasCleared() async throws {
         try await assertNavigationDuringImport(newDraft: false)
     }
@@ -3466,6 +3503,7 @@ extension NotesPageControllerTests {
     func testS17NewNoteAcceptsTheFinalImportWriteAfterItsTicketWasCleared() async throws {
         try await assertNavigationDuringImport(newDraft: true)
     }
+    #endif
 
     private func assertNavigationDuringImport(newDraft: Bool) async throws {
         let journal = CountingDeadlineJournal(directory: directory)
@@ -3505,3 +3543,220 @@ extension NotesPageControllerTests {
         await controller.waitForImportWork()
     }
 }
+
+#if ATTIC_GENERATED_TESTS
+
+@MainActor
+final class RoundPRAMarkdownTests: XCTestCase {
+    /// Independent oracle at the reader, live paste, Undo/Redo, saved bytes and
+    /// fresh-context reopen. Identity-bearing blocks are checked by each caller.
+    private func checkPaste(_ markdown: String, expected: [NoteBlock],
+                            file: StaticString = #filePath, line: UInt = #line) async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let original = NoteDocument(blocks: [.text("Title"), .text("")])
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: original) else { return XCTFail("seed", file: file, line: line) }
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(600), pauseVersionDelay: .seconds(600))
+        let opened = await controller.openDurably(noteID: id)
+        XCTAssertTrue(opened, file: file, line: line)
+        let session = try XCTUnwrap(controller.active), engine = session.engine
+        let (scroll, view) = engine.makeView()
+        defer { engine.detachView(); withExtendedLifetime(scroll) {} }
+        let selection = NSRange(location: engine.textStorage.length, length: 0)
+        view.setSelectedRange(selection)
+        let before = engine.document()
+        XCTAssertTrue(engine.pasteMarkdown(markdown, at: selection), file: file, line: line)
+        func assertExpected(_ document: NoteDocument) {
+            let blocks = Array(document.blocks.dropFirst())
+            XCTAssertEqual(blocks.count, expected.count, file: file, line: line)
+            for (actual, wanted) in zip(blocks, expected) {
+                XCTAssertEqual(actual.text, wanted.text, file: file, line: line)
+                XCTAssertEqual(actual.marks, wanted.marks, file: file, line: line)
+                XCTAssertEqual(actual.style, wanted.style, file: file, line: line)
+                XCTAssertEqual(actual.kind, wanted.kind, file: file, line: line)
+                XCTAssertEqual(actual.indent ?? 0, wanted.indent ?? 0, file: file, line: line)
+                XCTAssertEqual(actual.start, wanted.start, file: file, line: line)
+                XCTAssertEqual(actual.checked, wanted.checked, file: file, line: line)
+                if wanted.kind == .checklist { XCTAssertNotNil(actual.id, file: file, line: line) }
+                if let table = wanted.table {
+                    XCTAssertEqual(actual.table?.rows.map { $0.cells.map(\.text) }, table.rows.map { $0.cells.map(\.text) }, file: file, line: line)
+                    XCTAssertEqual(actual.table?.rows.map { $0.cells.map(\.marks) }, table.rows.map { $0.cells.map(\.marks) }, file: file, line: line)
+                }
+            }
+        }
+        assertExpected(engine.document())
+        let pasted = engine.document(), afterSelection = view.selectedRange()
+        XCTAssertEqual(engine.history.undoOps.count, 1, file: file, line: line)
+        XCTAssertTrue(engine.history.undo(), file: file, line: line)
+        XCTAssertEqual(engine.document(), before, file: file, line: line)
+        XCTAssertEqual(view.selectedRange(), selection, file: file, line: line)
+        XCTAssertTrue(engine.history.redo(), file: file, line: line)
+        XCTAssertEqual(engine.document(), pasted, file: file, line: line)
+        XCTAssertEqual(view.selectedRange(), afterSelection, file: file, line: line)
+        let saved = await controller.preserveDurably(session)
+        XCTAssertTrue(saved, file: file, line: line)
+        let fresh = ModelContext(store.container)
+        let row = try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        let document = try XCTUnwrap(NoteContentCodec.decode(try XCTUnwrap(row.content)).document)
+        assertExpected(document)
+        XCTAssertEqual(document, pasted, file: file, line: line)
+    }
+
+    func testCalloutListStartAtIntMaxDoesNotOverflow() async throws {
+        var first = NoteBlock.text("one", style: "number"); first.start = Int.max
+        let expected = ["\(Int.max). one", "\(Int.max). two"]
+        XCTAssertEqual(NoteMarkdownImport.calloutParagraphs([first, .text("two", style: "number")], icon: "").map(\.text), expected)
+        let raw = "> 1. <!-- attic:list start=\(Int.max) -->one\n> 2. two"
+        XCTAssertEqual(try NoteMarkdownImport.document(raw).blocks.map(\.text), expected)
+        try await checkPaste(raw, expected: expected.map { .text($0, style: "quote") })
+    }
+}
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testMarkdownSourceRangesKeepCRParagraphContent() async throws {
+        var underlined = NoteBlock.text("Important")
+        underlined.marks = [NoteMark(.underline, offset: 0, length: 9)]
+        for eol in ["\n", "\r\n", "\r"] {
+            let raw = "Intro" + eol + eol + "<u>Important</u>"
+            let document = try NoteMarkdownImport.document(raw)
+            XCTAssertEqual(document.blocks.map(\.text), ["Intro", "Important"], eol.debugDescription)
+            XCTAssertEqual(document.blocks.last?.marks, underlined.marks, eol.debugDescription)
+            try await checkPaste(raw, expected: [.text("Intro"), underlined])
+        }
+    }
+}
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testIndentedQuotesKeepExplicitExportBytesAndDepth() async throws {
+        for (depth, bytes) in [(0, "# Title\n\n> Q"), (1, "# Title\n\n> > Q"), (2, "# Title\n\n> > > Q")] {
+            var quote = NoteBlock.text("Q", style: "quote"); quote.indent = depth == 0 ? nil : depth
+            let markdown = NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("Title"), quote]))
+            XCTAssertEqual(Array(markdown.utf8), Array(bytes.utf8))
+            let imported = try NoteMarkdownImport.document(bytes)
+            XCTAssertEqual(imported.blocks.last?.text, "Q")
+            XCTAssertEqual(imported.blocks.last?.style, "quote")
+            XCTAssertEqual(imported.blocks.last?.indent ?? 0, depth)
+            try await checkPaste(bytes.components(separatedBy: "\n\n")[1], expected: [quote])
+        }
+    }
+}
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testIndentedQuoteHardBreakKeepsMarksAndDepth() async throws {
+        var quote = NoteBlock.text("Q\u{2028}R", style: "quote"); quote.indent = 1
+        quote.marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let bytes = "# Title\n\n> > **Q**\\\n> > R"
+        XCTAssertEqual(Array(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("Title"), quote])).utf8), Array(bytes.utf8))
+        try await checkPaste("> > **Q**\\\n> > R", expected: [quote])
+    }
+}
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testLooseListsKeepContinuationInsideOneSourceItem() async throws {
+        let numbered = "7. first\n\n   **continuation**\n\n8. second"
+        var first = NoteBlock.text("first\u{2028}continuation", style: "number"); first.start = 7
+        first.marks = [NoteMark(.bold, offset: 6, length: 12)]
+        let second = NoteBlock.text("second", style: "number")
+        let document = try NoteMarkdownImport.document(numbered)
+        XCTAssertEqual(document.blocks.filter { $0.style == "number" }.count, 2)
+        XCTAssertEqual(document.blocks.map(\.text), ["first\u{2028}continuation", "second"])
+        XCTAssertEqual(document.blocks.first?.marks, first.marks)
+        try await checkPaste(numbered, expected: [first, second])
+        var checked = NoteBlock.checklist("first\u{2028}continuation")
+        checked.marks = [NoteMark(.bold, offset: 6, length: 12)]
+        let checklist = "- [ ] first\n\n  **continuation**"
+        let parsed = try NoteMarkdownImport.document(checklist)
+        XCTAssertEqual(parsed.blocks.filter { $0.kind == .checklist }.count, 1)
+        XCTAssertEqual(parsed.blocks.map(\.text), [checked.text])
+        XCTAssertEqual(Set(parsed.blocks.compactMap(\.id)).count, 1)
+        try await checkPaste(checklist, expected: [checked])
+        var child = NoteBlock.text("child", style: "bullet"); child.indent = 1
+        try await checkPaste("7. first\n\n   **continuation**\n\n   - child\n\n8. second", expected: [first, child, second])
+        let table = NoteTable(texts: [["A", "B"], ["C", "D"]])
+        try await checkPaste(checklist + "\n\n  | A | B |\n  | --- | --- |\n  | C | D |", expected: [checked, .table(table)])
+    }
+}
+
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testObjectCharacterRemovalRebasesInlineMarks() async throws {
+        var ordinary = NoteBlock.text("bx"); ordinary.marks = [NoteMark(.bold, offset: 0, length: 1)]
+        var paired = NoteBlock.text("ab"); paired.marks = [NoteMark(.underline, offset: 0, length: 2)]
+        var unicode = NoteBlock.text("😀bx"); unicode.marks = [NoteMark(.bold, offset: 2, length: 1)]
+        for (markdown, expected) in [("\u{FFFC}**b**x", ordinary), ("<u>a\u{FFFC}b</u>", paired), ("😀\u{FFFC}**b**x", unicode)] {
+            let document = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(document.blocks.map(\.text), [expected.text])
+            XCTAssertEqual(document.blocks.first?.marks, expected.marks)
+            try await checkPaste(markdown, expected: [expected])
+        }
+    }
+}
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testListContinuationsStopAtInterveningBlocksAndNestedFirstHasNoBreak() async throws {
+        var child = NoteBlock.text("child", style: "bullet"); child.indent = 1
+        var bold = NoteBlock.text("b", style: "number")
+        bold.marks = [NoteMark(.bold, offset: 0, length: 1)]
+        let fixtures: [(String, [NoteBlock])] = [
+            ("- a\n  - child\n\n  b", [.text("a", style: "bullet"), child, .text("b", style: "bullet")]),
+            ("1. a\n\n   ```\n   code\n   ```\n\n   **b**", [.text("a", style: "number"), .text("code", style: "mono"), bold]),
+            ("- - child\n\n  b", [child, .text("b", style: "bullet")]),
+            ("- a\n\n  > quote\n\n  b", [.text("a", style: "bullet"), .text("quote", style: "quote"), .text("b", style: "bullet")]),
+            ("- a\n\n  | A | B |\n  | --- | --- |\n  | C | D |\n\n  b", [.text("a", style: "bullet"), .table(NoteTable(texts: [["A", "B"], ["C", "D"]])), .text("b", style: "bullet")])
+        ]
+        for (markdown, expected) in fixtures {
+            let imported = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(imported.blocks.map(\.text), expected.map(\.text), markdown)
+            XCTAssertEqual(imported.blocks.map(\.marks), expected.map(\.marks), markdown)
+            try await checkPaste(markdown, expected: expected)
+        }
+    }
+}
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testCalloutNestedQuotesDoNotKeepHiddenDepth() async throws {
+        for marker in ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] {
+            let markdown = "> [!\(marker)]\n> a\n> > b"
+            let imported = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(imported.blocks.map(\.text), ["a", "b"])
+            XCTAssertTrue(imported.blocks.allSatisfy { $0.style == "quote" && $0.callout != nil })
+            XCTAssertTrue(imported.blocks.allSatisfy { $0.indent == nil }, marker)
+            try await checkPaste(markdown, expected: [.text("a", style: "quote"), .text("b", style: "quote")])
+        }
+    }
+}
+@MainActor
+extension RoundPRAMarkdownTests {
+    func testCalloutMarkersAcceptEverySourceLineEnding() async throws {
+        for eol in ["\n", "\r\n", "\r"] {
+            let markdown = "> [!NOTE]" + eol + "> text"
+            let imported = try NoteMarkdownImport.document(markdown)
+            XCTAssertEqual(imported.blocks.map(\.text), ["text"], eol.debugDescription)
+            XCTAssertEqual(imported.blocks.first?.callout, "", eol.debugDescription)
+            XCTAssertNil(imported.blocks.first?.indent)
+            try await checkPaste(markdown, expected: [.text("text", style: "quote")])
+        }
+    }
+
+    func testPairedHTMLNormalizesSourceLineEndingsBeforeInlineParsing() throws {
+        let lf = try NoteMarkdownImport.document("<u>a\nb</u>")
+        XCTAssertEqual(lf.blocks.map(\.text), ["a\nb"])
+        XCTAssertEqual(lf.blocks.first?.marks, [NoteMark(.underline, offset: 0, length: 3)])
+        for eol in ["\r", "\r\n"] {
+            let imported = try NoteMarkdownImport.document("<u>a" + eol + "b</u>")
+            XCTAssertEqual(imported, lf, eol.debugDescription)
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = UUID()
+            guard case .success = store.createDocumentNote(id: id, document: imported) else { return XCTFail("save") }
+            let fresh = ModelContext(store.container)
+            let row = try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+            XCTAssertEqual(NoteContentCodec.decode(try XCTUnwrap(row.content)).document,
+                NoteContentCodec.decode(try NoteContentCodec.encode(lf)).document)
+        }
+    }
+}
+#endif

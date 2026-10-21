@@ -1235,8 +1235,5 @@ final class NoteDocumentStoreTests: XCTestCase {
 
     // MARK: Migration gate (requirement 2, fixtures only)
 
-    private func textKitRoundTrip(_ document: NoteDocument) -> NoteDocument {
-        NoteTextKitRoundTrip.document(afterRoundTrip: document)
-    }
 
 }
