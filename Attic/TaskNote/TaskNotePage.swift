@@ -251,8 +251,12 @@ struct TaskNotePage: View {
         case richSubtasks(TaskNoteSubtaskSelection)
         /// § 2.6: a Done task gets an open subtask.
         case reopenForSubtasks(TaskNoteSubtaskSelection)
+        /// § 2.6: unticking or adding a subtask under a Done task.
+        case reopenRequest
         var id: String {
             switch self {
+            case .reopenRequest: "reopenRequest"
+
             case .deleteTask: "deleteTask"
             case .deleteNote: "deleteNote"
             case .richSubtasks: "richSubtasks"
@@ -323,7 +327,13 @@ struct TaskNotePage: View {
             onBack()
             return .handled
         }
-        .confirmationDialog(confirmationTitle, isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+        .onChange(of: model.pendingReopen) { _, request in if request != nil { confirming = .reopenRequest } }
+        .confirmationDialog(confirmationTitle, isPresented: Binding(get: { confirming != nil }, set: {
+            if !$0 {
+                if case .reopenRequest = confirming { model.pendingReopen = nil }
+                confirming = nil
+            }
+        }),
                             titleVisibility: .visible, presenting: confirming) { kind in
             switch kind {
             case .deleteTask:
@@ -332,6 +342,9 @@ struct TaskNotePage: View {
                 Button(String(localized: "Delete Note"), role: .destructive) { deleteNote() }
             case let .richSubtasks(analysis):
                 Button(String(localized: "Create Subtask and Keep Original")) { runMakeSubtask(analysis) }
+                    .keyboardShortcut(.defaultAction)
+            case .reopenRequest:
+                Button(String(localized: "Reopen Task and Continue")) { model.continueAfterReopen() }
                     .keyboardShortcut(.defaultAction)
             case let .reopenForSubtasks(analysis):
                 Button(String(localized: "Reopen Task and Continue")) {
@@ -425,7 +438,30 @@ struct TaskNotePage: View {
         textView.workspaceMenuItems = { writingMenuItems() }
     }
 
+    /// § 2.6: the toast names what completing the task completed.
+    static func completionMessage(subtasks: Int) -> String {
+        switch subtasks {
+        case 0: String(localized: "Task completed")
+        case 1: String(localized: "Task and 1 subtask completed")
+        default: String(localized: "Task and \(subtasks) subtasks completed")
+        }
+    }
+
+    private func installCompletionToast() {
+        let presenter = presenter, toasts = toasts
+        model.onCompleted = { subtasks, stepID in
+            guard let stepID else { return }
+            toasts?.show(Self.completionMessage(subtasks: subtasks), performingAsync: {
+                guard presenter.lease != nil else { return .applied }
+                let history = presenter.page.history
+                guard history.route.undoStepID(in: history.historyID) == stepID else { return .applied }
+                return history.undo() ? .applied : .failed(CommandFailure(String(localized: "Couldn't undo")))
+            })
+        }
+    }
+
     private func installMenus() {
+        installCompletionToast()
         presenter.menus.noteMenu = { presentNoteMenu() }
         presenter.menus.taskMenu = { taskCommands() }
         presenter.menus.restoreNote = { restoreNote() }
@@ -526,7 +562,7 @@ struct TaskNotePage: View {
         case let .richSubtasks(analysis):
             analysis.richCount == 1 ? String(localized: "1 line has links or formatting a subtask can't keep.")
                 : String(localized: "\(analysis.richCount) lines have links or formatting a subtask can't keep.")
-        case .reopenForSubtasks: String(localized: "This task is done.")
+        case .reopenForSubtasks, .reopenRequest: String(localized: "This task is done.")
         case nil: ""
         }
     }
@@ -681,8 +717,8 @@ struct TaskNotePage: View {
             return String(localized: "Its writing and files go to Recently Deleted for 30 days. “\(model.head.title)” and its subtasks stay in Tasks.")
         case .richSubtasks:
             return String(localized: "Those lines stay in the note unchanged; plain lines still move.")
-        case .reopenForSubtasks:
-            return String(localized: "A new open subtask reopens “\(model.head.title)”.")
+        case .reopenForSubtasks, .reopenRequest:
+            return String(localized: "An open subtask reopens “\(model.head.title)”.")
         }
     }
 

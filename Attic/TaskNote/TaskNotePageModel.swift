@@ -184,7 +184,9 @@ final class TaskNotePageModel: ObservableObject {
     func refresh(animated: Bool = false) {
         // A task moved to the Done log still has its page (`p3-22` row 3).
         let task = store.listedTask(withID: taskID)
-        let canonical = store.subtasks(of: taskID)
+        // Next-day cleanup moved the family to the Done log (§ 2.6): its
+        // subtasks are read from there.
+        let canonical = task?.doneLoggedAt != nil ? store.doneLogSubtasks(of: taskID) : store.subtasks(of: taskID)
         let done = canonical.filter { $0.status == .done }.count
         var next = Head(title: task?.title ?? head.title,
                         state: task.map { TaskRowPresentation.state($0.status) } ?? head.state,
@@ -331,6 +333,11 @@ final class TaskNotePageModel: ObservableObject {
     @discardableResult
     func toggle(_ id: UUID) -> Bool {
         guard let task = store.task(withID: id) else { return report(.taskGone) }
+        // § 2.6: unticking under a Done task asks Reopen Task and Continue.
+        if needsReopen(toggling: id) {
+            pendingReopen = .toggle(id)
+            return false
+        }
         let next: TaskStatus = task.status == .done ? .todo : .done
         let outcome = library.updateTask(id, status: next, in: historyID)
         return settle(outcome) { [weak self] in self?.toggle(id) }
@@ -346,6 +353,11 @@ final class TaskNotePageModel: ObservableObject {
             newSubtaskText = ""
             focusWriting(atTop: true)
             return true
+        }
+        // § 2.6: an open subtask in a Done task asks first; the draft stays.
+        if head.exists, head.state == .done {
+            pendingReopen = .addSubtask
+            return false
         }
         let created = library.createTasks([TaskDraft(title: title, status: .todo, parentID: taskID)], in: historyID)
         guard created != nil else {
@@ -486,9 +498,15 @@ final class TaskNotePageModel: ObservableObject {
     /// The head's status circle: done, or back from done.
     @discardableResult
     func toggleTask() -> Bool {
-        guard let task = store.task(withID: taskID) else { return report(.taskGone) }
-        let next: TaskStatus = task.status == .done ? .todo : .done
-        return settle(library.updateTask(taskID, status: next, in: historyID)) { [weak self] in self?.toggleTask() }
+        // A Done-log task keeps its page (`p3-22`): it can come back too.
+        guard let task = store.listedTask(withID: taskID) else { return report(.taskGone) }
+        guard task.status != .done else { return reopenTask() }
+        // § 2.6: completing completes the open subtasks in the same
+        // operation (today's family operation, as the Tasks circle).
+        let open = store.subtasks(of: taskID).filter { $0.status != .done }.count
+        guard settle(library.completeTask(taskID, in: historyID), retry: { [weak self] in self?.toggleTask() }) else { return false }
+        onCompleted?(open, library.undo.undoStepID(in: historyID))
+        return true
     }
 
     // MARK: The head's title (Tasks' title editor and its shorthand)
@@ -672,10 +690,40 @@ final class TaskNotePageModel: ObservableObject {
     /// one step in the page's history; what was asked then goes ahead.
     @discardableResult
     func reopenTask() -> Bool {
-        guard let task = store.task(withID: taskID) ?? store.listedTask(withID: taskID) else { return report(.taskGone) }
+        guard let task = store.listedTask(withID: taskID) else { return report(.taskGone) }
         guard task.status == .done else { return true }
-        return settle(library.updateTask(taskID, status: .todo, in: historyID)) { [weak self] in self?.reopenTask() }
+        // Back to what it was before it was finished, from the Done log too
+        // (today's Reopen, as the Tasks circle).
+        guard settle(library.reopenTasks([taskID], in: historyID), retry: { [weak self] in self?.reopenTask() }) else { return false }
+        refresh()
+        return true
     }
+
+    /// What waits for Reopen Task and Continue (§ 2.6): writing, files and
+    /// the title never reopen a Done task; these do, once asked.
+    enum ReopenRequest: Equatable { case toggle(UUID), addSubtask }
+    @Published var pendingReopen: ReopenRequest?
+
+    func needsReopen(toggling id: UUID) -> Bool {
+        guard head.exists, head.state == .done else { return false }
+        return rows.first { $0.id == id }?.isDone ?? (store.task(withID: id)?.status == .done)
+    }
+
+    /// The person chose Reopen Task and Continue: the task reopens, then
+    /// what was asked goes ahead.
+    func continueAfterReopen() {
+        guard let request = pendingReopen else { return }
+        pendingReopen = nil
+        guard reopenTask() else { return }
+        switch request {
+        case let .toggle(id): _ = toggle(id)
+        case .addSubtask: _ = commitNewSubtask()
+        }
+    }
+
+    /// Completing from the head (circle, ⇧⌘↩): the toast names the scope
+    /// ("Task and 2 subtasks completed"), with the step its Undo targets.
+    var onCompleted: ((_ subtasks: Int, _ stepID: UUID?) -> Void)?
 
     func clearFailure() {
         failure = nil

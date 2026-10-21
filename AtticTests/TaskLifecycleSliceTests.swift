@@ -576,4 +576,66 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(try ownNotes(id).allSatisfy { $0.taskID == id }, "nothing was written")
         textView.unmarkText()
     }
+
+    // MARK: The family contract (§ 2.6)
+
+    func testCompletingTheTaskOnItsPageCompletesItsOpenSubtasksAndKeepsThePage() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        XCTAssertTrue(presenter.model.toggleTask())
+        XCTAssertEqual(tasks.task(withID: id)?.status, .done)
+        XCTAssertTrue(tasks.subtasks(of: id).allSatisfy { $0.status == .done }, "one family operation")
+        presenter.model.refresh()
+        XCTAssertEqual(presenter.model.head.state, .done)
+        XCTAssertTrue(presenter.model.head.exists)
+        XCTAssertNotNil(presenter.lease, "completing never navigates away")
+        XCTAssertFalse(presenter.host.engine.isReadOnly, "the writing stays editable")
+        XCTAssertEqual(TaskNotePage.completionMessage(subtasks: 1), "Task and 1 subtask completed")
+    }
+
+    func testDoneCleanupWithTheTaskPageOpenKeepsItsHeadSubtasksAndWriting() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        XCTAssertTrue(presenter.model.toggleTask())
+        let cutoff = Date().addingTimeInterval(60)
+        XCTAssertEqual(tasks.moveCompletedToDoneLog(before: cutoff), 3, "next-day cleanup moves the family to the Done log")
+        presenter.model.refresh()
+        XCTAssertTrue(presenter.model.head.exists, "a Done-log task still has its page")
+        XCTAssertEqual(presenter.model.head.state, .done)
+        XCTAssertEqual(presenter.model.rows.count, 2, "its subtasks stay on the page")
+        XCTAssertFalse(try ownNotes(id).isEmpty)
+        type(" More.", into: presenter.host.textView)
+        XCTAssertTrue(notes.save(try XCTUnwrap(presenter.session)), "the note stays editable")
+    }
+
+    func testADivergentDuplicateBlocksDoneCleanupWhileThePageIsOpen() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        XCTAssertTrue(presenter.model.toggleTask())
+        // A second physical replica of the task that disagrees.
+        let context = ModelContext(container)
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        let replica = TaskItem(id: id, title: row.title + " (other Mac)", status: .done, createdAt: row.createdAt,
+                               completedAt: row.completedAt, manualOrder: row.manualOrder)
+        context.insert(replica)
+        try context.save()
+        tasks.refresh()
+        XCTAssertEqual(tasks.moveCompletedToDoneLog(before: Date().addingTimeInterval(60)), 0, "replicas must agree first")
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).allSatisfy { $0.doneLoggedAt == nil })
+        presenter.model.refresh()
+        XCTAssertTrue(presenter.model.head.exists)
+    }
+
+    func testReopenTaskAndContinueUnticksASubtaskOfADoneTask() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        XCTAssertTrue(presenter.model.toggleTask())
+        let sub = try XCTUnwrap(tasks.subtasks(of: id).first)
+        XCTAssertTrue(presenter.model.needsReopen(toggling: sub.id), "unticking under a Done task asks first")
+        XCTAssertTrue(presenter.model.reopenTask())
+        XCTAssertNotEqual(tasks.task(withID: id)?.status, .done)
+        XCTAssertTrue(presenter.model.toggle(sub.id))
+        XCTAssertEqual(tasks.task(withID: sub.id)?.status, .todo)
+        XCTAssertFalse(presenter.model.needsReopen(toggling: sub.id))
+    }
 }
