@@ -456,6 +456,18 @@ final class RecentlyDeletedModel: ObservableObject {
         emptyRequest = nil
         guard let library else { return }
         library.emptyRecentlyDeleted(request.selection)
+        finishEmpty(request)
+        // Deleted tasks with notes finish through the coordinated purge
+        // (Phase 3); the list and its message follow when they are done.
+        if library.taskNotePurge != nil, !request.selection.items(.task).isEmpty {
+            Task { @MainActor [weak self] in
+                guard !(await library.emptyTaskNoteFamilies(request.selection)).isEmpty else { return }
+                self?.finishEmpty(request)
+            }
+        }
+    }
+
+    private func finishEmpty(_ request: EmptyRequest) {
         reload()
         let kept = entries.filter { entry in
             switch entry.source {

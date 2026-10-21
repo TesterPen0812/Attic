@@ -651,6 +651,11 @@ final class AppCoordinator: ObservableObject {
         self.noteDraft = noteDraft
         self.uiState = uiState
         self.panelController = panelController
+        // Phase 3: deleted tasks that own notes are purged through the
+        // coordinated path, through any open task page (§ 2.7.2).
+        library.taskNotePurge = { [store, noteDraft] cutoff, confirmed in
+            await TaskNotePurge.run(tasks: store, notes: noteDraft.pages, before: cutoff, confirmed: confirmed).removedTaskIDs
+        }
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer

@@ -1203,6 +1203,11 @@ final class NotesPageController: ObservableObject {
         return session.isPersisted && session.state == .clean && !session.isImporting
     }
 
+    /// A coordinated purge made a task's own note ordinary (§ 2.7.2); the
+    /// host closes that task's page and shows the note (with the patch and
+    /// its operation for "Task removed permanently · Undo").
+    var taskNoteMaterialized: ((WorkspaceMaterializationPatch, UUID) -> Void)?
+
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
     var libraryQueryAcrossTaskPage: String?
@@ -3704,5 +3709,96 @@ extension NotesPageController {
     var librarySelectionID: UUID? {
         if let active, active.isPersisted { return active.noteID }
         return lastViewedNoteID
+    }
+}
+
+// MARK: - Phase 3: purging a deleted task whose note is open (§ 2.7.2)
+
+extension NotesPageController {
+    /// What the coordinated purge must know about the open editors of the
+    /// family's own notes (S5): their drafts (merged into the
+    /// materialization, never replaced by stored content), their activity
+    /// (composition, imports, conflicts defer the purge) and their bytes.
+    func taskNotePurgeInventory(ownNotes: Set<UUID>) -> WorkspacePurge.Inventory {
+        var generation: UInt64 = 1
+        var drafts: [UUID: NoteDocument] = [:]
+        var sessions: [UUID: WorkspacePurge.SessionSnapshot] = [:]
+        var claims: [UUID: NoteRecoveryClaim] = [:]
+        var staged: [UUID: [StagedNoteAttachment]] = [:]
+        var tags: [UUID: [String]] = [:]
+        var selections: [UUID: NSRange] = [:]
+        var bytes = Set<UUID>()
+        var blocked = Set<UUID>()
+        for session in cache.values {
+            let id = session.noteID
+            generation = generation &* 31 &+ UInt64(truncatingIfNeeded: id.hashValue) &+ session.editGeneration
+            for item in session.engine.stagedAttachments(for: session.engine.checkpointDocument()) { bytes.insert(item.id) }
+            guard ownNotes.contains(id) else { continue }
+            session.engine.refreshCompositionActivity()
+            var snapshot = session.workspacePage?.activitySnapshot ?? WorkspacePurge.SessionSnapshot()
+            snapshot.activity = session.engine.activity
+            snapshot.state = session.state
+            snapshot.importing = session.isImporting
+            snapshot.proposal = proposalReview?.noteID == id
+            if session.engine.textView?.hasMarkedText() == true { snapshot.activity = .composing }
+            sessions[id] = snapshot
+            if session.recoverySourceNoteID != nil { blocked.insert(id) }
+            if NoteSessionPolicy.hasPendingWork(session.state) {
+                let document = session.engine.checkpointDocument()
+                drafts[id] = document
+                staged[id] = session.engine.stagedAttachments(for: document)
+                if let claim = session.recoveryClaim { claims[id] = claim }
+                if let pending = session.pendingTags { tags[id] = pending }
+                selections[id] = session.selection
+            }
+        }
+        return WorkspacePurge.Inventory(generation: generation, bytes: bytes, drafts: drafts, blockedNotes: blocked,
+                                        sessions: sessions, claims: claims, staged: staged, tags: tags, selections: selections)
+    }
+
+    /// After a committed purge materialized `noteID` (now an ordinary
+    /// note): an editor that was open on it as a task's note took the
+    /// stored text as its base (its draft is what the purge saved) and
+    /// leaves; the next open builds an ordinary editor. A warm, closed
+    /// task-note editor is dropped.
+    func retireMaterializedTaskNote(_ noteID: UUID) {
+        store.refresh()
+        guard let session = cache[noteID], session.engine.isBodyOnly else { return }
+        session.saveTask?.cancel(); session.saveTask = nil
+        session.durabilityTask?.cancel(); session.durabilityTask = nil
+        session.pauseTask?.cancel(); session.pauseTask = nil
+        if let note = store.note(withID: noteID) {
+            session.baseRevisionID = note.revisionID
+            session.baseContent = note.content
+            session.baseTags = note.tags
+        }
+        session.state = .clean
+        if !session.usesWorkspaceBinding {
+            session.engine.detachView()
+            cache[noteID] = nil
+        }
+    }
+
+    /// A change written by another owner (a purge's Undo): a clean editor
+    /// on `noteID` reloads from the store; one with pending writing keeps
+    /// it and meets the change as a conflict, as with any external edit.
+    func reloadAfterExternalChange(_ noteID: UUID) {
+        store.refresh()
+        guard let session = cache[noteID], !session.usesWorkspaceBinding else { return }
+        guard !NoteSessionPolicy.hasPendingWork(session.state), !session.isImporting else {
+            session.state = .conflict(.changed)
+            return
+        }
+        let wasActive = active === session
+        session.engine.detachView()
+        cache[noteID] = nil
+        if wasActive { _ = open(noteID: noteID) }
+    }
+
+    /// Drops the retired task-note editor once its page has left.
+    func evictRetiredTaskNote(_ noteID: UUID) {
+        guard let session = cache[noteID], session.engine.isBodyOnly, !session.usesWorkspaceBinding else { return }
+        session.engine.detachView()
+        cache[noteID] = nil
     }
 }

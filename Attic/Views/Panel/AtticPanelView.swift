@@ -239,6 +239,20 @@ struct AtticPanelView: View {
                 .eraseToAnyPublisher())
     }
 
+    /// A purge made an open task's note ordinary (§ 2.7.2): its page leaves
+    /// and, if it was showing, the note opens in Notes.
+    private func installTaskNotePurgePresentation() {
+        let pages = noteDraft.pages
+        pages.taskNoteMaterialized = { [store, uiState, toasts] patch, operationID in
+            Task { @MainActor in
+                await TaskNotePurgePresentation.finish(patch, operationID: operationID, tasks: store, notes: pages,
+                                                       uiState: uiState, toasts: toasts) {
+                    uiState.switchPage(to: .notes, motion: .instant)
+                }
+            }
+        }
+    }
+
     /// The header controls' frames in panel coordinates (top-left origin).
     private var headerControlRects: [CGRect] {
         [
@@ -291,6 +305,7 @@ struct AtticPanelView: View {
                 chromeInteractionState.modeDockWidth = PanelHeaderLayout.pageSwitchWidth
                 syncBottomControlsHeight()
                 syncNoteDraftInteractionLocks()
+                installTaskNotePurgePresentation()
             }
             .onChange(of: noteDraft.isDirty) { _, _ in syncNoteDraftInteractionLocks() }
             .onChange(of: noteDraft.hasConflict) { _, _ in syncNoteDraftInteractionLocks() }

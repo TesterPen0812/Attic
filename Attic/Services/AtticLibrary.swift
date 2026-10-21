@@ -690,7 +690,34 @@ final class AtticLibrary {
     /// cleanup; never by agents.
     @discardableResult
     func purgeExpired(now: Date, calendar: Calendar) -> RecentlyDeletedPurgeReport {
-        purgeDeleted(before: RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar))
+        let cutoff = RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar)
+        let report = purgeDeleted(before: cutoff)
+        // Deleted tasks that own notes go through the coordinated purge
+        // (Phase 3), after the legacy collector, without holding it up.
+        if let taskNotePurge {
+            Task { @MainActor [weak self] in
+                let removed = await taskNotePurge(cutoff, nil)
+                self?.undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+            }
+        }
+        return report
+    }
+
+    /// Phase 3: removes for good deleted task families that own notes, each
+    /// in one coordinated transaction that makes their notes ordinary
+    /// (§ 2.7.2, through an open page's session). Installed by the app; nil
+    /// leaves those families in Recently Deleted (tests, previews).
+    var taskNotePurge: ((_ cutoff: Date, _ confirmed: [UUID: Date]?) async -> Set<UUID>)?
+
+    /// Empty Recently Deleted's second half: the confirmed deleted tasks
+    /// that own notes, through the coordinated purge (Phase 3). The rest of
+    /// the selection was removed synchronously by `emptyRecentlyDeleted`.
+    @discardableResult
+    func emptyTaskNoteFamilies(_ selection: RecentlyDeletedSelection) async -> Set<UUID> {
+        guard !selection.isEmpty, let taskNotePurge else { return [] }
+        let removed = await taskNotePurge(.distantFuture, selection.items(.task))
+        undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+        return removed
     }
 
     /// Empties Recently Deleted: removes for good exactly the deletions the

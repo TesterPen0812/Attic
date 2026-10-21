@@ -41,7 +41,9 @@ final class TaskLifecycleSliceTests: XCTestCase {
     }
 
     private func makeStores() {
-        tasks = TaskStore(container: container)
+        let files = FileManager.default.temporaryDirectory.appendingPathComponent("TaskLifecycle-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: files) }
+        tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: files))
         library = AtticLibrary(tasks: tasks)
         notes = NotesPageController(store: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()),
                                     journal: coordinator.journal, defaults: nil,
@@ -516,5 +518,62 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(undone, .applied)
         XCTAssertTrue(presenter.host.textView.textStorage!.isEqual(to: before))
         XCTAssertTrue(try rows(alternate).allSatisfy { $0.deletedAt == nil && $0.taskID == id })
+    }
+
+    // MARK: Purge through an open session (§ 2.7.2)
+
+    func testPurgingADeletedTaskMakesItsClosedNoteOrdinaryInOneTransaction() async throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(tasks.purgeDeleted(before: .distantFuture).isEmpty, "the legacy collector leaves a family with a note")
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id))
+        XCTAssertEqual(report.materializedNoteIDs, [noteID])
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })), 0)
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == nil && $0.deletedAt == nil })
+        let document = try storedDocument(noteID)
+        XCTAssertFalse(document.requires.contains("taskNote"))
+        XCTAssertEqual(document.title, "Finalize launch checklist")
+        XCTAssertEqual(document.blocks.dropFirst().first?.text, "Everything that has to be true before 1.0 goes out.")
+    }
+
+    func testPurgeWhileTheTasksPageIsOpenMergesItsUnsavedWritingAndTheNoteBecomesOrdinary() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(presenter.model.deleteTask())
+        presenter.host.textView.setSelectedRange(NSRange(location: presenter.host.textView.string.utf16.count, length: 0))
+        type(" Still writing.", into: presenter.host.textView)
+        XCTAssertNotEqual(session.state, .clean, "unsaved writing")
+        var materialized: [UUID] = []
+        notes.taskNoteMaterialized = { patch, _ in materialized.append(patch.noteID) }
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id))
+        XCTAssertEqual(materialized, [session.noteID], "the page is told to leave")
+        let document = try storedDocument(session.noteID)
+        XCTAssertTrue(document.blocks.map(\.text).contains("Sam owns the pricing page; I take the checklist. Still writing."),
+                      "the draft is merged, never replaced by stored content")
+        XCTAssertFalse(document.requires.contains("taskNote"))
+        XCTAssertTrue(try rows(session.noteID).allSatisfy { $0.taskID == nil })
+        XCTAssertEqual(session.state, .clean, "what the editor shows is what the purge saved")
+        await close(presenter)
+        XCTAssertTrue(try rows(session.noteID).allSatisfy { $0.taskID == nil }, "leaving never writes the task note back")
+        XCTAssertFalse(try storedDocument(session.noteID).requires.contains("taskNote"))
+    }
+
+    func testPurgeWaitsWhileTheOpenNoteIsComposing() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        XCTAssertTrue(presenter.model.deleteTask())
+        let textView = presenter.host.textView
+        textView.window?.makeFirstResponder(textView)
+        textView.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(textView.hasMarkedText())
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertEqual(report.deferredRootIDs, [id], "IME composition: the purge waits for a later cleanup")
+        XCTAssertTrue(report.removedTaskIDs.isEmpty)
+        XCTAssertTrue(try ownNotes(id).allSatisfy { $0.taskID == id }, "nothing was written")
+        textView.unmarkText()
     }
 }
