@@ -554,6 +554,12 @@ final class AppCoordinator: ObservableObject {
                     if runtime.bundleIdentifier == TaskNotePreviewSeed.ownerPreviewBundleIdentifier {
                         try TaskNotePreviewSeed.seedOwnerPreview(in: container)
                     }
+                    // "Attic Task Life" (slice 1): the task pages and one
+                    // task for each lifecycle state.
+                    if runtime.bundleIdentifier == TaskNoteLifecyclePreviewSeed.bundleIdentifier {
+                        try TaskNotePreviewSeed.seedOwnerPreview(in: container)
+                        try TaskNoteLifecyclePreviewSeed.seed(in: container)
+                    }
                 } catch {
                     NSLog("Attic demo data: %@", error.localizedDescription)
                 }

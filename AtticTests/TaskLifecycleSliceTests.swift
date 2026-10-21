@@ -762,4 +762,28 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(tasks.subtasks(of: id).count, 2, "a body write never touches subtasks")
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == id }, "nor the association")
     }
+
+    // MARK: The "Attic Task Life" preview seed
+
+    func testTheTaskLifePreviewSeedsEveryNewState() async throws {
+        let ids = try TaskNoteLifecyclePreviewSeed.seed(in: container)
+        makeStores()
+        let deletedNote = try open(try XCTUnwrap(ids[.deletedNote]))
+        XCTAssertTrue(deletedNote.model.deletedNote, "Write a new note · Restore Note")
+        let deletedTask = try open(try XCTUnwrap(ids[.deletedTask]))
+        XCTAssertFalse(deletedTask.model.head.exists, "Task deleted · Restore")
+        XCTAssertEqual(deletedTask.model.rows.count, 1)
+        let alternate = try open(try XCTUnwrap(ids[.alternateNote]))
+        XCTAssertEqual(alternate.model.alternateNotes.count, 1, "Another note for this task · Review")
+        let history = try XCTUnwrap(ids[.history])
+        let noteID = try XCTUnwrap(try ownNotes(history).first?.id)
+        XCTAssertEqual(notes.store.versions(noteID: noteID).count, 2)
+        let logged = try open(try XCTUnwrap(ids[.doneLogged]))
+        XCTAssertTrue(logged.model.head.exists)
+        XCTAssertEqual(logged.model.head.state, .done)
+        let demo = try open(try XCTUnwrap(ids[.makeSubtask]))
+        XCTAssertTrue(demo.host.textView.string.contains("Record a backup video"))
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskDeletionPreservation>())
+            .contains { $0.rootID == ids[.deletedTask] }, "the deleted task has its preservation record")
+    }
 }
