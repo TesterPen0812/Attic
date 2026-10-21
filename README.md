@@ -8,6 +8,10 @@ Attic is macOS-first and local-first. Your data stays in a local SwiftData
 store on the Mac. An iPhone app and CloudKit sync exist in the source but are
 switched off (see [What is not active](#what-is-not-active)).
 
+<p align="center">
+  <img src="Media/attic-panel.png" width="375" alt="The Attic panel on the Notes page: a note titled “Woah” that says “This app is dope”, with a large image of a cigar-smoking emoji, and the pin, Notes, Aa and new-note buttons at the panel’s corners.">
+</p>
+
 ## What works today
 
 ### The panel
