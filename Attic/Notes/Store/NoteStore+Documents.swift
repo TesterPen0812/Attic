@@ -1050,12 +1050,7 @@ extension NoteStore {
                 : "This saved version has conflicting copies and cannot be restored safely."))
         }
         let restoredContent: Data?
-        var restoredTitle = version.title
         do {
-            if version.contentFormat == 0, version.content == nil,
-               let title = try WorkspaceRestoreNormalization.detachedTitle(noteID: noteID, in: modelContext) {
-                restoredTitle = title
-            }
             if let bytes = version.content, case let .editable(document) = NoteContentCodec.decode(bytes) {
                 let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: modelContext)
                 restoredContent = normalized == document ? bytes : try NoteContentCodec.encode(normalized)
@@ -1075,10 +1070,10 @@ extension NoteStore {
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         let derived = Self.derivedColumns(content: restoredContent, format: version.contentFormat,
-                                          title: restoredTitle, body: version.body)
+                                          title: version.title, body: version.body)
         WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
         for replica in replicas {
-            replica.content = version.contentFormat >= 1 ? restoredContent : nil
+            replica.content = restoredContent
             replica.contentFormat = version.contentFormat
             replica.title = derived.title
             replica.body = derived.body
@@ -1538,18 +1533,5 @@ extension NoteStore {
             if row.deletedAt != deleted { row.deletedAt = deleted; row.updatedAt = timestamp }
         }
         WorkspaceCrashHook.reach("K3-note")
-    }
-}
-
-
-extension NoteStore {
-    /// Changes only legacy compatibility columns; the body, anchors and format
-    /// remain byte-for-byte legacy. No implicit migration is performed.
-    static func stageLegacyTitle(_ title: String, on row: NoteItem, timestamp: Date) {
-        row.title = title
-        row.plainText = row.body.isEmpty ? title : title + "\n" + row.body
-        row.updatedAt = timestamp
-        row.revision &+= 1
-        row.revisionID = UUID()
     }
 }

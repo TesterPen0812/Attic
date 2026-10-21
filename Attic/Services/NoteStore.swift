@@ -690,12 +690,6 @@ final class NoteStore: ObservableObject {
             }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas {
-                if replica.contentFormat == 0, replica.content == nil {
-                    if let title = try WorkspaceRestoreNormalization.detachedTitle(noteID: noteID, in: context) {
-                        Self.stageLegacyTitle(title, on: replica, timestamp: currentDate)
-                    }
-                    continue
-                }
                 guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
                     if context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }),
                        try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains(where: { $0.noteID == noteID && $0.detachedPreservationID != nil }) {

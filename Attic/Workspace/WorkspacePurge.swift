@@ -305,7 +305,7 @@ enum WorkspacePurge {
             }
             guard Set(ownership.drafts.keys).isSubset(of: Set(documents.keys)) else { return refused() }
             let draftVersionIDs = Dictionary(uniqueKeysWithValues: ownership.drafts.keys.map { ($0, UUID()) })
-            let versionIDs = Dictionary(uniqueKeysWithValues: notes.filter { documents[$0.id] != nil || ($0.deletedAt == nil && $0.contentFormat == 0 && $0.content == nil) }.map { ($0.persistentModelID, UUID()) })
+            let versionIDs = Dictionary(uniqueKeysWithValues: notes.filter { documents[$0.id] != nil }.map { ($0.persistentModelID, UUID()) })
             let attachmentRows = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { ownIDs.contains($0.noteID) }
             let missingAssociations = ownIDs.subtracting(Set(associations.map(\.noteID)))
             let detachedIDs = Dictionary(uniqueKeysWithValues: missingAssociations.map { ($0, UUID()) })
@@ -318,11 +318,6 @@ enum WorkspacePurge {
             owners.formUnion(attachmentRows.map { .init(entity: .attachment, id: $0.id) })
             owners.insert(.init(entity: .preservation, id: preservationID))
             owners.formUnion(affectedLinkIDs.map { .init(entity: .link, id: $0) })
-            let legacyTitles = try Dictionary(grouping: notes.filter { $0.deletedAt == nil && $0.contentFormat == 0 && $0.content == nil }, by: \.id).mapValues { replicas in
-                guard let first = replicas.first,
-                      replicas.allSatisfy({ $0.title == first.title && $0.body == first.body && $0.taskID == first.taskID }) else { throw WorkspaceFoundationError.conflict }
-                return try snapshot.title(for: first.taskID ?? rootID)
-            }
             let prepared = try documents.mapValues { try PreparedNoteDocument($0) }
             let tokens = owners.union(initial.keys).map { initial[$0] ?? WorkspaceModelToken(owner: $0, replicas: []) }
             let scopes = entities.map { index.token(.all($0)) }
@@ -364,12 +359,6 @@ enum WorkspacePurge {
                         tags: ownership.tags[id], timestamp: Date())
                 }
                 for note in try commit.fetch(FetchDescriptor<NoteItem>()) where ownIDs.contains(note.id) {
-                    if let title = legacyTitles[note.id], title != note.title {
-                        commit.insert(NoteVersion(id: versionIDs[note.persistentModelID]!, noteID: note.id, createdAt: Date(), reason: .beforeRestore,
-                            content: nil, contentFormat: 0, title: note.title, body: note.body,
-                            attachmentIDs: attachmentRows.filter { $0.noteID == note.id }.map(\.id), sourceRevisionID: note.revisionID))
-                        NoteStore.stageLegacyTitle(title, on: note, timestamp: Date())
-                    }
                     note.taskID = nil; note.associationGeneration += 1
                 }
                 for association in try commit.fetch(FetchDescriptor<TaskNoteAssociation>()) where owners.contains(.init(entity: .association, id: association.id)) {

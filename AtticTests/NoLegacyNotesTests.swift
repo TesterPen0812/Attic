@@ -409,6 +409,16 @@ final class NoLegacyNotesTests: XCTestCase {
         }
     }
 
+    func testP3_5RetiredFormatZeroTitleNormalizationHasNoDeclarations() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let normalization = try String(contentsOf: root.appendingPathComponent("Attic/Workspace/WorkspaceRestoreNormalization.swift"), encoding: .utf8)
+        let documents = try String(contentsOf: root.appendingPathComponent("Attic/Notes/Store/NoteStore+Documents.swift"), encoding: .utf8)
+        let purge = try String(contentsOf: root.appendingPathComponent("Attic/Workspace/WorkspacePurge.swift"), encoding: .utf8)
+        XCTAssertFalse(normalization.contains("static func detachedTitle("))
+        XCTAssertFalse(documents.contains("static func stageLegacyTitle("))
+        XCTAssertFalse(purge.contains("legacyTitles"))
+    }
+
     func testH4_01RetiredImportStateHasNoDeclaration() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("Attic/Models/NoteAttachment.swift"), encoding: .utf8)
