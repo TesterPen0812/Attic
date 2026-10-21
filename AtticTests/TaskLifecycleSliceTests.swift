@@ -816,4 +816,18 @@ final class TaskLifecycleSliceTests: XCTestCase {
         without.hasPage = false
         XCTAssertNotEqual(row, TasksListRow(id: row.id, model: without, status: row.status, subtasks: row.subtasks, files: row.files))
     }
+
+    /// The page leaves after Make Subtask and after its Undo (Back worked
+    /// before; nothing may stay pending on the page's history).
+    func testThePageLeavesAfterMakeSubtaskAndItsUndo() async throws {
+        let (_, presenter, _) = try makeSubtaskFixture()
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        guard case let .made(entryID, _, _) = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes) else { return XCTFail() }
+        XCTAssertNil(presenter.page.history.pendingCommandID)
+        let undone = await presenter.page.history.undoLatest(stepID: entryID)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertNil(presenter.page.history.pendingReplayID)
+        await close(presenter)
+    }
 }
