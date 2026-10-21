@@ -317,27 +317,14 @@ final class WorkspaceOperationCoordinator {
         checkpointOwners = rows; checkpointBytes = bytes
         try releaseAbortedCompatibility(ownedCheckpoints: entries)
     }
-    /// Proven receipt absence cancels intent, but not recovery. Release only
-    /// after an independently claimed checkpoint owns the exact pre-copy and
-    /// every supplied payload. A damaged or different copy never qualifies;
-    /// this handoff does not replace or retire any checkpoint.
+    /// A proven abort leaves the durable rows and independent checkpoints
+    /// untouched. Its intent has no remaining publication obligation.
     private func retainAbortedCompatibility(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim) {
         abortedCompatibility[envelope.id] = (envelope, claim)
-        if let checkpoints = try? journal.inventoryCheckpointsSynchronously() {
-            try? releaseAbortedCompatibility(ownedCheckpoints: checkpoints)
-        }
+        try? releaseAbortedCompatibility(ownedCheckpoints: [])
     }
     private func releaseAbortedCompatibility(ownedCheckpoints entries: [NoteDraftRecoveryEntry]) throws {
-        for (id, (envelope, claim)) in abortedCompatibility {
-            if let pre = envelope.preDraft {
-                guard entries.contains(where: { item in
-                    guard case let .valid(entry, _, _) = item, entry.noteID == pre.noteID,
-                          entry.content == pre.content, pre.changedTags == nil || entry.changedTags == pre.changedTags else { return false }
-                    return envelope.payloads.allSatisfy { payload in
-                        entry.staged.contains { $0.id == payload.id && $0.digest == payload.digest && $0.byteCount == payload.byteCount }
-                    }
-                }) else { continue }
-            } else if !envelope.payloads.isEmpty { continue }
+        for (id, (_, claim)) in abortedCompatibility {
             try journal.releaseOperationSynchronously(claim)
             abortedCompatibility.removeValue(forKey: id)
         }
@@ -451,10 +438,14 @@ final class WorkspaceOperationCoordinator {
         #if ATTIC_OPERATION_CRASH_TESTS
         await afterPreparation?()
         #endif
-        guard !Task.isCancelled else { return .notCommitted }
+        guard !Task.isCancelled else {
+            retainAbortedCompatibility(envelope, claim: claim); return .notCommitted
+        }
         // Concurrent preparation may have completed another writer; revalidate
         // its complete envelope here, never against warm presentation objects.
-        guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
+        guard affected.isDisjoint(with: heldOwners), sessionValid() else {
+            retainAbortedCompatibility(envelope, claim: claim); return .conflict
+        }
         let result = commitPrepared(envelope, claim: claim, collection: collection, stage: stage, publication: publication)
         return result == .publicationPending ? await retryPublication(envelope.id) : result
     }
@@ -462,6 +453,8 @@ final class WorkspaceOperationCoordinator {
     private func commitPrepared(_ envelope: WorkspaceOperationEnvelope, claim: WorkspaceOperationClaim, collection: WorkspaceOwnershipLeases? = nil,
                                 stage: (ModelContext) throws -> Void, publication: Publication) -> Outcome {
         let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
+        var receiptMayExist = false
+        defer { if !receiptMayExist { retainAbortedCompatibility(envelope, claim: claim) } }
         let context = freshContext()
         do {
             let validated = try WorkspaceModelToken.read(owners: Set((envelope.tokens + envelope.inverseGuards).map(\.owner)), in: context)
@@ -499,6 +492,7 @@ final class WorkspaceOperationCoordinator {
                 compensationOf: envelope.compensationOf))
             WorkspaceCrashHook.reach("K4")
             do {
+                receiptMayExist = true
                 try gatedSave(context, before: envelope.tokens, using: save)
                 #if ATTIC_OPERATION_CRASH_TESTS
                 if ProcessInfo.processInfo.environment["ATTIC_SAVE_THEN_THROW"] == "1" {
@@ -508,7 +502,7 @@ final class WorkspaceOperationCoordinator {
             } catch {
                 // Discard, do not optimistically roll back a proven save.
                 let truth = receiptTruth(envelope.id, digest: claim.digest)
-                if truth == .notCommitted { return .notCommitted }
+                if truth == .notCommitted { receiptMayExist = false; return .notCommitted }
                 if truth == .unknown {
                     heldOwners.formUnion(affected)
                     pending[envelope.id] = (envelope, claim, publication)
@@ -766,7 +760,9 @@ final class WorkspaceOperationCoordinator {
     func retryPublication(_ id: UUID) async -> Outcome {
         guard let (envelope, claim, publication) = pending[id] else { return .conflict }
         switch receiptTruth(id, digest: claim.digest) {
-        case .notCommitted: releasePending(envelope); return .notCommitted
+        case .notCommitted:
+            retainAbortedCompatibility(envelope, claim: claim)
+            releasePending(envelope); return .notCommitted
         case .committed: break
         default: return .unknown
         }
@@ -852,7 +848,23 @@ final class WorkspaceOperationCoordinator {
                 if let pre = envelope.preDraft {
                     preOperationRecoveryCopies.append(RecoveryCopy(operationID: envelope.id,
                         draft: pre, claim: claim, payloads: envelope.payloads))
-                } // Keep both foreign and operation copies; never rerun intent.
+                    // Interrupted operations can hold the only unsaved pre-copy.
+                    // Claim it independently before releasing intent; never
+                    // overwrite a foreign checkpoint for the same note.
+                    if !checkpoints.contains(where: { item in
+                        if case let .valid(entry, _, _) = item { return entry.noteID == pre.noteID }
+                        return false
+                    }), !damagedCheckpointNotes.contains(pre.noteID) {
+                        let staged = envelope.payloads.filter { payload in pre.staged.contains { $0.id == payload.id } }.map {
+                            StagedNoteAttachment(id: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentType,
+                                byteCount: $0.byteCount, digest: $0.digest, data: $0.bytes)
+                        }
+                        _ = try await journal.writeDurably(pre, staged: staged)
+                    }
+                }
+                // Existing rows/checkpoints retain the pre-operation state.
+                // Never replay an intent whose receipt is proven absent.
+                try await journal.releaseOperation(claim)
             default: throw WorkspaceFoundationError.unknown
             }
         }
@@ -1202,9 +1214,6 @@ extension WorkspaceOperationCoordinator {
         let claim = try journal.prepareOperationSynchronously(envelope)
         let result = commitPrepared(envelope, claim: claim, stage: stage, publication: Publication())
         if result == .unknown { compatibilityPending.insert(envelope.id); deferCompatibilityRetry(envelope.id) }
-        if result == .notCommitted || result == .conflict {
-            retainAbortedCompatibility(envelope, claim: claim)
-        }
         guard result == .publicationPending else {
             if result == .notCommitted, let writeError { throw writeError }
             throw WorkspaceFoundationError.unknown

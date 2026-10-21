@@ -60,9 +60,12 @@ final class OperationCrashHarnessTests: XCTestCase {
                 let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
                 let journal = WorkspaceCrashFixture.journal(root)
                 let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal)
-                if point != "save-then-throw" && (reopen == 0 || !committed) {
+                if point != "save-then-throw" && reopen == 0 {
                     do { _ = try await journal.readRecoveryEntries(); XCTFail("offering must await receipt reconciliation: \(point)") }
                     catch { }
+                } else if reopen == 1 && !committed {
+                    let independent = try await journal.readRecoveryEntries()
+                    XCTAssertEqual(independent.count, 1, "released intent must leave an offerable ordinary checkpoint: \(point)")
                 }
                 try await coordinator.reconcileStartup()
                 let context = coordinator.freshContext()
@@ -82,7 +85,9 @@ final class OperationCrashHarnessTests: XCTestCase {
                     guard case let .valid(pre, staged, _) = recovery.first else { XCTFail("lost pre-copy: \(point)"); continue }
                     XCTAssertEqual(NoteContentCodec.decode(pre.content).document, WorkspaceCrashFixture.original)
                     XCTAssertEqual(staged.first?.data, WorkspaceCrashFixture.bytes)
-                    XCTAssertEqual(coordinator.preOperationRecoveryCopies.count, 1)
+                    XCTAssertEqual(coordinator.preOperationRecoveryCopies.count, reopen == 0 ? 1 : 0)
+                    let envelopes = try await journal.operationEnvelopes()
+                    XCTAssertTrue(envelopes.isEmpty, "proven absent receipt must release its intent: \(point)")
                 }
                 XCTAssertEqual(try Data(contentsOf: sentinel), sentinelBytes)
             }

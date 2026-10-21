@@ -35,6 +35,48 @@ final class WorkspaceCommitTests: XCTestCase {
         try FileManager.default.removeItem(at: root)
     }
 
+    func testP2_1AbortedEnvelopeReleasesBeforeMoreTypingAndRelaunch() async throws {
+        let pre = try recoveryDraft("before")
+        _ = try await coordinator.journal.writeDurably(pre, staged: [])
+        let owners: Set<WorkspaceOwner> = [.init(entity: .task, id: taskID)]
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        let failed = try coordinator.newEnvelope(intent: "failed", reads: coordinator.capture(owners), writes: owners, preDraft: pre)
+        let outcome = await coordinator.execute(failed) { context in
+            try TaskStore.stageUpdate(in: context, taskID: taskID, title: "failed typing", timestamp: Date())
+        }
+        XCTAssertEqual(outcome, .notCommitted)
+        coordinator.save = { try $0.save() }
+        for relaunch in 0..<2 {
+            if relaunch == 1 {
+                coordinator = try WorkspaceOperationCoordinator(container: container,
+                    journal: NoteDraftJournal(directory: root.appendingPathComponent("NoteDrafts")))
+                try await coordinator.finishLaunch()
+            }
+            let next = try coordinator.newEnvelope(intent: "more typing", reads: coordinator.capture(owners), writes: owners)
+            let saved = await coordinator.execute(next) { context in
+                try TaskStore.stageUpdate(in: context, taskID: taskID, title: "more typing \(relaunch)", timestamp: Date())
+            }
+            XCTAssertEqual(saved, .committed)
+            XCTAssertTrue(try coordinator.journal.operationEnvelopesSynchronously().isEmpty)
+            let offers = try await coordinator.journal.readRecoveryEntries()
+            XCTAssertEqual(offers.count, 1)
+        }
+    }
+
+    func testP2_1PreparationFailureReleasesItsPartialIntent() async throws {
+        let payload = StagedNoteAttachment(id: UUID(), filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: 4, digest: NotePayloadDigest.sha256(Data("good".utf8)), data: Data("good".utf8))
+        let owners: Set<WorkspaceOwner> = [.init(entity: .task, id: taskID)]
+        var envelope = try coordinator.newEnvelope(intent: "bad preparation", reads: coordinator.capture(owners), writes: owners, staged: [payload])
+        envelope.payloads[0].bytes = Data("damaged".utf8)
+        let result = await coordinator.execute(envelope) { _ in XCTFail("unprepared intent must not stage") }
+        XCTAssertEqual(result, .notCommitted)
+        let operations = coordinator.journal.directory.appendingPathComponent("operations")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: operations.path).isEmpty)
+        let offers = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertTrue(offers.isEmpty)
+    }
+
     func testConfirmedTaskReplicasRetainTheWholeDurableFamily() throws {
         let seed = ModelContext(container)
         let duplicate = TaskItem(id: taskID, title: "Archived copy", status: .done)
@@ -277,7 +319,7 @@ final class WorkspaceCommitTests: XCTestCase {
         let before = try coordinator.capture(baseOwners)
         let pre = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
             content: try NoteContentCodec.encode(original), selectionLocation: 0, selectionLength: 0,
-            staged: [], savedAt: Date())
+            staged: [], savedAt: Date(timeIntervalSince1970: 123))
         let envelope = try coordinator.newEnvelope(intent: "interrupted fixture", reads: before,
             writes: baseOwners, preDraft: pre)
         let claim = try await coordinator.journal.prepareOperation(envelope)
@@ -291,8 +333,11 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(coordinator.preOperationRecoveryCopies.map(\.operationID), [envelope.id])
         XCTAssertEqual(coordinator.preOperationRecoveryCopies.first?.draft, pre)
         let retained = try await replacement.operationEnvelopes()
-        XCTAssertEqual(retained.count, 1)
-        XCTAssertEqual(retained.first?.1, claim)
+        XCTAssertEqual(retained.count, 0)
+        let offers = try await replacement.readRecoveryEntries()
+        guard case let .valid(entry, _, _) = try XCTUnwrap(offers.first) else { return XCTFail("lost pre-copy") }
+        XCTAssertEqual(entry, pre)
+        XCTAssertEqual(claim.id, envelope.id)
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
     }
 
@@ -1468,7 +1513,7 @@ final class WorkspaceCommitTests: XCTestCase {
         }
     }
 
-    func testR2FailedCompatibilityDraftReleasesOnlyAfterExactClaimedCheckpointHandoff() async throws {
+    func testR2FailedCompatibilityDraftReleasesWithoutWaitingForCheckpointHandoff() async throws {
         let id = UUID(), owner = WorkspaceOwner(entity: .note, id: id)
         let prepared = try PreparedNoteDocument(NoteDocument(blocks: [.text("Only pre-copy")]))
         let pre = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
@@ -1480,11 +1525,11 @@ final class WorkspaceCommitTests: XCTestCase {
                 NoteStore.stageDocumentContent(prepared, format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
                 context.insert(note)
             }))
-        XCTAssertEqual(try coordinator.journal.operationEnvelopesSynchronously().count, 1)
+        XCTAssertEqual(try coordinator.journal.operationEnvelopesSynchronously().count, 0)
         var different = pre
         different.content = try PreparedNoteDocument(NoteDocument(blocks: [.text("Different foreign copy")])).content
         let claim = try await coordinator.journal.writeDurably(different, staged: [])
-        XCTAssertEqual(try coordinator.journal.operationEnvelopesSynchronously().count, 1, "a different checkpoint owns no pre-copy")
+        XCTAssertEqual(try coordinator.journal.operationEnvelopesSynchronously().count, 0, "an aborted intent cannot block an independent checkpoint")
         _ = try await coordinator.journal.writeDurably(pre, staged: [], replacing: claim)
         XCTAssertTrue(try coordinator.journal.operationEnvelopesSynchronously().isEmpty)
         let restart = NoteDraftJournal(directory: coordinator.journal.directory)

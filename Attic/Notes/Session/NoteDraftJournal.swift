@@ -860,6 +860,11 @@ private extension NoteDraftJournalIO {
         let bytes = try WorkspaceModelFields.encode(envelope)
         let claim = WorkspaceOperationClaim(id: envelope.id, digest: Self.digest(bytes))
         let root = operationDirectory(envelope.id)
+        let createdHere = !fileManager.fileExists(atPath: root.path)
+        var prepared = false
+        defer {
+            if createdHere && !prepared { try? releaseOperationDirectory(root, id: envelope.id) }
+        }
         operationBarrier.setBlocked(true)
         operationReconciled = false
         let record = root.appendingPathComponent("envelope.json")
@@ -893,8 +898,10 @@ private extension NoteDraftJournalIO {
         try journalSync(operationsDirectory)
         try journalSync(directory)
         WorkspaceCrashHook.reach("K2")
+        prepared = true
         return claim
     }
+
 
     func operationEnvelopes() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
         let roots: [URL]
@@ -932,11 +939,21 @@ private extension NoteDraftJournalIO {
     func releaseOperation(_ claim: WorkspaceOperationClaim) throws {
         let root = operationDirectory(claim.id)
         guard fileManager.fileExists(atPath: root.path) else { return }
-        let bytes = try Data(contentsOf: root.appendingPathComponent("envelope.json"))
+        let bytes: Data
+        do { bytes = try Data(contentsOf: root.appendingPathComponent("envelope.json")) }
+        catch {
+            guard journalFileIsMissing(error) else { throw error }
+            bytes = try Data(contentsOf: root.appendingPathComponent("intent.json"))
+        }
         guard Self.digest(bytes) == claim.digest else { throw WorkspaceFoundationError.invalidIdentity }
+        try releaseOperationDirectory(root, id: claim.id)
+    }
+
+    private func releaseOperationDirectory(_ root: URL, id: UUID) throws {
+        guard fileManager.fileExists(atPath: root.path) else { return }
         // Durable rename first. A crash leaves a bounded released directory;
         // recovery must never interpret it as retryable absent-receipt intent.
-        let released = directory.appendingPathComponent("released-\(claim.id.uuidString)", isDirectory: true)
+        let released = directory.appendingPathComponent("released-\(id.uuidString)", isDirectory: true)
         try fileManager.moveItem(at: root, to: released)
         try journalSync(operationsDirectory)
         try journalSync(directory)
