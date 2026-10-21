@@ -525,6 +525,41 @@ final class PanelHideMotionShipTests: XCTestCase {
         content.clearAlternateMotion()
     }
 
+    /// The snapshot tells the panel's content from its controls: the pages'
+    /// scrolling content renders under them, the edges' variable blurs and
+    /// the controls (the composer's field among them) over it. (Rendered
+    /// whole, the controls' glass and the blurs were missing and rows showed
+    /// through the add bar: owner, 2026-10-21.)
+    func testTheSnapshotTellsTheContentFromTheControls() throws {
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
+        defer { rig.close() }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        rig.content.layoutSubtreeIfNeeded()
+        let split = try XCTUnwrap(PanelGenieView.tierSplit(rig.host.layer, surfaceRect: rig.host.frame))
+        func has(_ layers: [CALayer], _ test: (CALayer) -> Bool) -> Bool {
+            layers.contains { test($0) || has($0.sublayers ?? [], test) }
+        }
+        let isBlur: (CALayer) -> Bool = { layer in
+            (layer.filters ?? []).contains { (($0 as? NSObject)?.value(forKey: "name") as? String) == "variableBlur" }
+        }
+        // SwiftUI's page scroll view (the composer's field has one of its own).
+        let isPage: (CALayer) -> Bool = { layer in
+            layer.delegate.map { String(describing: type(of: $0)).contains("HostingScrollView") } ?? false
+        }
+        let isField: (CALayer) -> Bool = { $0.delegate is AtticTokenFieldView }
+        // The content's render keeps the pages and leaves the controls out.
+        XCTAssertFalse(has(split.aboveContent, isPage), "the content renders under the controls")
+        XCTAssertTrue(has(split.aboveContent, isField), "the composer's field is a control")
+        // The controls' render keeps the controls and leaves the pages out.
+        XCTAssertTrue(has(split.belowControls, isPage))
+        XCTAssertFalse(has(split.belowControls, isField))
+        if AtticVariableBlur.isAvailable {
+            // The blurs are made from the content: neither render draws them.
+            XCTAssertTrue(has(split.aboveContent, isBlur))
+            XCTAssertTrue(has(split.belowControls, isBlur))
+        }
+    }
+
     /// The hover monitor announces a timed reveal (pointer resting in the
     /// corner) and a timed hide (pointer gone), so Genie can prepare.
     func testTimedRevealsAndHidesAreAnnouncedAhead() throws {
@@ -567,6 +602,7 @@ private struct PanelRig {
         suite = "PanelRig.\(UUID().uuidString)"
         defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try TasksPagePreview.seedDemo(in: container, long: true)
         let store = TaskStore(container: container)
         let notes = NoteStore(container: container, attachmentFileStore: attachments)
         let canvasStore = CanvasStore(container: container)
@@ -575,6 +611,7 @@ private struct PanelRig {
         state = PanelUIState()
         let size = CGSize(width: 320, height: 480)
         state.updatePanelSize(size)
+        state.loadPageContent()
         let chrome = PanelChromeInteractionState()
         settings = AppSettings(defaults: defaults)
         host = AtticPanelHostingView(
@@ -600,6 +637,7 @@ private struct PanelRig {
 
     func close() {
         host.cancelActiveInteraction(reason: .lostWindow)
+        state.releasePageContent()
         panel.close()
         defaults.removePersistentDomain(forName: suite)
     }

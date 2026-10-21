@@ -565,21 +565,25 @@ enum PanelHideMotionTrace {
 /// content under each control, blurred, under a tint and a rim, with the
 /// control's own glyphs on top (measured against the panel at rest).
 enum PanelGenieGlassLook {
-    /// The blur of what is under a control's glass (points).
-    static var blur: CGFloat = 9
-    /// The glass's tint over it, Light and Dark.
-    static var lightTint: CGFloat = 0.62
-    static var darkTint: CGFloat = 0.30
+    /// The blur of what is under a control's glass (points), and the
+    /// glass's tint over it: it lightens in Light (white) and darkens in
+    /// Dark (black). Measured against the panel at rest (Air, g6 calibration:
+    /// the add bar and corner buttons within a few levels of rest).
+    static var lightBlur: CGFloat = 16
+    static var lightTint: CGFloat = 0.6
+    static var darkBlur: CGFloat = 24
+    static var darkTint: CGFloat = 0.45
     /// The rim's highlight.
     static var rim: CGFloat = 0.45
 
     #if DEBUG
-    /// The bench's calibration: `ATTIC_MOTION_BENCH_GLASS=blur,light,dark,rim`.
+    /// The bench's calibration: `ATTIC_MOTION_BENCH_GLASS=blur,light,dark,rim` (one blur for both).
     static func applyBenchOverride() {
         guard let spec = ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_GLASS"] else { return }
         let values = spec.split(separator: ",").compactMap { Double($0) }.map { CGFloat($0) }
         guard values.count == 4 else { return }
-        (blur, lightTint, darkTint, rim) = (values[0], values[1], values[2], values[3])
+        (lightBlur, lightTint, darkTint, rim) = (values[0], values[1], values[2], values[3])
+        darkBlur = lightBlur
     }
     #endif
 }
@@ -708,10 +712,10 @@ final class PanelGenieView: NSView {
         if let split, !(scan.pills.isEmpty && scan.bands.isEmpty) {
             // The content (with the surface under it), then its blurs and
             // the controls' glass, then the controls.
-            let content = render(hiding: split.above)
-            let controls = render(hiding: split.below)
+            let content = render(hiding: split.aboveContent)
+            let controls = render(hiding: split.belowControls)
             if let content {
-                let made = Self.glassLook(content: content, scan: scan, scale: scale, dark: dark, solid: !translucent)
+                let made = Self.glassLook(content: content, scan: scan, scale: scale, dark: dark)
                 context.draw(made ?? content, in: view.bounds)
             }
             if let controls { context.draw(controls, in: view.bounds) }
@@ -751,12 +755,12 @@ final class PanelGenieView: NSView {
                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
     }
 
-    /// The panel's top-level layers under its controls (the surface and the
-    /// pages' content) and over them (the edges' blurs and the controls),
-    /// or nil when they cannot be told apart.
+    /// The panel's top-level layers each render hides: the content's hides
+    /// the edges' blurs and the controls; the controls' hides the surface,
+    /// the content and the blurs. Nil when they cannot be told apart.
     struct TierSplit {
-        var below: [CALayer]
-        var above: [CALayer]
+        var aboveContent: [CALayer]
+        var belowControls: [CALayer]
     }
 
     static func tierSplit(_ tiers: CALayer?, surfaceRect: CGRect,
@@ -778,7 +782,11 @@ final class PanelGenieView: NSView {
         let first: Int
         if let firstBlur = blurs.first {
             first = firstBlur
-        } else if let firstGlass = layers.indices.first(where: { contains(layers[$0], isControlGlass) }) {
+        } else if let firstGlass = layers.indices.first(where: {
+            // A shown control: the next page's search row, transparent and
+            // parked past the panel's side, sits below the content.
+            !layers[$0].isHidden && layers[$0].opacity > 0.01 && contains(layers[$0], isControlGlass)
+        }) {
             first = firstGlass
         } else {
             return nil
@@ -786,13 +794,13 @@ final class PanelGenieView: NSView {
         // The blurs sit between the content and the controls: they belong
         // to neither render (each is made from the content).
         let controlsStart = (blurs.last.map { $0 + 1 }) ?? first
-        return TierSplit(below: Array(layers[..<min(controlsStart, layers.count)]),
-                         above: Array(layers[first...]))
+        return TierSplit(aboveContent: Array(layers[first...]),
+                         belowControls: Array(layers[..<min(controlsStart, layers.count)]))
     }
 
     /// The content with the edges' variable blurs and the controls' glass
     /// made from it (y up, in points of the snapshot's view).
-    private static func glassLook(content: CGImage, scan: GlassScan, scale: CGFloat, dark: Bool, solid: Bool) -> CGImage? {
+    private static func glassLook(content: CGImage, scan: GlassScan, scale: CGFloat, dark: Bool) -> CGImage? {
         var image = CIImage(cgImage: content)
         let extent = image.extent
         func pixels(_ rect: CGRect) -> CGRect {
@@ -811,63 +819,51 @@ final class PanelGenieView: NSView {
                 mask = CIImage(color: CIColor(red: strength, green: strength, blue: strength)).cropped(to: strip)
                     .composited(over: mask)
             }
-            let blurred = image.clampedToExtent().applyingFilter("CIMaskedVariableBlur", parameters: [
+            // Where the mask is black the blur's radius is 0: the rest is unchanged.
+            image = image.clampedToExtent().applyingFilter("CIMaskedVariableBlur", parameters: [
                 "inputMask": mask, kCIInputRadiusKey: band.radius * scale
-            ]).cropped(to: rect)
-            image = blurred.composited(over: image)
+            ]).cropped(to: extent)
         }
-        // Each control's glass: what is under it, blurred, under the tint.
-        let tint = dark ? CIColor(red: 1, green: 1, blue: 1, alpha: PanelGenieGlassLook.darkTint)
-            : CIColor(red: 1, green: 1, blue: 1, alpha: PanelGenieGlassLook.lightTint)
+        let space = content.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let blurred = imageContext.createCGImage(image, from: extent, format: .BGRA8, colorSpace: space) else { return nil }
+        guard !scan.pills.isEmpty else { return blurred }
+        // Each control's glass, in its capsule: what is under it, blurred
+        // again, under the glass's tint, with a hairline rim. The live
+        // material shows through it as it does at rest.
         let under = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [
-            kCIInputRadiusKey: PanelGenieGlassLook.blur * scale
+            kCIInputRadiusKey: (dark ? PanelGenieGlassLook.darkBlur : PanelGenieGlassLook.lightBlur) * scale
         ]).cropped(to: extent)
-        var glass = CIImage.empty()
-        for pill in scan.pills {
-            let shape = pixels(pill.rect)
-            let clip = pixels(pill.clip)
-            guard let mask = pillMask(shape, clip: clip, extent: extent) else { continue }
-            let tinted = CIImage(color: tint).cropped(to: shape).composited(over: under.cropped(to: shape))
-            glass = tinted.applyingFilter("CIBlendWithAlphaMask", parameters: [
-                kCIInputBackgroundImageKey: CIImage.empty(), kCIInputMaskImageKey: mask
-            ]).composited(over: glass)
-        }
-        image = glass.composited(over: image)
-        guard let made = imageContext.createCGImage(image, from: extent, format: .BGRA8,
-                                                    colorSpace: content.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)) else { return nil }
-        // The rims: a hairline highlight round each control's glass.
-        guard !scan.pills.isEmpty, let context = bitmap(width: made.width, height: made.height,
-                                                        space: content.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!) else { return made }
-        context.draw(made, in: CGRect(x: 0, y: 0, width: made.width, height: made.height))
+        guard let frosted = imageContext.createCGImage(under, from: extent, format: .BGRA8, colorSpace: space),
+              let context = bitmap(width: blurred.width, height: blurred.height, space: space) else { return blurred }
+        let points = CGRect(x: 0, y: 0, width: extent.width / scale, height: extent.height / scale)
         context.scaleBy(x: scale, y: scale)
-        context.setStrokeColor(NSColor(white: 1, alpha: PanelGenieGlassLook.rim * (dark ? 0.5 : 1)).cgColor)
-        context.setLineWidth(1 / scale * 1.5)
+        context.draw(blurred, in: points)
         for pill in scan.pills {
+            let capsule = Path(roundedRect: pill.rect, cornerRadius: min(pill.rect.width, pill.rect.height) / 2,
+                               style: .circular).cgPath
             context.saveGState()
             context.clip(to: pill.clip)
-            let rect = pill.rect.insetBy(dx: 0.5, dy: 0.5)
-            context.addPath(Path(roundedRect: rect, cornerRadius: min(rect.width, rect.height) / 2, style: .circular).cgPath)
+            context.addPath(capsule)
+            context.clip()
+            context.setBlendMode(.copy)
+            context.draw(frosted, in: points)
+            context.setBlendMode(.normal)
+            context.setFillColor(dark ? NSColor(white: 0, alpha: PanelGenieGlassLook.darkTint).cgColor
+                : NSColor(white: 1, alpha: PanelGenieGlassLook.lightTint).cgColor)
+            context.fill(pill.rect)
+            context.restoreGState()
+            context.saveGState()
+            context.clip(to: pill.clip)
+            let rim = pill.rect.insetBy(dx: 0.5, dy: 0.5)
+            context.addPath(Path(roundedRect: rim, cornerRadius: min(rim.width, rim.height) / 2, style: .circular).cgPath)
+            context.setStrokeColor(NSColor(white: 1, alpha: PanelGenieGlassLook.rim * (dark ? 0.5 : 1)).cgColor)
+            context.setLineWidth(1)
             context.strokePath()
             context.restoreGState()
         }
         return context.makeImage()
     }
 
-    /// A control's shape (a capsule or circle) as a mask, cut to its clip.
-    private static func pillMask(_ shape: CGRect, clip: CGRect, extent: CGRect) -> CIImage? {
-        let bounds = shape.intersection(clip).intersection(extent).integral
-        guard bounds.width > 0, bounds.height > 0,
-              let context = CGContext(data: nil, width: Int(bounds.width), height: Int(bounds.height), bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),
-                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
-        context.translateBy(x: -bounds.minX, y: -bounds.minY)
-        context.setFillColor(gray: 1, alpha: 1)
-        // Capsules and circles, as the controls' glass.
-        context.addPath(Path(roundedRect: shape, cornerRadius: min(shape.width, shape.height) / 2, style: .circular).cgPath)
-        context.fillPath()
-        guard let image = context.makeImage() else { return nil }
-        return CIImage(cgImage: image).transformed(by: CGAffineTransform(translationX: bounds.minX, y: bounds.minY))
-    }
 
     /// One control's glass stand-in: the control's rect, drawn only inside
     /// `clip`, the part of it the panel shows.
