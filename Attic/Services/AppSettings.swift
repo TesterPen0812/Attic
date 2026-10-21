@@ -230,7 +230,7 @@ final class AppSettings: ObservableObject {
 
     let motionLabAvailable: Bool
 
-    /// Experimental (phase-x/genie): how the panel hides and reveals.
+    /// How the panel hides and reveals (Settings › General › Behaviour).
     @Published var hideAnimation: PanelHideAnimation {
         didSet { defaults.set(hideAnimation.rawValue, forKey: Key.hideAnimation) }
     }
@@ -411,7 +411,11 @@ final class AppSettings: ObservableObject {
         motionTuning = tuning
         AtticMotionTuning.current = tuning
         hideAnimation = defaults.string(forKey: Key.hideAnimation)
-            .flatMap(PanelHideAnimation.init(rawValue:)) ?? .defaultValue
+            .flatMap(PanelHideAnimation.init(storedValue:)) ?? .defaultValue
+        // Genie Classic (dropped 2026-10-21) is stored as Genie from now on.
+        if defaults.string(forKey: Key.hideAnimation) == "genie" {
+            defaults.set(PanelHideAnimation.genieLiveGlass.rawValue, forKey: Key.hideAnimation)
+        }
         hideSpeedLab = motionLabAvailable
             ? defaults.data(forKey: Key.hideSpeedLab).flatMap { try? JSONDecoder().decode(PanelHideSpeedLab.self, from: $0) }
                 ?? PanelHideSpeedLab()

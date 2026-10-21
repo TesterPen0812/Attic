@@ -156,10 +156,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
-    /// The genie bench: whether the panel takes clicks and keys right now.
+    #if DEBUG
+    /// The motion bench: whether the panel takes clicks and keys right now.
     var acceptsInputForProbe: Bool { contentContainer?.allowsContentInteraction == true && panel.isKeyWindow }
-    /// The genie bench: what starting the last draft motion cost (ms).
+    /// The motion bench: what starting the last hide animation cost (ms).
     var alternateBeginCostForProbe: Double { contentContainer?.lastAlternateBeginMilliseconds ?? 0 }
+    #endif
     /// Tests: the panel's window, to send it a swipe as the system does.
     var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0
@@ -178,7 +180,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isPanelMotionActive = false
     private var isInteractiveDismissal = false
     private var interactiveSwipeStartProgress: CGFloat = 0
-    /// Experimental (phase-x/genie): the draft a swipe drives (nil: Slide),
+    /// The hide animation a swipe drives (nil: Slide),
     /// its recent progress for the release speed, and that release.
     private var swipeDraft: PanelHideAnimation?
     private var swipeSamples: [(time: CFTimeInterval, progress: Double)] = []
@@ -588,6 +590,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.cancelInteractiveDismissal()
             }
         }
+        panel.onContentMayChange = { [weak self] in
+            self?.contentContainer?.noteContentMayChange()
+        }
         panel.onTrackpadSwipeMayBegin = { [weak self] in
             guard let self, self.panel.isVisible, !self.isInteractiveDismissal,
                   !AtticMotionPreference.reducesMotion, self.settings.hideAnimation.usesGenieMesh,
@@ -991,7 +996,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if !isInteractiveDismissal {
             stopPanelMotion()
             isInteractiveDismissal = true
-            // Experimental (phase-x/genie): Swoop and both Genies follow the
+            // Swoop and both Genies follow the
             // fingers themselves (Reduced keeps today's dimming pull).
             swipeDraft = nil
             swipeSamples = []
@@ -1032,7 +1037,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     /// The fingers' speed at release, in progress per second (the swipe's
-    /// own window of recent movement), for the draft's spring.
+    /// own window of recent movement), for the animation's spring.
     private func captureSwipeRelease() {
         guard swipeDraft != nil else { pendingDraftRelease = nil; return }
         let limit = PanelHideMotionTuning.swipeMaxVelocity
@@ -1128,23 +1133,23 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let currentScale = contentContainer?.presentationTransform.m11 ?? 1
         let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
         let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
-        // Experimental drafts (phase-x/genie): Genie or Swoop owns a hide
-        // from the full panel, and the reveal or reversal that follows it.
+        // Genie, Genie Classic or Swoop owns a hide from the full panel, and
+        // the reveal or reversal that follows it.
         // A swipe's partly collapsed Slide keeps Slide.
         // A swipe's release (its speed) belongs to this motion only.
         let release = pendingDraftRelease
         pendingDraftRelease = nil
         let draft: PanelHideAnimation? = {
             guard let container = contentContainer else { return nil }
-            // A draft that owns the presentation (a swipe following the
-            // fingers, or a draft motion) finishes or springs back as itself.
+            // An animation that owns the presentation (a swipe following the
+            // fingers, or its own motion) finishes or springs back as itself.
             if let active = container.alternateMode { return active }
             guard spring == nil, collapseProgress >= 1, settings.hideAnimation != .slide,
                   CATransform3DIsIdentity(container.presentationTransform) else { return nil }
             return settings.hideAnimation
         }()
         // A swipe's close or spring-back under Reduced motion fades; so
-        // does every draft motion.
+        // does every hide animation other than Slide.
         let fades = reduceMotion && (reducedFade || draft != nil || (spring == nil && settings.hideAnimation != .slide))
         if let draft, !reduceMotion, let container = contentContainer {
             let target = Double(collapseProgress)
@@ -1220,6 +1225,36 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// A timed hide (the pointer has left) or reveal (it rests in the
+    /// corner) will happen in `delay` unless something changes: Genie takes
+    /// its snapshot shortly before, so the flight starts on its first frame.
+    /// nil: none is due any more.
+    func prepareForExpectedVisibilityChange(_ expected: (hiding: Bool, delay: TimeInterval)?) {
+        let mode = settings.hideAnimation
+        guard let (hiding, delay) = expected, mode.usesGenieMesh, !AtticMotionPreference.reducesMotion, delay > 0 else {
+            expectedChangeWork?.cancel()
+            expectedChangeWork = nil
+            return
+        }
+        // Each pointer sample re-states the same deadline: keep its work.
+        let due = CACurrentMediaTime() + delay
+        if let expectedChange, expectedChange.hiding == hiding, abs(expectedChange.due - due) < 0.02,
+           expectedChangeWork?.isCancelled == false { return }
+        expectedChangeWork?.cancel()
+        expectedChange = (hiding, due)
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let container = self.contentContainer, !self.isInteractiveDismissal,
+                  self.panel.isVisible == hiding, self.settings.hideAnimation == mode else { return }
+            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode))
+        }
+        expectedChangeWork = work
+        let lead = max(0, delay - PanelHideMotionTuning.geniePrepareLead)
+        DispatchQueue.main.asyncAfter(deadline: .now() + lead, execute: work)
+    }
+
+    private var expectedChangeWork: DispatchWorkItem?
+    private var expectedChange: (hiding: Bool, due: CFTimeInterval)?
+
     /// Before a reveal from hidden: the presentation collapsed the way the
     /// chosen hide animation reveals from.
     private func prepareCollapsedPresentation(corner: ScreenCorner) {
@@ -1237,10 +1272,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// What a Genie snapshot stands on. Genie: the surface's own measured
-    /// render of a mid-grey desktop, a stand-in for the live backdrop a
-    /// snapshot cannot hold. Genie (live glass): the panel's own material,
-    /// live, under the bent snapshot. Solid needs neither.
+    /// What a Genie snapshot stands on: the panel's own material, live,
+    /// under the bent snapshot. Solid needs none.
     private func genieSurface(for mode: PanelHideAnimation) -> PanelGenieSurface? {
         guard mode.usesGenieMesh else { return nil }
         let dark = hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -1250,17 +1283,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             contrast: increaseContrast ? .increased : .standard,
             reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         )
-        guard treatment.kind != .solid else { return PanelGenieSurface(underlay: nil, live: nil, translucent: false) }
-        if mode == .genie {
-            return PanelGenieSurface(
-                underlay: AtticSurfaceModel.phase0(treatment, increaseContrast: increaseContrast).underlay(.midGrey).nsColor,
-                live: nil, translucent: true
-            )
-        }
+        guard treatment.kind != .solid else { return PanelGenieSurface(live: nil, translucent: false) }
         // As `AtticPanelSurface.nativeSurfaceColorScheme`.
         let scheme: ColorScheme = treatment.usesShadeAsFoundation ? .light : treatment.appearance == .dark ? .dark : .light
         return PanelGenieSurface(
-            underlay: nil,
             live: PanelGenieLiveMaterial(
                 kind: treatment.kind == .glass ? .glass : .frosted,
                 colorScheme: scheme,

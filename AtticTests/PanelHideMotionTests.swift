@@ -3,7 +3,7 @@ import QuartzCore
 import XCTest
 @testable import Attic
 
-/// The experimental hide drafts (phase-x/genie): timing, end states and
+/// The hide animations (Slide, Swoop, Genie): timing, end states and
 /// corners, without a window.
 final class PanelHideMotionTests: XCTestCase {
     func testTimingRunsFromStartToEnd() {
@@ -41,9 +41,9 @@ final class PanelHideMotionTests: XCTestCase {
         lab.setDuration(0.5, .swoop, hiding: true)
         XCTAssertEqual(lab.duration(.swoop, hiding: true), 0.5, accuracy: 1e-9)
         XCTAssertEqual(lab.duration(.swoop, hiding: false), 0.24, accuracy: 1e-9)
-        XCTAssertEqual(lab.duration(.genie, hiding: true), 0.22, accuracy: 1e-9)
-        lab.setDuration(5, .genie, hiding: false)
-        XCTAssertEqual(lab.duration(.genie, hiding: false), 0.8, accuracy: 1e-9)
+        XCTAssertEqual(lab.duration(.genieLiveGlass, hiding: true), 0.22, accuracy: 1e-9)
+        lab.setDuration(5, .genieLiveGlass, hiding: false)
+        XCTAssertEqual(lab.duration(.genieLiveGlass, hiding: false), 0.8, accuracy: 1e-9)
         lab.setDuration(0.01, .slide, hiding: true)
         XCTAssertEqual(lab.duration(.slide, hiding: true), 0.1, accuracy: 1e-9)
         // Back at the default, the override is dropped.
@@ -60,12 +60,12 @@ final class PanelHideMotionTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let preview = AppSettings(defaults: defaults, motionLabAvailable: true)
-        preview.hideSpeedLab.setDuration(0.6, .genie, hiding: true)
+        preview.hideSpeedLab.setDuration(0.6, .genieLiveGlass, hiding: true)
         XCTAssertEqual(AppSettings(defaults: defaults, motionLabAvailable: true)
-            .hideMotionDuration(.genie, hiding: true), 0.6, accuracy: 1e-9)
+            .hideMotionDuration(.genieLiveGlass, hiding: true), 0.6, accuracy: 1e-9)
         // The release identity never reads (or keeps) the lab's values.
         let release = AppSettings(defaults: defaults, motionLabAvailable: false)
-        XCTAssertEqual(release.hideMotionDuration(.genie, hiding: true), 0.22, accuracy: 1e-9)
+        XCTAssertEqual(release.hideMotionDuration(.genieLiveGlass, hiding: true), 0.22, accuracy: 1e-9)
         release.hideSpeedLab.setDuration(0.7, .slide, hiding: false)
         XCTAssertTrue(release.hideSpeedLab.isDefault)
         XCTAssertEqual(release.hideMotionDuration(.slide, hiding: false), 0.24, accuracy: 1e-9)
@@ -334,17 +334,46 @@ final class PanelHideMotionTests: XCTestCase {
         XCTAssertEqual(scan.hidden.count, 9)
     }
 
-    /// Owner, 2026-10-20: Slide, Swoop, Genie, Genie Classic. The live-glass
-    /// Genie takes the plain name; the stored raw values never change.
+    /// Owner, 2026-10-21: three ship, Slide, Swoop and Genie (the live-glass
+    /// one, which keeps its stored raw value).
     func testHideAnimationsAreNamedAndOrderedForSettings() {
-        XCTAssertEqual(PanelHideAnimation.allCases.map(\.title), ["Slide", "Swoop", "Genie", "Genie Classic"])
-        XCTAssertEqual(PanelHideAnimation.allCases.map(\.rawValue), ["slide", "swoop", "genieLiveGlass", "genie"])
+        XCTAssertEqual(PanelHideAnimation.allCases.map(\.title), ["Slide", "Swoop", "Genie"])
+        XCTAssertEqual(PanelHideAnimation.allCases.map(\.rawValue), ["slide", "swoop", "genieLiveGlass"])
     }
 
-    func testLiveGlassIsAFourthOption() {
-        XCTAssertEqual(PanelHideAnimation.allCases, [.slide, .swoop, .genieLiveGlass, .genie])
+    func testGenieIsTheThirdOptionAndTheOnlyMesh() {
+        XCTAssertEqual(PanelHideAnimation.allCases, [.slide, .swoop, .genieLiveGlass])
         XCTAssertTrue(PanelHideAnimation.genieLiveGlass.usesGenieMesh)
         XCTAssertFalse(PanelHideAnimation.swoop.usesGenieMesh)
+        XCTAssertFalse(PanelHideAnimation.slide.usesGenieMesh)
+    }
+
+    /// Genie Classic was dropped (owner, 2026-10-21): a stored Classic reads
+    /// as Genie, never as the default, and is stored as Genie from then on.
+    @MainActor
+    func testAStoredGenieClassicReadsAsGenie() throws {
+        XCTAssertEqual(PanelHideAnimation(storedValue: "genie"), .genieLiveGlass)
+        XCTAssertEqual(PanelHideAnimation(storedValue: "genieLiveGlass"), .genieLiveGlass)
+        XCTAssertEqual(PanelHideAnimation(storedValue: "swoop"), .swoop)
+        XCTAssertNil(PanelHideAnimation(storedValue: "puff"))
+        let suite = "HideAnimationMigration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("genie", forKey: "panelHideAnimation")
+        XCTAssertEqual(AppSettings(defaults: defaults).hideAnimation, .genieLiveGlass)
+        XCTAssertEqual(defaults.string(forKey: "panelHideAnimation"), "genieLiveGlass")
+        XCTAssertEqual(AppSettings(defaults: defaults).hideAnimation, .genieLiveGlass)
+    }
+
+    /// Settings' help: one short line for each animation, in order.
+    func testEachAnimationHasOneHelpLine() {
+        let lines = PanelHideAnimation.settingsHelp.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, PanelHideAnimation.allCases.count)
+        for (line, mode) in zip(lines, PanelHideAnimation.allCases) {
+            XCTAssertTrue(line.hasPrefix(mode.title + ":"), line)
+            XCTAssertLessThan(line.count, 90, "short: \(line)")
+        }
+        XCTAssertFalse(PanelHideAnimation.settingsHelp.contains("Classic"))
     }
 
     private func project(_ point: CGPoint, _ t: CATransform3D) -> CGPoint {
@@ -352,5 +381,214 @@ final class PanelHideMotionTests: XCTestCase {
         let y = point.x * t.m12 + point.y * t.m22 + t.m42
         let w = point.x * t.m14 + point.y * t.m24 + t.m44
         return CGPoint(x: x / w, y: y / w)
+    }
+}
+
+/// Genie's ship round (g6): the handover that ended the blank first frame,
+/// the crisp snapshot, snapshots prepared ahead of a timed hide or reveal.
+@MainActor
+final class PanelHideMotionShipTests: XCTestCase {
+    // MARK: The blank first frame
+
+    /// A flight takes over from the live panel only once one of its
+    /// drawables has reached the screen; before that the live panel stays.
+    /// (Draft 5: an empty window for a frame, 1 hide in 21, when the live
+    /// panel stepped aside in a transaction whose drawable came late.)
+    func testAFlightTakesOverOnlyOnceAFrameHasReachedTheScreen() {
+        var handover = PanelGenieHandover(maxFrames: 4)
+        XCTAssertFalse(handover.begin(), "a layer just shown waits")
+        XCTAssertTrue(handover.isWaiting)
+        XCTAssertFalse(handover.waitedOneFrame())
+        XCTAssertFalse(handover.presented(generation: handover.generation - 1), "a frame from before the reset is not it")
+        XCTAssertTrue(handover.isWaiting)
+        XCTAssertTrue(handover.presented(generation: handover.generation), "the first presented frame takes over")
+        XCTAssertFalse(handover.isWaiting)
+        XCTAssertTrue(handover.begin(), "established: the next flight takes over at once")
+
+        handover.reset()
+        XCTAssertFalse(handover.begin(), "hidden or off screen since: it waits again")
+        for _ in 0..<3 { XCTAssertFalse(handover.waitedOneFrame()) }
+        XCTAssertTrue(handover.waitedOneFrame(), "and gives up waiting after its frames")
+        XCTAssertFalse(handover.isWaiting)
+        XCTAssertFalse(handover.presented(generation: handover.generation), "a late frame after giving up starts nothing")
+        XCTAssertTrue(handover.isEstablished)
+    }
+
+    /// The snapshot is taken at the window's backing scale (crisp text in
+    /// flight; drafts took it at 1×).
+    func testTheSnapshotIsAtBackingScale() throws {
+        try XCTSkipIf(PanelGenieRenderer.shared.device == nil, "no Metal device")
+        let size = CGSize(width: 200, height: 300)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSView(frame: CGRect(origin: .zero, size: size))
+        let content = NSView(frame: root.bounds)
+        content.wantsLayer = true
+        content.addSubview(NSTextField(labelWithString: "Attic"))
+        let genie = PanelGenieView(frame: root.bounds)
+        root.addSubview(content)
+        root.addSubview(genie)
+        window.contentView = root
+        let surface = root.bounds.insetBy(dx: 20, dy: 20)
+        genie.captureSnapshot(of: content, surfaceRect: surface, cornerRadius: 30, translucent: true, dark: false)
+        let scale = window.backingScaleFactor
+        XCTAssertGreaterThanOrEqual(scale, 1)
+        XCTAssertEqual(genie.snapshotPixelSize, CGSize(width: 200 * scale, height: 300 * scale))
+    }
+
+    // MARK: Snapshots prepared ahead
+
+    /// Anything that may change what the panel shows marks a prepared
+    /// snapshot stale; the swipe's own scroll events and resting fingers do
+    /// not.
+    func testThePanelReportsWhatMayChangeItsContent() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: -5_000, y: -5_000, width: 320, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        panel.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        panel.trackpadDismissCorner = .topRight
+        var changes = 0
+        panel.onContentMayChange = { changes += 1 }
+        let point = CGPoint(x: 10, y: 10)
+        func scroll(dx: Int32 = 0, dy: Int32 = 0, phase: Int64, momentum: Int64 = 0) throws -> NSEvent {
+            let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                              wheel1: dy, wheel2: dx, wheel3: 0))
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum)
+            event.location = point
+            return try XCTUnwrap(NSEvent(cgEvent: event))
+        }
+        panel.sendEvent(try scroll(phase: 128))
+        XCTAssertEqual(changes, 0, "fingers resting change nothing")
+        // A swipe toward the docked edge (classic scrolling: negative dx).
+        panel.sendEvent(try scroll(phase: 1))
+        for _ in 0..<12 { panel.sendEvent(try scroll(dx: -6, phase: 2)) }
+        panel.sendEvent(try scroll(phase: 4))
+        XCTAssertEqual(changes, 0, "the swipe's own events change nothing")
+        // A vertical scroll reaches the content.
+        panel.sendEvent(try scroll(dy: 0, phase: 1))
+        for _ in 0..<8 { panel.sendEvent(try scroll(dy: -8, phase: 2)) }
+        XCTAssertGreaterThan(changes, 0, "scrolling content changes it")
+        changes = 0
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: point, modifierFlags: [], timestamp: 0,
+                                                 windowNumber: panel.windowNumber, context: nil, characters: "a",
+                                                 charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+        panel.sendEvent(key)
+        XCTAssertEqual(changes, 1, "a key changes it")
+    }
+
+    /// A prepared snapshot is used while nothing has changed, and never
+    /// after the content, the surface or the panel's size may have.
+    func testAPreparedSnapshotIsUsedOnlyWhileNothingHasChanged() throws {
+        try XCTSkipIf(PanelGenieRenderer.shared.device == nil, "no Metal device")
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
+        defer { rig.close() }
+        let content = rig.content
+        let solid = PanelGenieSurface(live: nil, translucent: false)
+        let glass = PanelGenieSurface(live: PanelGenieLiveMaterial(kind: .glass, colorScheme: .light, cornerRadius: 52),
+                                      translucent: true)
+        XCTAssertFalse(content.hasPreparedSnapshot(.genieLiveGlass, surface: solid))
+        content.prepareAlternateSnapshot(.genieLiveGlass, surface: solid)
+        XCTAssertTrue(content.hasPreparedSnapshot(.genieLiveGlass, surface: solid))
+        XCTAssertFalse(content.hasPreparedSnapshot(.genieLiveGlass, surface: glass), "another surface")
+        content.noteContentMayChange()
+        XCTAssertFalse(content.hasPreparedSnapshot(.genieLiveGlass, surface: solid), "the content may have changed")
+
+        // Prepared, then a hide: the flight starts from it, without a snapshot of its own.
+        content.prepareAlternateSnapshot(.genieLiveGlass, surface: solid)
+        var done = false
+        content.animateAlternate(.genieLiveGlass, to: 1, corner: .topRight, surface: solid,
+                                 curve: .timed(duration: 0.05, timing: PanelHideMotionTuning.hideTiming)) { done = true }
+        #if DEBUG
+        XCTAssertEqual(PanelHideMotionTrace.snapshotMilliseconds["reused"], 1, "the hide used the prepared snapshot")
+        #endif
+        XCTAssertFalse(content.hasPreparedSnapshot(.genieLiveGlass, surface: solid), "used once")
+        let deadline = Date().addingTimeInterval(2)
+        while !done, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(done, "the hide finishes (taking over, or after its frames)")
+        content.clearAlternateMotion()
+    }
+
+    /// The hover monitor announces a timed reveal (pointer resting in the
+    /// corner) and a timed hide (pointer gone), so Genie can prepare.
+    func testTimedRevealsAndHidesAreAnnouncedAhead() throws {
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore(), withController: true)
+        defer { rig.close() }
+        let monitor = try XCTUnwrap(rig.monitor)
+        let settings = rig.settings
+        let screen = try XCTUnwrap(NSScreen.main)
+        settings.corner = .topRight
+        settings.revealDelay = 0.5
+        var announced: [(hiding: Bool, delay: TimeInterval)?] = []
+        monitor.onVisibilityChangeExpected = { announced.append($0) }
+        monitor.start()
+        defer { monitor.stop() }
+        let corner = CGPoint(x: screen.frame.maxX - 1, y: screen.frame.maxY - 1)
+        let away = CGPoint(x: screen.frame.midX, y: screen.frame.midY)
+        monitor.sampleForTesting(at: corner)
+        let reveal = try XCTUnwrap(announced.last ?? nil, "resting in the corner announces a reveal")
+        XCTAssertFalse(reveal.hiding)
+        XCTAssertEqual(reveal.delay, 0.5, accuracy: 0.1)
+        monitor.sampleForTesting(at: away)
+        XCTAssertNil(announced.last ?? nil, "leaving the corner calls it off")
+    }
+}
+
+/// A real panel content container (and, optionally, its controller and the
+/// hover monitor) off screen, for the hide-animation tests.
+@MainActor
+private struct PanelRig {
+    let settings: AppSettings
+    let content: AtticPanelContentContainer
+    let panel: AtticPanel
+    let host: AtticPanelHostingView
+    let state: PanelUIState
+    var monitor: CornerHoverMonitor?
+    private let suite: String
+    private let defaults: UserDefaults
+
+    init(attachments: AttachmentFileStore, withController: Bool = false) throws {
+        suite = "PanelRig.\(UUID().uuidString)"
+        defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: attachments)
+        let canvasStore = CanvasStore(container: container)
+        let canvasSession = CanvasSession(store: canvasStore)
+        let noteDraft = NoteDraftController(noteStore: notes)
+        state = PanelUIState()
+        let size = CGSize(width: 320, height: 480)
+        state.updatePanelSize(size)
+        let chrome = PanelChromeInteractionState()
+        settings = AppSettings(defaults: defaults)
+        host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes, canvasSession: canvasSession,
+                                     noteDraft: noteDraft, chromeInteractionState: chrome, uiState: state,
+                                     settings: settings, tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                           styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        content.layoutSubtreeIfNeeded()
+        if withController {
+            let uiState = PanelUIState()
+            let controller = AtticPanelController(store: store, noteStore: notes, canvasSession: canvasSession,
+                                                  noteDraft: noteDraft, settings: settings, uiState: uiState)
+            monitor = CornerHoverMonitor(settings: settings, panelController: controller, uiState: uiState,
+                                         store: store, noteStore: notes, canvasStore: canvasStore, noteDraft: noteDraft)
+        }
+    }
+
+    func close() {
+        host.cancelActiveInteraction(reason: .lostWindow)
+        panel.close()
+        defaults.removePersistentDomain(forName: suite)
     }
 }

@@ -3,48 +3,52 @@ import Metal
 import QuartzCore
 import SwiftUI
 
-// Experimental (branch `phase-x/genie`, never merged into int13): two drafts
-// of a hide/reveal motion for the owner to compare with today's Slide.
+// The panel's hide animations (Settings › General › Behaviour › Hide
+// animation). Slide is `AtticPanelContentContainer.setCollapseProgress`;
+// the other two live here:
 //
-// - Genie: a snapshot of the panel drawn through a Metal vertex grid bent
-//   along a Genie curve into the panel's own corner (the reveal runs it
-//   backwards). Glass's live backdrop cannot be snapshotted without Screen
-//   Recording, so in flight it is imitated with the surface's measured
-//   mid-grey render under the snapshot.
+// - Genie: a snapshot of the panel's content drawn through a Metal vertex
+//   grid bent along a Genie curve into the panel's own corner (a reveal runs
+//   it backwards), with the panel's material kept live under it.
 // - Swoop: the live panel (real glass) on a curved path into the corner,
 //   narrowing and stretching toward it, with layer transforms only.
 
-/// Settings › Behaviour › Hide animation (this branch only).
+/// Settings › General › Behaviour › Hide animation.
 enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
-    // Declared in Settings' order (owner, 2026-10-20): Slide, Swoop, Genie,
-    // Genie Classic. The raw values stay as first stored, so a choice
-    // carries over the rename.
+    // Declared in Settings' order: Slide, Swoop, Genie (owner, 2026-10-21:
+    // three ship; Genie Classic was dropped). The raw values stay as first
+    // stored, so a choice carries over.
     case slide
     case swoop
-    /// "Genie": the bend with the real glass kept live under it (draft 3).
+    /// "Genie": the bend with the panel's real glass kept live under it.
     case genieLiveGlass
-    /// "Genie Classic": the panel bends as a picture, like the Dock's minimise.
-    case genie
 
     static let defaultValue: PanelHideAnimation = .slide
 
     var id: String { rawValue }
 
-    /// Both Genies draw the content through the Metal mesh.
-    var usesGenieMesh: Bool { self == .genie || self == .genieLiveGlass }
+    /// Reads a stored choice. Genie Classic (`genie`, dropped 2026-10-21)
+    /// reads as Genie, its nearest look, never as the default.
+    init?(storedValue: String) {
+        if storedValue == "genie" { self = .genieLiveGlass; return }
+        self.init(rawValue: storedValue)
+    }
+
+    /// Genie draws the content through the Metal mesh.
+    var usesGenieMesh: Bool { self == .genieLiveGlass }
 
     /// This animation's own hide and reveal durations: where each one's
-    /// shipped default lives. All four start at Slide's (0.22 s and 0.24 s);
+    /// shipped default lives. All three start at Slide's (0.22 s and 0.24 s);
     /// the preview-only speed lab (`PanelHideSpeedLab`) tunes them on screen.
     var defaultHideDuration: TimeInterval {
         switch self {
-        case .slide, .genie, .swoop, .genieLiveGlass: 0.22
+        case .slide, .swoop, .genieLiveGlass: 0.22
         }
     }
 
     var defaultRevealDuration: TimeInterval {
         switch self {
-        case .slide, .genie, .swoop, .genieLiveGlass: 0.24
+        case .slide, .swoop, .genieLiveGlass: 0.24
         }
     }
 
@@ -53,9 +57,20 @@ enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
         case .slide: String(localized: "Slide")
         case .swoop: String(localized: "Swoop")
         case .genieLiveGlass: String(localized: "Genie")
-        case .genie: String(localized: "Genie Classic")
         }
     }
+
+    /// One short line on how it looks (Settings' help, one line each).
+    var summary: String {
+        switch self {
+        case .slide: String(localized: "Slide: the panel shrinks into its corner.")
+        case .swoop: String(localized: "Swoop: the panel curves into its corner, narrowing as it goes.")
+        case .genieLiveGlass: String(localized: "Genie: the panel pours into its corner through a funnel, like the Dock's minimise.")
+        }
+    }
+
+    /// The Hide animation row's help: each animation's line, in order.
+    static var settingsHelp: String { allCases.map(\.summary).joined(separator: "\n") }
 }
 
 /// Preview-only speed lab (owner, 2026-10-19): each animation's hide and
@@ -91,7 +106,7 @@ struct PanelHideSpeedLab: Codable, Equatable, Sendable {
     var isDefault: Bool { overrides.isEmpty }
 }
 
-/// Every tunable number of the two drafts in one place.
+/// Every tunable number of the hide animations in one place.
 enum PanelHideMotionTuning {
     /// Time → progress. Hide eases in and out (the funnel forms, then the
     /// panel is drawn into the corner); a reveal decelerates like Slide.
@@ -112,11 +127,13 @@ enum PanelHideMotionTuning {
     /// Grid density (along the flow, across it).
     static let genieColumns = 56
     static let genieRows = 14
-    /// The snapshot's pixels per point (2 is the display's own; the
-    /// snapshot's cost follows its pixel count).
-    static var genieSnapshotScale: CGFloat = {
-        ProcessInfo.processInfo.environment["ATTIC_GENIE_SNAPSHOT_SCALE"].flatMap(Double.init).map { CGFloat($0) } ?? 1
-    }()
+    /// Frames a new Genie flight waits for its first drawable to reach the
+    /// screen before it takes over from the live panel regardless.
+    static let genieHandoverMaxFrames = 8
+    /// How long a snapshot taken ahead of a hide, reveal or swipe stays good.
+    static let geniePreparedLifetime: CFTimeInterval = 1.5
+    /// A timed hide or reveal prepares its snapshot this long ahead.
+    static let geniePrepareLead: TimeInterval = 0.12
 
     // Swoop
     /// The size the panel ends at (Slide's collapsed scale is 0.015).
@@ -522,6 +539,78 @@ final class PanelGenieRenderer: @unchecked Sendable {
     """
 }
 
+/// Whether a Genie flight may take over from the live panel. A Metal layer
+/// that has just been shown (or whose window has just ordered in) can miss
+/// its first drawables: taking over before one reaches the screen showed an
+/// empty window for a frame (draft 5, 1 in 21 hides). So a flight waits for
+/// a drawable to be presented, drawing clear frames meanwhile, and the live
+/// panel stays in place until then (or until `maxFrames` have passed).
+struct PanelGenieHandover: Equatable {
+    var maxFrames = PanelHideMotionTuning.genieHandoverMaxFrames
+    /// A drawable drawn since the layer was last shown, with its window
+    /// visible, has reached the screen.
+    private(set) var isEstablished = false
+    private(set) var isWaiting = false
+    private var framesWaited = 0
+    /// Bumped on every reset: a late "presented" from before it is ignored.
+    private(set) var generation = 0
+
+    /// The layer was hidden, or its window is not on screen.
+    mutating func reset() {
+        isEstablished = false
+        generation += 1
+    }
+
+    /// A flight starts. True when it can take over now; otherwise it waits.
+    mutating func begin() -> Bool {
+        guard !isEstablished else { isWaiting = false; return true }
+        isWaiting = true
+        framesWaited = 0
+        return false
+    }
+
+    /// A clear frame was drawn while waiting. True when the wait gives up.
+    mutating func waitedOneFrame() -> Bool {
+        guard isWaiting else { return false }
+        framesWaited += 1
+        guard framesWaited >= maxFrames else { return false }
+        isWaiting = false
+        return true
+    }
+
+    /// A drawable of `generation` reached the screen. True when that ends a
+    /// wait (the flight takes over now).
+    mutating func presented(generation drawn: Int) -> Bool {
+        guard drawn == generation else { return false }
+        isEstablished = true
+        guard isWaiting else { return false }
+        isWaiting = false
+        return true
+    }
+
+    mutating func cancel() { isWaiting = false }
+}
+
+/// Debug-build diagnostics for the on-screen motion bench (never compiled
+/// into Release): what the last snapshot and flight cost, and which glass
+/// it stood in for or left out.
+enum PanelHideMotionTrace {
+    #if DEBUG
+    static var snapshotMilliseconds: [String: Double] = [:]
+    static var materialLayers: [String] = []
+    static var glassStandIns: [String] = []
+    static var glassLeftOut: [String] = []
+    static var maskMicroseconds: Double = 0
+    static var layerDump: [String] = []
+    #endif
+
+    @inline(__always) static func note(_ key: String, _ value: @autoclosure () -> Double) {
+        #if DEBUG
+        snapshotMilliseconds[key] = value()
+        #endif
+    }
+}
+
 /// Draws the panel's snapshot through the Genie grid. It sits over the live
 /// presentation inside the panel's own window (no extra windows) and never
 /// takes a click: the live panel under it keeps its input.
@@ -530,18 +619,15 @@ final class PanelGenieView: NSView {
     private var texture: MTLTexture?
     private var displayLink: CADisplayLink?
     private var run: PanelHideMotionRun?
+    /// A run asked for while the flight still waits to take over.
+    private var pendingRun: (curve: PanelHideMotionCurve, target: Double)?
     private var corner: ScreenCorner = .topRight
     /// Called with every drawn frame's uniforms, in the frame's own
-    /// transaction (the live glass's mask moves with it).
+    /// transaction (the live material's mask moves with it).
     var frameObserver: ((PanelGenieRenderer.Uniforms) -> Void)?
-    /// Called once, on the main thread, when a drawable with the snapshot
-    /// has really reached the screen (a window just ordered in drops its
-    /// first drawables; the live glass waits for the content).
-    var onFirstPresented: (() -> Void)? {
-        didSet { presentedGeneration += 1; droppedBeforeFirst = 0 }
-    }
-    private var presentedGeneration = 0
-    private var droppedBeforeFirst = 0
+    private var handover = PanelGenieHandover()
+    /// Runs once, in the transaction of the first frame that draws content.
+    private var onHandover: (() -> Void)?
     private var completion: (() -> Void)?
     private(set) var progress: Double = 0
 
@@ -564,28 +650,37 @@ final class PanelGenieView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    override var isHidden: Bool {
+        didSet { if isHidden, !oldValue { handover.reset() } }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        handover.reset()
+    }
+
     var hasSnapshot: Bool { texture != nil }
-    var isAnimating: Bool { run != nil }
+    /// The snapshot's size in pixels (tests: it is taken at the window's
+    /// backing scale).
+    var snapshotPixelSize: CGSize? { texture.map { CGSize(width: $0.width, height: $0.height) } }
+    var isAnimating: Bool { run != nil || pendingRun != nil }
+    /// Waiting for a first drawable to reach the screen before taking over.
+    var isWaitingToTakeOver: Bool { handover.isWaiting }
     /// Where the motion is now, read between display frames.
     var currentProgress: Double { run?.progress(at: CACurrentMediaTime()) ?? progress }
 
-    /// Takes the snapshot the grid draws. Glass and Frosted transmit a live
-    /// backdrop a snapshot cannot hold, so `underlay` is laid in the visible
-    /// squircle first (the surface's own render of a mid-grey desktop).
-    /// The last snapshot's cost (cache, composite, upload), for the bench.
-    static var lastSnapshotMilliseconds: [String: Double] = [:]
-    /// The live Frosted material's layers kept out of the last snapshot.
-    static var lastMaterialLayers: [String] = []
-
+    /// Takes the snapshot the grid draws, at the window's backing scale (so
+    /// text stays crisp in flight). The panel's material stays live under
+    /// the mesh, so the snapshot leaves it out.
     func captureSnapshot(
-        of view: NSView, surfaceRect: CGRect, cornerRadius: CGFloat, underlay: NSColor?, translucent: Bool, dark: Bool,
+        of view: NSView, surfaceRect: CGRect, cornerRadius: CGFloat, translucent: Bool, dark: Bool,
         hidesSurfaceMaterial: Bool = false
     ) {
         let began = CACurrentMediaTime()
-        defer { Self.lastSnapshotMilliseconds["total"] = (CACurrentMediaTime() - began) * 1000 }
+        defer { PanelHideMotionTrace.note("total", (CACurrentMediaTime() - began) * 1000) }
         texture = nil
         guard let device = PanelGenieRenderer.shared.device, let root = view.layer else { return }
-        let scale = view.window?.backingScaleFactor ?? 2
+        let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         let width = Int((view.bounds.width * scale).rounded()), height = Int((view.bounds.height * scale).rounded())
         let space = view.window?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
         guard width > 0, height > 0, let context = CGContext(
@@ -596,37 +691,29 @@ final class PanelGenieView: NSView {
         // window server; hide them for the snapshot only (same transaction,
         // so the screen never sees it) and stand in for the small ones.
         let scan = Self.scanGlass(in: root, surfaceRect: surfaceRect, hidesSurfaceMaterial: hidesSurfaceMaterial)
-        let hidden = scan.hidden
-        if !scan.materialLayers.isEmpty { Self.lastMaterialLayers = scan.materialLayers }
-        Self.lastGlassStandIns = scan.pills.map { "\($0.rect.integral)" }
-        Self.lastGlassLeftOut = scan.leftOut.map { "\($0.integral)" }
+        #if DEBUG
+        if !scan.materialLayers.isEmpty { PanelHideMotionTrace.materialLayers = scan.materialLayers }
+        PanelHideMotionTrace.glassStandIns = scan.pills.map { "\($0.rect.integral)" }
+        PanelHideMotionTrace.glassLeftOut = scan.leftOut.map { "\($0.integral)" }
+        #endif
         context.scaleBy(x: scale, y: scale)
-        if let underlay {
-            // The panel's own squircle (AtticPanelSurface).
-            let path = Squircle(cornerRadius: cornerRadius, exponent: AtticStyle.panelSquircleExponent)
-                .path(in: surfaceRect.insetBy(dx: 0.5, dy: 0.5)).cgPath
-            context.addPath(path)
-            context.setFillColor(underlay.cgColor)
-            context.fillPath()
-        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        hidden.forEach { $0.isHidden = true }
+        scan.hidden.forEach { $0.isHidden = true }
         let renderBegan = CACurrentMediaTime()
         // `cacheDisplay` redraws every view (Core Animation's `render(in:)`
         // costs the same and loses SwiftUI's text); its cost follows the
-        // pixel count, so the snapshot is taken at `snapshotScale` and the
-        // grid's linear sampling scales it up in flight.
-        let snapshotScale = PanelHideMotionTuning.genieSnapshotScale
+        // pixel count. Snapshots ahead of a timed hide, reveal or swipe
+        // (`AtticPanelContentContainer.prepareAlternateSnapshot`) keep it
+        // off the flight's first frame.
         if let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * snapshotScale),
-            pixelsHigh: Int(view.bounds.height * snapshotScale), bitsPerSample: 8, samplesPerPixel: 4,
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
         ) {
             rep.size = view.bounds.size
             view.cacheDisplay(in: view.bounds, to: rep)
             if let image = rep.cgImage {
-                context.interpolationQuality = .high
+                context.interpolationQuality = .none
                 context.draw(image, in: view.bounds)
             }
         }
@@ -643,8 +730,8 @@ final class PanelGenieView: NSView {
             context.fillPath()
             context.restoreGState()
         }
-        Self.lastSnapshotMilliseconds["render"] = (CACurrentMediaTime() - renderBegan) * 1000
-        hidden.forEach { $0.isHidden = false }
+        PanelHideMotionTrace.note("render", (CACurrentMediaTime() - renderBegan) * 1000)
+        scan.hidden.forEach { $0.isHidden = false }
         CATransaction.commit()
         guard let data = context.data else { return }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -659,11 +746,6 @@ final class PanelGenieView: NSView {
     }
 
     func releaseSnapshot() { texture = nil }
-
-    /// The last snapshot's glass stand-ins, and the glass it left out because
-    /// the panel never shows it (for the bench).
-    static var lastGlassStandIns: [String] = []
-    static var lastGlassLeftOut: [String] = []
 
     /// One control's glass stand-in: the control's rect, drawn only inside
     /// `clip`, the part of it the panel shows.
@@ -745,7 +827,46 @@ final class PanelGenieView: NSView {
         "CABackdropLayer", "CASDFLayer", "CASDFElementLayer"
     ]
 
-    /// Draws `progress` now, in the current Core Animation transaction.
+    /// A flight starts at `progress`. `takeOver` runs once, in the
+    /// transaction of the first frame that draws the snapshot: at once when
+    /// this layer already has a drawable on screen, otherwise after the
+    /// first one is presented (clear frames until then, so the live panel
+    /// under it stays what the screen shows).
+    func beginFlight(progress: Double, corner: ScreenCorner, takeOver: @escaping () -> Void) {
+        self.corner = corner
+        self.progress = progress
+        isPrewarming = false
+        isHidden = false
+        if window?.isVisible != true { handover.reset() }
+        if handover.begin() {
+            onHandover = nil
+            takeOver()
+            render()
+        } else {
+            onHandover = takeOver
+            render()
+            startLink()
+        }
+    }
+
+    /// Ahead of a likely flight (a pending hide, or fingers resting): show
+    /// the layer with a clear frame, so its first drawable reaches the
+    /// screen now and the flight can take over on its first frame.
+    func prewarm() {
+        isHidden = false
+        guard window?.isVisible == true, !handover.isEstablished, displayLink == nil else { return }
+        isPrewarming = true
+        prewarmFrames = 0
+        render()
+        startLink()
+    }
+
+    /// Showing clear frames ahead of a flight (`prewarm`).
+    private var isPrewarming = false
+    private var prewarmFrames = 0
+
+    /// Draws `progress` now, in the current Core Animation transaction (a
+    /// swipe, following the fingers).
     func show(progress: Double, corner: ScreenCorner) {
         self.corner = corner
         self.progress = progress
@@ -758,36 +879,112 @@ final class PanelGenieView: NSView {
         to target: Double, curve: PanelHideMotionCurve, corner: ScreenCorner,
         completion: @escaping () -> Void
     ) -> TimeInterval {
-        stop()
+        stopRun()
         self.corner = corner
         self.completion = completion
         let made = curve.run(from: progress, to: target, start: CACurrentMediaTime())
-        run = made
-        defer { startLink() }
+        if handover.isWaiting {
+            // The clock starts when the flight takes over.
+            pendingRun = (curve, target)
+        } else {
+            run = made
+        }
+        startLink()
+        // A display link stops while its window is on no screen (asleep,
+        // locked, unplugged): the flight still ends, at its target.
+        let watchdog = DispatchWorkItem { [weak self] in self?.finishRun(at: target) }
+        self.watchdog?.cancel()
+        self.watchdog = watchdog
+        let frames = Double(PanelHideMotionTuning.genieHandoverMaxFrames) / 60
+        DispatchQueue.main.asyncAfter(deadline: .now() + made.duration + frames + 0.25, execute: watchdog)
         return made.duration
     }
 
+    private var watchdog: DispatchWorkItem?
+
+    /// Ends the run at `target` now and reports it (the watchdog).
+    private func finishRun(at target: Double) {
+        guard run != nil || pendingRun != nil else { return }
+        if handover.isWaiting {
+            handover.cancel()
+            takeOverNow()
+        }
+        progress = target
+        render()
+        let done = completion
+        displayLink?.invalidate()
+        displayLink = nil
+        run = nil
+        pendingRun = nil
+        completion = nil
+        done?()
+    }
+
     private func startLink() {
+        guard displayLink == nil else { return }
         let link = displayLink(target: self, selector: #selector(step(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
 
-    /// Freezes where it is (an interruption reverses from here).
-    func stop() {
+    private func stopRun() {
+        watchdog?.cancel()
+        watchdog = nil
         if let run { progress = run.progress(at: CACurrentMediaTime()) }
-        displayLink?.invalidate()
-        displayLink = nil
         run = nil
+        pendingRun = nil
         completion = nil
     }
 
+    /// Freezes where it is (an interruption reverses from here). A flight
+    /// still waiting to take over keeps waiting.
+    func stop() {
+        stopRun()
+        if !handover.isWaiting, !isPrewarming {
+            displayLink?.invalidate()
+            displayLink = nil
+        }
+    }
+
+    /// Ends the flight: no waiting, no run, nothing drawn.
+    func cancelFlight() {
+        stopRun()
+        isPrewarming = false
+        handover.cancel()
+        onHandover = nil
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
     @objc private func step(_ link: CADisplayLink) {
-        guard let run else { return }
+        if isPrewarming {
+            prewarmFrames += 1
+            if handover.isEstablished || prewarmFrames >= PanelHideMotionTuning.genieHandoverMaxFrames {
+                isPrewarming = false
+                displayLink?.invalidate()
+                displayLink = nil
+            } else {
+                render()
+            }
+            return
+        }
+        if handover.isWaiting {
+            if handover.waitedOneFrame() { takeOverNow() } else { render() }
+            return
+        }
+        guard let run else {
+            // Nothing to animate (a prewarm, or a swipe's flight that took
+            // over): the link only served the wait.
+            displayLink?.invalidate()
+            displayLink = nil
+            return
+        }
         progress = run.progress(at: link.targetTimestamp)
         render()
         if run.isFinished(at: link.targetTimestamp) {
             progress = run.to
+            watchdog?.cancel()
+            watchdog = nil
             let done = completion
             displayLink?.invalidate()
             displayLink = nil
@@ -797,10 +994,22 @@ final class PanelGenieView: NSView {
         }
     }
 
+    private func takeOverNow() {
+        let takeOver = onHandover
+        onHandover = nil
+        if let pending = pendingRun {
+            pendingRun = nil
+            run = pending.curve.run(from: progress, to: pending.target, start: CACurrentMediaTime())
+        }
+        takeOver?()
+        render()
+    }
+
     private func render() {
-        let pixelSize = CGSize(width: bounds.width * (window?.backingScaleFactor ?? 2),
-                               height: bounds.height * (window?.backingScaleFactor ?? 2))
+        let scale = window?.backingScaleFactor ?? 2
+        let pixelSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         if metalLayer.drawableSize != pixelSize { metalLayer.drawableSize = pixelSize }
+        if window?.isVisible != true, handover.isEstablished { handover.reset() }
         guard pixelSize.width > 0, pixelSize.height > 0,
               let (pipeline, queue) = PanelGenieRenderer.shared.state(),
               let grid = PanelGenieRenderer.shared.grid,
@@ -811,9 +1020,12 @@ final class PanelGenieView: NSView {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         pass.colorAttachments[0].storeAction = .store
+        // While waiting to take over: a clear frame, so the live panel under
+        // it is still what the screen shows.
+        let drawsContent = !handover.isWaiting && !isPrewarming
         var uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner)
-        frameObserver?(uniforms)
-        if let texture, let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) {
+        if drawsContent { frameObserver?(uniforms) }
+        if drawsContent, let texture, let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) {
             encoder.setRenderPipelineState(pipeline)
             encoder.setVertexBuffer(grid.vertices, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<PanelGenieRenderer.Uniforms>.stride, index: 1)
@@ -825,17 +1037,14 @@ final class PanelGenieView: NSView {
         } else if let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) {
             encoder.endEncoding()
         }
-        if texture != nil, onFirstPresented != nil {
-            let generation = presentedGeneration
+        if !handover.isEstablished, window?.isVisible == true {
+            let generation = handover.generation
             drawable.addPresentedHandler { [weak self] presented in
                 let time = presented.presentedTime
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        guard let self, self.presentedGeneration == generation, let fire = self.onFirstPresented else { return }
-                        guard time > 0 else { self.droppedBeforeFirst += 1; return }
-                        Self.lastSnapshotMilliseconds["dropped_before_first"] = Double(self.droppedBeforeFirst)
-                        self.onFirstPresented = nil
-                        fire()
+                        guard let self, time > 0 else { return }
+                        if self.handover.presented(generation: generation) { self.takeOverNow() }
                     }
                 }
             }
@@ -860,27 +1069,48 @@ struct PanelGenieLiveMaterial: Equatable {
 
 private struct PanelGenieMaterialView: View {
     let material: PanelGenieLiveMaterial
+    /// The panel's squircle at rest, in this view's coordinates (y down).
+    var rest: CGRect
+    /// In flight: the bent outline (y down). Nil draws the squircle.
+    var outline: Path?
 
     var body: some View {
-        let shape = Squircle(cornerRadius: material.cornerRadius, exponent: AtticStyle.panelSquircleExponent)
+        let shape = PanelGenieOutlineShape(outline: outline, rest: rest, cornerRadius: material.cornerRadius)
         Group {
             switch material.kind {
             case .glass:
-                // As `AtticPanelSurface.nativeGlassBackground`.
+                // As `AtticPanelSurface`'s native glass, in the bent shape:
+                // Liquid Glass draws its own rim along the bent edge.
                 shape.fill(Color.clear).glassEffect(.regular, in: shape)
             case .frosted:
                 shape.fill(.ultraThinMaterial)
             }
         }
         .environment(\.colorScheme, material.colorScheme)
+        // Each frame's shape is the mesh's, not a morph toward it.
+        .transaction { $0.disablesAnimations = true; $0.animation = nil }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }
 
-/// Under the Genie mesh: the live material, masked every frame to the
-/// outline of the bent panel, so it keeps blurring the real desktop in
-/// the bending shape. Fills the content container (the mesh's space).
+/// The live material's shape: the mesh's bent outline in flight, the
+/// panel's own squircle otherwise.
+struct PanelGenieOutlineShape: Shape {
+    var outline: Path?
+    var rest: CGRect
+    var cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        outline ?? Squircle(cornerRadius: cornerRadius, exponent: AtticStyle.panelSquircleExponent).path(in: rest)
+    }
+}
+
+/// Under the Genie mesh: the panel's material, live, in the outline of the
+/// bent panel, so it keeps blurring the real desktop in the bending shape.
+/// Glass takes the outline as its own shape every frame, so its rim runs
+/// along the bent edge; Frosted (no rim) is masked to it. Fills the content
+/// container (the mesh's space).
 final class PanelGenieLiveGlassView: NSView {
     private let maskLayer = CAShapeLayer()
     private var host: NSHostingView<PanelGenieMaterialView>?
@@ -889,8 +1119,19 @@ final class PanelGenieLiveGlassView: NSView {
     /// densely enough to follow the mesh's columns and rows.
     private var outline: [SIMD2<Float>] = []
     private var points: [CGPoint] = []
-    /// The last mask's cost (outline warp and path), for the bench.
-    static var lastMaskMicroseconds: Double = 0
+    private var rest: CGRect = .zero
+    /// Shown by the flight once it has taken over from the live panel.
+    var isEngaged = false { didSet { if !isEngaged { isHidden = true } } }
+
+    /// Glass bends its own shape (its rim follows the bend); otherwise the
+    /// material is masked to the outline.
+    private var shapesMaterial: Bool { material?.kind == .glass && PanelGenieLiveGlassView.glassTakesOutlineShape }
+    static var glassTakesOutlineShape: Bool = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_RIM"] == "mask" { return false }
+        #endif
+        return true
+    }()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -899,7 +1140,6 @@ final class PanelGenieLiveGlassView: NSView {
         // A plain layer animates its path implicitly; the mask must land in
         // the same transaction as the mesh's drawable.
         maskLayer.actions = ["path": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
-        layer?.mask = maskLayer
         isHidden = true
     }
 
@@ -909,24 +1149,26 @@ final class PanelGenieLiveGlassView: NSView {
     override var isFlipped: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    /// Lays the material over `surfaceRect` (container coordinates) and
-    /// samples its outline. Cheap when nothing changed.
+    /// Lays the material over the container, its squircle at `surfaceRect`
+    /// (container coordinates), and samples its outline.
     func configure(material: PanelGenieLiveMaterial, surfaceRect: CGRect) {
-        if self.material != material || host == nil {
-            self.material = material
-            if let host {
-                host.rootView = PanelGenieMaterialView(material: material)
-            } else {
-                let made = NSHostingView(rootView: PanelGenieMaterialView(material: material))
-                made.sizingOptions = []
-                addSubview(made)
-                host = made
-            }
+        rest = CGRect(x: surfaceRect.minX, y: bounds.height - surfaceRect.maxY,
+                      width: surfaceRect.width, height: surfaceRect.height)
+        let view = PanelGenieMaterialView(material: material, rest: rest, outline: nil)
+        if let host {
+            host.rootView = view
+        } else {
+            let made = NSHostingView(rootView: view)
+            made.sizingOptions = []
+            addSubview(made)
+            host = made
         }
+        self.material = material
+        layer?.mask = shapesMaterial ? nil : maskLayer
         // Its own appearance, not the window's: a reveal lays it out while
         // the panel is still off screen.
         host?.appearance = NSAppearance(named: material.colorScheme == .dark ? .darkAqua : .aqua)
-        if host?.frame != surfaceRect { host?.frame = surfaceRect }
+        if host?.frame != bounds { host?.frame = bounds }
         maskLayer.frame = bounds
         guard bounds.width > 0, bounds.height > 0 else { outline = []; return }
         let squircle = Squircle(cornerRadius: material.cornerRadius, exponent: AtticStyle.panelSquircleExponent)
@@ -963,29 +1205,40 @@ final class PanelGenieLiveGlassView: NSView {
         points = Array(repeating: .zero, count: sampled.count)
     }
 
-    /// Masks the material to the mesh's outline at `uniforms`. Called in
-    /// the mesh frame's transaction.
+    /// The material in the mesh's outline at `uniforms`. Called in the mesh
+    /// frame's transaction.
     func update(_ uniforms: PanelGenieRenderer.Uniforms) {
+        #if DEBUG
         let began = CACurrentMediaTime()
+        defer { PanelHideMotionTrace.maskMicroseconds = (CACurrentMediaTime() - began) * 1_000_000 }
+        #endif
+        isHidden = !isEngaged
+        guard isEngaged else { return }
         let width = bounds.width, height = bounds.height
         for index in outline.indices {
             let p = PanelGenieRenderer.meshPosition(outline[index], uniforms)
             points[index] = CGPoint(x: CGFloat(p.x) * width, y: CGFloat(p.y) * height)
         }
-        let path = CGMutablePath()
-        path.addLines(between: points)
-        path.closeSubpath()
-        maskLayer.path = path
-        // The mesh fades its last sliver; the glass fades with it.
+        if shapesMaterial, let host, let material {
+            var path = Path()
+            path.addLines(points.map { CGPoint(x: $0.x, y: height - $0.y) })
+            path.closeSubpath()
+            host.rootView = PanelGenieMaterialView(material: material, rest: rest, outline: path)
+            host.layoutSubtreeIfNeeded()
+        } else {
+            let path = CGMutablePath()
+            path.addLines(between: points)
+            path.closeSubpath()
+            maskLayer.path = path
+        }
+        // The mesh fades its last sliver; the material fades with it.
         layer?.opacity = uniforms.alpha
-        Self.lastMaskMicroseconds = (CACurrentMediaTime() - began) * 1_000_000
     }
 }
 
-/// What a Genie snapshot stands on: Genie's mid-grey stand-in for the
-/// backdrop, or (live glass) the panel's material kept live under it.
-struct PanelGenieSurface {
-    var underlay: NSColor?
+/// What a Genie snapshot stands on: the panel's own material, kept live
+/// under it (nil on Solid, which transmits nothing).
+struct PanelGenieSurface: Equatable {
     var live: PanelGenieLiveMaterial?
     /// Glass or Frosted (the controls' glass gets a light stand-in).
     var translucent: Bool

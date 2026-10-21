@@ -438,17 +438,23 @@ final class CornerHoverMonitor {
         followUpWork = nil
         guard stateMachine.isVisible else {
             if let deadline = stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) {
+                onVisibilityChangeExpected?((hiding: false, delay: deadline - uptime))
                 scheduleFollowUp(after: deadline - uptime)
+            } else {
+                onVisibilityChangeExpected?(nil)
             }
             return
         }
         let isPinned = uiState.isPanelPinned
         guard !stateMachine.isHidePending,
-              !isMouseButtonPressed, !isPinned else { return }
+              !isMouseButtonPressed, !isPinned else { onVisibilityChangeExpected?(nil); return }
         let stateDeadline = stateMachine.nextTimedDecision(
             at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
             isInteractionLocked: isInteractionLocked, isPinned: isPinned, hideDelay: settings.hideDelay
         )
+        // Away from the panel and the corner, nothing holding it open: the
+        // panel hides at that deadline unless the pointer comes back.
+        onVisibilityChangeExpected?(stateDeadline.map { (hiding: true, delay: $0 - uptime) })
         let focusDeadline = MainPanelAutoHidePolicy.focusExpirationDeadline(
             reasons: uiState.interactionLockReasons,
             pointerInside: isInPanel,
@@ -499,6 +505,10 @@ final class CornerHoverMonitor {
 
     /// Test seam: how many one-shot follow-ups were scheduled.
     private(set) var followUpCountForTesting = 0
+    /// A timed reveal (`hiding` false) or hide is due in `delay` seconds
+    /// unless the pointer changes course; nil when none is. The panel uses
+    /// it to prepare a hide animation's snapshot ahead of the motion.
+    var onVisibilityChangeExpected: (((hiding: Bool, delay: TimeInterval)?) -> Void)?
 
     private func updateResponsivenessActivity(for cadence: CornerHoverSamplingCadence) {
         if cadence.holdsResponsivenessActivity {
@@ -549,6 +559,8 @@ final class CornerHoverMonitor {
     /// Test seams: the frames whose corners answer hover, and the rule.
     var hoverScreenFramesForTesting: [CGRect] { cachedScreenFrames }
     var revealPolicyForTesting: CornerRevealPolicy { revealPolicy }
+    /// Test seam: one pointer sample at `location`, as an event would run it.
+    func sampleForTesting(at location: CGPoint) { samplePointer(at: location) }
     /// Test seam: whether a pointer at `location` counts as in the hotspot
     /// with `flags` held, as a sample decides it.
     func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {
