@@ -28,6 +28,8 @@ final class TaskNotePresenter: ObservableObject {
     private var design: AtticDesignContext
     private weak var notes: NotesPageController?
     @Published private(set) var engineGeneration: UInt64 = 0
+    /// The title riding in the header (0 hidden, 1 shown).
+    @Published private(set) var headerTitleProgress: CGFloat = 0
     private var engineObservation: AnyCancellable?
     private var hasMounted = false
     private var closeWork: Task<Bool, Never>?
@@ -91,6 +93,7 @@ final class TaskNotePresenter: ObservableObject {
             self.host.setNeedsRestack()
         }
         model.onFocusWriting = { [weak self] atTop in self?.host.focusWriting(atTop: atTop) }
+        host.onHeaderProgress = { [weak self] progress in self?.headerTitleProgress = progress }
         model.deletedNote = deletedNoteID != nil
         Self.live[taskID] = WeakPresenter(presenter: self)
         if canReuse {
@@ -259,6 +262,10 @@ struct TaskNotePage: View {
                                       engineGeneration: presenter.engineGeneration, onEscape: onBack)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("task-note-page")
+            // Content shows under the floating controls, blurred (owner,
+            // 2026-10-17): the Notes page's own variable blur.
+            AtticEdgeBlurBackdrops(AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls))
+            if placement == .panel { headerTitle }
             bottomRow
                 .padding(.leading, layout.chromeInsets.leading)
                 .padding(.trailing, layout.chromeInsets.trailing)
@@ -294,6 +301,24 @@ struct TaskNotePage: View {
             Text(verbatim: confirmationMessage(kind))
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// `p3-21` panel 3: the task's title rides in the header once the head
+    /// has scrolled away; it opens the note's menu, as the Notes header
+    /// title does (today's control).
+    private var headerTitle: some View {
+        let progress = presenter.headerTitleProgress
+        return AtticHeaderTitleRoom(chromeInset: layout.chromeInsets.leading, switcherWidth: PanelHeaderLayout.pageSwitchWidth) {
+            AtticHeaderTitle(title: model.head.title) { presentNoteMenu() }
+                .opacity(progress)
+                .offset(y: design.reduceMotion ? 0 : (1 - progress) * -6)
+                .scaleEffect(design.reduceMotion ? 1 : 0.94 + 0.06 * progress, anchor: .top)
+                .allowsHitTesting(progress > 0.5)
+                .accessibilityHidden(progress < 0.5)
+                .accessibilityIdentifier("task-note-header-title")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.top, layout.chromeInsets.top)
     }
 
     private var bottomRow: some View {

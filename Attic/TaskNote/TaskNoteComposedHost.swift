@@ -106,6 +106,28 @@ final class TaskNoteComposedHost: NSObject {
             forName: NSView.frameDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.clipDidResize() }
             })
+        // The title rides in the header once the head has scrolled away.
+        clip.postsBoundsChangedNotifications = true
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reportHeaderProgress() }
+            })
+    }
+
+    /// 0 while the head's title is on screen, 1 once it has passed under the
+    /// header (the Notes header title's rule, `headerProgress`).
+    var onHeaderProgress: ((CGFloat) -> Void)?
+    private var lastHeaderProgress: CGFloat = 0
+
+    private func reportHeaderProgress() {
+        let visibleTop = scrollView.contentView.bounds.minY + scrollView.contentInsets.top
+        let titleBottom = headController.view.frame.minY + TaskNoteMetrics.titleLineHeight
+        let raw = min(max((visibleTop - titleBottom) / TaskNoteMetrics.titleLineHeight, 0), 1)
+        // Quantized: a scroll inside the head or past it publishes nothing.
+        let progress = (raw * 10).rounded() / 10
+        guard progress != lastHeaderProgress else { return }
+        lastHeaderProgress = progress
+        onHeaderProgress?(progress)
     }
 
     func resume(reusingViewport: Bool = false) {

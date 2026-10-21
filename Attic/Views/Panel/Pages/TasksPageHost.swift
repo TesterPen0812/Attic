@@ -74,6 +74,16 @@ struct TasksPageHost: View {
         _filesHold = State(initialValue: filesHold ?? PanelEditHold())
     }
 
+    /// Before the page's first build: rows capture whether a title click
+    /// opens the task's page when they are drawn.
+    private func installTaskNoteServices(_ model: TasksPageModel) {
+        guard let taskNotes, model.services.openTaskNote == nil else { return }
+        model.services.openTaskNote = { [weak model] id in
+            taskNotes.open(id, String(localized: "Back to \(model?.tab.title ?? TasksTab.now.title)"))
+        }
+        model.services.addFilesToTaskNote = taskNotes.addFiles
+    }
+
     /// The host's callbacks, also exercised without the Tasks page's own
     /// monitors when testing the lifetime of its holds.
     var pageChrome: TasksPageChrome { pageChrome(editHold: editHold, filesHold: filesHold) }
@@ -95,6 +105,7 @@ struct TasksPageHost: View {
 
     var body: some View {
         let model = state.model(for: store, toasts: toasts)
+        let _ = installTaskNoteServices(model)
         TasksPage(
             model: model,
             store: store,
@@ -146,13 +157,6 @@ struct TasksPageHost: View {
             // what observes the shell, and the first keystroke's frame is
             // the add bar's alone. A turn late changes nothing for hiding.
             DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
-        }
-        .onAppear { [taskNotes, weak model] in
-            guard let taskNotes else { return }
-            model?.services.openTaskNote = { [weak model] id in
-                taskNotes.open(id, String(localized: "Back to \(model?.tab.title ?? TasksTab.now.title)"))
-            }
-            model?.services.addFilesToTaskNote = taskNotes.addFiles
         }
         .onAppear {
             // "Attach file…" in a row's files list (A1): the picker, which
