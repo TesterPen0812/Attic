@@ -23,7 +23,7 @@ final class TaskNotePresenter: ObservableObject {
     /// The workspace's own note session; nil for a task with no note yet
     /// (lazy creation is slice 1: the writing shows its placeholder).
     let session: NoteSession?
-    private let page: WorkspacePageSession
+    let page: WorkspacePageSession
     private(set) var lease: WorkspacePageSession.Lease?
     private let surfaceID = UUID()
     private var design: AtticDesignContext
@@ -240,7 +240,18 @@ struct TaskNotePage: View {
 
     enum Confirmation: Identifiable {
         case deleteTask, deleteNote
-        var id: Self { self }
+        /// § 2.3.3: some lines hold what a subtask can't keep.
+        case richSubtasks(TaskNoteSubtaskSelection)
+        /// § 2.6: a Done task gets an open subtask.
+        case reopenForSubtasks(TaskNoteSubtaskSelection)
+        var id: String {
+            switch self {
+            case .deleteTask: "deleteTask"
+            case .deleteNote: "deleteNote"
+            case .richSubtasks: "richSubtasks"
+            case .reopenForSubtasks: "reopenForSubtasks"
+            }
+        }
     }
 
     init(presenter: TaskNotePresenter, controller: NotesPageController, noteStore: NoteStore,
@@ -296,6 +307,8 @@ struct TaskNotePage: View {
             }
         }
         .onAppear(perform: installMenus)
+        .onAppear(perform: installWritingCommands)
+        .onChange(of: presenter.engineGeneration) { _, _ in installWritingCommands() }
         .onAppear(perform: installClickDiagnostics)
         // Esc from the head or the block goes Back (§ 7: after inner layers).
         .onKeyPress(.escape) {
@@ -310,6 +323,15 @@ struct TaskNotePage: View {
                 Button(String(localized: "Delete Task"), role: .destructive) { model.deleteTask() }
             case .deleteNote:
                 Button(String(localized: "Delete Note"), role: .destructive) { deleteNote() }
+            case let .richSubtasks(analysis):
+                Button(String(localized: "Create Subtask and Keep Original")) { runMakeSubtask(analysis) }
+                    .keyboardShortcut(.defaultAction)
+            case let .reopenForSubtasks(analysis):
+                Button(String(localized: "Reopen Task and Continue")) {
+                    guard model.reopenTask() else { return }
+                    continueMakeSubtask(analysis)
+                }
+                .keyboardShortcut(.defaultAction)
             }
             Button(String(localized: "Cancel"), role: .cancel) {}
         } message: { kind in
@@ -381,6 +403,20 @@ struct TaskNotePage: View {
     }
 
     // MARK: Menus (§ 5.5)
+
+    /// ⌥⌘S and the context menu's Make Subtask live on the writing of this
+    /// page only; ordinary notes never see them.
+    private func installWritingCommands() {
+        let textView = presenter.host.textView
+        textView.workspaceShortcut = { event in
+            let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+            guard flags == [.command, .option], event.charactersIgnoringModifiers?.lowercased() == "s"
+                    || event.keyCode == 1 else { return false }
+            requestMakeSubtask()
+            return true
+        }
+        textView.workspaceMenuItems = { writingMenuItems() }
+    }
 
     private func installMenus() {
         presenter.menus.noteMenu = { presentNoteMenu() }
@@ -478,8 +514,84 @@ struct TaskNotePage: View {
         switch confirming {
         case .deleteTask: String(localized: "Delete “\(model.head.title)”?")
         case .deleteNote: String(localized: "Delete this note?")
+        case let .richSubtasks(analysis):
+            analysis.richCount == 1 ? String(localized: "1 line has links or formatting a subtask can't keep.")
+                : String(localized: "\(analysis.richCount) lines have links or formatting a subtask can't keep.")
+        case .reopenForSubtasks: String(localized: "This task is done.")
         case nil: ""
         }
+    }
+
+    // MARK: Make Subtask ⌥⌘S (§ 2.3.3)
+
+    /// ⌥⌘S, the writing's context menu and Format: from the selection, or
+    /// the caret's paragraph. A disabled command still takes the key and
+    /// says why.
+    func requestMakeSubtask() {
+        if let reason = presenter.makeSubtaskUnavailableReason(tasks: model.store) {
+            model.reportUnavailable(reason)
+            return
+        }
+        guard let analysis = presenter.subtaskSelection(), !analysis.isEmpty else {
+            model.reportUnavailable(String(localized: "There is no text to make a subtask from"))
+            return
+        }
+        if model.head.state == .done, analysis.hasOpenSubtask {
+            confirming = .reopenForSubtasks(analysis)
+            return
+        }
+        continueMakeSubtask(analysis)
+    }
+
+    private func continueMakeSubtask(_ analysis: TaskNoteSubtaskSelection) {
+        if analysis.richCount > 0 {
+            confirming = .richSubtasks(analysis)
+            return
+        }
+        runMakeSubtask(analysis)
+    }
+
+    private func runMakeSubtask(_ analysis: TaskNoteSubtaskSelection) {
+        let presenter = presenter, model = model, controller = controller, toasts = toasts
+        Task { @MainActor in
+            let result = await presenter.makeSubtasks(analysis, tasks: model.store, notes: controller)
+            switch result {
+            case let .made(entryID, count, kept):
+                model.clearFailure()
+                var message = count == 1 ? String(localized: "Made subtask") : String(localized: "Made \(count) subtasks")
+                if kept > 0 {
+                    message += " · " + (kept == 1 ? String(localized: "1 line kept") : String(localized: "\(kept) lines kept"))
+                }
+                Self.showUndoToast(message, entryID: entryID, presenter: presenter, toasts: toasts)
+            case let .refused(reason):
+                model.reportUnavailable(reason)
+            case .madeCheckbox:
+                break
+            }
+        }
+    }
+
+    /// The operation's toast: its Undo targets exactly its own entry (S11);
+    /// anything newer makes it stale.
+    static func showUndoToast(_ message: String, entryID: UUID, presenter: TaskNotePresenter, toasts: PanelToastCenter?) {
+        toasts?.show(message, performingAsync: {
+            guard presenter.lease != nil, let outcome = await presenter.page.history.undoLatest(stepID: entryID) else { return .applied }
+            return outcome == .applied ? .applied
+                : .failed(CommandFailure(String(localized: "Can't undo: the line was edited since")))
+        })
+    }
+
+    /// The writing's own commands on a task's page (its context menu).
+    func writingMenuItems() -> [NSMenuItem] {
+        let reason = presenter.makeSubtaskUnavailableReason(tasks: model.store)
+        let command = AtticMenuCommand(verbatim: String(localized: "Make Subtask"),
+                                       shortcut: KeyboardShortcut("s", modifiers: [.command, .option]),
+                                       isDisabled: reason != nil) { requestMakeSubtask() }
+        let menu = AtticNativeMenu.make([command])
+        let items = menu.items
+        menu.removeAllItems()
+        if let reason { items.forEach { $0.toolTip = reason } }
+        return items
     }
 
     private func confirmationMessage(_ kind: Confirmation) -> String {
@@ -491,6 +603,10 @@ struct TaskNotePage: View {
             return subtasks + " " + String(localized: "to Recently Deleted for 30 days. Its note stays in All notes, and you can keep editing it.")
         case .deleteNote:
             return String(localized: "Its writing and files go to Recently Deleted for 30 days. “\(model.head.title)” and its subtasks stay in Tasks.")
+        case .richSubtasks:
+            return String(localized: "Those lines stay in the note unchanged; plain lines still move.")
+        case .reopenForSubtasks:
+            return String(localized: "A new open subtask reopens “\(model.head.title)”.")
         }
     }
 

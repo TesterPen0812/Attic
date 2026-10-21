@@ -653,6 +653,21 @@ final class TaskNotePageModel: ObservableObject {
         action?()
     }
 
+    /// A command that cannot run here says why in the slot (§ 6: a disabled
+    /// command consumes its key and gives its reason).
+    func reportUnavailable(_ reason: String) {
+        _ = report(CommandFailure(reason))
+    }
+
+    /// Reopen Task and Continue (§ 2.6): a Done task goes back to To Do as
+    /// one step in the page's history; what was asked then goes ahead.
+    @discardableResult
+    func reopenTask() -> Bool {
+        guard let task = store.task(withID: taskID) ?? store.listedTask(withID: taskID) else { return report(.taskGone) }
+        guard task.status == .done else { return true }
+        return settle(library.updateTask(taskID, status: .todo, in: historyID)) { [weak self] in self?.reopenTask() }
+    }
+
     func clearFailure() {
         failure = nil
         retry = nil

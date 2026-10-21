@@ -457,6 +457,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
     private var importNoteID: UUID?
 
+    /// The stored document a workspace command's candidate text becomes
+    /// (Make Subtask, Make Note Checkbox): the same decoding as a save.
+    func document(forCommand candidate: NSAttributedString) -> NoteDocument { decode(candidate) }
+
+    /// Body text for `blocks`, styled as this editor shows them (a workspace
+    /// command's inserted lines, e.g. Make Note Checkbox).
+    func bodyText(for blocks: [NoteBlock]) -> NSAttributedString {
+        NoteTextCodec.attributedString(from: NoteDocument(blocks: blocks), style: style, firstBlockIsTitle: false)
+    }
+
     /// The stored document for `text`: in a task's note, the held block 0
     /// goes back in front of the body (§ 2.12).
     private func decode(_ text: NSAttributedString) -> NoteDocument {

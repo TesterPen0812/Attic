@@ -1161,6 +1161,48 @@ final class NotesPageController: ObservableObject {
 
     /// Called after a task draft's first save created its note.
     var taskNoteCreated: ((_ taskID: UUID, _ noteID: UUID) -> Void)?
+    /// A workspace operation (Make Subtask, Make Note Checkbox, their Undo)
+    /// committed this note's document at `revisionID` through the write
+    /// gate, and its editor already shows that text: the session takes the
+    /// revision as its base, so its next save neither conflicts nor repeats
+    /// the write. `created` marks the never-saved task draft whose note the
+    /// operation created. Text typed meanwhile stays pending, as after any
+    /// save.
+    func adoptWorkspaceCommit(_ session: NoteSession, revisionID: UUID, created: Bool = false) {
+        store.refresh()
+        if created {
+            session.isPersisted = true
+            if let owner = session.pendingTaskID {
+                session.pendingTaskID = nil
+                taskNoteCreated?(owner, session.noteID)
+            }
+            remember(session.noteID)
+        }
+        session.baseRevisionID = revisionID
+        session.baseContent = store.note(withID: session.noteID)?.content
+        session.baseTags = store.note(withID: session.noteID)?.tags ?? session.baseTags
+        let stored = store.loadDocument(noteID: session.noteID)?.content.document
+        if session.engine.matchesContentIgnoringFolds(stored), session.engine.tags == session.baseTags {
+            session.state = .clean
+            session.durabilityTask?.cancel(); session.durabilityTask = nil
+            clearRecoveryCopy(for: session)
+        } else {
+            session.state = .dirty
+            scheduleSave(session)
+            scheduleDurabilityDeadline(session)
+        }
+    }
+
+    /// Makes the session hold exactly what is stored (a workspace operation
+    /// starts from a saved note): saves pending writing, creating a task
+    /// draft's note when it has writing. True when the note exists and is
+    /// clean.
+    func settleForWorkspaceOperation(_ session: NoteSession) -> Bool {
+        session.engine.refreshCompositionActivity()
+        if NoteSessionPolicy.hasPendingWork(session.state) || !session.isPersisted { _ = save(session) }
+        return session.isPersisted && session.state == .clean && !session.isImporting
+    }
+
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
     var libraryQueryAcrossTaskPage: String?

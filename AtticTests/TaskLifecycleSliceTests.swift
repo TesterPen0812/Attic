@@ -225,4 +225,173 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(notes.store.restoreDeleted(noteID: oldID), "an ordinary note restores as one")
         XCTAssertTrue(try rows(oldID).allSatisfy { $0.deletedAt == nil && $0.taskID == nil })
     }
+
+    // MARK: Make Subtask ⌥⌘S (§ 2.3.3)
+
+    private func attributed(_ paragraphs: [String]) -> NSMutableAttributedString {
+        NSMutableAttributedString(string: paragraphs.joined(separator: "\n"))
+    }
+
+    func testTheSelectionTableForMakeSubtask() {
+        let text = attributed(["Alpha line", "", "Bravo line", "Charlie line"])
+        // A caret: the caret's whole paragraph.
+        var analysis = TaskNoteSubtaskSelection.analyse(text, selection: NSRange(location: 3, length: 0))
+        XCTAssertEqual(analysis.pieces.map(\.title), ["Alpha line"])
+        XCTAssertEqual(analysis.candidate(from: text).text.string, "\nBravo line\nCharlie line")
+        XCTAssertEqual(analysis.candidate(from: text).caret, 0, "the caret stays where the text was")
+        // Part of one paragraph: the selected text only; the rest stays.
+        analysis = TaskNoteSubtaskSelection.analyse(text, selection: NSRange(location: 6, length: 4))
+        XCTAssertEqual(analysis.pieces.map(\.title), ["line"])
+        XCTAssertEqual(analysis.candidate(from: text).text.string, "Alpha \n\nBravo line\nCharlie line")
+        // Several paragraphs: partial ends give their part; an empty
+        // paragraph wholly selected goes; one subtask per paragraph, in order.
+        analysis = TaskNoteSubtaskSelection.analyse(text, selection: NSRange(location: 6, length: 22))
+        XCTAssertEqual(analysis.pieces.map(\.title), ["line", "Bravo line", "Charl"])
+        XCTAssertEqual(analysis.candidate(from: text).text.string, "Alpha \nie line")
+        // The last paragraph takes the break before it: no empty line left.
+        analysis = TaskNoteSubtaskSelection.analyse(text, selection: NSRange(location: text.length - 2, length: 0))
+        XCTAssertEqual(analysis.pieces.map(\.title), ["Charlie line"])
+        XCTAssertEqual(analysis.candidate(from: text).text.string, "Alpha line\n\nBravo line")
+        // A caret on an empty paragraph makes nothing.
+        XCTAssertTrue(TaskNoteSubtaskSelection.analyse(text, selection: NSRange(location: 11, length: 0)).isEmpty)
+    }
+
+    func testANoteCheckboxGivesItsTextAndACheckedBoxACompletedSubtask() {
+        let text = NSMutableAttributedString()
+        text.append(NSAttributedString(attachment: NoteChecklistAttachment(isChecked: true)))
+        text.append(NSAttributedString(string: "Shipped it\n"))
+        text.append(NSAttributedString(attachment: NoteChecklistAttachment(isChecked: false)))
+        text.append(NSAttributedString(string: "Still to do"))
+        let analysis = TaskNoteSubtaskSelection.analyse(text, selection: NSRange(location: 0, length: text.length))
+        XCTAssertEqual(analysis.pieces.map(\.title), ["Shipped it", "Still to do"])
+        XCTAssertEqual(analysis.pieces.map(\.isDone), [true, false])
+        XCTAssertEqual(analysis.candidate(from: text).text.length, 0, "both lines leave the writing")
+    }
+
+    func testLinesWithLinksOrStylesAreAskedAboutAndKeptWhenMade() {
+        let text = attributed(["Plain line", "Styled line"])
+        text.addAttribute(.noteMark(.bold), value: true, range: NSRange(location: 11, length: 6))
+        let analysis = TaskNoteSubtaskSelection.analyse(text, selection: NSRange(location: 0, length: text.length))
+        XCTAssertEqual(analysis.pieces.map(\.title), ["Plain line", "Styled line"])
+        XCTAssertEqual(analysis.richCount, 1, "the pop-over counts 1 line")
+        XCTAssertEqual(analysis.candidate(from: text).text.string, "Styled line", "Keep Original: the styled line stays unchanged")
+        let linked = attributed(["See the doc"])
+        linked.addAttribute(.noteMark(.link), value: "https://example.com", range: NSRange(location: 4, length: 3))
+        XCTAssertEqual(TaskNoteSubtaskSelection.analyse(linked, selection: NSRange(location: 0, length: 0)).richCount, 1)
+    }
+
+    private func makeSubtaskFixture() throws -> (UUID, TaskNotePresenter, NoteSession) {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        return (id, presenter, session)
+    }
+
+    func testMakeSubtaskMovesTheCaretsParagraphIntoTheBlockInOneCommitAndUndoRestoresTheExactSource() async throws {
+        let (id, presenter, session) = try makeSubtaskFixture()
+        let textView = presenter.host.textView
+        let before = NSAttributedString(attributedString: textView.textStorage!)
+        XCTAssertEqual(before.string, "Everything that has to be true before 1.0 goes out.\nSam owns the pricing page; I take the checklist.")
+        textView.setSelectedRange(NSRange(location: 60, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        let result = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        guard case let .made(entryID, count, kept) = result else { return XCTFail("\(result)") }
+        XCTAssertEqual(count, 1); XCTAssertEqual(kept, 0)
+        let subtasks = tasks.subtasks(of: id)
+        XCTAssertEqual(subtasks.map(\.title), ["Write release notes", "Sam owns the pricing page; I take the checklist.", "Freeze strings"],
+                       "a new open subtask joins the end of the open group")
+        XCTAssertEqual(textView.string, "Everything that has to be true before 1.0 goes out.")
+        XCTAssertEqual(textView.selectedRange().location, textView.string.utf16.count, "the caret stays where the text was")
+        let stored = try storedDocument(session.noteID)
+        XCTAssertEqual(stored.blocks.dropFirst().map(\.text), ["Everything that has to be true before 1.0 goes out."],
+                       "the writing changed in the same commit")
+        XCTAssertEqual(stored.blocks.first?.text, "Finalize launch checklist", "block 0 stays the compatibility title")
+        XCTAssertEqual(session.state, .clean, "the session took the commit's revision as its base")
+        XCTAssertEqual(presenter.page.history.undoName, "Make Subtask")
+        XCTAssertEqual(presenter.model.rows.count, 3)
+        // Undo: the exact attributed source, in place, with its selection.
+        let undone = await presenter.page.history.undoLatest(stepID: entryID)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertTrue(textView.textStorage!.isEqual(to: before), "the exact attributed source returns")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 60, length: 0))
+        XCTAssertEqual(tasks.subtasks(of: id).count, 2, "the subtask leaves (to Recently Deleted)")
+        XCTAssertEqual(try storedDocument(session.noteID).blocks.dropFirst().count, 2)
+        XCTAssertEqual(session.state, .clean)
+        // Redo makes it again, the same record.
+        let redone = await presenter.page.history.replay(redo: true)
+        XCTAssertEqual(redone, .applied)
+        XCTAssertEqual(tasks.subtasks(of: id).count, 3)
+        XCTAssertEqual(textView.string, "Everything that has to be true before 1.0 goes out.")
+    }
+
+    func testMakeSubtaskOfACheckedBoxMakesACompletedSubtask() async throws {
+        let (id, presenter, session) = try makeSubtaskFixture()
+        let textView = presenter.host.textView
+        // A checked note checkbox at the end of the writing.
+        let storage = try XCTUnwrap(textView.textStorage)
+        let box = NSMutableAttributedString(string: "\n", attributes: storage.attributes(at: 0, effectiveRange: nil))
+        box.append(NSAttributedString(attachment: NoteChecklistAttachment(isChecked: true)))
+        box.append(NSAttributedString(string: "Book the venue", attributes: storage.attributes(at: 0, effectiveRange: nil)))
+        textView.setSelectedRange(NSRange(location: storage.length, length: 0))
+        textView.insertText(box, replacementRange: NSRange(location: storage.length, length: 0))
+        XCTAssertTrue(notes.save(session))
+        textView.setSelectedRange(NSRange(location: storage.length - 2, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        XCTAssertEqual(analysis.pieces.map(\.isDone), [true])
+        let result = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        guard case .made = result else { return XCTFail("\(result)") }
+        let made = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title == "Book the venue" })
+        XCTAssertEqual(made.status, .done, "a checked box gives a completed subtask")
+        XCTAssertFalse(textView.string.contains("Book the venue"))
+    }
+
+    func testMakeSubtaskRefusesInADeletedTaskAndOutsideATasksNote() async throws {
+        let (id, presenter, _) = try makeSubtaskFixture()
+        XCTAssertNil(presenter.makeSubtaskUnavailableReason(tasks: tasks))
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertEqual(presenter.makeSubtaskUnavailableReason(tasks: tasks), "The task is deleted")
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        let result = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        XCTAssertEqual(result, .refused("The task is deleted"))
+        XCTAssertEqual(presenter.host.textView.string.components(separatedBy: "\n").count, 2, "nothing moved")
+    }
+
+    /// Failure injection (S1): a refused save leaves the writing, the
+    /// subtasks, the stored note and the history untouched.
+    func testAFailedMakeSubtaskSaveChangesNothing() async throws {
+        let (id, presenter, session) = try makeSubtaskFixture()
+        let textView = presenter.host.textView
+        let before = NSAttributedString(attributedString: textView.textStorage!)
+        let storedBefore = try storedDocument(session.noteID)
+        let historyBefore = presenter.page.history.undoName
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        let result = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        coordinator.save = { try $0.save() }
+        XCTAssertEqual(result, .refused("Couldn't make the subtask"))
+        XCTAssertTrue(textView.textStorage!.isEqual(to: before), "the writing is untouched")
+        XCTAssertEqual(tasks.subtasks(of: id).count, 2, "no subtask was made")
+        XCTAssertEqual(try storedDocument(session.noteID), storedBefore, "the stored note is untouched")
+        XCTAssertEqual(presenter.page.history.undoName, historyBefore, "no history entry")
+        XCTAssertEqual(session.state, .clean)
+        // The same command then works.
+        let retried = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        guard case .made = retried else { return XCTFail("\(retried)") }
+    }
+
+    func testUndoOfMakeSubtaskRefusesOnceTheSubtaskWasRenamed() async throws {
+        let (id, presenter, _) = try makeSubtaskFixture()
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        guard case let .made(entryID, _, _) = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes) else { return XCTFail() }
+        let made = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title.hasPrefix("Everything") })
+        // Renamed elsewhere (not through this page's history).
+        XCTAssertTrue(tasks.rename(made, to: "Renamed"))
+        let undone = await presenter.page.history.undoLatest(stepID: entryID)
+        XCTAssertEqual(undone, .failed, "Can't undo: the subtask changed since")
+        XCTAssertEqual(tasks.subtasks(of: id).first { $0.id == made.id }?.title, "Renamed", "nothing changed")
+        XCTAssertFalse(presenter.host.textView.string.hasPrefix("Everything"))
+    }
 }

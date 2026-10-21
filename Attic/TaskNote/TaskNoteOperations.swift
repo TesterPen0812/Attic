@@ -1,0 +1,380 @@
+import AppKit
+import Foundation
+import SwiftData
+
+/// What Make Subtask (⌥⌘S, UX plan § 2.3.3) takes from the writing of a
+/// task's note. Pure: built from the editor's text and selection, it never
+/// edits anything.
+///
+/// | Selection | Becomes |
+/// | --- | --- |
+/// | a caret | the caret's whole paragraph, one subtask |
+/// | part of one paragraph | the selected text; the rest stays; a paragraph left empty goes |
+/// | several paragraphs | one subtask per non-empty paragraph touched, in order; partial ends give their selected part; empty paragraphs are skipped (removed when wholly selected) |
+/// | a note checkbox | its text; a checked box gives a completed subtask |
+///
+/// Text that holds something a subtask cannot carry (a link, an inline
+/// style or highlight, an attachment: an image, a file, a date, a card) is
+/// "rich": it still makes a subtask (plain text), and its line stays in the
+/// writing unchanged (Create Subtask and Keep Original).
+struct TaskNoteSubtaskSelection: Equatable {
+    struct Piece: Equatable {
+        let title: String
+        let isDone: Bool
+        let isRich: Bool
+        /// What leaves the writing (nil: the line stays, Keep Original).
+        let removal: NSRange?
+    }
+
+    let pieces: [Piece]
+    /// Wholly selected empty paragraphs, removed with the rest.
+    let emptyRemovals: [NSRange]
+    /// The caret's place before the command (Undo puts it back).
+    let selection: NSRange
+
+    var isEmpty: Bool { pieces.isEmpty }
+    var richCount: Int { pieces.filter(\.isRich).count }
+    var hasOpenSubtask: Bool { pieces.contains { !$0.isDone } }
+
+    static func analyse(_ text: NSAttributedString, selection: NSRange) -> TaskNoteSubtaskSelection {
+        let string = text.string as NSString
+        let length = string.length
+        let selected = NSRange(location: min(max(0, selection.location), length),
+                               length: max(0, min(selection.length, length - min(max(0, selection.location), length))))
+        let caret = selected.length == 0
+        var paragraphs: [NSRange] = []
+        if caret {
+            paragraphs = [string.paragraphRange(for: NSRange(location: selected.location, length: 0))]
+        } else {
+            var location = selected.location
+            let end = NSMaxRange(selected)
+            repeat {
+                let paragraph = string.paragraphRange(for: NSRange(location: location, length: 0))
+                paragraphs.append(paragraph)
+                guard NSMaxRange(paragraph) > location else { break }
+                location = NSMaxRange(paragraph)
+            } while location < end && location < length
+        }
+        var pieces: [Piece] = []
+        var empties: [NSRange] = []
+        for paragraph in paragraphs {
+            var content = paragraph
+            if content.length > 0, Self.isBreak(string.character(at: NSMaxRange(content) - 1)) { content.length -= 1 }
+            let box = content.length > 0 ? text.attribute(.attachment, at: content.location, effectiveRange: nil) as? NoteChecklistAttachment : nil
+            let bodyStart = content.location + (box == nil ? 0 : 1)
+            let body = NSRange(location: bodyStart, length: NSMaxRange(content) - bodyStart)
+            let take: NSRange
+            if caret {
+                take = body
+            } else {
+                let overlap = NSIntersectionRange(body, selected)
+                guard overlap.length > 0 else {
+                    // None of its text is selected: an empty paragraph
+                    // wholly inside the selection goes, any other stays.
+                    if box == nil, paragraph.length > 0, Self.plainTitle(string.substring(with: body)).isEmpty,
+                       NSIntersectionRange(paragraph, selected).length == paragraph.length {
+                        empties.append(Self.paragraphRemoval(paragraph, in: string))
+                    }
+                    continue
+                }
+                take = overlap
+            }
+            let title = Self.plainTitle(string.substring(with: take))
+            let rest = (string.substring(with: body) as NSString)
+                .replacingCharacters(in: NSRange(location: take.location - body.location, length: take.length), with: "")
+            let whole = caret || Self.plainTitle(rest).isEmpty
+            if title.isEmpty {
+                // Only whitespace selected: a paragraph left empty goes.
+                if !caret, whole, box == nil, paragraph.length > 0 { empties.append(Self.paragraphRemoval(paragraph, in: string)) }
+                continue
+            }
+            let rich = Self.isRich(text, in: take)
+            let removal = rich ? nil : (whole ? Self.paragraphRemoval(paragraph, in: string) : take)
+            pieces.append(Piece(title: title, isDone: box?.isChecked ?? false, isRich: rich, removal: removal))
+        }
+        return TaskNoteSubtaskSelection(pieces: pieces, emptyRemovals: empties, selection: selected)
+    }
+
+    /// The writing once the plain lines (and wholly selected empty ones)
+    /// have left, and where the caret goes: where the text was.
+    func candidate(from text: NSAttributedString) -> (text: NSAttributedString, caret: Int) {
+        var ranges = (pieces.compactMap(\.removal) + emptyRemovals).sorted { $0.location < $1.location }
+        guard !ranges.isEmpty else { return (text, selection.location) }
+        // Merge touching or overlapping removals (a last paragraph removes
+        // the break before it).
+        var merged: [NSRange] = []
+        for range in ranges {
+            if let last = merged.last, range.location <= NSMaxRange(last) {
+                merged[merged.count - 1] = NSUnionRange(last, range)
+            } else {
+                merged.append(range)
+            }
+        }
+        ranges = merged
+        let result = NSMutableAttributedString(attributedString: text)
+        for range in ranges.reversed() where NSMaxRange(range) <= result.length {
+            result.deleteCharacters(in: range)
+        }
+        let caret = min(ranges[0].location, result.length)
+        return (result, caret)
+    }
+
+    private static func isBreak(_ character: unichar) -> Bool {
+        character == 0x0A || character == 0x0D || character == 0x2029
+    }
+
+    /// The paragraph and its break; the last paragraph takes the break
+    /// before it instead, so no empty line is left behind.
+    private static func paragraphRemoval(_ paragraph: NSRange, in string: NSString) -> NSRange {
+        if paragraph.length > 0, isBreak(string.character(at: NSMaxRange(paragraph) - 1)) { return paragraph }
+        if paragraph.location > 0 { return NSRange(location: paragraph.location - 1, length: paragraph.length + 1) }
+        return paragraph
+    }
+
+    /// List markers and heading styles are paragraph attributes, so they
+    /// are already gone; attachment characters and surrounding whitespace
+    /// go too. Shorthand is never parsed.
+    static func plainTitle(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "\u{FFFC}", with: "")
+            .replacingOccurrences(of: "\u{2028}", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isRich(_ text: NSAttributedString, in range: NSRange) -> Bool {
+        guard range.length > 0 else { return false }
+        var rich = false
+        text.enumerateAttributes(in: range) { attributes, _, stop in
+            for key in attributes.keys where key == .attachment || key == .link
+                || key.rawValue.hasPrefix("com.taha.attic.note.mark.") {
+                rich = true
+                stop.pointee = true
+                return
+            }
+        }
+        return rich
+    }
+}
+
+/// The page's workspace operations (S1, S11): each is one gated, journaled
+/// commit through the operation coordinator, recorded as one entry in the
+/// workspace's history, whose Undo and Redo replay through the same gate.
+extension TaskNotePresenter {
+    /// What happened (the toast and the slot read it).
+    enum OperationResult: Equatable {
+        case made(entryID: UUID, count: Int, kept: Int)
+        case madeCheckbox(entryID: UUID, recovery: String?)
+        case refused(String)
+    }
+
+    /// Why Make Subtask is unavailable here, or nil (§ 6: the disabled
+    /// command consumes ⌥⌘S and says why).
+    func makeSubtaskUnavailableReason(tasks: TaskStore) -> String? {
+        guard let session, lease != nil else { return String(localized: "Subtasks are made in a task's note") }
+        if tasks.task(withID: taskID) == nil { return String(localized: "The task is deleted") }
+        if session.isReadOnly { return String(localized: "This note is read-only") }
+        return nil
+    }
+
+    func subtaskSelection() -> TaskNoteSubtaskSelection? {
+        guard let session, let textView = session.engine.textView else { return nil }
+        return TaskNoteSubtaskSelection.analyse(session.engine.textStorage, selection: textView.selectedRange())
+    }
+
+    /// Make Subtask (§ 2.3.3): the subtasks and the writing change in one
+    /// commit; the toast's and ⌘Z's Undo restore the exact source.
+    func makeSubtasks(_ analysis: TaskNoteSubtaskSelection, tasks: TaskStore,
+                      notes: NotesPageController) async -> OperationResult {
+        if let reason = makeSubtaskUnavailableReason(tasks: tasks) { return .refused(reason) }
+        guard !analysis.isEmpty, let session else { return .refused(String(localized: "There is no text to make a subtask from")) }
+        let engine = session.engine
+        guard engine.textView?.hasMarkedText() != true, engine.activity == .idle else {
+            return .refused(String(localized: "Finish typing first"))
+        }
+        let source = NSAttributedString(attributedString: engine.textStorage)
+        guard notes.settleForWorkspaceOperation(session), session.engine === engine,
+              source.isEqual(to: engine.textStorage) else {
+            return .refused(String(localized: "Couldn't save the note first"))
+        }
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else {
+            return .refused(String(localized: "Couldn't make the subtask"))
+        }
+        let (candidate, caret) = analysis.candidate(from: source)
+        let drafts = analysis.pieces.map { TaskDraft(title: $0.title, status: $0.isDone ? .done : .todo, parentID: taskID) }
+        let ids = drafts.map { _ in UUID() }
+        let titles = Dictionary(uniqueKeysWithValues: zip(ids, drafts.map(\.title)))
+        let before = analysis.selection
+        let edit = TaskNoteTextEdit(engine: engine, session: session, notes: notes, tasks: tasks,
+                                    coordinator: coordinator, history: page.history, noteID: session.noteID,
+                                    parentID: taskID, selectionBefore: before, caretAfter: caret)
+        let entry = UUID()
+        let outcome = await edit.perform(name: String(localized: "Make Subtask"), candidate: candidate, entryID: entry,
+            forwardWrites: Set(ids.map { WorkspaceOwner(entity: .task, id: $0) }),
+            forward: { commit in
+                _ = try TaskStore.stageCreation(in: commit, drafts: drafts, ids: ids, timestamp: Date())
+            },
+            inverse: { redo in
+                // Undo removes exactly the subtasks it made, as made; a
+                // subtask renamed, moved or deleted since refuses (S11).
+                try TaskNoteTextEdit.TaskStep(writes: Set(ids.map { WorkspaceOwner(entity: .task, id: $0) }),
+                    check: { context in
+                        for id in ids {
+                            let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+                            guard !rows.isEmpty, rows.allSatisfy({ ($0.deletedAt != nil) == redo && $0.parentID == edit.parentID
+                                && $0.title == titles[id] }) else { throw WorkspaceFoundationError.conflict }
+                        }
+                    },
+                    preservations: redo ? [:] : Dictionary(uniqueKeysWithValues: ids.map { ($0, UUID()) }),
+                    stage: { commit, preservations in
+                        if redo {
+                            try TaskStore.stageRestoreDeleted(in: commit, taskIDs: ids, timestamp: Date())
+                        } else {
+                            for id in ids { try TaskStore.stageSoftDeletion(in: commit, taskID: id, preservationID: preservations[id]!, timestamp: Date()) }
+                        }
+                    })
+            })
+        switch outcome {
+        case .committed, .publicationPending:
+            if model.isFolded { model.setFolded(false) }
+            return .made(entryID: entry, count: ids.count, kept: analysis.richCount)
+        case .notCommitted, .conflict, .unknown:
+            return .refused(String(localized: "Couldn't make the subtask"))
+        }
+    }
+}
+
+/// One workspace operation that changes a task's note's writing together
+/// with task rows (S1, S11). The forward commit and its replays share the
+/// write gate, the journal, the session's adoption of the new revision and
+/// the caret rules.
+@MainActor
+struct TaskNoteTextEdit {
+    /// The task half of a replay: what it guards, writes and stages.
+    struct TaskStep {
+        let writes: Set<WorkspaceOwner>
+        let check: (ModelContext) throws -> Void
+        /// A soft deletion's new preservation records, by task.
+        let preservations: [UUID: UUID]
+        let stage: (ModelContext, [UUID: UUID]) throws -> Void
+    }
+
+    let engine: NoteEditorEngine
+    let session: NoteSession
+    let notes: NotesPageController
+    let tasks: TaskStore
+    let coordinator: WorkspaceOperationCoordinator
+    let history: WorkspaceHistory
+    let noteID: UUID
+    let parentID: UUID
+    let selectionBefore: NSRange
+    let caretAfter: Int
+    /// The note does not exist yet: the forward commit creates it (and its
+    /// association) from the page's never-saved draft (§ 2.1).
+    var createsNote = false
+
+    func perform(name: String, candidate: NSAttributedString, entryID: UUID,
+                 forwardWrites: Set<WorkspaceOwner>,
+                 forward: @escaping (ModelContext) throws -> Void,
+                 inverse: @escaping (_ redo: Bool) throws -> TaskStep) async -> WorkspaceOperationCoordinator.Outcome {
+        let adapter = engine.history
+        let revision = UUID()
+        let associationID = UUID()
+        var group: WorkspaceHistory.TextGroup?
+        let edit = self
+        return await history.performCommand(using: coordinator) {
+            guard let command = adapter.prepareCommand(candidate, name: name) else { throw WorkspaceFoundationError.conflict }
+            group = WorkspaceHistory.TextGroup(adapter: adapter, payload: command.payload)
+            let document = edit.engine.document(forCommand: command.candidate)
+            let prepared = try PreparedNoteDocument(document)
+            let context = edit.coordinator.freshContext()
+            let id = edit.noteID
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+            guard edit.createsNote ? rows.isEmpty : !rows.isEmpty else { throw WorkspaceFoundationError.conflict }
+            let versions = Dictionary(uniqueKeysWithValues: rows.map { ($0.persistentModelID, UUID()) })
+            var writes = forwardWrites.union([.init(entity: .note, id: id)]).union(versions.values.map { .init(entity: .version, id: $0) })
+            if edit.createsNote { writes.formUnion([.init(entity: .association, id: associationID), .init(entity: .task, id: edit.parentID)]) }
+            let envelope = try edit.coordinator.newEnvelope(intent: name, reads: edit.coordinator.capture(writes.union([.init(entity: .task, id: edit.parentID)])),
+                writes: writes, afterDocuments: [id: prepared.content],
+                historyEffect: WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: edit.history.id, entryID: entryID)))
+            return .init(entryID: entryID, envelope: envelope, sessionValid: { adapter.canInstallCommand(command) }, stage: { commit in
+                try forward(commit)
+                if edit.createsNote {
+                    try edit.stageNoteCreation(in: commit, prepared: prepared, document: document, revision: revision, associationID: associationID)
+                } else {
+                    try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared,
+                        revisionID: revision, versionIDs: versions, timestamp: Date())
+                }
+            }, record: { operation, entry in
+                guard let group else { return }
+                edit.record(operation: operation, entry: entry, name: name, group: group, inverse: inverse)
+            }, publication: .init(steps: [{ _ in
+                guard adapter.installCommand(command) else { throw WorkspaceFoundationError.conflict }
+                edit.engine.textView?.setSelectedRange(NSRange(location: min(edit.caretAfter, edit.engine.textStorage.length), length: 0))
+                edit.notes.adoptWorkspaceCommit(edit.session, revisionID: revision, created: edit.createsNote)
+                edit.tasks.refresh()
+            }]))
+        }
+    }
+
+    /// A new own note from the page's draft, with its association, in the
+    /// operation's one save (the store's lazy creation, staged).
+    private func stageNoteCreation(in commit: ModelContext, prepared: PreparedNoteDocument, document: NoteDocument,
+                                   revision: UUID, associationID: UUID) throws {
+        guard let generation = NoteStore.taskOwnerGeneration(parentID, in: commit) else { throw WorkspaceFoundationError.conflict }
+        let now = Date()
+        let note = NoteItem(id: noteID, createdAt: now, updatedAt: now)
+        NoteStore.stageDocumentContent(prepared, format: document.format, on: [note], timestamp: now, revision: 0, revisionID: revision)
+        note.taskID = parentID
+        commit.insert(note)
+        let association = TaskNoteAssociation(id: associationID, taskID: parentID, noteID: noteID)
+        association.taskGeneration = generation
+        association.noteGeneration = note.associationGeneration
+        commit.insert(association)
+    }
+
+    private func record(operation: UUID, entry: UUID, name: String, group: WorkspaceHistory.TextGroup,
+                        inverse: @escaping (Bool) throws -> TaskStep) {
+        let edit = self
+        let adapter = engine.history
+        history.recordOperation(id: operation, entryID: entry, name: name, coordinator: coordinator, textGroup: group) { redo, effect in
+            let step = try inverse(redo)
+            let context = edit.coordinator.freshContext()
+            try step.check(context)
+            guard let text = adapter.prepareReplay(redo ? group.payloads : group.payloads.reversed().map { $0 }) else {
+                throw WorkspaceFoundationError.conflict
+            }
+            let document = text.document ?? edit.engine.document(forCommand: text.candidate)
+            let prepared = try PreparedNoteDocument(document)
+            let id = edit.noteID
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+            guard !rows.isEmpty else { throw WorkspaceFoundationError.conflict }
+            let versions = Dictionary(uniqueKeysWithValues: rows.map { ($0.persistentModelID, UUID()) })
+            var writes = step.writes.union([.init(entity: .note, id: id)]).union(versions.values.map { .init(entity: .version, id: $0) })
+            writes.formUnion(step.preservations.values.map { .init(entity: .preservation, id: $0) })
+            if redo {
+                let restored = Set(step.writes.filter { $0.entity == .task }.map(\.id))
+                writes.formUnion(try context.fetch(FetchDescriptor<TaskDeletionPreservation>())
+                    .filter { restored.contains($0.rootID) && $0.retiredAt == nil }
+                    .map { .init(entity: .preservation, id: $0.id) })
+            }
+            let envelope = try edit.coordinator.newEnvelope(intent: "Replay " + name,
+                reads: edit.coordinator.capture(writes.union([.init(entity: .task, id: edit.parentID)])), writes: writes,
+                afterDocuments: [id: prepared.content], historyEffect: WorkspaceModelFields.encode(effect), replayOf: operation)
+            let revision = UUID()
+            return .init(envelope: envelope, text: (adapter, text), textDocument: (id, prepared.content), stage: { commit in
+                try step.stage(commit, step.preservations)
+                try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared,
+                    revisionID: revision, versionIDs: versions, timestamp: Date())
+            }, publication: .init(steps: [{ _ in
+                // Undo puts the selection back as it was; Redo leaves the
+                // caret where the text was.
+                let length = edit.engine.textStorage.length
+                let selection = redo ? NSRange(location: min(edit.caretAfter, length), length: 0)
+                    : NSRange(location: min(edit.selectionBefore.location, length),
+                              length: max(0, min(edit.selectionBefore.length, length - min(edit.selectionBefore.location, length))))
+                edit.engine.textView?.setSelectedRange(selection)
+                edit.notes.adoptWorkspaceCommit(edit.session, revisionID: revision)
+                edit.tasks.refresh()
+            }]))
+        }
+    }
+}

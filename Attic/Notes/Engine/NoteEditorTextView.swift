@@ -896,7 +896,15 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         return body()
     }
 
+    /// A task's page (Phase 3): its writing's own keys (⌥⌘S Make Subtask),
+    /// asked before the editor's. Nil in ordinary notes.
+    var workspaceShortcut: ((NSEvent) -> Bool)?
+    /// A task's page: commands added at the top of the writing's context
+    /// menu (Make Subtask). Nil in ordinary notes.
+    var workspaceMenuItems: (() -> [NSMenuItem])?
+
     override func keyDown(with event: NSEvent) {
+        if !hasMarkedText(), workspaceShortcut?(event) == true { return }
         handleHiddenForTyping = true
         hideBlockHandle()
         if marquee?.isEmpty == false {
@@ -1726,6 +1734,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         let format = NSMenuItem(title: String(localized: "Format"), action: nil, keyEquivalent: "")
         format.submenu = formatMenu()
         menu.insertItem(format, at: 0)
+        // A task's page puts its own commands first (Make Subtask, § 6).
+        if let extra = workspaceMenuItems?(), !extra.isEmpty {
+            menu.insertItem(.separator(), at: 0)
+            for item in extra.reversed() { menu.insertItem(item, at: 0) }
+        }
         return menu
     }
 
