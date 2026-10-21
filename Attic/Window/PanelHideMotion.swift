@@ -132,7 +132,7 @@ enum PanelHideMotionTuning {
     /// How long a snapshot taken ahead of a hide, reveal or swipe stays good.
     static let geniePreparedLifetime: CFTimeInterval = 1.5
     /// A timed hide or reveal prepares its snapshot this long ahead.
-    static let geniePrepareLead: TimeInterval = 0.12
+    static let geniePrepareLead: TimeInterval = 0.25
 
     // Swoop
     /// The size the panel ends at (Slide's collapsed scale is 0.015).
@@ -655,6 +655,19 @@ final class PanelGenieView: NSView {
 
     private static let imageContext = CIContext(options: [.cacheIntermediates: false])
 
+    /// Core Image's first blur costs a further ~20 ms (Air): pay it when
+    /// Genie is chosen, off the main thread, not in a flight's snapshot.
+    static func prewarmImageWork() {
+        DispatchQueue.global(qos: .utility).async {
+            let image = CIImage(color: .gray).cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64))
+            let mask = CIImage(color: .white).cropped(to: image.extent)
+            for blurred in [image.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 8]),
+                            image.applyingFilter("CIMaskedVariableBlur", parameters: ["inputMask": mask, kCIInputRadiusKey: 2])] {
+                _ = imageContext.createCGImage(blurred, from: image.extent)
+            }
+        }
+    }
+
     /// Takes the snapshot the grid draws, at the window's backing scale (so
     /// text stays crisp in flight). The panel's material stays live under
     /// the mesh, so the snapshot leaves it out.
@@ -712,10 +725,18 @@ final class PanelGenieView: NSView {
         if let split, !(scan.pills.isEmpty && scan.bands.isEmpty) {
             // The content (with the surface under it), then its blurs and
             // the controls' glass, then the controls.
+            var stage = CACurrentMediaTime()
+            func lap(_ name: String) {
+                PanelHideMotionTrace.note(name, (CACurrentMediaTime() - stage) * 1000)
+                stage = CACurrentMediaTime()
+            }
             let content = render(hiding: split.aboveContent)
+            lap("r_content")
             let controls = render(hiding: split.belowControls)
+            lap("r_controls")
             if let content {
                 let made = Self.glassLook(content: content, scan: scan, scale: scale, dark: dark)
+                lap("glass_look")
                 context.draw(made ?? content, in: view.bounds)
             }
             if let controls { context.draw(controls, in: view.bounds) }
@@ -799,45 +820,53 @@ final class PanelGenieView: NSView {
     }
 
     /// The content with the edges' variable blurs and the controls' glass
-    /// made from it (y up, in points of the snapshot's view).
+    /// made from it (y up). Core Image works on those regions only, so a
+    /// snapshot costs a few milliseconds more, not a full-size pass.
     private static func glassLook(content: CGImage, scan: GlassScan, scale: CGFloat, dark: Bool) -> CGImage? {
-        var image = CIImage(cgImage: content)
-        let extent = image.extent
+        let space = content.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let context = bitmap(width: content.width, height: content.height, space: space) else { return nil }
+        let full = CGRect(x: 0, y: 0, width: content.width, height: content.height)
         func pixels(_ rect: CGRect) -> CGRect {
             CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
+                .integral.intersection(full)
         }
+        context.draw(content, in: full)
         // The edges' variable blurs: strongest at the panel's edge.
+        let source = CIImage(cgImage: content).clampedToExtent()
         for band in scan.bands where !band.strengths.isEmpty {
             let rect = pixels(band.clip.intersection(band.rect))
             guard rect.width > 0, rect.height > 0 else { continue }
             let rows = band.strengths.count
             let step = band.rect.height * scale / CGFloat(rows)
-            var mask = CIImage(color: .black).cropped(to: extent)
+            var mask = CIImage(color: .black).cropped(to: rect)
             for (row, strength) in band.strengths.enumerated() {
                 let strip = CGRect(x: band.rect.minX * scale, y: band.rect.maxY * scale - CGFloat(row + 1) * step,
                                    width: band.rect.width * scale, height: step + 1).intersection(rect)
+                guard !strip.isEmpty else { continue }
                 mask = CIImage(color: CIColor(red: strength, green: strength, blue: strength)).cropped(to: strip)
                     .composited(over: mask)
             }
-            // Where the mask is black the blur's radius is 0: the rest is unchanged.
-            image = image.clampedToExtent().applyingFilter("CIMaskedVariableBlur", parameters: [
+            let blurred = source.applyingFilter("CIMaskedVariableBlur", parameters: [
                 "inputMask": mask, kCIInputRadiusKey: band.radius * scale
-            ]).cropped(to: extent)
+            ])
+            guard let patch = imageContext.createCGImage(blurred, from: rect, format: .BGRA8, colorSpace: space) else { continue }
+            context.setBlendMode(.copy)
+            context.draw(patch, in: rect)
+            context.setBlendMode(.normal)
         }
-        let space = content.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
-        guard let blurred = imageContext.createCGImage(image, from: extent, format: .BGRA8, colorSpace: space) else { return nil }
-        guard !scan.pills.isEmpty else { return blurred }
+        guard !scan.pills.isEmpty else { return context.makeImage() }
         // Each control's glass, in its capsule: what is under it, blurred
         // again, under the glass's tint, with a hairline rim. The live
         // material shows through it as it does at rest.
-        let under = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [
-            kCIInputRadiusKey: (dark ? PanelGenieGlassLook.darkBlur : PanelGenieGlassLook.lightBlur) * scale
-        ]).cropped(to: extent)
-        guard let frosted = imageContext.createCGImage(under, from: extent, format: .BGRA8, colorSpace: space),
-              let context = bitmap(width: blurred.width, height: blurred.height, space: space) else { return blurred }
-        let points = CGRect(x: 0, y: 0, width: extent.width / scale, height: extent.height / scale)
+        let radius = (dark ? PanelGenieGlassLook.darkBlur : PanelGenieGlassLook.lightBlur) * scale
+        let area = pixels(scan.pills.reduce(CGRect.null) { $0.union($1.rect.intersection($1.clip)) }.insetBy(dx: -2, dy: -2))
+        guard area.width > 0, area.height > 0, let banded = context.makeImage(),
+              let frosted = imageContext.createCGImage(
+                  CIImage(cgImage: banded).clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius]),
+                  from: area, format: .BGRA8, colorSpace: space
+              ) else { return context.makeImage() }
         context.scaleBy(x: scale, y: scale)
-        context.draw(blurred, in: points)
+        let areaPoints = CGRect(x: area.minX / scale, y: area.minY / scale, width: area.width / scale, height: area.height / scale)
         for pill in scan.pills {
             let capsule = Path(roundedRect: pill.rect, cornerRadius: min(pill.rect.width, pill.rect.height) / 2,
                                style: .circular).cgPath
@@ -846,7 +875,7 @@ final class PanelGenieView: NSView {
             context.addPath(capsule)
             context.clip()
             context.setBlendMode(.copy)
-            context.draw(frosted, in: points)
+            context.draw(frosted, in: areaPoints)
             context.setBlendMode(.normal)
             context.setFillColor(dark ? NSColor(white: 0, alpha: PanelGenieGlassLook.darkTint).cgColor
                 : NSColor(white: 1, alpha: PanelGenieGlassLook.lightTint).cgColor)

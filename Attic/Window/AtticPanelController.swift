@@ -275,7 +275,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             .store(in: &cancellables)
         // Genie's shader compiles off the main thread before its first use.
         settings.$hideAnimation.sink { mode in
-            if mode.usesGenieMesh { PanelGenieRenderer.shared.prewarm() }
+            if mode.usesGenieMesh {
+                PanelGenieRenderer.shared.prewarm()
+                PanelGenieView.prewarmImageWork()
+            }
         }.store(in: &cancellables)
     }
 
