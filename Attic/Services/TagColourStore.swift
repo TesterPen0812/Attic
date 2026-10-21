@@ -166,6 +166,7 @@ final class TagColourStore: ObservableObject {
         if existing.isEmpty {
             context.insert(TagColour(name: name, hue: hue, at: date))
         }
+        WorkspaceLegacyBridge.prepareMutations(existing, in: context)
         for row in existing {
             row.colourKey = hue.rawValue
             row.modifiedAt = date

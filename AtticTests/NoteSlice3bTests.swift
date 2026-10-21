@@ -2315,6 +2315,7 @@ private final class PendingWriteJournal: NoteDraftJournaling {
     private(set) var readStarted = false
     private var readContinuation: CheckedContinuation<Void, Never>?
     private(set) var writeStarted = false
+    private(set) var writeCount = 0
     private var continuation: CheckedContinuation<Void, Never>?
     init(directory: URL) { base = NoteDraftJournal(directory: directory) }
     var requiresAsyncIO: Bool { true }
@@ -2326,6 +2327,7 @@ private final class PendingWriteJournal: NoteDraftJournaling {
     }
     func listDamagedDurably() async throws -> [NoteDamagedRecoveryDetails] { try await base.listDamagedDurably() }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
+        writeCount += 1
         if blockWrites {
             writeStarted = true
             await withCheckedContinuation { continuation = $0 }
@@ -2424,6 +2426,60 @@ extension NoteSlice3bTests {
     }
 
     func testHideAndSwitchAcceptQueuedCheckpointAndQuitWaitsForWrite() async throws {
+        try await pendingCheckpointQuit(warmSessions: 0)
+    }
+
+    func testQuitUsesVerifiedCheckpointWithoutQueueingAnotherWrite() async throws {
+        let root = ownedTemporaryDirectory(prefix: "VerifiedQuit")
+        let journal = PendingWriteJournal(directory: root), loader = FirstSuspendedLoader(try stagedImage())
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60), imageLoader: { await loader.load($0) })
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Pending"), name: "Typing"))
+        controller.importFiles([URL(fileURLWithPath: "/tmp/pending.png")])
+        for _ in 0..<100 {
+            if await loader.started { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await loader.started
+        XCTAssertTrue(started)
+        await controller.waitForRecoveryWork()
+        let before = journal.writeCount
+        let quit = await controller.prepareToLeaveDurably(.quit)
+        XCTAssertTrue(quit)
+        XCTAssertEqual(journal.writeCount, before + 1, "quit verifies once; it must not queue a second preservation write")
+        XCTAssertFalse(try journal.base.entries().isEmpty)
+        await loader.release()
+        await controller.waitForImportWork()
+    }
+
+    func testQuitStillWaitsForRecoveryWhenThereAreNoPendingDrafts() async throws {
+        let journal = PendingWriteJournal(directory: ownedTemporaryDirectory(prefix: "CleanQuit"))
+        journal.blockRead = true
+        let controller = NotesPageController(store: try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore()), journal: journal)
+        controller.start()
+        try await waitFor { journal.readStarted }
+        var result: Bool?
+        let quit = Task { @MainActor in result = await controller.prepareToLeaveDurably(.quit) }
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(result)
+        journal.releaseRead()
+        await quit.value
+        XCTAssertEqual(result, true)
+    }
+
+    func testPendingCheckpointQuitWithAndWithoutClosedWarmTaskNotes() async throws {
+        let iterations = Int(ProcessInfo.processInfo.environment["ATTIC_CHECKPOINT_STRESS_ITERATIONS"] ?? "12") ?? 12
+        for iteration in 0..<iterations {
+            for warmSessions in [0, 8] {
+                try await pendingCheckpointQuit(warmSessions: warmSessions)
+                print("CHECKPOINT_QUIT iteration=\(iteration) warm=\(warmSessions) passed")
+            }
+        }
+    }
+
+    private func pendingCheckpointQuit(warmSessions: Int) async throws {
         let root = ownedTemporaryDirectory(prefix: "M2Leave")
 
         let journal = PendingWriteJournal(directory: root), loader = FirstSuspendedLoader(try stagedImage())
@@ -2431,6 +2487,25 @@ extension NoteSlice3bTests {
         let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60), imageLoader: { await loader.load($0) })
         await controller.startAndWait()
         let session = try XCTUnwrap(controller.active)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        for _ in 0..<warmSessions {
+            let taskID = UUID(), noteID = UUID()
+            guard case .success = store.createDocumentNote(id: noteID, document: .init(blocks: [.text("Warm body")])) else { return XCTFail() }
+            let seed = coordinator.freshContext()
+            seed.insert(TaskItem(id: taskID, title: "Warm head"))
+            let note = try XCTUnwrap(seed.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first)
+            note.taskID = taskID
+            seed.insert(TaskNoteAssociation(taskID: taskID, noteID: noteID))
+            try seed.save()
+            store.refresh()
+            let page = try coordinator.sessions.session(for: .task(taskID), notes: controller)
+            let lease = try page.acquire(surfaceID: UUID())
+            let noteSession = try XCTUnwrap(page.note)
+            let closed = await page.close(lease)
+            XCTAssertTrue(closed)
+            XCTAssertTrue(controller.workspaceSession(noteID: noteID) === noteSession, "closed task notes really stay warm")
+        }
+        XCTAssertTrue(controller.active === session)
         XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Pending"), name: "Typing"))
         journal.blockWrites = true
         controller.importFiles([URL(fileURLWithPath: "/tmp/pending.png")])
@@ -2704,7 +2779,10 @@ extension NoteSlice3bTests {
         gate.shouldFail = true; journal.failNextWrite = true
         await XCTAssertFalseAsync(await controller.prepareToLeaveDurably(.hide), "queued acceptance is not a durable pass after write failure")
         XCTAssertTrue(controller.active === session)
-        XCTAssertNotNil(session.notice)
+        XCTAssertNil(session.notice, "a finished recovery write must not leave a saving notice")
+        if case let .onlyInMemory(reason) = session.state {
+            XCTAssertTrue(reason.contains("Recovery could not be saved"), "the failed recovery must be reported")
+        } else { XCTFail("failed checkpoint must report only-in-memory status") }
         await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.hide), "retry succeeds once checkpoint I/O recovers")
         XCTAssertFalse(try journal.base.entries().isEmpty)
         gate.shouldFail = false
@@ -2909,12 +2987,14 @@ extension NoteSlice3bTests {
         let row = try XCTUnwrap(store.attachmentFamily(items[0].id).first)
         // Payload-only corruption deliberately keeps the old digest metadata.
         row.payload = Data("bad".utf8)
-        XCTAssertTrue(store.commitStagedChanges())
+        // Inject a damaged persisted row directly into this isolated fixture.
+        // The production commit path must refuse unverified payload admission.
+        try store.modelContext.save()
         XCTAssertNil(store.cachedVerifiedAttachmentBytes(items[0].id))
         XCTAssertNotNil(store.cachedVerifiedAttachmentBytes(items[1].id), "another family in the same note retains its proof")
         await XCTAssertNilAsync(await store.verifiedAttachmentBytes(items[0].id))
         row.payload = nil
-        XCTAssertTrue(store.commitStagedChanges())
+        try store.modelContext.save()
         guard case .success = store.saveDocument(noteID: id, document: document,
             baseRevisionID: store.loadDocument(noteID: id)?.revisionID, staged: [items[0]]) else { return XCTFail() }
         await XCTAssertEqualAsync(await store.verifiedAttachmentBytes(items[0].id), items[0])
@@ -2948,7 +3028,9 @@ extension NoteSlice3bTests {
             case .unrelated: XCTAssertNotNil(store.create(title: "Other", body: "Saved"))
             case .payload:
                 try XCTUnwrap(store.attachmentFamily(item.id).first).payload = Data("bad".utf8)
-                XCTAssertTrue(store.commitStagedChanges())
+                // Fault injection, rather than admitting corrupt bytes through
+                // the production coordinator.
+                try store.modelContext.save()
             case .freshContext: store.refresh()
             }
             barrier.resume()
@@ -3240,7 +3322,7 @@ extension NoteSlice3bTests {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "a checkpoint created during the read still owns its bytes")
     }
 
-    func testRetentionRefusesDestructionWhenStoreChangesDuringDecoding() async throws {
+    func testRetentionAdmissionWaitsForDecodeThenRevalidatesBeforeNewVersionRoot() async throws {
         let files = makeTestAttachmentFileStore(), store = try makeTestNoteStore(attachmentFileStore: files), item = staged(), id = UUID()
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Initial")])) else { return XCTFail() }
         await store.waitForAttachmentReconciliation()
@@ -3253,13 +3335,31 @@ extension NoteSlice3bTests {
         try await waitFor { barrier.started }
         let document = NoteDocument(blocks: [.text("New owner"), .file(attachmentID: item.id, filename: item.filename,
             contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
-        store.modelContext.insert(NoteVersion(noteID: id, createdAt: Date(), reason: .leave,
+        let versionID = UUID()
+        store.modelContext.insert(NoteVersion(id: versionID, noteID: id, createdAt: Date(), reason: .leave,
             content: try NoteContentCodec.encode(document), contentFormat: 1, title: "New owner", body: "",
             attachmentIDs: [], sourceRevisionID: nil))
-        XCTAssertTrue(store.commitStagedChanges())
+        XCTAssertFalse(store.commitStagedChanges(), "§4 P5: a synchronous producer refuses while collection owns this UUID")
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.modelContext.container)
+        let publication = Task {
+            let lease = try await coordinator.ownership.admit([id, item.id, versionID])
+            defer { lease.release() }
+            let rebuilt = try await files.admit(reference)
+            let (_, bytesLease) = try XCTUnwrap(rebuilt)
+            defer { bytesLease.release() }
+            store.modelContext.insert(NoteVersion(id: versionID, noteID: id, createdAt: Date(), reason: .leave,
+                content: try NoteContentCodec.encode(document), contentFormat: 1, title: "New owner", body: "",
+                attachmentIDs: [], sourceRevisionID: nil))
+            store.modelContext.insert(NoteAttachment(id: item.id, noteID: id, originalFilename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount, sortIndex: 0,
+                contentDigest: item.digest, payload: item.data))
+            XCTAssertTrue(store.commitStagedChanges())
+        }
+        await Task.yield()
         barrier.resume()
         try await removal.value
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "stale aggregate inventory cannot authorize removal")
+        try await publication.value
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "the admitted root revalidates/rebuilds after unlink")
         store.retentionDecodeObserver = nil
         try await files.removeMaterializations([reference])
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "the newly saved version owns these bytes")
@@ -3474,10 +3574,10 @@ extension NoteSlice3bTests {
         // A resolver that succeeds after suspension makes the stale-destination
         // guard, rather than unavailable bytes, responsible for refusing.
         let successful = DeferredPasteBytes([item.id: item])
-        for change in 0..<3 {
+        for change in 0..<4 {
             let target = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Destination"), .text("Original")]),
                                           imageProvider: successful)
-            let (_, view) = target.makeView()
+            let (scroll, view) = target.makeView()
             let range = NSRange(location: target.textStorage.length, length: 0)
             view.setSelectedRange(range)
             let before = target.document()
@@ -3488,8 +3588,13 @@ extension NoteSlice3bTests {
             if change == 0 { view.setSelectedRange(NSRange(location: 0, length: 0)) }
             if change == 1 { current = false }
             if change == 2 { _ = target.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "New "), name: "Typing") }
+            if change == 3 {
+                target.detachView()
+                XCTAssertTrue(target.resumeComposedView(view, in: scroll))
+                XCTAssertTrue(target.textView === view, "the same native view now belongs to a new attachment generation")
+            }
             await XCTAssertFalseAsync(await paste.value)
-            if change < 2 { XCTAssertEqual(target.document(), before); XCTAssertFalse(target.history.canUndo) }
+            if change < 2 || change == 3 { XCTAssertEqual(target.document(), before); XCTAssertFalse(target.history.canUndo) }
             XCTAssertTrue(target.staged.isEmpty)
             XCTAssertFalse(target.document().attachmentIDs.contains(item.id))
         }
@@ -3536,7 +3641,8 @@ extension NoteSlice3bTests {
         XCTAssertEqual(manifest.noteID, id)
         XCTAssertEqual(manifest.unavailableImageIDs, [missingID])
         XCTAssertFalse(controller.save(recovery)); XCTAssertFalse(controller.keepAsNewNote())
-        await XCTAssertTrueAsync(await controller.preserveDurably(recovery))
+        let preservedRecovery = await controller.preserveDurably(recovery)
+        XCTAssertTrue(preservedRecovery, recovery.notice ?? controller.recoveryWarnings.joined(separator: "; "))
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         XCTAssertEqual(controller.active?.engine.document().title, "Stored")
         XCTAssertTrue(controller.openFailedDraft(sessionID: recovery.id))
@@ -3547,6 +3653,13 @@ extension NoteSlice3bTests {
         guard case let .valid(_, _, retainedClaim) = try XCTUnwrap(reread.first) else { return XCTFail() }
         XCTAssertEqual(retainedClaim, claim)
         XCTAssertEqual(store.note(withID: id)?.title, "Stored")
+        // Equal document content is insufficient when another claimed copy
+        // has replaced the source. Navigation must not assert the old claim.
+        var replacement = entry
+        replacement.savedAt = entry.savedAt.addingTimeInterval(1)
+        _ = try await NoteDraftJournal(directory: directory).writeDurably(replacement, staged: [known], replacing: claim)
+        _ = try await controller.journal?.readRecoveryEntries()
+        await XCTAssertFalseAsync(await controller.preserveDurably(recovery))
     }
 }
 

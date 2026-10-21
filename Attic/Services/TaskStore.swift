@@ -140,7 +140,7 @@ private struct TaskReplicaSnapshot: Equatable {
     let createdAt: Date
     let updatedAt: Date
     let completedAt: Date?
-    let manualOrder: Int64?
+    var manualOrder: Int64?
     let parentID: UUID?
     private(set) var imageReferencesData: Data?
     let deletedAt: Date?
@@ -153,6 +153,12 @@ private struct TaskReplicaSnapshot: Equatable {
     let completedFromRaw: String?
     let completedFromOrder: Int64?
 
+
+    var ignoringListOrder: TaskReplicaSnapshot {
+        var copy = self
+        copy.manualOrder = nil
+        return copy
+    }
 
     init(_ task: TaskItem) {
         id = task.id
@@ -403,25 +409,47 @@ final class TaskStore: ObservableObject {
     /// made each post-edit snapshot dominate toggle cost at scale (every
     /// model property read goes through SwiftData's storage).
     private final class FamilyIndex {
-        let revision: UInt64
-        let byID: [UUID: TaskItem]
+        var revision: UInt64
+        private(set) var byID: [UUID: TaskItem]
+        let positions: [UUID: Int]
+        let parentIDs: [UUID: UUID]
         /// Tasks that are not a validated child of a live top-level parent:
         /// true roots plus orphaned, self-linked and nested links, which stay
         /// visible instead of vanishing (same rule as `parent(of:)`).
-        let roots: [TaskItem]
-        private let childrenByParent: [UUID: [TaskItem]]
+        private(set) var roots: [TaskItem]
+        private let rootPositions: [UUID: Int]
+        private var childrenByParent: [UUID: [TaskItem]]
         private var sortedChildrenByParent: [UUID: [TaskItem]] = [:]
 
         init(
             revision: UInt64,
             byID: [UUID: TaskItem],
+            positions: [UUID: Int], parentIDs: [UUID: UUID],
             roots: [TaskItem],
             childrenByParent: [UUID: [TaskItem]]
         ) {
             self.revision = revision
             self.byID = byID
+            self.positions = positions; self.parentIDs = parentIDs
             self.roots = roots
+            self.rootPositions = Dictionary(uniqueKeysWithValues: roots.enumerated().map { ($0.element.id, $0.offset) })
             self.childrenByParent = childrenByParent
+        }
+
+        func canRebind(_ rows: [TaskItem]) -> Bool {
+            rows.allSatisfy { byID[$0.id] != nil && parentIDs[$0.id] == $0.parentID }
+        }
+        func rebind(_ rows: [TaskItem], revision: UInt64) {
+            for row in rows {
+                let id = row.id
+                byID[id] = row
+                if let position = rootPositions[id] { roots[position] = row }
+                else if let parent = parentIDs[id], let position = childrenByParent[parent]?.firstIndex(where: { $0.id == id }) {
+                    childrenByParent[parent]?[position] = row
+                    sortedChildrenByParent.removeValue(forKey: parent)
+                }
+            }
+            self.revision = revision
         }
 
         func children(of parentID: UUID) -> [TaskItem] {
@@ -442,6 +470,9 @@ final class TaskStore: ObservableObject {
         }
     }
     private static let manualOrderStride: Int64 = 1_024
+    #if ATTIC_OPERATION_CRASH_TESTS
+    var onSaveTiming: ((String, Duration) -> Void)?
+    #endif
 #if os(macOS)
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
@@ -453,14 +484,38 @@ final class TaskStore: ObservableObject {
         taskImageFiles: TaskImageFiles = .shared
     ) {
         self.container = container
-        context = ModelContext(container)
+        context = Self.makeStoreContext(container)
         self.now = now
         self.persist = persist
         self.taskImageFiles = taskImageFiles
+        #if os(macOS)
+        if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) {
+            coordinator.registerLegacyFiles(taskImageFiles.files)
+            taskImageFiles.files.registerByteOwners(coordinator.ownership.identity) { [weak self] in
+            await MainActor.run {
+                guard let self else { return nil }
+                do {
+                    let fresh = ModelContext(self.container)
+                    var ids = Set(try fresh.fetch(FetchDescriptor<TaskItem>()).flatMap { try WorkspacePurge.legacyReferences($0).map(\.id) })
+                    let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.container)
+                    ids.formUnion(coordinator.retainedHistoryBytes)
+                    ids.formUnion(coordinator.retainedRecoveryBytes)
+                    let generation = coordinator.ledger.generation
+                    let history = coordinator.retainedHistoryBytes, recovery = coordinator.retainedRecoveryBytes
+                    return AttachmentByteOwnership(ids: ids, isCurrent: {
+                        coordinator.ledger.generation == generation && coordinator.retainedHistoryBytes == history
+                            && coordinator.retainedRecoveryBytes == recovery
+                    })
+                } catch { return nil }
+            }
+            }
+        }
+        #endif
         migrateListOrderIfNeeded()
         // A failed migration stays on screen: refresh() clears notices.
         let migrationNotice = errorNotice
-        refresh()
+        do { try reloadTasks(using: context); errorNotice = nil }
+        catch { report(error, owner: nil) }
         if let migrationNotice, errorNotice == nil { errorNotice = migrationNotice }
         // Deferred iPhone/CloudKit work stays dormant in local-only builds,
         // exactly as NoteStore and CanvasStore keep theirs: no observers, no
@@ -494,12 +549,13 @@ final class TaskStore: ObservableObject {
     /// save failed (reported).
     @discardableResult
     func migrateListOrderIfNeeded() -> Int {
+        let migration = Self.makeStoreContext(container)
         do {
             var pending = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.listOrderVersion == 0 })
             pending.fetchLimit = 1
-            guard try !context.fetch(pending).isEmpty else { return 0 }
+            guard try !migration.fetch(pending).isEmpty else { return 0 }
 
-            let stored = try context.fetch(FetchDescriptor<TaskItem>())
+            let stored = try migration.fetch(FetchDescriptor<TaskItem>())
             let replicasByID = Dictionary(grouping: stored, by: \.id)
             let live = Self.canonicalReplicas(from: stored).filter { $0.deletedAt == nil && $0.doneLoggedAt == nil }
             let liveByID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -511,6 +567,7 @@ final class TaskStore: ObservableObject {
                 return false
             }
             let stride = Self.manualOrderStride
+            var orderChanges: [(TaskItem, Int64)] = []
             for (_, group) in Dictionary(grouping: roots, by: \.statusRaw) {
                 let legacy = group.filter { $0.listOrderVersion == 0 }
                 guard !legacy.isEmpty else { continue }
@@ -522,53 +579,71 @@ final class TaskStore: ObservableObject {
                 for (index, task) in ordered.enumerated() {
                     let order = Int64(ordered.count - index) * stride
                     for replica in replicasByID[task.id] ?? [] where replica.manualOrder != order {
-                        replica.manualOrder = order
+                        orderChanges.append((replica, order))
                     }
                 }
             }
-            var marked = 0
-            for row in stored where row.listOrderVersion == 0 {
-                row.listOrderVersion = TaskItem.currentListOrderVersion
-                marked += 1
-            }
-            try persist(context)
+            let participating = Dictionary((stored.filter { $0.listOrderVersion == 0 } + orderChanges.map { $0.0 }).map {
+                ($0.persistentModelID, $0)
+            }, uniquingKeysWith: { first, _ in first })
+            let preserved = participating.mapValues { TaskReplicaSnapshot($0).ignoringListOrder }
+            let generations = participating.mapValues { $0.associationGeneration }
+            for (replica, order) in orderChanges { replica.manualOrder = order }
+            let pendingRows = stored.filter { $0.listOrderVersion == 0 }
+            for row in pendingRows { row.listOrderVersion = TaskItem.currentListOrderVersion }
+            // This launch-only bookkeeping save changes exactly the two order
+            // fields; it does not acquire operation tokens or classify a write.
+            guard migration.insertedModelsArray.isEmpty, migration.deletedModelsArray.isEmpty,
+                  migration.changedModelsArray.allSatisfy({ model in
+                      guard let row = model as? TaskItem else { return false }
+                      return preserved[row.persistentModelID] == TaskReplicaSnapshot(row).ignoringListOrder
+                          && generations[row.persistentModelID] == row.associationGeneration
+                          && row.listOrderVersion == TaskItem.currentListOrderVersion
+                  }) else { throw WorkspaceFoundationError.conflict }
+            try WorkspaceLegacyBridge.coordinator(for: container).saveListOrderMigration(migration, using: persist)
+            context = migration
+            let marked = pendingRows.count
             return marked
         } catch {
-            context.rollback()
+            migration.rollback()
             report("Attic couldn’t update the task order for this version: \(error.localizedDescription)", owner: nil)
             return 0
         }
     }
 
-    /// O(1) lookup of a visible task by application identity.
-    func task(withID id: UUID) -> TaskItem? {
-        familyIndex.byID[id]
-    }
+    /// Indexed lookup of a visible task in the current presentation.
+    func task(withID id: UUID) -> TaskItem? { familyIndex.byID[id] }
 
     private var familyIndex: FamilyIndex {
         if let familyIndexCache, familyIndexCache.revision == revision {
             return familyIndexCache
         }
         var byID: [UUID: TaskItem] = [:]
+        var positions: [UUID: Int] = [:], parents: [UUID: UUID] = [:]
+        var records: [(UUID, TaskItem)] = []
         byID.reserveCapacity(tasks.count)
-        for task in tasks where byID[task.id] == nil {
-            byID[task.id] = task
+        for (offset, task) in tasks.enumerated() {
+            let id = task.id
+            if byID[id] == nil {
+                byID[id] = task; positions[id] = offset; records.append((id, task))
+                if let parent = task.parentID { parents[id] = parent }
+            }
         }
         var childrenByParent: [UUID: [TaskItem]] = [:]
         var roots: [TaskItem] = []
-        for task in tasks {
+        for (id, task) in records {
             // Same root-validation rule as parent(of:): a child counts only
             // under a live top-level parent; orphaned links stay visible as
             // roots instead of vanishing.
-            if let parentID = task.parentID, parentID != task.id,
-               let parent = byID[parentID], parent.parentID == nil {
+            if let parentID = parents[id], parentID != id,
+               byID[parentID] != nil, parents[parentID] == nil {
                 childrenByParent[parentID, default: []].append(task)
             } else {
                 roots.append(task)
             }
         }
         let index = FamilyIndex(
-            revision: revision, byID: byID, roots: roots,
+            revision: revision, byID: byID, positions: positions, parentIDs: parents, roots: roots,
             childrenByParent: childrenByParent
         )
         familyIndexCache = index
@@ -702,38 +777,56 @@ final class TaskStore: ObservableObject {
     @discardableResult
     func commit(_ drafts: [TaskDraft]) -> [TaskItem]? {
         guard !drafts.isEmpty else { return [] }
-        let titles = drafts.map { Self.normalized($0.title) }
-        guard titles.allSatisfy({ !$0.isEmpty }) else { return nil }
-
-        let timestamp = now()
-        // Resolved before the first failure can be reported: a composer error
-        // belongs to the family panel that asked for the subtask.
+        guard drafts.allSatisfy({ !Self.normalized($0.title).isEmpty }) else { return nil }
         let parentIDs = Set(drafts.map(\.parentID))
         let owner = parentIDs.count == 1 ? familyOwner(forParentID: parentIDs.first ?? nil) : nil
-        var created: [TaskItem?] = Array(repeating: nil, count: drafts.count)
         do {
+            let created = try stageCreation(drafts, ids: drafts.map { _ in UUID() }, timestamp: now())
+            guard save(owner: owner) else { return nil }
+            return created.map { task(withID: $0.id) ?? $0 }
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error.localizedDescription, owner: owner)
+            return nil
+        }
+    }
+
+    private func stageCreation(_ drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+        guard ids.count == drafts.count else { throw TaskEditRefusal("Task identity count does not match the draft count.") }
+        let titles = drafts.map { Self.normalized($0.title) }
+        guard titles.allSatisfy({ !$0.isEmpty }) else { throw TaskEditRefusal("A task needs a title.") }
+        let parentIDs = Set(drafts.map(\.parentID))
+        var created: [TaskItem?] = Array(repeating: nil, count: drafts.count)
             for parentID in parentIDs.compactMap({ $0 }) {
                 let parents = try storedTasks(matching: parentID)
                 guard task(withID: parentID) != nil,
                       parents.allSatisfy({ $0.parentID == nil && $0.status != .done
                           && $0.deletedAt == nil && $0.doneLoggedAt == nil }) else {
-                    report("Subtasks need an unfinished main task. Reopen the main task first.", owner: owner)
-                    return nil
+                    throw TaskEditRefusal("Subtasks need an unfinished main task. Reopen the main task first.")
                 }
             }
-            // Inserted last-first: each new task is placed above the ones
-            // already in its group, so the first draft ends up on top.
-            for index in drafts.indices.reversed() {
+            // Main tasks are inserted last-first: each new task is placed
+            // above the ones already in its group, so the first draft ends up
+            // on top. Subtasks follow canonical insertion (Phase 3 UX plan
+            // § 2.3.1): after the last subtask of their state group, in the
+            // drafts' order.
+            let subtaskIndices = drafts.indices.filter { drafts[$0].parentID != nil }
+            let taskIndices = drafts.indices.filter { drafts[$0].parentID == nil }
+            for index in Array(taskIndices.reversed()) + subtaskIndices {
                 let draft = drafts[index]
                 // A lone task in an unordered group stays unordered, exactly as
                 // before; a batch is ordered explicitly so its tasks, which
                 // share one timestamp, keep the drafts' order.
-                let manualOrder = try nextManualOrder(
-                    status: draft.status,
-                    parentID: draft.parentID,
-                    updatedAt: timestamp
-                ) ?? (drafts.count > 1 ? Self.manualOrderStride : nil)
+                let manualOrder = draft.parentID != nil
+                    ? try endManualOrder(status: draft.status, parentID: draft.parentID, batch: drafts.count > 1, updatedAt: timestamp)
+                    : try nextManualOrder(
+                        status: draft.status,
+                        parentID: draft.parentID,
+                        updatedAt: timestamp
+                    ) ?? (drafts.count > 1 ? Self.manualOrderStride : nil)
                 let task = TaskItem(
+                    id: ids[index],
                     title: titles[index],
                     status: draft.status,
                     priority: draft.priority,
@@ -755,17 +848,53 @@ final class TaskStore: ObservableObject {
                 tasks.append(task)
                 created[index] = task
             }
-        } catch {
-            if created.contains(where: { $0 != nil }) {
-                context.rollback()
-                try? reloadTasks()
-            }
-            report(error.localizedDescription, owner: owner)
-            return nil
-        }
-        guard save(owner: owner) else { return nil }
         return created.compactMap { $0 }
     }
+
+    #if os(macOS)
+    /// A staging-only adapter invokes the same guarded family machinery on a
+    /// supplied context. It has no observers and cannot persist or publish.
+    private init(staging context: ModelContext, timestamp: Date) throws {
+        self.container = context.container
+        self.context = context
+        self.now = { timestamp }
+        self.persist = { _ in throw WorkspaceFoundationError.conflict }
+        self.taskImageFiles = TaskImageFiles(rootURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticWorkspaceStaging-\(UUID().uuidString)"))
+        self.tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletedAt == nil }
+    }
+
+    static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        let rows = try adapter.stageCreation(drafts, ids: ids, timestamp: timestamp)
+        WorkspaceCrashHook.reach("K3-task")
+        return rows
+    }
+
+    static func stageUpdate(in context: ModelContext, taskID: UUID, title: String? = nil,
+                            status: TaskStatus? = nil, tags: [String]? = nil, timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        guard let task = adapter.task(withID: taskID) else { throw WorkspaceFoundationError.conflict }
+        _ = try adapter.stageUpdate(task, title: title, status: status, tags: tags, at: timestamp)
+        WorkspaceCrashHook.reach("K3-task")
+    }
+
+    static func stageTransition(in context: ModelContext, from expected: [TaskEditableState],
+                                to target: [TaskEditableState], timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        for state in expected {
+            let id = state.id
+            let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+            guard !replicas.isEmpty, replicas.allSatisfy({ TaskEditableState($0) == state }) else {
+                throw WorkspaceFoundationError.conflict
+            }
+        }
+        if case .obsolete = try adapter.stageEditableTransition(from: expected, to: target) {
+            throw WorkspaceFoundationError.conflict
+        }
+    }
+
+    #endif
 
     @discardableResult
     func rename(_ task: TaskItem, to title: String) -> Bool {
@@ -832,9 +961,13 @@ final class TaskStore: ObservableObject {
         allowingUnfinishedSubtasks: Bool = false,
         at fixedTimestamp: Date? = nil
     ) throws -> Bool {
-        let replicas = try storedTasks(matching: task.id)
         let normalizedTitle = title.map(Self.normalized)
         if let normalizedTitle, normalizedTitle.isEmpty { throw TaskEditRefusal("A task needs a title.") }
+        // A family fetch can refresh resident values after another writer's
+        // commit. Freeze the presented family before that fetch, so the exact
+        // fallback still compares against the values the edit began with.
+        WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
+        let replicas = try storedTasks(matching: task.id)
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
@@ -900,10 +1033,12 @@ final class TaskStore: ObservableObject {
         // replica; everything else each replica holds stays its own, so a
         // divergent copy never loses a value the edit did not touch
         // (deferred replica safety, Phase 1). Only copies that agreed with
-        // the shown one take the new time, so the shown copy stays shown.
+        // the shown one take the new time. Never move their clock backwards:
+        // an imported future timestamp must not promote a divergent older copy.
         let shown = TaskContentSnapshot(task)
-        let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }
+        let agreeing = Set(replicas.filter { $0 === task || (TaskContentSnapshot($0) == shown && $0.deletedAt == task.deletedAt) }
             .map(\.persistentModelID))
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
         for replica in replicas {
             if titleChanged { replica.title = destinationTitle }
             if priorityChanged { replica.priority = destinationPriority }
@@ -919,7 +1054,7 @@ final class TaskStore: ObservableObject {
             }
             if tagsChanged { replica.tagsRaw = destinationTagsRaw }
             if dueChanged { replica.dueDayRaw = destinationDueDayRaw }
-            if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+            if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
         }
         return true
     }
@@ -1083,6 +1218,7 @@ final class TaskStore: ObservableObject {
         let groups: [UUID: [TaskItem]] = Dictionary(grouping: try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { ids.contains($0.id) }
         )), by: \.id)
+        WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         var winners: [UUID: TaskItem] = [:]
         for state in target {
             guard let replicas = groups[state.id],
@@ -1175,9 +1311,10 @@ final class TaskStore: ObservableObject {
             let shown = TaskContentSnapshot(winner)
             let agreeing = Set(replicas.filter { $0 === winner || TaskContentSnapshot($0) == shown }
                 .map(\.persistentModelID))
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas {
                 edits.forEach { $0(replica) }
-                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
             if winner.doneLoggedAt != nil, winner.statusRaw != doneRaw {
                 returningFamilies.insert(winner.parentID ?? winner.id)
@@ -1207,6 +1344,7 @@ final class TaskStore: ObservableObject {
             predicate: #Predicate { childIDs.contains($0.id) }
         ))
         for row in linked + childReplicas where row.doneLoggedAt != nil && row.deletedAt == nil {
+            WorkspaceLegacyBridge.prepareMutation(row, in: context)
             row.doneLoggedAt = nil
         }
     }
@@ -1332,9 +1470,10 @@ final class TaskStore: ObservableObject {
                 let shown = try Self.attachmentLists(of: replica).shown
                 return (replica, try Self.encodedAttachments(shown + imported), stamp)
             }
+            WorkspaceLegacyBridge.prepareMutations(proposed.map { $0.0 }, in: context)
             for (replica, bytes, stamp) in proposed {
                 replica.imageReferencesData = bytes
-                if stamp { replica.updatedAt = timestamp }
+                if stamp { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
             guard save(owner: errorOwner) else {
                 await taskImageFiles.remove(imported); return nil
@@ -1354,6 +1493,7 @@ final class TaskStore: ObservableObject {
     }
 
     private var hasSweptAttachmentStorage = false
+    private var isSweepingAttachmentStorage = false
 
     /// Once per launch, before anything is being attached: removes private
     /// attachment copies no stored task references, such as a composer's
@@ -1364,14 +1504,18 @@ final class TaskStore: ObservableObject {
     /// stops the sweep. Anything created or modified within `minimumAge` is
     /// kept, which also covers an import that starts while the sweep runs.
     /// Only Attic's own storage is touched, never originals. Returns how many
-    /// copies were removed, or nil when the sweep did not run.
+    /// copies were removed, or nil when the sweep did not run. A partial pass
+    /// whose collection was refused does not consume the launch's attempt.
     @discardableResult
     func sweepUnreferencedAttachmentStorage(minimumAge: TimeInterval = 24 * 60 * 60,
                                             dropStagingRoot: URL = TaskAttachmentStaging.ownedRootURL) async -> Int? {
-        guard !hasSweptAttachmentStorage, importingAttachmentTaskIDs.isEmpty else { return nil }
-        hasSweptAttachmentStorage = true
+        guard !hasSweptAttachmentStorage, !isSweepingAttachmentStorage, importingAttachmentTaskIDs.isEmpty else { return nil }
+        isSweepingAttachmentStorage = true
+        defer { isSweepingAttachmentStorage = false }
         let referencedIDs: Set<UUID>
         do {
+            try await WorkspaceLegacyBridge.coordinator(for: container).finishRegisteredLaunch()
+            guard importingAttachmentTaskIDs.isEmpty else { return nil }
             referencedIDs = try storedAttachmentIDs(excludingTaskIDs: [])
         } catch {
             return nil
@@ -1379,8 +1523,10 @@ final class TaskStore: ObservableObject {
         // File dates are wall-clock times, whatever clock the store was given.
         let cutoff = Date().addingTimeInterval(-minimumAge)
         TaskAttachmentStaging.removeAbandoned(modifiedBefore: cutoff, in: dropStagingRoot)
-        return await taskImageFiles.removeUnreferenced(keeping: referencedIDs, modifiedBefore: cutoff,
-                                                       limit: Self.attachmentSweepLimit)
+        let removed = await taskImageFiles.removeUnreferenced(keeping: referencedIDs, modifiedBefore: cutoff,
+                                                            limit: Self.attachmentSweepLimit)
+        if removed.complete { hasSweptAttachmentStorage = true }
+        return removed.removed
     }
 
     private static let attachmentSweepLimit = 500
@@ -1444,7 +1590,7 @@ final class TaskStore: ObservableObject {
                 replica.imageReferencesData = kept.isEmpty && replica.imageReferencesData == nil
                     ? nil : try Self.encodedAttachments(kept)
                 replica.removedAttachmentsData = try Self.encodedAttachments(removedList)
-                if stamp { replica.updatedAt = timestamp }
+                if stamp { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         } catch {
             context.rollback()
@@ -1538,7 +1684,7 @@ final class TaskStore: ObservableObject {
                 let remaining = lists.removed.filter { $0.reference.id != attachmentID }
                 replica.imageReferencesData = try Self.encodedAttachments(shown)
                 replica.removedAttachmentsData = remaining.isEmpty ? nil : try Self.encodedAttachments(remaining)
-                if stamp { replica.updatedAt = timestamp }
+                if stamp { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         } catch {
             context.rollback()
@@ -1574,7 +1720,10 @@ final class TaskStore: ObservableObject {
                 guard !old.isEmpty else { continue }
                 let remaining = entries.filter { !isExpired($0) }
                 let remainingData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
-                for replica in replicas { replica.removedAttachmentsData = remainingData }
+                WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+                for replica in replicas {
+                    replica.removedAttachmentsData = remainingData
+                }
                 expired += old.map(\.reference)
             }
         } catch {
@@ -1688,14 +1837,23 @@ final class TaskStore: ObservableObject {
         }
         let timestamp = now()
         var deletedIDs = Set<UUID>()
+        WorkspaceLegacyBridge.prepareMutations(staged.flatMap { $0.rows }, in: context)
         for (root, rows) in staged {
             let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
             for replica in rows {
+                WorkspaceLegacyBridge.prepareMutation(replica, in: context)
                 replica.deletedAt = timestamp
                 replica.deletionRootID = root
                 replica.deletionMembersRaw = members
                 deletedIDs.insert(replica.id)
             }
+        }
+        do {
+            for (root, rows) in staged {
+                try WorkspacePurge.stageDeletionCapture(rootID: root, rows: rows, deletedAt: timestamp, in: context)
+            }
+        } catch {
+            context.rollback(); refresh(); report(error.localizedDescription, owner: owner); return false
         }
         tasks.removeAll { deletedIDs.contains($0.id) }
         return save(owner: owner)
@@ -1799,7 +1957,7 @@ final class TaskStore: ObservableObject {
         let deleted: [TaskItem]
         let rootWinners: [UUID: TaskItem]
         do {
-            let freshContext = ModelContext(container)
+            let freshContext = Self.makeStoreContext(container)
             deleted = try freshContext.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
@@ -1862,93 +2020,150 @@ final class TaskStore: ObservableObject {
     @discardableResult
     func restoreDeleted(taskIDs: [UUID]) -> Bool {
         guard !taskIDs.isEmpty else { return false }
+        // Restore preflight consumes the current physical family, including
+        // replicas saved by another context since the previous refusal.
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
-            var batches: [UUID: [TaskItem]] = [:]
-            for taskID in Set(taskIDs) {
-                batches[taskID] = try context.fetch(FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { $0.deletionRootID == taskID && $0.deletedAt != nil }
-                ))
-            }
-            // A subtask created with its parent in one batch was deleted with
-            // it and comes back with it.
-            let covered = Set(batches.values.flatMap { $0.map(\.id) })
-            var restoring = Set<UUID>()
-            for (rootID, batch) in batches {
-                if batch.isEmpty {
-                    guard covered.contains(rootID) else { throw TaskReplicaMutationError.notRecentlyDeleted(rootID) }
-                    continue
-                }
-                guard batch.contains(where: { $0.id == rootID }) else {
-                    throw TaskReplicaMutationError.notRecentlyDeleted(rootID)
-                }
-                let recorded = batch[0].deletionMembersRaw
-                let members = batch[0].deletionMembers
-                guard !members.isEmpty, members.contains(rootID),
-                      batch.allSatisfy({ $0.deletionMembersRaw == recorded }),
-                      members.allSatisfy({ id in batch.contains { $0.id == id } }),
-                      Set(batch.map(\.id)).isSubset(of: members) else {
-                    throw TaskReplicaMutationError.incompleteRestore(rootID)
-                }
-                let ids = Array(members)
-                let replicas = try context.fetch(FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { ids.contains($0.id) }
-                ))
-                guard replicas.allSatisfy({ $0.deletedAt == nil || $0.deletionRootID == rootID }) else {
-                    throw TaskReplicaMutationError.incompleteRestore(rootID)
-                }
-                // A copy that stayed live (a late replica the delete never
-                // reached) must hold what the deleted copies hold. If it was
-                // changed, restoring would put two different versions of the
-                // task side by side and let the list pick one, so nothing is
-                // restored until the copies agree.
-                for copies in Dictionary(grouping: replicas, by: \.id).values
-                where copies.contains(where: { $0.deletedAt == nil }) {
-                    let content = TaskContentSnapshot(copies[0])
-                    guard copies.allSatisfy({ TaskContentSnapshot($0) == content }) else {
-                        throw TaskReplicaMutationError.divergentLiveCopy(rootID)
-                    }
-                }
-                restoring.formUnion(members)
-            }
-            // A root that is a subtask returns only under a live main task,
-            // or, if it was archived, under a main task still in the Done log.
-            for (rootID, batch) in batches where !batch.isEmpty {
-                guard let parentID = batch.first(where: { $0.id == rootID })?.parentID,
-                      parentID != rootID, !restoring.contains(parentID) else { continue }
-                let parentRows = try context.fetch(FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { $0.id == parentID }
-                ))
-                // A parent that no longer exists at all leaves the subtask
-                // visible as a root, as for any orphaned link.
-                if !parentRows.isEmpty, task(withID: parentID) == nil {
-                    // An archived subtask (round 10b) goes back into its
-                    // parent's Done-log family with its completion and
-                    // archive fields as they were; the parent is not reopened.
-                    let archived = batch.filter { $0.id == rootID }.allSatisfy { $0.doneLoggedAt != nil }
-                    guard archived, listedTask(withID: parentID) != nil else {
-                        throw TaskReplicaMutationError.parentNotLive(rootID)
-                    }
-                }
-            }
-            for batch in batches.values {
-                for replica in batch {
-                    replica.deletedAt = nil
-                    replica.deletionRootID = nil
-                    replica.deletionMembersRaw = ""
-                }
-            }
+            try stageRestoration(taskIDs: taskIDs)
         } catch {
             context.rollback()
             report(error.localizedDescription, owner: nil)
             return false
         }
-        guard save(owner: nil) else { return false }
-        do {
-            try reloadTasks()
-        } catch {
-            report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
+        return save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed")
+    }
+
+    private func stageRestoration(taskIDs: [UUID]) throws {
+        var batches: [UUID: [TaskItem]] = [:]
+        for taskID in Set(taskIDs) {
+            batches[taskID] = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.deletionRootID == taskID && $0.deletedAt != nil }
+            ))
         }
-        return true
+        // A subtask created with its parent in one batch was deleted with
+        // it and comes back with it.
+        let covered = Set(batches.values.flatMap { $0.map(\.id) })
+        var restoring = Set<UUID>()
+        for (rootID, batch) in batches {
+            if batch.isEmpty {
+                guard covered.contains(rootID) else { throw TaskReplicaMutationError.notRecentlyDeleted(rootID) }
+                continue
+            }
+            guard batch.contains(where: { $0.id == rootID }) else {
+                throw TaskReplicaMutationError.notRecentlyDeleted(rootID)
+            }
+            let recorded = batch[0].deletionMembersRaw
+            let members = batch[0].deletionMembers
+            guard !members.isEmpty, members.contains(rootID),
+                  batch.allSatisfy({ $0.deletionMembersRaw == recorded }),
+                  members.allSatisfy({ id in batch.contains { $0.id == id } }),
+                  Set(batch.map(\.id)).isSubset(of: members) else {
+                throw TaskReplicaMutationError.incompleteRestore(rootID)
+            }
+            let ids = Array(members)
+            let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { ids.contains($0.id) }
+            ))
+            guard replicas.allSatisfy({ $0.deletedAt == nil || $0.deletionRootID == rootID }) else {
+                throw TaskReplicaMutationError.incompleteRestore(rootID)
+            }
+            // A copy that stayed live (a late replica the delete never
+            // reached) must hold what the deleted copies hold. If it was
+            // changed, restoring would put two different versions of the
+            // task side by side and let the list pick one, so nothing is
+            // restored until the copies agree.
+            for copies in Dictionary(grouping: replicas, by: \.id).values
+            where copies.contains(where: { $0.deletedAt == nil }) {
+                let content = TaskContentSnapshot(copies[0])
+                guard copies.allSatisfy({ TaskContentSnapshot($0) == content }) else {
+                    throw TaskReplicaMutationError.divergentLiveCopy(rootID)
+                }
+            }
+            restoring.formUnion(members)
+        }
+        // A root that is a subtask returns only under a live main task,
+        // or, if it was archived, under a main task still in the Done log.
+        for (rootID, batch) in batches where !batch.isEmpty {
+            guard let parentID = batch.first(where: { $0.id == rootID })?.parentID,
+                  parentID != rootID, !restoring.contains(parentID) else { continue }
+            let parentRows = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.id == parentID }
+            ))
+            // A parent that no longer exists at all leaves the subtask
+            // visible as a root, as for any orphaned link.
+            if !parentRows.isEmpty, task(withID: parentID) == nil {
+                // An archived subtask (round 10b) goes back into its
+                // parent's Done-log family with its completion and
+                // archive fields as they were; the parent is not reopened.
+                let archived = batch.filter { $0.id == rootID }.allSatisfy { $0.doneLoggedAt != nil }
+                guard archived, listedTask(withID: parentID) != nil else {
+                    throw TaskReplicaMutationError.parentNotLive(rootID)
+                }
+            }
+        }
+        WorkspaceLegacyBridge.prepareMutations(batches.values.flatMap { $0 }, in: context)
+        for batch in batches.values {
+            for replica in batch {
+                WorkspaceLegacyBridge.prepareMutation(replica, in: context)
+                replica.deletedAt = nil
+                replica.deletionRootID = nil
+                replica.deletionMembersRaw = ""
+            }
+        }
+    }
+
+    static func stageRestoreDeleted(in context: ModelContext, taskIDs: [UUID], timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        try adapter.stageRestoration(taskIDs: taskIDs)
+    }
+
+    static func stageSoftDeletion(in context: ModelContext, taskID: UUID, preservationID: UUID, timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        guard let task = adapter.task(withID: taskID),
+              let rows = adapter.deletionFamily(of: task, owner: taskID) else { throw WorkspaceFoundationError.conflict }
+        let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
+        WorkspaceLegacyBridge.prepareMutations(rows, in: context)
+        for row in rows {
+            WorkspaceLegacyBridge.prepareMutation(row, in: context)
+            row.deletedAt = timestamp; row.deletionRootID = taskID; row.deletionMembersRaw = members
+        }
+        try WorkspacePurge.stageDeletionCapture(id: preservationID, rootID: taskID, rows: rows, deletedAt: timestamp, in: context)
+    }
+
+    /// Lowest shared preflight for an immutable deletion family. Both the
+    /// compatibility collector and coordinated purge stage through this guard.
+    static func guardedDeletedFamily(in context: ModelContext, rootID: UUID, before cutoff: Date,
+                                     confirmed: Date? = nil) throws -> [TaskItem]? {
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let batch = all.filter { $0.deletionRootID == rootID && $0.deletedAt != nil }
+        guard let first = batch.first, let deletedAt = first.deletedAt,
+              deletedAt < cutoff, confirmed == nil || confirmed == deletedAt else { return nil }
+        let members = first.deletionMembers
+        let recorded = first.deletionMembersRaw.split(separator: " ")
+        guard recorded.count == members.count, recorded.allSatisfy({ UUID(uuidString: String($0)) != nil }),
+              !members.isEmpty, members.contains(rootID), Set(batch.map(\.id)) == members,
+              batch.allSatisfy({ $0.deletedAt == deletedAt && $0.deletionMembersRaw == first.deletionMembersRaw }) else { return nil }
+        let replicas = all.filter { members.contains($0.id) }
+        for id in members {
+            let family = replicas.filter { $0.id == id }
+            guard let row = family.first, family.allSatisfy({
+                $0.deletionRootID == rootID && $0.deletedAt == deletedAt
+                    && $0.deletionMembersRaw == first.deletionMembersRaw
+                    && TaskReplicaSnapshot($0) == TaskReplicaSnapshot(row)
+                    && $0.associationGeneration == row.associationGeneration
+            }) else { return nil }
+        }
+        return replicas
+    }
+
+    static func stagePermanentRemoval(in context: ModelContext, rootID: UUID, before cutoff: Date,
+                                      confirmed: Date? = nil) throws -> Set<UUID> {
+        guard let rows = try guardedDeletedFamily(in: context, rootID: rootID, before: cutoff, confirmed: confirmed) else {
+            throw WorkspaceFoundationError.protectedOwner
+        }
+        let ids = Set(rows.map(\.id))
+        rows.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
+        return ids
     }
 
     /// Removes for good what was deleted before `cutoff` (30 days ago, at
@@ -1970,6 +2185,7 @@ final class TaskStore: ObservableObject {
         confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         let rootsByID: [UUID: [TaskItem]]
         let storedByID: [UUID: [TaskItem]]
         do {
@@ -2011,20 +2227,19 @@ final class TaskStore: ObservableObject {
                       $0.deletionRootID == rootID && $0.deletedAt == first.deletedAt
                           && $0.deletionMembersRaw == first.deletionMembersRaw
                   }) else { continue }
-            let agreed = ids.allSatisfy { id in
-                guard let replicas = storedByID[id], let first = replicas.first,
-                      first.deletedAt.map({ $0 < cutoff }) == true,
-                      (first.deletionRootID ?? first.id) == rootID else { return false }
-                let snapshot = TaskReplicaSnapshot(first)
-                return replicas.allSatisfy { TaskReplicaSnapshot($0) == snapshot }
-            }
-            guard agreed else { continue }
+            guard let complete = try? Self.guardedDeletedFamily(in: context, rootID: rootID, before: cutoff,
+                                                                 confirmed: confirmed?[rootID]),
+                  Set(complete.map(\.id)) == ids else { continue }
+            // Own notes/associations must go through the coordinated path.
+            // The legacy collector cannot leave an actionable purged task ID.
+            guard (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == false else { continue }
             purgedIDs.formUnion(ids)
             removed += ids.flatMap { storedByID[$0] ?? [] }
         }
         guard !removed.isEmpty else { return [] }
         let removedFiles = removed.flatMap { $0.attachments + $0.removedAttachments.map(\.reference) }
-        removed.forEach(context.delete)
+        WorkspaceLegacyBridge.prepareMutations(removed, in: context)
+        removed.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
         do {
             try alongside?(context, purgedIDs)
         } catch {
@@ -2125,7 +2340,9 @@ final class TaskStore: ObservableObject {
         }
         guard !expiredIDs.isEmpty else { return 0 }
         let timestamp = now()
+        WorkspaceLegacyBridge.prepareMutations(stored.filter { expiredIDs.contains($0.id) }, in: context)
         for replica in stored where expiredIDs.contains(replica.id) {
+            WorkspaceLegacyBridge.prepareMutation(replica, in: context)
             replica.doneLoggedAt = timestamp
         }
         tasks.removeAll { expiredIDs.contains($0.id) }
@@ -2554,6 +2771,7 @@ final class TaskStore: ObservableObject {
                 let shownCopy = TaskContentSnapshot(logged)
                 let agreeing = Set(replicas.filter { $0 === logged || TaskContentSnapshot($0) == shownCopy }
                     .map(\.persistentModelID))
+                WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
                 for replica in replicas {
                     replica.status = .todo
                     replica.completedAt = nil
@@ -2561,7 +2779,7 @@ final class TaskStore: ObservableObject {
                     replica.completedFromOrder = nil
                     replica.manualOrder = order
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+                    if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
                 returning.insert(logged.parentID ?? taskID)
             }
@@ -2573,13 +2791,7 @@ final class TaskStore: ObservableObject {
             return false
         }
         guard context.hasChanges else { return true }
-        guard save(owner: nil) else { return false }
-        do {
-            try reloadTasks()
-        } catch {
-            report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
-        }
-        return true
+        return save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed")
     }
 
     /// An agent edit that returns an archived task and its family to the
@@ -2607,11 +2819,7 @@ final class TaskStore: ObservableObject {
             report(error, owner: nil)
             return false
         }
-        guard save(owner: nil) else { return false }
-        do { try reloadTasks() } catch {
-            report("Updated, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
-        }
-        return true
+        return save(owner: nil, presentationFailure: "Updated, but the list could not be refreshed")
     }
 
     /// Puts a family that `restoreToNow` brought back into the Done log
@@ -2631,7 +2839,11 @@ final class TaskStore: ObservableObject {
         guard !shown.isEmpty, shown.allSatisfy({ $0.status == .done && $0.doneLoggedAt == nil }) else {
             return false
         }
-        for replica in replicas where replica.doneLoggedAt == nil { replica.doneLoggedAt = loggedAt }
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+        for replica in replicas where replica.doneLoggedAt == nil {
+            WorkspaceLegacyBridge.prepareMutation(replica, in: context)
+            replica.doneLoggedAt = loggedAt
+        }
         return true
     }
 
@@ -2662,6 +2874,7 @@ final class TaskStore: ObservableObject {
                 let snapshot = TaskContentSnapshot(shown)
                 for replica in copies {
                     let agrees = replica === shown || TaskContentSnapshot(replica) == snapshot
+                    WorkspaceLegacyBridge.prepareMutation(replica, in: context)
                     replica.status = target
                     replica.completedAt = nil
                     replica.completedFromRaw = nil
@@ -2670,7 +2883,7 @@ final class TaskStore: ObservableObject {
                         replica.manualOrder = order
                         replica.listOrderVersion = TaskItem.currentListOrderVersion
                     }
-                    if agrees { replica.updatedAt = timestamp }
+                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
             }
             for id in taskIDs {
@@ -2715,11 +2928,7 @@ final class TaskStore: ObservableObject {
             return false
         }
         guard context.hasChanges else { return true }
-        guard save(owner: owner) else { return false }
-        if !returning.isEmpty {
-            do { try reloadTasks() } catch { report("Reopened, but the list could not be refreshed: \(error.localizedDescription)", owner: owner) }
-        }
-        return true
+        return save(owner: owner, presentationFailure: "Reopened, but the list could not be refreshed")
     }
 
     /// The editable fields of a task and its subtasks wherever they are
@@ -2762,8 +2971,7 @@ final class TaskStore: ObservableObject {
             return .failed
         }
         guard context.hasChanges else { return .applied }
-        guard save(owner: nil) else { return .failed }
-        do { try reloadTasks() } catch { report("Undone, but the list could not be refreshed: \(error.localizedDescription)", owner: nil) }
+        guard save(owner: nil, presentationFailure: "Undone, but the list could not be refreshed") else { return .failed }
         return .applied
     }
 
@@ -2820,16 +3028,19 @@ final class TaskStore: ObservableObject {
         // One completion time for the family: reopening the main task
         // reopens exactly the subtasks finished with it (Astra 20).
         let timestamp = now()
+        _ = try storedTasks(matching: taskID)
+        WorkspaceLegacyBridge.prepareMutations(openChildren.values.flatMap { $0 }, in: context)
         for (id, copies) in openChildren {
             let shownRow = self.task(withID: id)
             let shown = shownRow.map(TaskContentSnapshot.init)
             for replica in copies {
                 let agrees = replica === shownRow || shown.map { TaskContentSnapshot(replica) == $0 } == true
+                WorkspaceLegacyBridge.prepareMutation(replica, in: context)
                 replica.completedFromRaw = replica.statusRaw
                 replica.completedFromOrder = replica.manualOrder
                 replica.status = .done
                 replica.completedAt = timestamp
-                if agrees { replica.updatedAt = timestamp }
+                if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         }
         _ = try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true, at: timestamp)
@@ -2899,7 +3110,7 @@ final class TaskStore: ObservableObject {
             return nil
         }
         guard save(owner: nil) else { return nil }
-        return created
+        return created.map { task(withID: $0.id) ?? $0 }
     }
 
     /// Title, priority, tags or due date on tasks wherever they are
@@ -2943,7 +3154,12 @@ final class TaskStore: ObservableObject {
     /// them in one order.
     @discardableResult
     func moveSubtask(taskID: UUID, by offset: Int) -> Bool {
-        guard let task = tasks.first(where: { $0.id == taskID }), let parentID = task.parentID else { return false }
+        // The family index's instance: the same one `subtasks(of:)` sorts
+        // and filters (CU 2a: after a plain-commit rebind, the first row in
+        // `tasks` with this id could still read the old state, so a ticked
+        // subtask was looked for in the wrong group and the move failed).
+        guard let task = task(withID: taskID) ?? tasks.first(where: { $0.id == taskID }),
+              let parentID = task.parentID else { return false }
         // Among the siblings in the same state (open ones, or done ones):
         // the family lists open subtasks first.
         var siblings = subtasks(of: parentID).filter { ($0.status == .done) == (task.status == .done) }
@@ -2957,11 +3173,16 @@ final class TaskStore: ObservableObject {
         do {
             if let order = sparseManualOrder(at: destination, in: siblings) {
                 let shown = TaskContentSnapshot(task)
-                for replica in try storedTasks(matching: taskID) {
+                // Every physical replica is captured for the write gate
+                // before it changes, as `assignSpacedManualOrders` does.
+                let replicas = try storedTasks(matching: taskID)
+                WorkspaceLegacyBridge.captureBeforeMutations([task] + replicas, in: context)
+                WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+                for replica in replicas {
                     let agrees = replica === task || TaskContentSnapshot(replica) == shown
                     replica.manualOrder = order
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agrees { replica.updatedAt = timestamp }
+                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
             } else {
                 try assignSpacedManualOrders(to: siblings, updatedAt: timestamp)
@@ -3033,7 +3254,9 @@ final class TaskStore: ObservableObject {
         // after the first write needs the list reloaded.
         var wrote = false
         do {
+            WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
             let replicas = try storedTasks(matching: id)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             guard Set(replicas.map(\.parentID)).count == 1 else {
                 throw TaskEditRefusal("This subtask’s copies disagree about where it belongs. Refresh and try again.")
             }
@@ -3105,7 +3328,7 @@ final class TaskStore: ObservableObject {
                 if replica.listOrderVersion != TaskItem.currentListOrderVersion {
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
                 }
-                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         } catch {
             context.rollback()
@@ -3300,11 +3523,12 @@ final class TaskStore: ObservableObject {
             if let sparseOrder = sparseManualOrder(at: destinationIndex, in: group) {
                 let replicas = try storedTasks(matching: task.id)
                 let shown = TaskContentSnapshot(task)
+                WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
                 for replica in replicas {
                     let agrees = replica === task || TaskContentSnapshot(replica) == shown
                     replica.manualOrder = sparseOrder
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agrees { replica.updatedAt = timestamp }
+                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
                 }
             } else {
                 // Legacy stores can have missing or tightly packed values. Pay the
@@ -3334,16 +3558,46 @@ final class TaskStore: ObservableObject {
     /// `owner` is the surface a failed save belongs to, decided by the
     /// operation that asked for it; a success clears any notice outright.
     @discardableResult
-    private func save(owner: UUID? = nil) -> Bool {
+    private func save(owner: UUID? = nil, presentationFailure: String = "Saved, but presentation is still updating") -> Bool {
         tagInventoryWillSave(context)
         do {
+            let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
+            let candidateIDs = try WorkspaceLegacyBridge.coordinator(for: container).taskReferenceIDs(
+                (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? TaskItem })
+            #if ATTIC_OPERATION_CRASH_TESTS
+            let writeStart = ContinuousClock.now
+            #endif
             let changedIDs = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
                 .compactMap { ($0 as? TaskItem)?.id })
             let deleted = Set(context.deletedModelsArray.map(\.persistentModelID))
             #if os(macOS)
-            try PerformanceSignposts.storeSave { try persist(context) }
+            try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil) }
             #else
-            try persist(context)
+            try Self.persistStoreContext(context, using: persist, history: commandLibrary != nil)
+            #endif
+            taskImageFiles.files.finishCandidates(candidateIDs)
+            #if ATTIC_OPERATION_CRASH_TESTS
+            onSaveTiming?("writer", writeStart.duration(to: .now))
+            let presentationStart = ContinuousClock.now
+            #endif
+            var presentationReadFailed = false
+            if try WorkspaceLegacyBridge.wasPlainCommit(in: context) {
+                do {
+                    try publishPlainCommit(changedIDs, removedRows: removedRows)
+                    errorNotice = nil
+                } catch {
+                    // Durability already succeeded. A presentation read must
+                    // not turn that save into a rollback or a reported refusal.
+                    familyIndexCache = nil
+                    presentationReadFailed = true
+                    report("\(presentationFailure): \(error.localizedDescription)", owner: owner)
+                }
+            } else {
+                do { try reloadTasks(); errorNotice = nil }
+                catch { report("\(presentationFailure): \(error.localizedDescription)", owner: owner) }
+            }
+            #if ATTIC_OPERATION_CRASH_TESTS
+            onSaveTiming?("presentation", presentationStart.duration(to: .now))
             #endif
             tagInventoryDidSave()
             // Publish the revision only after the index sees the durable
@@ -3356,8 +3610,21 @@ final class TaskStore: ObservableObject {
             if !changedIDs.isEmpty {
                 let ids = Array(changedIDs)
                 do {
-                    let changedRows = try context.fetch(
+                    // The plain writer already confirmed every physical
+                    // replica synchronously. Reuse those saved instances;
+                    // incomplete or invalidated families still use SQL.
+                    let changedRows: [TaskItem]
+                    #if os(macOS)
+                    if let confirmed = WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context) {
+                        changedRows = confirmed
+                    } else {
+                        changedRows = try context.fetch(
+                            FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                    }
+                    #else
+                    changedRows = try context.fetch(
                         FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                    #endif
                     let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
                         .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
                         .map(DoneSearchEntry.init)
@@ -3366,15 +3633,19 @@ final class TaskStore: ObservableObject {
                     indexReadFailed = true
                 }
             }
-            errorNotice = nil
             revision &+= 1
-            if indexReadFailed { refresh() }
+            familyIndexCache?.revision = revision
+            if indexReadFailed || presentationReadFailed { refresh() }
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
             reconcileProtectedCloudSyncActivity(for: .exportData)
             #endif
             return true
         } catch {
+            if error is WorkspaceLegacyBridge.CommitHeld {
+                report("The save outcome is still being checked. This item is held.", owner: owner)
+                return false
+            }
             let saveError = error.localizedDescription
             context.rollback()
             tagInventoryDidRefresh()
@@ -3393,7 +3664,31 @@ final class TaskStore: ObservableObject {
     var listRefreshFailures = 0
     #endif
 
-    private func reloadTasks() throws {
+    /// Plain saves can materialize a different instance of a physical row.
+    /// Publish the complete confirmed logical family to BOTH list and index,
+    /// choosing the presentation winner again (never deduplicating mutations).
+    /// Stable families replace only changed slots; membership changes refresh.
+    private func publishPlainCommit(_ changedIDs: Set<UUID>, removedRows: Bool) throws {
+        let ids = Array(changedIDs)
+        let confirmed = try WorkspaceLegacyBridge.confirmedTaskReplicas(changedIDs, in: context)
+            ?? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+        let winners = Self.canonicalReplicas(from: confirmed)
+        let index = familyIndex
+        guard !removedRows, Set(winners.map(\.id)) == changedIDs,
+              winners.allSatisfy({ $0.deletedAt == nil && $0.doneLoggedAt == nil }), index.canRebind(winners) else {
+            try reloadTasks()
+            return
+        }
+        for row in winners {
+            if let position = index.positions[row.id], tasks[position] !== row {
+                tasks[position] = row
+            }
+        }
+        index.rebind(winners, revision: revision &+ 1)
+        familyIndexCache = index
+    }
+
+    private func reloadTasks(using initialContext: ModelContext? = nil) throws {
         defer { tagInventoryDidRefresh() }
         #if DEBUG
         if listRefreshFailures > 0 {
@@ -3402,22 +3697,21 @@ final class TaskStore: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "Injected list refresh failure"])
         }
         #endif
-        // A long-lived ModelContext can return cached model instances after
-        // CloudKit updates the underlying store. Refresh through a new context
-        // so remote values replace the old objects instead of being written
-        // back to CloudKit by the next local save.
-        let refreshedContext = ModelContext(container)
+        let refreshedContext = initialContext ?? Self.makeStoreContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+        try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.task])
+        let unique = Self.canonicalReplicas(from: fetched)
         context = refreshedContext
         // Deduplicate first, then hide: the replica presentation would show
         // decides whether the logical task is in Recently Deleted or the Done
         // log, exactly as it decides every other field.
-        let winners = visibleUniqueTasks(from: fetched)
+        let winners = unique
         indexDoneSearch(winners)
         tasks = winners.filter {
             $0.deletedAt == nil && $0.doneLoggedAt == nil
         }
         revision &+= 1
+        familyIndexCache = nil
     }
 
     /// CloudKit can't enforce a unique UUID attribute. If a malformed import
@@ -3668,6 +3962,28 @@ final class TaskStore: ObservableObject {
         return maximum + Self.manualOrderStride
     }
 
+    /// A new subtask's order at the end of its state group (canonical
+    /// insertion, Phase 3 UX plan § 2.3.1). Higher orders come first, and a
+    /// missing order reads as 0. A lone subtask in an empty or unordered
+    /// group stays unordered (creation time puts it last).
+    private func endManualOrder(status: TaskStatus, parentID: UUID?, batch: Bool, updatedAt: Date) throws -> Int64? {
+        // The display group: every unfinished state together, or Done
+        // (review P2-3: a Todo appended after Later rows, not before them).
+        let isDone = status == .done
+        let group = tasks.filter { ($0.status == .done) == isDone && $0.parentID == parentID }
+        let orders = group.map { $0.manualOrder ?? 0 }
+        if !batch, group.allSatisfy({ $0.manualOrder == nil }) { return nil }
+        guard let lowest = orders.min() else { return Self.manualOrderStride }
+        guard lowest >= .min + Self.manualOrderStride else {
+            let orderedGroup = (parentID.map(subtasks(of:)) ?? orderedTasks(for: status)).filter {
+                ($0.status == .done) == isDone && $0.parentID == parentID
+            }
+            try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
+            return 0
+        }
+        return lowest - Self.manualOrderStride
+    }
+
     private func sparseManualOrder(at index: Int, in orderedGroup: [TaskItem]) -> Int64? {
         guard orderedGroup.indices.contains(index) else { return nil }
         if orderedGroup.count == 1 { return Self.manualOrderStride }
@@ -3699,7 +4015,9 @@ final class TaskStore: ObservableObject {
         to orderedGroup: [TaskItem],
         updatedAt: Date
     ) throws {
+        WorkspaceLegacyBridge.captureBeforeMutations(orderedGroup, in: context)
         let groups = try storedTaskGroups(matching: Set(orderedGroup.map(\.id)))
+        WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         for (index, item) in orderedGroup.enumerated() {
             let order = Int64(orderedGroup.count - index) * Self.manualOrderStride
             let shown = TaskContentSnapshot(item)
@@ -3712,7 +4030,7 @@ final class TaskStore: ObservableObject {
                     changed = true
                 }
                 // A copy that already holds its order is not written at all.
-                if changed, agrees { replica.updatedAt = updatedAt }
+                if changed, agrees { replica.updatedAt = max(replica.updatedAt, updatedAt) }
             }
         }
     }
@@ -3772,5 +4090,23 @@ final class TaskStore: ObservableObject {
         parts.append(task.dueDayRaw ?? "")
         parts.append(String(reflecting: task.persistentModelID))
         return parts.joined(separator: "\u{1F}")
+    }
+}
+
+
+extension TaskStore {
+    private static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
+        #if os(macOS)
+        return WorkspaceLegacyBridge.context(for: container, captureScopes: false)
+        #else
+        let context = ModelContext(container); context.autosaveEnabled = false; return context
+        #endif
+    }
+    private static func persistStoreContext(_ context: ModelContext, using writer: @escaping (ModelContext) throws -> Void, history: Bool) throws {
+        #if os(macOS)
+        try WorkspaceLegacyBridge.persist(context, using: writer, sourceName: "TaskStore", history: history)
+        #else
+        try writer(context)
+        #endif
     }
 }

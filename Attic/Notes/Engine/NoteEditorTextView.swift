@@ -133,6 +133,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
     override var shouldDrawInsertionPoint: Bool { marquee?.isEmpty != false && super.shouldDrawInsertionPoint }
     var proseTextCompletionEnabled = false
+    /// A cached native view is inert between workspace leases.
+    var isSuspended = false
+
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        !isSuspended && super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    }
+
+    override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
+        !isSuspended && super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
+    }
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
     /// After each layout pass: the page keeps the title's accessories (the
     /// note menu button and the tag line) on the title's lines.
@@ -144,6 +154,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         didSet { if isTrackingMouseSelection != oldValue { onMouseSelectionTracking?(isTrackingMouseSelection) } }
     }
     var onMouseSelectionTracking: ((Bool) -> Void)?
+    /// Set in the composed task-note host (UX plan § 9.1), where this view
+    /// does not scroll on its own: caret visibility, the selection bar,
+    /// Find and accessibility frames use the shared scroll's one mapper.
+    var coordinateMapper: NoteCoordinateMapper?
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if coordinateMapper != nil, window?.firstResponder === self, engine?.find.handleKey(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+
     /// Views laid over the text (the title's accessories), read by
     /// VoiceOver after the text.
     var accessoryViews: [NSView] = []
@@ -849,6 +869,16 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         return result
     }
 
+    /// A menu/key action queued by the native view belongs to this attachment,
+    /// even when an unchanged cached view later resumes in another lease.
+    private func queueObjectCommand(_ command: NoteObjectCommand, objectID: UUID, engine: NoteEditorEngine) {
+        let generation = engine.viewGeneration
+        Task { [weak self] in
+            guard self?.engine === engine, engine.viewGeneration == generation else { return }
+            _ = await engine.perform(command, objectID: objectID)
+        }
+    }
+
     // MARK: A person's own editing
 
     private func asUserEdit<T>(_ body: () -> T) -> T {
@@ -881,7 +911,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
            object is NoteImageAttachment || object is NoteFileAttachment {
             let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
             if flags.isEmpty, event.charactersIgnoringModifiers == " " {
-                Task { await engine.perform(.quickLook, objectID: object.objectID) }
+                queueObjectCommand(.quickLook, objectID: object.objectID, engine: engine)
                 return
             }
         }
@@ -1021,7 +1051,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     /// The placeholder's line, the column's full width.
     var placeholderRect: NSRect {
-        let height = max(NoteTextStyle.titleLineHeight, ceil((engine?.style.titleFont).map { $0.ascender - $0.descender } ?? 0))
+        let font = engine?.isBodyOnly == true ? engine?.style.bodyFont : engine?.style.titleFont
+        let height = max(NoteTextStyle.titleLineHeight, ceil(font.map { $0.ascender - $0.descender } ?? 0))
         return NSRect(x: 0, y: textContainerOrigin.y, width: bounds.width, height: height + 4)
     }
 
@@ -1052,8 +1083,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         drawsPlaceholder = showsPlaceholder
         guard drawsPlaceholder, let engine else { return }
         let origin = textContainerOrigin
-        let placeholder = NSAttributedString(string: String(localized: "Title"), attributes: [
-            .font: engine.style.titleFont,
+        // A task's note has no title in its text (§ 2.12): its empty writing
+        // invites writing instead (§ 5.5).
+        let placeholder = NSAttributedString(string: engine.isBodyOnly ? String(localized: "Write, or drop a file")
+                                                                       : String(localized: "Title"), attributes: [
+            .font: engine.isBodyOnly ? engine.style.bodyFont : engine.style.titleFont,
             .foregroundColor: engine.style.placeholderColor
         ])
         placeholder.draw(at: NSPoint(x: origin.x + (textContainer?.lineFragmentPadding ?? 0), y: origin.y))
@@ -1071,6 +1105,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// covered viewport. Resolve a distant target's preceding layout first:
     /// TextKit's estimated positions differ when paragraphs wrap at 340/420.
     override func scrollRangeToVisible(_ range: NSRange) {
+        if let coordinateMapper { coordinateMapper.revealRange(range, margin: 4); return }
         guard let engine else { return super.scrollRangeToVisible(range) }
         guard range.location != NSNotFound,
               range.location <= engine.textStorage.length,
@@ -1102,6 +1137,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if refusesUnexpectedCalloutInput() { return }
         let generation = engine?.history.recordingGeneration
         defer { engine?.history.completeSelection(since: generation) }
+        guard !isSuspended else { return }
         guard let engine, !engine.isWritingToolsSessionActive else {
             return super.insertText(string, replacementRange: replacementRange)
         }
@@ -1132,6 +1168,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         if refusesUnexpectedCalloutInput() { return }
+        guard !isSuspended else { return }
         if !hasMarkedText() {
             let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange
             engine?.history.beginComposition(replacing: replaced)
@@ -1185,7 +1222,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
-            Task { await engine.perform(.delete, objectID: object.objectID) }
+            queueObjectCommand(.delete, objectID: object.objectID, engine: engine)
             return
         }
         if engine?.handleDeleteBackward() == true { return }
@@ -1249,7 +1286,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
-            Task { await engine.perform(.delete, objectID: object.objectID) }
+            queueObjectCommand(.delete, objectID: object.objectID, engine: engine)
             return
         }
         asUserEdit { super.delete(sender) }
@@ -1260,14 +1297,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
            let object = engine.object(at: selectedRange().location),
            object is NoteImageAttachment || object is NoteFileAttachment {
             let command: NoteObjectCommand = object is NoteImageAttachment ? .copyImage : .copyFile
-            Task { await engine.perform(command, objectID: object.objectID) }
+            queueObjectCommand(command, objectID: object.objectID, engine: engine)
             return
         }
         super.copy(sender)
     }
     @objc func printNote(_ sender: Any?) {
         guard let engine else { return }
-        Task { _ = await engine.printNote() }
+        let generation = engine.viewGeneration
+        Task { [weak self] in
+            guard self?.engine === engine, engine.viewGeneration == generation else { return }
+            _ = await engine.printNote()
+        }
     }
 
     /// File › Print… (⌘P in the menu bar) prints the note as the engine
@@ -1351,6 +1392,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard !isSuspended else { return false }
         // A detached note view must not fall back to AppKit's unrestricted
         // clipboard importer while its engine is being replaced.
         guard let engine else { return false }
@@ -1360,8 +1402,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if engine.isPerformingSelfMove { return engine.paste(fragmentData: data, at: target) }
             // The private type owns this paste even if verification refuses it:
             // AppKit must not fall back to plain text and flatten its objects.
+            let generation = engine.viewGeneration
             Task { @MainActor [weak self, weak engine] in
-                guard let self, let engine, self.engine === engine, self.rangeForUserTextChange == target else { return }
+                guard let self, let engine, self.engine === engine, engine.viewGeneration == generation,
+                      self.rangeForUserTextChange == target else { return }
                 _ = await engine.pasteDurably(fragmentData: data, at: target)
             }
             return true
@@ -1418,6 +1462,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
             if item.action == #selector(copy(_:)) { return true }
             if item.action == #selector(cut(_:)) || item.action == #selector(delete(_:)) { return isEditable }
         }
+
         if let engine {
             if item.action == #selector(undo(_:)) {
                 let name = engine.undoCommandName
@@ -1451,7 +1496,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 guard let object = engine.object(at: location),
                       object is NoteImageAttachment || object is NoteFileAttachment else { continue }
                 setSelectedRange(NSRange(location: location, length: 1))
-                Task { await engine.perform(.quickLook, objectID: object.objectID) }
+                queueObjectCommand(.quickLook, objectID: object.objectID, engine: engine)
                 return
             }
         }
@@ -1908,3 +1953,6 @@ final class NoteBlockDragDim {
         CATransaction.flush()
     }
 }
+/// NSTextView already answers the finder's client calls (string, ranges,
+/// rects, content views and `scrollRangeToVisible`); the composed host's own
+/// `NSTextFinder` uses it as its client.

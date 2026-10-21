@@ -221,21 +221,32 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         XCTAssertEqual(library.undo.undoName(in: .tasks), "Change Task State")
     }
 
-    func testCommittedArchivedUpdateReportsSuccessWhenListRefreshFails() throws {
-        let (parentID, _) = try archivedFamily(in: store)
+    func testCommittedArchivedUpdateReportsSuccessAndRetriesFailedListRefresh() throws {
+        let (parentID, childID) = try archivedFamily(in: store)
+        let before = try XCTUnwrap(store.listedEditableState(of: parentID))
+        let childBefore = try XCTUnwrap(store.listedEditableState(of: childID))
+        let loggedAt = try XCTUnwrap(store.listedTask(withID: parentID)?.doneLoggedAt)
         store.listRefreshFailures = 1
         let result = try call("update_task", ["id": parentID.uuidString, "state": "inProgress", "title": "Committed"])
         XCTAssertNotNil(result["task"], "a committed command must not invite an agent retry")
         XCTAssertEqual(store.listRefreshFailures, 0)
-        XCTAssertTrue(store.tasks.isEmpty, "the refresh failed, leaving the old presentation intact")
-        XCTAssertTrue(store.errorNotice?.message.contains("Updated, but the list could not be refreshed") == true)
-        XCTAssertNil(library.undo.undoName(in: .tasks), "missing after-state omits history, not success")
+        let shown = try XCTUnwrap(store.tasks.first { $0.id == parentID })
+        XCTAssertEqual(shown.title, "Committed", "the scheduled retry publishes the durable update without an unrelated refresh")
+        XCTAssertEqual(shown.status, .inProgress)
+        XCTAssertTrue(shown === store.task(withID: parentID), "list and family readers agree after the retry")
+        XCTAssertNil(store.errorNotice, "a successful retry clears the presentation warning")
+        XCTAssertEqual(library.undo.undoName(in: .tasks), "Change Task State", "the recovered after-state retains the compound Undo")
         let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
         let parent = try XCTUnwrap(rows.first { $0.id == parentID })
         XCTAssertEqual(parent.title, "Committed")
         XCTAssertEqual(parent.status, .inProgress)
         XCTAssertTrue(rows.allSatisfy { $0.doneLoggedAt == nil })
-        store.refresh()
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        XCTAssertEqual(store.listedEditableState(of: parentID), before)
+        XCTAssertEqual(store.listedEditableState(of: childID), childBefore)
+        XCTAssertEqual(store.listedTask(withID: parentID)?.doneLoggedAt, loggedAt)
+        XCTAssertEqual(store.listedTask(withID: childID)?.doneLoggedAt, loggedAt)
+        XCTAssertEqual(library.undo.redoStep(in: .tasks), .applied)
         XCTAssertEqual(store.task(withID: parentID)?.title, "Committed")
     }
 

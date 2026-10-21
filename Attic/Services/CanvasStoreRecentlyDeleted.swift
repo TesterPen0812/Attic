@@ -290,6 +290,9 @@ extension CanvasStore {
         var purged = Set<UUID>()
         var stamped = false
         do {
+            #if os(macOS)
+            if alongside != nil { try WorkspaceLegacyBridge.registerContext(context, includeCanvas: true) }
+            #endif
             let boards = try context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(
                 predicate: #Predicate { $0.tombstoned && $0.purgedAt == nil }
             ))
@@ -300,6 +303,7 @@ extension CanvasStore {
                 if let confirmed, confirmed[id] != Self.winningBoardReplica(in: replicas).deletedAt { continue }
                 let unstamped = replicas.allSatisfy { $0.tombstoned && $0.purgedAt == nil && $0.recentlyDeletedAt == nil }
                 if unstamped, confirmed == nil {
+                    replicas.forEach { WorkspaceLegacyBridge.prepareMutation($0, in: context) }
                     for replica in replicas { replica.recentlyDeletedAt = timestamp }
                     stamped = true
                     continue
@@ -307,15 +311,16 @@ extension CanvasStore {
                 guard let started = unstamped ? first.deletedAt : first.recentlyDeletedAt, started < cutoff,
                       replicas.allSatisfy({ Self.boardDeletionSnapshot($0) == Self.boardDeletionSnapshot(first) }),
                       try contentIsSafeToPurge(canvasID: id) else { continue }
+                replicas.forEach { WorkspaceLegacyBridge.prepareMutation($0, in: context) }
                 let canvasID = id
                 try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
                     predicate: #Predicate { $0.canvasID == canvasID }
-                )).forEach(context.delete)
+                )).forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
                     predicate: #Predicate { $0.canvasID == canvasID }
-                )).forEach(context.delete)
+                )).forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 #if os(macOS)
-                try storedSemanticReplicas(canvasID: canvasID).forEach(context.delete)
+                try storedSemanticReplicas(canvasID: canvasID).forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 #endif
                 for replica in replicas {
                     replica.name = ""

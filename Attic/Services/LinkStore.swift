@@ -48,6 +48,7 @@ enum LinkStoreError: LocalizedError {
 final class LinkStore {
     private let container: ModelContainer
     private let now: () -> Date
+    private var writerCoordinator: WorkspaceOperationCoordinator?
     private let persist: (ModelContext) throws -> Void
     /// Answers whether an item exists and is live; supplied by the library,
     /// which knows every item store.
@@ -65,6 +66,7 @@ final class LinkStore {
         self.container = container
         self.now = now
         self.persist = persist
+        self.writerCoordinator = try? WorkspaceLegacyBridge.coordinator(for: container)
         self.endpointState = endpointState
     }
 
@@ -76,7 +78,7 @@ final class LinkStore {
         for endpoint in [source, target] where endpointState(endpoint) != .live {
             return fail(LinkStoreError.unavailableEndpoint(endpoint))
         }
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         let link = ItemLink(source: source, target: target, kind: kind, createdAt: now())
         context.insert(link)
         guard save(context) else { return nil }
@@ -123,7 +125,7 @@ final class LinkStore {
     @discardableResult
     func purgeLinks(touching items: Set<AtticItemRef>) -> Int {
         guard !items.isEmpty else { return 0 }
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         do {
             let removed = try stagePurge(touching: items, in: context)
             guard removed > 0 else { return 0 }
@@ -140,11 +142,11 @@ final class LinkStore {
     /// save therefore leaves both for the next cleanup, and no link outlives
     /// the item it points at. Returns how many link ids it staged.
     func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext) throws -> Int {
-        try Self.stagePurge(touching: items, in: context)
+        try Self.stagePurge(touching: items, in: context, deleting: { WorkspaceLegacyBridge.delete($0, in: context) })
     }
 
     /// Pure transaction staging also used before stores are presented at launch.
-    nonisolated static func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext) throws -> Int {
+    nonisolated static func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext, deleting: ((ItemLink) -> Void)? = nil) throws -> Int {
         guard !items.isEmpty else { return 0 }
         let ids = Array(Set(items.map(\.id)))
         let candidates = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
@@ -161,7 +163,7 @@ final class LinkStore {
         for group in Dictionary(grouping: replicas, by: \.id).values {
             let ends = Self.ends(of: group[0])
             guard group.allSatisfy({ Self.ends(of: $0) == ends }) else { continue }
-            group.forEach(context.delete)
+            group.forEach { row in if let deleting { deleting(row) } else { context.delete(row) } }
             removed += 1
         }
         return removed
@@ -176,7 +178,7 @@ final class LinkStore {
     /// of the link is identical (same ends, kind and removal).
     @discardableResult
     func purgeRemovedLinks(before cutoff: Date) -> Int {
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         do {
             let removedRows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
                 $0.deletedAt != nil
@@ -192,7 +194,7 @@ final class LinkStore {
                 guard replicas.allSatisfy({ ($0.deletedAt ?? .distantFuture) < cutoff && Self.snapshot(of: $0) == snapshot }) else {
                     continue
                 }
-                replicas.forEach(context.delete)
+                replicas.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 removed += 1
             }
             guard removed > 0 else { return 0 }
@@ -230,11 +232,12 @@ final class LinkStore {
     // MARK: - Private
 
     private func setDeleted(_ deleted: Bool, linkID: UUID) -> Bool {
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
         do {
             let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { $0.id == linkID }))
             guard !replicas.isEmpty else { throw LinkStoreError.missingLink(linkID) }
             let timestamp = now()
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas {
                 replica.deletedAt = deleted ? timestamp : nil
                 replica.updatedAt = timestamp
@@ -260,7 +263,7 @@ final class LinkStore {
         includingUnavailable: Bool
     ) -> [ItemLinkRecord] {
         do {
-            let context = ModelContext(container)
+            let context = WorkspaceLegacyBridge.context(for: container, captureScopes: false)
             let ids = Array(Set(try context.fetch(candidates).map(\.id)))
             guard !ids.isEmpty else { return [] }
             let rows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { ids.contains($0.id) }))
@@ -301,7 +304,7 @@ final class LinkStore {
 
     private func save(_ context: ModelContext) -> Bool {
         do {
-            try persist(context)
+            try WorkspaceLegacyBridge.persist(context, using: persist, sourceName: "LinkStore")
             lastErrorMessage = nil
             revision &+= 1
             return true

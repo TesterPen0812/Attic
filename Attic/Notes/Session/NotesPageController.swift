@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CryptoKit
+import SwiftData
 import UniformTypeIdentifiers
 
 enum NoteStatusItem: Equatable {
@@ -99,17 +100,43 @@ final class NoteSession: ObservableObject, Identifiable {
     /// save writes the engine's tags only when they differ.
     fileprivate(set) var baseTags: [String] = []
     @Published private(set) var engine: NoteEditorEngine
-    let readOnlyReason: NoteReadOnlyReason?
+    fileprivate(set) var readOnlyReason: NoteReadOnlyReason?
     /// A readable checkpoint with unavailable placements. Its display ID is
     /// separate from the original owner; it can never replace that saved note.
     let recoverySourceNoteID: UUID?
     @Published fileprivate(set) var state: State {
         didSet {
+            if case .conflict = state, state != oldValue { invalidateCallbacks() }
             engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(state,
                 activity: engine.activity, refusedSinceLastStoreSave: refusedWritingToolsSinceSave,
                 hasMarkedText: engine.textView?.hasMarkedText() == true))
         }
     }
+    struct CallbackStamp {
+        let noteID: UUID
+        let engineID: ObjectIdentifier
+        let binding: UInt64
+        let draft: UInt64
+        let revision: UUID?
+    }
+    private var bindingGeneration: UInt64 = 0
+    var usesWorkspaceBinding = false
+    weak var workspacePage: WorkspacePageSession?
+    /// Closed native task-note regions share this session's cache lifetime.
+    /// No lease, controller, timer or second draft is retained here.
+    var taskNotePresentation: TaskNoteWarmPresentation?
+    var callbackStamp: CallbackStamp {
+        .init(noteID: noteID, engineID: ObjectIdentifier(engine), binding: bindingGeneration,
+              draft: editGeneration, revision: baseRevisionID)
+    }
+    func hasSameBinding(_ stamp: CallbackStamp) -> Bool {
+        stamp.noteID == noteID && stamp.engineID == ObjectIdentifier(engine) && stamp.binding == bindingGeneration
+    }
+    func accepts(_ stamp: CallbackStamp, retainingNewerDraft: Bool = false) -> Bool {
+        hasSameBinding(stamp) && stamp.revision == baseRevisionID
+            && (retainingNewerDraft || stamp.draft == editGeneration)
+    }
+    func invalidateCallbacks() { bindingGeneration &+= 1 }
     fileprivate var editGeneration: UInt64 = 0
     /// Information for the slot (lowest priority), such as a refused change.
     @Published private(set) var noticeValue: NoteNotice?
@@ -149,11 +176,13 @@ final class NoteSession: ObservableObject, Identifiable {
     }
 
     fileprivate func adopt(noteID: UUID) {
+        invalidateCallbacks()
         self.noteID = noteID
         engine.noteID = noteID
     }
 
     fileprivate func replaceEngine(_ replacement: NoteEditorEngine) {
+        invalidateCallbacks()
         engine.detachView()
         verifiedDocumentAttachments.removeAll()
         engine = replacement
@@ -222,6 +251,9 @@ final class NotesPageController: ObservableObject {
     var versionRestoreUndoID: UUID? { versionRestoreUndo?.isUndo == true ? versionRestoreUndo?.id : nil }
     private(set) var versionHistoryCommandTask: Task<Void, Never>?
     private var isVersionRestoreReplaying = false
+    /// The task page belongs to navigation, not its disposable SwiftUI
+    /// container. Keep its single lease while Notes is behind another section.
+    var taskNotePresenter: TaskNotePresenter?
     @Published var isLibraryPresented = false
     @Published private(set) var design: AtticDesignContext = .default
     @Published private(set) var recoveryWarnings: [String] = []
@@ -304,6 +336,26 @@ final class NotesPageController: ObservableObject {
     }
     func startAndWait() async { start(); await waitForRecoveryWork() }
     func preserveDurably(_ session: NoteSession) async -> Bool {
+        // A task page can receive queued input while its close checkpoint is
+        // in flight. Preserve the newest draft before releasing its lease.
+        if session.usesWorkspaceBinding {
+            let deadline = ContinuousClock.now + recoveryResponseTimeout
+            let binding = session.callbackStamp
+            repeat {
+                guard await awaitRecoveryForUser() else { return false }
+                let failures = recoveryFailureCount
+                let result = preserve(session)
+                let queued = recoveryWork != nil
+                guard await awaitRecoveryForUser(), recoveryFailureCount == failures,
+                      session.hasSameBinding(binding) else { return false }
+                checkpointKeys[session.id] = nil
+                if hasDurableCheckpoint(session)
+                    || (result && !session.isImporting && !NoteSessionPolicy.hasPendingWork(session.state)) { return true }
+                guard queued else { return false }
+            } while ContinuousClock.now < deadline
+            reportRecoveryRetentionWarning("Recovery data is still being saved. Try again when saving finishes.")
+            return false
+        }
         guard await awaitRecoveryForUser() else { return false }
         let failures = recoveryFailureCount
         let engine = session.engine, generation = session.editGeneration
@@ -323,6 +375,15 @@ final class NotesPageController: ObservableObject {
         return ok
     }
     private func hasDurableCheckpoint(_ session: NoteSession) -> Bool {
+        if let source = session.recoverySourceNoteID, let claim = session.recoveryClaim {
+            // A read-only recovery row has a separate display ID. Its original
+            // claimed checkpoint, not a new copy under that ID, owns the draft.
+            return (try? journal?.recoveryEntries().contains { item in
+                guard case let .valid(entry, _, current) = item else { return false }
+                return entry.noteID == source && current == claim
+                    && NoteContentCodec.decode(entry.content).document == session.engine.document()
+            }) == true
+        }
         guard let owner = verifiedCheckpointOwners[session.id],
               session.recoveryClaim == owner.claim, session.editGeneration == owner.generation,
               var key = try? journalEntry(for: session,
@@ -341,7 +402,13 @@ final class NotesPageController: ObservableObject {
     func prepareToLeaveDurably(_ reason: LeaveReason) async -> Bool {
         // Quit must prove all cached drafts durable before the shell releases them.
         if reason == .quit {
-            guard await preserveAllDurably() else { return false }
+            guard await awaitRecoveryForUser(), await preserveAllDurably() else { return false }
+            // Re-check the live proofs synchronously. Running preserveAll
+            // again would queue a redundant checkpoint (preserveDurably
+            // retires its scheduling key), whose completion races the import
+            // producer's key retirement. No actor suspension separates this
+            // proof from leaving, so newer work still refuses termination.
+            return prepareToLeave(reason, verifiedCheckpointsOnly: true)
         }
         let wasVisible = isPageVisible
         let result = await performAfterRecovery(requireDrainedRecovery: reason == .quit,
@@ -577,7 +644,7 @@ final class NotesPageController: ObservableObject {
         self.prepareDocument = prepareDocument
         self.decodeRecoveryDocument = decodeRecoveryDocument
         self.decodeOpenDocument = decodeOpenDocument
-        if let diskJournal = journal as? NoteDraftJournal {
+        if let diskJournal = journal?.workspaceJournal {
             diskJournal.liveReferencedIDs = { [weak self] in
                 Set(self?.cache.values.flatMap { Array($0.engine.staged.keys) + (self?.liveAttachmentIDs(in: $0) ?? []) } ?? [])
             }
@@ -642,6 +709,10 @@ final class NotesPageController: ObservableObject {
     func refreshRecoveryWarningsAfterResolution() async {
         guard let journal else { return }
         do {
+            if let diskJournal = journal.workspaceJournal,
+               let coordinator = try? WorkspaceLegacyBridge.coordinator(for: store.container), coordinator.journal === diskJournal {
+                try await coordinator.reconcileStartup()
+            }
             let remaining = try await journal.listDamagedDurably()
             recoveryWarnings.removeAll { damagedRecoveryWarnings.contains($0) }
             damagedRecoveryWarnings = Set(remaining.map { "Recovery data is damaged: \($0.confirmation.checkpointFilename)." })
@@ -941,6 +1012,7 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func openFailedDraft(sessionID: UUID) -> Bool {
         guard let draft = cache.values.first(where: { $0.id == sessionID }) else { return false }
+        guard draft.workspacePage?.activeLease == nil else { return false }
         if active !== draft { guard prepareToLeave(.openNote) else { return false } }
         activate(draft)
         isLibraryPresented = false
@@ -986,13 +1058,14 @@ final class NotesPageController: ObservableObject {
     /// Opens a stored document in the Notes editor.
     @discardableResult
     func open(noteID: UUID, verifiedCheckpointsOnly: Bool = false, preparedLoad: NoteDocumentLoad? = nil) -> Bool {
+        guard cache[noteID]?.workspacePage?.activeLease == nil else { return false }
         if let active, active.noteID == noteID {
             present()
             return true
         }
         guard let note = store.note(withID: noteID) else { return false }
         guard prepareToLeave(.openNote, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
-        guard let session = session(for: note, preparedLoad: preparedLoad).flatMap(presentSession) else { return false }
+        guard let session = session(for: note, preparedLoad: preparedLoad).flatMap({ presentSession($0) }) else { return false }
         activate(session)
         return true
     }
@@ -1010,6 +1083,90 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
+    /// Engine-only entry point: does not present a page, create a note, or
+    /// attach a native view. Registry callers share the controller's cache.
+    func workspaceSession(noteID: UUID) -> NoteSession? {
+        // Cache admission can evict a clean incoming note before activate
+        // installs it as active. Reuse that live session rather than split it.
+        let existing = cache[noteID] ?? (active?.noteID == noteID ? active : nil)
+        if let existing, !existing.usesWorkspaceBinding {
+            // Reopen checks this UUID's physical rows only. A warm hit must
+            // not reload every unrelated note and attachment in the store.
+            let context = ModelContext(store.container)
+            context.autosaveEnabled = false
+            guard let rows = try? store.liveReplicas(of: noteID, in: context) else { return nil }
+            let latest = NoteStore.canonicalReplicas(from: rows).first
+            if latest == nil || latest?.revisionID != existing.baseRevisionID || latest?.tags != existing.baseTags {
+                // An actual external change replaces the stale store context
+                // before presentSession rebuilds the clean cached engine.
+                store.refresh()
+            }
+        }
+        guard let note = store.note(withID: noteID) else { return nil }
+        guard let session = (existing ?? session(for: note)).flatMap({
+            $0.usesWorkspaceBinding ? $0 : presentSession($0)
+        }) else { return nil }
+        if let existing, session !== existing {
+            // A closed workspace still has its ordered history. An external
+            // replacement must stop Undo before the retired editor's steps.
+            existing.engine.history.workspace?.recordExternalBarrier(origin: "another surface")
+        }
+        if cache[noteID] == nil { wire(session); cache[noteID] = session }
+        return session
+    }
+    func refreshWorkspaceSession(_ session: NoteSession) -> NoteSession? {
+        store.refresh()
+        session.invalidateCallbacks()
+        cancelWorkspaceImport(session)
+        guard let note = store.note(withID: session.noteID) else {
+            session.state = .conflict(.deleted)
+            return session
+        }
+        if NoteSessionPolicy.hasPendingWork(session.state), note.revisionID != session.baseRevisionID {
+            session.state = .conflict(.changed)
+            return session
+        }
+        guard let refreshed = presentSession(session, refreshingWorkspace: true) else { return nil }
+        if refreshed !== session { wire(refreshed); cache[refreshed.noteID] = refreshed }
+        return refreshed
+    }
+    func resumeWorkspaceDurability(_ session: NoteSession) {
+        // Admission happens after the workspace binding protects this owner.
+        touch(session.noteID)
+        if NoteSessionPolicy.hasPendingWork(session.state) {
+            scheduleSave(session); scheduleDurabilityDeadline(session)
+        }
+    }
+    func workspaceIsDurable(_ session: NoteSession) -> Bool {
+        hasDurableCheckpoint(session)
+            || (!session.isImporting && !NoteSessionPolicy.hasPendingWork(session.state))
+    }
+    func suspendWorkspace(_ session: NoteSession) {
+        guard active !== session else { return }
+        cancelWorkspaceImport(session)
+        session.saveTask?.cancel(); session.saveTask = nil
+        session.durabilityTask?.cancel(); session.durabilityTask = nil
+        session.pauseTask?.cancel(); session.pauseTask = nil
+        session.importTask?.cancel(); session.importTask = nil
+        session.engine.detachView()
+    }
+
+    func cancelWorkspaceImport(_ session: NoteSession) {
+        guard let batch = session.importBatch else { return }
+        dropImport(in: session, batchID: batch.id,
+            notice: NoteNotice(kind: .notice, detail: String(localized: "The file batch was cancelled because the page moved or closed.")))
+    }
+
+    func releaseWorkspace(_ session: NoteSession) {
+        session.usesWorkspaceBinding = false
+        session.workspacePage = nil
+        // Close revokes the page and its callbacks, not the warm editor.
+        // The same eight-slot LRU and protected-draft rules as plain Notes
+        // decide when this clean, detached session can be discarded.
+        guard cache[session.noteID] === session else { return }
+        touch(session.noteID)
+    }
+
     private func session(for note: NoteItem, preparedLoad: NoteDocumentLoad? = nil) -> NoteSession? {
         if let cached = cache[note.id] { return cached }
         let load = preparedLoad ?? store.loadDocument(noteID: note.id)
@@ -1021,7 +1178,7 @@ final class NotesPageController: ObservableObject {
         }
         let session = NoteSession(noteID: note.id, isPersisted: true, baseRevisionID: load?.revisionID,
                                   engine: makeEngine(noteID: note.id, document: document, readOnly: readOnlyReason != nil,
-                                                     tags: note.tags),
+                                                     tags: note.tags, bodyOnly: note.taskID != nil),
                                   readOnlyReason: readOnlyReason)
         session.baseTags = note.tags
         session.baseContent = note.content
@@ -1034,10 +1191,13 @@ final class NotesPageController: ObservableObject {
     }
 
     private func makeEngine(noteID: UUID, document: NoteDocument, readOnly: Bool,
-                            staged: [StagedNoteAttachment] = [], tags: [String] = []) -> NoteEditorEngine {
+                            staged: [StagedNoteAttachment] = [], tags: [String] = [],
+                            bodyOnly: Bool = false) -> NoteEditorEngine {
+        // A task's own note (`taskID` set, stored in the `taskNote` form)
+        // loads the body-only projection (UX plan § 2.12).
         let engine = NoteEditorEngine(noteID: noteID, document: document, readOnly: readOnly, design: design,
                                       today: NoteDay(date: now()), imageProvider: self, stagedAttachments: staged,
-                                      tags: tags, relativeDateNow: now)
+                                      tags: tags, relativeDateNow: now, bodyOnly: bodyOnly)
         if let editor = store.note(withID: noteID)?.externalEditorName {
             engine.history.outsideEditBarrier = editor
             engine.history.onOutsideEditBarrier = { [weak engine] editor in
@@ -1058,14 +1218,20 @@ final class NotesPageController: ObservableObject {
     }
 
     /// A clean cached session is rebuilt once, at presentation, if its store
-    /// revision or content moved. A missing clean note is dropped.
-    private func presentSession(_ session: NoteSession) -> NoteSession? {
+    /// revision moved. A missing clean note is dropped.
+    private func presentSession(_ session: NoteSession, refreshingWorkspace: Bool = false) -> NoteSession? {
+        if !refreshingWorkspace {
+            guard session.workspacePage?.activeLease == nil else { return nil }
+            // Bound notes refresh only through the workspace's history barrier.
+            if session.usesWorkspaceBinding { return session }
+        }
         if case .conflict = session.state {
             session.state = .conflict(store.note(withID: session.noteID) == nil ? .deleted : .changed)
             return session
         }
         guard case .clean = session.state, session.isPersisted else { return session }
         guard let note = store.note(withID: session.noteID) else {
+            if session.usesWorkspaceBinding { session.state = .conflict(.deleted); return session }
             cache[session.noteID] = nil
             session.engine.detachView()
             return nil
@@ -1076,6 +1242,18 @@ final class NotesPageController: ObservableObject {
                 session.baseTags = note.tags
                 session.engine.setTags(note.tags)
             }
+            return session
+        }
+        if session.usesWorkspaceBinding {
+            guard let load = store.loadDocument(noteID: session.noteID) else { return nil }
+            let reason: NoteReadOnlyReason? = if case let .readOnly(_, reason, _) = load.content { reason } else { nil }
+            session.replaceEngine(makeEngine(noteID: session.noteID, document: load.content.document ?? .blank,
+                readOnly: reason != nil, tags: note.tags, bodyOnly: note.taskID != nil))
+            session.readOnlyReason = reason
+            session.baseRevisionID = load.revisionID
+            session.baseTags = note.tags
+            session.state = reason == nil ? .clean : .readOnly
+            wire(session)
             return session
         }
         cache[session.noteID] = nil
@@ -1170,8 +1348,8 @@ final class NotesPageController: ObservableObject {
             guard let self, let session, let engine else { return false }
             guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
                     refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave,
-                    hasMarkedText: engine.textView?.hasMarkedText() == true) else {
-                engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
+                    hasMarkedText: session.engine.textView?.hasMarkedText() == true) else {
+                session.engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
                 return false
             }
             let saved = session.isImporting && self.hasDurableImportCheckpoint(session) ? true : self.save(session)
@@ -1179,7 +1357,7 @@ final class NotesPageController: ObservableObject {
             guard saved, session.isPersisted,
                   self.store.recordVersion(noteID: session.noteID, reason: .beforeWritingTools) else {
                 session.refusedWritingToolsSinceSave = true
-                engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
+                session.engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
                 return false
             }
             return true
@@ -1207,7 +1385,7 @@ final class NotesPageController: ObservableObject {
             let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
                 ? .onScreen : .background
             // A session still holding a checkpoint claim keeps it reachable.
-            return session.recoveryClaim == nil
+            return !session.usesWorkspaceBinding && session.recoveryClaim == nil
                 && NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
                                               hasBatch: session.isImporting, presence: presence)
         }) {
@@ -1243,16 +1421,17 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func prepareToLeave(_ reason: LeaveReason, verifiedCheckpointsOnly: Bool = false) -> Bool {
         if reason != .openNote { openRequestGeneration &+= 1 }
-        if let active, !canLeaveComposition(in: active) { return false }
+        let visibleSession = (reason == .hide || reason == .pageSwitch || reason == .quit) ? (taskNotePresenter?.session ?? active) : active
+        if let active = visibleSession, !canLeaveComposition(in: active) { return false }
         let retainsSession = reason == .hide || reason == .pageSwitch
         if reason == .hide || reason == .quit {
             guard preserveAll(allowQueued: retainsSession, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
-        } else if let session = active {
+        } else if let session = visibleSession {
             captureViewState(session)
             guard preserve(session, allowQueued: retainsSession, verifiedCheckpointsOnly: verifiedCheckpointsOnly) else { return false }
         }
         endProposalReview()
-        if let session = active {
+        if let session = visibleSession {
             // The session and its history survive navigation (and may keep
             // their native view during a transition). A new visit must start
             // a new typing run even when its caret returns to the same edge.
@@ -1265,6 +1444,8 @@ final class NotesPageController: ObservableObject {
             session.pauseTask?.cancel()
         }
         if reason == .pageSwitch || reason == .hide || reason == .quit {
+            taskNotePresenter?.model.setFocusInside(false)
+            taskNotePresenter?.model.setPointerInside(false)
             isPageVisible = false
         }
         closeHistory()
@@ -1329,6 +1510,7 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func preserveAll(allowQueued: Bool = false, verifiedCheckpointsOnly: Bool = false) -> Bool {
         if let active { captureViewState(active) }
+        if let session = taskNotePresenter?.session { captureViewState(session) }
         var ok = true
         for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
             ok = preserve(session, allowQueued: allowQueued, verifiedCheckpointsOnly: verifiedCheckpointsOnly) && ok
@@ -1383,6 +1565,7 @@ final class NotesPageController: ObservableObject {
                 // replacement and quit wait for the verified checkpoint.
                 let bytes = journalStaged(for: session, document: document)
                 let noteID = session.noteID, generation = session.editGeneration
+                let stamp = session.callbackStamp
                 queueRecoveryWork { [weak self, session] in
                     guard let self, session.noteID == noteID else { return }
                     if self.checkpointKeys[session.id] == key && session.recoveryClaim != nil { return }
@@ -1391,13 +1574,19 @@ final class NotesPageController: ObservableObject {
                         let claim = try await journal.writeDurably(entry, staged: bytes, replacing: session.recoveryClaim)
                         guard session.noteID == noteID else { return }
                         session.recoveryClaim = claim
-                        self.checkpointKeys[session.id] = key
-                        self.verifiedCheckpointKeys[session.id] = key
-                        self.verifiedCheckpointOwners[session.id] = (generation, claim)
                         if session.noticeValue?.kind == .saving || session.noticeValue?.kind == .stillSaving { session.notice = nil }
+                        if session.accepts(stamp) {
+                            self.checkpointKeys[session.id] = key
+                            self.verifiedCheckpointKeys[session.id] = key
+                            self.verifiedCheckpointOwners[session.id] = (generation, claim)
+                        }
                         if session.isConflict { return }
                         if !silent { session.state = .notSaved(self.storeMessage()) }
-                    } catch { self.recoveryFailureCount += 1; session.state = .onlyInMemory("Recovery could not be saved: \(error.localizedDescription)") }
+                    } catch {
+                        self.recoveryFailureCount += 1
+                        if session.notice == "Saving recovery data…" { session.notice = nil }
+                        session.state = .onlyInMemory("Recovery could not be saved: \(error.localizedDescription)")
+                    }
                 }
                 session.showNotice(NoteNotice(kind: .saving, detail: "Saving recovery data…"))
                 return allowQueued
@@ -1523,16 +1712,12 @@ final class NotesPageController: ObservableObject {
             return
         }
         let generation = session.editGeneration
-        let noteID = session.noteID
-        let engine = session.engine
-        let baseRevisionID = session.baseRevisionID
+        let stamp = session.callbackStamp
         let tags = session.engine.tags
         let document = session.engine.document()
         let staged = session.engine.stagedAttachments(for: document)
         let prepared = await prepareDocument(document)
-        guard !Task.isCancelled, noteID == session.noteID, engine === session.engine,
-              baseRevisionID == session.baseRevisionID,
-              isDeadline || generation == session.editGeneration else { return }
+        guard !Task.isCancelled, session.accepts(stamp, retainingNewerDraft: isDeadline) else { return }
         if session.isImporting { _ = checkpoint(session, silent: true); return }
         guard let prepared else { _ = preserve(session); return }
         if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared,
@@ -1900,6 +2085,9 @@ final class NotesPageController: ObservableObject {
 
     /// Materializes recovery drafts before agent access starts. Safe to call
     /// again from `start()` in tests that do not create an AppCoordinator.
+    func recoveryStartupFailed(_ error: Error) {
+        reportRecoveryRetentionWarning("Recovery could not be checked: \(error.localizedDescription)")
+    }
     func recoverAtLaunch() {
         guard !didRecoverAtLaunch else { return }
         if let journal, journal.requiresAsyncIO {
@@ -1908,7 +2096,16 @@ final class NotesPageController: ObservableObject {
             queueRecoveryWork { [weak self] in
                 guard let self else { return }
                 do {
+                    if let diskJournal = journal.workspaceJournal {
+                        let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.store.container)
+                        if coordinator.journal !== diskJournal { try coordinator.adoptJournal(diskJournal) }
+                        try await coordinator.finishLaunch()
+                    }
                     _ = try await journal.readRecoveryEntries()
+                    // A faster guarded save can now reach missing-row repair
+                    // while the store's existing cache collection still owns
+                    // its bytes. Finish that work before this synchronous save.
+                    await self.store.waitForAttachmentReconciliation()
                     // Prepare stored-byte proofs off-main before comparing
                     // matching checkpoint documents at startup.
                     var savedProofs: [UUID: [UUID: StagedNoteAttachment]] = [:]
@@ -2015,7 +2212,8 @@ final class NotesPageController: ObservableObject {
                 isPersisted: stored != nil || entry.baseRevisionID != nil || !replicas.isEmpty,
                 baseRevisionID: entry.baseRevisionID,
                 engine: makeEngine(noteID: entry.noteID, document: document, readOnly: false, staged: staged,
-                                   tags: entry.tags ?? storedTags),
+                                   tags: entry.tags ?? storedTags,
+                                   bodyOnly: store.note(withID: entry.noteID)?.taskID != nil),
                 readOnlyReason: nil)
             // Unchanged tags stay the stored ones' business (nothing is written
             // over them), yet the draft keeps them, even if its note is gone.
@@ -2234,6 +2432,7 @@ final class NotesPageController: ObservableObject {
             var loaded: [NoteImportedObject] = []
             for url in urls {
                 guard !Task.isCancelled, session.importBatch?.id == batchID else { return }
+                let stamp = session.callbackStamp
                 let type = UTType(filenameExtension: url.pathExtension) ?? .data
                 let item: NoteImportedObject
                 // Metadata admission happens before either loader opens the
@@ -2246,6 +2445,11 @@ final class NotesPageController: ObservableObject {
                     item = NoteImportedObject(staged: image.copying(id: UUID()), pixelSize: size)
                 } else {
                     item = await Self.loadFile(url, type: type.identifier)
+                }
+                guard !Task.isCancelled, session.importBatch?.id == batchID else { return }
+                if session.usesWorkspaceBinding, !session.accepts(stamp, retainingNewerDraft: true) {
+                    self.cancelWorkspaceImport(session)
+                    return
                 }
                 if let payload = item.staged,
                    let failure = self.importAdmissionFailure(payload, in: session, earlier: loaded) {
@@ -3214,7 +3418,7 @@ extension NotesPageController {
         // 3. One complete copy, then it opens (the leave already ran).
         guard case let .success((newID, _)) = store.createDocumentNote(id: UUID(), document: copy, staged: images,
                                                                      tags: tags.isEmpty ? nil : tags),
-              let note = store.note(withID: newID), let session = session(for: note).flatMap(presentSession) else {
+              let note = store.note(withID: newID), let session = session(for: note).flatMap({ presentSession($0) }) else {
             active?.showNotice(NoteNotice(kind: .noDuplicate, detail: String(localized: "The note couldn’t be duplicated: \(storeMessage())")))
             return nil
         }

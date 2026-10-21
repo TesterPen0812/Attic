@@ -71,9 +71,12 @@ final class NoteUndoHistory {
             self.group = group
         }
 
+        /// The text this step would restore (tests).
+        var restores: String { other.string }
+        var captureGroup: Int { group }
     }
 
-    struct TableSnapshot {
+    struct TableSnapshot: Equatable {
         var id: UUID
         var before: NoteTable
         var after: NoteTable
@@ -118,8 +121,12 @@ final class NoteUndoHistory {
     var outsideEditBarrier: String?
     var onOutsideEditBarrier: ((String) -> Void)?
 
-    private(set) var undoOps: [Op] = []
-    private(set) var redoOps: [Op] = []
+    var canPrepareWorkspaceCommand: Bool { !isChangeInFlight && composition == nil && (canReplay?() ?? true) }
+    weak var workspace: WorkspaceHistory?
+    private var localUndoOps: [Op] = []
+    private var localRedoOps: [Op] = []
+    var undoOps: [Op] { workspace?.payloads(for: self, redo: false) ?? localUndoOps }
+    var redoOps: [Op] { workspace?.payloads(for: self, redo: true) ?? localRedoOps }
     private(set) var log: [String] = []
     private(set) var isReplaying = false
     private(set) var isTraversing = false
@@ -139,17 +146,20 @@ final class NoteUndoHistory {
         self.limit = limit
     }
 
-    var canUndo: Bool { !undoOps.isEmpty && (canReplay?() ?? true) }
-    var canRedo: Bool { !redoOps.isEmpty && (canReplay?() ?? true) }
-    var undoActionName: String { undoOps.last?.name ?? "" }
-    var redoActionName: String { redoOps.first?.name ?? "" }
+    var canUndo: Bool { (workspace?.canUndo ?? !undoOps.isEmpty) && (canReplay?() ?? true) }
+    var canRedo: Bool { (workspace?.canRedo ?? !redoOps.isEmpty) && (canReplay?() ?? true) }
+    var undoActionName: String { workspace?.undoName ?? undoOps.last?.name ?? "" }
+    var redoActionName: String { workspace?.redoName ?? redoOps.first?.name ?? "" }
     var isChangeInFlight: Bool { !pending.isEmpty }
 
     /// Bytes reachable by either side of Undo/Redo remain live until the
     /// history step is discarded. This is queried for purge, never per key.
     var referencedAttachmentIDs: Set<UUID> {
+        return attachmentIDs(in: undoOps + redoOps)
+    }
+    func attachmentIDs(in payloads: [Op]) -> Set<UUID> {
         var ids = Set<UUID>()
-        for op in undoOps + redoOps {
+        for op in payloads {
             for text in [op.current, op.other] {
                 text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
                     if let image = value as? NoteImageAttachment { ids.insert(image.attachmentID) }
@@ -161,8 +171,9 @@ final class NoteUndoHistory {
     }
 
     func reset() {
-        undoOps.removeAll()
-        redoOps.removeAll()
+        workspace?.clear()
+        localUndoOps.removeAll()
+        localRedoOps.removeAll()
         open = nil
         pending.removeAll()
         selectionCompletion = nil
@@ -212,6 +223,7 @@ final class NoteUndoHistory {
                                        TableSnapshot?, NSRange?, NSRange?)
         fileprivate let undo: [Saved]
         fileprivate let redo: [Saved]
+        fileprivate let workspace: UndoRoute.Checkpoint?
     }
 
     func checkpoint() -> Checkpoint {
@@ -219,7 +231,7 @@ final class NoteUndoHistory {
         func copy(_ ops: [Op]) -> [Checkpoint.Saved] {
             ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagPickerDelta, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot, $0.emptyParagraphSnapshot, $0.tableSnapshot, $0.selectionBefore, $0.selectionAfter) }
         }
-        return Checkpoint(undo: copy(undoOps), redo: copy(redoOps))
+        return Checkpoint(undo: copy(undoOps), redo: copy(redoOps), workspace: workspace?.checkpoint())
     }
 
     /// Puts the history back to a checkpoint taken when the text was what it
@@ -242,8 +254,9 @@ final class NoteUndoHistory {
                 return op
             }
         }
-        undoOps = restore(checkpoint.undo)
-        redoOps = restore(checkpoint.redo)
+        let undo = restore(checkpoint.undo), redo = restore(checkpoint.redo)
+        if let snapshot = checkpoint.workspace { workspace?.rewind(to: snapshot) }
+        else { localUndoOps = undo; localRedoOps = redo }
         open = nil
         pending.removeAll()
         selectionCompletion = nil
@@ -337,7 +350,7 @@ final class NoteUndoHistory {
                 op.selectionBefore = entry.selectionBefore
                 updateEmptyParagraphSnapshot(op, before: entry.emptyParagraphBefore)
                 append(op)
-                open = (pending.count == 1 && groupID == nil) ? undoOps.last : nil
+                open = (pending.count == 1 && groupID == nil) ? op : nil
             }
         }
     }
@@ -372,9 +385,10 @@ final class NoteUndoHistory {
         recordingGeneration &+= 1
         if op.selectionBefore == nil { op.selectionBefore = textView?.selectedRange() }
         op.selectionAfter = textView?.selectedRange()
-        undoOps.append(op)
-        redoOps.removeAll()
-        if undoOps.count > limit { undoOps.removeFirst(undoOps.count - limit) }
+        if let workspace { workspace.capture(op, from: self); return }
+        localUndoOps.append(op)
+        localRedoOps.removeAll()
+        if localUndoOps.count > limit { localUndoOps.removeFirst(localUndoOps.count - limit) }
     }
 
     /// The text view announces a composition that starts by replacing
@@ -524,7 +538,7 @@ final class NoteUndoHistory {
             op.selectionAfter = textView?.selectedRange()
             recordingGeneration &+= 1
             op.tableSnapshot = snapshot
-            redoOps.removeAll()
+            localRedoOps.removeAll()
             return
         }
         open = nil
@@ -554,8 +568,267 @@ final class NoteUndoHistory {
 
     // MARK: Undo and redo
 
+    /// A workspace may own these payloads without invoking the adapter's
+    /// standalone cursor. Preparation simulates the whole group; installation
+    /// runs only after its model transaction (if any) is proven committed.
+    struct ReplayMetadata: Equatable {
+        var tags: [String] = []
+        var paragraphs: [Int: ParagraphState] = [:]
+        var typingMarks: Set<NoteMark.Kind> = []
+        var emptyParagraph: NoteBlock?
+        var typingMarkValues: [NoteMark.Kind: Any] = [:]
+        var tables: [UUID: NoteTable] = [:]
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.tags == rhs.tags && lhs.paragraphs == rhs.paragraphs && lhs.typingMarks == rhs.typingMarks
+                && lhs.emptyParagraph == rhs.emptyParagraph && lhs.tables == rhs.tables
+                && NSDictionary(dictionary: lhs.typingMarkValues).isEqual(to: rhs.typingMarkValues)
+        }
+    }
+    var readReplayMetadata: (() -> ReplayMetadata)?
+    var installReplayMetadata: ((ReplayMetadata) -> Void)?
+    var replayDocument: ((NSAttributedString, ReplayMetadata) -> NoteDocument?)?
+
+    struct PreparedReplay {
+        fileprivate let originalMetadata: ReplayMetadata?
+        let metadata: ReplayMetadata?
+        let document: NoteDocument?
+        fileprivate let original: NSAttributedString
+        let candidate: NSAttributedString
+        let selection: NSRange
+        fileprivate let swaps: [(Op, PayloadState, PayloadState)]
+    }
+
+    fileprivate struct PayloadState {
+        let range: NSRange
+        let current: NSAttributedString
+        let other: NSAttributedString
+        let inert: Bool
+        let tag: (tag: String, adds: Bool, changesTags: Bool)?
+        let picker: (adds: [String], removes: [String])?
+        let paragraph: (location: Int, before: ParagraphState, after: ParagraphState)?
+        let mark: (kind: NoteMark.Kind, before: Any?, after: Any?)?
+        let emptyParagraph: (before: NoteBlock?, after: NoteBlock?)?
+        let table: TableSnapshot?
+        let selectionBefore: NSRange?
+        let selectionAfter: NSRange?
+
+        init(_ op: Op, flipped: Bool = false) {
+            range = NSRange(location: op.range.location, length: flipped ? op.other.length : op.range.length)
+            current = NSAttributedString(attributedString: flipped ? op.other : op.current)
+            other = NSAttributedString(attributedString: flipped ? op.current : op.other)
+            inert = op.isInert
+            tag = op.tagDelta.map { ($0.tag, flipped ? !$0.adds : $0.adds, $0.changesTags) }
+            picker = op.tagPickerDelta.map { flipped ? ($0.removes, $0.adds) : $0 }
+            paragraph = op.paragraphStyleSnapshot.map { flipped ? ($0.location, $0.after, $0.before) : $0 }
+            mark = op.typingMarkSnapshot.map { flipped ? ($0.kind, $0.after, $0.before) : $0 }
+            emptyParagraph = op.emptyParagraphSnapshot.map { flipped ? ($0.after, $0.before) : $0 }
+            table = op.tableSnapshot.map { value in
+                flipped ? TableSnapshot(id: value.id, before: value.after, after: value.before,
+                    focusBefore: value.focusAfter, focusAfter: value.focusBefore, cell: value.cell) : value
+            }
+            selectionBefore = flipped ? op.selectionAfter : op.selectionBefore
+            selectionAfter = flipped ? op.selectionBefore : op.selectionAfter
+        }
+
+        func stillMatches(_ op: Op) -> Bool {
+            let other = PayloadState(op)
+            return range == other.range && current.isEqual(to: other.current) && self.other.isEqual(to: other.other)
+                && inert == other.inert && tag?.tag == other.tag?.tag && tag?.adds == other.tag?.adds
+                && tag?.changesTags == other.tag?.changesTags && picker?.adds == other.picker?.adds
+                && picker?.removes == other.picker?.removes && paragraph?.location == other.paragraph?.location
+                && paragraph?.before == other.paragraph?.before && paragraph?.after == other.paragraph?.after
+                && mark?.kind == other.mark?.kind && Self.same(mark?.before, other.mark?.before) && Self.same(mark?.after, other.mark?.after)
+                && emptyParagraph?.before == other.emptyParagraph?.before && emptyParagraph?.after == other.emptyParagraph?.after
+                && (emptyParagraph == nil) == (other.emptyParagraph == nil)
+                && table == other.table && selectionBefore == other.selectionBefore && selectionAfter == other.selectionAfter
+        }
+
+        private static func same(_ lhs: Any?, _ rhs: Any?) -> Bool {
+            NSDictionary(dictionary: lhs.map { ["value": $0] } ?? [:]).isEqual(to: rhs.map { ["value": $0] } ?? [:])
+        }
+        func install(on op: Op) {
+            op.range = range; op.current = current; op.other = other; op.isInert = inert
+            op.tagDelta = tag; op.tagPickerDelta = picker; op.paragraphStyleSnapshot = paragraph; op.typingMarkSnapshot = mark
+            op.emptyParagraphSnapshot = emptyParagraph
+            op.tableSnapshot = table; op.selectionBefore = selectionBefore; op.selectionAfter = selectionAfter
+        }
+    }
+
+    /// A committed command can retain its text patch without recording an
+    /// independent text entry. The workspace records the whole operation once.
+    func commandPayload(before: NSAttributedString, name: String) -> Op {
+        let after = NSAttributedString(attributedString: storage)
+        return Op(range: NSRange(location: 0, length: after.length), current: after, other: before,
+           name: name, group: nextOwnGroup())
+    }
+
+    struct PreparedCommand {
+        fileprivate let original: NSAttributedString
+        let candidate: NSAttributedString
+        let payload: Op
+    }
+    func prepareCommand(_ candidate: NSAttributedString, name: String) -> PreparedCommand? {
+        guard canPrepareWorkspaceCommand else { return nil }
+        let before = NSAttributedString(attributedString: storage)
+        if let textView {
+            let previous = isReplaying; isReplaying = true
+            let allowed = textView.shouldChangeText(in: NSRange(location: 0, length: before.length), replacementString: candidate.string)
+            isReplaying = previous
+            guard allowed else { return nil }
+        }
+        let after = NSAttributedString(attributedString: NSTextStorage(attributedString: candidate))
+        let payload = Op(range: NSRange(location: 0, length: after.length), current: after, other: before,
+            name: name, group: nextOwnGroup())
+        return .init(original: before, candidate: after, payload: payload)
+    }
+    func canInstallCommand(_ command: PreparedCommand) -> Bool {
+        canPrepareWorkspaceCommand && command.original.isEqual(to: storage)
+    }
+    @discardableResult func installCommand(_ command: PreparedCommand) -> Bool {
+        guard canInstallCommand(command) else { return false }
+        performUnrecorded {
+            storage.setAttributedString(command.candidate)
+            textView?.setSelectedRange(NSRange(location: command.candidate.length, length: 0))
+            textView?.didChangeText()
+            onReplay?(NSRange(location: 0, length: command.candidate.length))
+        }
+        return true
+    }
+
+    /// The caller supplies payload order: reverse capture order for Undo,
+    /// forward capture order for Redo. No storage, selection, callbacks, Op
+    /// payloads or standalone cursor are changed by this method.
+    func prepareReplay(_ payloads: [Op], preflight: ((NSAttributedString) -> Bool)? = nil) -> PreparedReplay? {
+        guard !payloads.isEmpty, !isChangeInFlight, composition == nil, canReplay?() ?? true else { return nil }
+        let original = NSAttributedString(attributedString: storage)
+        let candidate = NSMutableAttributedString(attributedString: original)
+        var swaps: [(Op, PayloadState, PayloadState)] = []
+        let originalMetadata = readReplayMetadata?()
+        var metadata = originalMetadata
+        var selection = textView?.selectedRange() ?? NSRange(location: 0, length: 0)
+        for op in payloads {
+            guard !op.isInert, op.range.location >= 0, op.range.length >= 0,
+                  op.range.location <= candidate.length, op.range.length <= candidate.length - op.range.location else { return nil }
+            let before = PayloadState(op), after = PayloadState(op, flipped: true)
+            guard op.externalChange == nil else { return nil }
+            if let table = before.table {
+                var found: (NoteTableAttachment, NSRange)?
+                candidate.enumerateAttribute(.attachment, in: NSRange(location: 0, length: candidate.length)) { value, range, stop in
+                    if let attachment = value as? NoteTableAttachment, attachment.objectID == table.id { found = (attachment, range); stop.pointee = true }
+                }
+                guard let (attachment, range) = found, attachment.table == table.after else { return nil }
+                candidate.addAttribute(.attachment, value: NoteTableAttachment(objectID: attachment.objectID, table: table.before, extras: attachment.extras), range: range)
+                metadata?.tables[table.id] = table.before
+            } else if op.tagPickerDelta == nil && op.paragraphStyleSnapshot == nil && op.typingMarkSnapshot == nil {
+                guard candidate.attributedSubstring(from: op.range).isEqual(to: op.current) else { return nil }
+                candidate.replaceCharacters(in: op.range, with: op.other)
+                selection = NSRange(location: NSMaxRange(after.range), length: 0)
+            }
+            if before.tag != nil || before.picker != nil || before.paragraph != nil || before.mark != nil || before.emptyParagraph != nil {
+                guard var state = metadata, installReplayMetadata != nil else { return nil }
+                var tags = Set(state.tags)
+                if let delta = before.picker {
+                    guard Set(delta.removes).isSubset(of: tags), tags.isDisjoint(with: delta.adds) else { return nil }
+                    tags.subtract(delta.removes); tags.formUnion(delta.adds)
+                }
+                if let delta = before.tag, delta.changesTags {
+                    guard delta.adds ? !tags.contains(delta.tag) : tags.contains(delta.tag) else { return nil }
+                    if delta.adds { tags.insert(delta.tag) } else { tags.remove(delta.tag) }
+                }
+                state.tags = AtticTag.normalizedSet(Array(tags))
+                if let paragraph = before.paragraph {
+                    let current = state.paragraphs[paragraph.location] ?? .init(style: .body, indent: 0)
+                    guard current == paragraph.after else { return nil }
+                    if paragraph.before == .init(style: .body, indent: 0) { state.paragraphs.removeValue(forKey: paragraph.location) }
+                    else { state.paragraphs[paragraph.location] = paragraph.before }
+                    if paragraph.location == candidate.length, let empty = state.emptyParagraph {
+                        var block = paragraph.before.block ?? empty
+                        block.style = paragraph.before.style.storageName ?? (block.style == "body" ? "body" : nil)
+                        block.level = paragraph.before.style.level
+                        block.indent = paragraph.before.indent > 0 ? paragraph.before.indent : (block.indent == 0 ? 0 : nil)
+                        state.emptyParagraph = block
+                    }
+                }
+                if let mark = before.mark {
+                    guard NSDictionary(dictionary: (state.typingMarkValues[mark.kind] ?? (state.typingMarks.contains(mark.kind) ? true : nil)).map { ["value": $0] } ?? [:])
+                        .isEqual(to: mark.after.map { ["value": $0] } ?? [:]) else { return nil }
+                    state.typingMarkValues[mark.kind] = mark.before
+                    if mark.before != nil { state.typingMarks.insert(mark.kind) } else { state.typingMarks.remove(mark.kind) }
+                }
+                if let empty = before.emptyParagraph {
+                    guard state.emptyParagraph == empty.after else { return nil }
+                    state.emptyParagraph = empty.before
+                    state.paragraphs.removeValue(forKey: original.length)
+                }
+                metadata = state
+            }
+            if let prior = before.selectionBefore { selection = prior }
+            if let boundary = op.boundaryTypingMarks {
+                metadata?.typingMarkValues = boundary
+                metadata?.typingMarks = Set(boundary.keys)
+            }
+            swaps.append((op, before, after))
+        }
+        guard preflight?(candidate) ?? true else { return nil }
+        if let textView {
+            let wasReplaying = isReplaying
+            isReplaying = true
+            let permitted = textView.shouldChangeText(in: NSRange(location: 0, length: original.length), replacementString: candidate.string)
+            isReplaying = wasReplaying
+            guard permitted else { return nil }
+        }
+        let document = metadata.flatMap { replayDocument?(candidate, $0) }
+        if replayDocument != nil, document == nil { return nil }
+        return PreparedReplay(originalMetadata: originalMetadata, metadata: metadata, document: document,
+            original: original, candidate: NSAttributedString(attributedString: candidate), selection: selection, swaps: swaps)
+    }
+
+    /// Idempotence is enforced by the original storage and payload snapshots.
+    /// The workspace, not this adapter, commits the associated cursor effect.
+    @discardableResult
+    func installReplay(_ prepared: PreparedReplay) -> Bool {
+        guard canInstallReplay(prepared) else { return false }
+        onWillReplay?()
+        isTraversing = true
+        defer { isTraversing = false }
+        performUnrecorded {
+            if !prepared.swaps.allSatisfy({ $0.1.table != nil }) { storage.setAttributedString(prepared.candidate) }
+            for (op, before, after) in prepared.swaps {
+                after.install(on: op)
+                if let table = before.table { _ = onTableSnapshot?(table.id, table.before, table.focusBefore) }
+                if prepared.metadata != nil {
+                    if let delta = before.tag { onTagFlip?(delta.tag, delta.adds, false, after.range) }
+                    continue
+                }
+                if let delta = before.picker { onTagPickerDelta?(delta.adds, delta.removes) }
+                if let state = before.paragraph { onParagraphStyleSnapshot?(state.location, state.before) }
+                if let state = before.mark { onTypingMarkSnapshot?(state.kind, state.before) }
+                if let state = before.emptyParagraph { onEmptyParagraphSnapshot?(state.before) }
+                if let delta = before.tag { onTagFlip?(delta.tag, delta.adds, delta.changesTags, after.range) }
+            }
+            textView?.setSelectedRange(prepared.selection)
+            if let metadata = prepared.metadata { installReplayMetadata?(metadata) }
+            textView?.didChangeText()
+            if let last = prepared.swaps.last, last.1.table == nil { onReplay?(last.2.range) }
+        }
+        return true
+    }
+
+    func canInstallReplay(_ prepared: PreparedReplay) -> Bool {
+        !isChangeInFlight && composition == nil && (canReplay?() ?? true)
+            && prepared.originalMetadata == readReplayMetadata?()
+            && prepared.original.isEqual(to: storage) && prepared.swaps.allSatisfy { $0.1.stillMatches($0.0) }
+    }
+
+    /// Native menus and the undo-manager shim use the same workspace route.
+    func requestReplay(redo: Bool) {
+        if let workspace { Task { _ = await workspace.replay(redo: redo) } }
+        else if redo { _ = self.redo() } else { _ = undo() }
+    }
+
     @discardableResult
     func undo() -> Bool {
+        if let workspace { return workspace.undo() }
         guard canReplay?() ?? true else { return false }
         guard let last = undoOps.last else {
             if let origin = outsideEditBarrier { onOutsideEditBarrier?(origin) }
@@ -568,17 +841,18 @@ final class NoteUndoHistory {
         let group = last.group
         var changed = false
         while let op = undoOps.last, op.group == group {
-            undoOps.removeLast()
+            localUndoOps.removeLast()
             let applied = flip(op)
-            if !applied && !op.isInert { undoOps.append(op); break }
+            if !applied && !op.isInert { localUndoOps.append(op); break }
             changed = applied || changed
-            redoOps.insert(op, at: 0)
+            localRedoOps.insert(op, at: 0)
         }
         return changed
     }
 
     @discardableResult
     func redo() -> Bool {
+        if let workspace { return workspace.redo() }
         guard canReplay?() ?? true else { return false }
         guard let first = redoOps.first else { return false }
         onWillReplay?()
@@ -588,11 +862,11 @@ final class NoteUndoHistory {
         let group = first.group
         var changed = false
         while let op = redoOps.first, op.group == group {
-            redoOps.removeFirst()
+            localRedoOps.removeFirst()
             let applied = flip(op)
-            if !applied && !op.isInert { redoOps.insert(op, at: 0); break }
+            if !applied && !op.isInert { localRedoOps.insert(op, at: 0); break }
             changed = applied || changed
-            undoOps.append(op)
+            localUndoOps.append(op)
         }
         return changed
     }

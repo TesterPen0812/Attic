@@ -250,7 +250,7 @@ final class PhaseXHunt1ReproTests: XCTestCase {
         let unversioned = try XCTUnwrap(store.create(title: "Another", body: "caf\u{E9}"))
         let copy = NoteItem(id: unversioned.id, title: "Another", body: "cafe\u{301}")
         copy.revisionID = unversioned.revisionID
-        XCTAssertEqual(store.stageDisplacedReplicas([unversioned, copy], reason: .beforeRestore, timestamp: timestamp), 2)
+        XCTAssertEqual(try store.stageDisplacedReplicas([unversioned, copy], reason: .beforeRestore, timestamp: timestamp), 2)
     }
 
     func testH2_05ProposalAttributionIdentityIsExact() throws {

@@ -13,9 +13,13 @@ import Foundation
     var hasConflict: Bool { pages.active?.isConflict == true }
     init(noteStore: NoteStore, sessionDefaults: UserDefaults? = nil, recoveryURL: URL? = nil) {
         self.noteStore = noteStore
-        pages = NotesPageController(store: noteStore, journal: recoveryURL.map {
+        let journal = recoveryURL.map {
             NoteDraftJournal(directory: $0.deletingLastPathComponent().appendingPathComponent("NoteDrafts", isDirectory: true))
-        }, defaults: sessionDefaults)
+        }
+        if let journal, let gate = try? WorkspaceLegacyBridge.coordinator(for: noteStore.container) {
+            try? gate.adoptJournal(journal)
+        }
+        pages = NotesPageController(store: noteStore, journal: journal, defaults: sessionDefaults)
         pageChanges = pages.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         activeSelection = pages.$active.sink { [weak self] session in
             self?.activeChanges = session?.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

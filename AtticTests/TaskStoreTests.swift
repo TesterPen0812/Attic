@@ -6,6 +6,106 @@ import UniformTypeIdentifiers
 
 final class TaskStoreTests: XCTestCase {
     @MainActor
+    func testFailedPlainCommitPublicationReloadsAfterRevisionWithoutUndoingDurableSave() throws {
+        let store = try makeTestStore()
+        let task = try XCTUnwrap(store.create(title: "Parent"))
+        _ = store.purgeDeleted(before: .distantPast)
+        let revision = store.revision
+        store.listRefreshFailures = 1
+        // Soft deletion leaves the presented membership and forces fallback reload.
+        XCTAssertTrue(store.delete(task))
+        XCTAssertGreaterThan(store.revision, revision)
+        XCTAssertEqual(store.listRefreshFailures, 0)
+        XCTAssertFalse(store.tasks.contains { $0.id == task.id })
+        XCTAssertNil(store.task(withID: task.id))
+        let saved = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertNotNil(saved.first { $0.id == task.id }?.deletedAt, "presentation failure cannot roll back durable deletion")
+    }
+
+    @MainActor
+    func testFailedPlainCommitAfterContextReplacementRollsBackBothReaders() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let task = try XCTUnwrap(store.create(title: "Unchanged"))
+        _ = store.task(withID: task.id)
+        _ = store.purgeDeleted(before: .distantPast)
+        gate.shouldFail = true
+        XCTAssertFalse(store.setStatus(.done, for: task))
+        let listed = try XCTUnwrap(store.tasks.first)
+        XCTAssertTrue(listed === store.task(withID: task.id))
+        XCTAssertEqual(listed.status, .todo)
+        let saved = try XCTUnwrap(ModelContext(store.container).fetch(FetchDescriptor<TaskItem>()).first)
+        XCTAssertEqual(saved.status, .todo)
+    }
+
+    @MainActor
+    func testPlainCommitRebindKeepsReplicasMCPDuplicationAndDoneSearchConsistent() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let id = UUID()
+        seed.insert(TaskItem(id: id, title: "Older replica", createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 1)))
+        seed.insert(TaskItem(id: id, title: "Shown replica", createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 2)))
+        try seed.save()
+        let store = TaskStore(container: container)
+        let tools = AgentTaskTools(store: store)
+        XCTAssertEqual(store.tasks.count, 1)
+        _ = store.task(withID: id)
+        XCTAssertTrue(store.purgeDeleted(before: .distantPast).isEmpty)
+        _ = try tools.call(name: "update_task", arguments: ["id": id.uuidString, "status": "done"])
+        XCTAssertTrue(store.tasks[0] === store.task(withID: id))
+        XCTAssertEqual(store.tasks[0].title, "Shown replica", "presentation chooses from the complete replica family")
+        let replicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(replicas.count, 2)
+        XCTAssertTrue(replicas.allSatisfy { $0.status == .done })
+        XCTAssertEqual(Set(replicas.map(\.title)), ["Older replica", "Shown replica"], "unrequested fields stay replica-specific")
+        let listing = try tools.call(name: "list_tasks", arguments: ["status": "done"])
+        XCTAssertTrue(listing.contains("Shown replica"))
+        let copies = try XCTUnwrap(store.duplicate(taskIDs: [id]))
+        XCTAssertEqual(copies.count, 1)
+        XCTAssertEqual(copies[0].status, .todo)
+        XCTAssertTrue(store.markDone(copies[0]))
+        XCTAssertEqual(copies[0].title, "Shown replica")
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: .distantFuture), 1)
+        XCTAssertEqual(store.task(withID: id)?.status, .done, "divergent replicas still block destructive cleanup")
+        XCTAssertEqual(store.indexedDoneLogCount(matching: "replica"), 1)
+        let page = store.indexedDoneLogPage(limit: 10, matching: "replica")
+        XCTAssertNil(page.failure)
+        XCTAssertEqual(page.tasks.count, 1)
+        XCTAssertTrue(store.updateListed([copies[0].id], title: "Archived renamed"))
+        XCTAssertEqual(store.indexedDoneLogCount(matching: "Archived renamed"), 1)
+        XCTAssertEqual(store.indexedDoneLogPage(limit: 10, matching: "Archived renamed").tasks.first?.title, "Archived renamed")
+        _ = try tools.call(name: "delete_task", arguments: ["id": copies[0].id.uuidString])
+        XCTAssertEqual(store.indexedDoneLogCount(matching: "Archived renamed"), 0)
+        _ = try tools.call(name: "delete_task", arguments: ["id": id.uuidString])
+        let deleted = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(deleted.count, 2)
+        XCTAssertTrue(deleted.allSatisfy { $0.deletedAt != nil })
+    }
+
+    @MainActor
+    func testPlainCommitPublishesOneInstanceForListAndFamilyReaders() throws {
+        let store = try makeTestStore()
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let first = try XCTUnwrap(store.create(title: "First", parentID: parent.id))
+        let second = try XCTUnwrap(store.create(title: "Second", parentID: parent.id))
+        _ = store.subtasks(of: parent.id)
+        XCTAssertTrue(store.purgeDeleted(before: .distantPast).isEmpty, "no-op purge replaces only the write context")
+        XCTAssertTrue(store.markDone(first))
+        let listed = try XCTUnwrap(store.tasks.first { $0.id == first.id })
+        let indexed = try XCTUnwrap(store.task(withID: first.id))
+        XCTAssertTrue(listed === indexed)
+        XCTAssertEqual(listed.status, .done)
+        XCTAssertTrue(store.subtasks(of: parent.id).contains { $0 === listed })
+        XCTAssertTrue(store.drop(taskID: first.id, into: .todo), "list-based moves see the saved state")
+        XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: first.id)), to: "Renamed"))
+        XCTAssertEqual(store.tasks.first { $0.id == first.id }?.title, "Renamed")
+        XCTAssertTrue(store.markDone(try XCTUnwrap(store.task(withID: second.id))))
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.tasks.first { $0.id == second.id })))
+        XCTAssertNil(store.task(withID: second.id))
+        XCTAssertFalse(store.subtasks(of: parent.id).contains { $0.id == second.id })
+    }
+
+    @MainActor
     func testIndexedSearchPreservesUnicodeFoundationMatching() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let context = ModelContext(container)
@@ -359,6 +459,31 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
         XCTAssertEqual(store.lastErrorOwnerID, parent.id,
                        "a child row is only reachable inside its family panel")
+    }
+
+    @MainActor
+    func testFutureDatedPresentedReplicaKeepsItsClockAndDivergenceThroughEditAndUndo() throws {
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let future = timestamp.addingTimeInterval(86_400)
+        let store = try makeTestStore(now: { timestamp })
+        let library = AtticLibrary(tasks: store)
+        let id = UUID(), seed = ModelContext(store.container)
+        seed.insert(TaskItem(id: id, title: "Shown", status: .todo, createdAt: timestamp, updatedAt: future))
+        seed.insert(TaskItem(id: id, title: "Divergent", status: .done, createdAt: timestamp,
+                             updatedAt: future.addingTimeInterval(-60), completedAt: timestamp))
+        try seed.save()
+        store.refresh()
+        XCTAssertTrue(library.updateTask(id, title: "Edited").isApplied)
+        XCTAssertEqual(store.task(withID: id)?.title, "Edited")
+        XCTAssertEqual(store.tasks.first(where: { $0.id == id })?.updatedAt, future)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(store.task(withID: id)?.title, "Shown")
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        XCTAssertEqual(Set(rows.map(\.statusRaw)), [TaskStatus.todo.rawValue, TaskStatus.done.rawValue])
+        XCTAssertEqual(rows.first(where: { $0.status == .done })?.completedAt, timestamp)
+        XCTAssertTrue(library.updateTask(id, status: .done).isApplied)
+        XCTAssertEqual(store.task(withID: id)?.updatedAt, future)
+        XCTAssertEqual(store.task(withID: id)?.completedAt, timestamp, "completion records the actual clock")
     }
 
     @MainActor

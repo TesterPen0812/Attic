@@ -321,7 +321,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         for excluded in [false, true] {
             let (id, revision) = try create(document("Original", ["caf\u{E9}"]))
             let note = try XCTUnwrap(store.note(withID: id))
-            XCTAssertEqual(store.stageDisplacedReplicas([note], reason: .replacedByDraft,
+            XCTAssertEqual(try store.stageDisplacedReplicas([note], reason: .replacedByDraft,
                 timestamp: timestamp, excludingUnchangedBase: excluded ? revision : UUID()), excluded ? 0 : 1)
             XCTAssertEqual(versions(id).count, excluded ? 0 : 1)
         }
@@ -333,7 +333,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         sibling.revisionID = revision
         store.modelContext.insert(sibling)
         try store.modelContext.save()
-        XCTAssertEqual(store.stageDisplacedReplicas([note, sibling], reason: .replacedByDraft,
+        XCTAssertEqual(try store.stageDisplacedReplicas([note, sibling], reason: .replacedByDraft,
             timestamp: timestamp, excludingUnchangedBase: revision), 2)
         XCTAssertEqual(Set(versions(id).map { Array($0.body.utf16) }),
                        Set([Array("caf\u{E9}".utf16), Array("cafe\u{301}".utf16)]))

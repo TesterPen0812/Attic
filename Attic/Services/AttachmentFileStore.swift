@@ -68,12 +68,14 @@ enum AttachmentFileStoreError: LocalizedError, Equatable {
 /// Owns the private materialization tree. All filesystem work is serialized so
 /// a refresh, import, preview, and delete cannot race over the same bytes.
 actor AttachmentFileStore {
-    let rootURL: URL
+    nonisolated let rootURL: URL
     private let fileManager: FileManager
 
     private final class RetentionRegistry: @unchecked Sendable {
         let lock = NSLock()
         var providers: [UUID: @Sendable () async -> AttachmentByteOwnership?] = [:]
+        var writers: [UUID: WorkspaceOwnershipGate] = [:]
+        var candidates: [UUID: WorkspaceOwnershipGate.Lease] = [:]
         var generation: UInt64 = 0
         func snapshot() -> (UInt64, [@Sendable () async -> AttachmentByteOwnership?]) {
             lock.lock(); defer { lock.unlock() }; return (generation, Array(providers.values))
@@ -108,6 +110,47 @@ actor AttachmentFileStore {
     private static let registries = RetentionRegistries()
     private nonisolated let retention: RetentionRegistry
 
+    nonisolated let ownership: WorkspaceOwnershipGate
+    /// Task imports have no row payload. Keep their only private original
+    /// admitted until the model binds it or the composer explicitly discards it.
+    nonisolated func finishCandidates(_ ids: Set<UUID>) {
+        let leases = retention.lock.withLock { ids.compactMap { retention.candidates.removeValue(forKey: $0) } }
+        leases.forEach { $0.release() }
+    }
+    nonisolated func registerWriter(_ gate: WorkspaceOwnershipGate) {
+        retention.lock.withLock {
+            guard retention.writers[gate.identity] == nil else { return }
+            retention.writers[gate.identity] = gate; retention.generation &+= 1
+        }
+    }
+    private nonisolated func gates() -> [WorkspaceOwnershipGate] {
+        retention.lock.withLock { [ownership] + retention.writers.values.filter { $0 !== ownership } }
+            .sorted { $0.identity.uuidString < $1.identity.uuidString }
+    }
+    nonisolated func acquireCollection(_ ids: Set<UUID>) -> WorkspaceOwnershipLeases? {
+        var leases: [UUID: WorkspaceOwnershipGate.Lease] = [:]
+        for gate in gates() {
+            guard let lease = gate.tryAcquire(ids, kind: .collection) else {
+                leases.values.forEach { $0.release() }; return nil
+            }
+            leases[gate.identity] = lease
+        }
+        return WorkspaceOwnershipLeases(leases)
+    }
+    nonisolated func validatesCollection(_ leases: WorkspaceOwnershipLeases, ids: Set<UUID>) -> Bool {
+        gates().allSatisfy { gate in
+            guard let lease = leases.lease(for: gate) else { return false }
+            return gate.validatesCollection(lease, ids: ids)
+        }
+    }
+    /// The caller keeps this lease until its draft/history/model root is
+    /// published. A payload-less legacy original missing after unlink refuses.
+    func admit(_ reference: AttachmentFileReference) async throws -> (URL, WorkspaceOwnershipGate.Lease)? {
+        let lease = try await ownership.admit([reference.id])
+        guard let url = try materialize(reference) else { lease.release(); return nil }
+        return (url, lease)
+    }
+
     /// Registration is synchronous and thread-safe so the destructive
     /// primitive cannot race the store's initialization task.
     nonisolated func registerByteOwners(_ owner: UUID, provider: @escaping @Sendable () async -> AttachmentByteOwnership?) {
@@ -117,8 +160,10 @@ actor AttachmentFileStore {
         retention.lock.unlock()
     }
 
-    private func removeUnownedDirectory(_ directory: URL) async throws -> Bool {
+    private func removeUnownedDirectory(_ directory: URL, collection: WorkspaceOwnershipLeases? = nil) async throws -> Bool {
         guard let id = UUID(uuidString: directory.deletingLastPathComponent().lastPathComponent) else { return false }
+        guard let leases = collection ?? acquireCollection([id]), validatesCollection(leases, ids: [id]) else { return false }
+        defer { if collection == nil { leases.release() } }
         guard let recoveryEpoch = AttachmentRecoveryEpoch.shared.snapshot() else { return false }
         let (generation, providers) = retention.snapshot()
         var proofs: [AttachmentByteOwnership] = []
@@ -133,10 +178,11 @@ actor AttachmentFileStore {
         let removed = try await MainActor.run {
             // No await between validating *every* source and the bounded
             // same-filesystem rename. Recursive removal stays off-main.
-            guard proofs.allSatisfy({ $0.isCurrent() }) else { return false }
+            guard self.validatesCollection(leases, ids: [id]), proofs.allSatisfy({ $0.isCurrent() }) else { return false }
             return try retention.move(directory, to: retired, ifCurrent: generation,
                                       recoveryEpoch: recoveryEpoch, using: files)
         }
+        if removed { ownership.didUnlink(id) }
         if removed, fileManager.fileExists(atPath: retired.path) { try fileManager.removeItem(at: retired) }
         return removed
     }
@@ -146,6 +192,7 @@ actor AttachmentFileStore {
         self.rootURL = (rootURL ?? Self.defaultRootURL(fileManager: fileManager))
             .standardizedFileURL
         retention = Self.registries.registry(for: self.rootURL)
+        ownership = WorkspaceOwnershipGate.shared(for: "files:" + self.rootURL.resolvingSymlinksInPath().path)
     }
 
     func prepare() throws {
@@ -222,6 +269,7 @@ actor AttachmentFileStore {
             try? fileManager.removeItem(at: batchRoot)
             return imported
         } catch {
+            finishCandidates(Set(finalDirectories.compactMap { UUID(uuidString: $0.deletingLastPathComponent().lastPathComponent) }))
             for directory in finalDirectories {
                 try? fileManager.removeItem(at: directory)
                 let idDirectory = directory.deletingLastPathComponent()
@@ -251,7 +299,11 @@ actor AttachmentFileStore {
         return url
     }
 
-    func ensureMaterialized(_ reference: AttachmentFileReference) throws -> URL? {
+    func ensureMaterialized(_ reference: AttachmentFileReference) async throws -> URL? {
+        guard let (url, lease) = try await admit(reference) else { return nil }
+        defer { lease.release() }; return url
+    }
+    private func materialize(_ reference: AttachmentFileReference) throws -> URL? {
         if let existingURL = try verifiedMaterializedURL(for: reference) {
             return existingURL
         }
@@ -273,14 +325,18 @@ actor AttachmentFileStore {
         }
 
         try payload.write(to: url, options: .atomic)
+        ownership.didVerify(reference.id)
         return url
     }
 
-    func removeMaterializations(_ references: [AttachmentFileReference]) async throws {
+    func removeMaterializations(_ references: [AttachmentFileReference], collection: WorkspaceOwnershipLeases? = nil) async throws {
         collectRetiredMaterializations()
         for reference in references {
+            guard let leases = collection ?? acquireCollection([reference.id]), validatesCollection(leases, ids: [reference.id]) else { continue }
+            defer { if collection == nil { leases.release() } }
             let directory = try validatedDirectory(for: reference)
-            guard try await removeUnownedDirectory(directory) else { continue }
+            guard try await removeUnownedDirectory(directory, collection: leases) else { continue }
+            WorkspaceCrashHook.reach("K8-cache")
             let idDirectory = directory.deletingLastPathComponent()
             if fileManager.fileExists(atPath: idDirectory.path),
                (try? fileManager.contentsOfDirectory(atPath: idDirectory.path))?.isEmpty == true {
@@ -329,12 +385,12 @@ actor AttachmentFileStore {
     /// cannot prevent unrelated attachments or cleanup from completing.
     func repairMaterializations(
         _ references: [AttachmentFileReference]
-    ) -> [AttachmentReconciliationFailure] {
+    ) async -> [AttachmentReconciliationFailure] {
         var failures: [AttachmentReconciliationFailure] = []
         for reference in references {
             guard !Task.isCancelled else { return failures }
             do {
-                _ = try ensureMaterialized(reference)
+                _ = try await ensureMaterialized(reference)
             } catch {
                 failures.append(.init(
                     attachmentID: reference.id,
@@ -356,7 +412,7 @@ actor AttachmentFileStore {
         let repairs = references.filter {
             neededKeys.contains("\($0.id.uuidString)/\($0.digest.lowercased())")
         }
-        _ = repairMaterializations(repairs)
+        _ = await repairMaterializations(repairs)
     }
 
     func existingMaterializedURL(
@@ -382,12 +438,13 @@ actor AttachmentFileStore {
     /// bound, a composer's pending items — and anything not shaped like a
     /// materialization are left alone, as is the notes reconciler's tree.
     /// Importer staging batches older than `cutoff` are removed too. Stops
-    /// after `limit` removals; returns how many materializations it removed.
+    /// after `limit` removals; returns the removed count and whether any
+    /// candidate was deferred by ownership, so a launch sweep can retry.
     func removeUnreferencedMaterializations(
         keeping referencedIDs: Set<UUID>,
         modifiedBefore cutoff: Date,
         limit: Int
-    ) async -> Int {
+    ) async -> (removed: Int, complete: Bool) {
         collectRetiredMaterializations()
         let keys: [URLResourceKey] = [
             .isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey
@@ -405,6 +462,7 @@ actor AttachmentFileStore {
         }
 
         var removed = 0
+        var deferred = false
         let idDirectories = (try? fileManager.contentsOfDirectory(
             at: rootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
         )) ?? []
@@ -412,11 +470,18 @@ actor AttachmentFileStore {
             guard let id = UUID(uuidString: idDirectory.lastPathComponent),
                   id.uuidString == idDirectory.lastPathComponent,
                   !referencedIDs.contains(id), isDirectory(idDirectory) else { continue }
-            // Read before removing anything changes its modification date.
+            // Recent imports are not collection candidates. Their admission
+            // leases must not turn a completed sweep into a deferred pass.
             let idDirectoryIsOld = isOld(idDirectory)
             let digestDirectories = (try? fileManager.contentsOfDirectory(
                 at: idDirectory, includingPropertiesForKeys: keys, options: []
             )) ?? []
+            guard idDirectoryIsOld || digestDirectories.contains(where: { directory in
+                let name = directory.lastPathComponent
+                return name.count == 64 && name.allSatisfy(\.isHexDigit) && isDirectory(directory) && isOld(directory)
+            }) else { continue }
+            guard let leases = acquireCollection([id]) else { deferred = true; continue }
+            defer { leases.release() }
             for digestDirectory in digestDirectories where removed < limit {
                 let name = digestDirectory.lastPathComponent
                 guard name.count == 64, name.allSatisfy(\.isHexDigit), isDirectory(digestDirectory),
@@ -425,7 +490,7 @@ actor AttachmentFileStore {
                     at: digestDirectory, includingPropertiesForKeys: keys, options: []
                 )) ?? []
                 guard contents.allSatisfy(isOld),
-                      (try? await removeUnownedDirectory(digestDirectory)) == true else { continue }
+                      (try? await removeUnownedDirectory(digestDirectory, collection: leases)) == true else { continue }
                 removed += 1
             }
             if idDirectoryIsOld, (try? fileManager.contentsOfDirectory(atPath: idDirectory.path))?.isEmpty == true {
@@ -438,7 +503,7 @@ actor AttachmentFileStore {
         )) ?? [] where !Self.isSymbolicLink(batch, fileManager: fileManager) && isOld(batch) {
             try? fileManager.removeItem(at: batch)
         }
-        return removed
+        return (removed, !deferred)
     }
 
     /// Performs the expensive content check only when a file is about to be
@@ -453,6 +518,7 @@ actor AttachmentFileStore {
         guard SHA256.hash(data: data).hexString == reference.digest else {
             return nil
         }
+        ownership.didVerify(reference.id)
         return url
     }
 
@@ -485,11 +551,13 @@ actor AttachmentFileStore {
                 // Unknown entries are not proof of orphan ownership.
                 continue
             }
+            guard let id = UUID(uuidString: child.lastPathComponent), let leases = acquireCollection([id]) else { continue }
+            defer { leases.release() }
             for digestDirectory in try fileManager.contentsOfDirectory(at: child, includingPropertiesForKeys: nil) {
                 guard !Self.isSymbolicLink(digestDirectory, fileManager: fileManager) else { continue }
                 let key = "\(child.lastPathComponent)/\(digestDirectory.lastPathComponent.lowercased())"
                 guard !expected.contains(key) else { continue }
-                _ = try? await removeUnownedDirectory(digestDirectory)
+                _ = try? await removeUnownedDirectory(digestDirectory, collection: leases)
             }
             if (try? fileManager.contentsOfDirectory(atPath: child.path))?.isEmpty == true {
                 try? fileManager.removeItem(at: child)
@@ -606,6 +674,10 @@ actor AttachmentFileStore {
             payload: nil
         )
         let finalDirectory = try validatedDirectory(for: reference)
+        if !includePayload {
+            guard let admission = ownership.tryAcquire([attachmentID], kind: .admission) else { throw WorkspaceFoundationError.protectedOwner }
+            retention.lock.withLock { retention.candidates[attachmentID] = admission }
+        }
         // Register the directory before any filesystem operation that can
         // partially succeed. If directory creation or the move fails, the
         // batch rollback can still remove the empty directory it created.

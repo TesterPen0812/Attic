@@ -59,9 +59,9 @@ extension CanvasStore {
         tagInventoryWillSave(context)
         do {
             #if os(macOS)
-            try PerformanceSignposts.storeSave { try persist(context) }
+            try PerformanceSignposts.storeSave { try Self.persistSharedStoreContext(context, using: persist) }
             #else
-            try persist(context)
+            try Self.persistSharedStoreContext(context, using: persist)
             #endif
             tagInventoryDidSave()
             if CanvasCloudInfrastructurePolicy.isEnabled {
@@ -484,7 +484,7 @@ extension CanvasStore {
                 changed = true
             }
             guard changed else { return }
-            try persist(context)
+            try Self.persistSharedStoreContext(context, using: persist)
         } catch {
             context.rollback()
         }
@@ -626,4 +626,18 @@ extension CanvasStore {
         return hidden
     }
 
+}
+
+
+extension CanvasStore {
+    static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
+        let context = ModelContext(container); context.autosaveEnabled = false; return context
+    }
+    static func persistSharedStoreContext(_ context: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
+        #if os(macOS)
+        try WorkspaceLegacyBridge.persistSharedChanges(context, using: writer)
+        #else
+        try writer(context)
+        #endif
+    }
 }

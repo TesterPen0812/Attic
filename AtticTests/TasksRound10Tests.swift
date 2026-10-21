@@ -62,7 +62,9 @@ final class TasksRound10Tests: XCTestCase {
         let second = try make("Pack", parent: original.id)
         XCTAssertTrue(library.updateTask(first.id, status: .done).isApplied)
         let file = TaskImageReference(id: UUID(), filename: "map.png", digest: "abc", contentTypeIdentifier: "public.png", byteCount: 3)
-        original.imageReferencesData = try JSONEncoder().encode([file])
+        // Commits replace the staging context; seed the currently presented
+        // original, preserving the same duplicate/file assertions.
+        try XCTUnwrap(store.task(withID: original.id)).imageReferencesData = try JSONEncoder().encode([file])
         XCTAssertEqual(store.task(withID: original.id)?.attachments.count, 1)
 
         let before = store.revision

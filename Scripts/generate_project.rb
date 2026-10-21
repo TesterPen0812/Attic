@@ -48,19 +48,20 @@ project.add_build_configuration('Local', :debug)
 
 app = project.new_target(:application, 'Attic', :osx, '26.0')
 unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '26.0')
+crash_helper = project.new_target(:command_line_tool, 'AtticOperationCrashHelper', :osx, '26.0')
 unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '26.0')
 round_trip_tests = project.new_target(:unit_test_bundle, 'AtticRoundTripTests', :osx, '26.0')
 ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
-# Exact released parser dependency; only the macOS app and its invisible unit
-# host compile NoteMarkdownImport. Test bundles consume the host's adapter.
+# Exact released parser dependency; the app, invisible unit host and crash
+# helper compile NoteMarkdownImport. Test bundles consume the host's adapter.
 markdown_package = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
 markdown_package.repositoryURL = 'https://github.com/swiftlang/swift-markdown.git'
 markdown_package.requirement = { 'kind' => 'exactVersion', 'version' => '0.9.0' }
 project.root_object.package_references << markdown_package
-[app, unit_host].each do |target|
+[app, unit_host, crash_helper].each do |target|
   product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
   product.package = markdown_package
   product.product_name = 'Markdown'
@@ -72,6 +73,7 @@ end
 
 unit_tests.add_dependency(unit_host)
 round_trip_tests.add_dependency(unit_host)
+unit_host.add_dependency(crash_helper)
 ui_tests.add_dependency(app)
 mobile_tests.add_dependency(mobile_app)
 mobile_ui_tests.add_dependency(mobile_app)
@@ -97,8 +99,16 @@ app_group.files.each do |reference|
   next if reference.path == 'App/AtticApp.swift'
 
   unit_host.source_build_phase.add_file_reference(reference)
+  # Compile the same source/model graph: never maintain a helper-only schema.
+  crash_helper.source_build_phase.add_file_reference(reference)
 end
 unit_host.source_build_phase.add_file_reference(project.main_group['AtticUnitTestHost'].new_file('InvisiblePresentation.m'))
+add_swift_sources(project, crash_helper, 'AtticOperationCrashHelper', 'AtticOperationCrashHelper')
+embed_helper = unit_host.new_copy_files_build_phase('Embed operation crash helper')
+embed_helper.dst_subfolder_spec = '6' # Contents/MacOS
+embed_helper.dst_path = ''
+embedded_helper = embed_helper.add_file_reference(crash_helper.product_reference)
+embedded_helper.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy'] }
 add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
 observer_loader = project.main_group['AtticTests'].new_file('InvisibleHostObserverLoader.m')
 unit_tests.source_build_phase.add_file_reference(observer_loader)
@@ -235,6 +245,8 @@ end
 
 unit_host.build_configurations.each do |config|
   settings = config.build_settings
+  # The hardened ad-hoc crash host must load its code from the signed executable.
+  settings['ENABLE_DEBUG_DYLIB'] = 'NO'
   settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'
   settings['ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME'] = 'AtticUnitTestHost'
   settings['ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME'] = 'AtticUnitTestHost'
@@ -256,11 +268,29 @@ unit_host.build_configurations.each do |config|
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['ENABLE_APP_SANDBOX'] = 'YES'
   settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
+  # Xcode disables runtime automatically for an ad-hoc local override.
+  settings['OTHER_CODE_SIGN_FLAGS'] = '--options runtime'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_OPERATION_CRASH_TESTS'
   settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) ATTIC_UNIT_TEST_HOST'
   settings['SWIFT_OBJC_BRIDGING_HEADER'] = 'AtticUnitTestHost/InvisiblePresentation.h'
+end
+
+crash_helper.build_configurations.each do |config|
+  settings = config.build_settings
+  settings['PRODUCT_NAME'] = 'AtticOperationCrashHelper'
+  settings['SWIFT_VERSION'] = '5.0'
+  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_OPERATION_CRASH_TESTS'
+  settings['CODE_SIGN_ENTITLEMENTS'] = 'AtticOperationCrashHelper/Helper.entitlements'
+  settings['CODE_SIGN_STYLE'] = 'Automatic'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
+  settings['ENABLE_APP_SANDBOX'] = 'YES'
+  settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
+  settings['OTHER_CODE_SIGN_FLAGS'] = '--options runtime'
+  settings['CODE_SIGN_INJECT_BASE_ENTITLEMENTS'] = 'NO'
+  settings['SKIP_INSTALL'] = 'YES'
 end
 
 unit_tests.build_configurations.each do |config|
@@ -276,7 +306,7 @@ unit_tests.build_configurations.each do |config|
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -module-alias Attic=AtticUnitTestHost'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -DATTIC_OPERATION_CRASH_TESTS -module-alias Attic=AtticUnitTestHost'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'
@@ -442,6 +472,7 @@ mobile_scheme.save_as(staged_project_path, 'AtticMobile', true)
 stable_target_uuids = {
   app => 'A7714C2169D9DBD5A01DC94837E1C051',
   unit_host => '91B51DB0FF2546EAAA06E2521BC7D6A8',
+  crash_helper => 'B5A52D9C81724173A8AB94CDF81D800A',
   unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
   round_trip_tests => 'F3330000000000000000000000000001',
   ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',

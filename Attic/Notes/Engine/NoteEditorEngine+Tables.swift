@@ -560,7 +560,7 @@ extension NoteEditorEngine {
         let string = textStorage.string as NSString
         let insertion = NSMutableAttributedString()
         let target: NSRange
-        if selection.location > NSMaxRange(title), line.length == 0 {
+        if selection.location >= bodyStart, line.length == 0 {
             // An empty line becomes the table.
             target = NSRange(location: line.location, length: 0)
             insertion.append(NoteTextCodec.attachmentString(attachment, attributes: style.bodyAttributes))
@@ -680,7 +680,7 @@ extension NoteEditorEngine {
         let title = titleParagraphRange
         var target = selection
         // Never in the title: after it.
-        if target.location <= NSMaxRange(title) {
+        if !isBodyOnly, target.location <= NSMaxRange(title) {
             target = NSRange(location: NSMaxRange(title), length: max(0, NSMaxRange(target) - NSMaxRange(title)))
         }
         let attachment = NoteTableAttachment(table: table)

@@ -167,17 +167,23 @@ struct StagedNoteAttachment: Equatable, Sendable {
 struct PreparedNoteDocument: Sendable {
     private let source: NoteDocument
     let content: Data
+    let contentFingerprint: String
     let title: String
     let body: String
     let plainText: String
     let imageCount: Int
     let fileCount: Int
     let firstFileName: String?
+    let admissionIDs: Set<UUID>?
     let attachmentBlocks: [NoteBlock]
+    let hasTaskNote: Bool
 
     init(_ document: NoteDocument) throws {
         source = document
         content = try NoteContentCodec.encode(document)
+        contentFingerprint = NoteItem.fingerprint(content)
+        hasTaskNote = document.requires.contains("taskNote")
+        admissionIDs = document.isWritableByThisBuild ? Set(document.attachmentIDs) : nil
         title = NoteStore.normalizedTitle(document.title)
         body = NoteTextExport.plainBody(document)
         plainText = NoteTextExport.plainText(document)
@@ -329,10 +335,15 @@ extension NoteStore {
                     editable = decoded.isEditable
                     countDocumentReplicaDecode()
                     documentReplicaCapabilityCache[key] = (replica.revisionID, data, editable,
-                        decoded.document?.blocks.filter { $0.kind == .image || $0.kind == .file } ?? [])
+                        decoded.document?.blocks.filter { $0.kind == .image || $0.kind == .file } ?? [],
+                        decoded.document?.requires.contains("taskNote") == true)
                 }
                 guard editable else {
                     throw NoteDocumentStoreError.readOnly
+                }
+                if let cached = documentReplicaCapabilityCache[key] {
+                    try? WorkspaceLegacyBridge.coordinator(for: modelContext.container).observeValidatedDocument(data,
+                        attachmentIDs: Set(NoteDocument(blocks: cached.attachmentBlocks).attachmentIDs), hasTaskNote: cached.hasTaskNote)
                 }
             default:
                 throw NoteDocumentStoreError.readOnly
@@ -345,14 +356,14 @@ extension NoteStore {
     /// rows with the same revision token but different bytes or derived text.
     @discardableResult
     func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date,
-                                excludingUnchangedBase baseRevisionID: UUID? = nil) -> Int {
+                                excludingUnchangedBase baseRevisionID: UUID? = nil) throws -> Int {
         // A singleton at the excluded base cannot have a divergent sibling.
         // Skip it before constructing and hashing whole-body UTF-16 identity;
         // the family path below still preserves exact spellings for replicas.
         if replicas.count == 1, let baseRevisionID,
            replicas[0].revisionID == baseRevisionID { return 0 }
         var seen = Set<NotePreservationState>()
-        var inserted = 0
+        var displaced: [NoteItem] = []
         let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }
         let commonBaseState = Set(baseReplicas.map(NotePreservationState.init)).count == 1
             ? baseReplicas.first.map(NotePreservationState.init) : nil
@@ -360,10 +371,21 @@ extension NoteStore {
             if baseRevisionID != nil, replica.revisionID == baseRevisionID,
                commonBaseState == NotePreservationState(replica) { continue }
             if let latest = latestVersion(noteID: replica.id), isSameState(latest, replica) { continue }
-            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext)
-            inserted += 1
+            displaced.append(replica)
         }
-        return inserted
+        // Only rows actually displaced need a dependency inventory. Ordinary
+        // autosave's unchanged base must not decode its entire document here.
+        // Complete every required read before staging the first version.
+        var fallbackIDs: [UUID: [UUID]] = [:]
+        for replica in displaced where !replica.usesDocumentFormat || replica.content.flatMap({ NoteContentCodec.decode($0).document }) == nil {
+            let id = replica.id
+            fallbackIDs[id] = try modelContext.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))
+                .filter { $0.deletedAt == nil }.map(\.id)
+        }
+        for replica in displaced {
+            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext, fallbackAttachmentIDs: fallbackIDs[replica.id] ?? [])
+        }
+        return displaced.count
     }
 
     // MARK: Metadata
@@ -398,6 +420,7 @@ extension NoteStore {
             guard !replicas.isEmpty else { throw NoteDocumentStoreError.noteMissing(noteID) }
             guard replicas.contains(where: { $0.isPinned != pinned }) else { return .unchanged }
             let timestamp = pinned ? currentDate : nil
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
             for replica in replicas { replica.pinnedAt = timestamp }
         } catch {
             modelContext.rollback()
@@ -498,7 +521,7 @@ extension NoteStore {
         do {
             revisionID = stageValidated(document, on: [note], timestamp: timestamp, revision: 0, projection: projection,
                                    tags: tags.map(AtticTag.encode))
-            stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
+            Self.stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
             context.rollback()
             return .failure(error)
@@ -515,11 +538,19 @@ extension NoteStore {
             family.forEach(context.delete)
         }
         context.insert(note)
+        try? WorkspaceLegacyBridge.coordinator(for: context.container).observePreparedDocument(projection)
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
         }
         present(note)
         refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+        // Creation published a fresh row, whose admitted bytes are already
+        // known from this immutable projection. Prime its first edit directly.
+        if let committed = self.note(withID: id), committed.content == projection.content,
+           committed.revisionID == revisionID {
+            documentReplicaCapabilityCache[ObjectIdentifier(committed)] = (revisionID, projection.content, true,
+                projection.attachmentBlocks, projection.hasTaskNote)
+        }
         for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
         return .success((id, revisionID))
     }
@@ -565,6 +596,7 @@ extension NoteStore {
            replicas.allSatisfy({ $0.content == projection.content && $0.contentFormat == document.format
                && $0.revisionID == presentedRevisionID }) {
             guard replicas.contains(where: { $0.tagsRaw != encodedTags }) else { return .success(presentedRevisionID) }
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
             for replica in replicas { replica.tagsRaw = encodedTags }
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
@@ -601,17 +633,19 @@ extension NoteStore {
         }
         let timestamp = currentDate
         let context = modelContext
+        try? WorkspaceLegacyBridge.coordinator(for: modelContext.container).observePreparedDocument(projection)
         let priorIDs = Set(base.attachmentIDs)
         let removedIDs = priorIDs.subtracting(placements.attachmentIDs)
-        stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
-                               excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
         do {
+            try stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
+                                      excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
             let revisionID = stageValidated(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0, projection: projection,
                                        tags: encodedTags)
-            stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
+            Self.stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
             let visibilityChanged = try stageAttachmentVisibility(referencedBy: placements, noteID: noteID,
                 timestamp: timestamp, rows: attachmentPlan.existingRows)
+
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
@@ -645,10 +679,21 @@ extension NoteStore {
     private func stageValidated(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
                                 projection: PreparedNoteDocument, tags: String? = nil) -> UUID {
         let revisionID = UUID()
-        let canonical = canonical(replicas)
+        Self.stageDocumentContent(projection, format: document.format, on: replicas,
+                                  timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
         for replica in replicas {
-            replica.content = projection.content
-            replica.contentFormat = document.format
+            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks, projection.hasTaskNote)
+        }
+        return revisionID
+    }
+
+    static func stageDocumentContent(_ projection: PreparedNoteDocument, format: Int,
+                                     on replicas: [NoteItem], timestamp: Date, revision: Int64,
+                                     revisionID: UUID, tags: String? = nil) {
+        if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context) }
+        for replica in replicas {
+            replica.installPreparedContent(projection)
+            replica.contentFormat = format
             replica.title = projection.title
             replica.body = projection.body
             replica.plainText = projection.plainText
@@ -660,18 +705,9 @@ extension NoteStore {
             replica.updatedAt = timestamp
             replica.deletedAt = nil
             replica.deletedAttachmentIDsRaw = nil
-            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks)
-            if let canonical, canonical !== replica {
-                replica.createdAt = canonical.createdAt
-                replica.tagsRaw = canonical.tagsRaw
-                replica.taskID = canonical.taskID
-                replica.pinnedAt = canonical.pinnedAt
-                replica.externalEditorName = canonical.externalEditorName
-                replica.externalEditedAt = canonical.externalEditedAt
-            }
+            // Untouched metadata belongs to each physical replica.
             if let tags { replica.tagsRaw = tags }
         }
-        return revisionID
     }
 
     /// One admission component used by both pre-edit gates and the final
@@ -796,7 +832,7 @@ extension NoteStore {
     }
 
     /// Inserts validated rows; note, rows and versions still save together.
-    private func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
+    private static func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
                                   context: ModelContext, timestamp: Date) {
         for (row, item) in plan.repairs { row.payload = item.data }
         var nextIndex = plan.nextSortIndex
@@ -825,7 +861,9 @@ extension NoteStore {
                                            timestamp: Date, rows: [NoteAttachment]? = nil) throws -> Bool {
         let shown = Set(document.attachmentIDs)
         var changed = false
-        for row in try rows ?? attachmentRows(forNoteID: noteID) {
+        let family = try rows ?? attachmentRows(forNoteID: noteID)
+        WorkspaceLegacyBridge.prepareMutations(family, in: modelContext)
+        for row in family {
             if shown.contains(row.id) {
                 if row.deletedAt != nil {
                     changed = true
@@ -860,7 +898,9 @@ extension NoteStore {
     @discardableResult
     func recordVersion(noteID: UUID, reason: NoteVersionReason) -> Bool {
         guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { return false }
-        let inserted = stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate)
+        let inserted: Int
+        do { inserted = try stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate) }
+        catch { recordError(error.localizedDescription); return false }
         if inserted == 0 { return true }
         guard commitStagedChanges() else { return false }
         thinVersions(noteID: noteID)
@@ -897,7 +937,8 @@ extension NoteStore {
                 !version.attachmentIDs.isEmpty || version.content.flatMap { NoteContentCodec.decode($0).document }
                     .map { !$0.attachmentIDs.isEmpty || $0.blocks.contains { $0.kind == .table } } == true
             }.map(\.id)
-            protectedIDs = Set(proposals.compactMap(\.baseVersionID)).union(rich).union(historyRetainedVersionIDs)
+            protectedIDs = Set(proposals.compactMap(\.baseVersionID)).union(rich).union(historyRetainedVersionIDs).union(
+                try WorkspacePurge.preservationOwners(in: modelContext).filter { $0.entity == .version }.map(\.id))
             recoveryBases = try recoveryProtectedRevisionIDs()
         } catch {
             // Unknown proposal, version or recovery ownership keeps history.
@@ -931,14 +972,14 @@ extension NoteStore {
             } else if age < 30 * day {
                 bucket = Int64(version.createdAt.timeIntervalSince1970 / day) - 1_000_000_000
             } else {
-                family.forEach(modelContext.delete)
+                family.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
                 removed = true
                 continue
             }
             if buckets.insert(bucket).inserted {
                 keptTimes.insert(version.createdAt)
             } else {
-                family.forEach(modelContext.delete)
+                family.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
                 removed = true
             }
         }
@@ -998,21 +1039,36 @@ extension NoteStore {
                 ? "This saved version can't be read by this version of Attic."
                 : "This saved version has conflicting copies and cannot be restored safely."))
         }
+        let restoredContent: Data?
+        var restoredTitle = version.title
+        do {
+            if version.contentFormat == 0, version.content == nil,
+               let title = try WorkspaceRestoreNormalization.detachedTitle(noteID: noteID, in: modelContext) {
+                restoredTitle = title
+            }
+            if let bytes = version.content, case let .editable(document) = NoteContentCodec.decode(bytes) {
+                let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: modelContext)
+                restoredContent = normalized == document ? bytes : try NoteContentCodec.encode(normalized)
+            } else { restoredContent = version.content }
+        } catch { return .failure(.saveFailed(error.localizedDescription)) }
         let timestamp = currentDate
         let context = modelContext
+        do {
         if let preservationID {
             stageVersion(of: preflight.canonical, reason: .beforeRestore, timestamp: timestamp,
                          context: context, id: preservationID)
-            stageDisplacedReplicas(replicas.filter { $0 !== preflight.canonical }, reason: .beforeRestore, timestamp: timestamp)
+            try stageDisplacedReplicas(replicas.filter { $0 !== preflight.canonical }, reason: .beforeRestore, timestamp: timestamp)
         } else {
-            stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
+            try stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
         }
+        } catch { return .failure(.saveFailed(error.localizedDescription)) }
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
-        let derived = Self.derivedColumns(content: version.content, format: version.contentFormat,
-                                          title: version.title, body: version.body)
+        let derived = Self.derivedColumns(content: restoredContent, format: version.contentFormat,
+                                          title: restoredTitle, body: version.body)
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
         for replica in replicas {
-            replica.content = version.contentFormat >= 1 ? version.content : nil
+            replica.content = version.contentFormat >= 1 ? restoredContent : nil
             replica.contentFormat = version.contentFormat
             replica.title = derived.title
             replica.body = derived.body
@@ -1034,7 +1090,7 @@ extension NoteStore {
                 replica.externalEditedAt = preflight.canonical.externalEditedAt
             }
         }
-        if let data = version.content, let restored = NoteContentCodec.decode(data).document {
+        if let data = restoredContent, let restored = NoteContentCodec.decode(data).document {
             do {
                 let rows = try attachmentRows(forNoteID: noteID)
                 try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp, rows: rows)
@@ -1062,15 +1118,15 @@ extension NoteStore {
     }
 
     func stageVersion(of replica: NoteItem, reason: NoteVersionReason, timestamp: Date, context: ModelContext,
-                      id: UUID = UUID()) {
+                      id: UUID = UUID(), fallbackAttachmentIDs: [UUID]? = nil) {
         let attachmentIDs: [UUID]
         if replica.usesDocumentFormat, let data = replica.content,
            case let .editable(document) = NoteContentCodec.decode(data) {
             attachmentIDs = document.attachmentIDs
         } else {
             // Newer or unreadable content: keep every row the note has.
-            attachmentIDs = ((try? attachmentRows(forNoteID: replica.id)) ?? [])
-                .filter { $0.deletedAt == nil }.map(\.id)
+            attachmentIDs = (fallbackAttachmentIDs ?? ((try? attachmentRows(forNoteID: replica.id)) ?? [])
+                .filter { $0.deletedAt == nil }.map(\.id))
         }
         context.insert(NoteVersion(
             id: id,
@@ -1097,7 +1153,7 @@ extension NoteStore {
     }
 
     private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
-        guard version.contentFormat == note.contentFormat, version.content == note.content,
+        guard version.contentFormat == note.contentFormat, version.contentFingerprint != nil, version.contentFingerprint == WorkspaceModelFields.digest(note.content),
               NoteTextReplacement.utf16Equal(version.title, note.title),
               NoteTextReplacement.utf16Equal(version.body, note.body) else { return false }
         return true
@@ -1158,11 +1214,14 @@ extension NoteStore {
         let timestamp = currentDate
         if disposition == .proposal {
             // The proposal and the exact base it compared with commit together.
+            let baseAttachmentIDs: [UUID]
+            do { baseAttachmentIDs = try attachmentRows(forNoteID: noteID).map(\.id) }
+            catch { return .failure(.saveFailed(error.localizedDescription)) }
             let baseVersionID = UUID()
             modelContext.insert(NoteVersion(id: baseVersionID, noteID: noteID, createdAt: timestamp,
                                             reason: .beforeAgentEdit, content: current.content,
                                             contentFormat: current.contentFormat, title: current.title, body: current.body,
-                                            attachmentIDs: (try? attachmentRows(forNoteID: noteID).map(\.id)) ?? [],
+                                            attachmentIDs: baseAttachmentIDs,
                                             sourceRevisionID: current.revisionID))
             let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
                                        proposedContent: data, agentName: agentName, createdAt: timestamp,
@@ -1173,8 +1232,8 @@ extension NoteStore {
             }
             return .success(.pending(editID: edit.id))
         }
-        stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
         do {
+            try stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0)
             attributeExternalEdit(replicas, name: agentName, at: timestamp)
@@ -1239,21 +1298,21 @@ extension NoteStore {
                   case let .editable(base) = NoteContentCodec.decode(baseData),
                   (try? NoteAgentTextSafety.validate(base: base, proposed: document)) != nil else {
                 if editRows.contains(where: { !$0.needsReview }) {
-                    editRows.forEach { $0.needsReview = true }
+                    editRows.forEach { WorkspaceLegacyBridge.prepareMutation($0, in: modelContext); $0.needsReview = true }
                     _ = commitStagedChanges()
                 }
                 continue
             }
             let timestamp = currentDate
-            stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             do {
+                try stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
                 try stage(document, on: replicas, timestamp: timestamp, revision: replicas.map(\.revision).max() ?? 0)
             } catch {
                 modelContext.rollback()
                 continue
             }
             attributeExternalEdit(replicas, name: edit.agentName, at: timestamp)
-            editRows.forEach(modelContext.delete)
+            editRows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
             if commitStagedChanges() { applied += 1 }
         }
         return applied
@@ -1299,7 +1358,7 @@ extension NoteStore {
                 guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion could not be kept.") }
                 return .success(.pending(editID: edit.id))
             }
-            stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+            try stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             attributeExternalEdit(preflight.replicas, name: agentName, at: timestamp)
             guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
             return .success(.applied(revisionToken: baseRevisionToken))
@@ -1310,6 +1369,7 @@ extension NoteStore {
     }
 
     func attributeExternalEdit(_ replicas: [NoteItem], name: String, at timestamp: Date) {
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: modelContext)
         for row in replicas {
             row.externalEditorName = name.isEmpty ? "Agent" : name
             row.externalEditedAt = timestamp
@@ -1319,6 +1379,7 @@ extension NoteStore {
     @discardableResult
     func acknowledgeExternalEdit(noteID: UUID) -> Bool {
         guard let rows = try? liveReplicas(of: noteID), !rows.isEmpty else { return false }
+        WorkspaceLegacyBridge.prepareMutations(rows, in: modelContext)
         rows.forEach { $0.externalEditorName = nil; $0.externalEditedAt = nil }
         return commitStagedChanges()
     }
@@ -1327,7 +1388,7 @@ extension NoteStore {
     func discardProposal(_ id: UUID, noteID: UUID) -> Bool {
         guard let rows = try? pendingEditRows(id),
               NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]) else { return false }
-        rows.forEach(modelContext.delete)
+        rows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
         return commitStagedChanges()
     }
 
@@ -1347,7 +1408,7 @@ extension NoteStore {
                 throw NoteDocumentStoreError.saveFailed("The proposal changed. Review it again.")
             }
             let timestamp = currentDate
-            stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+            try stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             // This can be unsaved typing; preserve it even when it differs from the store.
             modelContext.insert(NoteVersion(noteID: noteID, createdAt: timestamp, reason: .replacedByDraft,
                 content: try NoteContentCodec.encode(current), contentFormat: current.format,
@@ -1358,7 +1419,7 @@ extension NoteStore {
                     NoteTextReplacement.utf16Equal($0.title, note.title) && NoteTextReplacement.utf16Equal($0.body, note.body) }) else {
                     throw NoteDocumentStoreError.saveFailed("The note's replicas disagree. Deletion was not performed.")
                 }
-                rows.forEach(modelContext.delete)
+                rows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
                 attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)
                 guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
                 return .success(expectedRevision)
@@ -1369,7 +1430,7 @@ extension NoteStore {
             let token = try stage(document, on: preflight.replicas, timestamp: timestamp,
                                   revision: preflight.replicas.map(\.revision).max() ?? 0)
             attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)
-            rows.forEach(modelContext.delete)
+            rows.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) }
             guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Replacement failed.") }
             return .success(token.uuidString)
         } catch {
@@ -1402,8 +1463,11 @@ extension NoteStore {
         let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
         let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
         let recoveryBases = try recoveryProtectedRevisionIDs()
+        let preservation = try WorkspacePurge.preservationOwners(in: modelContext)
+        guard preservation.isDisjoint(with: Set(noteIDs.map { .init(entity: .note, id: $0) })) else { throw WorkspaceFoundationError.protectedOwner }
         // Proposals outside the same removal transaction keep their bases.
         let externalBases = Set(proposals.filter { !noteIDs.contains($0.noteID) }.compactMap(\.baseVersionID))
+            .union(preservation.filter { $0.entity == .version }.map(\.id))
         let versionFamilies = Dictionary(grouping: versions, by: \.id).values.filter {
             $0.contains { noteIDs.contains($0.noteID) }
         }
@@ -1415,7 +1479,62 @@ extension NoteStore {
               proposalFamilies.allSatisfy({ NotePhysicalFamilyRetention.proposalEligible($0, noteIDs: noteIDs) }) else {
             throw NoteDocumentStoreError.invalidDocument("Protected, divergent or unreadable history keeps this deleted note safe.")
         }
-        versionFamilies.forEach { $0.forEach(modelContext.delete) }
-        proposalFamilies.forEach { $0.forEach(modelContext.delete) }
+        versionFamilies.forEach { $0.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) } }
+        proposalFamilies.forEach { $0.forEach { WorkspaceLegacyBridge.delete($0, in: modelContext) } }
+    }
+}
+
+
+extension NoteStore {
+    /// Fresh-context staging uses the same admission, preservation and derived
+    /// column primitives. It performs no save, cache mutation or presentation.
+    static func stageDocument(in context: ModelContext, noteID: UUID, document: NoteDocument,
+                              prepared: PreparedNoteDocument, revisionID: UUID,
+                              versionIDs: [PersistentIdentifier: UUID],
+                              staged: [StagedNoteAttachment] = [], tags: [String]? = nil,
+                              timestamp: Date) throws {
+        guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+        let replicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        guard !replicas.isEmpty, replicas.allSatisfy({ row in
+            row.deletedAt == nil && row.contentFormat == 1 && row.content.map { NoteContentCodec.decode($0).isEditable } == true
+        }) else { throw NoteDocumentStoreError.readOnly }
+        let attachments = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == noteID }))
+        let base = replicas[0].content.flatMap { NoteContentCodec.decode($0).document }
+        let plan = try NoteAttachmentAdmission.evaluate(staged, referencedBy: document,
+            previouslyReferencedBy: base, rows: attachments, metadataOnlyIDs: [])
+        for replica in replicas {
+            if let versionID = versionIDs[replica.persistentModelID] {
+                guard let content = replica.content, case let .editable(old) = NoteContentCodec.decode(content) else {
+                    throw NoteDocumentStoreError.readOnly
+                }
+                context.insert(NoteVersion(id: versionID, noteID: noteID, createdAt: timestamp,
+                    reason: .replacedByDraft, content: content, contentFormat: replica.contentFormat,
+                    title: replica.title, body: replica.body, attachmentIDs: old.attachmentIDs,
+                    sourceRevisionID: replica.revisionID))
+            }
+        }
+        stageDocumentContent(prepared, format: document.format, on: replicas, timestamp: timestamp,
+                             revision: replicas.map(\.revision).max() ?? 0, revisionID: revisionID,
+                             tags: tags.map(AtticTag.encode))
+        stageAttachments(plan, noteID: noteID, context: context, timestamp: timestamp)
+        let shown = Set(document.attachmentIDs)
+        for row in attachments {
+            let deleted = shown.contains(row.id) ? nil : (row.deletedAt ?? timestamp)
+            if row.deletedAt != deleted { row.deletedAt = deleted; row.updatedAt = timestamp }
+        }
+        WorkspaceCrashHook.reach("K3-note")
+    }
+}
+
+
+extension NoteStore {
+    /// Changes only legacy compatibility columns; the body, anchors and format
+    /// remain byte-for-byte legacy. No implicit migration is performed.
+    static func stageLegacyTitle(_ title: String, on row: NoteItem, timestamp: Date) {
+        row.title = title
+        row.plainText = row.body.isEmpty ? title : title + "\n" + row.body
+        row.updatedAt = timestamp
+        row.revision &+= 1
+        row.revisionID = UUID()
     }
 }

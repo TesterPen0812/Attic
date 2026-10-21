@@ -5,6 +5,8 @@ import Foundation
 enum UndoHistoryID: Hashable, Sendable {
     /// The Tasks list.
     case tasks
+    /// The task workspace exists before its own note is first saved.
+    case taskWorkspace(UUID)
     case note(UUID)
     case canvas(UUID)
     /// Changes made across pages from one place (tag management, Recently
@@ -33,15 +35,20 @@ enum UndoOutcome: Equatable, Error {
 struct UndoStep {
     /// Which step this is, so something bound to it (the Undo toast) can
     /// tell whether it is still the one an undo would reverse.
-    let id = UUID()
+    let id: UUID
     let name: String
     let affectedItems: @MainActor () -> Set<AtticItemRef>
     let undo: @MainActor () -> UndoOutcome
     let redo: @MainActor () -> UndoOutcome
+    var workspacePayload: WorkspaceHistory.TextGroup? = nil
+    var operationID: UUID? = nil
+    var attachmentIDs: Set<UUID> = []
+    var replay: (@MainActor (Bool, @escaping @MainActor () throws -> Void) async -> UndoOutcome)? = nil
 
     /// A step whose closures only report whether the store confirmed its
     /// save; a refusal keeps the step.
-    init(name: String, items: @escaping @MainActor () -> Set<AtticItemRef> = { [] }, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
+    init(id: UUID = UUID(), name: String, items: @escaping @MainActor () -> Set<AtticItemRef> = { [] }, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
+        self.id = id
         self.name = name
         self.affectedItems = items
         self.undo = { undo() ? .applied : .failed }
@@ -51,11 +58,13 @@ struct UndoStep {
     /// A step that can tell a failure worth retrying from one that can never
     /// apply again.
     init(
+        id: UUID = UUID(),
         name: String,
         items: @escaping @MainActor () -> Set<AtticItemRef> = { [] },
         undoOutcome: @escaping @MainActor () -> UndoOutcome,
         redoOutcome: @escaping @MainActor () -> UndoOutcome
     ) {
+        self.id = id
         self.name = name
         self.affectedItems = items
         self.undo = undoOutcome
@@ -87,6 +96,11 @@ final class UndoRoute: ObservableObject {
     /// Bumped whenever any history changes, for menus that show names.
     @Published private(set) var revision: UInt64 = 0
     private var histories: [UndoHistoryID: History] = [:]
+    let ownershipID = UUID()
+    private var workspaces: [UndoHistoryID: WorkspaceHistory] = [:]
+    private var aliases: [UndoHistoryID: UndoHistoryID] = [:]
+    private var replaying: Set<UndoHistoryID> = []
+    var onOwnershipChanged: (() -> Void)?
     /// Least recently used first; the last one is the page in use.
     private var recency: [UndoHistoryID] = []
     private let limit: Int
@@ -125,8 +139,25 @@ final class UndoRoute: ObservableObject {
         return true
     }
 
+    /// Steps recorded while `capturingSteps` runs go to its caller instead
+    /// of a history: a field's commit (`WorkspaceFieldUndo.commit`) hands the
+    /// one confirmed step to the workspace history itself.
+    private var captures: [(UndoStep) -> Void] = []
+
+    /// Runs `change` and returns the steps it would have recorded, without
+    /// recording them.
+    func capturingSteps(_ change: () -> Void) -> [UndoStep] {
+        var steps: [UndoStep] = []
+        captures.append { steps.append($0) }
+        defer { captures.removeLast() }
+        change()
+        return steps
+    }
+
     /// Records a step for a change that has already been confirmed.
     func record(_ step: UndoStep, in history: UndoHistoryID) {
+        if let capture = captures.last { capture(step); return }
+        let history = resolved(history)
         var entry = histories[history] ?? History()
         entry.undo.append(step)
         if entry.undo.count > limit { entry.undo.removeFirst(entry.undo.count - limit) }
@@ -135,6 +166,7 @@ final class UndoRoute: ObservableObject {
         touch(history)
         evictInactiveHistories()
         revision &+= 1
+        onOwnershipChanged?()
     }
 
     /// Undoes the history's last step. Returns whether it applied; a step
@@ -153,7 +185,8 @@ final class UndoRoute: ObservableObject {
     /// `undo(in:)` with what happened: nil when there was nothing to undo.
     @discardableResult
     func undoStep(in history: UndoHistoryID) -> UndoOutcome? {
-        guard var entry = histories[history], let step = entry.undo.last else { return nil }
+        let history = resolved(history)
+        guard !replaying.contains(history), var entry = histories[history], let step = entry.undo.last, step.replay == nil else { return nil }
         let outcome = step.undo()
         switch outcome {
         case .failed:
@@ -162,12 +195,14 @@ final class UndoRoute: ObservableObject {
             entry.undo.removeLast()
             histories[history] = entry
             revision &+= 1
+        onOwnershipChanged?()
         case .applied:
             entry.undo.removeLast()
             entry.redo.append(step)
             histories[history] = entry
             touch(history)
             revision &+= 1
+        onOwnershipChanged?()
         }
         return outcome
     }
@@ -175,7 +210,8 @@ final class UndoRoute: ObservableObject {
     /// `redo(in:)` with what happened: nil when there was nothing to redo.
     @discardableResult
     func redoStep(in history: UndoHistoryID) -> UndoOutcome? {
-        guard var entry = histories[history], let step = entry.redo.last else { return nil }
+        let history = resolved(history)
+        guard !replaying.contains(history), var entry = histories[history], let step = entry.redo.last, step.replay == nil else { return nil }
         let outcome = step.redo()
         switch outcome {
         case .failed:
@@ -184,46 +220,165 @@ final class UndoRoute: ObservableObject {
             entry.redo.removeLast()
             histories[history] = entry
             revision &+= 1
+        onOwnershipChanged?()
         case .applied:
             entry.redo.removeLast()
             entry.undo.append(step)
             histories[history] = entry
             touch(history)
             revision &+= 1
+        onOwnershipChanged?()
         }
         return outcome
     }
 
     func canUndo(in history: UndoHistoryID) -> Bool {
-        histories[history]?.undo.isEmpty == false
+        let history = resolved(history)
+        return histories[history]?.undo.isEmpty == false
     }
 
     func canRedo(in history: UndoHistoryID) -> Bool {
-        histories[history]?.redo.isEmpty == false
+        let history = resolved(history)
+        return histories[history]?.redo.isEmpty == false
     }
 
     /// "Undo Delete Task" in menus reads this.
     func undoName(in history: UndoHistoryID) -> String? {
-        histories[history]?.undo.last?.name
+        let history = resolved(history)
+        return histories[history]?.undo.last.map { $0.workspacePayload?.payloads.last?.name ?? $0.name }
     }
 
     func redoName(in history: UndoHistoryID) -> String? {
-        histories[history]?.redo.last?.name
+        let history = resolved(history)
+        return histories[history]?.redo.last.map { $0.workspacePayload?.payloads.first?.name ?? $0.name }
     }
 
     /// The step an undo would reverse now.
     func undoStepID(in history: UndoHistoryID) -> UUID? {
-        histories[history]?.undo.last?.id
+        let history = resolved(history)
+        return histories[history]?.undo.last?.id
     }
 
     func undoCount(in history: UndoHistoryID) -> Int {
-        histories[history]?.undo.count ?? 0
+        let history = resolved(history)
+        return histories[history]?.undo.count ?? 0
     }
 
     func clear(_ history: UndoHistoryID) {
+        let history = resolved(history)
         guard histories.removeValue(forKey: history) != nil else { return }
         recency.removeAll { $0 == history }
         revision &+= 1
+        onOwnershipChanged?()
+    }
+
+    func workspace(for key: UndoHistoryID) -> WorkspaceHistory {
+        let key = resolved(key)
+        if let existing = workspaces[key] { return existing }
+        let workspace = WorkspaceHistory(route: self, historyID: key)
+        workspaces[key] = workspace
+        return workspace
+    }
+
+    /// Aliasing never merges independently ordered histories. A note created
+    /// lazily and later detached keeps the existing sequence and step identities.
+    @discardableResult
+    func alias(_ alias: UndoHistoryID, to target: UndoHistoryID) -> Bool {
+        let target = resolved(target), current = resolved(alias)
+        if current == target { return true }
+        guard histories[current] == nil, !replaying.contains(current) else { return false }
+        aliases[alias] = target
+        return true
+    }
+
+    /// Move the existing task workspace to its ordinary-note identity. Keep
+    /// cursor, entries, replay rights and all old aliases; never merge histories.
+    func rekey(_ workspace: WorkspaceHistory, to key: UndoHistoryID) -> Bool {
+        let old = resolved(workspace.historyID), destination = resolved(key)
+        if old == key { return true }
+        guard workspaces[old] === workspace, !replaying.contains(old),
+              destination == old || (histories[destination] == nil && workspaces[destination] == nil),
+              histories[key] == nil, workspaces[key] == nil else { return false }
+        let reflected = aliases.keys.filter { resolved($0) == old }
+        if let value = histories.removeValue(forKey: old) { histories[key] = value }
+        workspaces.removeValue(forKey: old); workspaces[key] = workspace
+        recency = recency.map { $0 == old ? key : $0 }
+        for alias in reflected where alias != key { aliases[alias] = key }
+        aliases.removeValue(forKey: key); aliases[old] = key
+        workspace.didRekey(to: key)
+        revision &+= 1; onOwnershipChanged?()
+        return true
+    }
+
+    private func resolved(_ key: UndoHistoryID) -> UndoHistoryID {
+        var key = key
+        var seen = Set<UndoHistoryID>()
+        while let next = aliases[key], seen.insert(key).inserted { key = next }
+        return key
+    }
+
+    struct Checkpoint {
+        fileprivate let key: UndoHistoryID
+        fileprivate let undo: [UndoStep]
+        fileprivate let redo: [UndoStep]
+    }
+    func checkpoint(in history: UndoHistoryID) -> Checkpoint {
+        let key = resolved(history), value = histories[key] ?? History()
+        return Checkpoint(key: key, undo: value.undo, redo: value.redo)
+    }
+    func rewind(to checkpoint: Checkpoint) {
+        let key = resolved(checkpoint.key)
+        guard !replaying.contains(key) else { return }
+        histories[key] = History(undo: checkpoint.undo, redo: checkpoint.redo)
+        touch(key)
+        revision &+= 1
+        onOwnershipChanged?()
+    }
+    func steps(in history: UndoHistoryID, redo: Bool) -> [UndoStep] {
+        let value = histories[resolved(history)] ?? History()
+        return redo ? value.redo : value.undo
+    }
+    var referencedOperationIDs: Set<UUID> {
+        Set(histories.values.flatMap { ($0.undo + $0.redo).compactMap(\.operationID) })
+    }
+    var referencedAttachmentIDs: Set<UUID> {
+        histories.values.reduce(into: Set<UUID>()) { ids, history in
+            for step in history.undo + history.redo {
+                ids.formUnion(step.attachmentIDs)
+                if let payload = step.workspacePayload { ids.formUnion(payload.attachmentIDs) }
+            }
+        }
+    }
+    func isReplaying(in history: UndoHistoryID) -> Bool { replaying.contains(resolved(history)) }
+
+    /// The replay's receipt carries this cursor effect. Its first publication
+    /// step commits the cursor, even when a later editor/index step fails. The
+    /// pending gate refuses a second inverse; retry runs publication only.
+    @discardableResult
+    func replay(in history: UndoHistoryID, redo: Bool) async -> UndoOutcome? {
+        let key = resolved(history)
+        guard !replaying.contains(key), let entry = histories[key],
+              let step = (redo ? entry.redo : entry.undo).last else { return nil }
+        guard let replay = step.replay else {
+            return redo ? redoStep(in: key) : undoStep(in: key)
+        }
+        replaying.insert(key)
+        defer { replaying.remove(key) }
+        var committed = false
+        let outcome = await replay(redo, { [self] in
+            if committed { return }
+            guard var current = histories[key],
+                  (redo ? current.redo : current.undo).last?.id == step.id else {
+                throw WorkspaceFoundationError.conflict
+            }
+            if redo { current.redo.removeLast(); current.undo.append(step) }
+            else { current.undo.removeLast(); current.redo.append(step) }
+            histories[key] = current
+            committed = true
+            revision &+= 1
+            onOwnershipChanged?()
+        })
+        return committed ? .applied : outcome
     }
 
     /// A purge releases only histories/steps that retain the removed items.

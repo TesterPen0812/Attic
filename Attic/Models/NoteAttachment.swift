@@ -20,7 +20,12 @@ final class NoteAttachment {
     /// Removed on its own and kept in Recently Deleted for 30 days (its bytes
     /// and file stay). nil while the attachment is shown.
     var deletedAt: Date? = nil
-    @Attribute(.externalStorage) var payload: Data? = nil
+    @Attribute(.externalStorage, originalName: "payload") private var payloadStorage: Data? = nil
+    var payload: Data? {
+        get { WorkspacePayloadAccess.note("attachment", model: self); return payloadStorage }
+        set { payloadFingerprint = WorkspaceModelFields.digest(newValue); payloadStorage = newValue }
+    }
+    var payloadFingerprint: String? = nil
 
     init(
         id: UUID = UUID(),

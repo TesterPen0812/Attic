@@ -52,6 +52,8 @@ final class PanelUIState: ObservableObject {
         get { renameDraft.title }
         set { renameDraft.title = newValue }
     }
+    /// Seeded task-page route; production entry points arrive in the next slice.
+    @Published var openTaskNoteID: UUID?
     @Published var confirmingTaskDeletionID: UUID?
     @Published var confirmingTaskCompletionID: UUID?
     /// The owner whose Add attachment picker is up. Only

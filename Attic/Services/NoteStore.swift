@@ -218,7 +218,10 @@ final class NoteStore: ObservableObject {
     /// including payload-only repairs whose metadata and digest did not change.
     private func invalidateAttachmentProofs(in transaction: ModelContext) {
         let changed = transaction.insertedModelsArray + transaction.changedModelsArray + transaction.deletedModelsArray
-        for id in Set(changed.compactMap { ($0 as? NoteAttachment)?.id }) {
+        invalidateAttachmentProofs(ids: Set(changed.compactMap { ($0 as? NoteAttachment)?.id }))
+    }
+    private func invalidateAttachmentProofs(ids: Set<UUID>) {
+        for id in ids {
             attachmentFamilyGenerations[id, default: 0] &+= 1
             verifiedAttachmentPayloads[id] = nil
             verifiedPayloadGenerations[id] = nil
@@ -391,7 +394,7 @@ final class NoteStore: ObservableObject {
     // not another copy of each decoded note body. Exact bytes and revision
     // still invalidate the proof even when an external writer reuses a token.
     var documentReplicaCapabilityCache: [ObjectIdentifier: (revisionID: UUID?, content: Data, editable: Bool,
-                                                           attachmentBlocks: [NoteBlock])] = [:]
+                                                           attachmentBlocks: [NoteBlock], hasTaskNote: Bool)] = [:]
     var pendingEditFetchCount = 0
     /// Test seam for a failed destructive-retention scan. Presentation reads
     /// continue to use their own deduplicated query.
@@ -449,11 +452,21 @@ final class NoteStore: ObservableObject {
         self.attachmentFileStore = resolvedAttachmentFileStore
         attachmentRetentionSource = AttachmentRetentionSource(container: container)
 #endif
-        context = ModelContext(container)
+        context = Self.makeStoreContext(container)
         self.now = now
         self.persist = persist
-        self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
+        let contextFactory = makeFreshContext ?? { ModelContext(container) }
+        self.makeFreshContext = {
+            let fresh = try contextFactory()
+            #if os(macOS)
+            try WorkspaceLegacyBridge.registerContext(fresh, captureScopes: false)
+            #endif
+            return fresh
+        }
 #if os(macOS)
+        if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) {
+            resolvedAttachmentFileStore.registerWriter(coordinator.ownership)
+        }
         resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self, source = attachmentRetentionSource] in
             guard let owner = self else { return await source.retainedIDs() }
             return await owner.retainedAttachmentIDsForFiles()
@@ -566,6 +579,7 @@ final class NoteStore: ObservableObject {
         do {
             let replicas = try storedNotes(matching: note.id)
             guard replicas.contains(where: { $0.tagsRaw != encoded }) else { return true }
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas { replica.tagsRaw = encoded }
         } catch {
             context.rollback()
@@ -601,6 +615,7 @@ final class NoteStore: ObservableObject {
         // `updatedAt` is kept, so a restored note returns to its place in
         // the newest-first list.
         let timestamp = now()
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
         for replica in replicas {
             replica.deletedAt = timestamp
             replica.deletedAttachmentIDsRaw = attachmentFamily
@@ -667,6 +682,28 @@ final class NoteStore: ObservableObject {
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+            for replica in replicas {
+                if replica.contentFormat == 0, replica.content == nil {
+                    if let title = try WorkspaceRestoreNormalization.detachedTitle(noteID: noteID, in: context) {
+                        Self.stageLegacyTitle(title, on: replica, timestamp: currentDate)
+                    }
+                    continue
+                }
+                guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
+                    if context.container.schema.entities.contains(where: { $0.name == "TaskNoteAssociation" }),
+                       try context.fetch(FetchDescriptor<TaskNoteAssociation>()).contains(where: { $0.noteID == noteID && $0.detachedPreservationID != nil }) {
+                        throw NoteDocumentStoreError.readOnly
+                    }
+                    continue
+                }
+                let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: context)
+                if normalized != document {
+                    Self.stageDocumentContent(try PreparedNoteDocument(normalized), format: normalized.format,
+                        on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID())
+                }
+            }
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             for replica in replicas {
                 replica.deletedAt = nil
                 replica.deletedAttachmentIDsRaw = nil
@@ -711,11 +748,20 @@ final class NoteStore: ObservableObject {
         var references: [AttachmentFileReference] = []
 #endif
         do {
+            // Eligibility and the writer baseline must describe the same
+            // fresh physical family, including rows another context removed
+            // since the previous attempt.
+            // Install the fresh context and its presentation together, even
+            // when every family is retained. A no-op purge must not leave
+            // presented notes belonging to the previous staging context.
+            try reloadModels()
             let deleted = try context.fetch(FetchDescriptor<NoteItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
             let expiredIDs = Set(deleted.filter { ($0.deletedAt ?? .distantFuture) < cutoff }.map(\.id))
+            let preserved = try WorkspacePurge.preservationOwners(in: context)
             for id in expiredIDs {
+                guard !preserved.contains(.init(entity: .note, id: id)) else { continue }
                 let replicas = try storedNotesIncludingDeleted(matching: id)
                 guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
                 if let confirmed, confirmed[id] != first.deletedAt { continue }
@@ -760,11 +806,11 @@ final class NoteStore: ObservableObject {
                           })
                       }) else { continue }
                 references += attachments.map { AttachmentFileReference($0, includePayload: false) }
-                attachments.forEach(context.delete)
+                attachments.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
 #else
                 _ = recordedFamily
 #endif
-                replicas.forEach(context.delete)
+                replicas.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
                 purgedIDs.insert(id)
             }
 #if os(macOS)
@@ -809,12 +855,13 @@ final class NoteStore: ObservableObject {
         }
         let timestamp = now()
         do {
-            for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
+            for note in try storedNotesIfPresent(matching: noteID) { WorkspaceLegacyBridge.prepareMutation(note, in: context); note.updatedAt = timestamp }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
             return false
         }
+        WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
         for replica in replicas {
             replica.deletedAt = timestamp
             replica.updatedAt = timestamp
@@ -825,10 +872,8 @@ final class NoteStore: ObservableObject {
         guard save() else { return false }
         attachmentFailures[attachment.id] = nil
         attachmentRetryVersions[attachment.id] = nil
-        // What is shown changed without a reload; the next presentation
-        // (a restore, a refresh) must reconcile files again, not match the
-        // signature from before the removal and skip its repair.
-        reconciledAttachmentSignature = nil
+        // Visibility changed in place; reconcile the retained file inventory.
+        if let rows = try? context.fetch(FetchDescriptor<NoteAttachment>()) { reconcileFileStorage(with: rows) }
         return true
     }
 
@@ -909,7 +954,7 @@ final class NoteStore: ObservableObject {
                     continue
                 }
                 references.append(AttachmentFileReference(first, includePayload: false))
-                replicas.forEach(context.delete)
+                replicas.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
             }
         } catch {
             context.rollback()
@@ -1034,6 +1079,7 @@ final class NoteStore: ObservableObject {
                   replicas.allSatisfy({ NoteAttachmentReplicaSnapshot($0) == expectedSnapshot }) else {
                 throw AttachmentFileStoreError.inaccessible(sourceURL, "The attachment changed while the file was being selected. Retry with its current version.")
             }
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: refreshedContext)
             for replica in replicas { replica.payload = original.payload }
             let presentation = try presentationSnapshot(in: refreshedContext)
             if case let .failed(message) = persistImport(in: refreshedContext, fallbackPresentation: presentation) {
@@ -1110,6 +1156,7 @@ final class NoteStore: ObservableObject {
                     contentTypeIdentifier: type, byteCount: size, sortIndex: 0, contentDigest: digest,
                     createdAt: currentDate, payload: bytes.data))
             } else {
+                WorkspaceLegacyBridge.prepareMutations(family, in: transaction)
                 for row in family { row.payload = bytes.data }
             }
             let presentation = try presentationSnapshot(in: transaction)
@@ -1241,7 +1288,8 @@ final class NoteStore: ObservableObject {
 
     /// Every physical row of a live note (throws when none).
     func liveReplicas(of id: UUID, in sourceContext: ModelContext? = nil) throws -> [NoteItem] {
-        try storedNotes(matching: id, in: sourceContext)
+        let rows = try storedNotes(matching: id, in: sourceContext)
+        return rows
     }
 
     func replicasIncludingDeleted(of id: UUID) throws -> [NoteItem] {
@@ -1271,14 +1319,23 @@ final class NoteStore: ObservableObject {
             invalidateTagInventory(in: context)
             invalidateAttachmentProofs(in: context)
             #if os(macOS)
-            try PerformanceSignposts.storeSave { try persist(context) }
+            try PerformanceSignposts.storeSave { try Self.persistStoreContext(context, using: persist) }
             #else
-            try persist(context)
+            try Self.persistStoreContext(context, using: persist)
             #endif
-            lastErrorMessage = nil
+            do {
+                if try !WorkspaceLegacyBridge.wasPlainCommit(in: context) { try reloadModels(preservingAttachmentProofs: true) }
+                lastErrorMessage = nil
+            } catch {
+                lastErrorMessage = "Saved, but presentation is still updating: \(error.localizedDescription)"
+            }
             registerSuccessfulLocalSave()
             return true
         } catch {
+            if error is WorkspaceLegacyBridge.CommitHeld {
+                lastErrorMessage = "The save outcome is still being checked. This note is held."
+                return false
+            }
             let saveError = error.localizedDescription
             context.rollback()
             tagInventoryDidRefresh()
@@ -1293,10 +1350,6 @@ final class NoteStore: ObservableObject {
     }
 
     private func reloadModels(preservingAttachmentProofs: Bool = false) throws {
-        // A long-lived ModelContext can return cached model instances after
-        // CloudKit updates the underlying store. Refresh through a new context
-        // so remote values replace the old objects instead of being written
-        // back to CloudKit by the next local save.
         let refreshedContext = try makeFreshContext()
         let presentation = try presentationSnapshot(in: refreshedContext)
         installPresentation(presentation, using: refreshedContext, preservingAttachmentProofs: preservingAttachmentProofs)
@@ -1329,8 +1382,15 @@ final class NoteStore: ObservableObject {
         preservingAttachmentProofs: Bool = false
     ) {
         context = sourceContext
+        let sourceID = ObjectIdentifier(sourceContext)
+        WorkspaceLegacyBridge.observeForeignAttachmentWrites(in: sourceContext) { [weak self] ids in
+            guard let self, ObjectIdentifier(self.context) == sourceID else { return }
+            if let ids { self.invalidateAttachmentProofs(ids: ids) }
+            else { self.clearVerifiedAttachmentCache() }
+        }
         if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
         documentReplicaCapabilityCache.removeAll()
+        try? WorkspaceLegacyBridge.establishScopeBaseline(sourceContext, roots: presentation.notes + presentation.attachments, entities: [.note, .attachment])
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
         // A deleted note's attachments stay stored (and their files stay
@@ -1352,7 +1412,7 @@ final class NoteStore: ObservableObject {
         do {
             invalidateTagInventory(in: transactionContext)
             invalidateAttachmentProofs(in: transactionContext)
-            try persist(transactionContext)
+            try Self.persistStoreContext(transactionContext, using: persist)
             registerSuccessfulLocalSave()
         } catch {
             let saveError = error.localizedDescription
@@ -1376,10 +1436,20 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = nil
             return .persisted
         } catch {
-            // Persistence has already succeeded. Adopt the committed
-            // transaction and its precomputed presentation instead of
-            // reporting total failure or leaving the old arrays visible.
-            installPresentation(fallbackPresentation, using: transactionContext, preservingAttachmentProofs: true)
+            // Persistence has already succeeded. Read the committed rows
+            // directly instead of reporting total failure or leaving the
+            // old arrays visible when the presentation factory fails.
+            // The source staging context was never saved by the fresh writer.
+            // Its inserted objects still have temporary IDs. Present actual
+            // committed rows so a later save cannot insert their replicas.
+            do {
+                let committed = Self.makeStoreContext(container)
+                installPresentation(try presentationSnapshot(in: committed), using: committed, preservingAttachmentProofs: true)
+            } catch {
+                let message = "Attachments were saved, but their presentation is still updating: \(error.localizedDescription)"
+                lastErrorMessage = message
+                return .persistedButRefreshFailed(message)
+            }
             let message = "Attachments were saved and the saved version is shown, but a fresh reload failed: \(error.localizedDescription)"
             lastErrorMessage = message
             return .persistedButRefreshFailed(message)
@@ -1465,7 +1535,9 @@ final class NoteStore: ObservableObject {
                 note.id == targetID
             }
         )
-        return try (sourceContext ?? context).fetch(descriptor)
+        let source = sourceContext ?? context
+        let rows = try source.fetch(descriptor)
+        return rows
     }
 
 #if os(macOS)
@@ -1480,7 +1552,8 @@ final class NoteStore: ObservableObject {
                 attachment.id == targetID
             }
         )
-        let replicas = try (sourceContext ?? context).fetch(descriptor)
+        let source = sourceContext ?? context
+        let replicas = try source.fetch(descriptor)
         guard allowMissing || !replicas.isEmpty else {
             throw NoteReplicaMutationError.missingReplica(id)
         }
@@ -1497,7 +1570,9 @@ final class NoteStore: ObservableObject {
                 attachment.noteID == targetNoteID
             }
         )
-        return try (sourceContext ?? context).fetch(descriptor)
+        let source = sourceContext ?? context
+        let rows = try source.fetch(descriptor)
+        return rows
     }
 
     private func visibleUniqueAttachments(
@@ -1565,6 +1640,8 @@ final class NoteStore: ObservableObject {
             guard let self else { return }
             defer { attachmentFileTasks[workID] = nil }
             do {
+                try Task.checkCancellation()
+                try await WorkspaceLegacyBridge.coordinator(for: container).finishRegisteredLaunch()
                 try Task.checkCancellation()
                 let report = try await attachmentFileStore.reconcileMetadata(metadata)
                 guard !Task.isCancelled, generation == attachmentReconciliationGeneration else { return }
@@ -1789,5 +1866,23 @@ final class NoteStore: ObservableObject {
             note.revisionID?.uuidString ?? "",
             String(reflecting: note.persistentModelID)
         ].joined(separator: "\u{1F}")
+    }
+}
+
+
+extension NoteStore {
+    private static func makeStoreContext(_ container: ModelContainer) -> ModelContext {
+        #if os(macOS)
+        return WorkspaceLegacyBridge.context(for: container, captureScopes: false)
+        #else
+        let context = ModelContext(container); context.autosaveEnabled = false; return context
+        #endif
+    }
+    private static func persistStoreContext(_ context: ModelContext, using writer: @escaping (ModelContext) throws -> Void) throws {
+        #if os(macOS)
+        try WorkspaceLegacyBridge.persist(context, using: writer, sourceName: "NoteStore", history: false)
+        #else
+        try writer(context)
+        #endif
     }
 }

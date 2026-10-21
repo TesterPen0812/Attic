@@ -127,6 +127,7 @@ final class TagService {
     }
 
     private let container: ModelContainer
+    private var writerCoordinator: WorkspaceOperationCoordinator?
     private let persist: (ModelContext) throws -> Void
     private let fetchTaggedTasks: (ModelContext) throws -> [TaskItem]
     /// Replaces the item stores' contexts after a successful change.
@@ -143,6 +144,7 @@ final class TagService {
     ) {
         self.container = container
         self.persist = persist
+        self.writerCoordinator = try? WorkspaceLegacyBridge.coordinator(for: container)
         self.fetchTaggedTasks = fetchTaggedTasks
         self.afterChange = afterChange
     }
@@ -250,7 +252,7 @@ final class TagService {
     @discardableResult
     func revert(_ snapshot: TagChangeSnapshot) -> Bool {
         guard !snapshot.isEmpty else { return true }
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container, includeCanvas: true)
         var changed = false
         func reverted(_ raw: String, _ change: TagChangeSnapshot.Change) -> String? {
             let tags = Set(AtticTag.decode(raw)).subtracting(change.added).union(change.removed)
@@ -262,11 +264,11 @@ final class TagService {
         for (identifier, change) in snapshot.changesByRow {
             switch context.model(for: identifier) {
             case let task as TaskItem:
-                if let raw = reverted(task.tagsRaw, change) { task.tagsRaw = raw }
+                if let raw = reverted(task.tagsRaw, change) { WorkspaceLegacyBridge.prepareMutation(task, in: context); task.tagsRaw = raw }
             case let note as NoteItem:
-                if let raw = reverted(note.tagsRaw, change) { note.tagsRaw = raw }
+                if let raw = reverted(note.tagsRaw, change) { WorkspaceLegacyBridge.prepareMutation(note, in: context); note.tagsRaw = raw }
             case let board as CanvasBoardItem:
-                if let raw = reverted(board.tagsRaw, change) { board.tagsRaw = raw }
+                if let raw = reverted(board.tagsRaw, change) { WorkspaceLegacyBridge.prepareMutation(board, in: context); board.tagsRaw = raw }
             default: continue
             }
         }
@@ -280,7 +282,7 @@ final class TagService {
     /// Returns what it removed and added on each row it changed.
     private func rewrite(beforeRewrite: (ModelContext) throws -> Void = { _ in },
                          _ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
-        let context = ModelContext(container)
+        let context = WorkspaceLegacyBridge.context(for: container, includeCanvas: true)
         var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
         var affectedItems = Set<AtticItemRef>()
         func apply(_ raw: String, _ identifier: PersistentIdentifier) -> String? {
@@ -296,18 +298,21 @@ final class TagService {
             try beforeRewrite(context)
             for task in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
                 if let updated = apply(task.tagsRaw, task.persistentModelID) {
+                    WorkspaceLegacyBridge.prepareMutation(task, in: context)
                     task.tagsRaw = updated
                     affectedItems.insert(AtticItemRef(.task, task.id))
                 }
             }
             for note in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
                 if let updated = apply(note.tagsRaw, note.persistentModelID) {
+                    WorkspaceLegacyBridge.prepareMutation(note, in: context)
                     note.tagsRaw = updated
                     affectedItems.insert(AtticItemRef(.note, note.id))
                 }
             }
             for board in try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
                 if let updated = apply(board.tagsRaw, board.persistentModelID) {
+                    WorkspaceLegacyBridge.prepareMutation(board, in: context)
                     board.tagsRaw = updated
                     affectedItems.insert(AtticItemRef(.canvas, board.id))
                 }
@@ -391,7 +396,7 @@ final class TagService {
     private func save(_ context: ModelContext) -> Bool {
         invalidate(in: context)
         do {
-            try persist(context)
+            try WorkspaceLegacyBridge.persist(context, using: persist, sourceName: "TagService")
             publishInventoryChange()
             lastErrorMessage = nil
         } catch {

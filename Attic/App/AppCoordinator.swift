@@ -255,6 +255,13 @@ struct AppRuntimeEnvironment {
     /// together: an in-memory gallery store never meets the real files.
     @MainActor
     func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) throws -> (tasks: TaskStore, notes: NoteStore) {
+        if let recovery = noteRecoveryURL {
+            WorkspaceLegacyBridge.configureJournalDirectory(
+                recovery.deletingLastPathComponent().appendingPathComponent("NoteDrafts"), for: container
+            )
+        }
+        let workspace = try? WorkspaceLegacyBridge.coordinator(for: container)
+        workspace?.beginLaunchRegistration()
         let tasks = TaskStore(
             container: container,
             taskImageFiles: performanceRoot.map {
@@ -266,6 +273,12 @@ struct AppRuntimeEnvironment {
         } ?? makeAttachmentFileStore() ?? AttachmentFileStore()
         try OldNotesPurge.cleanup(in: container, recoveryURL: noteRecoveryURL, attachmentRoot: attachmentFiles.rootURL)
         let notes = NoteStore(container: container, attachmentFileStore: attachmentFiles)
+        // Every launch path builds these stores, including noninteractive and
+        // seed-only hosts. The main-actor task runs after synchronous launch
+        // presentation construction, independent of start()'s early returns.
+        Task { @MainActor in
+            try? await workspace?.finishLaunch()
+        }
         return (tasks, notes)
     }
 }
@@ -520,6 +533,11 @@ final class AppCoordinator: ObservableObject {
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
             try? TasksPagePreview.seedCaughtUp(in: container)
         }
+        // Phase 3 slice 0b: the task's-note fixtures (the preview's seeded
+        // entry point; `ATTIC_UI_TEST_TASK_NOTE` opens one).
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "tasknote" {
+            try? TaskNotePreviewSeed.seedAll(in: container)
+        }
         #endif
         // Preview builds only (owner, 2026-10-01): a fresh preview identity
         // opens on demo content, written into its own empty store once.
@@ -684,6 +702,11 @@ final class AppCoordinator: ObservableObject {
 
         if isUITesting {
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }
+            // Phase 3 slice 0b's seeded entry point: a task's note over Notes.
+            if let scenario = TaskNotePreviewSeed.requested(), let taskID = TaskNotePreviewSeed.seeded[scenario] {
+                uiState.selectSection(.notes)
+                uiState.openTaskNoteID = taskID
+            }
             // LSUIElement apps do not necessarily become active when XCTest
             // launches them. Activate the real process before presenting the
             // key panel so AppKit, not a test-only model shortcut, owns mouse
@@ -909,7 +932,17 @@ final class AppCoordinator: ObservableObject {
             return
         }
 
-        noteDraft.pages.recoverAtLaunch()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await WorkspaceLegacyBridge.coordinator(for: self.store.container).finishLaunchOfferingRecovery(
+                    offers: { self.noteDraft.pages.recoverAtLaunch() },
+                    sweep: {
+                        // Only registered, reconciled persistent stores judge files.
+                        if !self.isRunningTests { await self.store.sweepUnreferencedAttachmentStorage() }
+                    })
+            } catch { self.noteDraft.pages.recoveryStartupFailed(error) }
+        }
         if settings.quickCaptureEnabled { newTaskHotKey.register() }
         // Settings › General › Quick Capture (round 10): a new combination
         // or the switch releases the old claim and makes the new one.
@@ -922,11 +955,6 @@ final class AppCoordinator: ObservableObject {
             }
         hoverMonitor.start()
         if !isRunningTests {
-            // Once per launch, on the persistent store only (tests and UI
-            // tests use an in-memory store, whose empty reference set must
-            // never judge real files).
-            let store = store
-            Task { await store.sweepUnreferencedAttachmentStorage() }
             agentAccessObservation = settings.$isAgentAccessEnabled.sink { [weak self] isEnabled in
                 guard let self else { return }
                 if isEnabled {

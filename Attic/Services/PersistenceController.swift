@@ -38,7 +38,10 @@ enum PersistenceController {
             NotePendingEdit.self,
             StoreMaintenance.self,
             // Colour pass (2026-10-10): each tag's stored colour.
-            TagColour.self
+            TagColour.self,
+            OperationReceipt.self,
+            TaskNoteAssociation.self,
+            TaskDeletionPreservation.self
         ]
         #else
         [
@@ -118,11 +121,12 @@ enum PersistenceController {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
         #endif
-        let container = try ModelContainer(
-            for: Schema(appModelTypes),
-            configurations: configuration
-        )
         #if os(macOS)
+        let lease = configuration.isStoredInMemoryOnly ? nil : try WorkspaceWriterLease.acquire(storeURL: configuration.url)
+        #endif
+        let container = try ModelContainer(for: Schema(appModelTypes), configurations: configuration)
+        #if os(macOS)
+        if let lease { WorkspaceWriterLease.attach(lease, to: container) }
         _ = try OldNotesPurge.run(in: container)
         #endif
         return container
@@ -160,11 +164,12 @@ enum PersistenceController {
             url: storeURL,
             cloudKitDatabase: .none
         )
-        let container = try ModelContainer(
-            for: Schema(appModelTypes),
-            configurations: configuration
-        )
         #if os(macOS)
+        let lease = configuration.isStoredInMemoryOnly ? nil : try WorkspaceWriterLease.acquire(storeURL: configuration.url)
+        #endif
+        let container = try ModelContainer(for: Schema(appModelTypes), configurations: configuration)
+        #if os(macOS)
+        if let lease { WorkspaceWriterLease.attach(lease, to: container) }
         _ = try OldNotesPurge.run(in: container)
         #endif
         return container

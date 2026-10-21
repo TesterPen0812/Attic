@@ -227,6 +227,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_performance_probe.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_pf*.py'
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_integration_cost_reference.py
           PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
 
       - name: Verify branch ancestry and initial cleanliness
@@ -347,6 +349,10 @@ jobs:
           # it: Tab-order tests expect rows and fields, not every button.
           # Full Keyboard Access has its own step below.
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
+          Scripts/xcodebuild_locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+          Scripts/sign_crash_harness.zsh "$RUNNER_TEMP/AtticUnitTests/Build/Products/Local/AtticUnitTestHost.app"
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
@@ -354,7 +360,7 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
             -resultBundlePath "$RUNNER_TEMP/AtticUnitTests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
             -only-testing:AtticTests \
             -skip-testing:AtticTests/DoneSearchCostTests \
             -skip-testing:AtticTests/TasksFrameCostTests \
@@ -362,7 +368,7 @@ jobs:
             -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBefore \
             -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn \
             -skip-testing:AtticTests/AtticDropdownTests/testPairedSamplerRejectsARealPriorityOpeningSlowdown \
-            test
+            test-without-building
 
       # Native timing collection has its own bounded step. Its required
       # outcome retains all three assertions without consuming the functional

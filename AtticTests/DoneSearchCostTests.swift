@@ -102,6 +102,37 @@ final class DoneSearchCostTests: XCTestCase {
         }
     }
 
+    func testExplicitNSStringIndexMatchingPreservesLocalizedSemanticsWithoutWrites() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let titles = ["Café", "Cafe\u{301}", "Résumé", "Straße", "ｶﾀｶﾅ", "task １２", "Plan 🏠", "Unrelated"]
+        let tasks = titles.enumerated().map { index, title in
+            let date = Date(timeIntervalSince1970: Double(10_000 - index))
+            let task = TaskItem(title: title, status: .done, createdAt: date, updatedAt: date, completedAt: date)
+            task.doneLoggedAt = date
+            context.insert(task)
+            return task
+        }
+        try context.save()
+        var saves = 0
+        let store = TaskStore(container: container, persist: { context in saves += 1; try context.save() })
+        let initialSaves = saves
+        let revision = store.revision
+        for query in ["", "cafe", "CAFÉ", "Cafe\u{301}", " \n resume \t", "strasse", "カタカナ", "12", "🏠", "no match"] {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            let expected = tasks.filter { trimmed.isEmpty || $0.title.localizedStandardContains(trimmed) }.map(\.id)
+            // Repeat to exercise the cache as well as each fresh search.
+            for _ in 0..<2 {
+                let page = store.indexedDoneLogPage(limit: 80, matching: query)
+                XCTAssertNil(page.failure)
+                XCTAssertEqual(page.tasks.map(\.id), expected, query)
+                XCTAssertEqual(store.indexedDoneLogCount(matching: query), expected.count, query)
+            }
+        }
+        XCTAssertEqual(saves, initialSaves, "Searching must not enter the gated save path")
+        XCTAssertEqual(store.revision, revision)
+    }
+
     func testSearchStaysLiveThroughEditsDeleteRestoreUndoAndRefresh() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedScale(in: container)

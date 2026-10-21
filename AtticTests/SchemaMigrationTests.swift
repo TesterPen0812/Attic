@@ -34,7 +34,8 @@ final class SchemaMigrationTests: XCTestCase {
             XCTAssertEqual(Set(entities.keys), [
                 "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem",
                 "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance",
-                "TagColour"
+                "TagColour",
+                "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation"
             ])
             let taskAttributes = Set(entities["TaskItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(taskAttributes.isSuperset(of: [
@@ -46,7 +47,10 @@ final class SchemaMigrationTests: XCTestCase {
             let noteAttributes = Set(entities["NoteItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(noteAttributes.isSuperset(of: ["deletedAt", "deletedAttachmentIDsRaw", "tagsRaw"]))
             // Phase 2: the note format fields (all defaulted or optional).
-            XCTAssertTrue(noteAttributes.isSuperset(of: ["content", "contentFormat", "plainText", "taskID", "revision", "revisionID"]))
+            // The guarded getter uses the existing content column through
+            // originalName. The copied pre-Phase-0 fixture below separately
+            // verifies compatibility and attachment byte preservation.
+            XCTAssertTrue(noteAttributes.isSuperset(of: ["contentStorage", "contentFingerprint", "contentFormat", "plainText", "taskID", "revision", "revisionID"]))
             let boardAttributes = Set(entities["CanvasBoardItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(boardAttributes.isSuperset(of: ["tagsRaw", "purgedAt", "recentlyDeletedAt", "deletedContentCount"]))
         }

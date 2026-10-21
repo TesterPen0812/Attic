@@ -503,10 +503,15 @@ final class CanvasStore: ObservableObject {
         }
     ) {
         self.container = container
-        context = ModelContext(container)
+        context = Self.makeStoreContext(container)
         self.now = now
         self.persist = persist
-        self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
+        let contextFactory = makeFreshContext ?? { ModelContext(container) }
+        self.makeFreshContext = {
+            let fresh = try contextFactory()
+            fresh.autosaveEnabled = false
+            return fresh
+        }
         self.loadReplicas = loadReplicas
         self.decodeStroke = decodeStroke
         refresh()

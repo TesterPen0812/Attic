@@ -67,6 +67,7 @@ final class AtticLibrary {
         }
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
+        if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) { coordinator.registerHistory(self.undo) }
         let inventory = tags
         tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
         tasks.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }

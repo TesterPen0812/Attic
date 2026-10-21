@@ -32,7 +32,7 @@ struct TaskAttachmentSource: Equatable, Sendable {
 /// actor. The directory name predates general files and stays for existing data.
 actor TaskImageFiles {
     static let shared = TaskImageFiles()
-    let files: AttachmentFileStore
+    nonisolated let files: AttachmentFileStore
     private var thumbnailCache: [String: Data] = [:]
 
     init(rootURL: URL? = nil) {
@@ -72,8 +72,11 @@ actor TaskImageFiles {
     /// The recorded type carries over.
     func importCopies(of sources: [TaskImageReference], existing: [TaskImageReference]) async throws -> [TaskImageReference] {
         var urls: [URL] = []
+        var admissions: [WorkspaceOwnershipGate.Lease] = []
+        defer { admissions.forEach { $0.release() } }
         for source in sources {
-            guard let url = try? await verifiedURL(for: source) else { throw TaskDropError.attachmentUnavailable }
+            guard let (url, lease) = try await files.admit(source.fileReference) else { throw TaskDropError.attachmentUnavailable }
+            admissions.append(lease)
             urls.append(url)
         }
         let copies = try await importAttachments(urls, existing: existing)
@@ -90,11 +93,11 @@ actor TaskImageFiles {
     /// Launch-time cleanup of private copies no task references, such as a
     /// composer's pending items when Attic quit before the task was added.
     /// See `AttachmentFileStore.removeUnreferencedMaterializations`.
-    func removeUnreferenced(keeping referencedIDs: Set<UUID>, modifiedBefore cutoff: Date, limit: Int) async -> Int {
+    func removeUnreferenced(keeping referencedIDs: Set<UUID>, modifiedBefore cutoff: Date, limit: Int) async -> (removed: Int, complete: Bool) {
         let removed = await files.removeUnreferencedMaterializations(
             keeping: referencedIDs, modifiedBefore: cutoff, limit: limit
         )
-        if removed > 0 { thumbnailCache.removeAll() }
+        if removed.removed > 0 { thumbnailCache.removeAll() }
         return removed
     }
 
@@ -134,8 +137,9 @@ actor TaskImageFiles {
         }
     }
 
-    func remove(_ references: [TaskImageReference]) async {
-        try? await files.removeMaterializations(references.map(\.fileReference))
+    func remove(_ references: [TaskImageReference], collection: WorkspaceOwnershipLeases? = nil) async {
+        files.finishCandidates(Set(references.map(\.id)))
+        try? await files.removeMaterializations(references.map(\.fileReference), collection: collection)
     }
 
     func thumbnail(_ reference: TaskImageReference, pixels: Int = 96) async throws -> Data? {

@@ -477,6 +477,53 @@ final class TaskAttachmentDropTests: XCTestCase {
         storage.appendingPathComponent(reference.id.uuidString)
     }
 
+    func testR2StandaloneSweepDoesNotStartLaunchReconciliation() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("StandaloneImages"))
+        let store = TaskStore(container: container, taskImageFiles: files)
+        let gate = try WorkspaceLegacyBridge.coordinator(for: container)
+        _ = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: root.appendingPathComponent("Drops"))
+        XCTAssertFalse(gate.startupReconciled)
+        XCTAssertTrue(gate.launchPruneBatches.isEmpty)
+    }
+
+    func testR2FollowupLaunchSweepWaitsForRegistrationAndRetriesARefusedCollection() async throws {
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskImages"))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container, taskImageFiles: files)
+        let gate = try WorkspaceLegacyBridge.coordinator(for: container)
+        let imported = try await files.importAttachments([textFile(named: "orphan.txt")], existing: [])
+        let reference = try XCTUnwrap(imported.first)
+        let directory = files.files.rootURL.appendingPathComponent(reference.id.uuidString)
+        try backdate(directory, by: 3 * 24 * 60 * 60)
+        files.files.finishCandidates([reference.id])
+        gate.beginLaunchRegistration()
+        let removed = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: root.appendingPathComponent("Drops"))
+        XCTAssertEqual(removed, 1)
+        XCTAssertTrue(gate.startupReconciled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    func testR2FollowupSweepDoesNotConsumeOncePerLaunchAttemptWhenAnOwnerRefusesCollection() async throws {
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskImages"))
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container, taskImageFiles: files)
+        let gate = try WorkspaceLegacyBridge.coordinator(for: container)
+        try await gate.finishLaunch()
+        let imported = try await files.importAttachments([textFile(named: "held.txt")], existing: [])
+        let reference = try XCTUnwrap(imported.first)
+        let directory = files.files.rootURL.appendingPathComponent(reference.id.uuidString)
+        try backdate(directory, by: 3 * 24 * 60 * 60)
+        files.files.finishCandidates([reference.id])
+        let hold = try XCTUnwrap(gate.ownership.tryAcquire([reference.id], kind: .admission))
+        let first = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: root.appendingPathComponent("Drops"))
+        XCTAssertEqual(first, 0, "a partial sweep preserves its removed-count API")
+        hold.release()
+        let retry = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: root.appendingPathComponent("Drops"))
+        XCTAssertEqual(retry, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
     func testLaunchSweepRemovesOnlyOldUnreferencedCopiesAndKeepsEveryReplicasFiles() async throws {
         let (store, container, files) = try makeStore()
         let day: TimeInterval = 24 * 60 * 60
@@ -515,6 +562,10 @@ final class TaskAttachmentDropTests: XCTestCase {
         try FileManager.default.createDirectory(at: liveDrop, withIntermediateDirectories: true)
         try backdate(oldDrop, by: 3 * day)
 
+        // §4 P5: an in-flight original-only import is an owner even when
+        // backdated. This fixture explicitly ends the abandoned candidate's
+        // ownership before simulating the next launch's orphan sweep.
+        files.files.finishCandidates([abandoned.id])
         let removed = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: dropRoot)
         XCTAssertEqual(removed, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: privateDirectory(abandoned).path))
@@ -690,7 +741,7 @@ final class TaskAttachmentDropTests: XCTestCase {
 
         // A cutoff of now makes every entry old enough to remove.
         let removed = await files.removeUnreferencedMaterializations(keeping: [], modifiedBefore: Date(), limit: 10)
-        XCTAssertEqual(removed, 0)
+        XCTAssertEqual(removed.removed, 0)
         try await files.reconcile([])
         XCTAssertEqual(TaskAttachmentStaging.removeAbandoned(modifiedBefore: Date(), in: dropRoot), 0)
 

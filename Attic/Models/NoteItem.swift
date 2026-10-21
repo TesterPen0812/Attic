@@ -1,11 +1,14 @@
 import Foundation
 import SwiftData
+import CryptoKit
 
 @Model
 final class NoteItem {
     // CloudKit can't enforce SwiftData uniqueness. UUID generation plus the
     // NoteStore refresh deduplication keep the app-level identity stable.
     var id: UUID = UUID()
+    /// Both endpoints bump when association or task lifecycle changes.
+    var associationGeneration: Int64 = 0
     var title: String = ""
     var body: String = ""
     var createdAt: Date = Date()
@@ -40,8 +43,31 @@ final class NoteItem {
 
     /// The stored document. Kept byte for byte
     /// when this build can only read it (a newer format).
-    @Attribute(.externalStorage) var content: Data? = nil
-    /// 0 historical format (purged once), 1 `attic.note/1`, higher = a newer Attic.
+    @Attribute(.externalStorage, originalName: "content") private var contentStorage: Data? = nil
+    var content: Data? {
+        get { contentStorage }
+        set {
+            contentFingerprint = Self.fingerprint(newValue)
+            contentStorage = newValue
+        }
+    }
+    /// Optional for existing stores. Guard legacy rows by their real bytes;
+    /// every new write updates this scalar alongside the document.
+    var contentFingerprint: String? = nil
+    nonisolated static func fingerprint(_ content: Data?) -> String {
+        content.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "nil"
+    }
+    /// Typed patches already validated these bytes and their scalar digest.
+    /// Preserve even a legacy nil digest without hashing the bytes on main.
+    func copyStoredContent(from source: NoteItem) {
+        contentStorage = source.contentStorage
+        contentFingerprint = source.contentFingerprint
+    }
+    func installPreparedContent(_ projection: PreparedNoteDocument) {
+        contentStorage = projection.content
+        contentFingerprint = projection.contentFingerprint
+    }
+    /// 0 historical format (purged once), 1 `attic.note/1`, higher = written by a newer Attic.
     var contentFormat: Int = 0
     /// Derived search and agent text (title, then one line per block).
     var plainText: String = ""

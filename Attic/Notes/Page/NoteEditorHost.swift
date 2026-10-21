@@ -94,9 +94,9 @@ final class NotesPageChrome: ObservableObject {
 
     fileprivate weak var accessories: NoteTitleAccessories?
     /// The format controls over the note on screen (bar, `/`, cards).
-    fileprivate(set) weak var controls: NoteFormatControls?
+    weak var controls: NoteFormatControls?
     /// The images and files of the note on screen (ring, drop, menus).
-    fileprivate(set) weak var objectControls: NoteObjectControls?
+    weak var objectControls: NoteObjectControls?
 
     init() {
         formatRow.onChange = { [weak self] open, keyboard in self?.formatRowChanged(open: open, keyboard: keyboard) }
