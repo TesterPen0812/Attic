@@ -21,6 +21,31 @@ struct PanelPageLayout: Equatable {
     /// The bottom of the header, measured from the panel's top edge. Content
     /// that scrolls starts below it and fades as it passes under it.
     var headerBottom: CGFloat { PanelHeaderLayout.bottom(chromeInsets: chromeInsets) }
+    /// The scroll-under fade's bands at the panel's top and bottom edges
+    /// (owner, 2026-10-06): from the edge to the middle of the header's
+    /// controls, and of the bottom row.
+    var scrollEdgeFadeTop: CGFloat { chromeInsets.top + AtticControlSize.panelButton.height / 2 }
+    var scrollEdgeFadeBottom: CGFloat { chromeInsets.bottom + AtticControlSize.panelButton.height / 2 }
+
+    /// The widest a page's column of rows and controls grows (U-42): a
+    /// panel widened past it keeps its column this wide, centred, so a
+    /// date never floats far from its title. The panel itself stays freely
+    /// resizable.
+    static let readingWidth: CGFloat = 600
+
+    /// This layout with its content and floating controls held to a
+    /// centred column at most `maxWidth` wide (the panel's own insets
+    /// included).
+    func readingColumn(maxWidth: CGFloat = PanelPageLayout.readingWidth) -> PanelPageLayout {
+        let extra = max(0, (panelSize.width - maxWidth) / 2).rounded(.down)
+        guard extra > 0 else { return self }
+        var column = self
+        column.contentInsets.leading += extra
+        column.contentInsets.trailing += extra
+        column.chromeInsets.leading += extra
+        column.chromeInsets.trailing += extra
+        return column
+    }
 
     init(cornerSize: CGFloat, panelSize: CGSize) {
         self.cornerSize = cornerSize

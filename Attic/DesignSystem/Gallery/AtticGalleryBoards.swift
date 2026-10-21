@@ -68,13 +68,10 @@ final class AtticGalleryDemo {
     var addTextFilled = "Call the printer #office fri"
     var liveState: AtticTaskState = .todo
     var expandedRow = true
-    var expandedCard = true
     var toastShown = true
     var surface = 0
     var tint = 2
     var haptics = true
-    var dropPhase = 0
-    var subtasksDone: Set<String> = []
     /// The last action a specimen fired ("Complete · Book dentist"), shown in
     /// the gallery's toolbar: proof that every drawn control is wired.
     var lastAction = "None yet"
@@ -124,8 +121,7 @@ struct GalleryQuickLook: View {
         AtticQuickLook(
             subtasks: subtasks,
             onToggle: { demo.record("Toggle subtask", $0.title)() },
-            onAddSubtask: demo.record("Add subtask", task),
-            onOpenPage: demo.record("Open page", task)
+            onAddSubtask: demo.record("Add subtask", task)
         )
     }
 }
@@ -499,15 +495,6 @@ private struct RaisedControlsBoard: View {
                 AtticRaisedButton(systemName: "square.and.pencil", title: "New note", action: demo.record("New note")).atticForcedState(.hover)
             }
         }
-        BoardHeading(title: "Settings back button · 38 × 34, radius 14.5")
-        SpecimenRow {
-            ForEach([AtticControlState.rest, .hover, .pressed, .focused], id: \.self) { state in
-                AtticSpecimen(state.title) {
-                    AtticRaisedButton(systemName: "chevron.left", label: "Back", size: AtticControlSize.settingsBackButton, action: demo.record("Back"))
-                        .atticForcedState(state)
-                }
-            }
-        }
     }
 }
 
@@ -517,7 +504,7 @@ private struct PageSwitchBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
     var body: some View {
-        BoardHeading(title: "Page button (Phase 0's mode dock) · 36 × 36, opens to 96")
+        BoardHeading(title: "Page button (Chrome B) · 32 × 32, opens to 84")
         SpecimenRow {
             AtticSpecimen("Shut: the current page") {
                 AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false)
@@ -855,6 +842,21 @@ private struct TagsBoard: View {
                 }
             }
         }
+        BoardHeading(title: "Notes · the tag line under a title, and suggestions while typing #pri")
+        AtticSpecimen("Tag line, wrapping", fullWidth: true) {
+            AtticNoteTagLine(tags: ["launch-october", "pricing", "website-redesign"]) { _ in }
+                .frame(width: 264, alignment: .leading)
+                .padding(.horizontal, 16)
+        }
+        SpecimenRow {
+            AtticSpecimen("Suggestions") {
+                AtticTagSuggestionList(suggestions: [
+                    AtticTagSuggestion(name: "pricing", count: 6, isNew: false),
+                    AtticTagSuggestion(name: "print-shop", count: 1, isNew: false),
+                    AtticTagSuggestion(name: "pri", count: 0, isNew: true)
+                ], highlighted: 0) { _ in }
+            }
+        }
     }
 }
 
@@ -888,10 +890,10 @@ private struct FeedbackBoard: View {
             .padding(.horizontal, 16)
         }
         BoardHeading(title: "Empty · one quiet italic line, where the first row goes")
-        AtticSpecimen("Now, first use", fullWidth: true) { AtticEmptyLine(text: String(localized: "Add your first task")) }
-        AtticSpecimen("Now, all finished today", fullWidth: true) { AtticEmptyLine(text: String(localized: "You’re caught up")) }
-        AtticSpecimen("Now, tasks waiting in Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing active. Choose from Later.")) }
-        AtticSpecimen("Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing for later")) }
+        AtticSpecimen("Now, first use", fullWidth: true) { AtticEmptyLine(text: String(localized: "Add your first task.")) }
+        AtticSpecimen("Now, all finished today", fullWidth: true) { AtticEmptyLine(text: String(localized: "You’re caught up.")) }
+        AtticSpecimen("Now, tasks waiting in Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing active.")) }
+        AtticSpecimen("Later", fullWidth: true) { AtticEmptyLine(text: String(localized: "Nothing for later.")) }
         AtticSpecimen("Done", fullWidth: true) { AtticEmptyLine(text: String(localized: "Finished tasks collect here.")) }
         AtticSpecimen("Search with no results", fullWidth: true) { AtticEmptyLine(text: String(localized: "No tasks match “invoice”.")) }
         BoardHeading(title: "Error · never hidden, with the next step")
@@ -900,6 +902,58 @@ private struct FeedbackBoard: View {
         }
         AtticSpecimen("Retry hover", fullWidth: true) {
             AtticErrorLine(message: String(localized: "Not saved"), onRetry: demo.record("Retry")).padding(.leading, AtticLayout.textX).atticForcedState(.hover)
+        }
+        BoardHeading(title: "Notes status slot · the most urgent state between the bottom buttons")
+        AtticSpecimen("Not saved, with Retry", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .error),
+                            inlineAction: AtticStatusItem.Action(title: "Retry", handler: demo.record("Retry")),
+                            onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Several at once", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .error),
+                            more: 2, onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("An agent's proposal", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "proposal", systemName: "sparkle", title: "Claude has changes"),
+                            onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Read only", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "readOnly", systemName: "lock", title: "Read only", tone: .quiet),
+                            onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Details", fullWidth: true) {
+            AtticStatusDetails(items: [
+                AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved",
+                                explanation: "The disk is full. Every change is in the recovery copy; Attic keeps trying.",
+                                tone: .error, actions: [.init(title: "Retry", handler: demo.record("Retry")),
+                                                          .init(title: "Copy Text", handler: demo.record("Copy Text"))]),
+                AtticStatusItem(id: "proposal", systemName: "sparkle", title: "Claude has changes",
+                                explanation: "Proposed at 14:10, based on an older version.",
+                                actions: [.init(title: "Review", handler: demo.record("Review"))])
+            ])
+            .background(AtticPopoverBackground())
+            .padding(.horizontal, 16)
+        }
+        BoardHeading(title: "All notes rows · 48 pt, the time never replaced by a status")
+        AtticSpecimen("Rows", fullWidth: true) {
+            VStack(spacing: 0) {
+                AtticNoteRow(model: AtticNoteRowModel(id: UUID(), title: "Pricing page", time: "09:40",
+                                                      preview: "Lead with the free tier. Most people only need the panel.",
+                                                      checklist: (1, 3), images: 1, spoken: "Pricing page"),
+                             isSelected: true, onOpen: demo.record("Open"))
+                AtticNoteRow(model: AtticNoteRowModel(id: UUID(), title: "Groceries", time: "08:15", needsAttention: true,
+                                                      preview: "Oat milk, lemons, rice, coffee beans",
+                                                      checklist: (3, 6), spoken: "Groceries"),
+                             onOpen: demo.record("Open"))
+                AtticNoteRow(model: AtticNoteRowModel(id: UUID(), title: "pricing-v2.pdf", time: "07:50",
+                                                      preview: "1 file", files: 1, spoken: "pricing-v2.pdf"),
+                             onOpen: demo.record("Open"))
+            }
+            .frame(width: 296)
         }
         BoardHeading(title: "Loading · static skeleton, no shimmer")
         AtticSpecimen("List loading", fullWidth: true) { AtticLoadingRows(count: 3) }
@@ -1193,7 +1247,7 @@ struct AtticGallerySettingsWindow: View {
                 .frame(width: AtticLayout.settingsSidebarWidth)
             AtticContentCard {
                 VStack(alignment: .leading, spacing: 0) {
-                    AtticSettingsHeader(title: String(localized: "Appearance"), onBack: demo.record("Back"))
+                    AtticSettingsHeader(title: String(localized: "Appearance"))
                     Color.clear.frame(height: AtticSpacing.settingsBelowHeader - AtticSpacing.s12)
                     content
                         .padding(.horizontal, AtticSpacing.settingsGroupInset)
@@ -1309,7 +1363,7 @@ private struct TokensBoard: View {
         .padding(.horizontal, 16)
         BoardHeading(title: "Type")
         VStack(alignment: .leading, spacing: 6) {
-            AtticText(verbatim: "Note title 17 bold", style: .noteTitle, ink: .heading)
+            AtticText(verbatim: "Note title 22 bold", style: .noteTitle, ink: .heading)
             AtticText(verbatim: "Page title 16 bold", style: .pageTitle, ink: .heading)
             AtticText(verbatim: "Section heading 14 bold", style: .sectionHeading, ink: .heading)
             AtticText(verbatim: "Heading 13 semibold", style: .panelHeading, ink: .heading)

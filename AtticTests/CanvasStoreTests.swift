@@ -88,8 +88,8 @@ final class CanvasStoreTests: XCTestCase {
 
     @MainActor
     func testCopiedLegacyStoreOpensAdditivelyWithoutRewritingInkOrImages() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CanvasSchemaFixture-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "CanvasSchemaFixture")
+
         let originalDirectory = root.appendingPathComponent("legacy", isDirectory: true)
         let copyDirectory = root.appendingPathComponent("upgraded", isDirectory: true)
         try FileManager.default.createDirectory(at: originalDirectory, withIntermediateDirectories: true)

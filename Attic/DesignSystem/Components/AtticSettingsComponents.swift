@@ -139,22 +139,16 @@ struct AtticContentCard<Content: View>: View {
     }
 }
 
-/// The page's top bar: a rim-lit back button (sub-pages only) and the
-/// 16 pt bold title.
+/// The page's 16 pt bold title, aligned with the traffic lights.
 struct AtticSettingsHeader: View {
     let title: String
-    var showsBack = true
-    let onBack: () -> Void
 
     var body: some View {
         HStack(spacing: AtticSpacing.s12) {
-            if showsBack {
-                AtticRaisedButton(systemName: "chevron.left", label: "Back", size: AtticControlSize.settingsBackButton, action: onBack)
-            }
             AtticText(verbatim: title, style: .pageTitle, ink: .heading)
                 .accessibilityAddTraits(.isHeader)
         }
-        .frame(height: AtticControlSize.settingsBackButton.height)
+        .frame(height: AtticControlSize.settingsHeaderHeight)
         .padding(AtticSpacing.s12)
     }
 }
@@ -270,11 +264,12 @@ struct AtticPopUpChoices<Choice: Hashable>: View {
     var body: some View {
         AtticPopover(width: AtticPopoverMetrics.defaultWidth) {
             ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
+                // The tick after the choice (N-4's card design).
                 AtticPopoverRow(
-                    systemName: choice.value == selection ? "checkmark" : nil,
+                    systemName: nil,
                     title: choice.title,
                     isHighlighted: highlighted == index,
-                    reservesIconSlot: true
+                    checked: choice.value == selection
                 ) { choose(choice.value) }
             }
         }
@@ -386,42 +381,6 @@ struct AtticSwitchRow: View {
     }
 }
 
-/// A label and a system segmented control on one grouped row (the Motion
-/// Lab's feel: Calm, Lively, Playful). Like the slider row, the control is
-/// the system's own.
-struct AtticSegmentedRow<Choice: Hashable>: View {
-    let title: String
-    let choices: [(value: Choice, title: String)]
-    @Binding var selection: Choice
-    var identifier: String?
-
-    @State private var probeID = UUID()
-
-    var body: some View {
-        HStack {
-            AtticText(verbatim: title, style: .rowSingle, ink: .body)
-            Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
-            Picker(title, selection: $selection) {
-                ForEach(choices, id: \.value) { choice in
-                    Text(choice.title).tag(choice.value)
-                }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .labelsHidden()
-            .fixedSize()
-            .atticIdentifier(identifier)
-        }
-        .padding(.leading, AtticLayout.groupedRowTextInset)
-        .padding(.trailing, AtticSettingsMetrics.switchTrailing)
-        .frame(height: AtticLayout.groupedRowSingle)
-        .atticControlProbe(
-            "Grouped row (single)", id: probeID,
-            expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowSingle),
-            radius: 0, expectedRadius: 0
-        )
-    }
-}
 
 /// A capture-only drawing of the small system switch (AppKit switches do
 /// not render in `ImageRenderer`). Live UI always uses the real switch.

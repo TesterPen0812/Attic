@@ -42,10 +42,12 @@ struct TasksRowID: Hashable {
 /// What the page needs from outside itself. The shell (or the preview)
 /// supplies it; tests supply fixed clocks.
 struct TasksPageServices {
-    /// ⌘Return, "Open page", VoiceOver "Open page": the task's page. Task
-    /// pages arrive in Phase 3; until then the host opens today's detail
-    /// panel (the subtask panel, which also holds the task's files).
-    var openPage: (UUID) -> Void = { _ in }
+    /// "Attach file…": the host's file picker for the task (it keeps the
+    /// panel open while the picker is up). Nil where the page has none.
+    var chooseFiles: ((UUID) -> Void)?
+    /// The add bar's Attach (O17-06): the same picker, for the task being
+    /// written. Nil where the page has none.
+    var chooseComposerFiles: (() -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -61,6 +63,9 @@ struct TasksListRow: Identifiable, Equatable {
     let status: TaskStatus
     /// Only when the quick look is open.
     let subtasks: [AtticSubtaskModel]
+    /// The task's stored files, only when its files list is open (A1: the
+    /// files count opens them inline, apart from the subtasks).
+    var files: [TaskImageReference] = []
 
     static func == (lhs: TasksListRow, rhs: TasksListRow) -> Bool {
         lhs.id == rhs.id && lhs.status == rhs.status && lhs.model.title == rhs.model.title
@@ -72,6 +77,7 @@ struct TasksListRow: Identifiable, Equatable {
             && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
             && lhs.subtasks.map(\.isDone) == rhs.subtasks.map(\.isDone)
             && lhs.subtasks.map(\.title) == rhs.subtasks.map(\.title)
+            && lhs.files == rhs.files
     }
 }
 
@@ -97,6 +103,14 @@ final class TasksCellUpdates: ObservableObject {
     static let quiet = TasksCellUpdates()
 }
 
+/// Only the quick look with the active editor observes its draft keys.
+@MainActor
+final class TasksSubtaskDraftState: ObservableObject {
+    static let quiet = TasksSubtaskDraftState()
+    @Published var newTitle = ""
+    @Published var rename = ""
+}
+
 /// The add bar's text and insertion point. Only the add bar observes it.
 @MainActor
 final class TasksAddBarState: ObservableObject {
@@ -111,6 +125,13 @@ final class TasksAddBarState: ObservableObject {
     @Published var hiddenSuggestion: NSRange?
     /// The draft's undo history, text and pieces together (round 4).
     var history = TaskDraftHistory()
+    /// Files waiting for the new task (O17-06), and batches still being
+    /// staged. Kept when the text is cleared; they go with the task added,
+    /// or the strip's × removes them.
+    @Published var files: [TasksComposerFiles] = []
+    @Published var stagingFiles = 0
+    /// Clear invalidates providers still staging for this draft.
+    var filesGeneration = UUID()
 
     /// The owner's side of the token field's undo: text and pieces step
     /// back together; nil when the draft has nothing to undo.
@@ -146,6 +167,15 @@ final class TasksAddBarState: ObservableObject {
     }
 }
 
+/// A rename's draft is observed only by the row being edited. Page state
+/// still publishes begin/commit/cancel, but typing and caret movement do not
+/// invalidate the page, other rows, or the kept pager pages.
+@MainActor
+final class TasksTitleDraftState: ObservableObject {
+    @Published var text = TaskAddBarText()
+    @Published var caret: Int?
+}
+
 /// The Tasks page's state and every action it takes. All changes go through
 /// `AtticLibrary`, so each is one undoable step in the Tasks history (the
 /// same route ⌘Z, the toast and agents use). Lives as long as the panel
@@ -161,16 +191,36 @@ final class TasksPageModel: ObservableObject {
         // Remembered across relaunch (L7), where the page has a memory.
         didSet { if tab != oldValue { memory?.savePage(tab) } }
     }
-    @Published private(set) var selection: Set<UUID> = []
+    @Published private(set) var selection: Set<UUID> = [] {
+        didSet { if selection != oldValue { selectionRevision += 1 } }
+    }
+    private var selectionRevision = 0
+    private var keyboardFocusSelectionRevision: Int?
     /// The row a Shift-extension grows from (readable for the tests).
     private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
     @Published private(set) var expanded: Set<UUID> = []
+    /// Rows whose files list is open (A1, owner decision: the files count
+    /// opens only the files, the subtasks count only the subtasks; each
+    /// opens and closes on its own).
+    @Published private(set) var expandedFiles: Set<UUID> = []
+
+    /// Only a files list visible on this tab holds the panel open.
+    var hasVisibleInlineFiles: Bool {
+        !expandedFiles.isEmpty && rows(for: tab).contains { expandedFiles.contains($0.id) }
+    }
     @Published private(set) var editingTitleID: UUID?
     /// The title being edited, with its shorthand (owner fix 4): what is
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
-    @Published var titleEdit = TaskAddBarText()
-    @Published var titleEditCaret: Int?
+    let titleDraft = TasksTitleDraftState()
+    var titleEdit: TaskAddBarText {
+        get { titleDraft.text }
+        set { titleDraft.text = newValue }
+    }
+    var titleEditCaret: Int? {
+        get { titleDraft.caret }
+        set { titleDraft.caret = newValue }
+    }
     /// The title editor's undo history, text and pieces together (round 4).
     var titleHistory = TaskDraftHistory()
 
@@ -210,11 +260,21 @@ final class TasksPageModel: ObservableObject {
         case paste
     }
     @Published private(set) var newSubtaskParentID: UUID?
-    @Published var newSubtaskTitle = ""
+    let subtaskDraft = TasksSubtaskDraftState()
+    var newSubtaskTitle: String {
+        get { subtaskDraft.newTitle }
+        set { subtaskDraft.newTitle = newValue }
+    }
     /// A quick-look subtask being renamed in place (round 10), its text,
     /// and whether its save failed ("Not saved · Retry").
     @Published var renamingSubtaskID: UUID?
-    @Published var subtaskRename = ""
+    /// A rename belongs to the quick look it opened in. A move elsewhere
+    /// cannot leave its editor holding that original page's keys.
+    var renamingSubtaskParentID: UUID?
+    var subtaskRename: String {
+        get { subtaskDraft.rename }
+        set { subtaskDraft.rename = newValue }
+    }
     @Published var subtaskRenameFailed = false
     /// The subtask line that has the keyboard (round 10b). Not published: it
     /// only steers which row a shortcut targets, and never redraws.
@@ -223,6 +283,23 @@ final class TasksPageModel: ObservableObject {
     /// it changes so the rows' cells read it as they draw (deep review
     /// P2-04). Not published: the page tells the cells (`cellUpdates`).
     var keyboardFocus: AtticRowFocusID?
+
+    /// Shared by native focus observation and the headless regression tests.
+    func receiveKeyboardFocus(_ focus: AtticRowFocusID?, keyboardDriving: Bool) {
+        if let focus, focus.page == tab.rawValue, keyboardDriving,
+           selection.count == 1, !selection.contains(focus.id) { selectOnly(focus.id) }
+        keyboardFocus = focus
+        keyboardFocusSelectionRevision = focus?.page == tab.rawValue && keyboardDriving ? selectionRevision : nil
+    }
+
+    func keyboardRow(focused: UUID?, visible: [UUID]) -> UUID? {
+        let live = Set(visible)
+        let selected = selection.intersection(live)
+        let focusIsLater = keyboardFocus?.id == focused && keyboardFocus?.page == tab.rawValue
+            && keyboardFocusSelectionRevision == selectionRevision
+        if let focused, live.contains(focused), focusIsLater || selected.isEmpty || selected.contains(focused) { return focused }
+        return selected.count == 1 ? selected.first : nil
+    }
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: HeldPlace] = [:]
@@ -320,6 +397,7 @@ final class TasksPageModel: ObservableObject {
     private var doneLogRevision: UInt64?
     private var doneLogCursor = TaskStore.DoneLogCursor()
 
+    var dateEnvironmentDidPublish: ((Notification) -> Void)?
     let parser: TaskTextParser
     /// Where the page's Undo toast shows: the shell's one toast host (the
     /// panel supplies its own; the page alone gets a private one).
@@ -340,10 +418,22 @@ final class TasksPageModel: ObservableObject {
         self.toasts = toasts ?? PanelToastCenter()
         self.memory = memory
         parser = TaskTextParser(calendar: services.calendar(), locale: services.locale, now: services.now)
+        Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
+            NotificationCenter.default.publisher(for: $0)
+        }).sink { [weak self] notification in
+            DispatchQueue.main.async { [weak self] in
+                self?.objectWillChange.send()
+                self?.cellUpdates.objectWillChange.send()
+                self?.dateEnvironmentDidPublish?(notification)
+            }
+        }.store(in: &cancellables)
         // A task that left the list (deleted, cleaned up) leaves the
         // selection and the quick look too.
         library.tasks.$revision
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneMissing() } }
+            .store(in: &cancellables)
+        library.tags.inventoryChanges
+            .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
         // A subtask moved, or a move undone or redone (from here or the
         // shared history): the open quick look takes the new order.
@@ -364,6 +454,9 @@ final class TasksPageModel: ObservableObject {
     // MARK: - Lists
 
     private var today: DueDay { DueDay(date: services.now(), calendar: services.calendar()) }
+    private var dateEnvironment: DatePresentationEnvironment {
+        DatePresentationEnvironment(calendar: services.calendar(), locale: services.locale)
+    }
 
     func rowModel(for task: TaskItem, match: String? = nil) -> TasksListRow {
         let subtasks: [TaskItem]
@@ -380,6 +473,7 @@ final class TasksPageModel: ObservableObject {
             subtasks = doneLogChildren[task.id] ?? []
         }
         let open = expanded.contains(task.id)
+        let filesOpen = expandedFiles.contains(task.id)
         var model = TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
                                             calendar: services.calendar(), locale: services.locale)
         // Find's matches are marked in the title (item 6, as on Done).
@@ -388,7 +482,8 @@ final class TasksPageModel: ObservableObject {
             id: task.id,
             model: model,
             status: task.status,
-            subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : []
+            subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : [],
+            files: filesOpen ? task.attachments : []
         )
     }
 
@@ -397,8 +492,10 @@ final class TasksPageModel: ObservableObject {
         let revision: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
+        let expandedFiles: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
+        let dateEnvironment: DatePresentationEnvironment
         let view: TasksViewOptions
         let search: String
     }
@@ -411,8 +508,10 @@ final class TasksPageModel: ObservableObject {
         let revision: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
+        let expandedFiles: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
+        let dateEnvironment: DatePresentationEnvironment
         let doneLog: [UUID]
         let search: String
         /// Now's and Later's view (item 6).
@@ -425,7 +524,7 @@ final class TasksPageModel: ObservableObject {
 
     func pageToken(_ tab: TasksTab) -> PageToken {
         PageToken(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                  completedExpanded: tab == .now && completedTodayExpanded, today: today,
+                  expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), owner: self.tab == tab && isPageShown)
     }
@@ -450,7 +549,7 @@ final class TasksPageModel: ObservableObject {
 
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
         let key = RowsKey(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
-                          completedExpanded: tab == .now && completedTodayExpanded, today: today,
+                          expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
@@ -498,16 +597,8 @@ final class TasksPageModel: ObservableObject {
         return tasks.map { rowModel(for: $0, match: query.isEmpty ? nil : query) }
     }
 
-    /// The library's tags, most used first, read once per store change
-    /// (the suggestions look at them on every keystroke).
-    var cachedTags: [String] {
-        if let tagsCache, tagsCache.revision == store.revision { return tagsCache.tags }
-        let tags = library.tags.counts().map(\.name)
-        tagsCache = (store.revision, tags)
-        return tags
-    }
-
-    private var tagsCache: (revision: UInt64, tags: [String])?
+    /// The shared value-only inventory: Notes changes reach the add bar too.
+    var cachedTags: [String] { library.tags.names }
 
     /// Now is empty and Later has tasks: the empty line offers "Choose
     /// from Later" (review 24).
@@ -525,12 +616,13 @@ final class TasksPageModel: ObservableObject {
 
     /// What an empty list says (Direction A): Now with nothing open is
     /// caught up when something was finished today, points to Later when
-    /// Later has tasks, and otherwise invites the first task.
+    /// Later has tasks, and otherwise invites the first task. Every empty
+    /// and no-match line is one short sentence with its full stop (U-11).
     var emptyMessage: [TasksTab: String] {
         [
-            .now: hasDoneToday ? String(localized: "You’re caught up")
-                : (backlogCount > 0 ? String(localized: "Nothing active") : String(localized: "Add your first task")),
-            .backlog: String(localized: "Nothing for later")
+            .now: hasDoneToday ? String(localized: "You’re caught up.")
+                : (backlogCount > 0 ? String(localized: "Nothing active.") : String(localized: "Add your first task.")),
+            .backlog: String(localized: "Nothing for later.")
         ]
     }
 
@@ -541,7 +633,7 @@ final class TasksPageModel: ObservableObject {
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
         let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch,
-                          today: DueDay(date: services.now(), calendar: services.calendar()))
+                          today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment)
         if let doneCache, doneCache.key == key { return doneCache.days }
         let days = buildDoneDays()
         doneCache = (key, days)
@@ -553,6 +645,7 @@ final class TasksPageModel: ObservableObject {
         let loaded: [UUID]
         let search: String
         let today: DueDay
+        let dateEnvironment: DatePresentationEnvironment
     }
 
     private var doneCache: (key: DoneKey, days: [TasksDoneDay])?
@@ -572,7 +665,7 @@ final class TasksPageModel: ObservableObject {
                 // The match is highlighted in the title (owner item 17).
                 var model = row.model
                 model.titleMatch = query
-                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks)
+                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks, files: row.files)
             }
             if current?.day == day {
                 current?.rows.append(row)
@@ -653,7 +746,11 @@ final class TasksPageModel: ObservableObject {
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
         let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "")
-        setDoneLog(doneLogTasks + page.tasks)
+        doneCountCache = nil
+        // The indexed cursor supplies canonical IDs in completion order.
+        // Existing families remain valid for this store revision.
+        doneLogTasks.append(contentsOf: page.tasks)
+        doneLogChildren.merge(store.doneLogSubtasks(ofParents: page.tasks.map(\.id))) { _, new in new }
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = page.failure
@@ -796,7 +893,8 @@ final class TasksPageModel: ObservableObject {
     private var rowRetry: (() -> CommandOutcome)?
 
     /// Shows `outcome` under row `id` when it failed (and clears that row's
-    /// earlier failure when it applied). Returns the outcome.
+    /// earlier failure when it applied). Returns the outcome. The stored retry
+    /// must capture the model weakly and keep only the command's value inputs.
     @discardableResult
     func report(_ outcome: CommandOutcome, on id: UUID, retry: @escaping () -> CommandOutcome) -> CommandOutcome {
         if let failure = outcome.failure {
@@ -1014,9 +1112,7 @@ final class TasksPageModel: ObservableObject {
     /// counted in rows, so the browsing page size never shortens it
     /// (GPT-6.1's PR prep review, P3: 40-row pages halved it to 8,040).
     static let doneRevealReach = 80 + 200 * 80
-    /// A reveal reads in 80-row steps, as before the 40-row pages: each
-    /// step re-reads the loaded rows' families, so smaller steps would
-    /// double the reads for the same reach.
+    /// Keep the established reveal page boundary when seeking directly.
     static let doneRevealStep = 80
 
     /// Loads the Done log until `id`'s page is in, and says whether it is.
@@ -1026,9 +1122,12 @@ final class TasksPageModel: ObservableObject {
         isRevealing = true
         defer { isRevealing = false }
         loadDoneLogIfNeeded()
-        while !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
-              doneLogTasks.count < Self.doneRevealReach {
-            loadMoreDoneLog(limit: min(Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
+        if !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
+           doneLogTasks.count < Self.doneRevealReach {
+            let offset = store.indexedDoneLogOffset(of: id, matching: doneLogQuery ?? "") ?? (Self.doneRevealReach - 1)
+            let remaining = max(0, offset + 1 - doneLogTasks.count)
+            let pages = max(1, (remaining + Self.doneRevealStep - 1) / Self.doneRevealStep)
+            loadMoreDoneLog(limit: min(pages * Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))
         }
         return doneLogTasks.contains { $0.id == id }
     }
@@ -1156,12 +1255,28 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func pruneMissing() {
-        let live = { (id: UUID) in self.store.task(withID: id) != nil || self.tab == .done }
+        let live = { (id: UUID) in
+            self.tab == .done ? self.store.listedTask(withID: id) != nil : self.store.task(withID: id) != nil
+        }
         let keptSelection = selection.filter(live)
         if keptSelection != selection { selection = keptSelection }
         if let anchor = selectionAnchor, !live(anchor) { selectionAnchor = nil }
-        if let editingTitleID, store.task(withID: editingTitleID) == nil, tab != .done { cancelEditing() }
-        if let newSubtaskParentID, store.task(withID: newSubtaskParentID) == nil { self.newSubtaskParentID = nil }
+        // Check logical ownership, not the anchor's one-/two-line view
+        // lifetime. Done-log rows remain valid while they are listed.
+        func hasRow(_ id: UUID) -> Bool {
+            guard live(id) else { return false }
+            // Done reloads its paged projection asynchronously. An empty
+            // intermediate page is not evidence that a listed task vanished.
+            if tab == .done { return store.listedTask(withID: id)?.status == .done }
+            return rows(for: tab).contains { $0.id == id }
+        }
+        if let editingTitleID, !hasRow(editingTitleID) { cancelEditing() }
+        if let newSubtaskParentID, !hasRow(newSubtaskParentID) { cancelEditing() }
+        if let id = renamingSubtaskID {
+            let parent = store.task(withID: id)?.parentID
+            let hasOwner = parent.map { $0 == renamingSubtaskParentID && hasRow($0) } ?? false
+            if !hasOwner { cancelSubtaskRename() }
+        }
     }
 
     // MARK: - State changes
@@ -1377,6 +1492,7 @@ final class TasksPageModel: ObservableObject {
         selection.subtract(live)
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
+        expandedFiles.subtract(live)
         if let title {
             showToast(String(localized: "Deleted “\(title)”"))
         } else {
@@ -1545,6 +1661,49 @@ final class TasksPageModel: ObservableObject {
         if open != expanded.contains(id) { toggleExpanded(id) }
     }
 
+    /// An empty editor's Backspace removes its own line, then edits the
+    /// previous visible sibling at its end. Store deletion remains the
+    /// library's duplicate-safe, fallible, undoable operation.
+    @discardableResult
+    func backspaceEmptySubtask() -> Bool {
+        if let parent = newSubtaskParentID {
+            guard newSubtaskTitle.isEmpty else { return false }
+            let previous = quickLookSubtasks(of: parent, store.subtasks(of: parent)).last?.id
+            newSubtaskParentID = nil
+            if let previous { beginRenamingSubtask(previous) }
+            library.undo.record(UndoStep(name: String(localized: "Remove empty subtask"), undoOutcome: { [weak self] in
+                guard let self, self.store.task(withID: parent) != nil else { return .obsolete }
+                guard self.canRestoreEmptySubtaskLine else { return .failed }
+                self.cancelEditing()
+                self.beginAddingSubtask(to: parent)
+                return .applied
+            }, redoOutcome: { [weak self] in
+                guard let self, self.store.task(withID: parent) != nil else { return .obsolete }
+                guard self.canRestoreEmptySubtaskLine else { return .failed }
+                self.cancelEditing()
+                if let previous { self.beginRenamingSubtask(previous) }
+                return .applied
+            }), in: .tasks)
+            return true
+        }
+        guard let id = renamingSubtaskID, subtaskRename.isEmpty,
+              let parent = store.task(withID: id)?.parentID else { return false }
+        let siblings = quickLookSubtasks(of: parent, store.subtasks(of: parent))
+        let previous = siblings.firstIndex(where: { $0.id == id }).flatMap { $0 > 0 ? siblings[$0 - 1].id : nil }
+        guard deleteSubtask(id).isApplied else { return false }
+        if let previous { beginRenamingSubtask(previous) }
+        return true
+    }
+
+    /// Undo closures must never save/record another history step while
+    /// UndoRoute is applying one. Dirty native typing keeps its own Undo
+    /// first; a direct page Undo also preserves that draft and its history.
+    private var canRestoreEmptySubtaskLine: Bool {
+        if hasUnsavedEdit { return false }
+        if let id = renamingSubtaskID, subtaskRename != store.task(withID: id)?.title { return false }
+        return newSubtaskTitle.isEmpty
+    }
+
     func beginAddingSubtask(to id: UUID) {
         guard newSubtaskParentID != id else { return }
         guard finishEditing() else { return }
@@ -1597,14 +1756,12 @@ final class TasksPageModel: ObservableObject {
     /// The Done page's search field.
     var searchPlaceholder: String { String(localized: "Search done tasks") }
 
-    var addBarChips: [NSRange] {
-        addBar.chips(parser: parser, caret: addBarCaret)
-    }
 
-    /// Return adds and keeps the bar focused; ⌘Return adds and opens the
-    /// task's page. Returns the new task.
+    /// Return adds and keeps the bar focused; ⌘Return reveals the new
+    /// task and opens its inline files. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
+        guard composerFilesReadyForSubmission() else { return nil }
         // Submitting finishes the words at the end (round 8, G1): a date or
         // priority typed after a pick, still at the caret (`Call !` then
         // Return), replaces the pick as a finished one does. Words that are
@@ -1615,21 +1772,38 @@ final class TasksPageModel: ObservableObject {
         guard let draft = finished.draft(parser: parser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
         addBarState.clearDraft()
-        if openingPage { services.openPage(task.id) }
+        // Files added while it was written go onto it (O17-06).
+        attachComposerFiles(to: task.id)
         selectOnly(nil)
+        var revealed = false
+        if openingPage {
+            expandedFiles.insert(task.id)
+            revealed = show(task.id) == .shown
+        }
         addedRequest = ScrollRequest(id: task.id)
-        // Added from Done, the task goes to Now, out of sight: say where.
-        if tab == .done, !openingPage { showToast(String(localized: "Added to Now")) }
+        // A requested reveal can be blocked by another unsaved edit. Only
+        // suppress the out-of-view feedback once the task is actually shown.
+        if tab == .done, !revealed { showToast(String(localized: "Added to Now")) }
         // Added where the view or a Find hides it (item 6): say so.
-        else if !openingPage, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
+        else if !revealed, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
             showToast(String(localized: "Added · hidden by this view"))
         }
         return task.id
     }
 
+    /// Preparing a provider cannot consume this draft yet. Keep the choice
+    /// explicit: a later file callback must never submit a changed draft.
+    private func composerFilesReadyForSubmission() -> Bool {
+        guard addBarState.stagingFiles > 0 else { return true }
+        toasts.show(String(localized: "Preparing files · try again in a moment"),
+                    actionTitle: String(localized: "OK"), answersUndoKey: false, action: {})
+        return false
+    }
+
     /// Pasted lines: one task per line, or all of them as one task.
     /// The offer stays (with "Not saved · Retry") until the tasks exist.
     func acceptPaste(asOne: Bool) {
+        guard composerFilesReadyForSubmission() else { return }
         guard let offer = pasteOffer else { return }
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
         let drafts = builder.drafts(from: offer.text, mode: asOne ? .single : .onePerLine)
@@ -1643,6 +1817,9 @@ final class TasksPageModel: ObservableObject {
         // The bar is empty once the tasks exist, as after a single add (round
         // 12, CU: the draft stayed behind the batch).
         addBarState.clearDraft()
+        // A paste consumes the same draft as Return. For one-per-line,
+        // its files belong to the first task, which the page reveals.
+        if let first = created.first { attachComposerFiles(to: first.id) }
         // The same observable success as a single add (round 4): the first
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.
@@ -1765,16 +1942,25 @@ final class TasksPageModel: ObservableObject {
 
     private var postedToastID: UUID?
 
-    /// "Open page" (⌘Return, the menu, VoiceOver). A task in the lists goes
-    /// to the host's detail route; a task in the Done log, which that route
-    /// can't show, opens its read-only details here: its subtasks and the
-    /// files it kept.
+    /// "Show files" (⌘Return, the menu, VoiceOver, the files count): a task
+    /// in the lists opens or closes its files inline, under the row (A1);
+    /// a task in the Done log opens its read-only details here: its
+    /// subtasks and the files it kept.
     func openPage(_ id: UUID) {
         if store.task(withID: id) != nil {
-            services.openPage(id)
+            toggleFiles(id)
         } else if store.listedTask(withID: id) != nil {
             doneDetailID = id
         }
+    }
+
+    /// The files list under a row opens or closes, apart from its subtasks.
+    func toggleFiles(_ id: UUID) {
+        if expandedFiles.contains(id) { expandedFiles.remove(id) } else { expandedFiles.insert(id) }
+    }
+
+    func setFilesExpanded(_ id: UUID, _ open: Bool) {
+        if open != expandedFiles.contains(id) { toggleFiles(id) }
     }
 
     /// The Done log task whose details are open.

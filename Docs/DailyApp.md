@@ -13,25 +13,9 @@ not overwritten when developing or using the normal Codex Run action.
 
 The original `/Applications/Attic.app` and former owner's container are not
 modified. Existing notes in another app/preview are not silently transferred.
-CloudKit and APNs remain disabled. Agent Access is opt-in. The initial daily
-release requires the MCP authentication repair described below before access
-can safely be enabled.
-
-### Agent Access warning for the initial daily release
-
-The 2026-09-09 connection check found that `ATTIC_LOCAL_ONLY` substitutes a fixed
-placeholder bearer token, but the Settings switch can still start the server.
-This is not an enforced compile-time disable. Do not turn on Agent Access in
-daily release `8b03586` or distribute its setup prompt. No listener was running
-during verification, and access was left off.
-
-The repaired source now uses private per-identity Keychain credentials and
-rejects invalid credentials before opening a listener. Its socket tests and
-optional official-SDK gate cover authenticated connections. Update the initial
-daily binary before enabling access; changing source does not update an
-installed release. A successful SDK test against an isolated test store does
-not configure the user's clients or grant them the daily app's credential.
-See [daily installation and MCP validation](DailyAppValidation-2026-09-09.md).
+CloudKit and APNs remain disabled. Agent Access (the local MCP server) is off
+until it is turned on in Settings, and it uses a private per-identity Keychain
+credential; see the README's Agent access section.
 
 ## Install or update the daily app
 
@@ -52,14 +36,14 @@ It builds only `Local` with `ATTIC_LOCAL_ONLY` and
 store environment to `Development` so a future release configuration cannot
 accidentally select `default.store`/the production store.
 
-On this Mac, the user approved the installed Taha Waseem development certificate
-with actual team `AQ484LXN59` as a local override on 2026-09-09. This does not
-change the project's official team or development contract. Use:
+To sign with a different development certificate, pass an explicitly approved
+local override. This does not change the project's official team or the
+Development Contract:
 
 ```sh
 Scripts/install_daily_app.zsh --install --expected-sha <full-reviewed-commit-sha> \
-  --development-team AQ484LXN59 \
-  --signing-identity 12F1981F20A99BA8CC316439D7A04ACE14643BC0
+  --development-team <TEAM_ID> \
+  --signing-identity <CERTIFICATE_SHA1>
 ```
 
 The installer requires an exact valid development-certificate fingerprint for

@@ -38,9 +38,7 @@ enum TasksPagePreview {
         }
         let store = TaskStore(container: container)
         let library = AtticLibrary(tasks: store)
-        let model = TasksPageModel(library: library, services: TasksPageServices(openPage: { id in
-            NSLog("Attic Tasks preview: open page for %@ (task pages arrive in Phase 3)", id.uuidString)
-        }))
+        let model = TasksPageModel(library: library, services: TasksPageServices())
         retained = [store, library, model]
         let dark = ProcessInfo.processInfo.arguments.contains("--dark")
         let root = TasksPagePreviewRoot(model: model, store: store, mode: dark ? .dark : .light)
@@ -110,6 +108,44 @@ enum TasksPagePreview {
     }
 
     /// The v9 mockup's tasks, plus a backlog and a few days of the Done log.
+    /// The colour pass sheet's Tasks panel (captures only): #launch,
+    /// #design and #pricing (teal, blue, and olive after the collision), a
+    /// pie at 1 of 3, an overdue date and two done today.
+    static func seedColour(in container: ModelContainer) throws {
+        let context = ModelContext(container)
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+        func day(_ offset: Int) -> DueDay? {
+            calendar.date(byAdding: .day, value: offset, to: now).map { DueDay(date: $0, calendar: calendar) }
+        }
+        var order: Int64 = 100 * 1_024
+        func task(_ title: String, _ status: TaskStatus = .todo, _ priority: TaskPriority = .none, due: DueDay? = nil,
+                  tags: [String] = [], parent: UUID? = nil, completed: Date? = nil) -> TaskItem {
+            order -= 1_024
+            let item = TaskItem(title: title, status: status, priority: priority, createdAt: now.addingTimeInterval(-86_400 * 3),
+                                completedAt: completed, manualOrder: order, parentID: parent)
+            item.dueDay = due
+            item.tags = tags
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+            return item
+        }
+        let launch = task("Finalize launch checklist", .inProgress, .high, due: day(0), tags: ["launch"])
+        _ = task("Freeze strings", .done, parent: launch.id, completed: now)
+        _ = task("Write release notes", parent: launch.id)
+        _ = task("Final screenshots", parent: launch.id)
+        let ship = task("Ship appearance PR", .todo, .high, tags: ["design"])
+        _ = task("Review contrast", .done, parent: ship.id, completed: now)
+        _ = task("Record the preview", .done, parent: ship.id, completed: now)
+        _ = task("Fix tint slider test", parent: ship.id)
+        _ = task("Merge", parent: ship.id)
+        _ = task("Email beta testers", .todo, .medium, due: day(3), tags: ["pricing", "launch"])
+        _ = task("Renew passport", due: day(-1))
+        _ = task("Renew domain", .done, completed: now)
+        _ = task("Call the plumber", .done, tags: ["design"], completed: now)
+        try context.save()
+    }
+
     static func seedDemo(in container: ModelContainer, long: Bool = false) throws {
         let context = ModelContext(container)
         let calendar = Calendar.autoupdatingCurrent
@@ -187,7 +223,11 @@ private struct TasksPagePreviewRoot: View {
                     .padding(.horizontal, layout.chromeInsets.leading)
                     .padding(.bottom, layout.contentInsets.bottom + noticeClearance)
             }
-            .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { noticeClearance = $0 }
+            .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
+                withAnimation(AtticMotionPreset.popover.animation(reduceMotion: false, showing: clearance > noticeClearance)) {
+                    noticeClearance = clearance
+                }
+            }
         }
         .atticDesign(AtticDesignContext(mode: mode))
         .atticWindowAppearance(mode)

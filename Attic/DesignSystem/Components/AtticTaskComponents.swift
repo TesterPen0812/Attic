@@ -150,7 +150,7 @@ enum AtticTextInput {
     /// An Attic pop-over is on screen: its keys are its own, whichever
     /// window AppKit delivers them to.
     @MainActor static var isPopoverOpen: Bool {
-        popoverWindows.allObjects.contains { $0.isVisible }
+        AtticDropdownPresenter.isAnyOpen || popoverWindows.allObjects.contains { $0.isVisible }
     }
 
     static func isTyping(_ responder: NSResponder?) -> Bool {
@@ -365,13 +365,6 @@ struct AtticRowFocus {
     /// would leave them deaf.
     let isActive: () -> Bool
 
-    init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isActive: @escaping () -> Bool = { true }) {
-        self.binding = binding
-        self.id = id
-        self.isActive = isActive
-        isFocused = isActive() && binding.wrappedValue == id
-    }
-
     /// With the list's own record of which row has the keyboard: a lazy
     /// list's cell that reads the focus state reads it as it was when the
     /// list was built (the Tasks page, deep review P2-04), so the list
@@ -419,6 +412,10 @@ struct AtticTitleEditing {
     /// text and Return can try again.
     let commit: () -> Bool
     let cancel: () -> Void
+    /// Return, when it means more than saving (O17-04: a subtask's Return
+    /// saves it and moves on to a new one); nil: Return saves (`commit`).
+    /// Leaving the field always only saves.
+    var submit: (() -> Bool)? = nil
     /// The title editor understands the add bar's shorthand (owner fix 4):
     /// what it draws as chips and what the field reports. nil keeps a
     /// plain field (the new-subtask line).
@@ -428,6 +425,12 @@ struct AtticTitleEditing {
     /// Shown in the empty plain field ("Add subtask…" on the new-subtask
     /// line, round 13); nil shows nothing, as a title editor never empties.
     var placeholder: String? = nil
+
+    /// Only subtask editors consume Backspace on a truly empty field.
+    var emptyBackspace: (() -> Bool)? = nil
+    var pageUndo: ((_ nativeHasUndo: Bool) -> Bool)? = nil
+    var pageRedo: ((_ nativeHasRedo: Bool) -> Bool)? = nil
+    var didEdit: (() -> Void)? = nil
 
     struct Tokens {
         var chips: [AtticTokenChip]
@@ -488,6 +491,10 @@ struct AtticRowTitleEditor: View {
             .onAppear { tokenFocused = true }
             .onChange(of: tokenFocused) { _, now in lost(now) { tokenFocused = true } }
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
+        } else if editing.emptyBackspace != nil {
+            // A subtask's entry wraps and grows with its text (O17-05).
+            AtticSubtaskTitleField(editing: editing, color: NSColor(design.tokens.color(.heading)))
+                .frame(minHeight: AtticTaskRowMetrics.titleLineHeight)
         } else {
             TextField("", text: editing.text,
                       prompt: editing.placeholder.map { Text($0).foregroundStyle(design.tokens.color(.placeholder)) })
@@ -556,9 +563,12 @@ struct AtticRowTitleEditor: View {
 ///   whatever the priority.
 /// - **In progress:** the same ring with a 5 pt filled centre dot
 ///   ("working on it") until a subtask is ticked; then a true pie of the
-///   share ticked, with no minimum (owner, 2026-09-26). A task not started
-///   keeps its empty ring whatever its subtasks say (its "☑ n/m" shows it).
-/// - **Done:** a quiet grey disc with a darker grey check.
+///   share ticked, with no minimum (owner, 2026-09-26), capped at 92 % so
+///   all subtasks ticked still leaves a sliver of ring and never reads as
+///   done. A task not started keeps its empty ring whatever its subtasks
+///   say (its "☑ n/m" shows it).
+/// - **Done:** a filled disc in the same ink with its tick in the inverse
+///   (owner, 2026-10-10): only done is filled and ticked.
 /// - **Backlog (Later):** the same ring, dashed.
 ///
 /// Completing: the done disc sweeps in from 12 o'clock, then the check
@@ -624,13 +634,14 @@ struct AtticStatusCircle: View {
             case .done:
                 AtticCompletionMark(
                     completion: completionProgress ?? completion,
-                    ring: tokens.color(isDisabled ? .disabledIcon : Self.ringInk), ringWidth: width, disc: tokens.doneDisc.color
+                    ring: tokens.color(isDisabled ? .disabledIcon : Self.ringInk), ringWidth: width,
+                    disc: tokens.color(isDisabled ? .disabledIcon : .doneFill)
                 )
                 .opacity(discOpacity)
                 AtticCheckShape()
                     .trim(from: 0, to: checkProgress ?? drawnCheck)
-                    .stroke(tokens.color(.doneCheck), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
-                    .atticCheckProbe(id: checkProbeID, ink: .doneCheck, foreground: tokens.ink(.doneCheck))
+                    .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
                     .opacity(discOpacity)
             case .backlog:
@@ -665,11 +676,15 @@ struct AtticStatusCircle: View {
         .accessibilityHidden(true)
     }
 
+    /// The largest pie an in-progress task draws: 4 of 4 keeps a sliver of
+    /// open ring, so a full pie never reads as the done disc.
+    static let pieCap = 0.92
+
     /// In progress: the pie's share, or nil (the centre dot) while no
-    /// subtask is ticked. A true share, with no minimum.
+    /// subtask is ticked. A true share, with no minimum, capped at `pieCap`.
     static func pieShare(_ subtasks: (done: Int, total: Int)?) -> Double? {
         guard let subtasks, subtasks.total > 0, subtasks.done > 0 else { return nil }
-        return min(1, Double(subtasks.done) / Double(subtasks.total))
+        return min(pieCap, Double(subtasks.done) / Double(subtasks.total))
     }
 
     /// The spoken state: "in progress, 1 of 3 subtasks".
@@ -930,6 +945,9 @@ struct AtticPageTabs<Page: Hashable>: View {
         let title: String
         /// For UI tests and automation.
         var accessibilityIdentifier: String?
+        /// A tag tab's own colour (colour pass): its words in the tag's hue
+        /// in every state, the selected tab still semibold and underlined.
+        var ink: AtticInk?
         var id: String { title }
     }
 
@@ -937,6 +955,8 @@ struct AtticPageTabs<Page: Hashable>: View {
     @Binding var selection: Page
     /// The gallery pins a state (hover, focus) on one tab only.
     var statePinnedPage: Page?
+    /// What VoiceOver calls the group (All notes: its filters).
+    var groupLabel = String(localized: "Pages")
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -963,7 +983,7 @@ struct AtticPageTabs<Page: Hashable>: View {
                             .hidden()
                             .accessibilityHidden(true)
                         AtticText(verbatim: item.title, style: isSelected ? .pageTabSelected : .pageTab,
-                                  ink: isSelected ? .heading : (hovered ? .body : .helper))
+                                  ink: item.ink ?? (isSelected ? .heading : (hovered ? .body : .helper)))
                             .fixedSize()
                     }
                         .frame(height: AtticLayout.pageTabsHeight)
@@ -1013,7 +1033,7 @@ struct AtticPageTabs<Page: Hashable>: View {
             return .handled
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Pages"))
+        .accessibilityLabel(groupLabel)
     }
 
     /// A plain change (round 11): the page that shows the selection moves
@@ -1136,6 +1156,12 @@ struct AtticPriorityMark: View {
 /// focusable: a focused row draws the 2 pt accent ring and answers the
 /// task keys (`AtticTaskKeys`).
 struct AtticTaskRow: View {
+    /// The title's ink: the secondary grey once done (T-06 B, owner
+    /// 2026-10-15; the filled mark stays), the disabled ink when disabled.
+    nonisolated static func titleInk(done: Bool, disabled: Bool) -> AtticInk {
+        disabled ? .disabledText : (done ? .helper : .heading)
+    }
+
     /// Whether the row shows its actions button: for the keyboard's row
     /// (and the gallery's focused state), never for the pointer's hover,
     /// which only tints the row.
@@ -1150,6 +1176,11 @@ struct AtticTaskRow: View {
     var isSelected = false
     var selectionRun: AtticSelectionRun = .single
     var isExpanded = false
+    /// The files list is open under the row (A1).
+    var isFilesExpanded = false
+    /// The files count's click: opens or closes the files list under the
+    /// row. nil draws the count as plain text.
+    var onToggleFiles: (() -> Void)? = nil
     /// "Add to page" while a file hovers over the row.
     var dropLabel: String?
     let actions: AtticTaskActions
@@ -1217,6 +1248,7 @@ struct AtticTaskRow: View {
             }
             .frame(height: highlightHeight)
             .padding(.horizontal, AtticLayout.rowHighlightInset)
+            .animation(.linear(duration: isSelected ? 0.08 : 0.06), value: isSelected)
 
             // The circle, centred on the title line (row top + 17), its
             // 28 pt hit area around the 14 pt drawing.
@@ -1232,7 +1264,20 @@ struct AtticTaskRow: View {
             VStack(alignment: .leading, spacing: m.titleToDetails) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     if let titleEditing, capture == nil {
-                        AtticRowTitleEditor(editing: titleEditing)
+                        // Keep the title's real text baseline in layout. An
+                        // NSViewRepresentable otherwise contributes its bottom
+                        // edge as a baseline, lifting the date while its own
+                        // NSTextView draws the title lower (F-09).
+                        AtticText(verbatim: model.title,
+                                  style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
+                                  ink: .heading, truncates: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .hidden()
+                            .overlay(alignment: .leading) {
+                                AtticRowTitleEditor(editing: titleEditing)
+                                    .frame(height: m.titleLineHeight)
+                            }
+                            .layoutPriority(-1)
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: AtticPriorityMarkMetrics.titleGap) {
                             AtticText(
@@ -1240,8 +1285,9 @@ struct AtticTaskRow: View {
                                 // Phase 0's qualities: SF Pro Rounded, medium
                                 // while in progress, in the primary ink.
                                 style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
-                                // Done fades the title, without a strike (v9).
-                                ink: disabled ? .disabledText : (done ? .helper : .heading),
+                                // T-06 B (owner, 2026-10-15): a done title is
+                                // the secondary grey; the filled mark stays.
+                                ink: Self.titleInk(done: done, disabled: disabled),
                                 truncates: true,
                                 highlights: model.titleMatchRanges
                             )
@@ -1275,6 +1321,7 @@ struct AtticTaskRow: View {
                     // The tag popover points at the tags that were clicked
                     // (round 5), not the middle of the line.
                     AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded,
+                                     isFilesExpanded: isFilesExpanded, onToggleFiles: capture == nil ? onToggleFiles : nil,
                                      onTags: capture == nil ? meta?.onTags : nil,
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
@@ -1292,7 +1339,7 @@ struct AtticTaskRow: View {
                 if !twoLine || model.tags.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
                         .padding(.leading, AtticLayout.textX)
-                        .atticPopover(isPresented: tagsPresented(twoLine: false), arrowEdge: .bottom) { meta?.tagPicker() }
+                        .atticDropdown(isPresented: tagsPresented(twoLine: false), label: String(localized: "Tags")) { meta?.tagPicker() }
                 }
             }
         }
@@ -1313,8 +1360,7 @@ struct AtticTaskRow: View {
             }
         }
         .contentShape(Rectangle())
-        // (A preview's `ATTIC_UI_TEST_HOVER=off` never tints: an A/B switch.)
-        .onHover { hovered = $0 && AtticPreviewOverrides.current.rowHoverTints }
+        .onHover { hovered = $0 }
         .onTapGesture { if isEnabled { (onSelect ?? actions.openPage)() } }
         .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true,
                         live: capture == nil, external: focus, answersKeys: titleEditing == nil)
@@ -1366,7 +1412,7 @@ struct AtticTaskRow: View {
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
                 .accessibilityHint(String(localized: "Changes the date"))
-                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
             } else {
                 AtticDueText(due: due, disabled: disabled)
                     .fixedSize()
@@ -1374,7 +1420,7 @@ struct AtticTaskRow: View {
         } else if let meta, capture == nil {
             // No date yet: "Pick a Date…" opens the picker from here.
             Color.clear.frame(width: 1, height: 1)
-                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
         }
     }
 
@@ -1402,7 +1448,7 @@ struct AtticRowActionsButton: View {
     var body: some View {
         let m = AtticRowActionsMetrics.self
         Button { action(anchor.view) } label: {
-            AtticIcon(systemName: "ellipsis", size: m.iconSize, weight: .semibold, ink: .icon)
+            AtticIcon(systemName: "ellipsis", size: m.iconSize, weight: m.iconWeight, ink: .icon)
                 .frame(width: m.width, height: AtticTaskRowMetrics.metaPillHeight)
                 .background(AtticMetaPill(visible: hovered || forced == .hover).padding(.horizontal, AtticTaskRowMetrics.metaPillOutset))
                 .contentShape(Rectangle())
@@ -1445,6 +1491,48 @@ extension View {
 struct AtticAnchoredPopover {
     var isPresented: Binding<Bool>
     let content: () -> AnyView
+}
+
+/// What opens under a row (its subtasks, its files) is uncovered from the
+/// top as the rows below make room, on the same spring (V-10): it never
+/// shows at its final place over rows still sliding down, nor stays over
+/// them as they come back up. A clip, not a mask: no layer is drawn
+/// offscreen, and at rest it cuts nothing.
+struct AtticTopRevealShape: Shape {
+    /// 0: nothing shown; 1: at rest, nothing cut.
+    var fraction: CGFloat
+
+    var animatableData: CGFloat {
+        get { fraction }
+        set { fraction = newValue }
+    }
+
+    /// Room around the content its clip leaves alone (focus rings, a
+    /// lifted subtask's shadow): only the bottom edge moves.
+    static let room: CGFloat = 10_000
+
+    func path(in rect: CGRect) -> Path {
+        let open = rect.insetBy(dx: -Self.room, dy: -Self.room)
+        guard fraction < 1 else { return Path(open) }
+        let bottom = rect.minY + rect.height * max(0, fraction)
+        return Path(CGRect(x: open.minX, y: open.minY, width: open.width, height: max(0, bottom - open.minY)))
+    }
+}
+
+private struct AtticTopReveal: ViewModifier {
+    let fraction: CGFloat
+
+    func body(content: Content) -> some View {
+        content.clipShape(AtticTopRevealShape(fraction: fraction))
+    }
+}
+
+extension AnyTransition {
+    /// Uncovered from the top as it opens, covered back up as it closes
+    /// (`AtticTopRevealShape`).
+    static var atticTopReveal: AnyTransition {
+        .modifier(active: AtticTopReveal(fraction: 0), identity: AtticTopReveal(fraction: 1))
+    }
 }
 
 /// A row's date and tags as controls (owner fix 5 C): their clicks and the
@@ -1494,6 +1582,10 @@ struct AtticTaskDetails: View {
     let disabled: Bool
     let isExpanded: Bool
     let onToggleExpanded: () -> Void
+    /// The files list is open under the row, and the files count's click
+    /// (A1); nil draws the count as plain text (captures, Done).
+    var isFilesExpanded = false
+    var onToggleFiles: (() -> Void)? = nil
     /// A click on the tags (the row's tag popover); nil draws plain text.
     var onTags: (() -> Void)? = nil
     /// The row's tag popover, anchored to the tags themselves so its arrow
@@ -1517,8 +1609,13 @@ struct AtticTaskDetails: View {
                 AtticDetailsTags(tags: model.tags, disabled: disabled, onTags: onTags, popover: tagsPopover)
             }
             if let subtasks = model.subtasks {
-                AtticSubtaskChecklistButton(
-                    done: subtasks.done, total: subtasks.total, isExpanded: isExpanded, disabled: disabled, action: onToggleExpanded
+                AtticDetailsCountButton(
+                    systemName: "checkmark.square", count: "\(subtasks.done)/\(subtasks.total)",
+                    isExpanded: isExpanded, disabled: disabled,
+                    help: (String(localized: "Hide subtasks"), String(localized: "Show subtasks")),
+                    spokenLabel: String(localized: "\(subtasks.done) of \(subtasks.total) subtasks"),
+                    hint: (String(localized: "Collapses the quick look"), String(localized: "Expands the quick look")),
+                    action: onToggleExpanded
                 )
                 .fixedSize()
                 .layoutPriority(1)
@@ -1532,12 +1629,27 @@ struct AtticTaskDetails: View {
                 .layoutPriority(1)
             }
             if model.attachments > 0 {
-                HStack(spacing: m.detailsIconGap) {
-                    AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
-                    AtticText(verbatim: "\(model.attachments)", style: .rowMeta, ink: text)
+                if let onToggleFiles {
+                    // The files count opens the files list, apart from the
+                    // subtasks (A1).
+                    AtticDetailsCountButton(
+                        systemName: "paperclip", count: "\(model.attachments)",
+                        isExpanded: isFilesExpanded, disabled: disabled,
+                        help: (String(localized: "Hide files"), String(localized: "Show files")),
+                        spokenLabel: model.attachments == 1 ? String(localized: "1 file") : String(localized: "\(model.attachments) files"),
+                        hint: (String(localized: "Hides the files"), String(localized: "Shows the files")),
+                        action: onToggleFiles
+                    )
+                    .fixedSize()
+                    .layoutPriority(1)
+                } else {
+                    HStack(spacing: m.detailsIconGap) {
+                        AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
+                        AtticText(verbatim: "\(model.attachments)", style: .rowMeta, ink: text)
+                    }
+                    .fixedSize()
+                    .layoutPriority(1)
                 }
-                .fixedSize()
-                .layoutPriority(1)
             }
             if model.links > 0 {
                 AtticText(verbatim: String(localized: "\(model.links) links"), style: .rowMeta, ink: text)
@@ -1562,18 +1674,20 @@ private struct AtticDetailsTags: View {
     @State private var hovered = false
 
     var body: some View {
-        let ink: AtticInk = disabled ? .disabledText : .accentText
+        // Each tag in its own colour (colour pass, owner 2026-10-10).
         let content = ViewThatFits(in: .horizontal) {
-            all(ink: ink)
+            all()
             if tags.count > 1 {
                 HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                    AtticText(verbatim: "#" + tags[0], style: .rowMeta, ink: ink).fixedSize()
-                    more(ink: ink)
+                    AtticTagLabel(name: tags[0], disabled: disabled).fixedSize()
+                        .atticTagColourMenu(tags[0])
+                    more()
                 }
             }
             HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                AtticText(verbatim: "#" + tags[0], style: .rowMeta, ink: ink, truncates: true)
-                if tags.count > 1 { more(ink: ink) }
+                AtticTagLabel(name: tags[0], disabled: disabled, truncates: true)
+                    .atticTagColourMenu(tags[0])
+                if tags.count > 1 { more() }
             }
         }
         if let onTags, !disabled {
@@ -1586,7 +1700,7 @@ private struct AtticDetailsTags: View {
             .focusEffectDisabled()
             .onHover { hovered = $0 }
             .atticRowControl()
-            .atticPopover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
+            .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Tags")) { popover?.content() }
             .help(tags.map { "#" + $0 }.joined(separator: " "))
             .accessibilityLabel(String(localized: "Tags: \(tags.joined(separator: ", "))"))
             .accessibilityHint(String(localized: "Changes the tags"))
@@ -1595,15 +1709,17 @@ private struct AtticDetailsTags: View {
         }
     }
 
-    private func all(ink: AtticInk) -> some View {
+    private func all() -> some View {
         HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
             ForEach(tags, id: \.self) { tag in
-                AtticText(verbatim: "#" + tag, style: .rowMeta, ink: ink).fixedSize()
+                // A right-click on a tag: its Colour ▸ (owner's call, 10-11).
+                AtticTagLabel(name: tag, disabled: disabled).fixedSize()
+                    .atticTagColourMenu(tag)
             }
         }
     }
 
-    private func more(ink: AtticInk) -> some View {
+    private func more() -> some View {
         AtticText(verbatim: "+\(tags.count - 1)", style: .rowMeta, ink: disabled ? .disabledText : .helper)
             .fixedSize()
     }
@@ -1626,14 +1742,19 @@ struct AtticMetaPill: View {
     }
 }
 
-/// "☑ 1/3" on the details line: the second click target, which opens and
-/// closes the quick look. A checklist glyph and the count, with a hover
-/// fill so it reads as a control; its text stays on the details line.
-private struct AtticSubtaskChecklistButton: View {
-    let done: Int
-    let total: Int
+/// "☑ 1/3" and "📎 3" on the details line: click targets that open and
+/// close the subtasks (the quick look) and the files, each on its own (A1).
+/// A glyph and the count, with a hover fill so it reads as a control; its
+/// text stays on the details line.
+private struct AtticDetailsCountButton: View {
+    let systemName: String
+    let count: String
     let isExpanded: Bool
     let disabled: Bool
+    /// Help and VoiceOver, for what the count opens.
+    let help: (open: String, closed: String)
+    let spokenLabel: String
+    let hint: (open: String, closed: String)
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1646,9 +1767,9 @@ private struct AtticSubtaskChecklistButton: View {
         let hover = !disabled && (forced == .hover || hovered)
         Button(action: action) {
             HStack(spacing: m.iconGap) {
-                AtticIcon(systemName: "checkmark.square", size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
+                AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
                     .frame(width: m.iconSlot)
-                AtticText(verbatim: "\(done)/\(total)", style: .count, ink: disabled ? .disabledText : .helper)
+                AtticText(verbatim: count, style: .count, ink: disabled ? .disabledText : .helper)
             }
             .padding(.horizontal, m.horizontalPadding)
             .frame(height: m.height)
@@ -1666,10 +1787,10 @@ private struct AtticSubtaskChecklistButton: View {
         .padding(.horizontal, -m.horizontalPadding)
         .frame(height: AtticTaskRowMetrics.detailsLineHeight)
         .atticRowControl()
-        .help(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"))
-        .accessibilityLabel(String(localized: "\(done) of \(total) subtasks"))
+        .help(isExpanded ? help.open : help.closed)
+        .accessibilityLabel(spokenLabel)
         .accessibilityValue(isExpanded ? String(localized: "expanded") : String(localized: "collapsed"))
-        .accessibilityHint(isExpanded ? String(localized: "Collapses the quick look") : String(localized: "Expands the quick look"))
+        .accessibilityHint(isExpanded ? hint.open : hint.closed)
     }
 }
 
@@ -1720,9 +1841,9 @@ struct AtticCompletedLine: View {
 // MARK: - Quick look and subtasks
 
 /// A subtask's rounded-square checkbox (tasks keep circles, so the two never
-/// look alike). Done matches a done task: the quiet grey (`doneDisc`) with
-/// a darker grey check (`doneCheck`, 3 : 1 on it); the fill is decoration,
-/// the check is what the appearance check judges.
+/// look alike). Done matches a done task: filled in the title's ink
+/// (`doneFill`) with the inverse tick (`onDone`); the tick is what the
+/// appearance check judges.
 struct AtticSubtaskCheckbox: View {
     let isDone: Bool
 
@@ -1739,10 +1860,10 @@ struct AtticSubtaskCheckbox: View {
         let lineWidth = design.increaseContrast ? m.lineWidthIncreased : m.lineWidth
         ZStack {
             if isDone {
-                shape.fill(tokens.doneDisc.color)
+                shape.fill(tokens.color(.doneFill))
                 AtticCheckShape()
-                    .stroke(tokens.color(.doneCheck), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
-                    .atticCheckProbe(id: checkProbeID, ink: .doneCheck, foreground: tokens.ink(.doneCheck))
+                    .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
             } else {
                 shape.inset(by: lineWidth / 2).stroke(tokens.color(.priorityNone), lineWidth: lineWidth)
@@ -1768,11 +1889,17 @@ struct AtticSubtaskModel: Identifiable, Sendable {
 /// the same commands are its right-click menu and its VoiceOver actions
 /// (one list for all three), and `renaming` edits its title in place.
 struct AtticSubtaskRow: View {
+    /// A done subtask's title is the secondary grey (T-06 B).
+    nonisolated static func titleInk(isDone: Bool) -> AtticInk { isDone ? .helper : .body }
+
     let subtask: AtticSubtaskModel
     let onToggle: () -> Void
     var commands: [AtticMenuCommand] = []
     /// Its title being edited in place (Return, or Rename).
     var renaming: AtticTitleEditing? = nil
+    var onDragChanged: ((CGFloat) -> Void)? = nil
+    var onDragEnded: ((CGFloat) -> Void)? = nil
+    var onDragCancelled: (() -> Void)? = nil
     /// Told when the line gains or loses the keyboard (round 10b), so the
     /// page knows a shortcut is not about the main task.
     var onFocusChange: (Bool) -> Void = { _ in }
@@ -1789,7 +1916,10 @@ struct AtticSubtaskRow: View {
     var body: some View {
         let m = AtticSubtaskMetrics.self
         let managed = capture == nil && !commands.isEmpty
-        HStack(spacing: m.titleGap) {
+        // Its title being edited can wrap onto more lines (O17-05): the box
+        // stays on the first line, and the line grows downward.
+        let editing = renaming != nil && capture == nil
+        HStack(alignment: editing ? .top : .center, spacing: m.titleGap) {
             Button(action: onToggle) {
                 AtticSubtaskCheckbox(isDone: subtask.isDone)
                     .frame(width: m.hitSize, height: m.hitSize)
@@ -1797,10 +1927,16 @@ struct AtticSubtaskRow: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, -(m.hitSize - AtticControlSize.subtaskCheckbox) / 2)
+            .frame(height: AtticLayout.subtaskPitch)
             if let renaming, capture == nil {
                 AtticRowTitleEditor(editing: renaming)
+                    .padding(.vertical, (AtticLayout.subtaskPitch - AtticTaskRowMetrics.titleLineHeight) / 2)
             } else {
-                AtticText(verbatim: subtask.title, style: .listBody, ink: subtask.isDone ? .helper : .body, strikethrough: subtask.isDone, truncates: true)
+                // T-06 B (owner, 2026-10-15): a done subtask's title is grey.
+                AtticText(verbatim: subtask.title, style: .listBody, ink: Self.titleInk(isDone: subtask.isDone), truncates: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .modifier(AtticSubtaskDrag(changed: onDragChanged, ended: onDragEnded, cancelled: onDragCancelled))
             }
             Spacer(minLength: 0)
             if managed, renaming == nil, hovered || (focused && keyboardFocusVisible) {
@@ -1810,7 +1946,8 @@ struct AtticSubtaskRow: View {
                     .transition(.opacity)
             }
         }
-        .frame(height: AtticLayout.subtaskPitch)
+        .frame(height: editing ? nil : AtticLayout.subtaskPitch)
+        .frame(minHeight: AtticLayout.subtaskPitch)
         .background(alignment: .leading) {
             if managed, focused, keyboardFocusVisible, renaming == nil {
                 Color.clear
@@ -1828,7 +1965,9 @@ struct AtticSubtaskRow: View {
         .onHover { inside in if managed, hovered != inside { hovered = inside } }
         .onChange(of: focused) { _, now in onFocusChange(now) }
         .onDisappear { if focused { onFocusChange(false) } }
-        .atticPopover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
+        // A page's own Tab order reaches the line (A10).
+        .modifier(AtticSubtaskFocusTarget(id: subtask.id, managed: managed, focused: $focused))
+        .atticDropdown(isPresented: popover?.isPresented ?? .constant(false), label: String(localized: "Move to Task")) { popover?.content() }
         .accessibilityElement(children: renaming == nil ? .combine : .contain)
         .accessibilityLabel(subtask.title)
         .accessibilityValue(subtask.isDone ? String(localized: "done") : String(localized: "to do"))
@@ -1853,12 +1992,43 @@ struct AtticSubtaskRow: View {
     }
 }
 
+/// What a page asks `AtticFocusRequests` for to give a subtask line the
+/// keyboard.
+struct AtticSubtaskFocusID: Hashable {
+    let id: UUID
+}
+
+private struct AtticSubtaskFocusTarget: ViewModifier {
+    let id: UUID
+    let managed: Bool
+    var focused: FocusState<Bool>.Binding
+
+    func body(content: Content) -> some View {
+        if managed {
+            content.atticFocusRequestTarget(AtticSubtaskFocusID(id: id), focused: focused)
+        } else {
+            content
+        }
+    }
+}
+
 /// A managed subtask's focus, keys and right-click menu (round 10; ⇧⌘I
 /// opens the same menu, control audit item 5).
 private struct AtticSubtaskCommands: ViewModifier {
     let commands: [AtticMenuCommand]
     var focused: FocusState<Bool>.Binding
     let showActions: () -> Void
+
+    /// The line's Rename (Return, the edit-title shortcut, as on a row).
+    static func rename(in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+        commands.first { $0.shortcut == AtticTaskShortcut.editTitle && !$0.isDisabled }
+    }
+
+    /// The second press of a double-click (or more).
+    static func isDoubleClick(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseDown || event.type == .leftMouseUp else { return false }
+        return event.clickCount >= 2
+    }
 
     func body(content: Content) -> some View {
         if commands.isEmpty {
@@ -1869,8 +2039,17 @@ private struct AtticSubtaskCommands: ViewModifier {
                 .focused(focused)
                 .focusEffectDisabled()
                 // A click on the line gives it the keyboard (its box keeps
-                // its own click).
-                .onTapGesture { focused.wrappedValue = true }
+                // its own click); a double-click edits its title in place,
+                // as a task's does (O17-03). The second click of a pair
+                // arrives as a click of its own, so a single click is never
+                // held back waiting for a second.
+                .onTapGesture {
+                    if Self.isDoubleClick(NSApp.currentEvent), let rename = Self.rename(in: commands) {
+                        rename.action()
+                    } else {
+                        focused.wrappedValue = true
+                    }
+                }
                 .onKeyPress(phases: .down) { press in
                     guard !AtticTextInput.hasKeyboard else { return .ignored }
                     return AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
@@ -1881,13 +2060,12 @@ private struct AtticSubtaskCommands: ViewModifier {
     }
 }
 
-/// The quick look: the row expands in place into its subtasks, "Add
-/// subtask" and "Open page". Aligned to the row's text column.
+/// The quick look: the row expands in place into its subtasks and "Add
+/// subtask" (its files open apart, under it: `TasksFilesList`). Aligned to the row's text column.
 struct AtticQuickLook: View {
     let subtasks: [AtticSubtaskModel]
     let onToggle: (AtticSubtaskModel) -> Void
     let onAddSubtask: () -> Void
-    let onOpenPage: () -> Void
     /// Each subtask's commands (round 10: rename, delete, reorder); none
     /// draws plain lines (captures).
     var commands: (AtticSubtaskModel) -> [AtticMenuCommand] = { _ in [] }
@@ -1901,6 +2079,11 @@ struct AtticQuickLook: View {
     var newSubtask: AtticTitleEditing? = nil
     /// A pop-over open from one subtask's line (Move to Task…).
     var popover: (id: UUID, popover: AtticAnchoredPopover)? = nil
+    /// The same completion-group move as the keys and row menu, committed
+    /// only on release, so the whole drag is one Undo step.
+    var onReorder: ((UUID, Int, [UUID]) -> Void)? = nil
+    @State private var drag: TasksDrag?
+    @State private var translation: CGFloat = 0
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
@@ -1910,24 +2093,85 @@ struct AtticQuickLook: View {
             ForEach(subtasks) { subtask in
                 AtticSubtaskRow(subtask: subtask, onToggle: { onToggle(subtask) }, commands: commands(subtask),
                                 renaming: renaming?.id == subtask.id ? renaming?.editing : nil,
+                                onDragChanged: onReorder == nil ? nil : { updateDrag(subtask, by: $0) },
+                                onDragEnded: onReorder == nil ? nil : { amount in
+                                    updateDrag(subtask, by: amount)
+                                    if let drag { onReorder?(subtask.id, drag.targetIndex, drag.group) }
+                                    drag = nil
+                                    translation = 0
+                                },
+                                onDragCancelled: {
+                                    withAnimation(design.reduceMotion ? nil : AtticMotionPreset.failReturn.animation(reduceMotion: false)) {
+                                        drag = nil
+                                        translation = 0
+                                    }
+                                },
                                 onFocusChange: { onFocusChange(subtask.id, $0) },
                                 popover: popover?.id == subtask.id ? popover?.popover : nil)
+                    .offset(y: drag?.id == subtask.id ? translation : drag.map {
+                        TasksReorderCell<EmptyView, EmptyView>.offset(of: subtask.id, in: $0, heights: { _ in AtticLayout.subtaskPitch })
+                    } ?? 0)
+                    .background {
+                        if drag?.id == subtask.id {
+                            RoundedRectangle(cornerRadius: AtticRadius.contentCard).fill(design.tokens.recessed.color)
+                                .offset(y: translation)
+                        }
+                    }
+                    .zIndex(drag?.id == subtask.id ? 1 : 0)
             }
             if let newSubtask, capture == nil {
-                HStack(spacing: AtticSubtaskMetrics.titleGap) {
+                // It grows with its text (O17-05), the box on its first line.
+                HStack(alignment: .top, spacing: AtticSubtaskMetrics.titleGap) {
                     AtticSubtaskCheckbox(isDone: false)
+                        .frame(height: AtticLayout.subtaskPitch)
                     AtticRowTitleEditor(editing: newSubtask)
+                        .padding(.vertical, (AtticLayout.subtaskPitch - AtticTaskRowMetrics.titleLineHeight) / 2)
                 }
-                .frame(height: AtticLayout.subtaskPitch)
+                .frame(minHeight: AtticLayout.subtaskPitch)
             } else {
                 AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
             }
-            // A live task's files and details panel, until task pages arrive.
-            AtticQuietAction(systemName: nil, title: String(localized: "Open files"), trailingChevron: true, emphasised: true, action: onOpenPage)
         }
         .padding(.leading, AtticLayout.textX)
         .padding(.trailing, AtticLayout.rowHighlightInset)
         .padding(.bottom, AtticQuickLookMetrics.bottomPadding)
+    }
+
+    private func updateDrag(_ subtask: AtticSubtaskModel, by amount: CGFloat) {
+        let group = drag?.group ?? subtasks.filter { $0.isDone == subtask.isDone }.map(\.id)
+        guard let start = drag?.startIndex ?? group.firstIndex(of: subtask.id) else { return }
+        translation = amount
+        let target = TasksReorderCell<EmptyView, EmptyView>.target(start: start, translation: amount,
+            group: group, heights: { _ in AtticLayout.subtaskPitch })
+        drag = TasksDrag(id: subtask.id, tab: .now, group: group, startIndex: start, targetIndex: target)
+    }
+}
+
+/// Only the title starts a subtask drag. Checkbox, actions, text editors
+/// and popovers keep their own gestures. A cancelled gesture settles back.
+private struct AtticSubtaskDrag: ViewModifier {
+    let changed: ((CGFloat) -> Void)?
+    let ended: ((CGFloat) -> Void)?
+    let cancelled: (() -> Void)?
+    @GestureState private var dragging = false
+    @State private var cancellation = TasksDragCancellation()
+    func body(content: Content) -> some View {
+        content.gesture(changed == nil ? nil : DragGesture(minimumDistance: 4)
+            .updating($dragging) { _, state, _ in state = true }
+            .onChanged {
+                cancellation.begin(in: NSApp.currentEvent?.window ?? NSApp.keyWindow) { cancelled?() }
+                guard !cancellation.isCancelled else { return }
+                changed?($0.translation.height)
+            }
+            .onEnded {
+                cancellation.poll()
+                if !cancellation.isCancelled { ended?($0.translation.height) }
+                cancellation.end()
+            })
+            .onChange(of: dragging) { _, now in
+                if !now { cancellation.cancel(); cancellation.end() }
+            }
+            .onDisappear { cancellation.cancel(); cancellation.end() }
     }
 }
 
@@ -1947,6 +2191,13 @@ struct AtticQuietAction: View {
     var body: some View {
         let m = AtticQuietActionMetrics.self
         let hover = forced == .hover || hovered
+        // The fill's inner padding is the same on both sides of what it
+        // holds (O17-14): a leading icon's ink sits inside its slot, so the
+        // fill starts that much later; the icon and the label stay where
+        // they are, on the text column.
+        let leading = m.horizontalPadding - (systemName.map(Self.iconInset) ?? 0)
+        // And the label's last letter stops short of its advance.
+        let trailing = m.horizontalPadding - (trailingChevron ? 0 : Self.trailingBearing(title, style: emphasised ? .controlLabel : .body))
         Button(action: action) {
             HStack(spacing: m.gap) {
                 if let systemName {
@@ -1959,19 +2210,66 @@ struct AtticQuietAction: View {
                         .padding(.leading, -m.chevronPullIn)
                 }
             }
-            .padding(.horizontal, m.horizontalPadding)
+            .padding(.leading, leading)
+            .padding(.trailing, trailing)
             .frame(height: m.height)
             .background(
                 RoundedRectangle(cornerRadius: AtticRadius.control(height: m.height), style: .continuous)
                     .fill((hover ? design.tokens.chipHover : .clear).color)
             )
-            .padding(.horizontal, -m.horizontalPadding)
+            .padding(.leading, -leading)
+            .padding(.trailing, -trailing)
             .frame(height: AtticLayout.subtaskPitch)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
     }
+
+    /// How far a leading symbol's ink starts inside its slot (the slot is
+    /// wider than most symbols, and a symbol's own box is wider than its
+    /// ink): measured from the drawn symbol, once per symbol.
+    static func iconInset(_ systemName: String) -> CGFloat {
+        if let known = iconInsets[systemName] { return known }
+        let m = AtticQuietActionMetrics.self
+        let configuration = NSImage.SymbolConfiguration(pointSize: m.iconSize, weight: .medium)
+        guard let image = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)?.withSymbolConfiguration(configuration),
+              image.size.width > 0, image.size.height > 0 else { return 0 }
+        let scale: CGFloat = 4
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(image.size.width * scale)),
+                                         pixelsHigh: Int(ceil(image.size.height * scale)), bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return 0 }
+        rep.size = image.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+        NSGraphicsContext.restoreGraphicsState()
+        let firstInk = (0..<rep.pixelsWide).first { x in
+            (0..<rep.pixelsHigh).contains { (rep.colorAt(x: x, y: $0)?.alphaComponent ?? 0) > 0.3 }
+        } ?? 0
+        let inset = max(0, (m.iconSlot - image.size.width) / 2 + CGFloat(firstInk) / scale)
+        iconInsets[systemName] = inset
+        return inset
+    }
+
+    private static var iconInsets: [String: CGFloat] = [:]
+
+    /// The room after a label's last letter's ink inside the label's laid
+    /// out width (its advance, rounded up to a whole point as a text view
+    /// lays it out), measured once per label.
+    static func trailingBearing(_ title: String, style: AtticTextStyle) -> CGFloat {
+        let key = "\(style)|\(title)"
+        if let known = trailingBearings[key] { return known }
+        let text = NSAttributedString(string: title, attributes: [.font: style.nsFont])
+        let ink = text.boundingRect(with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                                    options: [.usesDeviceMetrics, .usesLineFragmentOrigin])
+        let bearing = ink.isEmpty ? 0 : min(AtticQuietActionMetrics.horizontalPadding, max(0, ceil(text.size().width) - ink.maxX))
+        trailingBearings[key] = bearing
+        return bearing
+    }
+
+    private static var trailingBearings: [String: CGFloat] = [:]
 }
 
 // MARK: - Task card
@@ -2122,9 +2420,39 @@ private struct AtticCardDetails: View {
 
 // MARK: - Tag
 
-/// A tag: the accent (grey on Original), sentence of `#word`. `inline` is
-/// plain text for details lines; `chip` is a recessed pill that follows the
-/// control corner rule (18 tall, radius 7.5).
+/// A tag set in a line of text, in its colour (colour pass, owner
+/// 2026-10-10): `#word` in the tag's hue on a soft fill of the same hue
+/// that reaches past the words without moving them. Disabled, it is the
+/// disabled grey with no fill.
+struct AtticTagLabel: View {
+    let name: String
+    var style: AtticTextStyle = .rowMeta
+    var disabled = false
+    var hovered = false
+    var truncates = false
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticTagColouring) private var colouring
+
+    var body: some View {
+        let tokens = design.tokens
+        let hue = colouring.hue(for: name)
+        let fill: AtticRGBA = disabled ? .clear : (hovered ? tokens.hover.over(tokens.tagFill(hue)) : tokens.tagFill(hue))
+        AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
+            .background(
+                RoundedRectangle(cornerRadius: AtticTagMetrics.inlineFillRadius, style: .continuous)
+                    .fill(fill.color)
+                    .padding(.horizontal, -AtticTagMetrics.inlineFillOutset)
+            )
+    }
+}
+
+/// A tag's colour dot (the tag picker's rows, Settings).
+
+/// A tag in its colour, sentence of `#word`. `inline` sits in a details
+/// line; `chip` is a pill of the tag's hue that follows the control corner
+/// rule (18 tall, radius 7.5). A right-click offers the tag menu's Colour
+/// row where colours can change.
 struct AtticTagChip: View {
     enum Style { case chip, inline }
 
@@ -2134,6 +2462,7 @@ struct AtticTagChip: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticTagColouring) private var colouring
     @State private var hovered = false
     @State private var probeID = UUID()
 
@@ -2142,19 +2471,268 @@ struct AtticTagChip: View {
         let height = AtticControlSize.tagHeight
         let radius = AtticRadius.control(height: height)
         let hover = forced == .hover || hovered
-        let fill: AtticRGBA = isSelected ? tokens.tagFillSelected : (hover ? tokens.hover.over(tokens.tagFill) : tokens.tagFill)
+        let hue = colouring.hue(for: name)
+        let fill: AtticRGBA = isSelected ? tokens.tagFillSelected(hue) : (hover ? tokens.hover.over(tokens.tagFill(hue)) : tokens.tagFill(hue))
         switch style {
         case .inline:
-            AtticText(verbatim: "#" + name, style: .rowMeta, ink: .accentText)
+            AtticTagLabel(name: name)
         case .chip:
-            AtticText(verbatim: "#" + name, style: .tag, ink: .accentText)
+            AtticText(verbatim: "#" + name, style: .tag, ink: hue.ink)
                 .padding(.horizontal, AtticTagMetrics.horizontalPadding)
                 .frame(height: height)
                 .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
                 .onHover { hovered = $0 }
                 .accessibilityLabel(String(localized: "Tag \(name)"))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .atticTagColourMenu(name)
                 .atticControlProbe("Tag", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 7.5)
         }
+    }
+}
+
+extension View {
+    /// The tag menu's Colour row on a right-click, where colours can change
+    /// (colour pass, owner 2026-10-10).
+    func atticTagColourMenu(_ tag: String) -> some View {
+        modifier(AtticTagColourMenu(tag: tag))
+    }
+}
+
+private struct AtticTagColourMenu: ViewModifier {
+    let tag: String
+    @Environment(\.atticTagColouring) private var colouring
+
+    func body(content: Content) -> some View {
+        let commands = colouring.colourCommands(for: tag)
+        if commands.isEmpty {
+            content
+        } else {
+            content.contextMenu { AtticMenuItems(commands: commands) }
+        }
+    }
+}
+
+/// NSTextField's editor consumes an empty Backspace before SwiftUI's key
+/// handlers. Its delegate exposes that one command without intercepting
+/// app-wide keys or changing typing, selection, input methods or Undo.
+struct AtticSubtaskTitleField: NSViewRepresentable {
+    let editing: AtticTitleEditing
+    let color: NSColor
+    func makeCoordinator() -> Coordinator { Coordinator(editing) }
+    func makeNSView(context: Context) -> NSTextField {
+        let field = Self.makeField()
+        field.delegate = context.coordinator
+        return field
+    }
+
+    /// The field as the row uses it (internal for the tests).
+    static func makeField() -> NSTextField {
+        let field = AtticSubtaskTextField()
+        let cell = AtticSubtaskTitleCell()
+        cell.editor.isFieldEditor = true
+        field.cell = cell
+        field.isEditable = true
+        field.isSelectable = true
+        // It wraps and grows with its text (O17-05); Return still saves.
+        cell.usesSingleLineMode = false
+        cell.wraps = true
+        cell.isScrollable = false
+        cell.lineBreakMode = .byWordWrapping
+        field.maximumNumberOfLines = 0
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = AtticTextStyle.rowTitle.nsFont
+        return field
+    }
+    /// As tall as its wrapped text, from one line up to the composers'
+    /// most lines; past that it scrolls inside.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView field: NSTextField, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        return CGSize(width: width, height: Self.height(of: editing.text.wrappedValue, width: width,
+                                                       font: field.font ?? AtticTextStyle.rowTitle.nsFont))
+    }
+
+    /// The field's height for `text` wrapped at `width` (pure, tested).
+    static func height(of text: String, width: CGFloat, font: NSFont) -> CGFloat {
+        let measure = NSTextFieldCell(textCell: text.isEmpty ? " " : text)
+        measure.font = font
+        measure.wraps = true
+        measure.usesSingleLineMode = false
+        measure.isBordered = false
+        measure.lineBreakMode = .byWordWrapping
+        let used = measure.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)).height
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        let lines = max(1, Int((used / line - 0.01).rounded(.up)))
+        return AtticTokenFieldGrowth.height(lines: lines, lineHeight: line,
+                                            minHeight: AtticTaskRowMetrics.titleLineHeight, maxLines: AtticComposerMetrics.maxLines)
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.editing = editing
+        if context.coordinator.lastText != editing.text.wrappedValue {
+            context.coordinator.lastText = editing.text.wrappedValue
+            context.coordinator.finished = false
+        }
+        (field.cell as? AtticSubtaskTitleCell)?.editor.editing = editing
+        field.textColor = color
+        field.placeholderString = editing.placeholder
+        field.setAccessibilityLabel(editing.accessibilityLabel)
+        if field.stringValue != editing.text.wrappedValue { field.stringValue = editing.text.wrappedValue }
+        guard !context.coordinator.focused else { return }
+        context.coordinator.focused = true
+        DispatchQueue.main.async { [weak field] in
+            guard let field, let window = field.window, window.isKeyWindow, !field.isHiddenOrHasHiddenAncestor else { return }
+            window.makeFirstResponder(field)
+            (window.firstResponder as? NSTextView)?.setSelectedRange(NSRange(location: (field.stringValue as NSString).length, length: 0))
+        }
+    }
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var editing: AtticTitleEditing
+        var focused = false
+        var finished = false
+        var reclaims = 0
+        var lastText: String?
+        init(_ editing: AtticTitleEditing) { self.editing = editing }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            // One title: a pasted line break becomes a space (the field
+            // wraps, so it would take one).
+            if field.stringValue.rangeOfCharacter(from: .newlines) != nil {
+                let editor = field.currentEditor() as? NSTextView
+                let caret = editor?.selectedRange()
+                field.stringValue = field.stringValue.components(separatedBy: .newlines).joined(separator: " ")
+                if let caret { editor?.setSelectedRange(caret) }
+            }
+            editing.text.wrappedValue = field.stringValue
+            editing.didEdit?()
+            lastText = field.stringValue
+            finished = false
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard !finished, let field = notification.object as? NSTextField, field.window?.isKeyWindow == true else { return }
+            if AtticRowTitleEditor.isPersonsDeparture(NSApp.currentEvent?.type) || reclaims >= 2 {
+                finished = editing.commit()
+            } else {
+                reclaims += 1
+                DispatchQueue.main.async { [weak field, weak self] in
+                    guard let self, !self.finished, let field, !field.isHiddenOrHasHiddenAncestor else { return }
+                    field.window?.makeFirstResponder(field)
+                }
+            }
+        }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
+            if command == #selector(NSResponder.deleteBackward(_:)), textView.string.isEmpty {
+                // Mark finished before the model removes this editor: a
+                // resulting focus loss must never commit its stale draft.
+                finished = true
+                if editing.emptyBackspace?() == true { return true }
+                finished = false
+                return false
+            }
+            if command == #selector(NSResponder.insertNewline(_:)) {
+                let saved = (editing.submit ?? editing.commit)()
+                finished = saved && editing.text.wrappedValue == textView.string
+                return true
+            }
+            if command == #selector(NSResponder.cancelOperation(_:)) {
+                finished = true
+                editing.cancel()
+                return true
+            }
+            return false
+        }
+    }
+}
+
+final class AtticSubtaskTitleCell: NSTextFieldCell {
+    let editor = AtticSubtaskFieldEditor()
+    override func fieldEditor(for controlView: NSView) -> NSTextView? { editor }
+
+    /// V-12: the text sits in whole lines, with the row's spare height
+    /// (18 pt title line, 16 pt text line) split evenly above and below,
+    /// drawn and edited alike: grown to its most lines, the field shows
+    /// exactly that many, never half a line at its bottom or a sliver of
+    /// the line above at its top.
+    static func textRect(forBounds rect: NSRect, font: NSFont?) -> NSRect {
+        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.rowTitle.nsFont)
+        guard line > 0, rect.height > line else { return rect }
+        let whole = (rect.height / line).rounded(.down) * line
+        return rect.insetBy(dx: 0, dy: (rect.height - whole) / 2)
+    }
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        super.drawingRect(forBounds: Self.textRect(forBounds: rect, font: font))
+    }
+
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: Self.textRect(forBounds: rect, font: font), in: controlView, editor: textObj, delegate: delegate, event: event)
+        fitEditor(textObj, in: controlView)
+    }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?,
+                         start selStart: Int, length selLength: Int) {
+        super.select(withFrame: Self.textRect(forBounds: rect, font: font), in: controlView, editor: textObj, delegate: delegate,
+                     start: selStart, length: selLength)
+        fitEditor(textObj, in: controlView)
+    }
+
+    /// V-12: AppKit hosts the editor in its own focus clip, the whole field
+    /// and a little more (102 pt for a 98 pt field, from 1 pt above its
+    /// top), so it showed part of a seventh line, hid the last line and its
+    /// caret, and lifted a single line 1 pt above where it is drawn at rest.
+    /// The clip is made exactly the text's rectangle, whole lines tall, the
+    /// editor at its top, scrolled by whole lines to the caret: the text
+    /// lies where it is drawn, and the caret is always in view.
+    func fitEditor(_ editor: NSText, in controlView: NSView) {
+        guard let clip = editor.superview as? NSClipView, clip.superview === controlView else { return }
+        let rect = Self.textRect(forBounds: controlView.bounds, font: font)
+        let target = NSRect(x: clip.frame.minX, y: rect.minY, width: clip.frame.width, height: rect.height)
+        if clip.frame != target { clip.frame = target }
+        if editor.frame.minY != 0 { editor.setFrameOrigin(NSPoint(x: editor.frame.minX, y: 0)) }
+        if let text = editor as? NSTextView { text.scrollRangeToVisible(text.selectedRange()) }
+    }
+}
+
+/// The subtask entry's field (V-12): its editor's clip follows it as it
+/// grows and shrinks with its text.
+final class AtticSubtaskTextField: NSTextField {
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if let editor = currentEditor(), let cell = cell as? AtticSubtaskTitleCell { cell.fitEditor(editor, in: self) }
+    }
+}
+
+/// Typing stays in AppKit's undo manager. A newer Tasks step (such as
+/// deleting an empty sibling) answers Undo before the older typing.
+final class AtticSubtaskFieldEditor: NSTextView {
+    var editing: AtticTitleEditing?
+    /// V-12: grown past its most lines, it scrolls to the insertion point
+    /// by whole lines (its clip is whole lines tall).
+    override func adjustScroll(_ newVisible: NSRect) -> NSRect {
+        var rect = super.adjustScroll(newVisible)
+        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.rowTitle.nsFont)
+        rect.origin.y = AtticLineSnap.offset(rect.origin.y - textContainerOrigin.y, line: line,
+                                             limit: frame.height - rect.height - textContainerOrigin.y) + textContainerOrigin.y
+        return rect
+    }
+    @objc func undo(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        if editing?.pageUndo?(undoManager?.canUndo == true) != true { undoManager?.undo() }
+    }
+    @objc func redo(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        if editing?.pageRedo?(undoManager?.canRedo == true) != true { undoManager?.redo() }
+    }
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.charactersIgnoringModifiers?.lowercased() == "z", flags == .command { undo(nil); return }
+        if event.charactersIgnoringModifiers?.lowercased() == "z", flags == [.command, .shift] { redo(nil); return }
+        super.keyDown(with: event)
+    }
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(undo(_:)) || menuItem.action == #selector(redo(_:)) { return editing != nil }
+        return super.validateMenuItem(menuItem)
     }
 }

@@ -11,12 +11,11 @@ import SwiftUI
 /// `GlassEffectContainer` (`AtticControlGroup`). Wherever the controls are
 /// not live glass (Reduce Transparency, the Craft style, a Solid panel that
 /// is not key) they keep L3's opaque flat surface
-/// (`AtticCornerButtonStyle.drawsFlat`).
+/// according to the effective control material.
 ///
 /// Cost: the rows scroll under the header, so the glass samples moving
 /// content. The window server does that sampling; the header's own view
-/// graph depends only on the pin, the page, the design context and the
-/// corner lab, so scrolling and swiping never re-evaluate it (checked by
+/// graph depends only on the pin, the page and the design context, so scrolling and swiping never re-evaluate it (checked by
 /// `CornerGlassTests`). The glass at rest is the same material whether it is
 /// interactive or not; the press response runs only while it is pressed.
 struct PanelHeader: View {
@@ -28,11 +27,10 @@ struct PanelHeader: View {
     /// built behind the current one, so the click only shows them.
     var onApproachPageSwitch: () -> Void = {}
     /// ⇧⌘N and ⇧⌘F (round 10).
-    var onNewNote: () -> Void = { AppCoordinator.shared.showNewNote() }
-    var onSearch: () -> Void = { AppCoordinator.shared.showSearch() }
+    var onNewNote: () -> Void = { AppCoordinator.shared?.showNewNote() }
+    var onSearch: () -> Void = { AppCoordinator.shared?.showSearch() }
 
     @Environment(\.atticDesign) private var design
-    @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared
 
     #if DEBUG
     /// Test seam: how many times the header's body has run
@@ -44,11 +42,13 @@ struct PanelHeader: View {
         #if DEBUG
         let _ = Self.bodyEvaluations += 1
         #endif
-        let flat = cornerButtons.style.drawsFlat(in: design)
+        let flat = design.effectiveControls != .liquidGlass
         AtticControlGroup {
             HStack(alignment: .top, spacing: 0) {
-                // An outline pin in both states, at the switch's icon size;
-                // pinned shows as the button's selected chip (v9).
+                // O14-05 (owner, 2026-10-14): the outline pin, filled when
+                // pinned, and under the pointer a pinned pin shows what a
+                // click does (the pin with a slash), cross-faded. No chip:
+                // the fill says "on". At the switch's icon size.
                 AtticRaisedButton(
                     systemName: "pin",
                     label: isPinned ? "Unpin panel" : "Pin panel",
@@ -57,6 +57,8 @@ struct PanelHeader: View {
                     glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
                     emphasisedGlyph: true,
                     flat: flat,
+                    selectedSystemName: AtticRaisedButtonMetrics.pinnedSymbol,
+                    selectedHoverSystemName: AtticRaisedButtonMetrics.unpinSymbol,
                     action: onTogglePin
                 )
                 .keyboardShortcut("p", modifiers: [.command, .shift])

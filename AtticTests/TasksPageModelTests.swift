@@ -18,14 +18,12 @@ final class TasksPageModelTests: XCTestCase {
     private var store: TaskStore!
     private var library: AtticLibrary!
     private var model: TasksPageModel!
-    private var opened: [UUID] = []
 
     override func setUp() async throws {
         store = try makeTestStore(now: { [clock] in clock.value })
         library = AtticLibrary(tasks: store, now: { [clock] in clock.value })
         let calendar = self.calendar
         model = TasksPageModel(library: library, services: TasksPageServices(
-            openPage: { [weak self] in self?.opened.append($0) },
             now: { [clock] in clock.value },
             calendar: { calendar },
             locale: Locale(identifier: "en_GB"),
@@ -47,6 +45,22 @@ final class TasksPageModelTests: XCTestCase {
         model.select(tab: tab)
         model.addBar.text = text
         return model.submitAddBar()
+    }
+
+    func testAR08TabAndShiftTabPreserveExtendedSelectionButReturnUsesNewFocus() throws {
+        let a = try XCTUnwrap(add("A")), b = try XCTUnwrap(add("B")), c = try XCTUnwrap(add("C"))
+        let visible = [a, b, c]
+        model.selectOnly(a)
+        model.extendSelection(to: b, visible: visible)
+        XCTAssertEqual(model.selection, [a, b])
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: c), keyboardDriving: true)
+        XCTAssertEqual(model.selection, [a, b], "Tab preserves the extended selection")
+        XCTAssertEqual(model.keyboardRow(focused: c, visible: visible), c, "the later key uses the visible focus")
+        model.receiveKeyboardFocus(AtticRowFocusID(page: TasksTab.now.rawValue, id: b), keyboardDriving: true)
+        XCTAssertEqual(model.selection, [a, b], "Shift-Tab preserves it too")
+        XCTAssertEqual(model.keyboardRow(focused: b, visible: visible), b)
+        model.selectOnly(a)
+        XCTAssertEqual(model.keyboardRow(focused: b, visible: visible), a, "a later menu selection supersedes old focus")
     }
 
     // MARK: - Lists
@@ -125,14 +139,14 @@ final class TasksPageModelTests: XCTestCase {
 
     /// Direction A's empty states: Now says why it is empty; Later has its own.
     func testEmptyListsSayWhyTheyAreEmpty() throws {
-        XCTAssertEqual(model.emptyMessage[.now], "Add your first task")
-        XCTAssertEqual(model.emptyMessage[.backlog], "Nothing for later")
+        XCTAssertEqual(model.emptyMessage[.now], "Add your first task.")
+        XCTAssertEqual(model.emptyMessage[.backlog], "Nothing for later.")
         _ = try XCTUnwrap(add("Idea", tab: .backlog))
-        XCTAssertEqual(model.emptyMessage[.now], "Nothing active")
+        XCTAssertEqual(model.emptyMessage[.now], "Nothing active.")
         XCTAssertTrue(model.offersLater, "with \"Choose from Later\" under it")
         let done = try XCTUnwrap(add("Water plants"))
         model.complete(done)
-        XCTAssertEqual(model.emptyMessage[.now], "You’re caught up")
+        XCTAssertEqual(model.emptyMessage[.now], "You’re caught up.")
     }
 
     func testMovesAndDeletesShowAnUndoToastAndUndoPutsThemBack() throws {
@@ -232,7 +246,7 @@ final class TasksPageModelTests: XCTestCase {
         model.select(tab: .now)
         model.addBar.text = "Ship it"
         let opened = try XCTUnwrap(model.submitAddBar(openingPage: true))
-        XCTAssertEqual(self.opened, [opened], "⌘Return adds and opens the task's page")
+        XCTAssertEqual(model.expandedFiles, [opened], "⌘Return adds the task and opens its files")
 
         // On Done the bar still adds, to Now, and says so.
         model.select(tab: .done)
@@ -241,6 +255,28 @@ final class TasksPageModelTests: XCTestCase {
         let fromDone = try XCTUnwrap(model.submitAddBar())
         XCTAssertEqual(store.task(withID: fromDone)?.status, .todo)
         XCTAssertEqual(model.toasts.current?.message, "Added to Now")
+    }
+
+    func testAlternateSubmissionRevealsItsOwningTabAndClearsOnlyItsNarrowingView() throws {
+        for source in [TasksTab.done, .now, .backlog] {
+            let target: TasksTab = source == .backlog ? .backlog : .now
+            model.setSearchQuery("Keep this Done query", for: .done)
+            var options = model.viewOptions(for: target)
+            options.priority = .highOnly
+            model.setViewOptions(options, for: target)
+            model.setSearchQuery("Hides the new task", for: target)
+            model.select(tab: source)
+            model.addBar.text = "Alternate submission"
+            let id = try XCTUnwrap(model.submitAddBar(openingPage: true))
+            XCTAssertEqual(store.task(withID: id)?.status, source == .backlog ? .backlog : .todo)
+            XCTAssertEqual(model.tab, target)
+            XCTAssertTrue(model.rows(for: target).contains { $0.id == id }, "the promised files belong to a visible task")
+            XCTAssertTrue(model.expandedFiles.contains(id))
+            XCTAssertEqual(model.scrollRequest?.id, id)
+            XCTAssertEqual(model.scrollRequest?.tab, target)
+            XCTAssertNil(model.toasts.current, "successful reveal needs no out-of-view toast")
+            XCTAssertEqual(model.searchQuery(for: .done), "Keep this Done query", "navigation preserves the other tab's query")
+        }
     }
 
     func testChipsFormOnceAWordIsFinishedAndBackspaceTurnsOneBackIntoText() throws {

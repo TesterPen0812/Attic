@@ -3,6 +3,25 @@ import SwiftData
 @testable import Attic
 
 final class DailyCleanupServiceTests: XCTestCase {
+
+    @MainActor
+    func testR1_03CleanupKeepsCanonicallyEqualButByteDivergentTitles() throws {
+        let now = Date(timeIntervalSince1970: 500_000)
+        let old = now.addingTimeInterval(-3 * 24 * 60 * 60)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container), id = UUID()
+        for title in ["Café", "Cafe\u{301}"] {
+            context.insert(TaskItem(id: id, title: title, status: .done, createdAt: old, updatedAt: old, completedAt: old))
+        }
+        try context.save()
+        let store = TaskStore(container: container)
+        XCTAssertEqual(DailyCleanupService(store: store, now: { now }).performCleanup(), 0)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.doneLoggedAt == nil })
+        XCTAssertEqual(Set(rows.map { Array($0.title.utf16) }).count, 2)
+    }
+
     @MainActor
     // Phase 0: the cleanup keeps today's timing but moves finished tasks to
     // the Done log instead of deleting them. These tests keep their original

@@ -58,7 +58,8 @@ struct AtticDesignContext: Hashable, Sendable {
             surface: effectiveSurface,
             tint: tint,
             tintLength: Self.quantisedTintLength(tintLength),
-            increaseContrast: increaseContrast
+            increaseContrast: increaseContrast,
+            reducedFrom: reduceTransparency && surface.treatmentKind != .solid ? surface.treatmentKind : nil
         )
     }
 
@@ -80,6 +81,17 @@ struct AtticDesignContext: Hashable, Sendable {
         let tint: PanelTintLevel
         let tintLength: Double
         let increaseContrast: Bool
+        /// The translucent surface Reduce Transparency made solid (nil when
+        /// the person chose Solid, or the setting is off): its text keeps
+        /// the contrast it had there (U-40).
+        var reducedFrom: AtticPanelSurfaceTreatment.Kind? = nil
+
+        /// The same key for the surface as chosen, before Reduce
+        /// Transparency.
+        var chosen: ColourKey? {
+            reducedFrom.map { ColourKey(mode: mode, palette: palette, surface: $0, tint: tint, tintLength: tintLength,
+                                        increaseContrast: increaseContrast) }
+        }
     }
 
     /// The resolved tokens for this context (cached).
@@ -159,8 +171,12 @@ private struct AtticSystemDesignModifier: ViewModifier {
     let motion: AtticMotionTuning
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var contrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    /// The Mac's setting (or a UI-test launch's, `AtticTransparencySeam`).
+    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
@@ -260,4 +276,41 @@ final class AtticWindowAppearanceView: NSView {
         if appWide { AtticWindowAppearance.applyToApp(mode) }
         if let window { AtticWindowAppearance.apply(mode, to: window) }
     }
+}
+
+/// Capture seam (O14-05): `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_INCREASE_CONTRAST=1`
+/// draws the panel with Attic's Increase Contrast treatment, so it can be
+/// checked on screen without changing the Mac's accessibility setting.
+/// System-drawn materials still follow the Mac's own setting.
+enum AtticContrastSeam {
+    nonisolated static let forced: Bool = {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        return environment["ATTIC_UI_TESTING"] == "1" && environment["ATTIC_UI_TEST_INCREASE_CONTRAST"] == "1"
+        #else
+        return false
+        #endif
+    }()
+
+    nonisolated static func resolve(_ system: ColorSchemeContrast) -> ColorSchemeContrast {
+        forced ? .increased : system
+    }
+}
+
+/// Capture seam: `ATTIC_UI_TESTING=1 ATTIC_UI_TEST_REDUCE_TRANSPARENCY=1`
+/// draws the panel with Attic's Reduce Transparency treatment (solid
+/// surfaces, no edge blur), so it can be checked on screen without changing
+/// the Mac's accessibility setting. System-drawn materials still follow the
+/// Mac's own setting.
+enum AtticTransparencySeam {
+    nonisolated static let forced: Bool = {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        return environment["ATTIC_UI_TESTING"] == "1" && environment["ATTIC_UI_TEST_REDUCE_TRANSPARENCY"] == "1"
+        #else
+        return false
+        #endif
+    }()
+
+    nonisolated static func resolve(_ system: Bool) -> Bool { forced || system }
 }

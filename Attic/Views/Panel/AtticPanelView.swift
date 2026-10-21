@@ -12,22 +12,23 @@ struct AtticPanelView: View {
     let chromeInteractionState: PanelChromeInteractionState
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
-    @ObservedObject var subtaskPanels: SubtaskPanelController
     @ObservedObject var toasts: PanelToastCenter
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    /// The Mac's setting (or a UI-test launch's, `AtticTransparencySeam`).
+    private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
     @Environment(\.colorScheme) private var systemColorScheme
     /// What the Tasks page keeps while another page shows (the add bar's
     /// draft and pending attachments).
     @StateObject private var tasksPageState = TasksPageState()
+    /// Whether the page switcher is open, for the header titles that make
+    /// room for it. Not observed here: only those titles are.
+    @State private var switcherPresence = AtticPageSwitcherPresence()
     @State private var noticeHeight: CGFloat = 0
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
-    /// The current page's primary input (the Tasks add bar). The shell owns
-    /// it so a page switch can take focus out of the page.
-    @FocusState private var isQuickEntryFocused: Bool
 
     @MainActor
     init(
@@ -38,7 +39,6 @@ struct AtticPanelView: View {
         chromeInteractionState: PanelChromeInteractionState,
         uiState: PanelUIState,
         settings: AppSettings,
-        subtaskPanels: SubtaskPanelController,
         toasts: PanelToastCenter? = nil,
         tasksPageState: TasksPageState? = nil
     ) {
@@ -49,7 +49,6 @@ struct AtticPanelView: View {
         self.chromeInteractionState = chromeInteractionState
         self.uiState = uiState
         self.settings = settings
-        self.subtaskPanels = subtaskPanels
         self.toasts = toasts ?? PanelToastCenter()
         // A test hands one in to reach the page's model (round 12).
         _tasksPageState = StateObject(wrappedValue: tasksPageState ?? TasksPageState())
@@ -86,7 +85,7 @@ struct AtticPanelView: View {
         ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
 
     var body: some View {
-        themedPanel
+        PanelRootLayout { themedPanel }
     }
 
     // MARK: Composition
@@ -102,6 +101,10 @@ struct AtticPanelView: View {
                         pageHost(page)
                             .modifier(PanelPageVisibility(
                                 isCurrent: page == currentPage,
+                                // A page kept built rests on its side of the
+                                // current one, so it travels in from there.
+                                restingOffset: pageMotion.travels
+                                    ? page.side(from: currentPage) * panelSize.width : 0,
                                 // Canvas has single-key tool shortcuts (V, P, E);
                                 // hidden, they must not fire. Tasks has none
                                 // outside its menus, and disabling it would
@@ -112,7 +115,6 @@ struct AtticPanelView: View {
                 }
             }
         }
-        .coordinateSpace(name: AtticPanelCoordinateSpaceName.taskWorkspace)
         .coordinateSpace(PanelPageLayout.coordinateSpace)
         .overlay(alignment: .top) {
             header
@@ -137,7 +139,14 @@ struct AtticPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { clearance in
-            if noticeClearance != clearance { noticeClearance = clearance }
+            guard noticeClearance != clearance else { return }
+            // A page's bottom controls grow or shrink with a spring (the
+            // composer's date and tags row): the notices ride it, never
+            // jump (O17-02). Reduce Motion moves them at once.
+            let reduced = reduceMotion || settings.animations == .reduced
+            withAnimation(AtticMotionPreset.popover.animation(reduceMotion: reduced, showing: clearance > noticeClearance)) {
+                noticeClearance = clearance
+            }
         }
     }
 
@@ -178,14 +187,13 @@ struct AtticPanelView: View {
                 store: store,
                 uiState: uiState,
                 settings: settings,
-                subtaskPanels: subtaskPanels,
                 state: tasksPageState,
                 layout: pageLayout,
                 chromeInteractionState: chromeInteractionState,
-                primaryInputFocus: $isQuickEntryFocused,
+                primaryInputFocusRequest: uiState.primaryInputFocusRequest,
                 isCurrent: page == currentPage
             )
-            .transition(pageTransition)
+            .transition(pageTransition(.tasks))
         case .canvas:
             CanvasPageHost(
                 canvasSession: canvasSession,
@@ -195,7 +203,7 @@ struct AtticPanelView: View {
                 headerControlRects: headerControlRects,
                 headerBottom: PanelHeaderLayout.bottom(chromeInsets: chromeInsets)
             )
-            .transition(pageTransition)
+            .transition(pageTransition(.canvas))
         case .notes:
             NotesPageHost(
                 noteStore: noteStore,
@@ -204,7 +212,7 @@ struct AtticPanelView: View {
                 layout: pageLayout,
                 hasRestoredSession: hasRestoredNoteSession
             )
-            .transition(pageTransition)
+            .transition(pageTransition(.notes))
         }
     }
 
@@ -239,33 +247,18 @@ struct AtticPanelView: View {
             .onChange(of: uiState.selectedSection) { _, _ in
                 syncBottomControlsHeight()
                 releaseTaskEntryInteractionLocks()
-                openMostRecentNoteIfNeeded()
                 if PerformanceSignposts.hasPendingPageSwitch {
                     DispatchQueue.main.async { PerformanceSignposts.pageLaidOut() }
                 }
             }
             .task {
-                _ = await noteDraft.restoreRecoveryIfNeeded()
+                await noteDraft.pages.startAndWait()
                 hasRestoredNoteSession = true
-                openMostRecentNoteIfNeeded()
             }
             // Task-list plumbing the legacy Tasks page relies on; it runs on
             // every page, as it always has, and leaves with that page.
             .onChange(of: store.revision) { _, _ in
                 uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
-            }
-            .onPreferenceChange(TaskRowAnchorPreferenceKey.self) { frames in
-                subtaskPanels.updateTaskRowFrames(frames)
-            }
-            .onPreferenceChange(TaskSubtaskControlFramePreferenceKey.self) { frames in
-                subtaskPanels.updateSubtaskControlFrames(frames)
-            }
-            .onPreferenceChange(TaskListViewportPreferenceKey.self) { viewport in
-                subtaskPanels.updateTaskListViewport(viewport)
-            }
-            .onChange(of: noteStore.revision) { _, _ in
-                reconcileNoteDraft()
-                openMostRecentNoteIfNeeded()
             }
     }
 
@@ -276,15 +269,9 @@ struct AtticPanelView: View {
                 syncBottomControlsHeight()
                 syncNoteDraftInteractionLocks()
             }
-            .onChange(of: uiState.primaryInputFocusRequest) { _, _ in
-                // An explicit open on Tasks: the keyboard lands in the add
-                // bar. A plain text field draws no focus ring.
-                guard uiState.selectedSection.isTaskBased else { return }
-                isQuickEntryFocused = true
-            }
             .onChange(of: noteDraft.isDirty) { _, _ in syncNoteDraftInteractionLocks() }
             .onChange(of: noteDraft.hasConflict) { _, _ in syncNoteDraftInteractionLocks() }
-            .onChange(of: noteStore.attachmentImportState) { _, _ in syncNoteDraftInteractionLocks() }
+            .onChange(of: noteDraft.isImporting) { _, _ in syncNoteDraftInteractionLocks() }
             .onPreferenceChange(PanelNoticeHeightPreferenceKey.self) { measured in
                 let resolved = max(0, measured.isFinite ? measured : 0)
                 if abs(noticeHeight - resolved) >= 0.5 { noticeHeight = resolved }
@@ -297,6 +284,8 @@ struct AtticPanelView: View {
             .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
             .environment(\.atticPanelToasts, toasts)
+            .environment(\.atticPageSwitcherPresence, switcherPresence)
+            .atticTagColours(store.commandLibrary)
             .tint(panelAccentColor)
             .accentColor(panelAccentColor)
             .atticDesignFromSystem(
@@ -336,7 +325,7 @@ struct AtticPanelView: View {
             "Settings…",
             systemImage: "gearshape",
             shortcut: KeyboardShortcut(",", modifiers: .command)
-        ) { AppCoordinator.shared.openSettings() })
+        ) { AppCoordinator.shared?.openSettings() })
         return commands
     }
 
@@ -360,31 +349,43 @@ struct AtticPanelView: View {
         selectSection(page.section)
     }
 
-    private func selectSection(_ section: PanelSection) {
+    func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
+        // O4-02: a drag tracked on the page being left is cancelled, not
+        // committed when its button comes up on another page.
+        AtticDragTracking.cancelAll()
         // A refused Notes close must leave every other state untouched, so
         // the refusal is decided before any focus or lock changes.
-        if uiState.selectedSection.isNotes, noteDraft.isActive {
-            guard noteDraft.close() else { return }
+        if uiState.selectedSection.isNotes {
+            guard noteDraft.prepareToLeave(.pageSwitch) else { return }
         }
         PerformanceSignposts.beginPageSwitch()
-        isQuickEntryFocused = false
         uiState.setInteractionLock(.quickEntryFocus, isActive: false)
         if uiState.selectedSection.isCanvas {
             canvasSession.interruptActiveInteraction()
         }
-        let selection = {
-            uiState.selectSection(section)
-            if section.isNotes { openMostRecentNoteIfNeeded() }
+        uiState.switchPage(to: section, motion: pageMotion) {
+            if section.isNotes {
+                noteDraft.pages.present()
+            }
         }
-        withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced)) { selection() }
     }
 
-    /// Pages crossfade in every feel: they hold AppKit scroll views, which
-    /// a SwiftUI scale would not carry (`AtticMotionPreset.scaleWeight`).
-    private var pageTransition: AnyTransition {
-        AtticMotionPreset.pageSwitch.transition(reduceMotion: reduceMotion || settings.animations == .reduced,
-                                                edge: nil, anchor: .top)
+    /// The motion every page switch uses (A20): the feel's navigation
+    /// spring, sideways; instant under Reduce Motion or Animations: Reduced.
+    private var pageMotion: PanelPageMotion {
+        PanelPageMotion.current(reduceMotion: reduceMotion || settings.animations == .reduced)
+    }
+
+    /// A page built or released by a switch (Notes every time, Tasks and
+    /// Canvas on a first visit) travels as a kept page does: in from its
+    /// side of the page left, out to its side of the new one. It reads the
+    /// switch as it runs (`PanelUIState.lastPageSwitch`). Pages never
+    /// scale: they hold AppKit scroll views, which a SwiftUI scale would
+    /// not carry (`AtticMotionPreset.scaleWeight`); an offset moves them.
+    private func pageTransition(_ page: PanelPage) -> AnyTransition {
+        .modifier(active: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: true),
+                  identity: PanelPageTravel(page: page, uiState: uiState, width: panelSize.width, isAway: false))
     }
 
     /// Pages with their own bottom controls (the Tasks add bar) report their
@@ -452,11 +453,14 @@ extension EnvironmentValues {
 
 private struct PanelPageVisibility: ViewModifier {
     let isCurrent: Bool
+    /// Where the page rests while hidden (0 when it is current).
+    let restingOffset: CGFloat
     let disablesWhenHidden: Bool
 
     func body(content: Content) -> some View {
         content
             .environment(\.atticPanelPageIsCurrent, isCurrent)
+            .offset(x: isCurrent ? 0 : restingOffset)
             .opacity(isCurrent ? 1 : 0)
             .allowsHitTesting(isCurrent)
             .disabled(disablesWhenHidden && !isCurrent)
@@ -465,6 +469,24 @@ private struct PanelPageVisibility: ViewModifier {
             .transformPreference(PanelPageNoticeClearancePreferenceKey.self) { value in
                 if !isCurrent { value = 0 }
             }
+    }
+}
+
+/// A page coming in or going out with a switch: away, it rests on its side
+/// of the switch's other page (`PanelPageSwitch.restingSide`), transparent.
+/// It holds the shell's state without observing it and reads the switch
+/// when SwiftUI applies it, so a page leaving goes the way of the switch
+/// that removes it, not the one that brought it.
+private struct PanelPageTravel: ViewModifier {
+    let page: PanelPage
+    let uiState: PanelUIState
+    let width: CGFloat
+    let isAway: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .offset(x: isAway ? (uiState.lastPageSwitch?.restingSide(of: page) ?? 0) * width : 0)
+            .opacity(isAway ? 0 : 1)
     }
 }
 
@@ -511,5 +533,44 @@ extension AppearancePreference {
         case .light: .light
         case .dark: .dark
         }
+    }
+}
+
+/// The panel's root always takes exactly the room its window gives it, from
+/// its top-leading corner, whatever its content asks for.
+///
+/// A flexible frame reports the larger of its content's size and the
+/// proposal, and `NSHostingView` centres a root that is larger than its
+/// bounds. So a single over-wide child (a bottom row whose status pill no
+/// longer fit beside the buttons, a window frame that changed while
+/// SwiftUI still laid out for the old one) used to push the whole panel
+/// past its window on both sides, cutting the corner buttons off at the
+/// left and right edges (owner, 2026-10-08). Here the content is proposed
+/// the window's size and placed at its origin, every pass, including every
+/// frame of a size change.
+struct PanelRootLayout: Layout {
+    #if DEBUG
+    /// The size the root was last placed at (hosted tests compare it with
+    /// the window's visible frame).
+    @MainActor static var lastPlacedSize: CGSize?
+    #endif
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        // Asked for an ideal size (no proposal), report the content's, so
+        // nothing that measures the hosting view changes; given a size, take
+        // exactly that.
+        if let width = proposal.width, let height = proposal.height { return CGSize(width: width, height: height) }
+        let ideal = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        return CGSize(width: proposal.width ?? ideal.width, height: proposal.height ?? ideal.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+        }
+        #if DEBUG
+        let size = bounds.size
+        MainActor.assumeIsolated { Self.lastPlacedSize = size }
+        #endif
     }
 }

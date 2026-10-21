@@ -168,9 +168,8 @@ final class TaskPhase1StoreTests: XCTestCase {
     /// fields, so every reference list and every file on disk survives, and
     /// the launch sweep of unreferenced files removes nothing.
     func testACopiedPhase0StoreWithFilesKeepsEveryAttachmentAndFile() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticPhase1MigrationFiles-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticPhase1MigrationFiles")
+
         let filesRoot = root.appendingPathComponent("task-files", isDirectory: true)
         let sources = root.appendingPathComponent("sources", isDirectory: true)
         try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
@@ -229,9 +228,8 @@ final class TaskPhase1StoreTests: XCTestCase {
     }
 
     func testACopiedPhase0StoreMigratesInPlaceKeepingOrderAndEveryRow() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticPhase1Migration-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticPhase1Migration")
+
         let fixtureURL = root.appendingPathComponent("fixture/phase0.store")
         try FileManager.default.createDirectory(at: fixtureURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let duplicateID = UUID(), parentID = UUID()

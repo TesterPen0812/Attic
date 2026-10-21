@@ -110,6 +110,7 @@ final class TasksRound8Tests: XCTestCase {
     // MARK: - Typing on Done faster than the field takes the keyboard
 
     func testFastTypingOnDoneKeepsEveryLetter() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.go(to: .done)

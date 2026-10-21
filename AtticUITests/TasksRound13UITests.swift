@@ -39,6 +39,24 @@ final class TasksRound13UITests: XCTestCase {
         XCTAssertTrue(condition(), message, file: file, line: line)
     }
 
+    /// H14-01: direct providers do not exercise macOS's empty-provider bridge.
+    /// Drive the native drag and verify a separately displayed copy.
+    func testH14_01NativeAttachmentDragCopiesIntoAnotherTask() throws {
+        app.terminate()
+        app.launchEnvironment["ATTIC_UI_TEST_SEED_FILES"] = "9"
+        app.launch()
+        app.activate()
+        let image = app.buttons.matching(NSPredicate(format: "label == %@", "Moodboard.png")).firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        let destination = row("Ship appearance PR")
+        XCTAssertTrue(destination.waitForExistence(timeout: 5))
+        image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.3, thenDragTo: destination.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)))
+        waitFor(app.buttons.matching(NSPredicate(format: "label == %@", "Moodboard.png")).count == 2,
+                "source and destination both show the file")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "panel-error-message").firstMatch.exists)
+    }
+
     /// ⇧⌘I, eight ↓ to Add Subtask, Return: the subtask editor opens and the
     /// parent's title editor does not.
     func testReturnInTheActionsMenuRunsTheHighlightedItem() throws {

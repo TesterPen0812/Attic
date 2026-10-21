@@ -177,6 +177,23 @@ struct CanvasPanelContent: View {
                 dismissedImageFailureIDs.formIntersection(failures)
             }
         }
+        .onChange(of: session.selectedCanvasID) { _, _ in
+            // A board's dialogs leave with it. An agent's deletion must
+            // never transfer a pending Clear/Delete/Rename to the next board.
+            isClearConfirmationPresented = false
+            isRenameCanvasPresented = false
+            isDeleteCanvasPresented = false
+            renameCanvasName = ""
+            isImageImporterPresented = false
+            isReplacementImporterPresented = false
+            replacementImageID = nil
+        }
+        .onChange(of: session.images.map(\.id)) { _, ids in
+            if let replacementImageID, !ids.contains(replacementImageID) {
+                isReplacementImporterPresented = false
+                self.replacementImageID = nil
+            }
+        }
         .transaction { transaction in
             if reduceMotion {
                 transaction.animation = nil

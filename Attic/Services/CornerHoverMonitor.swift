@@ -89,7 +89,6 @@ final class CornerHoverMonitor {
     private var cornerObservation: AnyCancellable?
     private var responsivenessActivity: NSObjectProtocol?
     private var revealRefreshTask: Task<Void, Never>?
-    private var dragReleaseTask: Task<Void, Never>?
     private var isRunning = false
     private var lastKeyboardInputAt: TimeInterval = -.infinity
     /// Sampling is event-driven: bursts of pointer events near the corner or
@@ -187,8 +186,6 @@ final class CornerHoverMonitor {
         stopPointerActivityMonitoring()
         revealRefreshTask?.cancel()
         revealRefreshTask = nil
-        dragReleaseTask?.cancel()
-        dragReleaseTask = nil
         if let screenChangeToken { NotificationCenter.default.removeObserver(screenChangeToken) }
         screenChangeToken = nil
         cornerObservation = nil
@@ -251,7 +248,7 @@ final class CornerHoverMonitor {
     /// Keep the real panel on screen through a performance sample, including
     /// a section change made while it is already visible.
     func revealForPerformanceProbe(section: PanelSection) {
-        guard let screen = NSScreen.main,
+        guard let screen = Self.uiTestingScreen,
               preparePresentation(openComposer: false, section: section) == nil else { return }
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
@@ -274,7 +271,7 @@ final class CornerHoverMonitor {
     }
 
     func keepVisibleForUITesting(openComposer: Bool = false, makeKey: Bool = true) {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = Self.uiTestingScreen else { return }
         guard preparePresentation(openComposer: openComposer, section: nil) == nil else { return }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
@@ -290,19 +287,25 @@ final class CornerHoverMonitor {
         let targetSection = section ?? uiState.selectedSection
 
         if targetSection != uiState.selectedSection {
-            if uiState.selectedSection.isNotes, noteDraft.isActive {
-                guard noteDraft.close() else { return .unsavedNote }
+            if uiState.selectedSection.isNotes {
+                guard noteDraft.prepareToLeave(.pageSwitch) else { return .unsavedNote }
             }
             PerformanceSignposts.beginPageSwitch()
-            uiState.selectSection(targetSection)
+            // The shell's one switch (A20): sprung like any other while the
+            // panel shows, at once before a reveal from hidden.
+            let motion = panelController.isPanelVisible
+                ? PanelPageMotion.current(reduceMotion: AtticMotionPreference.reducesMotion) : .instant
+            uiState.switchPage(to: targetSection, motion: motion)
         }
 
         guard openComposer else { return nil }
         if targetSection.isNotes {
-            guard noteDraft.beginNew() else {
+            // The new Notes page: New Note always starts a fresh draft.
+            guard noteDraft.pages.requestNewNote() else {
                 PerformanceSignposts.cancelPageSwitch()
                 return .unsavedNote
             }
+            return nil
         }
 
         var transaction = Transaction()
@@ -331,31 +334,8 @@ final class CornerHoverMonitor {
         // Mouse passthrough and resize cursors belong to the panel
         // controller's own pointer monitors, which run only while the panel
         // is visible; sampling here must not duplicate that work.
-        // The transient subtask surface extends "inside" coverage: the open
-        // checklist is useless without its anchor, so hovering it keeps the
-        // main panel alive. The pinned window is independent and excluded.
         let isInPanel = panelController.containsScreenPoint(location)
-            || panelController.auxiliarySurfaceContains(location)
         let isMouseButtonPressed = NSEvent.pressedMouseButtons != 0
-        if isMouseButtonPressed {
-            dragReleaseTask?.cancel()
-            dragReleaseTask = nil
-        } else if uiState.isDraggingTask, dragReleaseTask == nil {
-            // SwiftUI dispatches performDrop just after mouse-up. Give an
-            // in-panel destination a short chance to consume draggedTaskID
-            // before treating the release as a cancelled or external drag.
-            dragReleaseTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(150))
-                guard let self, !Task.isCancelled else { return }
-                let releasedInPanel = panelController.containsScreenPoint(NSEvent.mouseLocation)
-                if let draggedTaskID = uiState.finishDragging(
-                    releasedOutsidePanel: !releasedInPanel
-                ) {
-                    store.startAfterExternalDrag(taskID: draggedTaskID)
-                }
-                dragReleaseTask = nil
-            }
-        }
 
         let isInteractionLocked = MainPanelAutoHidePolicy.isInteractionLocked(
             reasons: uiState.interactionLockReasons, pointerInside: isInPanel,
@@ -517,9 +497,6 @@ final class CornerHoverMonitor {
         }
     }
 
-    var scheduledCadenceForTesting: CornerHoverSamplingCadence? { scheduledCadence }
-    var holdsResponsivenessActivityForTesting: Bool { responsivenessActivity != nil }
-    var hasPendingFollowUpForTesting: Bool { followUpWork != nil }
     /// Test seam: how many one-shot follow-ups were scheduled.
     private(set) var followUpCountForTesting = 0
 
@@ -545,6 +522,23 @@ final class CornerHoverMonitor {
         cachedScreens = NSScreen.screens.map { ($0.frame, AtticDisplay.identifier(for: $0)) }
         revealPolicy = settings.cornerRevealPolicy
         cachedScreenFrames = cachedScreens.filter { revealPolicy.answers(displayID: $0.id) }.map(\.frame)
+    }
+
+    /// The screen a test launch shows the panel on: the key screen, unless
+    /// `ATTIC_UI_TEST_DISPLAY` names one ("external" for the first screen that
+    /// isn't built in, or a display UUID), so on-screen checks can stay off
+    /// the display the owner is working on.
+    static var uiTestingScreen: NSScreen? {
+        let request = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_DISPLAY"] ?? ""
+        guard !request.isEmpty else { return NSScreen.main }
+        let named = NSScreen.screens.first { screen in
+            if request == "external" {
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
+                return CGDisplayIsBuiltin(CGDirectDisplayID(number.uint32Value)) == 0
+            }
+            return AtticDisplay.identifier(for: screen) == request
+        }
+        return named ?? NSScreen.main
     }
 
     /// The identifier of the display at `screen`'s frame, from the cache.

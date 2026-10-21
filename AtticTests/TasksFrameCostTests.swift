@@ -5,6 +5,35 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
+// BEGIN COST BUDGET POLICY
+/// OD-6: reference hosts collect identical timings without absolute gates.
+/// Only the baseline commands set TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1;
+/// xcodebuild forwards it to the test host as ATTIC_COST_REFERENCE_ONLY.
+enum CostBudget {
+    static var referenceOnly: Bool {
+        ProcessInfo.processInfo.environment["ATTIC_COST_REFERENCE_ONLY"] == "1"
+    }
+
+    static func assertLessThanOrEqual(_ measured: Double, _ bound: Double, _ message: String = "",
+                                     file: StaticString = #filePath, line: UInt = #line) {
+        if referenceOnly {
+            print("ATTIC_COST_REFERENCE measured_ms=\(measured) bound_ms=\(bound) assertion=disabled \(message)")
+            return
+        }
+        XCTAssertLessThanOrEqual(measured, bound, message, file: file, line: line)
+    }
+
+    static func assertLessThan(_ measured: Double, _ bound: Double, _ message: String = "",
+                               file: StaticString = #filePath, line: UInt = #line) {
+        if referenceOnly {
+            print("ATTIC_COST_REFERENCE measured_ms=\(measured) bound_ms=\(bound) assertion=disabled \(message)")
+            return
+        }
+        XCTAssertLessThan(measured, bound, message, file: file, line: line)
+    }
+}
+// END COST BUDGET POLICY
+
 /// Round 11 (performance): what each interaction costs the main thread,
 /// headless, on the spec's seeded sizes (500 open tasks, 500 in Later,
 /// 5,000 in the Done log, with dates, tags and priorities mixed in). Each
@@ -26,9 +55,12 @@ final class TasksFrameCostTests: XCTestCase {
     }
 
     func testMeasuresWhatEachInteractionCostsTheMainThread() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         let host = try FrameCostHost()
         hosted = host
-        // The Motion Lab: the feel measured (ATTIC_MOTION_FEEL, else the default).
+        // Measure the chosen default, Lively.
         let feel = MotionFeelUnderTest.apply()
         defer { MotionFeelUnderTest.restore() }
         var report: [String] = ["feel=\(feel)"]
@@ -146,8 +178,9 @@ final class TasksFrameCostTests: XCTestCase {
         host.place(.now)
 
         print("ATTIC_FRAME_COST " + report.joined(separator: " | "))
+        print("ATTIC_FRAME_KEYS text=Call the plumber tomorrow #home raw_ms=\(keys)")
         // Sanity only (see the type's comment).
-        XCTAssertLessThan(Self.median(keys), 500)
+        CostBudget.assertLessThan(Self.median(keys), 500)
         XCTAssertEqual(host.model.tab, .now)
     }
 

@@ -88,16 +88,6 @@ struct AtticRGBA: Equatable, Hashable, Sendable, CustomStringConvertible {
         return AtticRGBA.grey(Double(byte)).withAlpha(alpha)
     }
 
-    /// Straight mix toward `other` by `amount` (0 = self, 1 = other), alpha included.
-    func mixed(with other: AtticRGBA, amount: Double) -> AtticRGBA {
-        let t = min(max(amount, 0), 1)
-        return AtticRGBA(
-            red: red + (other.red - red) * t,
-            green: green + (other.green - green) * t,
-            blue: blue + (other.blue - blue) * t,
-            alpha: alpha + (other.alpha - alpha) * t
-        )
-    }
 
     var relativeLuminance: Double { themeColor.relativeLuminance }
 

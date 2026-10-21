@@ -3,9 +3,9 @@
 
 Three interleaved samples each of the baseline and the candidate build. A
 metric passes when the candidate's median is at most the baseline's median
-plus the baseline's range across its three samples, plus 0.2 ms for printed
-rounding. Only the baseline's range counts: a noisier candidate must not
-widen its own allowance. The 16 ms input/query budgets live in
+plus max(baseline range, measured resolution), plus 0.2 ms for printed
+rounding (OD-9). Only reference samples determine spread and resolution.
+The 16 ms budgets live in
 DoneSearchCostTests (macos-ci.yml runs both).
 
 `search-show` is the frame in which Done search results appear: each
@@ -15,9 +15,10 @@ for the typing to pause.
 """
 import json
 import re
-import statistics
 import sys
 from pathlib import Path
+
+from cost_resolution import compare, fixture_quantum
 
 
 def metrics(path):
@@ -44,15 +45,15 @@ def metrics(path):
 
 
 def main(directory):
+    texts = [(directory / f"{name}-cost-{i}.log").read_text()
+             for name in ("baseline", "candidate") for i in (1, 2, 3)]
     samples = {name: [metrics(directory / f"{name}-cost-{i}.log") for i in (1, 2, 3)]
                for name in ("baseline", "candidate")}
     report = {}
     for metric in samples["baseline"][0]:
         before = [sample[metric] for sample in samples["baseline"]]
         after = [sample[metric] for sample in samples["candidate"]]
-        tolerance = max(before) - min(before) + 0.2
-        passed = statistics.median(after) <= statistics.median(before) + tolerance
-        report[metric] = dict(before_ms=before, after_ms=after, noise_ms=tolerance, passed=passed)
+        report[metric] = compare(before, after, fixture_quantum(texts, metric))
     (directory / "cost-comparison.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 0 if all(row["passed"] for row in report.values()) else 1

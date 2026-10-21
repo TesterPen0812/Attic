@@ -29,13 +29,6 @@ enum PanelSurfaceStyle: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var systemImage: String {
-        switch self {
-        case .solid: "square.fill"
-        case .glass: "square.on.square.dashed"
-        case .frosted: "square.fill.on.square"
-        }
-    }
 
     var accessibilityIdentifier: String { "setting-panel-surface-\(rawValue)" }
 }

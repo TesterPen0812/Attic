@@ -5,16 +5,23 @@ import XCTest
 
 @MainActor
 final class PerformanceSeedTests: XCTestCase {
+    #if ATTIC_GENERATED_TESTS
     func testDoneHistorySeedLivesOnlyInDoneLog() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticPerformanceSeedTests-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticPerformanceSeedTests")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         try PerformanceSeed.generate(in: container, root: root, includeDoneHistory: true, now: now)
 
+        let context = ModelContext(container)
+        let notes = try context.fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(notes.count, PerformanceSeed.noteCount)
+        XCTAssertTrue(notes.allSatisfy { $0.contentFormat == 1 && $0.content.map { NoteContentCodec.decode($0).isEditable } == true })
+        let noteAttachments = try context.fetch(FetchDescriptor<NoteAttachment>())
+        let documentIDs = Set(notes.flatMap { $0.content.flatMap { NoteContentCodec.decode($0).document }?.attachmentIDs ?? [] })
+        XCTAssertEqual(documentIDs, Set(noteAttachments.map(\.id)), "Every seeded attachment remains placed in a document")
         let store = TaskStore(container: container)
         let logged = store.doneLog()
         let today = Calendar.current.startOfDay(for: now)
@@ -37,4 +44,5 @@ final class PerformanceSeedTests: XCTestCase {
         XCTAssertTrue(store.snapshot(for: .tasks).sections
             .flatMap(\.tasks).allSatisfy { !loggedIDs.contains($0.id) })
     }
+    #endif
 }

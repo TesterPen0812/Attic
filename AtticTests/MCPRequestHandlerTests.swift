@@ -285,7 +285,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(
             names.sorted(),
             ["create_note", "create_task", "delete_item", "delete_note", "delete_task", "duplicate_task", "link", "list_deleted",
-             "list_notes", "list_tags", "list_tasks", "move_subtask", "restore_item", "restore_items", "update_note", "update_tags", "update_task"]
+             "list_notes", "list_tags", "list_tasks", "move_subtask", "restore_item", "restore_items", "update_note", "update_note_table", "update_tags", "update_task"]
         )
     }
 
@@ -323,17 +323,267 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(payload["count"] as? Int, 2)
     }
 
+    func testListNotesSaysWhichNotesArePinned() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let pinned = try XCTUnwrap(noteStore.create(title: "Pinned", body: "a"))
+        _ = noteStore.create(title: "Plain", body: "b")
+        XCTAssertTrue(noteStore.setPinned(true, noteID: pinned.id))
+        let payload = try callNoteTool(handler, "list_notes", [:])
+        let notes = try XCTUnwrap(payload["notes"] as? [[String: Any]])
+        XCTAssertEqual(notes.first { $0["title"] as? String == "Pinned" }?["pinned"] as? Bool, true)
+        XCTAssertNil(notes.first { $0["title"] as? String == "Plain" }?["pinned"])
+    }
+
     func testUpdateNoteChangesBody() throws {
         let (noteStore, handler) = try makeNoteHandler()
         let note = try XCTUnwrap(noteStore.create(title: "Title", body: "old"))
 
+        let listed = try callNoteTool(handler, "list_notes", [:])
+        let revision = try XCTUnwrap((listed["notes"] as? [[String: Any]])?.first?["revision"] as? String)
         let payload = try callNoteTool(handler, "update_note", [
             "id": note.id.uuidString,
+            "base_revision": revision,
             "body": "new body"
         ])
         let updated = try XCTUnwrap(payload["note"] as? [String: Any])
+        XCTAssertEqual(payload["status"] as? String, "applied")
         XCTAssertEqual(updated["body"] as? String, "new body")
-        XCTAssertEqual(note.body, "new body")
+        XCTAssertNotEqual(updated["revision"] as? String, revision)
+        XCTAssertEqual(noteStore.note(withID: note.id)?.body, "new body")
+        XCTAssertTrue(noteStore.versions(noteID: note.id).contains { $0.reason == .beforeAgentEdit && $0.body == "old" },
+                      "the note as it was is kept as a version")
+    }
+
+    /// Requirement 5: an explicit base revision, an existing note, and a
+    /// write that changes a row; anything else is an error, never "applied".
+    func testUpdateNoteNeedsAnExistingNoteAndItsCurrentRevision() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(noteStore.create(title: "Title", body: "old"))
+        XCTAssertEqual(try noteToolError(handler, ["id": note.id.uuidString, "body": "x"]),
+                       "base_revision is required: pass the note's revision from list_notes.")
+        XCTAssertTrue(try noteToolError(handler, ["id": note.id.uuidString, "base_revision": "stale", "body": "x"])
+            .hasPrefix("The note changed since revision stale"))
+        XCTAssertTrue(try noteToolError(handler, ["id": UUID().uuidString, "base_revision": "initial", "body": "x"])
+            .hasPrefix("No note exists"))
+        XCTAssertEqual(noteStore.note(withID: note.id)?.body, "old")
+    }
+
+    /// Notes v2 tables (spec § 4.6): agents read a table as a token and a
+    /// pipe table with its ids, edit it by id, and through update_note.
+    func testAgentsReadAndEditTablesByIdAndThroughTheBody() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let table = NoteTable(texts: [["Pillar", "What happened"], ["Integrity", "Systems encrypted"]])
+        let tableID = UUID()
+        var heading = NoteBlock.text("Impact")
+        heading.style = "heading"
+        heading.level = 2
+        let base = NoteDocument(blocks: [.text("CIA"), heading, .table(table, id: tableID)])
+        guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+        let listed = try callNoteTool(handler, "list_notes", [:])
+        let note = try XCTUnwrap((listed["notes"] as? [[String: Any]])?.first { $0["id"] as? String == id.uuidString })
+        let body = try XCTUnwrap(note["body"] as? String)
+        XCTAssertTrue(body.contains("<!-- attic:table id=\(tableID.uuidString) -->\n| Pillar | What happened |"))
+        let tables = try XCTUnwrap(note["tables"] as? [[String: Any]])
+        XCTAssertEqual(tables.first?["table_id"] as? String, tableID.uuidString)
+        let rows = try XCTUnwrap(tables.first?["rows"] as? [[String: Any]])
+        let columns = try XCTUnwrap(tables.first?["columns"] as? [[String: Any]])
+        // update_note_table: a cell by id, and a new row.
+        let revision = try XCTUnwrap(note["revision"] as? String)
+        let edited = try callNoteTool(handler, "update_note_table", [
+            "id": id.uuidString, "base_revision": revision, "table_id": tableID.uuidString,
+            "operations": [
+                ["op": "set_cell", "row_id": rows[1]["id"] as Any, "column_id": columns[1]["id"] as Any, "text": "Encrypted and held"],
+                ["op": "insert_row", "after_row_id": rows[1]["id"] as Any, "cells": ["Availability", "Shut down"]]
+            ]
+        ])
+        XCTAssertEqual(edited["status"] as? String, "applied")
+        var stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.first { $0.kind == .table })
+        XCTAssertEqual(stored.id, tableID)
+        XCTAssertEqual(stored.table?.texts, [["Pillar", "What happened"], ["Integrity", "Encrypted and held"], ["Availability", "Shut down"]])
+        XCTAssertEqual(stored.table?.rows[1].id.uuidString, rows[1]["id"] as? String, "the row keeps its id")
+        // update_note: a cell edited in the body, the heading kept.
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let newBody = NoteTextExport.agentBody(try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document))
+            .replacingOccurrences(of: "| Availability | Shut down |", with: "| Availability | Pipeline shut down |")
+        let updated = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": token, "body": newBody])
+        XCTAssertEqual(updated["status"] as? String, "applied")
+        stored = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document?.blocks.first { $0.kind == .table })
+        XCTAssertEqual(stored.id, tableID)
+        XCTAssertEqual(stored.table?[NoteTable.Position(row: 2, column: 1)].text, "Pipeline shut down")
+        // A bad write changes nothing.
+        let latest = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        let body2 = try XCTUnwrap(noteStore.note(withID: id)?.body)
+        let request = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "update_note_table", "arguments": [
+                "id": id.uuidString, "base_revision": latest, "table_id": tableID.uuidString,
+                "operations": [["op": "insert_row", "cells": ["only one"]]]
+            ] as [String: Any]]
+        ])
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: request).body)) as? [String: Any])
+        XCTAssertEqual((response["result"] as? [String: Any])?["isError"] as? Bool, true, "a ragged row is refused")
+        XCTAssertEqual(noteStore.note(withID: id)?.body, body2)
+    }
+
+    func testUpdateNoteCanAddAndRemoveChecklistLinesInPlainAndRichNotes() throws {
+        for rich in [false, true] {
+            for removing in [false, true] {
+                let (noteStore, handler) = try makeNoteHandler()
+                var paragraph = NoteBlock.text("Keep this paragraph")
+                if rich { paragraph.style = "heading"; paragraph.level = 2 }
+                var kept = NoteBlock.checklist("Keep this item", checked: true)
+                kept.extras = ["owner": .string("person")]
+                let removed = NoteBlock.checklist("Remove this item")
+                let base = NoteDocument(blocks: [.text("Title"), paragraph, kept] + (removing ? [removed] : []))
+                guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+                var lines = NoteTextExport.agentBody(base).components(separatedBy: "\n")
+                if removing { lines.removeLast() } else { lines.append("- [ ] Buy milk") }
+                let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+                let payload = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                    "base_revision": token, "body": lines.joined(separator: "\n")])
+                XCTAssertEqual(payload["status"] as? String, "applied")
+                let document = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+                XCTAssertEqual(document.blocks.prefix(3), base.blocks.prefix(3), "kept metadata and IDs survive")
+                XCTAssertEqual(document.blocks.filter { $0.kind == .checklist }.map(\.text),
+                               removing ? ["Keep this item"] : ["Keep this item", "Buy milk"])
+            }
+        }
+    }
+
+    func testUpdateNoteRejectsFlattenedDuplicatedAndReorderedChecklistLinesWithAccurateMessage() throws {
+        let message = "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
+        for rich in [false, true] {
+            let (noteStore, handler) = try makeNoteHandler()
+            var paragraph = NoteBlock.text("Keep paragraph")
+            if rich { paragraph.style = "heading"; paragraph.level = 2 }
+            var base = NoteDocument(blocks: [.text("Title"), paragraph, .checklist("First"), .checklist("Second")])
+            base.refreshRequiredCapabilities()
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let prefix = NoteTextExport.agentLine(paragraph, index: 1) + "\n"
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            for body in ["First\n- [ ] Second", "- [ ] First\n- [ ] Second\n- [ ] First", "- [ ] Second\n- [ ] First"] {
+                XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString, "base_revision": token, "body": prefix + body]), message)
+                XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, base)
+            }
+        }
+    }
+
+    func testUpdateNoteWithAnEmptyChecklistItemCanAddOrEditBlankParagraphs() throws {
+        for body in ["- [ ] Milk\n- [ ] \nParagraph\n\nNew paragraph",
+                     "- [ ] Milk\n- [ ] \n",
+                     "- [ ] Milk\n\nParagraph",
+                     "- [ ] Milk\n- [ ] \nParagraph\nMilk"] {
+            let (noteStore, handler) = try makeNoteHandler()
+            let base = NoteDocument(blocks: [.text("Title"), .checklist("Milk"),
+                                             .checklist(""), .text("Paragraph")])
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            let payload = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                "base_revision": token, "body": body])
+            XCTAssertEqual(payload["status"] as? String, "applied")
+            let document = try XCTUnwrap(noteStore.loadDocument(noteID: id)?.content.document)
+            XCTAssertEqual(NoteTextExport.agentBody(document), body)
+            XCTAssertEqual(document.blocks[1], base.blocks[1])
+            if body.contains("- [ ] \n") { XCTAssertEqual(document.blocks[2], base.blocks[2]) }
+            XCTAssertNotEqual(noteStore.note(withID: id)?.revisionToken, token)
+        }
+    }
+
+    func testUpdateNoteRejectsChecklistRenamesThatLoseNestingMarksOrExtras() throws {
+        let message = "This edit would flatten, duplicate, reorder, or change an existing checklist item. Keep remaining checklist lines unchanged except for their checked states; add or remove complete checklist lines."
+        var nested = NoteBlock.checklist("Oat"); nested.indent = 1
+        var bold = NoteBlock.checklist("Oat"); bold.marks = [NoteMark(.bold, offset: 0, length: 3)]
+        var struck = NoteBlock.checklist("Oat"); struck.marks = [NoteMark(.strikethrough, offset: 0, length: 3)]
+        var extra = NoteBlock.checklist("Oat"); extra.extras = ["owner": .string("person")]
+        for item in [nested, bold, struck, extra] {
+            let (noteStore, handler) = try makeNoteHandler()
+            var base = NoteDocument(blocks: [.text("Title"), item])
+            base.refreshRequiredCapabilities()
+            guard case let .success((id, _)) = noteStore.createDocumentNote(id: UUID(), document: base) else { return XCTFail() }
+            let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+            XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString,
+                "base_revision": token, "body": "- [ ] Oat milk 2L"]), message)
+            XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document, base)
+            XCTAssertEqual(noteStore.note(withID: id)?.revisionToken, token)
+            let deleted = try callNoteTool(handler, "update_note", ["id": id.uuidString,
+                "base_revision": token, "body": ""])
+            XCTAssertEqual(deleted["status"] as? String, "applied", "whole-item deletion remains allowed")
+            XCTAssertEqual(noteStore.loadDocument(noteID: id)?.content.document?.blocks, [.text("Title")])
+        }
+    }
+
+    func testUpdateNoteInTheNewFormatKeepsObjectsAndWaitsWhileTheNoteIsOpen() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let checklistID = UUID()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(),
+            document: NoteDocument(blocks: [.text("Plan"), .checklist("Buy cake", id: checklistID), .text("prose")])
+        ) else { return XCTFail() }
+        let listed = try callNoteTool(handler, "list_notes", [:])
+        let row = try XCTUnwrap((listed["notes"] as? [[String: Any]])?.first)
+        XCTAssertEqual(row["body"] as? String, "- [ ] Buy cake\nprose")
+        let revision = try XCTUnwrap(row["revision"] as? String)
+
+        noteStore.agentWriteDisposition = { $0 == id ? .proposal : .direct }
+        let pending = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": revision,
+                                                                "body": "- [x] Buy cake\nnew prose"])
+        XCTAssertEqual(pending["status"] as? String, "pending")
+        XCTAssertEqual(pending["message"] as? String,
+                       "The note is on screen in Attic. Your edit is waiting as a proposal the person can review.")
+        XCTAssertEqual(noteStore.note(withID: id)?.plainText, "Plan\n[ ] Buy cake\nprose", "an open note is not written")
+
+        noteStore.agentWriteDisposition = { _ in .direct }
+        XCTAssertEqual(noteStore.applyPendingEdits(noteID: id), 1)
+        guard case let .editable(document)? = noteStore.loadDocument(noteID: id)?.content else { return XCTFail() }
+        XCTAssertEqual(document.blocks[1].id, checklistID, "the kept checklist line keeps its id")
+        XCTAssertTrue(document.blocks[1].checked)
+        XCTAssertEqual(document.blocks[2].text, "new prose")
+    }
+
+    func testBackgroundDocumentAgentWriteReportsApplied() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Before")])) else { return XCTFail() }
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        noteStore.agentWriteDisposition = { _ in .direct }
+        let result = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": token, "body": "After"])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        XCTAssertEqual(noteStore.note(withID: id)?.title, "Before")
+        XCTAssertEqual(noteStore.note(withID: id)?.body, "After")
+    }
+
+    func testAgentWriteReportsLoadingImagesRefusal() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Before")])) else { return XCTFail() }
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        noteStore.agentWriteDisposition = { _ in .refuse("Images are being added to this note. Try again when they finish.") }
+        XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString, "base_revision": token, "body": "After"]),
+                       "Images are being added to this note. Try again when they finish.")
+        XCTAssertEqual(noteStore.note(withID: id)?.title, "Before")
+    }
+
+    func testAgentWriteReportsUnsavedTextRefusal() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Before")])) else { return XCTFail() }
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        noteStore.agentWriteDisposition = { _ in .refuse("Attic has unsaved text for this note. Try again after it is saved.") }
+        XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString, "base_revision": token, "body": "After"]),
+                       "Attic has unsaved text for this note. Try again after it is saved.")
+        XCTAssertEqual(noteStore.note(withID: id)?.title, "Before")
+    }
+
+    private func noteToolError(_ handler: MCPRequestHandler, _ arguments: [String: Any]) throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "update_note", "arguments": arguments]
+        ])
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body)) as? [String: Any])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        return try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
     }
 
     func testUpdateNoteRejectsBlankingWithAnAccurateMessage() throws {
@@ -345,7 +595,7 @@ final class MCPRequestHandlerTests: XCTestCase {
             "method": "tools/call",
             "params": [
                 "name": "update_note",
-                "arguments": ["id": note.id.uuidString, "title": "  ", "body": "\n"]
+                "arguments": ["id": note.id.uuidString, "base_revision": note.revisionToken, "title": "  ", "body": "\n"]
             ]
         ])
         let response = try XCTUnwrap(
@@ -364,9 +614,44 @@ final class MCPRequestHandlerTests: XCTestCase {
         let (noteStore, handler) = try makeNoteHandler()
         let note = try XCTUnwrap(noteStore.create(body: "Remove me"))
 
-        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString])
+        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString, "base_revision": note.revisionToken])
         XCTAssertEqual(payload["deleted"] as? String, note.id.uuidString)
         XCTAssertTrue(noteStore.notes.isEmpty)
+    }
+
+    func testS5DeleteRequiresRevisionAndKeepsOnScreenNote() throws {
+        let (notes, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(notes.create(title: "Keep my typing"))
+        XCTAssertTrue(try toolError(handler, "delete_note", ["id": note.id.uuidString]).contains("base_revision"))
+        notes.agentWriteDisposition = { _ in .proposal }
+        let result = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString,
+            "base_revision": note.revisionToken, "agent_name": "Claude"])
+        XCTAssertEqual(result["status"] as? String, "pending")
+        XCTAssertNotNil(notes.note(withID: note.id))
+        XCTAssertEqual(notes.pendingEdits(noteID: note.id).first?.agentName, "Claude")
+    }
+
+    func testS5GenericNoteDeletionAlsoRequiresRevisionAndProposes() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let notes = try XCTUnwrap(library.notes)
+        let note = try XCTUnwrap(notes.create(title: "Safe generic delete"))
+        XCTAssertTrue(try toolError(handler, "delete_item", ["kind": "note", "id": note.id.uuidString]).contains("base_revision"))
+        notes.agentWriteDisposition = { _ in .proposal }
+        let result = try callNoteTool(handler, "delete_item", ["kind": "note", "id": note.id.uuidString,
+            "base_revision": note.revisionToken, "agent_name": "Other editor"])
+        XCTAssertEqual(result["status"] as? String, "pending")
+        XCTAssertNotNil(notes.note(withID: note.id))
+        XCTAssertTrue(notes.pendingEdits(noteID: note.id).first?.isDeletion == true)
+    }
+
+    func testS5ProposalUsesPerCallAttribution() throws {
+        let (notes, handler) = try makeNoteHandler()
+        guard case let .success((id, revision)) = notes.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Title"), .text("Body")])) else { return XCTFail() }
+        notes.agentWriteDisposition = { _ in .proposal }
+        _ = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": revision.uuidString,
+            "body": "Suggested", "agent_name": "Claude"])
+        XCTAssertEqual(notes.pendingEdits(noteID: id).first?.agentName, "Claude")
     }
 
     func testNoteToolsAreUnknownWhenNoNoteStoreProvided() throws {
@@ -377,12 +662,14 @@ final class MCPRequestHandlerTests: XCTestCase {
 
     // MARK: - Phase 0: Recently Deleted, tags, dates and links
 
-    private func makeLibraryHandler() throws -> (AtticLibrary, MCPRequestHandler) {
+    private func makeLibraryHandler(
+        persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) throws -> (AtticLibrary, MCPRequestHandler) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
         let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 24, hour: 10))!
         // Every store shares the task store's container, as in the app.
-        let noteStore = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let noteStore = trackAttachmentReconciliation(of: NoteStore(container: store.container, persist: persist, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: CanvasStore(container: store.container))
         let handler = MCPRequestHandler(
             tools: AgentTaskTools(
@@ -534,10 +821,87 @@ final class MCPRequestHandlerTests: XCTestCase {
             .contains("Recently Deleted"))
     }
 
+    func testDirectAgentNoteDeletionRecordsUndoAndRedoForBothTools() throws {
+        for tool in ["delete_note", "delete_item"] {
+            let (library, handler) = try makeLibraryHandler()
+            let notes = try XCTUnwrap(library.notes)
+            let note = try XCTUnwrap(notes.create(title: "Undo target", body: "Keep this body"))
+            let id = note.id
+            let content = note.content
+            let before = library.undo.totalStepCount
+            let result = try callNoteTool(handler, tool, ["kind": "note", "id": id.uuidString,
+                "base_revision": note.revisionToken])
+            XCTAssertEqual(result["status"] as? String, "applied")
+            XCTAssertNil(notes.note(withID: id))
+            XCTAssertEqual(library.undo.totalStepCount, before + 1)
+            XCTAssertEqual(library.undo.undoName(in: .note(id)), "Delete Note")
+            XCTAssertTrue(library.undo.undo(in: .note(id)))
+            let restored = notes.note(withID: id)
+            XCTAssertNotNil(restored)
+            XCTAssertEqual(restored?.title, "Undo target")
+            XCTAssertEqual(restored?.body, "Keep this body")
+            XCTAssertEqual(restored?.content, content)
+            XCTAssertTrue(library.undo.redo(in: .note(id)))
+            XCTAssertNil(notes.note(withID: id))
+            XCTAssertEqual(library.undo.totalStepCount, before + 1, "Undo/Redo reuse the same command")
+        }
+    }
+
+    func testAgentNoteDeletionRecordsNoUndoForProposalsOrRefusedWrites() throws {
+        for tool in ["delete_note", "delete_item"] {
+            for scenario in ["stale", "divergent", "save", "proposal", "refused", "missing"] {
+                var failSave = false
+                let (library, handler) = try makeLibraryHandler { context in
+                    if failSave { throw NSError(domain: "PRB2", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Injected delete save failure"]) }
+                    try context.save()
+                }
+                let notes = try XCTUnwrap(library.notes)
+                let note = try XCTUnwrap(notes.create(title: "Preserved \(scenario)", body: "Original body"))
+                let id = note.id
+                var arguments: [String: Any] = ["kind": "note", "id": id.uuidString, "base_revision": note.revisionToken]
+                switch scenario {
+                case "stale": arguments["base_revision"] = "stale revision"
+                case "divergent":
+                    let context = ModelContext(store.container)
+                    let replica = NoteItem(id: id, title: note.title, body: "Divergent body",
+                        createdAt: note.createdAt, updatedAt: note.updatedAt.addingTimeInterval(-1))
+                    replica.revisionID = note.revisionID
+                    replica.revision = note.revision
+                    context.insert(replica)
+                    try context.save()
+                    notes.refresh()
+                case "save": failSave = true
+                case "proposal": notes.agentWriteDisposition = { _ in .proposal }
+                case "refused": notes.agentWriteDisposition = { _ in .refuse("Busy with unsaved text") }
+                case "missing": arguments["base_revision"] = nil
+                default: XCTFail("unknown scenario")
+                }
+                let before = library.undo.totalStepCount
+                if scenario == "proposal" {
+                    let result = try callNoteTool(handler, tool, arguments)
+                    XCTAssertEqual(result["status"] as? String, "pending")
+                    XCTAssertTrue(notes.pendingEdits(noteID: id).contains { $0.isDeletion })
+                } else {
+                    let message = try toolError(handler, tool, arguments)
+                    if scenario == "divergent" { XCTAssertTrue(message.contains("replicas disagree")) }
+                    if scenario == "save" { XCTAssertTrue(message.contains("Injected delete save failure")) }
+                }
+                XCTAssertEqual(library.undo.totalStepCount, before, "\(tool): \(scenario) is not an applied deletion")
+                XCTAssertNotNil(notes.note(withID: id))
+                let rows = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>())
+                    .filter { $0.id == id }
+                XCTAssertEqual(rows.count, scenario == "divergent" ? 2 : 1)
+                XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil }, "no replica was deleted")
+                failSave = false
+            }
+        }
+    }
+
     func testDeleteNoteNowMovesTheNoteToRecentlyDeleted() throws {
         let (library, handler) = try makeLibraryHandler()
         let note = try XCTUnwrap(library.notes?.create(title: "Keep safe"))
-        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString])
+        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString, "base_revision": note.revisionToken])
         XCTAssertEqual(payload["deleted"] as? String, note.id.uuidString)
         XCTAssertTrue(try XCTUnwrap(library.notes).notes.isEmpty)
         XCTAssertEqual(library.state(of: AtticItemRef(.note, note.id)), .deleted)
@@ -551,7 +915,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertNotNil(library.canvases?.createCanvas(name: "Keep"))
         let board = try XCTUnwrap(library.canvases?.createCanvas(name: "Board"))
         for (kind, id) in [("task", task.id), ("note", note.id), ("canvas", board.id)] {
-            let payload = try callNoteTool(handler, "delete_item", ["kind": kind, "id": id.uuidString])
+            let payload = try callNoteTool(handler, "delete_item", ["kind": kind, "id": id.uuidString, "base_revision": note.revisionToken])
             XCTAssertEqual(payload["kind"] as? String, kind)
             XCTAssertNotNil(payload["restorable_until"] as? String)
         }
@@ -616,7 +980,12 @@ final class MCPRequestHandlerTests: XCTestCase {
 
     func testListTagsAndUpdateTagsRenameAndMerge() throws {
         let (library, handler) = try makeLibraryHandler()
-        let first = try XCTUnwrap(store.create(title: "One"))
+        XCTAssertEqual(try callNoteTool(handler, "list_tags", [:])["count"] as? Int, 0, "warm before MCP mutations")
+        let created = try callNoteTool(handler, "create_task", ["title": "One", "tags": ["#Work"]])
+        let createdTask = try XCTUnwrap(created["task"] as? [String: Any])
+        let firstID = try XCTUnwrap((createdTask["id"] as? String).flatMap(UUID.init(uuidString:)))
+        let first = try XCTUnwrap(store.task(withID: firstID))
+        XCTAssertEqual(library.notes?.tagCounts, ["work": 1], "MCP creation reaches Notes suggestions")
         let second = try XCTUnwrap(store.create(title: "Two"))
         let note = try XCTUnwrap(library.notes?.create(title: "Note"))
         XCTAssertTrue(library.setTags(["work", "urgent"], on: AtticItemRef(.task, first.id)))
@@ -628,6 +997,10 @@ final class MCPRequestHandlerTests: XCTestCase {
         let tags = try XCTUnwrap(listed["tags"] as? [[String: Any]])
         XCTAssertEqual(tags.first?["name"] as? String, "work")
         XCTAssertEqual(tags.first?["count"] as? Int, 2)
+        _ = try callNoteTool(handler, "update_task", ["id": first.id.uuidString, "tags": ["work", "urgent", "mcp-only"]])
+        XCTAssertEqual(library.notes?.tagCounts["mcp-only"], 1, "MCP update invalidates the warmed shared inventory")
+        _ = try callNoteTool(handler, "update_task", ["id": first.id.uuidString, "tags": ["work", "urgent"]])
+        XCTAssertNil(library.notes?.tagCounts["mcp-only"], "last use removal invalidates too")
 
         let renamed = try callNoteTool(handler, "update_tags", ["action": "rename", "from": "urgent", "to": "Now"])
         XCTAssertEqual(renamed["tag"] as? String, "now")

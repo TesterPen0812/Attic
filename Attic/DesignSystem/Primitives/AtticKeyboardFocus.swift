@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Whether focus rings show: only while the keyboard is driving (owner
@@ -86,5 +87,65 @@ extension View {
     /// driving (`AtticKeyboardFocusTracker`).
     func atticKeyboardFocusTracking(_ tracker: AtticKeyboardFocusTracker) -> some View {
         modifier(AtticKeyboardFocusTracking(tracker: tracker))
+    }
+}
+
+// MARK: - Focus requests (a page's own Tab order)
+
+/// Hands keyboard focus to views that keep their own `FocusState` (a
+/// subtask line, a strip button) when a page moves the keyboard itself (its
+/// own Tab order, a closed pop-over giving the keyboard back), and records
+/// which of them has it. Nothing observes it: a request is a message to the
+/// one view it names, so asking never redraws a list (A10: the panel's key
+/// loop is AppKit's, so SwiftUI no longer walks focusable views in layout,
+/// and the pages order Tab themselves).
+@MainActor
+final class AtticFocusRequests {
+    let requests = PassthroughSubject<AnyHashable, Never>()
+    /// The target that has the keyboard, as its view last reported.
+    private(set) var current: AnyHashable?
+
+    func focus(_ target: AnyHashable) { requests.send(target) }
+
+    func note(_ target: AnyHashable, focused: Bool) {
+        if focused { current = target } else if current == target { current = nil }
+    }
+}
+
+private struct AtticFocusRequestsKey: EnvironmentKey {
+    static let defaultValue: AtticFocusRequests? = nil
+}
+
+extension EnvironmentValues {
+    var atticFocusRequests: AtticFocusRequests? {
+        get { self[AtticFocusRequestsKey.self] }
+        set { self[AtticFocusRequestsKey.self] = newValue }
+    }
+}
+
+private struct AtticFocusRequestTarget: ViewModifier {
+    let target: AnyHashable
+    var focused: FocusState<Bool>.Binding
+    @Environment(\.atticFocusRequests) private var requests
+
+    func body(content: Content) -> some View {
+        if let requests {
+            content
+                .onReceive(requests.requests) { asked in
+                    if asked == target, !focused.wrappedValue { focused.wrappedValue = true }
+                }
+                .onChange(of: focused.wrappedValue) { _, now in requests.note(target, focused: now) }
+                .onDisappear { if focused.wrappedValue { requests.note(target, focused: false) } }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// This view takes the keyboard when its page's `AtticFocusRequests`
+    /// asks for `target`, and reports when it has it.
+    func atticFocusRequestTarget(_ target: AnyHashable, focused: FocusState<Bool>.Binding) -> some View {
+        modifier(AtticFocusRequestTarget(target: target, focused: focused))
     }
 }

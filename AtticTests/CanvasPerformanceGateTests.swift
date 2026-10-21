@@ -14,16 +14,6 @@ import XCTest
 /// "did this path rebuild accessibility elements" is a yes-or-no fact.
 @MainActor
 final class CanvasPerformanceGateTests: XCTestCase {
-    private var temporaryStoreDirectories: [URL] = []
-
-    override func tearDown() {
-        for url in temporaryStoreDirectories {
-            try? FileManager.default.removeItem(at: url)
-        }
-        temporaryStoreDirectories.removeAll()
-        super.tearDown()
-    }
-
     // MARK: - CANVAS-016 / PERF-08
 
     func testStrokeSaveOnImageHeavyBoardDoesNotReadImageBytes() throws {
@@ -81,6 +71,29 @@ final class CanvasPerformanceGateTests: XCTestCase {
             store.images.first { $0.id == target.id }?.encodedData,
             replacement.encodedData
         )
+    }
+
+    func testHunt3SemanticObjectSaveOnImageHeavyBoardRoundTripsWithoutReadingImages() throws {
+        let store = try makeOnDiskCanvasStore()
+        try seedImages(count: 50, byteCount: 96 * 1024, in: store)
+        let content = CanvasSemanticContent(text: "Saved text", shape: nil, color: .ink, strokeWidth: 3)
+        CanvasImagePayloadAccessCounter.reset()
+        let object = try XCTUnwrap(store.addSemanticObject(content: content,
+            transform: CanvasImageTransform(center: CanvasPoint(x: 20, y: 30), width: 200, height: 80, zIndex: 60)))
+        XCTAssertEqual(CanvasImagePayloadAccessCounter.count, 0)
+        var edited = object
+        edited.transform.center = CanvasPoint(x: 100, y: 150)
+        edited.rotation = 0.5
+        CanvasImagePayloadAccessCounter.reset()
+        XCTAssertTrue(store.updateSemanticObject(edited))
+        XCTAssertEqual(CanvasImagePayloadAccessCounter.count, 0)
+        let reopened = CanvasStore(container: store.container)
+        let copy = try XCTUnwrap(reopened.semanticObjects.first { $0.id == object.id })
+        XCTAssertEqual(copy.content, content)
+        XCTAssertEqual(copy.transform, edited.transform)
+        XCTAssertEqual(copy.rotation, edited.rotation)
+        XCTAssertEqual(reopened.images.count, 50)
+        XCTAssertEqual(try ModelContext(store.container).fetch(FetchDescriptor<CanvasImageItem>()).count, 50)
     }
 
     func testTransformOnlySaveDoesNotTouchImagePayloads() throws {
@@ -689,13 +702,11 @@ final class CanvasPerformanceGateTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeOnDiskCanvasStore() throws -> CanvasStore {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticCanvasPerf-\(UUID().uuidString)", isDirectory: true)
+        let directory = ownedTemporaryDirectory(prefix: "AtticCanvasPerf")
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true
         )
-        temporaryStoreDirectories.append(directory)
         let configuration = ModelConfiguration(
             url: directory.appendingPathComponent("Canvas.store"),
             cloudKitDatabase: .none

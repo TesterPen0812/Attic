@@ -19,7 +19,7 @@ final class DoneSearchCostTests: XCTestCase {
         for (query, values) in samples.sorted(by: { $0.key < $1.key }) {
             let median = TasksFrameCostTests.median(values)
             print("ATTIC_DONE_QUERY_MEDIAN fixture=\(fixture) query=\(query) median_ms=\(median) sessions=\(values.count)")
-            XCTAssertLessThanOrEqual(median, 16, "\(fixture): the median Done query \"\(query)\" exceeds the 16 ms budget",
+            CostBudget.assertLessThanOrEqual(median, 16, "\(fixture): the median Done query \"\(query)\" exceeds the 16 ms budget",
                                      file: file, line: line)
         }
     }
@@ -204,12 +204,16 @@ final class DoneSearchCostTests: XCTestCase {
     }
 
     func testRenderedFindKeystrokeMediansFitTheInputBudget() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         // The predecessor's "cold" boundary is a fresh Done store/model,
         // not initialization of the process-wide native editing machinery.
         // Measure that separately on an empty control, before constructing
         // the 5000-task fixture; no Done data/query is warmed here.
         try measureNativeEditingStartupControl()
         var runs: [[Double]] = []
+        var keyPhases: [[[Double]]] = []
         var resultFrames: [Double] = []
         for run in 0..<3 {
             let host = try FrameCostHost()
@@ -223,12 +227,14 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertTrue(NSApp.keyWindow === host.window)
             let field = try XCTUnwrap(host.window.firstResponder as? NSTextView)
             var times: [Double] = []
+            var phases: [[Double]] = []
             for character in "Finished task 12" {
                 let before = TasksPage.tabsEvaluations
                 let parts = host.framePhases {
                     field.insertText(String(character), replacementRange: field.selectedRange())
                 }
                 times.append(parts.reduce(0, +))
+                phases.append(parts)
                 XCTAssertEqual(TasksPage.tabsEvaluations, before, "typing must not rebuild the task page")
             }
             // The frame the results arrive in (PR prep, review P2-2): the
@@ -246,36 +252,36 @@ final class DoneSearchCostTests: XCTestCase {
             XCTAssertEqual(host.model.doneSearch, "Finished task 12")
             XCTAssertEqual(host.model.doneSearchCount()?.matches, 111)
             runs.append(times)
+            keyPhases.append(phases)
             host.close()
         }
-        // Independent optimized cold-first-frame runs: 12.754, 15.137,
-        // 17.003 ms, a 4.249 ms within-build range. Freeze 4.3 ms as the
-        // noise guard, while EACH character's median must fit the spec's
-        // unchanged 16 ms budget. Query/controller samples above stay
-        // hard-capped at 16 ms, including cold and the disk-backed seed.
+        // Emit only after every input/results measurement and host close.
+        // Logging between keys can change idle publication and the next frame.
+        for (run, phases) in keyPhases.enumerated() {
+            for (key, parts) in phases.enumerated() {
+                print("ATTIC_DONE_KEY_PHASE run=\(run) key=\(key) change/runloop/layout/display/commit_ms=\(parts)")
+            }
+        }
+        // Keep the spec's per-character median budget. Individual samples
+        // compare by median with the same-job reference in the CI comparator,
+        // rather than the old single-run 16 + 4.3 ms noise constant.
         for key in runs[0].indices {
             let samples = runs.map { $0[key] }
             let median = TasksFrameCostTests.median(samples)
-            XCTAssertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
-            XCTAssertLessThanOrEqual(samples.max()!, 16 + 4.3, "sample exceeds the independently measured noise guard")
+            CostBudget.assertLessThanOrEqual(median, 16, "Done Find key \(key) median exceeds the 16 ms budget")
+            print("ATTIC_DONE_KEY key=\(key) raw_ms=\(samples)")
+            CostBudget.assertLessThan(samples.max()!, 500, "runaway Done input frame")
         }
-        // The frame after the typing pauses, where the first results
-        // arrive (not a keystroke frame, so not the keystroke budget). It
-        // took 86–116 ms on CI (run 37107829899) while it redrew the whole
-        // page twice and built the result rows cold; after the fix it
-        // measured 73.9, 57.0 and 53.8 ms on CI (run 37135232964), and
-        // 17–22 ms against 37–56 ms before on the owner's Mac (local,
-        // optimized, interleaved).
-        // Bound: that CI median plus its measured spread, 57.04 + 20.11 ms,
-        // on the median of the three runs. The no-regression comparison
-        // with the accepted baseline stays (`search-show`,
-        // Scripts/check_cost_comparison.py).
-        let resultsMedian = TasksFrameCostTests.median(resultFrames)
-        print("ATTIC_DONE_RESULTS median_ms=\(resultsMedian) bound_ms=77.15")
-        XCTAssertLessThanOrEqual(resultsMedian, 57.04 + 20.11, "the frame the Done results arrive in: \(resultFrames)")
-        // The earlier sanity bound on every run stays, so one runaway run
-        // can't hide behind a good median.
-        XCTAssertLessThan(resultFrames.max()!, 500, "the frame the Done results arrive in: \(resultFrames)")
+        // OD-8: unchanged code ranged 30–84 ms across today's CI runs.
+        // The old 77.15 ms bound came from one early run. CI now compares
+        // these samples to reference median + max(reference range, measured
+        // resolution) + 0.2 ms (OD-9). The comparator prints the resolution.
+        print("ATTIC_DONE_RESULTS median_ms=\(TasksFrameCostTests.median(resultFrames))")
+        // Every sample still has the independent 500 ms sanity ceiling.
+        for sample in resultFrames {
+            CostBudget.assertLessThan(sample, 500, "the frame the Done results arrive in: \(resultFrames)")
+        }
+
     }
 
     func testDoneTodaySlicePreservesSnapshotRootsAndOrder() throws {
@@ -303,6 +309,9 @@ final class DoneSearchCostTests: XCTestCase {
     }
 
     func testPreFocusTypingReachesTheEditorBeforeNativeTypingContinues() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         let host = try FrameCostHost()
         defer { host.close() }
         host.place(.done)
@@ -365,9 +374,8 @@ final class DoneSearchCostTests: XCTestCase {
     }
 
     private func measurePhase5Session(_ session: Int, into byQuery: inout [String: [Double]]) throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDoneSearch-\(UUID())", isDirectory: true)
+        let root = ownedTemporaryDirectory(prefix: "AtticDoneSearch")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         try PerformanceSeed.generate(in: container, root: root, includeDoneHistory: true,
                                      now: Date(timeIntervalSince1970: 1_800_000_000))

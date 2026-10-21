@@ -28,7 +28,12 @@ final class AtticLibrary {
     let canvases: CanvasStore?
     let links: LinkStore
     let tags: TagService
+    /// Each tag's colour (colour pass, owner 2026-10-10).
+    let tagColours: TagColourStore
     let undo: UndoRoute
+    private var tagInventoryObservation: AnyCancellable?
+    private var tagColourObservation: AnyCancellable?
+    private var tagColourRefreshPending = false
     private let container: ModelContainer
     private(set) var lastErrorMessage: String?
     /// The last task command that changed nothing, and why (Astra 6). Also
@@ -55,9 +60,80 @@ final class AtticLibrary {
         container = tasks.container
         links = LinkStore(container: tasks.container, now: now, persist: persist)
         tags = TagService(container: tasks.container, persist: persist)
+        tagColours = TagColourStore(container: tasks.container, persist: persist, now: now)
+        let colours = tagColours
+        tags.carryColour = { [weak colours] sources, target, targetInUse, inUse, context in
+            try colours?.carry(from: sources, to: target, targetInUse: targetInUse, inUse: inUse, in: context)
+        }
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
+        let inventory = tags
+        tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
+        tasks.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        tasks.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        notes?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
+        notes?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        notes?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        notes?.sharedTagCounts = { [weak inventory] in inventory?.countsByName }
+        canvases?.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
+        canvases?.tagInventoryDidSave = { [weak inventory] in inventory?.publishInventoryChange() }
+        canvases?.tagInventoryDidRefresh = { [weak inventory] in inventory?.invalidateInventory() }
+        tagInventoryObservation = tags.inventoryChanges.sink { [weak notes] in notes?.objectWillChange.send() }
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
+        // Tags come and go through every store and agents: whenever the set
+        // in use changes, new tags get their colour (once per change, after
+        // the save that changed it).
+        tagColourObservation = tags.inventoryChanges.sink { [weak self] in self?.scheduleTagColourRefresh() }
+        scheduleTagColourRefresh()
+    }
+
+    // MARK: - Tag colours
+
+    /// Gives every tag in use with no colour its colour and rebuilds the
+    /// palette. Runs on its own after any change to the tags in use.
+    func refreshTagColours() {
+        tagColours.refresh(inUse: tags.namesOldestFirst)
+    }
+
+    private func scheduleTagColourRefresh() {
+        guard !tagColourRefreshPending else { return }
+        tagColourRefreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            tagColourRefreshPending = false
+            refreshTagColours()
+        }
+    }
+
+    /// Changes a tag's colour (the tag menu's Colour row), as one undo step.
+    @discardableResult
+    func setTagHue(_ hue: AtticTagHue, for tag: String, in history: UndoHistoryID = .library) -> Bool {
+        let change = tagHueChange(hue, for: tag)
+        if let step = change.step { undo.record(step, in: history) }
+        return change.succeeded
+    }
+
+    @discardableResult
+    func setTagHue(_ hue: AtticTagHue, for tag: String, in history: NoteUndoHistory) -> Bool {
+        let change = tagHueChange(hue, for: tag)
+        if let step = change.step {
+            history.recordExternalChange(name: step.name, undo: { step.undo() == .applied }, redo: { step.redo() == .applied })
+        }
+        return change.succeeded
+    }
+
+    private func tagHueChange(_ hue: AtticTagHue, for tag: String) -> (succeeded: Bool, step: UndoStep?) {
+        guard let name = AtticTag.normalize(tag) else {
+            return (fail(TagServiceError.invalidTag(tag).localizedDescription), nil)
+        }
+        let previous: AtticTagHue
+        do { previous = try tagColours.currentHue(for: name, inUse: tags.namesOldestFirst) }
+        catch { return (fail(error.localizedDescription), nil) }
+        guard previous != hue else { return (true, nil) }
+        guard tagColours.setHue(hue, for: name) else { return (fail(tagColours.lastErrorMessage), nil) }
+        return (true, UndoStep(name: String(localized: "Tag Colour"),
+            undo: { [colours = tagColours] in colours.setHue(previous, for: name) },
+            redo: { [colours = tagColours] in colours.setHue(hue, for: name) }))
     }
 
     // MARK: - Item state
@@ -132,6 +208,7 @@ final class AtticLibrary {
             let owned = FamilyOwnership(liveFamilyMembers(of: ids))
             return UndoStep(
                 name: ids.count == 1 ? "Add Task" : "Add \(ids.count) Tasks",
+                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.deleteFamiliesFromHistory(ids, owning: owned)
@@ -205,6 +282,7 @@ final class AtticLibrary {
             let store = self.tasks
             return UndoStep(
                 name: "Change Task State",
+                items: { [AtticItemRef(.task, id)] },
                 undoOutcome: { store.undoReturnFromDoneLog(from: [after], to: [before], logging: [id: loggedAt]) },
                 redoOutcome: {
                     // Undo may restore fields but leave a changed family
@@ -313,6 +391,7 @@ final class AtticLibrary {
             let owned = FamilyOwnership(recordedMembers(of: ids))
             return UndoStep(
                 name: "Delete \(ids.count) Tasks",
+                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.restoreFamiliesFromHistory(ids, owning: owned)
@@ -353,6 +432,7 @@ final class AtticLibrary {
             let store = self.tasks
             return UndoStep(
                 name: ids.count == 1 ? "Restore Task" : "Restore \(ids.count) Tasks",
+                items: { Set(before.map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: {
                     store.undoReturnFromDoneLog(from: after, to: before, logging: logging)
                 },
@@ -387,6 +467,7 @@ final class AtticLibrary {
             guard !logged.isEmpty else { return editStep(name, before: before, after: after) }
             return UndoStep(
                 name: name,
+                items: { Set(before.map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: {
                     // Finished again and back in the log, families and all,
                     // in one save.
@@ -454,23 +535,34 @@ final class AtticLibrary {
 
     // MARK: - Delete and restore
 
-    /// Moves any item to Recently Deleted as one step. Agents and people use
-    /// the same call; nothing here deletes permanently.
+    /// Moves any item to Recently Deleted as one step; nothing here
+    /// deletes permanently.
     @discardableResult
     func delete(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         undo.perform(in: history ?? Self.defaultHistory(for: ref)) {
             guard performDelete(ref) else { return nil }
-            // What this delete took, to keep Redo from taking more.
-            let owned = FamilyOwnership(ownedMembers(of: ref))
-            return UndoStep(
-                name: "Delete \(Self.noun(for: ref.kind))",
-                undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
-                redoOutcome: { [weak self] in
-                    guard let self else { return .obsolete }
-                    return self.deleteOutcome(ref, owning: owned)
-                }
-            )
+            return committedDeletionStep(ref)
         }
+    }
+
+    /// A validating store command has already committed this deletion.
+    /// Pending proposals and refused writes must never call this recorder.
+    func recordCommittedDeletion(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) {
+        undo.record(committedDeletionStep(ref), in: history ?? Self.defaultHistory(for: ref))
+    }
+
+    private func committedDeletionStep(_ ref: AtticItemRef) -> UndoStep {
+        // What this delete took, to keep Redo from taking more.
+        let owned = FamilyOwnership(ownedMembers(of: ref))
+        return UndoStep(
+            name: "Delete \(Self.noun(for: ref.kind))",
+            items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
+            undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
+            redoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                return self.deleteOutcome(ref, owning: owned)
+            }
+        )
     }
 
     /// Restores an item from Recently Deleted, with what its delete took
@@ -483,6 +575,7 @@ final class AtticLibrary {
             guard performRestore(ref) else { return nil }
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
+                items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
                 undoOutcome: { [weak self] in self?.deleteOutcome(ref, owning: owned) ?? .obsolete },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
@@ -506,10 +599,36 @@ final class AtticLibrary {
             guard performRestoreAttachment(summary) else { return nil }
             return UndoStep(
                 name: "Restore Attachment",
+                items: { [summary.owner] },
                 undoOutcome: { [weak self] in self?.removeAttachmentOutcome(summary) ?? .obsolete },
                 redoOutcome: { [weak self] in self?.restoreAttachmentOutcome(summary) ?? .obsolete }
             )
         }
+    }
+
+    /// Removes a task's attachment as one undoable step (A1: a row's files
+    /// list): the file goes to Recently Deleted, Undo puts it back, Redo
+    /// removes it again. Nothing is deleted permanently here.
+    @discardableResult
+    func removeTaskAttachment(_ attachmentID: UUID, from taskID: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        let serial = tasks.errorSerial
+        var removed: DeletedAttachmentSummary?
+        let done = undo.perform(in: history) {
+            guard tasks.removeAttachment(attachmentID, from: taskID) else { return nil }
+            removed = tasks.recentlyDeletedAttachments().first { $0.attachmentID == attachmentID }
+            guard let summary = removed else { return nil }
+            return UndoStep(
+                name: "Remove Attachment",
+                items: { [summary.owner] },
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.performRestoreAttachment(summary) { return .applied }
+                    return self.recentlyDeletedAttachments().contains { $0.attachmentID == summary.attachmentID } ? .failed : .obsolete
+                },
+                redoOutcome: { [weak self] in self?.removeAttachmentOutcome(summary) ?? .obsolete }
+            )
+        }
+        return taskOutcome(done, since: serial, ids: [taskID])
     }
 
     /// Undo of an attachment restore: remove it again, if it is still shown
@@ -620,6 +739,9 @@ final class AtticLibrary {
         if confirmed == nil {
             report.removedLinks += links.purgeRemovedLinks(before: cutoff)
         }
+        undo.invalidate(Set(report.taskIDs.map { AtticItemRef(.task, $0) }
+            + report.noteIDs.map { AtticItemRef(.note, $0) }
+            + report.canvasIDs.map { AtticItemRef(.canvas, $0) }))
         return report
     }
 
@@ -651,6 +773,7 @@ final class AtticLibrary {
             }
             return UndoStep(
                 name: "Change Tags",
+                items: { [ref] },
                 undoOutcome: { [weak self] in self?.moveTags(of: ref, from: after, to: before) ?? .obsolete },
                 redoOutcome: { [weak self] in self?.moveTags(of: ref, from: before, to: after) ?? .obsolete }
             )
@@ -688,6 +811,7 @@ final class AtticLibrary {
             record = created
             return UndoStep(
                 name: "Link",
+                items: { [source, target] },
                 undo: { [links = self.links] in links.unlink(created.id) },
                 redo: { [links = self.links] in links.restoreLink(created.id) }
             )
@@ -930,6 +1054,7 @@ final class AtticLibrary {
     private func editStep(_ name: String, before: [TaskEditableState], after: [TaskEditableState]) -> UndoStep {
         UndoStep(
             name: name,
+            items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
             undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
             redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
         )
@@ -998,6 +1123,7 @@ final class AtticLibrary {
             let changes = Changes(snapshot)
             return UndoStep(
                 name: name,
+                items: { changes.snapshot.affectedItems },
                 undo: { [tags = self.tags] in tags.revert(changes.snapshot) },
                 redo: { [tags = self.tags] in
                     guard let rerun = operation(tags) else { return false }

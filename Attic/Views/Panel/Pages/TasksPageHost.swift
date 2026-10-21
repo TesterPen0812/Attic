@@ -9,6 +9,9 @@ final class TasksPageState: ObservableObject {
     private var model: TasksPageModel?
     /// The last Search request the page acted on (`PanelUIState.searchRequest`).
     var handledSearchRequest: UInt64 = 0
+    /// A request can precede the page's mount. Keep consumption with the
+    /// page state so rebuilding or returning never replays an old request.
+    var handledPrimaryInputFocusRequest: UInt64 = 0
     /// Where the page remembers its page and views across relaunch (L7);
     /// nil keeps them for the session only.
     let memory: TasksPageMemory?
@@ -36,36 +39,65 @@ struct TasksPageHost: View {
     let store: TaskStore
     let uiState: PanelUIState
     let settings: AppSettings
-    let subtaskPanels: SubtaskPanelController
     let state: TasksPageState
     let layout: PanelPageLayout
     let chromeInteractionState: PanelChromeInteractionState
-    /// The add bar's focus. The shell owns it so quick capture and page
-    /// switches can move focus into or out of the page.
-    let primaryInputFocus: FocusState<Bool>.Binding
+    /// The shell's request for the add bar's keyboard (an explicit open on
+    /// Tasks), as a value so each new one reaches this page.
+    let primaryInputFocusRequest: UInt64
     /// False while another page shows and this one is kept built behind it.
     var isCurrent = true
 
     @State private var addBarFocused = false
-    @State private var editHold = PanelEditHold()
+    @State private var editHold: PanelEditHold
+    @State private var filesHold: PanelEditHold
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
+
+    init(store: TaskStore, uiState: PanelUIState, settings: AppSettings, state: TasksPageState,
+         layout: PanelPageLayout, chromeInteractionState: PanelChromeInteractionState,
+         primaryInputFocusRequest: UInt64, isCurrent: Bool = true,
+         editHold: PanelEditHold? = nil, filesHold: PanelEditHold? = nil) {
+        self.store = store
+        self.uiState = uiState
+        self.settings = settings
+        self.state = state
+        self.layout = layout
+        self.chromeInteractionState = chromeInteractionState
+        self.primaryInputFocusRequest = primaryInputFocusRequest
+        self.isCurrent = isCurrent
+        _editHold = State(initialValue: editHold ?? PanelEditHold())
+        _filesHold = State(initialValue: filesHold ?? PanelEditHold())
+    }
+
+    /// The host's callbacks, also exercised without the Tasks page's own
+    /// monitors when testing the lifetime of its holds.
+    var pageChrome: TasksPageChrome { pageChrome(editHold: editHold, filesHold: filesHold) }
+
+    func pageChrome(editHold: PanelEditHold, filesHold: PanelEditHold) -> TasksPageChrome {
+        TasksPageChrome(
+            bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
+            typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
+            editLock: { [editHold] editing in
+                editHold.apply = { [uiState] active in uiState.setInteractionLock(.taskEditing, isActive: active) }
+                editHold.set(editing)
+            },
+            filesLock: { [filesHold] visible in
+                filesHold.apply = { [uiState] active in uiState.setInteractionLock(.taskFilesVisible, isActive: active) }
+                filesHold.set(visible)
+            }
+        )
+    }
 
     var body: some View {
         let model = state.model(for: store, toasts: toasts)
         TasksPage(
             model: model,
             store: store,
-            layout: layout,
+            // A wide panel keeps a readable column (U-42).
+            layout: layout.readingColumn(),
             addBarFocused: $addBarFocused,
-            chrome: TasksPageChrome(
-                bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
-                typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
-                editLock: { [editHold] editing in
-                    editHold.apply = { uiState.setInteractionLock(.taskEditing, isActive: $0) }
-                    editHold.set(editing)
-                }
-            )
+            chrome: pageChrome
         )
         .equatable()
         // Swipe to close (owner, 2026-10-01; pinned or not, 2026-10-02): a
@@ -78,21 +110,28 @@ struct TasksPageHost: View {
         // 5): an editor left open behind Notes never keeps Notes up.
         .onChange(of: isCurrent) { _, current in
             editHold.setSuspended(!current)
+            filesHold.setSuspended(!current)
             model.isPageShown = current
         }
-        .onDisappear { editHold.setSuspended(true) }
+        .onDisappear {
+            editHold.setSuspended(true)
+            filesHold.setSuspended(true)
+        }
         // Kept built behind another page, it shows again where it was left
         // (its tab, its selection): only a reveal of the panel starts it on
         // Now (`revealCount`, below).
         .onChange(of: isCurrent) { _, current in
             guard current else { return }
             model.pageDidReturn()
+            handlePrimaryInputFocusRequest()
             chromeInteractionState.bottomControlsHeight = TasksPage.footerZone
             syncDraftLock(model)
         }
         // Text typed in the add bar holds the panel open (the shell's
         // composer lock) until it is added or cleared; it is kept either way.
-        .onReceive(model.addBarState.$text.map { !$0.text.isEmpty }.removeDuplicates()) { hasDraft in
+        .onReceive(model.addBarState.$text.map { !$0.text.isEmpty }
+            .combineLatest(model.addBarState.$files.map { !$0.isEmpty }) { $0 || $1 }
+            .removeDuplicates()) { hasDraft in
             guard isCurrent else { return }
             // On the next turn (round 4): the shell's published lock redraws
             // what observes the shell, and the first keystroke's frame is
@@ -100,19 +139,30 @@ struct TasksPageHost: View {
             DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
         }
         .onAppear {
-            // Task pages arrive in Phase 3; until then "Open page" opens the
-            // task's detail panel on its files (the old subpanel stays only
-            // for a task's files).
-            model.services.openPage = { [subtaskPanels] id in
-                // The old panel for the task's files only: subtasks live in
-                // the row's quick look (Done log tasks open in the page).
-                subtaskPanels.openFilesPanel(for: id)
+            // "Attach file…" in a row's files list (A1): the picker, which
+            // keeps the panel open while it is up; the list opens on what
+            // was attached.
+            model.services.chooseFiles = { [store, uiState, weak model] id in
+                TaskAttachmentPicker.choose(for: id, store: store, uiState: uiState) { _, ownerID in
+                    model?.setFilesExpanded(ownerID, true)
+                }
+            }
+            // The add bar's Attach (O17-06): the files wait for the new task.
+            model.services.chooseComposerFiles = { [uiState, weak model] in
+                guard !TaskAttachmentPicker.isPresenting(uiState) else { return }
+                uiState.isComposerAttachmentPickerPresented = true
+                TaskAttachmentPickerSession.present(owner: nil) { urls in
+                    uiState.isComposerAttachmentPickerPresented = false
+                    model?.addComposerFiles(urls: urls)
+                }
             }
             editHold.setSuspended(!isCurrent)
+            filesHold.setSuspended(!isCurrent)
             if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
             // Only the page shown takes the shell's focus (a page built
             // behind Notes, or prepared on approach, never takes it).
-            if isCurrent, primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
+            if isCurrent, uiState.isComposerPresented { addBarFocused = true }
+            handlePrimaryInputFocusRequest()
             handleSearchRequest(model, request: uiState.searchRequest)
             showItemIfNeeded(model, uiState.shownItem)
             syncDraftLock(model)
@@ -125,11 +175,25 @@ struct TasksPageHost: View {
                    let tab = TasksTab.allCases.first(where: { $0.identifier == raw }) {
                     model.openForCapture(tab)
                 }
+                // Search results on the shown tab (blur rollout captures).
+                if let query = environment["ATTIC_UI_TEST_TASKS_SEARCH"], !query.isEmpty {
+                    model.setSearchQuery(query, for: model.tab)
+                }
                 if environment["ATTIC_UI_TEST_COMPLETED_OPEN"] == "1" { model.completedTodayExpanded = true }
                 // The first row with subtasks, its quick look open.
                 if environment["ATTIC_UI_TEST_EXPAND_FIRST"] == "1",
                    let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
                     model.setExpanded(row.id, true)
+                }
+                // The first row with subtasks gets N generated files of
+                // different kinds (in-memory store only), its files list open.
+                if let count = environment["ATTIC_UI_TEST_SEED_FILES"].flatMap(Int.init), count > 0,
+                   let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
+                    Task { @MainActor in
+                        guard let urls = try? TasksCaptureFiles.make(count) else { return }
+                        _ = await store.attachStagedFiles(to: row.id) { TaskAttachmentStaging(urls: urls) }
+                        model.setFilesExpanded(row.id, true)
+                    }
                 }
             }
             #endif
@@ -154,7 +218,11 @@ struct TasksPageHost: View {
         // Only while this page is the one shown: the shell's composer is
         // also Notes' New Note, which a Tasks page kept behind must neither
         // take nor end (round 5's CI: New Note closed at once).
-        .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused, isCurrent { addBarFocused = true } }
+        // An explicit open on Tasks (the hotkey, the corner): the keyboard
+        // lands in the add bar. The request is the shell's counter:
+        // relayed through a `@FocusState` no view was focused on, SwiftUI
+        // dropped it (H5-05).
+        .onChange(of: primaryInputFocusRequest) { _, _ in handlePrimaryInputFocusRequest() }
         .onChange(of: uiState.isComposerPresented) { _, presented in if presented, isCurrent { addBarFocused = true } }
         .onChange(of: addBarFocused) { _, focused in
             if !focused, isCurrent, uiState.isComposerPresented { uiState.endAdding() }
@@ -162,7 +230,13 @@ struct TasksPageHost: View {
     }
 
     private func syncDraftLock(_ model: TasksPageModel) {
-        uiState.setInteractionLock(.taskComposer, isActive: !model.addBar.text.isEmpty)
+        uiState.setInteractionLock(.taskComposer, isActive: !model.addBar.text.isEmpty || !model.addBarState.files.isEmpty)
+    }
+
+    private func handlePrimaryInputFocusRequest() {
+        guard isCurrent, primaryInputFocusRequest != state.handledPrimaryInputFocusRequest else { return }
+        state.handledPrimaryInputFocusRequest = primaryInputFocusRequest
+        addBarFocused = true
     }
 
     /// `request` is the new value: a published value is sent before the
@@ -185,3 +259,55 @@ struct TasksPageHost: View {
         DispatchQueue.main.async { if uiState.shownItem == ref { uiState.showItem(nil) } }
     }
 }
+
+#if DEBUG
+import AppKit
+
+/// Capture seam files (`ATTIC_UI_TEST_SEED_FILES`): small real files of
+/// different kinds, written to the app's own temporary folder so the
+/// in-memory UI-testing store can attach them. Never the owner's data.
+enum TasksCaptureFiles {
+    static func make(_ count: Int) throws -> [URL] {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-capture-files-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let kinds: [(String, () -> Data)] = [
+            ("Launch brief.pdf", pdf),
+            ("Moodboard.png", { image(.systemTeal, type: .png) }),
+            ("Press release draft.docx", { Data("Draft".utf8) }),
+            ("Venue photo.jpg", { image(.systemOrange, type: .jpeg) }),
+            ("Budget.csv", { Data("item,cost\nvenue,1200\n".utf8) }),
+            ("Assets.zip", { Data([0x50, 0x4B, 0x05, 0x06] + Array(repeating: 0, count: 18)) }),
+            ("Meeting notes.txt", { Data("Agenda\n- intro\n".utf8) })
+        ]
+        return try (0..<count).map { index in
+            let (name, data) = kinds[index % kinds.count]
+            let prefix = index < kinds.count ? "" : "\(index / kinds.count + 1) "
+            let url = folder.appendingPathComponent(prefix + name)
+            try data().write(to: url)
+            return url
+        }
+    }
+
+    private static func image(_ color: NSColor, type: NSBitmapImageRep.FileType) -> Data {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 200, bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSGradient(starting: color, ending: .white)?.draw(in: NSRect(x: 0, y: 0, width: 320, height: 200), angle: 45)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: type, properties: [:]) ?? Data()
+    }
+
+    private static func pdf() -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data), let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { return Data() }
+        context.beginPDFPage(nil)
+        context.setFillColor(NSColor.systemBlue.cgColor)
+        context.fill(CGRect(x: 72, y: 600, width: 468, height: 120))
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+}
+#endif

@@ -1,114 +1,39 @@
 import SwiftUI
 
-/// The date picker with its state (the month shown, the keyboard cursor),
-/// on `TaskDateChoices`: the same for the add bar's strip, a row's date and
-/// the right-click menu's "Pick a Date…".
+/// The date card on `TaskDateChoices` (the shared `AtticDateCard`): the
+/// same for the add bar's strip, a row's date and the right-click menu's
+/// "Pick a Date…". Typed text resolves through the shorthand's parser.
+/// Every one offers "Remove date" once there is a date (U-19).
 struct TaskDatePickerView: View {
     let choices: TaskDateChoices
-    /// The task's current day (ticked, filled), if any.
+    /// The task's current day (filled), if any.
     let selected: DueDay?
-    /// A row's picker offers "Remove date" and ticks the current choice.
-    var forRow = false
     let onPick: (DueDay) -> Void
-    var onRemove: () -> Void = {}
+    /// Clears the date; a card without it (nothing to clear) has no Remove.
+    var onRemove: (() -> Void)?
 
-    @State private var highlight: TaskDatePickerHighlight?
-    @FocusState private var focused: Bool
+    @State private var typed = ""
 
     var body: some View {
-        let today = choices.today
-        let highlight = self.highlight ?? TaskDatePickerHighlight(cursor: TaskDateCursor(start: selected ?? today))
-        let cursor = highlight.cursor
-        let month = cursor.month(in: choices)
-        let quick = choices.quick
-        // One tick for one day: when Tomorrow and Next week are the same
-        // day (on a Sunday), only the first shows it (review wording).
-        let tickedQuick = quick.first { $0.day == selected }?.id
-        AtticDatePicker(
-            quick: quick.map { item in
-                AtticDatePicker.Quick(id: item.id, title: item.title, detail: choices.detail(for: item.day), isChecked: item.id == tickedQuick)
-            },
-            showsChecks: forRow,
-            monthTitle: month.title,
-            weekdays: month.weekdaySymbols,
-            days: month.days.map { day in
-                AtticDatePicker.Day(
-                    id: day.day.rawValue,
-                    number: "\(day.day.day)",
-                    inMonth: day.inMonth,
-                    isToday: day.day == today,
-                    isSelected: day.day == selected,
-                    isPast: day.day < today,
-                    spoken: spoken(day.day)
-                )
-            },
-            cursor: cursor.isKeyboardActive ? cursor.active.rawValue : nil,
-            removeTitle: forRow && selected != nil ? String(localized: "Remove date") : nil,
-            highlightedRow: highlight.row,
-            onQuick: { id in if let item = quick.first(where: { $0.id == id }) { onPick(item.day) } },
-            onDay: { id in if let day = DueDay(rawValue: id) { onPick(day) } },
-            onMonth: { step in
-                var next = highlight
-                next.cursor.move(months: step, in: choices, byKeyboard: false)
-                self.highlight = next
-            },
-            onRemove: onRemove,
-            onHoverRow: { id, inside in
-                var next = highlight
-                next.hoverRow(id, inside: inside)
-                if next != highlight { self.highlight = next }
-            },
-            onHoverDay: { id, inside in
-                guard let day = DueDay(rawValue: id) else { return }
-                var next = highlight
-                next.hoverDay(day, inside: inside, inShownMonth: month.days.contains { $0.day == day && $0.inMonth })
-                if next != highlight { self.highlight = next }
-            }
+        let calendar = choices.cardCalendar
+        let parser = choices.parser
+        AtticDateCard(
+            today: choices.today.startDate(in: calendar) ?? parser.now(),
+            selected: selected?.startDate(in: calendar),
+            calendar: calendar,
+            typed: $typed,
+            parse: { parser.parseDueDay($0)?.startDate(in: calendar) },
+            removeTitle: selected != nil && onRemove != nil ? String(localized: "Remove date") : nil,
+            onPick: { onPick(DueDay(date: $0, calendar: calendar)) },
+            onRemove: { onRemove?() }
         )
-        .focusable()
-        .focused($focused)
-        .focusEffectDisabled()
-        .onAppear { focused = true }
-        .onKeyPress(phases: .down) { press in key(press, highlight: highlight, quick: quick) }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Choose a date"))
-    }
-
-    private func key(_ press: KeyPress, highlight start: TaskDatePickerHighlight, quick: [TaskDateChoices.Quick]) -> KeyPress.Result {
-        var next = start
-        switch press.key {
-        case .leftArrow: next.moveByKeyboard { $0.move(days: -1, in: choices) }
-        case .rightArrow: next.moveByKeyboard { $0.move(days: 1, in: choices) }
-        case .upArrow: next.moveByKeyboard { $0.move(days: -7, in: choices) }
-        case .downArrow: next.moveByKeyboard { $0.move(days: 7, in: choices) }
-        case .pageUp: next.moveByKeyboard { $0.move(months: -1, in: choices, byKeyboard: true) }
-        case .pageDown: next.moveByKeyboard { $0.move(months: 1, in: choices, byKeyboard: true) }
-        case .return:
-            // What the person sees highlighted: a quick day's row the
-            // pointer is on, or the cursor's day in the month shown.
-            if let row = start.row {
-                if row == AtticDatePicker.removeID { onRemove() } else if let item = quick.first(where: { $0.id == row }) { onPick(item.day) }
-                return .handled
-            }
-            guard start.cursor.isKeyboardActive else { return .ignored }
-            onPick(start.cursor.active)
-            return .handled
-        default:
-            return .ignored
-        }
-        self.highlight = next
-        return .handled
-    }
-
-    private func spoken(_ day: DueDay) -> String {
-        let calendar = DueDay.storageCalendar(matching: choices.parser.calendar)
-        guard let date = day.startDate(in: calendar) else { return day.rawValue }
-        return TaskRowPresentation.format(date, template: "EEEEdMMMMy", calendar: calendar, locale: choices.parser.locale)
     }
 }
 
-/// The tag list with its state (the query, the keyboard highlight). `state`
-/// says how many of the targets have a tag.
+/// The Tasks tag list: every tag, ticked as `state` says (how many of the
+/// targets have it), filtered by what is typed, with "New tag “#…”" for a
+/// name no tag has. The card, its highlight and keys are the shared
+/// `AtticTagPickerCard` (Notes' ⋯ → Tags… uses the same one).
 struct TaskTagPickerView: View {
     let allTags: [String]
     let state: (String) -> AtticCheckState
@@ -120,60 +45,13 @@ struct TaskTagPickerView: View {
     /// Opened by "New Tag…": the field has the keyboard at once.
     var focusField = true
 
-    @State private var query = ""
-    @State private var highlighted: Int?
-    @FocusState private var fieldFocused: Bool
-
     var body: some View {
-        let lowered = query.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "#", with: "")
-        let filtered = lowered.isEmpty ? allTags : allTags.filter { $0.lowercased().contains(lowered) }
-        let create = AtticTag.normalize(lowered).flatMap { name in allTags.contains { $0.lowercased() == name.lowercased() } ? nil : name }
-        AtticTagPicker(
-            query: $query,
-            tags: filtered.map { AtticTagPicker.Tag(name: $0, state: state($0)) },
-            create: create,
-            highlighted: highlighted,
-            onToggle: onToggle,
-            onCreate: { name in
-                let clear = { query = "" }
-                if onCreate(name, clear) { clear() }
-            },
-            fieldFocused: $fieldFocused,
-            onHover: { index, inside in
-                let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                if next != highlighted { highlighted = next }
-            }
-        )
-        .onAppear { if focusField { fieldFocused = true } }
-        // Typing highlights the first match; an empty field (as after a new
-        // tag saved) highlights nothing, so another Return does nothing
-        // rather than toggle a tag (round 5, F5).
-        .onChange(of: query) { _, _ in highlighted = lowered.isEmpty || (filtered.isEmpty && create == nil) ? nil : 0 }
-        .onKeyPress(phases: .down) { press in
-            let count = filtered.count + (create == nil ? 0 : 1)
-            switch press.key {
-            case .downArrow:
-                guard count > 0 else { return .ignored }
-                highlighted = min((highlighted ?? -1) + 1, count - 1)
-                return .handled
-            case .upArrow:
-                guard count > 0 else { return .ignored }
-                highlighted = max((highlighted ?? count) - 1, 0)
-                return .handled
-            case .return:
-                if let highlighted, highlighted < filtered.count {
-                    onToggle(filtered[highlighted])
-                } else if let create {
-                    let clear = { query = "" }
-                    if onCreate(create, clear) { clear() }
-                } else {
-                    return .ignored
-                }
-                return .handled
-            default:
-                return .ignored
-            }
-        }
+        AtticTagPickerCard(rows: { query in
+            let lowered = query.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "#", with: "")
+            let filtered = lowered.isEmpty ? allTags : allTags.filter { $0.lowercased().contains(lowered) }
+            let create = AtticTag.normalize(lowered).flatMap { name in allTags.contains { $0.lowercased() == name.lowercased() } ? nil : name }
+            return (filtered.map { AtticTagPicker.Tag(name: $0, state: state($0)) }, create)
+        }, listRows: allTags.count, onToggle: onToggle, onCreate: onCreate, focusField: focusField)
     }
 }
 
@@ -186,7 +64,7 @@ struct TaskMovePickerView: View {
 
     @State private var query = ""
     @State private var highlighted: Int?
-    @FocusState private var fieldFocused: Bool
+    @FocusState private var focus: AtticDropdownFocusTarget?
 
     /// What `query` leaves, in list order (tests read it).
     static func filter(_ choices: [AtticTaskPicker.Choice], query: String) -> [AtticTaskPicker.Choice] {
@@ -201,13 +79,15 @@ struct TaskMovePickerView: View {
             choices: filtered,
             highlighted: highlighted,
             onChoose: onChoose,
-            fieldFocused: $fieldFocused,
+            focus: $focus,
             onHover: { index, inside in
                 let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
                 if next != highlighted { highlighted = next }
-            }
+            },
+            onListHighlight: $highlighted
         )
-        .onAppear { fieldFocused = true }
+        .atticDropdownFocus($focus)
+        .atticDropdownTabs(focus: $focus, count: filtered.count)
         // Typing highlights the first match, so Return chooses it.
         .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
         .onKeyPress(phases: .down) { press in
@@ -220,7 +100,8 @@ struct TaskMovePickerView: View {
                 guard !filtered.isEmpty else { return .ignored }
                 highlighted = max((highlighted ?? filtered.count) - 1, 0)
                 return .handled
-            case .return:
+            case .return, .space:
+                if press.key == .space, focus != .list { return .ignored }
                 guard let highlighted, filtered.indices.contains(highlighted) else { return .ignored }
                 onChoose(filtered[highlighted].id)
                 return .handled
@@ -240,30 +121,48 @@ struct TaskPriorityPickerView: View {
     @State private var highlighted: Int?
     @FocusState private var focused: Bool
 
+    @Environment(\.atticDropdownRegisterKeys) private var registerKeys
+
     private var options: [TaskPriority] { TaskPriority.choices }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(options.enumerated()), id: \.element) { index, priority in
-                AtticChoiceRow(title: priority.pickerTitle, detail: nil,
-                               check: current == priority || (current == nil && priority == .none) ? .on : .off,
-                               isHighlighted: highlighted == index, titleInk: .body,
-                               onHover: { inside in
-                                   let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
-                                   if next != highlighted { highlighted = next }
-                               }) { onPick(priority) }
+        AtticShortcutHintScope { shown in
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(options.enumerated()), id: \.element) { index, priority in
+                    // Its ⌥⌘ key on every row: real commands, learned here (p2-24).
+                    AtticDropdownRow(title: priority.choiceTitle,
+                                     check: current == priority || (current == nil && priority == .none) ? .on : .off,
+                                     mark: TaskRowPresentation.priority(priority),
+                                     detail: priority.shortcutHint,
+                                     shortcutHintsShown: shown,
+                                     isHighlighted: highlighted == index,
+                                     onHover: { inside in
+                                         let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                                         if next != highlighted { highlighted = next }
+                                     }, position: index + 1, itemCount: options.count) { onPick(priority) }
+                }
             }
         }
-        .frame(width: AtticPickerMetrics.tagWidth - 40)
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true }
+        .atticDropdownFocus($focused)
+        .onAppear {
+            registerKeys { event in
+                guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command, .option],
+                      let priority = options.first(where: { String($0.shortcut.key.character) == event.charactersIgnoringModifiers }) else { return false }
+                onPick(priority)
+                return true
+            }
+        }
+        .onDisappear { registerKeys(nil) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Priority"))
         .onKeyPress(phases: .down) { press in
             switch press.key {
             case .downArrow: highlighted = min((highlighted ?? -1) + 1, options.count - 1); return .handled
             case .upArrow: highlighted = max((highlighted ?? options.count) - 1, 0); return .handled
-            case .return:
+            case .return, .space:
                 guard let highlighted else { return .ignored }
                 onPick(options[highlighted])
                 return .handled
@@ -308,6 +207,22 @@ extension TaskPriority {
         case .medium: String(localized: "!  Medium")
         case .high: String(localized: "!!  High")
         }
+    }
+
+    /// The priority picker's name (p2-24): "None", "Low", "Medium", "High".
+    var choiceTitle: String {
+        switch self {
+        case .none: String(localized: "None")
+        case .low: String(localized: "Low")
+        case .medium: String(localized: "Medium")
+        case .high: String(localized: "High")
+        }
+    }
+
+    /// Its key as the picker's rows show it: "⌥⌘0" to "⌥⌘3".
+    var shortcutHint: String {
+        let key = shortcut.key.character
+        return "⌥⌘" + String(key).uppercased()
     }
 
     /// The plain name ("Low", "Medium", "High"; "No Priority").

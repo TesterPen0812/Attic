@@ -8,12 +8,6 @@ import SwiftUI
 extension TasksPageModel {
     // MARK: - Copy and Duplicate
 
-    /// What ⌘C puts on the pasteboard as plain text: each task's title, one
-    /// per line, in list order, so it pastes anywhere (and back into the
-    /// add bar as one task per line).
-    func copyText(_ ids: [UUID]) -> String? {
-        export(ids)?.titles
-    }
 
     /// The tasks as text for other apps (`TasksTextExport`): ⌘C and a drag
     /// out of the panel share it. Nil when none of them is listed.
@@ -32,7 +26,8 @@ extension TasksPageModel {
                 due: task.dueDay.map { dueText($0) },
                 tags: task.tags,
                 priority: task.priority == .none ? nil : TasksTextExport.priorityName(task.priority),
-                subtasks: subtasks.map { .init(title: $0.title, isDone: $0.status == .done) }
+                subtasks: subtasks.map { .init(title: $0.title, isDone: $0.status == .done) },
+                files: task.attachments
             ))
         }
         return items.isEmpty ? nil : TasksTextExport(items: items)
@@ -85,6 +80,7 @@ extension TasksPageModel {
         guard let task = store.task(withID: id), task.parentID != nil, renamingSubtaskID != id else { return }
         guard finishEditing() else { return }
         subtaskRename = task.title
+        renamingSubtaskParentID = task.parentID
         renamingSubtaskID = id
     }
 
@@ -100,6 +96,7 @@ extension TasksPageModel {
             // task is gone): a failure from an earlier try is over too
             // (round 12, P2-1: it kept the page's unsaved-edit hold).
             renamingSubtaskID = nil
+            renamingSubtaskParentID = nil
             subtaskRenameFailed = false
             return true
         }
@@ -109,11 +106,28 @@ extension TasksPageModel {
         }
         subtaskRenameFailed = false
         renamingSubtaskID = nil
+        renamingSubtaskParentID = nil
+        return true
+    }
+
+    /// Return in a subtask's field (O17-04): saved as one step, then a new
+    /// empty subtask opens below its siblings (where new subtasks go), so
+    /// the next one can be typed straight away. Return on an emptied title
+    /// only ends the rename (the title is kept). Returns whether the rename
+    /// is finished.
+    @discardableResult
+    func submitSubtaskRename() -> Bool {
+        guard let id = renamingSubtaskID else { return true }
+        let parent = renamingSubtaskParentID ?? store.task(withID: id)?.parentID
+        let emptied = subtaskRename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard commitSubtaskRename() else { return false }
+        if !emptied, let parent, store.task(withID: parent) != nil { beginAddingSubtask(to: parent) }
         return true
     }
 
     func cancelSubtaskRename() {
         renamingSubtaskID = nil
+        renamingSubtaskParentID = nil
         subtaskRenameFailed = false
     }
 
@@ -130,6 +144,16 @@ extension TasksPageModel {
         return outcome
     }
 
+    /// Removes a stored file from a row's files list, as one undoable step
+    /// (A1): its toast offers Undo, and it waits in Recently Deleted.
+    @discardableResult
+    func removeFile(_ file: TaskImageReference, from id: UUID) -> CommandOutcome {
+        let outcome = library.removeTaskAttachment(file.id, from: id)
+        guard outcome.isApplied else { return outcome }
+        showToast(String(localized: "Removed “\(file.filename)”"))
+        return outcome
+    }
+
     /// ⌘↑ ⌘↓ on a subtask: one place among its siblings in the same state,
     /// as one step. The open quick look shows the new order at once.
     @discardableResult
@@ -142,6 +166,16 @@ extension TasksPageModel {
         // the person's own choice of order, so it shows: the library tells
         // the page (`subtaskOrderChanges`), as for its Undo and Redo.
         return library.moveSubtask(id, by: offset)
+    }
+
+    func reorderSubtask(_ id: UUID, toGroupIndex destination: Int, group: [UUID]) -> CommandOutcome {
+        guard let task = store.task(withID: id), let parent = task.parentID else { return .failed(.taskGone) }
+        let siblings = quickLookSubtasks(of: parent, store.subtasks(of: parent))
+            .filter { ($0.status == .done) == (task.status == .done) }.map(\.id)
+        guard group == siblings, let start = siblings.firstIndex(of: id), siblings.indices.contains(destination) else {
+            return .applied // The family changed during the drag: settle back.
+        }
+        return moveSubtask(id, by: destination - start)
     }
 
     /// The subtasks a quick look's keys and menu act on, in the order it

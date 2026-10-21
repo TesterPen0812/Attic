@@ -3,135 +3,106 @@ import SwiftUI
 import XCTest
 @testable import Attic
 
-/// The lists' edges under the floating controls: Clean cut by default
-/// (owner, 2026-10-03, reversing D4b), the system's soft scroll edge as a
-/// preview-only comparison, and nothing left of the per-control softening
-/// (no content re-rendered to blur it).
+/// Clean cut in every app identity and card (owner, A7). Former soft-edge
+/// choices must never enable a native effect, even when injected through obsolete inputs.
 @MainActor
 final class ScrollEdgeTests: XCTestCase {
-    private var saved: AtticScrollEdgeStyle?
+    private var savedEnvironment: String?
+    private var savedDefault: Any?
+    private var injected = false
 
     override func tearDown() async throws {
-        if let saved { AtticScrollEdgeLab.shared.style = saved }
-        saved = nil
+        if injected {
+            if let savedEnvironment { setenv("ATTIC_UI_TEST_SCROLL_EDGES", savedEnvironment, 1) }
+            else { unsetenv("ATTIC_UI_TEST_SCROLL_EDGES") }
+            if let savedDefault { UserDefaults.standard.set(savedDefault, forKey: "AtticScrollEdgeStyle") }
+            else { UserDefaults.standard.removeObject(forKey: "AtticScrollEdgeStyle") }
+        }
+        injected = false
         try await super.tearDown()
     }
 
-    private func use(_ style: AtticScrollEdgeStyle) {
-        if saved == nil { saved = AtticScrollEdgeLab.shared.style }
-        AtticScrollEdgeLab.shared.style = style
-    }
-
-    // MARK: - The switch
-
-    private func scratchDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
-        let suite = "AtticScrollEdgeLabTest-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        return (defaults, { defaults.removePersistentDomain(forName: suite) })
-    }
-
-    func testTheCleanCutIsTheDefault() throws {
-        let (defaults, cleanup) = try scratchDefaults()
-        defer { cleanup() }
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .cleanCut)
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: false).style, .cleanCut)
-        XCTAssertEqual(AtticScrollEdgeLab.shared.style, .cleanCut, "the test host, not a preview, draws Clean cut")
-    }
-
-    func testAPreviewKeepsItsChoiceAndUITestsCanForceOne() throws {
-        let (defaults, cleanup) = try scratchDefaults()
-        defer { cleanup() }
-        let lab = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
-        XCTAssertEqual(lab.style, .cleanCut)
-        lab.style = .systemSoft
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: true).style, .systemSoft, "a preview keeps the owner's choice")
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "clean"], isPreview: true).style, .cleanCut)
-        let (fresh, freshCleanup) = try scratchDefaults()
-        defer { freshCleanup() }
-        XCTAssertEqual(AtticScrollEdgeLab(defaults: fresh, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], isPreview: true).style, .systemSoft)
-        XCTAssertEqual(AtticScrollEdgeStyle.allCases.map(\.title), ["System soft edge", "Clean cut"])
-    }
-
-    /// The official identity and every other non-preview one: Clean cut,
-    /// whatever the environment or the stored choice says, no
-    /// switch, and nothing is kept. The strict predicate ignores the launch
-    /// arguments (`--attic-motion-lab` widens the Motion Lab, not this), so
-    /// each identity is paired with and without it.
-    func testNoNonPreviewIdentityLeavesTheCleanCut() throws {
-        let identities: [String?] = [
-            "com.taha.Attic", "com.taha.Attic.UnitTestHost", "com.taha.Attic.perf.ui",
-            "com.taha.Attic.previewish", "com.taha.Attic.preview.", "com.taha.AtticUITests", "", nil,
-        ]
-        for identity in identities {
-            for arguments in [[String](), [AtticMotionLab.argument]] {
-                let name = "\(identity ?? "nil") \(arguments)"
-                let isPreview = AtticPreviewOverrides.isPreviewIdentity(identity)
-                XCTAssertFalse(isPreview, "\(name) is not a preview")
-                let (defaults, cleanup) = try scratchDefaults()
-                defer { cleanup() }
-                // The environment says soft.
-                let forced = AtticScrollEdgeLab(defaults: defaults, environment: ["ATTIC_UI_TEST_SCROLL_EDGES": "soft"], isPreview: isPreview)
-                XCTAssertEqual(forced.style, .cleanCut, "\(name): the environment cannot choose the soft edge")
-                XCTAssertFalse(forced.offersChoice, "\(name): no switch")
-                // The defaults say soft.
-                defaults.set(AtticScrollEdgeStyle.systemSoft.rawValue, forKey: AtticScrollEdgeLab.styleKey)
-                XCTAssertEqual(AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style, .cleanCut,
-                               "\(name): a stored soft edge is ignored")
-                // A choice made in code is not kept.
-                defaults.removeObject(forKey: AtticScrollEdgeLab.styleKey)
-                AtticScrollEdgeLab(defaults: defaults, isPreview: isPreview).style = .systemSoft
-                XCTAssertNil(defaults.string(forKey: AtticScrollEdgeLab.styleKey), "\(name): nothing is kept")
-            }
+    /// Obsolete inputs are still supplied to the real hosted page as negative controls.
+    private func use(_ obsolete: String) {
+        if !injected {
+            savedEnvironment = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SCROLL_EDGES"]
+            savedDefault = UserDefaults.standard.object(forKey: "AtticScrollEdgeStyle")
+            injected = true
         }
-        // The Motion Lab's own policy is wider, and is left as it is: this is
-        // the gap the strict predicate closes.
-        XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.perf.ui", arguments: [AtticMotionLab.argument]))
-        XCTAssertTrue(AtticMotionLab.isAvailable(bundleIdentifier: "com.taha.Attic.preview.", arguments: [AtticMotionLab.argument]))
-        // A preview identity is the one that may.
-        XCTAssertTrue(AtticPreviewOverrides.isPreviewIdentity("com.taha.Attic.preview.main"))
-        let (defaults, cleanup) = try scratchDefaults()
-        defer { cleanup() }
-        let preview = AtticScrollEdgeLab(defaults: defaults, isPreview: true)
-        XCTAssertTrue(preview.offersChoice)
+        setenv("ATTIC_UI_TEST_SCROLL_EDGES", obsolete, 1)
+        UserDefaults.standard.set("systemSoft", forKey: "AtticScrollEdgeStyle")
     }
 
-    // MARK: - The system soft edge on the Tasks lists (a preview's choice)
+    func testNoSurfaceOrCardEnablesANativeScrollEdge() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Attic")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        XCTAssertGreaterThan(files.count, 50, "the guard must inspect the product sources")
+        let enabling = try NSRegularExpression(pattern:
+            #"\bscrollEdgeEffectStyle\s*\(|\bscrollEdgeEffectHidden\s*\((?!\s*true\b)"#)
+        for file in files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            XCTAssertNil(enabling.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
+                         "\(file.path): native scroll edges must remain disabled, including E1 cards")
+        }
+    }
 
-    /// Native pockets occupy only resting gaps INSIDE the viewport. The
-    /// controls never overlap the scroll view or its clipped native effect.
-    func testTheNativeEdgesEndBeforeTheControlsAndLeaveTheFirstRowAtRest() throws {
-        use(.systemSoft)
+    func testNoNonPreviewIdentityLeavesTheCleanCut() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Attic")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        for file in files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            XCTAssertFalse(source.contains("ATTIC_UI_TEST_SCROLL_EDGES"), file.path)
+            XCTAssertFalse(source.contains("AtticScrollEdgeStyle"), file.path)
+        }
+    }
+
+    func testAPreviewIgnoresSavedAndEnvironmentSoftEdges() throws {
+        for obsolete in ["soft", "clean", "unknown"] {
+            use(obsolete)
+            let hosted = try Hosted(height: 520, long: true)
+            defer { hosted.close() }
+            XCTAssertTrue(Self.pockets(in: try shownList(hosted)).isEmpty,
+                          "obsolete defaults and \(obsolete) cannot enable native edges")
+            XCTAssertEqual(UserDefaults.standard.string(forKey: "AtticScrollEdgeStyle"), "systemSoft",
+                           "the old preference is ignored without rewriting it")
+        }
+    }
+
+    // MARK: - Former soft choices cannot enable native geometry
+
+    /// A former soft choice leaves the first row in its Clean cut place
+    /// and must not enable native pockets.
+    func testAFormerSoftChoiceLeavesTheFirstRowAtRestWithoutNativeEdges() throws {
+        use("soft")
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
         let list = try shownList(hosted)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
         let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
         let listTop = TasksViewport.listTop(tabsTop: tabsTop)
-        let top = TasksViewport.controlsBottom(tabsTop: tabsTop)
         let content = try XCTUnwrap(hosted.window.contentView)
         let frame = list.convert(list.bounds, to: content)
-        XCTAssertEqual(frame.minY, top, accuracy: 0.5)
-        XCTAssertEqual(list.contentInsets.top, listTop - top, accuracy: 0.5)
+        XCTAssertEqual(frame.minY, 0, accuracy: 0.5)
+        XCTAssertEqual(list.contentInsets.top, listTop, accuracy: 0.5)
         let first = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
         XCTAssertEqual(try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: first)]).minY, listTop, accuracy: 0.5,
-                       "the first row keeps its resting place beyond the native fade")
-        let topPocket = try XCTUnwrap(Self.pockets(in: list).first { $0.frame.minY < 1 })
-        XCTAssertEqual(topPocket.frame.maxY, listTop - top, accuracy: 0.5,
-                       "resting row ink starts beyond the pocket's clear boundary")
+                       "the first row keeps its Clean cut resting place")
+        XCTAssertTrue(Self.pockets(in: list).isEmpty, "a former soft choice cannot enable native edges")
         list.contentView.scroll(to: CGPoint(x: 0, y: 400))
         list.reflectScrolledClipView(list.contentView)
         hosted.spin(0.5)
-        let pockets = Self.pockets(in: list).map(\.frame.height).sorted()
-        XCTAssertEqual(pockets.count, 2)
-        XCTAssertEqual(pockets.first ?? 0, listTop - top, accuracy: 0.5)
-        XCTAssertEqual(pockets.last ?? 0, AtticLayout.contentToAddBar, accuracy: 0.5)
+        XCTAssertTrue(Self.pockets(in: list).isEmpty, "scrolling cannot enable native edges")
         XCTAssertTrue(Self.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty, "no row is blurred by Attic")
     }
 
     /// Clean cut: no bars and no system pockets; the list's own mask cuts
     /// the rows, and the rows rest in the same place.
     func testTheCleanCutHasNoSystemEdgeEffect() throws {
-        use(.cleanCut)
+        use("clean")
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
         let list = try shownList(hosted)
@@ -145,9 +116,9 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertTrue(Self.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty, "no row is blurred by Attic")
     }
 
-    /// Done's log takes the same edges as Now and Later.
-    func testDoneHasTheSystemsEdgeEffectToo() throws {
-        use(.systemSoft)
+    /// Done's log also ignores a former soft choice injected through obsolete inputs.
+    func testDoneHasNoNativeEdgeEvenWithAFormerSoftChoice() throws {
+        use("soft")
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
         hosted.go(to: .done)
@@ -155,13 +126,13 @@ final class ScrollEdgeTests: XCTestCase {
         list.contentView.scroll(to: CGPoint(x: 0, y: 200))
         list.reflectScrolledClipView(list.contentView)
         hosted.spin(0.5)
-        XCTAssertEqual(Self.pockets(in: list).count, 2)
+        XCTAssertTrue(Self.pockets(in: list).isEmpty)
     }
 
     /// The tabs still work under the lists' top bar: a tab click switches
     /// the page. (Typing in the add bar is a UI test's: `TasksPageUITests`.)
     func testTheTabsStillSwitchThePagesUnderTheBar() throws {
-        use(.systemSoft)
+        use("soft")
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.go(to: .backlog)
@@ -171,9 +142,9 @@ final class ScrollEdgeTests: XCTestCase {
         XCTAssertEqual(hosted.shownPage(), 0)
     }
 
-    /// The A/B switch changes viewport coordinates, not the person's place.
-    func testThePreviewSwitchKeepsTheScrolledPlace() throws {
-        use(.systemSoft)
+    /// A former A/B choice cannot change the person's scrolled place.
+    func testAFormerPreviewChoiceKeepsTheScrolledPlace() throws {
+        use("soft")
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
         let list = try shownList(hosted)
@@ -181,7 +152,7 @@ final class ScrollEdgeTests: XCTestCase {
         list.reflectScrolledClipView(list.contentView)
         hosted.spin(0.3)
         let place = list.contentView.bounds.minY + list.contentView.contentInsets.top
-        for style in [AtticScrollEdgeStyle.cleanCut, .systemSoft] {
+        for style in ["clean", "soft"] {
             use(style)
             hosted.spin(0.6)
             let current = try shownList(hosted)

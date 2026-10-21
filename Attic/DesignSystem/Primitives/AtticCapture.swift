@@ -101,13 +101,6 @@ final class AtticProbeCollector: @unchecked Sendable {
         }
     }
 
-    func reset() {
-        lock.lock()
-        order.removeAll()
-        probes.removeAll()
-        idealSizes.removeAll()
-        lock.unlock()
-    }
 
     func record(_ probe: AtticProbe, frame: CGRect) {
         lock.lock()

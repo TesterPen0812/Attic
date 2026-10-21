@@ -254,19 +254,18 @@ struct AppRuntimeEnvironment {
     /// are given, so a launch's store and its file roots must belong
     /// together: an in-memory gallery store never meets the real files.
     @MainActor
-    func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) -> (tasks: TaskStore, notes: NoteStore) {
+    func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) throws -> (tasks: TaskStore, notes: NoteStore) {
         let tasks = TaskStore(
             container: container,
             taskImageFiles: performanceRoot.map {
                 TaskImageFiles(rootURL: $0.appendingPathComponent("TaskImages", isDirectory: true))
             } ?? makeTaskImageFiles()
         )
-        let notes = NoteStore(
-            container: container,
-            attachmentFileStore: performanceRoot.map {
-                AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
-            } ?? makeAttachmentFileStore()
-        )
+        let attachmentFiles = performanceRoot.map {
+            AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
+        } ?? makeAttachmentFileStore() ?? AttachmentFileStore()
+        try OldNotesPurge.cleanup(in: container, recoveryURL: noteRecoveryURL, attachmentRoot: attachmentFiles.rootURL)
+        let notes = NoteStore(container: container, attachmentFileStore: attachmentFiles)
         return (tasks, notes)
     }
 }
@@ -296,9 +295,45 @@ enum AppTerminationPreparation {
     }
 }
 
+private struct AppStartupError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+/// One store-open attempt, followed only by explicit retry. The failed
+/// store is retained; constructing an empty replacement is never a fallback.
+@MainActor
+final class AppStartup<Value>: ObservableObject {
+    @Published private(set) var value: Value?
+    @Published private(set) var failureMessage: String?
+    private let open: () throws -> Value
+
+    init(open: @escaping () throws -> Value) {
+        self.open = open
+        retry()
+    }
+
+    func retry() {
+        guard value == nil else { return }
+        do {
+            value = try open()
+            failureMessage = nil
+        } catch {
+            failureMessage = "Attic could not open its local data. Try again. Your existing data is kept."
+            NSLog("Attic startup could not open local data")
+        }
+    }
+}
+
 @MainActor
 final class AppCoordinator: ObservableObject {
-    static let shared = AppCoordinator()
+    static let startup = AppStartup { try AppCoordinator() }
+    static var shared: AppCoordinator? { startup.value }
+
+    static func retryStartup() {
+        startup.retry()
+        shared?.start()
+    }
 
     /// Read-only mirror of the global shortcut's registration, so UI can stop
     /// advertising a combination the system refused without being able to
@@ -316,7 +351,6 @@ final class AppCoordinator: ObservableObject {
 
     /// The hot key itself, for Settings' recorder (it releases the claim
     /// while a new combination is typed).
-    var quickCaptureHotKey: GlobalHotKey { newTaskHotKey }
 
     let settings: AppSettings
     let store: TaskStore
@@ -337,31 +371,6 @@ final class AppCoordinator: ObservableObject {
 
     private let cleanupService: DailyCleanupService
     private let panelController: AtticPanelController
-    /// The auxiliary subtask surfaces (transient hover panel and the single
-    /// pinned mini-window) owned by the panel controller.
-    var subtaskPanels: SubtaskPanelController { panelController.subtaskPanels }
-
-    /// Capture seam for the appearance harness: seeds one family into the
-    /// in-memory UI-testing store and pins its checklist window, so the
-    /// auxiliary surface can be photographed hands-off next to the panel.
-    private func presentSampleSubtaskWindowsForUITesting() {
-        guard let parent = store.create(title: "Plan the launch") else { return }
-        _ = store.create(title: "Write the announcement", parentID: parent.id)
-        _ = store.create(title: "Check the build", parentID: parent.id)
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            subtaskPanels.pinFamily(parent.id)
-            // Clear of the panel, on the main display, so the checklist is
-            // photographed over the harness backdrop rather than the panel.
-            if let screen = NSScreen.main?.visibleFrame {
-                subtaskPanels.placePinnedWindowForUITesting(
-                    parent.id,
-                    visibleOrigin: CGPoint(x: screen.midX - SubtaskPanelLayout.panelWidth / 2,
-                                           y: screen.midY - 120)
-                )
-            }
-        }
-    }
     private let settingsWindowController: SettingsWindowController
     private let hoverMonitor: CornerHoverMonitor
     /// An agent's `show` over the real panel (the shell tools hold it weakly).
@@ -387,26 +396,26 @@ final class AppCoordinator: ObservableObject {
     private var performanceSignalSource: (any DispatchSourceSignal)?
     private var performancePhaseIndex = 0
 
-    private init() {
+    init(runtime: AppRuntimeEnvironment = AppRuntimeEnvironment(),
+         openStore: (() throws -> ModelContainer)? = nil) throws {
         PerformanceSignposts.beginLaunch()
-        let environment = ProcessInfo.processInfo.environment
-        let runtime = AppRuntimeEnvironment(environment: environment)
+        let environment = runtime.environment
         let isUITesting = runtime.isUITesting
         let isRunningTests = runtime.isRunningTests
         let externalPerformanceRoot = PerformanceProbe.validatedRoot(environment: environment)
         if environment["ATTIC_PERF_STORE_ROOT"] != nil && externalPerformanceRoot == nil {
-            fatalError("Performance store root is not an owned temporary directory")
+            throw AppStartupError(message: "Performance store root is not an owned temporary directory")
         }
         let uiPerformanceRoot: URL?
         do {
             uiPerformanceRoot = try PerformanceProbe.uiTestRoot(environment: environment)
         } catch {
-            fatalError("Unable to create the isolated performance UI test root: \(error)")
+            throw error
         }
         let performanceUICleanup = environment["ATTIC_PERF_UI_CLEANUP"] == "1"
         if environment["ATTIC_PERF_UI_TEST"] == "1",
            uiPerformanceRoot == nil, !performanceUICleanup {
-            fatalError("Performance UI tests require their isolated preview bundle")
+            throw AppStartupError(message: "Performance UI tests require their isolated preview bundle")
         }
         let performanceRoot = externalPerformanceRoot ?? uiPerformanceRoot
         let performanceSeedOnly = environment["ATTIC_PERF_SEED_ONLY"] == "1"
@@ -437,7 +446,9 @@ final class AppCoordinator: ObservableObject {
         }
         #endif
         let container: ModelContainer
-        if let performanceRoot {
+        if let openStore {
+            container = try PerformanceSignposts.storeOpen(openStore)
+        } else if let performanceRoot {
             do {
                 container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
                     reset: performanceSeedOnly, baseDirectory: performanceRoot
@@ -451,7 +462,7 @@ final class AppCoordinator: ObservableObject {
                     PerformanceProbe.writePhase("seed_complete", root: performanceRoot)
                 }
             } catch {
-                fatalError("Unable to create the isolated performance store: \(error)")
+                throw error
             }
         } else if usesCanvasUITestPersistence {
             do {
@@ -459,7 +470,7 @@ final class AppCoordinator: ObservableObject {
                     reset: environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1"
                 ) }
             } catch {
-                fatalError("Unable to create the isolated Canvas UI test store: \(error)")
+                throw error
             }
         } else {
             #if ATTIC_LOCAL_ONLY
@@ -469,7 +480,7 @@ final class AppCoordinator: ObservableObject {
                     cloudSyncEnabled: false
                 ) }
             } catch {
-                fatalError("Unable to create the local-only SwiftData container: \(error)")
+                throw error
             }
             #else
             do {
@@ -484,10 +495,7 @@ final class AppCoordinator: ObservableObject {
                     ) }
                     settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
                 } catch {
-                    fatalError(
-                        "Unable to create the SwiftData container with CloudKit "
-                            + "(\(cloudError)) or local-only (\(error))"
-                    )
+                    throw error
                 }
             }
             #endif
@@ -503,6 +511,10 @@ final class AppCoordinator: ObservableObject {
         // in Later, 5,000 in the Done log.
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "scale" {
             try? TasksPagePreview.seedScale(in: container)
+        }
+        // The colour pass sheet's tasks (`phaseX/colour-final.md`).
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "colour" {
+            try? TasksPagePreview.seedColour(in: container)
         }
         // Everything finished today: the caught-up Now page.
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
@@ -528,7 +540,7 @@ final class AppCoordinator: ObservableObject {
         }
         self.demoDataAllowed = demoDataAllowed
         self.demoContainer = demoDataAllowed ? container : nil
-        let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
+        let (store, noteStore) = try runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         if demoSeeded {
             let bundleIdentifier = runtime.bundleIdentifier
             Task { @MainActor in await AtticDemoData.attachFiles(to: noteStore, bundleIdentifier: bundleIdentifier) }
@@ -563,6 +575,9 @@ final class AppCoordinator: ObservableObject {
         // Both kinds of test host avoid Keychain. In normal use, credential
         // loading starts only after opt-in and runs away from the main thread.
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
+        // The Notes page records its library actions (pin, duplicate,
+        // delete) on the app's one undo route.
+        noteDraft.pages.attachUndoRoute(library.undo)
         let shellTools = AgentShellTools()
         let agentHandler = MCPRequestHandler(
             tools: AgentTaskTools(
@@ -682,7 +697,8 @@ final class AppCoordinator: ObservableObject {
                 // a time after which the panel takes the keyboard as a click
                 // would, for hands-off captures of both looks.
                 let environment = ProcessInfo.processInfo.environment
-                if let page = environment["ATTIC_UI_TEST_PAGE"].flatMap(PanelPage.init(rawValue:)) {
+                if let page = (environment["ATTIC_UI_TEST_PAGE"] ?? AtticDropdownCaptureSeam.current?.page)
+                    .flatMap(PanelPage.init(rawValue:)) {
                     uiState.selectSection(page.section)
                 }
                 // AppKit makes a visible window key when launching finishes,
@@ -691,11 +707,38 @@ final class AppCoordinator: ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                     self?.hoverMonitor.keepVisibleForUITesting(makeKey: false)
                 }
+                #if DEBUG
+                // Capture seam: every scrollable list or text in the panel
+                // scrolled to its middle, so content sits under the controls.
+                if let delay = environment["ATTIC_UI_TEST_SCROLL_MIDDLE"].flatMap(Double.init) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        for window in NSApp.windows where window.isVisible {
+                            AtticCaptureScroll.scrollToMiddle(in: window.contentView)
+                        }
+                    }
+                }
+                #endif
                 if let delay = environment["ATTIC_UI_TEST_KEY_AFTER"].flatMap(Double.init) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                         self?.panelController.makeKeyForCapture()
                     }
                 }
+                #if DEBUG
+                // Capture seams for what Settings changes while a note is open
+                // (A39 F08 and the appearance switch): `<seconds>:<width>` and
+                // `<seconds>:<light|dark|system>`, set on the same `AppSettings`
+                // properties the Settings controls write.
+                for spec in (environment["ATTIC_UI_TEST_SET_WIDTH"] ?? "").split(separator: ",") {
+                    let parts = spec.split(separator: ":")
+                    guard parts.count == 2, let delay = Double(parts[0]), let width = Double(parts[1]) else { continue }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.settings.panelContentSize = width }
+                }
+                for spec in (environment["ATTIC_UI_TEST_SET_APPEARANCE"] ?? "").split(separator: ",") {
+                    let parts = spec.split(separator: ":")
+                    guard parts.count == 2, let delay = Double(parts[0]), let mode = AppearancePreference(rawValue: String(parts[1])) else { continue }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.settings.appearance = mode }
+                }
+                #endif
                 return
             }
             NSApp.activate()
@@ -724,6 +767,24 @@ final class AppCoordinator: ObservableObject {
                     DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: action)
                 }
                 if ProcessInfo.processInfo.environment["ATTIC_PERF_EXTERNAL_CONTROL"] == "1" {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["ATTIC_PERF_SMOOTH"] == "1",
+                       Bundle.main.bundleIdentifier == "com.taha.Attic.preview.phasex" {
+                        let probe = SmoothPerformanceProbe(root: performanceRoot, notes: noteStore,
+                            tasks: store, pages: noteDraft.pages,
+                            reveal: { [weak self] section in self?.hoverMonitor.revealForPerformanceProbe(section: section) },
+                            hide: { [weak self] in
+                                _ = self?.hoverMonitor.hideForPerformanceProbe { _ in }
+                            })
+                        signal(SIGUSR1, SIG_IGN)
+                        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                        source.setEventHandler { probe.advance() }
+                        performanceSignalSource = source
+                        source.resume()
+                        PerformanceProbe.writePhase("smooth_ready", root: performanceRoot)
+                        return
+                    }
+                    #endif
                     // A signal arrives only after the sampler finishes its
                     // window. End markers and the next phase cannot race a
                     // slow reveal, footprint call, or AppKit hide completion.
@@ -840,9 +901,6 @@ final class AppCoordinator: ObservableObject {
             } else {
                 hoverMonitor.keepVisibleForUITesting()
             }
-            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PRESENT_SUBTASKS"] == "1" {
-                presentSampleSubtaskWindowsForUITesting()
-            }
             // Capture seam: open Settings on the remembered section (pass
             // `-AtticSettings.selectedSection <section>`) for screenshots.
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_OPEN_SETTINGS"] == "1" {
@@ -851,6 +909,7 @@ final class AppCoordinator: ObservableObject {
             return
         }
 
+        noteDraft.pages.recoverAtLaunch()
         if settings.quickCaptureEnabled { newTaskHotKey.register() }
         // Settings › General › Quick Capture (round 10): a new combination
         // or the switch releases the old claim and makes the new one.
@@ -895,7 +954,6 @@ final class AppCoordinator: ObservableObject {
         canvasSession.cancelActiveInteraction()
         _ = noteDraft.flush()
         cleanupService.stop()
-        panelController.subtaskPanels.tearDown()
         hoverMonitor.stop()
         newTaskHotKey.unregister()
         appearanceObservation = nil
@@ -908,9 +966,19 @@ final class AppCoordinator: ObservableObject {
         hasStarted = false
     }
 
+    func prepareForTerminationDurably() async -> Bool {
+        guard await noteDraft.prepareToLeaveDurably(.quit) else {
+            hoverMonitor.revealProgrammatically(section: .notes)
+            return false
+        }
+        canvasSession.cancelActiveInteraction()
+        canvasSession.flushViewState()
+        return true
+    }
+
     func prepareForTermination() -> Bool {
         let canTerminate = AppTerminationPreparation.prepare(
-            flushNoteDraft: { noteDraft.flush() },
+            flushNoteDraft: { noteDraft.prepareToLeave(.quit) },
             commitCanvasTermination: {
                 canvasSession.cancelActiveInteraction()
                 canvasSession.flushViewState()
@@ -1000,3 +1068,21 @@ final class AppCoordinator: ObservableObject {
         ]
     }
 }
+
+#if DEBUG
+/// The capture seam's scrolling (UI-test launches only).
+@MainActor
+enum AtticCaptureScroll {
+    static func scrollToMiddle(in view: NSView?) {
+        guard let view else { return }
+        if let scroll = view as? NSScrollView, let document = scroll.documentView {
+            let room = document.frame.height - scroll.contentView.bounds.height
+            if room > 40 {
+                scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: room * 0.45))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        }
+        view.subviews.forEach { scrollToMiddle(in: $0) }
+    }
+}
+#endif

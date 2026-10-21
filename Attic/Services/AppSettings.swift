@@ -18,13 +18,6 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
-    var nsAppearance: NSAppearance? {
-        switch self {
-        case .system: return nil
-        case .light: return NSAppearance(named: .aqua)
-        case .dark: return NSAppearance(named: .darkAqua)
-        }
-    }
 }
 
 /// User-adjustable corner radius of the panel squircle, in points.
@@ -39,17 +32,6 @@ enum PanelCornerSize: Double, CaseIterable, Identifiable {
 
     var id: Double { rawValue }
 
-    var title: String {
-        switch self {
-        case .small: return "Small"
-        case .standard: return "Default"
-        case .large: return "Large"
-        case .extraLarge: return "Extra Large"
-        case .huge: return "Huge"
-        case .enormous: return "Enormous"
-        case .maximum: return "Maximum"
-        }
-    }
 
     static let min = PanelCornerSize.small.rawValue
     static let max = PanelCornerSize.maximum.rawValue
@@ -67,13 +49,6 @@ enum PanelContentSize: Double, CaseIterable, Identifiable {
 
     var id: Double { rawValue }
 
-    var title: String {
-        switch self {
-        case .standard: return "Default"
-        case .large: return "Large"
-        case .extraLarge: return "Extra Large"
-        }
-    }
 
     static let min = PanelContentSize.standard.rawValue
     static var max: Double {
@@ -105,10 +80,8 @@ final class AppSettings: ObservableObject {
         static let panelCornerSize = "panelCornerSize"
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
-        static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
         static let animations = "animations"
-        static let motionLabFeel = "motionLabFeel"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
@@ -222,23 +195,18 @@ final class AppSettings: ObservableObject {
     /// Lively (the default) or Subtle springs, or Reduced motion (round 9,
     /// owner item 26; owner 2026-10-01). Reduced, like macOS Reduce Motion
     /// (which forces it whatever is chosen), turns every movement into a
-    /// crossfade or an instant change. A change here also drops any Motion
-    /// Lab feel or edit, so the last control touched wins.
+    /// crossfade or an instant change. Changing levels restores its spring recipe.
     @Published var animations: AtticAnimationLevel {
         didSet {
             defaults.set(animations.rawValue, forKey: Key.animations)
             AtticMotionPreference.level = animations
             guard oldValue != animations else { return }
-            clearMotionLabChoice()
+            applyAnimationLevel()
         }
     }
 
-    /// The feel in use and the values in use. They follow Animations
-    /// (Lively or Subtle) unless the Motion Lab (preview builds only, owner
-    /// 2026-09-30) has chosen a feel or edited the values. Outside the lab
-    /// nothing stored is read or written, so the release identity only ever
-    /// follows Animations.
-    @Published private(set) var motionFeel: AtticMotionFeel
+    /// Animations owns the spring recipe; the preview experiment only changes native popovers.
+    var motionFeel: AtticMotionFeel { animations.feel }
 
     @Published var motionTuning: AtticMotionTuning {
         didSet {
@@ -249,27 +217,16 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// True while Animations, not the lab, is setting the tuning.
     private var appliesLevelTuning = false
 
-    /// Back to the Animations level's feel, forgetting the lab's choice.
-    private func clearMotionLabChoice() {
-        if motionLabAvailable { defaults.removeObject(forKey: Key.motionLabFeel); defaults.removeObject(forKey: Key.motionLabTuning) }
+    private func applyAnimationLevel() {
+        if motionLabAvailable { defaults.removeObject(forKey: Key.motionLabTuning) }
         appliesLevelTuning = true
         defer { appliesLevelTuning = false }
-        motionFeel = animations.feel
         motionTuning = animations.feel.tuning
     }
 
     let motionLabAvailable: Bool
-
-    /// Chooses a feel in the Motion Lab: its values replace any edits.
-    func chooseMotionFeel(_ feel: AtticMotionFeel) {
-        guard motionLabAvailable else { return }
-        motionFeel = feel
-        defaults.set(feel.rawValue, forKey: Key.motionLabFeel)
-        motionTuning = feel.tuning
-    }
 
     @Published var panelCornerSize: Double {
         didSet {
@@ -312,32 +269,6 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// Last on-screen frame of the pinned subtask mini-window. Persisted as
-    /// a rect string so reopening restores position; invalid or stale values
-    /// fall back to anchored placement beside the main panel.
-    ///
-    /// The size is bounded the same way a restored panel dimension is. A
-    /// width of `.infinity` passes `>= 1`, and a finite `1e30` passes as well;
-    /// either one then reaches window placement and numeric formatting, which
-    /// cannot use it. A frame the user really chose on a display that is not
-    /// attached right now is far inside these limits, so it still restores.
-    var pinnedSubtaskWindowFrame: CGRect? {
-        get {
-            guard let stored = defaults.string(forKey: Key.pinnedSubtaskWindowFrame),
-                  !stored.isEmpty else { return nil }
-            let rect = NSRectFromString(stored)
-            guard Self.isRestorableFrame(rect) else { return nil }
-            return rect
-        }
-        set {
-            if let newValue {
-                defaults.set(NSStringFromRect(newValue), forKey: Key.pinnedSubtaskWindowFrame)
-            } else {
-                defaults.removeObject(forKey: Key.pinnedSubtaskWindowFrame)
-            }
-        }
-    }
-
     @Published private(set) var cloudSyncStartupErrorMessage: String?
 
     @Published var revealDelay: Double {
@@ -364,8 +295,7 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable,
-         previewOverrides: AtticPreviewOverrides = .current) {
+    init(defaults: UserDefaults = .standard, motionLabAvailable: Bool = AtticMotionLab.isAvailable) {
         self.defaults = defaults
         self.motionLabAvailable = motionLabAvailable
         cloudSyncStartupErrorMessage = nil
@@ -439,19 +369,14 @@ final class AppSettings: ObservableObject {
         if defaults.string(forKey: Key.animations) == "full" {
             defaults.set(storedAnimations.rawValue, forKey: Key.animations)
         }
-        // A preview's A/B switch (`ATTIC_UI_TEST_MOTION`) forces the level and
-        // the feel for this launch and stores nothing.
-        let forcedMotion = previewOverrides.motion
-        let level = forcedMotion?.level ?? storedAnimations
-        animations = level
-        AtticMotionPreference.level = level
-        let storedFeel = forcedMotion?.feel
-            ?? (motionLabAvailable ? AtticMotionFeel(rawValue: defaults.string(forKey: Key.motionLabFeel) ?? "") : nil)
-        motionFeel = storedFeel ?? level.feel
-        let storedTuning = motionLabAvailable && forcedMotion == nil
+        animations = storedAnimations
+        AtticMotionPreference.level = storedAnimations
+        // Preserve the native-popover experiment from older lab data, ignoring retired tuning choices.
+        let storedTuning = motionLabAvailable
             ? defaults.data(forKey: Key.motionLabTuning).flatMap { try? JSONDecoder().decode(AtticMotionTuning.self, from: $0) }
             : nil
-        let tuning = storedTuning ?? (storedFeel ?? level.feel).tuning
+        var tuning = storedAnimations.feel.tuning
+        tuning.popsNativePopovers = storedTuning?.popsNativePopovers ?? false
         motionTuning = tuning
         AtticMotionTuning.current = tuning
         panelCornerSize = Self.clamp(
@@ -474,8 +399,8 @@ final class AppSettings: ObservableObject {
     }
 
     /// The one place the appearance settings become a drawable surface. The
-    /// main panel and the subtask checklist windows both call this, so they
-    /// can only ever render the same treatment.
+    /// main panel and its surfaces call this, so they can only ever render
+    /// the same treatment.
     func panelSurfaceTreatment(
         colorScheme: ColorScheme,
         contrast: ColorSchemeContrast,
@@ -550,17 +475,4 @@ final class AppSettings: ObservableObject {
         return max(value, minimum)
     }
 
-    /// A stored window frame Attic is willing to restore: a usable size, and
-    /// every component finite and within the magnitude a display could
-    /// justify. An origin may be negative — a window on a display left of or
-    /// below the main one — so only its magnitude is bounded.
-    static func isRestorableFrame(_ rect: CGRect) -> Bool {
-        guard rect.origin.x.isFinite, rect.origin.y.isFinite,
-              rect.width.isFinite, rect.height.isFinite else { return false }
-        guard rect.width >= 1, rect.height >= 1,
-              rect.width <= maximumRestorableDimension,
-              rect.height <= maximumRestorableDimension else { return false }
-        return abs(rect.origin.x) <= maximumRestorableDimension
-            && abs(rect.origin.y) <= maximumRestorableDimension
-    }
 }

@@ -111,9 +111,12 @@ enum PanelNeutralShade {
 
     /// Black in Dark. In Light, a soft grey rather than white: the bright
     /// glass already passes a light desktop almost untouched, so a white
-    /// shade vanished over light windows. Near-black text keeps about 11:1
-    /// on this grey.
-    static let lightShade = 0.84
+    /// shade vanished over light windows. Softened from 0.84 (owner's call,
+    /// 2026-10-11; design review A37: on Light Glass the darker grey read
+    /// as a smudge across the top), still a visible shade over a white
+    /// page: near-black text keeps about 13:1 on it, and over a dark
+    /// desktop the lighter shade needs less of itself.
+    static let lightShade = 0.88
 
     static func color(for appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
         let value = appearance == .dark ? 0.0 : lightShade
@@ -280,12 +283,6 @@ enum PanelTintCalibration {
 
     // MARK: Composite model
 
-    /// The raw desktop extreme used by the pre-macOS-26 fallback path and by
-    /// tests that deliberately bypass the native-surface credit.
-    static func worstCaseBackdrop(for appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
-        let value = appearance == .dark ? 1.0 : 0.0
-        return AtticThemeColor(red: value, green: value, blue: value)
-    }
 
     /// The top-edge composite before the wash.
     static func baseComposite(

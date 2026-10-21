@@ -8,6 +8,7 @@ comparison remains observational in CI until runner stability is established.
 
 import argparse
 import json
+import os
 from pathlib import Path
 import secrets
 import subprocess
@@ -35,6 +36,17 @@ def main():
     specs = {}
     for side, tree in (("reference", args.reference), ("candidate", args.candidate)):
         script = tree.resolve() / "Scripts" / "performance_probe.py"
+        # The pinned probe predates the wrapper environment override. Adapt
+        # only its build executable; leave all measured code and phases intact.
+        wrapper = os.environ.get("ATTIC_XCODEBUILD_COMMAND")
+        if side == "reference" and wrapper:
+            source = script.read_text()
+            old = 'WRAPPER = "/Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh"'
+            new = f"WRAPPER = {wrapper!r}"
+            if source.count(old) == 1:
+                script.write_text(source.replace(old, new))
+            elif source.count(new) != 1:
+                raise ValueError("expected one historical probe wrapper declaration")
         identity = secrets.token_hex(5)
         command(sys.executable, str(script), "--build-only", "--identity", identity)
         specs[side] = (script, identity)

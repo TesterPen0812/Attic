@@ -107,22 +107,10 @@ final class TasksRound11Tests: XCTestCase {
         XCTAssertFalse(clock.isRunning, "stopped when the motion said it was done")
     }
 
-    /// Round 11's crisp motion is the Motion Lab's Calm: navigation never
-    /// bounces, small things that appear bounce lightly, everything lands
-    /// in about a quarter of a second (spec § Motion). Every feel lands
-    /// within about a third of a second, and navigation bounces no more
-    /// than round 9's.
+    /// The supported recipes retain their timing and navigation-bounce limits.
     func testMotionIsCrisp() {
         let saved = AtticMotionTuning.current
         defer { AtticMotionTuning.current = saved }
-        AtticMotionTuning.current = .calm
-        for preset in AtticMotionPreset.allCases {
-            XCTAssertLessThanOrEqual(preset.duration, 0.28, "\(preset) lingers")
-        }
-        for preset in [AtticMotionPreset.slide, .expand, .doneSlide, .pageSwitch] {
-            XCTAssertEqual(preset.bounce, 0, "\(preset) is navigation")
-        }
-        XCTAssertLessThanOrEqual(AtticMotionPreset.popover.bounce, 0.15)
         for feel in AtticMotionFeel.allCases {
             AtticMotionTuning.current = feel.tuning
             for preset in AtticMotionPreset.allCases {
@@ -134,12 +122,15 @@ final class TasksRound11Tests: XCTestCase {
         }
     }
 
-    /// The fade under the tabs: nothing scrolled under them shows.
-    func testNothingShowsUnderTheTabs() {
-        let stops = TasksViewport.maskStops(height: 520, tabsTop: 80, listTop: 110, bottomStack: 60)
-        let underLabels = stops.filter { $0.location <= 96.0 / 520 + 0.0001 }
-        XCTAssertTrue(underLabels.allSatisfy { $0.opacity == 0 }, "rows under the tab labels are gone")
-        XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
+    /// N-6 D, superseded by the owner's 10-17 decision: rows are no
+    /// longer gone behind the tab labels; they run on under them, visible
+    /// through the blur (`RoundO3ControlsTests`). Still: no overlay behind
+    /// the tabs, and the first row rests clear of them.
+    func testRowsRunOnUnderTheTabsAndRestClearOfThem() {
+        let top = TasksViewport.topEdges(tabsTop: 80)
+        XCTAssertEqual(top.top, TasksViewport.controlsBottom(tabsTop: 80), "the blur covers the tabs line")
+        XCTAssertGreaterThan(TasksViewport.listTop(tabsTop: 80), TasksViewport.plainLine(tabsTop: 80).upperBound,
+                             "the first row rests below the tab labels")
     }
 
     /// Files over the page land on the row under them, never on another.

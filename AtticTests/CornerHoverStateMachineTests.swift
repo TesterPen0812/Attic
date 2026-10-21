@@ -12,7 +12,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
             reasons: [.quickEntryFocus], pointerInside: false, secondsSinceKeyboardInput: 0.5))
         XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(
             reasons: [.quickEntryFocus], pointerInside: true, secondsSinceKeyboardInput: 2))
-        for reason in [PanelInteractionLockReason.taskComposer, .notesDirty, .subtaskComposer, .taskEditing, .menuTracking] {
+        for reason in [PanelInteractionLockReason.taskComposer, .notesDirty, .taskEditing, .menuTracking] {
             XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(
                 reasons: [reason], pointerInside: false, secondsSinceKeyboardInput: 20))
         }
@@ -731,12 +731,10 @@ final class PanelUIStateTests: XCTestCase {
     @MainActor
     func testNotesPresentationLocksOnlyForExplicitWorkReasons() {
         let state = PanelUIState()
-        let note = NoteItem(title: "Saved", body: "Clean")
 
         state.selectSection(.notes)
-        state.beginEditingNote(note)
 
-        XCTAssertTrue(state.isComposerPresented)
+        XCTAssertFalse(state.isComposerPresented)
         XCTAssertFalse(state.isInteractionLocked)
         XCTAssertEqual(state.interactionLockReasons, [])
 
@@ -757,29 +755,7 @@ final class PanelUIStateTests: XCTestCase {
         }
     }
 
-    func testNotesComposerInteractionSnapshotSeparatesPresentationFromWork() {
-        XCTAssertEqual(
-            NotesComposerInteractionSnapshot(
-                isTitleFocused: false,
-                isBodyFocused: false,
-                isLibraryPresented: false,
-                isImporterPresented: false,
-                isBlockingSave: false
-            ).lockReasons,
-            []
-        )
 
-        XCTAssertEqual(
-            NotesComposerInteractionSnapshot(
-                isTitleFocused: true,
-                isBodyFocused: false,
-                isLibraryPresented: true,
-                isImporterPresented: false,
-                isBlockingSave: true
-            ).lockReasons,
-            [.notesEditorFocus, .notesPopover, .blockingSave]
-        )
-    }
 
     @MainActor
     func testQuickEntryMenuAndWindowReasonsComposeWithoutChangingPin() {
@@ -812,39 +788,14 @@ final class PanelUIStateTests: XCTestCase {
     }
 
     @MainActor
-    func testReleaseOutsideReturnsDraggedTaskOnce() {
-        let state = PanelUIState()
-        let task = TaskItem(title: "External drag")
-
-        state.beginDragging(task)
-
-        XCTAssertEqual(state.finishDragging(releasedOutsidePanel: true), task.id)
-        XCTAssertNil(state.draggedTaskID)
-        XCTAssertNil(state.finishDragging(releasedOutsidePanel: true))
-    }
-
-    @MainActor
-    func testReleaseInsideClearsDragWithoutStartingTask() {
-        let state = PanelUIState()
-        let task = TaskItem(title: "Internal drag")
-
-        state.beginDragging(task)
-
-        XCTAssertNil(state.finishDragging(releasedOutsidePanel: false))
-        XCTAssertNil(state.draggedTaskID)
-    }
-
-    @MainActor
-    func testReconcileClearsEditingAndDragStateForDeletedTask() {
+    func testReconcileClearsEditingStateForDeletedTask() {
         let state = PanelUIState()
         let task = TaskItem(title: "Removed remotely")
 
         state.beginEditing(task)
-        state.beginDragging(task)
         state.reconcileTaskIDs([])
 
         XCTAssertNil(state.editingTaskID)
-        XCTAssertNil(state.draggedTaskID)
         XCTAssertFalse(state.isInteractionLocked)
     }
 

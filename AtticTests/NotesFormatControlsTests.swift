@@ -1,0 +1,2837 @@
+import AppKit
+import Combine
+import SwiftUI
+import XCTest
+@testable import Attic
+
+/// Slice 3a UI: the selection bar, Aa, the `/` list with its date and file
+/// flows, the link card, the menus and the keys all run the engine's one
+/// command layer through `NoteCommandRouter`.
+@MainActor
+final class NotesFormatControlsTests: XCTestCase {
+    private var windows: [NSWindow] = []
+    private var controlsList: [NoteFormatControls] = []
+    private var defaultsSuite: String?
+
+    override func setUp() async throws {
+        let suite = "NotesFormatControlsTests.\(UUID().uuidString)"
+        defaultsSuite = suite
+    }
+
+    override func tearDown() async throws {
+        controlsList.forEach { $0.invalidate() }
+        controlsList.removeAll()
+        windows.forEach { $0.close() }
+        windows.removeAll()
+        if let defaultsSuite { UserDefaults.standard.removePersistentDomain(forName: defaultsSuite) }
+    }
+
+    private static let sample = NoteDocument(blocks: [
+        .text("Pricing page"),
+        .text("Lead with the free tier: most people only need the panel."),
+        .text("Before launch"),
+        .text("Annual plan"),
+        .text("Student pricing")
+    ])
+
+    private func make(_ document: NoteDocument = sample, readOnly: Bool = false, topInset: CGFloat = 0,
+                      bottomInset: CGFloat = 0) -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: document, readOnly: readOnly)
+        let (scrollView, textView) = engine.makeView()
+        scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+        textView.textContainerInset = NSSize(width: 28, height: 0)
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        windows.append(window)
+        window.makeFirstResponder(textView)
+        let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: scrollView, design: .default)
+        controlsList.append(controls)
+        scrollView.layoutSubtreeIfNeeded()
+        return (controls, engine, textView)
+    }
+
+    private func range(_ text: String, _ textView: NSTextView) -> NSRange {
+        (textView.string as NSString).range(of: text)
+    }
+
+    func testTrackingOwnerRespondsToAppKitsNativeMouseSelectors() {
+        let (controls, _, _) = make()
+        for selector in [#selector(NSResponder.mouseEntered(with:)), #selector(NSResponder.mouseMoved(with:)),
+                         #selector(NSResponder.mouseExited(with:))] {
+            XCTAssertTrue(controls.responds(to: selector), "tracking areas send \(NSStringFromSelector(selector))")
+        }
+    }
+
+    private func type(_ text: String, _ textView: NoteEditorTextView) {
+        for character in text {
+            if character == "\n" { textView.insertNewline(nil) } else {
+                textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+        }
+    }
+
+    private func spin() { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+
+    /// Runs the loop until `condition` holds (a second at most): SwiftUI
+    /// builds a card's field over a few turns.
+    private func settle(_ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(1)
+        while !condition(), Date() < deadline { spin() }
+    }
+
+    private func marks(_ engine: NoteEditorEngine, block: Int) -> [NoteMark.Kind] {
+        engine.document().blocks[block].marks.map(\.kind)
+    }
+
+    private func keyEvent(_ characters: String, _ ignoring: String, keyCode: UInt16,
+                          _ flags: NSEvent.ModifierFlags, window: NSWindow) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                         windowNumber: window.windowNumber, context: nil, characters: characters,
+                         charactersIgnoringModifiers: ignoring, isARepeat: false, keyCode: keyCode)!
+    }
+
+    private func invoke(_ item: NSMenuItem?) {
+        guard let item, let action = item.action else { return XCTFail("missing menu item") }
+        NSApp.sendAction(action, to: item.target, from: item)
+    }
+
+    private func find(_ title: String, in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+        for command in commands {
+            if command.title == title { return command }
+            if let found = find(title, in: command.children) { return found }
+        }
+        return nil
+    }
+
+    // H13: owner feedback, 11 October 2026.
+    func testH13ObjectOnlySelectionOffersNoTextFormatting() {
+        for object: NoteBlock in [
+            .file(attachmentID: UUID(), filename: "H13.txt", contentTypeIdentifier: "public.plain-text", byteCount: 12),
+            .image(attachmentID: UUID(), pixelWidth: 240, pixelHeight: 120)
+        ] {
+            let (controls, engine, text) = make(NoteDocument(blocks: [.text("H13"), object, .text("Body")]))
+            let selection = (text.string as NSString).range(of: "\u{FFFC}")
+            text.setSelectedRange(selection)
+            controls.refresh()
+            XCTAssertFalse(controls.formatModel.barShown, "object controls belong in the object's menu")
+            for command in NoteCommandCatalog.marks + NoteCommandCatalog.inline {
+                XCTAssertFalse(engine.validate(command).enabled, "\(command) cannot format an object")
+            }
+        }
+    }
+
+    func testH13SelectionBelowViewportDoesNotPutAFormatBarOutsideTheEditor() throws {
+        let document = NoteDocument(blocks: [.text("H13")] + (0..<100).map { .text("Line \($0)") })
+        let (controls, engine, text) = make(document, topInset: 64)
+        // Resolve TextKit's estimated geometry before revealing the selection,
+        // as in the tall-selection fixture: a later viewport correction can
+        // otherwise queue another refresh after the first one has completed.
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        let target = range("Line 99", text)
+        text.setSelectedRange(target)
+        engine.scrollView?.contentView.scroll(to: NSPoint(x: 0, y: -64))
+        controls.refresh()
+        XCTAssertNil(controls.barPlacement(selection: target), "an offscreen selection has no floating bar")
+        XCTAssertFalse(controls.formatModel.barShown)
+        text.scrollRangeToVisible(target)
+        waitForFormatRefresh(controls)
+        XCTAssertTrue(controls.formatModel.barShown, "the controls return with the visible selection")
+        let reads = controls.snapshotCount
+        for _ in 0..<3 {
+            let clip = try XCTUnwrap(engine.scrollView?.contentView)
+            clip.scroll(to: NSPoint(x: 0, y: clip.bounds.minY - 1))
+            waitForFormatRefresh(controls)
+        }
+        XCTAssertEqual(controls.snapshotCount, reads, "scrolling a visible selection only repositions its bar")
+    }
+
+    func testH13EveryMarkOnMixedTextTogglesAndUndoesWithoutChangingObjects() throws {
+        for kind in NoteMark.Kind.allCases where kind != .link {
+            let block = NoteBlock.image(attachmentID: UUID(), pixelWidth: 80, pixelHeight: 40)
+            let (controls, engine, text) = make(NoteDocument(blocks: [.text("H13"), .text("Alpha Beta"), block, .text("Gamma")]))
+            text.setSelectedRange(range("Alpha", text))
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .selectionBar))
+            text.setSelectedRange(range("Alpha Beta", text))
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .mixed)
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .selectionBar))
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .on)
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .selectionBar))
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .off)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .on)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .off)
+            text.selectAll(nil)
+            XCTAssertTrue(controls.router.run(.mark(kind), from: .shortcut))
+            let doc = engine.document()
+            XCTAssertTrue(doc.blocks[0].marks.isEmpty, "owner decision P3: titles stay plain even in mixed selections")
+            XCTAssertEqual(doc.blocks[2], block, "formatting preserves the object")
+            XCTAssertEqual(engine.validate(.mark(kind)).state, .on)
+            let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(doc)).document))
+            XCTAssertEqual(reopened.document(), doc)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document(), doc)
+        }
+    }
+
+    func testAR04NativeTitleKeepsItsCachedPixelsAfterRelayout() throws {
+        let (_, engine, text) = make(NoteDocument(blocks: [.text("H13 title pixels"), .text("Body")]))
+        text.setSelectedRange(NSRange(location: text.string.utf16.count, length: 0))
+        text.layoutSubtreeIfNeeded()
+        let rect = try XCTUnwrap(engine.titleLineRects()).first.insetBy(dx: -2, dy: -2)
+        func ink() throws -> Int {
+            let bitmap = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: rect))
+            text.cacheDisplay(in: rect, to: bitmap)
+            var count = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                       color.alphaComponent > 0.1, color.redComponent < 0.5 { count += 1 }
+                }
+            }
+            return count
+        }
+        let full = try ink()
+        XCTAssertGreaterThan(full, 20)
+        text.layoutSubtreeIfNeeded()
+        spin()
+        XCTAssertGreaterThan(try ink(), full * 9 / 10, "the title returns without missing ink")
+    }
+
+    // MARK: Routing: every surface runs the same engine command
+
+    func testJHighlightRoutesWriteNoKeyAndMenuDistinguishesYellowFromGrey() throws {
+        for surface: NoteCommandSurface in [.selectionBar, .formatBar, .noteMenu, .contextMenu, .menuBar, .shortcut] {
+            let (controls, engine, textView) = make()
+            textView.setSelectedRange(range("most people", textView))
+            if surface == .selectionBar || surface == .formatBar {
+                controls.formatModel.run(.mark(.highlight), from: surface)
+            } else {
+                XCTAssertTrue(controls.router.run(.mark(.highlight), from: surface))
+            }
+            let mark = try XCTUnwrap(engine.document().blocks[1].marks.first)
+            XCTAssertEqual(mark.kind, .highlight)
+            XCTAssertNil(mark.colour, "\(surface): the default remains editable in the October 10 build")
+            controls.refresh()
+            func checkedColour() -> [String] {
+                controls.formatModel.highlightMenu(from: surface).filter { $0.state == .on }.map(\.title)
+            }
+            XCTAssertEqual(engine.highlightColour(), .yellow)
+            XCTAssertEqual(checkedColour(), [NoteHighlightColour.yellow.title])
+            let grey = try XCTUnwrap(controls.formatModel.highlightMenu(from: surface).first { $0.title == NoteHighlightColour.grey.title })
+            grey.action()
+            controls.refresh()
+            XCTAssertEqual(engine.document().blocks[1].marks.first?.colour, "grey")
+            XCTAssertEqual(engine.highlightColour(), .grey)
+            XCTAssertEqual(checkedColour(), [NoteHighlightColour.grey.title])
+            XCTAssertTrue(engine.history.undo())
+            controls.refresh()
+            XCTAssertEqual(checkedColour(), [NoteHighlightColour.yellow.title])
+            XCTAssertNil(engine.document().blocks[1].marks.first?.colour)
+        }
+    }
+
+    func testEverySurfaceRunsTheSameBoldCommandWithTheSameResult() throws {
+        var results: [NoteCommandSurface: [NoteMark.Kind]] = [:]
+        var routes: [NoteCommandSurface: NoteFormatCommand] = [:]
+        for surface: NoteCommandSurface in [.selectionBar, .formatBar, .noteMenu, .contextMenu, .menuBar, .shortcut] {
+            let (controls, engine, textView) = make()
+            controls.router.onRun = { command, from in routes[from] = command }
+            let target = range("most people", textView)
+            textView.setSelectedRange(target)
+            switch surface {
+            case .selectionBar, .formatBar:
+                controls.formatModel.run(.mark(.bold), from: surface)
+            case .noteMenu:
+                find("Bold", in: controls.router.menuCommands(from: .noteMenu))?.action()
+            case .contextMenu:
+                let event = NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 60, y: 450), modifierFlags: [],
+                                               timestamp: 0, windowNumber: textView.window!.windowNumber, context: nil,
+                                               eventNumber: 0, clickCount: 1, pressure: 1)!
+                let menu = try XCTUnwrap(textView.menu(for: event))
+                textView.setSelectedRange(target)
+                let format = menu.items.first { $0.title == "Format" }?.submenu
+                XCTAssertNotNil(menu.items.first { $0.title == "Insert" }, "right-click has Insert")
+                invoke(format?.items.first { $0.title == "Bold" })
+            case .menuBar:
+                let items = NoteFormatMenuBar.items(for: NSMenu(title: "Format"), controls: controls)
+                invoke(items.first { $0.title == "Bold" })
+            case .shortcut:
+                let event = keyEvent("b", "b", keyCode: 11, .command, window: textView.window!)
+                XCTAssertTrue(controls.handleKey(event), "⌘B is the note's")
+            default: break
+            }
+            results[surface] = marks(engine, block: 1)
+            XCTAssertEqual(routes[surface], .mark(.bold), "\(surface) ran Bold")
+            XCTAssertEqual(engine.history.undoActionName, "Bold", "\(surface): one engine history step")
+        }
+        XCTAssertEqual(Set(results.values.map { $0 }), [[.bold]], "every surface made the same change: \(results)")
+    }
+
+    func testMenusListEveryCommandWithShortcutsAndChecks() throws {
+        let (controls, _, textView) = make()
+        textView.setSelectedRange(NSRange(location: range("Annual plan", textView).location, length: 0))
+        controls.router.run(.paragraph(.bullet), from: .shortcut)
+        let menu = controls.router.menuCommands(from: .noteMenu)
+        XCTAssertEqual(menu.map(\.title), ["Insert", "Format"])
+        // Notes v2 tables (owner pick Q6): Insert › Table.
+        XCTAssertEqual(menu[0].children.map(\.title), ["Image or File…", "Date…", "Divider", "Table"])
+        let format = menu[1].children
+        for command in NoteCommandCatalog.formatSections.flatMap({ $0 }) {
+            XCTAssertNotNil(format.first { $0.title == NoteCommandCatalog.menuTitle(command) }, "Format lists \(command)")
+        }
+        XCTAssertEqual(find("Bulleted List", in: menu)?.state, .on, "the current list is checked")
+        XCTAssertEqual(find("Bold", in: menu)?.shortcut, KeyboardShortcut("b", modifiers: .command))
+        XCTAssertEqual(find("Checklist", in: menu)?.shortcut, KeyboardShortcut("9", modifiers: [.command, .shift]))
+        XCTAssertEqual(find("Check or Uncheck", in: menu)?.shortcut, KeyboardShortcut(.return, modifiers: .command))
+        XCTAssertEqual(find("Move Line Up", in: menu)?.shortcut, KeyboardShortcut(.upArrow, modifiers: [.command, .option]))
+        XCTAssertEqual(find("Quote", in: menu)?.shortcut, KeyboardShortcut("4", modifiers: [.command, .option]))
+        XCTAssertEqual(find("Code Block", in: menu)?.shortcut, KeyboardShortcut("5", modifiers: [.command, .option]))
+    }
+
+    func testTheMenuBarNeverAnswersKeysAndIsDimmedWithoutANote() {
+        let bar = NoteFormatMenuBar.items(for: NSMenu(title: "Format"), controls: nil)
+        XCTAssertFalse(bar.isEmpty)
+        XCTAssertTrue(bar.allSatisfy { !$0.isEnabled })
+        let main = NSMenu()
+        main.addItem(withTitle: "Edit", action: nil, keyEquivalent: "")
+        NoteFormatMenuBar.install(in: main)
+        NoteFormatMenuBar.install(in: main)
+        XCTAssertEqual(main.items.map(\.title), ["Edit", "Insert", "Format"], "installed once, after Edit")
+        let format = main.items[2].submenu!
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0,
+                                     context: nil, characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11)!
+        var target: AnyObject?
+        var action: Selector?
+        XCTAssertFalse(format.delegate!.menuHasKeyEquivalent!(format, for: event, target: &target, action: &action))
+    }
+
+    func testShortcutsDecodeShiftedDigitsAndSkipReservedChords() throws {
+        let (_, _, textView) = make()
+        let window = textView.window!
+        // ⇧⌘7 on a US layout: the characters carry Shift ("&").
+        let bullet = keyEvent("&", "&", keyCode: 26, [.command, .shift], window: window)
+        XCTAssertEqual(NoteCommandCatalog.command(for: bullet), .paragraph(.bullet))
+        let checklist = keyEvent("(", "(", keyCode: 25, [.command, .shift], window: window)
+        XCTAssertEqual(NoteCommandCatalog.command(for: checklist), .paragraph(.checklist))
+        let quit = keyEvent("œ", "q", keyCode: 12, [.command, .option], window: window)
+        XCTAssertNil(NoteCommandCatalog.command(for: quit), "⌥⌘Q stays the system's")
+        let tick = keyEvent("\r", "\r", keyCode: 36, .command, window: window)
+        XCTAssertEqual(NoteCommandCatalog.command(for: tick), .toggleChecklist)
+        XCTAssertEqual(NoteCommandCatalog.parseShortcut("⌥⌘↓"), KeyboardShortcut(.downArrow, modifiers: [.command, .option]))
+        XCTAssertNil(NoteCommandCatalog.command(for: keyEvent("l", "l", keyCode: 37, [.command, .shift], window: window)),
+                     "⇧⌘L stays All notes")
+    }
+
+    // MARK: Selection bar
+
+    func testTheBarShowsForASelectionWithItsStatesAndHidesWithoutOne() throws {
+        let (controls, engine, textView) = make()
+        textView.setSelectedRange(range("most people", textView))
+        controls.router.run(.mark(.bold), from: .shortcut)
+        textView.setSelectedRange(range("people only", textView))
+        controls.refresh()
+        XCTAssertTrue(controls.formatModel.barShown, "a selection shows the bar")
+        XCTAssertEqual(controls.formatModel.snapshot.value(.mark(.bold)), .mixed, "half bold is mixed")
+        XCTAssertEqual(controls.formatModel.snapshot.paragraph, .body)
+        textView.setSelectedRange(range("most", textView))
+        controls.refresh()
+        XCTAssertEqual(controls.formatModel.snapshot.value(.mark(.bold)), .on)
+        XCTAssertEqual(controls.formatModel.snapshot.value(.mark(.italic)), .off)
+        textView.setSelectedRange(NSRange(location: 10, length: 0))
+        controls.refresh()
+        XCTAssertFalse(controls.formatModel.barShown, "nothing on screen without a selection")
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.kind, .bold)
+    }
+
+    /// U-01: the bar's last glyph stands as far from the capsule's end as
+    /// the style's name from its start, and the page hears where the bar
+    /// lies (the title's ⋯ steps aside under it) until it leaves.
+    func testTheBarHasEvenEndsAndReportsWhereItLies() throws {
+        let (controls, _, textView) = make()
+        var covers: [[NSRect]] = []
+        controls.onCoverChange = { covers.append($0) }
+        textView.setSelectedRange(range("Student pricing", textView))
+        controls.refresh()
+        let cover = try XCTUnwrap(covers.last?.first)
+        XCTAssertEqual(covers.last?.count, 1)
+        XCTAssertEqual(cover.minY, controls.barFrame.minY, accuracy: 1, "the capsule, in the text view")
+        XCTAssertEqual(cover.width, controls.barFrame.width, accuracy: 1)
+        let m = AtticNoteFormatMetrics.self
+        let font = AtticTextStyle.controlLabel.nsFont
+        let label = ceil(("Body" as NSString).size(withAttributes: [.font: font]).width)
+        let style = label + 4 + m.barStyleChevron + 2 + m.barStylePadding * 2
+        let toggles = CGFloat(NoteFormatBarItem.all.count - 1) * m.barToggleWidth + m.highlightChevronWidth
+        XCTAssertEqual(NoteFormatControls.barWidth(styleName: "Body"),
+                       ceil(AtticControlSize.capsuleInset * 2 + m.barTrailingRoom + style + m.barGroupGap * 3 + toggles))
+        XCTAssertGreaterThan(m.barTrailingRoom, 0)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        controls.refresh()
+        XCTAssertEqual(covers.last, [], "gone with the bar")
+    }
+
+    func testTheBarStaysAboveTheSelectionAndGoesBelowWithoutRoom() throws {
+        let (controls, engine, textView) = make()
+        let target = range("Student pricing", textView)
+        textView.setSelectedRange(target)
+        controls.refresh()
+        let selection = try XCTUnwrap(engine.rect(for: target))
+        XCTAssertLessThanOrEqual(controls.barFrame.maxY, selection.minY, "above, never over the selection")
+        XCTAssertEqual(controls.formatModel.barBelow, false)
+        XCTAssertLessThanOrEqual(controls.barFrame.width, 320 - 2 * AtticNoteFormatMetrics.barEdgeMargin, "fits a 320 pt panel")
+        XCTAssertGreaterThanOrEqual(controls.barFrame.width, NoteFormatControls.barWidth(styleName: "Body"))
+
+        let scrollable = NoteDocument(blocks: Self.sample.blocks + (0..<40).map { .text("Further body line \($0)") })
+        let (top, topEngine, topView) = make(scrollable, topInset: 60)
+        // Owner P3 keeps titles plain; exercise placement on the first body line.
+        // Scroll the body up beneath the header so there is still no room
+        // above the selection. Selecting the title used to supply this geometry.
+        let topScroll = try XCTUnwrap(topView.enclosingScrollView)
+        topEngine.layoutManager?.ensureLayout(for: topEngine.contentStorage.documentRange)
+        topView.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(topView.frame.height, topScroll.contentView.bounds.height, "the fixture must be scrollable")
+        topScroll.contentView.scroll(to: .zero)
+        topScroll.reflectScrolledClipView(topScroll.contentView)
+        let first = range("Lead", topView)
+        topView.setSelectedRange(first)
+        top.refresh()
+        let rect = try XCTUnwrap(topEngine.rect(for: first))
+        XCTAssertTrue(top.formatModel.barBelow, "no room under the header: below")
+        XCTAssertGreaterThanOrEqual(top.barFrame.minY, rect.maxY)
+        XCTAssertLessThanOrEqual(top.barFrame.maxX, topView.bounds.width, "inside the panel")
+        XCTAssertGreaterThanOrEqual(top.barFrame.minX, 0)
+    }
+
+    /// V-03 (recording 1937): while a drag-select is being made (AppKit's
+    /// tracking of the press, with its autoscroll) the bar stays away; it
+    /// comes once the button is up, for the settled selection.
+    func testV03TheBarWaitsForADragSelectionToSettle() throws {
+        let (controls, _, textView) = make()
+        textView.isTrackingMouseSelection = true
+        textView.setSelectedRange(range("Student pricing", textView))
+        controls.refresh()
+        XCTAssertFalse(controls.formatModel.barShown, "no bar while the drag is live")
+        textView.setSelectedRange(range("Annual plan", textView))
+        controls.refresh()
+        XCTAssertFalse(controls.formatModel.barShown, "still none as the selection grows")
+        textView.isTrackingMouseSelection = false
+        settle { controls.formatModel.barShown }
+        XCTAssertTrue(controls.formatModel.barShown, "the bar comes when the button is up")
+        let selection = try XCTUnwrap(engine(of: textView).rect(for: range("Annual plan", textView)))
+        XCTAssertLessThanOrEqual(controls.barFrame.maxY, selection.minY, "beside the settled selection, not on it")
+        // A new press hides a showing bar at once.
+        textView.isTrackingMouseSelection = true
+        XCTAssertFalse(controls.formatModel.barShown)
+        textView.isTrackingMouseSelection = false
+    }
+
+    /// V-03: the bar never covers the selection. A selection taller than
+    /// the view has no room on either side, so no bar shows; scrolled so an
+    /// end has room beside it, the bar comes back on that side.
+    func testV03TheBarNeverCoversASelectionTallerThanTheView() throws {
+        let long = NoteDocument(blocks: Self.sample.blocks + (0..<60).map { .text("Further body line \($0)") })
+        let (controls, engine, textView) = make(long, topInset: 60)
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        let start = range("Lead", textView).location
+        let end = NSMaxRange(range("Further body line 59", textView))
+        let selection = NSRange(location: start, length: end - start)
+        textView.setSelectedRange(selection)
+        let first = try XCTUnwrap(engine.rect(for: NSRange(location: start, length: 1)))
+        let last = try XCTUnwrap(engine.rect(for: NSRange(location: end - 1, length: 1)))
+        var shown = 0
+        for y in stride(from: -60, through: textView.frame.height - 200, by: 37) {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            guard let placed = controls.barPlacement(selection: selection) else { continue }
+            shown += 1
+            let visible = textView.visibleRect
+            let covered = NSRect(x: 0, y: max(first.minY, visible.minY), width: textView.bounds.width,
+                                 height: max(0, min(last.maxY, visible.maxY) - max(first.minY, visible.minY)))
+            XCTAssertFalse(placed.frame.intersects(covered), "at \(y): \(placed.frame) over the selection \(covered)")
+        }
+        XCTAssertGreaterThan(shown, 0, "an end with room beside it brings the bar back")
+        // In the middle of the selection neither end shows: no bar.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: (first.maxY + last.minY) / 2 - scroll.contentView.bounds.height / 2))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        XCTAssertNil(controls.barPlacement(selection: selection))
+    }
+
+    /// F6 (decided 10-18): the bar sits by whichever end of a selection
+    /// taller than the view is visible: above the start while it shows
+    /// with room, else below the end; it hides only while neither end is
+    /// on screen, and comes back when a scroll brings one into view. It
+    /// never covers the selection. Red first: once the bar had shown, a
+    /// bar that left (neither end in view) never came back on a scroll,
+    /// so it was gone for the rest of a selection taller than the view.
+    func testF6TheBarSitsByWhicheverEndOfATallSelectionIsVisible() throws {
+        let long = NoteDocument(blocks: Self.sample.blocks + (0..<60).map { .text("Further body line \($0)") })
+        let (controls, engine, textView) = make(long, topInset: 60)
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        let start = range("Before launch", textView).location
+        let end = NSMaxRange(range("Further body line 50", textView))
+        let selection = NSRange(location: start, length: end - start)
+        let first = try XCTUnwrap(engine.rect(for: NSRange(location: start, length: 1)))
+        let last = try XCTUnwrap(engine.rect(for: NSRange(location: end - 1, length: 1)))
+        func scrollTo(_ y: CGFloat) {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            waitForFormatRefresh(controls)
+        }
+        func check(_ name: String, shown: Bool, below: Bool? = nil) {
+            XCTAssertEqual(controls.formatModel.barShown, shown, "\(name): shown")
+            guard shown else { return }
+            if let below { XCTAssertEqual(controls.formatModel.barBelow, below, "\(name): side") }
+            let visible = textView.visibleRect
+            let covered = NSRect(x: 0, y: max(first.minY, visible.minY), width: textView.bounds.width,
+                                 height: max(0, min(last.maxY, visible.maxY) - max(first.minY, visible.minY)))
+            XCTAssertFalse(controls.barFrame.intersects(covered), "\(name): \(controls.barFrame) over the selection")
+            XCTAssertTrue(visible.contains(controls.barFrame), "\(name): in view")
+        }
+        scrollTo(-60)
+        textView.setSelectedRange(selection)
+        waitForFormatRefresh(controls)
+        check("start in view", shown: true, below: false)
+        XCTAssertLessThan(controls.barFrame.maxY, first.minY, "above the start")
+        // The middle: neither end on screen.
+        scrollTo((first.maxY + last.minY) / 2 - scroll.contentView.bounds.height / 2)
+        check("neither end", shown: false)
+        // Only the end in view, with room under it.
+        scrollTo(last.maxY + 80 - scroll.contentView.bounds.height)
+        check("only the end in view", shown: true, below: true)
+        XCTAssertGreaterThan(controls.barFrame.minY, last.maxY, "below the end")
+        // Back to the start.
+        scrollTo((first.maxY + last.minY) / 2 - scroll.contentView.bounds.height / 2)
+        check("neither end again", shown: false)
+        scrollTo(-60)
+        check("the start again", shown: true, below: false)
+    }
+
+    private func engine(of textView: NoteEditorTextView) -> NoteEditorEngine { textView.engine! }
+
+    func testEscHidesTheBarUntilTheSelectionChangesAndReadOnlyShowsNone() {
+        let (controls, _, textView) = make()
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        controls.refresh()
+        XCTAssertFalse(controls.formatModel.barShown)
+        textView.setSelectedRange(range("the panel", textView))
+        waitForFormatRefresh(controls)
+        XCTAssertTrue(controls.formatModel.barShown, "a new selection brings it back")
+
+        let (readOnly, _, readOnlyView) = make(readOnly: true)
+        readOnlyView.setSelectedRange(range("most people", readOnlyView))
+        readOnly.refresh()
+        XCTAssertFalse(readOnly.formatModel.barShown, "read only: nothing to offer")
+    }
+
+    func testControlTabWalksTheBarAndReturnPresses() throws {
+        let (controls, engine, textView) = make()
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        let window = textView.window!
+        XCTAssertTrue(controls.handleKey(keyEvent("\t", "\t", keyCode: 48, .control, window: window)))
+        XCTAssertEqual(controls.formatModel.barKeyboardIndex, 0, "⌃Tab reaches the bar's style control")
+        XCTAssertTrue(controls.handleKey(keyEvent("", "", keyCode: 124, [], window: window)))
+        XCTAssertEqual(controls.formatModel.barKeyboardIndex, 1)
+        XCTAssertTrue(controls.handleKey(keyEvent("\r", "\r", keyCode: 36, [], window: window)))
+        XCTAssertEqual(marks(engine, block: 1), [.bold], "Return pressed Bold")
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{1b}", "\u{1b}", keyCode: 53, [], window: window)))
+        XCTAssertNil(controls.formatModel.barKeyboardIndex, "Esc goes back to the text")
+        XCTAssertTrue(window.firstResponder === textView, "the text never lost the keyboard")
+
+        // OD-7: without a bar, ⌃Tab and ⌃⇧Tab leave the text for the
+        // page's next and previous control; Aa stays on ⌘T.
+        var opened: Bool?
+        var left: [Bool] = []
+        controls.requestFormatBar = { opened = $0 }
+        controls.leaveEditor = { left.append($0) }
+        textView.setSelectedRange(NSRange(location: 20, length: 0))
+        controls.refresh()
+        XCTAssertTrue(controls.handleKey(keyEvent("\t", "\t", keyCode: 48, .control, window: window)))
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{19}", "\u{19}", keyCode: 48, [.control, .shift], window: window)))
+        XCTAssertEqual(left, [true, false], "⌃Tab leaves forward, ⌃⇧Tab backward")
+        XCTAssertNil(opened, "⌃Tab no longer opens Aa")
+    }
+
+    /// OD-7: Tab in the title moves to the start of the body (making the
+    /// body's first line when there is none); in the body it indents.
+    func testTabInTheTitleMovesToTheBodyAndIndentsInTheBody() throws {
+        let (_, engine, textView) = make()
+        let title = engine.titleParagraphRange
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: NSMaxRange(title) + 1, length: 0), "Tab in the title: the body's start")
+        XCTAssertEqual(engine.titleParagraphRange, title, "nothing typed into the title")
+        XCTAssertFalse(textView.string.prefix(NSMaxRange(title)).contains("\t"))
+
+        XCTAssertFalse(engine.moveFromTitleToBody(), "in the body Tab is not navigation (it indents)")
+
+        let (_, empty, emptyView) = make(NoteDocument(blocks: [.text("Only a title")]))
+        emptyView.setSelectedRange(NSRange(location: 4, length: 0))
+        emptyView.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(emptyView.selectedRange().location, empty.titleParagraphRange.length + 1, "a body line to type in")
+        XCTAssertEqual(empty.lineText(at: 0), "Only a title")
+    }
+
+    func testNotesKeyboardOrderGoesRoundTheBottomRowAndBackIntoTheText() {
+        let stops = NotesKeyboardOrder.stops(format: true)
+        XCTAssertEqual(stops, [.text, .allNotes, .format, .newNote])
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: true), .allNotes, "⌃Tab: the next control")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: false), .newNote, "⌃⇧Tab: the previous one")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .newNote, in: stops, forward: true), .text, "round again into the text")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .allNotes, in: stops, forward: false), .text)
+        XCTAssertEqual(NotesKeyboardOrder.stops(format: false), [.text, .allNotes, .newNote], "a read-only note has no Aa")
+    }
+
+    func testListsToggleBackToBodyAndAaWorksOnTheCaretParagraph() {
+        let (controls, engine, textView) = make()
+        textView.setSelectedRange(NSRange(location: range("Annual", textView).location + 2, length: 0))
+        controls.formatModel.run(.paragraph(.bullet), from: .formatBar)
+        XCTAssertEqual(engine.document().blocks[3].style, "bullet")
+        controls.refreshSnapshot()
+        XCTAssertEqual(controls.formatModel.snapshot.value(.paragraph(.bullet)), .on)
+        XCTAssertEqual(controls.formatModel.snapshot.paragraph, .bullet, "the bar's style control says List")
+        controls.formatModel.run(.paragraph(.bullet), from: .selectionBar)
+        XCTAssertNil(engine.document().blocks[3].style, "choosing an on list returns it to Body")
+        controls.formatModel.run(.paragraph(.heading(2)), from: .formatBar)
+        XCTAssertEqual(engine.document().blocks[3].style, "heading")
+        controls.refreshSnapshot()
+        XCTAssertEqual(controls.formatModel.snapshot.paragraph, .heading(2))
+    }
+
+    func testTheTitleAndReadOnlyExplainWhyStylesAreDimmed() {
+        let (controls, _, textView) = make()
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        controls.refreshSnapshot()
+        XCTAssertFalse(controls.formatModel.snapshot.isEnabled(.paragraph(.heading(2))))
+        XCTAssertNotNil(controls.formatModel.snapshot.disabledReason)
+        let (readOnly, _, _) = make(readOnly: true)
+        readOnly.refreshSnapshot()
+        XCTAssertEqual(readOnly.formatModel.snapshot.disabledReason, "This note is read only.")
+        XCTAssertFalse(readOnly.formatModel.snapshot.hasEnabledCommand)
+    }
+
+    func testTypingWithNothingShownReadsNoState() {
+        let (controls, _, textView) = make()
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        waitForFormatRefresh(controls)
+        let before = controls.snapshotCount
+        type(" and more words typed quickly", textView)
+        waitForFormatRefresh(controls)
+        XCTAssertEqual(controls.snapshotCount, before, "no state read, no bar work per keystroke")
+    }
+
+    /// OD-14: the format row holds the style, the four cells (three lists
+    /// and, since Notes v2's tables, Table in Quote's place: owner pick Q6),
+    /// outdent and indent, and ✕, round in that order; the selection bar
+    /// keeps the marks (decision D), inline code included, and no list.
+    func testTheFormatRowAndTheSelectionBarHoldWhatTheDraftShows() {
+        XCTAssertEqual(NoteFormatRowItem.all, [.style, .command(.paragraph(.bullet)), .command(.paragraph(.number)),
+                                               .command(.paragraph(.checklist)), .command(.table),
+                                               .command(.outdent), .command(.indent), .close])
+        XCTAssertEqual(NoteFormatRowItem.step(7, forward: true), 0, "round again from ✕ to the style")
+        XCTAssertEqual(NoteFormatRowItem.step(0, forward: false), 7)
+        XCTAssertEqual(NoteFormatBarItem.all, [.style, .command(.mark(.bold)), .command(.mark(.italic)),
+                                               .command(.mark(.underline)), .command(.mark(.strikethrough)),
+                                               .command(.mark(.link)), .command(.mark(.highlight)), .command(.mark(.code))])
+        XCTAssertLessThanOrEqual(NoteFormatControls.barWidth(styleName: "Subheading"), 320 - 8, "the bar fits the panel")
+        // U-17: the pill keeps one width, so the row's cells are the same
+        // for every style at a given panel width (24 pt at 320, never moving).
+        let widths = Set(NoteFormatRowView.stylePillNames.map { name -> CGFloat in
+            var snapshot = NoteFormatSnapshot.empty
+            snapshot.paragraph = NoteCommandCatalog.styles.compactMap { command -> NoteParagraphStyle? in
+                if case let .paragraph(style) = command, NoteCommandCatalog.styleName(style) == name { style } else { nil }
+            }.first
+            return NoteFormatRowView.minimumWidth(snapshot: snapshot, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth)
+        })
+        XCTAssertEqual(widths.count, 1, "the row's width never depends on the style")
+        let longest = NoteFormatRowView.stylePillNames.map {
+            ceil(($0 as NSString).size(withAttributes: [.font: AtticTextStyle.controlLabel.nsFont]).width)
+        }.max() ?? 0
+        XCTAssertEqual(NoteFormatRowView.stylePillWidth,
+                       longest + 4 + AtticNoteFormatMetrics.barStyleChevron + 2 + AtticNoteFormatMetrics.barStylePadding * 2,
+                       "as wide as the longest name, which shows whole")
+        // A39 F11: "Subheading" shows whole in a 320 pt panel (288 pt row):
+        // the compact row, 24 pt cells and 2 pt around its lines.
+        var subheading = NoteFormatSnapshot.empty
+        subheading.paragraph = .heading(3)
+        let compact = NoteFormatRowView.minimumWidth(snapshot: subheading, toggleWidth: AtticNoteFormatMetrics.rowCompactToggleWidth)
+        XCTAssertLessThanOrEqual(compact, 288, "the longest style name fits the narrowest panel")
+        XCTAssertGreaterThan(NoteFormatRowView.minimumWidth(snapshot: subheading, toggleWidth: AtticNoteFormatMetrics.rowToggleWidth), 288,
+                             "with 28 pt cells it would not")
+        // R14: Small Heading and Callout fit too.
+        for style in [NoteParagraphStyle.heading(4), .callout(icon: "💡")] {
+            var snapshot = NoteFormatSnapshot.empty
+            snapshot.paragraph = style
+            XCTAssertLessThanOrEqual(NoteFormatRowView.minimumWidth(snapshot: snapshot, toggleWidth: AtticNoteFormatMetrics.rowCompactToggleWidth),
+                                     288, "\(style) fits the narrowest panel's row")
+            XCTAssertLessThanOrEqual(NoteFormatControls.barWidth(styleName: NoteCommandCatalog.styleName(style)), 320 - 8)
+        }
+    }
+
+    // MARK: The / list
+
+    func testSlashListKeysMoveAndPickAndEscLeavesTheText() throws {
+        let (controls, engine, textView) = make()
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertEqual(controls.slashModel.items.first?.kind, .body, "D-18: the text styles first, Body then Title")
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveDown(_:))))
+        XCTAssertEqual(controls.slashModel.highlightedKind, .title)
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveUp(_:))))
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.moveUp(_:))))
+        XCTAssertEqual(controls.slashModel.highlighted, controls.slashModel.items.count - 1, "↑ wraps")
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        XCTAssertFalse(controls.slashModel.shown)
+        XCTAssertTrue(textView.string.hasSuffix("\n/"), "Esc leaves the typed /")
+
+        type(" /hea", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading, .smallHeading], "the engine filters")
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertTab(_:))), "Tab picks")
+        let last = try XCTUnwrap(engine.document().blocks.last)
+        XCTAssertEqual(last.style, "heading")
+        XCTAssertEqual(last.text, "/ ", "the command is replaced")
+        XCTAssertFalse(controls.slashModel.shown)
+
+        type("\n/", textView)
+        type(" ", textView)
+        XCTAssertFalse(controls.slashModel.shown, "Space closes the list")
+    }
+
+    /// R14: a style with variants is on for any of them, and picking it
+    /// again keeps the line's own level, icon toggle or language.
+    func testStylesWithVariantsShowOnAndKeepTheirVariant() throws {
+        var h5 = NoteBlock.text("Small five", style: "heading"); h5.level = 5
+        var warn = NoteBlock.text("Careful", style: "quote"); warn.callout = "⚠️"
+        var js = NoteBlock.text("let a = 1", style: "mono"); js.language = "javascript"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("T"), h5, warn, js]))
+        _ = engine.makeView()
+        let router = NoteCommandRouter(engine: engine)
+        func at(_ text: String) -> NSRange { NSRange(location: (engine.textStorage.string as NSString).range(of: text).location, length: 0) }
+        XCTAssertEqual(router.validation(.paragraph(.heading(4)), selection: at("Small five")).state, .on)
+        XCTAssertEqual(router.validation(.paragraph(.callout(icon: "💡")), selection: at("Careful")).state, .on)
+        XCTAssertEqual(router.validation(.paragraph(.mono), selection: at("let a")).state, .on)
+        XCTAssertEqual(router.validation(.paragraph(.heading(3)), selection: at("Small five")).state, .off)
+        XCTAssertTrue(router.run(.paragraph(.heading(4)), from: .formatBar, selection: at("Small five")))
+        XCTAssertEqual(engine.paragraphStyle(at: at("Small five").location), .heading(5), "keeps level 5")
+        XCTAssertTrue(router.run(.paragraph(.mono), from: .formatBar, selection: at("let a")))
+        XCTAssertEqual(engine.codeLanguage(at: at("let a").location), "javascript", "keeps its language")
+        XCTAssertTrue(router.run(.paragraph(.callout(icon: "💡")), from: .formatBar, selection: at("Careful")))
+        XCTAssertEqual(engine.paragraphStyle(at: at("Careful").location), .body, "Callout toggles off, as Quote")
+    }
+
+    /// A39 F04: the `/` list offers exactly the block styles the Aa style
+    /// list has, under the same names, and each one applies its own style.
+    func testTheSlashListOffersTheAaStyleListsBlockStylesWithTheSameNames() throws {
+        let styleNames = NoteCommandCatalog.styles.map(\.title)
+        // R14: Small Heading and Callout join the list (no keys of their own).
+        // U-16: one order everywhere, the `/` list's (Body first, as D-18),
+        // so ⌥⌘0…⌥⌘5 also run down the list.
+        XCTAssertEqual(styleNames, ["Body", "Title", "Heading", "Subheading", "Small Heading", "Quote", "Callout", "Code Block"])
+        XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.heading(4))))
+        XCTAssertNil(NoteCommandCatalog.keyboardShortcut(.paragraph(.callout(icon: "💡"))))
+        let slashNames = NoteSlashItem.all.map(\.title)
+        for name in styleNames { XCTAssertTrue(slashNames.contains(name), "/ offers \(name)") }
+        XCTAssertEqual(slashNames.filter { styleNames.contains($0) }.count, styleNames.count, "no style twice")
+        XCTAssertEqual(slashNames.filter { styleNames.contains($0) }, styleNames, "the same order as the Aa list and Format")
+        let keys = NoteCommandCatalog.styles.compactMap { command in
+            NoteCommandCatalog.keyboardShortcut(command) == nil ? nil : command.shortcut
+        }
+        XCTAssertEqual(keys.count, 6, "Body, the three headings, Quote and Code Block have keys")
+        XCTAssertEqual(keys, keys.sorted(), "the style keys run in list order")
+
+        let expected: [(String, NoteSlashItem.Kind, NoteParagraphStyle)] = [
+            ("title", .title, .heading(1)), ("head", .heading, .heading(2)), ("subheading", .subheading, .heading(3)),
+            ("sub", .subheading, .heading(3)), ("body", .body, .body), ("mono", .mono, .mono), ("quote", .quote, .quote)
+        ]
+        for (query, kind, style) in expected {
+            let (controls, engine, textView) = make()
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            type("\n/\(query)", textView)
+            XCTAssertEqual(controls.slashModel.items.first?.kind, kind, "/\(query) puts \(kind) first")
+            XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertTab(_:))), "Tab picks /\(query)")
+            XCTAssertEqual(engine.paragraphStyle(at: textView.selectedRange().location), style, "/\(query)")
+        }
+    }
+
+    func testFullSlashListFlipsAboveALowCaretAndOpensBelowAHighCaret() throws {
+        // Real editor + controls: this catches the old Notes-only placement
+        // path, which truncated rows before trying the full list above.
+        let (lowControls, lowEngine, lowText) = make(NoteDocument(blocks: [.text("Title")] + (0..<14).map { _ in .text("Line") }))
+        lowText.setSelectedRange(NSRange(location: lowEngine.textStorage.length, length: 0))
+        type("\n/", lowText)
+        XCTAssertTrue(lowControls.slashModel.shown)
+        XCTAssertTrue(lowControls.slashModel.above)
+        // Thirteen rows since the Aa styles joined the list (A39 F04): above
+        // a low caret in this 500 pt window they scroll within the room.
+        let room = try XCTUnwrap(lowControls.slashModel.viewportHeight, "the list scrolls above the low caret")
+        XCTAssertGreaterThan(room, 8 * AtticDropdownMetrics.rowHeight, "most of the list shows")
+
+        let (highControls, highEngine, highText) = make(NoteDocument(blocks: [.text("Title"), .text("")]))
+        highText.setSelectedRange(NSRange(location: highEngine.textStorage.length, length: 0))
+        type("/", highText)
+        XCTAssertTrue(highControls.slashModel.shown)
+        XCTAssertFalse(highControls.slashModel.above)
+        let highRoom = try XCTUnwrap(highControls.slashModel.viewportHeight, "the sixteen R14 rows scroll below a high caret")
+        XCTAssertGreaterThan(highRoom, 8 * AtticDropdownMetrics.rowHeight)
+    }
+
+    /// P3-B3: the `/` list keeps its side while typing filters it; a list
+    /// that opens anew takes its side afresh.
+    func testTheSlashListKeepsItsSideWhileFiltering() throws {
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Title")] + (0..<12).map { _ in .text("Line") }))
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertTrue(controls.slashModel.above, "the full list opens above the low caret")
+        let slash = try XCTUnwrap(engine.rect(for: NSRange(location: engine.textStorage.length - 1, length: 1)))
+        let d = AtticDropdownMetrics.self
+        let below = textView.visibleRect.maxY - d.panelMargin - (slash.maxY + d.anchorGap)
+        XCTAssertGreaterThanOrEqual(below, d.rowHeight + d.inset * 2, "one row would fit below the caret")
+        type("hea", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.heading, .subheading, .smallHeading], "the engine filters")
+        XCTAssertTrue(controls.slashModel.above, "the filtered list keeps its side")
+        XCTAssertNil(controls.slashModel.viewportHeight)
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        XCTAssertFalse(controls.slashModel.shown)
+        // A new list high in the note opens below its caret.
+        textView.setSelectedRange(NSRange(location: ("Title\nLine" as NSString).length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertFalse(controls.slashModel.above, "a list that opens anew takes its side afresh")
+    }
+
+    /// V-01 (recording 1937): `/` → Diagram on the note's last line puts
+    /// the block and its template on screen together: in the same pass the
+    /// template's lines are inside TextKit's laid-out viewport (drawn), even
+    /// where they run on under the floating bottom controls.
+    func testV01DiagramTemplateIsLaidOutWithItsBlockAtOnce() throws {
+        let bottomInset: CGFloat = 58
+        let document = NoteDocument(blocks: [.text("Title")] + (0..<30).map { .text("Line \($0)") } + [.text("")])
+        let (controls, engine, textView) = make(document, topInset: 60, bottomInset: bottomInset)
+        let scroll = try XCTUnwrap(textView.enclosingScrollView)
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        // The empty last line rests on the bottom inset, as the page leaves it.
+        let clip = scroll.contentView
+        clip.scroll(to: NSPoint(x: 0, y: textView.frame.height - clip.bounds.height + bottomInset))
+        scroll.reflectScrolledClipView(clip)
+        textView.layoutSubtreeIfNeeded()
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type("/diagram", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.diagram])
+        controls.pickSlash(.diagram)
+        // One pass, as the next frame would make it.
+        textView.layoutSubtreeIfNeeded()
+        textView.displayIfNeeded()
+        let end = engine.textStorage.length
+        XCTAssertTrue(engine.textStorage.string.hasSuffix("B --> C[Done]"), "the template is in the text")
+        let layout = try XCTUnwrap(engine.layoutManager)
+        let viewport = try XCTUnwrap(layout.textViewportLayoutController.viewportRange, "laid out for display")
+        let viewportEnd = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: viewport.endLocation)
+        let caret = try XCTUnwrap(engine.caretRect(at: end))
+        XCTAssertTrue(textView.visibleRect.intersects(caret), "the template's last line is within the visible text")
+        XCTAssertGreaterThanOrEqual(viewportEnd, end, "the template's lines are drawn with the block, not later")
+    }
+
+    /// V-08 (recording 1937): the `/` list never sits under or over the
+    /// note's floating controls. Opened downward it stops above the bottom
+    /// row (the scroll view's bottom inset: the row and the 12 pt the last
+    /// line keeps); opened upward it stops below the header's controls (the
+    /// top inset less the title's gap), with the panel's margin to spare.
+    func testV08TheSlashListStaysClearOfTheFloatingControls() throws {
+        func hosts(_ view: NSView) -> [AtticOverlayHostingView] {
+            ((view as? AtticOverlayHostingView).map { [$0] } ?? []) + view.subviews.flatMap { hosts($0) }
+        }
+        let header: CGFloat = 52, bottomRow: CGFloat = 46
+        let topInset = header + AtticNoteMetrics.titleTopGap, bottomInset = bottomRow + AtticSpacing.s12
+        func listFrame(lines: Int, scrolledToEnd: Bool) throws -> (CGRect, CGRect, Bool) {
+            let document = NoteDocument(blocks: [.text("Title")] + (lines > 0 ? (0..<lines).map { _ in .text("Line") } : [.text("")]))
+            let (controls, engine, textView) = make(document, topInset: topInset, bottomInset: bottomInset)
+            let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+            if scrolledToEnd {
+                engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+                textView.layoutSubtreeIfNeeded()
+                let clip = scrollView.contentView
+                clip.scroll(to: NSPoint(x: 0, y: max(-topInset, textView.frame.height - clip.bounds.height + bottomInset)))
+                scrollView.reflectScrolledClipView(clip)
+            }
+            textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            type(lines > 0 ? "\n/" : "/", textView)
+            XCTAssertTrue(controls.slashModel.shown)
+            let parent = try XCTUnwrap(scrollView.window?.contentView?.superview)
+            let host = try XCTUnwrap(hosts(parent).first { $0.menuLabel == "Insert" && !$0.isHidden })
+            let room = AtticDropdownMetrics.shadowRoom
+            let card = parent.convert(host.frame.insetBy(dx: room, dy: room), to: scrollView)
+            return (card, scrollView.bounds, controls.slashModel.above)
+        }
+        // A caret low in a long note: the list opens above it.
+        let (above, panel, opensAbove) = try listFrame(lines: 30, scrolledToEnd: true)
+        XCTAssertTrue(opensAbove)
+        // The scroll view is unflipped: its top is its bounds' maxY.
+        let headerEdge = panel.maxY - header
+        XCTAssertLessThanOrEqual(above.maxY, headerEdge - AtticDropdownMetrics.panelMargin + 0.5,
+                                 "upward, it stops below the header's controls: \(above) in \(panel)")
+        // A caret high in the note: the list opens below it, down to the bottom row.
+        let (below, panel2, opensBelow) = try listFrame(lines: 0, scrolledToEnd: false)
+        XCTAssertFalse(opensBelow)
+        XCTAssertGreaterThanOrEqual(below.minY, panel2.minY + bottomInset - 0.5,
+                                    "downward, it stops above the bottom row: \(below) in \(panel2)")
+    }
+
+    /// P3-B4: the title's tag suggestions follow their `#` as the note
+    /// scrolls (they lived in the text view before the overlay), and wait
+    /// out of sight while the `#` is scrolled under the header.
+    func testTitleTagSuggestionsFollowTheHashtagAsTheNoteScrolls() throws {
+        let title = "Launch plan "
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text(title)] + (0..<40).map { _ in .text("Line") }),
+                                      readOnly: false)
+        let (scrollView, textView) = engine.makeView()
+        scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
+        scrollView.automaticallyAdjustsContentInsets = false
+        let header: CGFloat = 60
+        scrollView.contentInsets = NSEdgeInsets(top: header, left: 0, bottom: 0, right: 0)
+        // Room above the title, so the note can scroll a little with the
+        // title still in view.
+        textView.textContainerInset = NSSize(width: 28, height: 100)
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        windows.append(window)
+        let accessories = NoteTitleAccessories(engine: engine, textView: textView, scrollView: scrollView, chrome: NotesPageChrome(),
+                                               design: .default, headerBottom: header, isUntouched: { false },
+                                               tagEditor: { AnyView(EmptyView()) })
+        defer { accessories.invalidate() }
+        accessories.tagCounts = { ["launch": 3, "landing": 1] }
+        // The card moves in the scroll's own pass: no run-loop turn (where
+        // a layout pass might re-place it) between the scroll and the checks.
+        func scroll(to y: CGFloat) {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+        scrollView.layoutSubtreeIfNeeded()
+        scroll(to: -header)
+        spin()
+        window.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: (title as NSString).length, length: 0))
+        type("#la", textView)
+        func hosts(_ view: NSView) -> [AtticOverlayHostingView] {
+            ((view as? AtticOverlayHostingView).map { [$0] } ?? []) + view.subviews.flatMap { hosts($0) }
+        }
+        let overlayParent = try XCTUnwrap(scrollView.superview)
+        settle { hosts(overlayParent).contains { $0.menuLabel == "Tag suggestions" && !$0.isHidden } }
+        let host = try XCTUnwrap(hosts(overlayParent).first { $0.menuLabel == "Tag suggestions" })
+        XCTAssertFalse(host.isHidden, "the suggestions show")
+        let hash = try XCTUnwrap(engine.rect(for: NSRange(location: (title as NSString).length, length: 1)))
+        /// The card's top, against the `#`'s bottom, in the text's terms.
+        func gap() -> CGFloat { textView.convert(host.contentRect, from: host).minY - hash.maxY }
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1, "the card hangs from the #")
+        let before = host.frame
+        scroll(to: -header + 40)
+        XCTAssertFalse(host.isHidden)
+        XCTAssertEqual(host.frame.minX, before.minX)
+        XCTAssertNotEqual(host.frame, before, "the card moved with the note")
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1, "and still hangs from the #")
+        scroll(to: 200)
+        XCTAssertTrue(host.isHidden, "the # is under the header: the card waits out of sight")
+        scroll(to: -header)
+        XCTAssertFalse(host.isHidden, "the # is back")
+        XCTAssertEqual(gap(), AtticDropdownMetrics.anchorGap, accuracy: 1)
+        XCTAssertEqual(host.frame, before)
+    }
+
+    func testSlashRowsShowTheirTypingShortcuts() {
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.checklist), "-[]")
+        // R14: Markdown's heading levels; code's fence.
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.title), "#")
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.heading), "##")
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.smallHeading), "####")
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.number), "1.")
+        XCTAssertEqual(NoteCommandCatalog.slashHint(.codeBlock), "```", "a typing habit, never a reserved chord")
+        // Every row has its own glyph.
+        let symbols = NoteSlashItem.order.map(NoteCommandCatalog.slashSymbol)
+        XCTAssertEqual(Set(symbols).count, symbols.count)
+    }
+
+    func testSlashDateTypedDayInsertsAChipAndEscRestoresTheCommand() throws {
+        let (controls, engine, textView) = make()
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("\nCall Sam /da", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.date])
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
+        XCTAssertEqual(controls.cardModel.card, .date(fromSlash: true))
+        settle { controls.cardHasKeyboard }
+        XCTAssertTrue(controls.cardHasKeyboard, "typing goes to the date field")
+        XCTAssertTrue(textView.string.hasSuffix("/da"), "the command stays until a date is chosen")
+        controls.cancelCard()
+        XCTAssertNil(controls.cardModel.card)
+        XCTAssertTrue(textView.window?.firstResponder === textView, "the keyboard is back in the note")
+        XCTAssertTrue(textView.string.hasSuffix("Call Sam /da"), "Esc puts /da back")
+
+        type(" /da", textView)
+        controls.pickSlash(.date)
+        controls.cardModel.dateText = "fri"
+        let friday = try XCTUnwrap(controls.cardModel.candidateDate)
+        XCTAssertEqual(Calendar.current.component(.weekday, from: friday), 6)
+        controls.cardModel.onCommitDate?(friday)
+        XCTAssertNil(controls.cardModel.card)
+        let last = try XCTUnwrap(engine.document().blocks.last)
+        XCTAssertEqual(last.text, "Call Sam /da " + String(NoteDocument.objectCharacter), "the chip replaces the second /da")
+        XCTAssertEqual(last.inlines.first?.kind, .date(NoteDay(date: friday)))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(textView.string.hasSuffix("Call Sam /da /da"), "one Undo brings the command back")
+    }
+
+    func testInsertDateFromTheMenuUsesTheCardAndTheCaret() throws {
+        let (controls, engine, textView) = make()
+        let caret = NSRange(location: range("Student", textView).location, length: 0)
+        textView.setSelectedRange(caret)
+        find("Date…", in: controls.router.menuCommands(from: .noteMenu))?.action()
+        XCTAssertEqual(controls.cardModel.card, .date(fromSlash: false))
+        let today = try XCTUnwrap(controls.cardModel.candidateDate, "an empty field means today")
+        controls.cardModel.onCommitDate?(today)
+        XCTAssertEqual(engine.document().blocks[4].inlines.first?.kind, .date(NoteDay(date: today)))
+    }
+
+    func testSlashImageAsksForAFileAndCancelLeavesTheCommand() {
+        let (controls, engine, textView) = make()
+        var asked: Bool?
+        var request: NoteSlashFileRequest?
+        controls.requestFile = { asked = $0 != nil; request = $0 }
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("\n/ima", textView)
+        XCTAssertEqual(controls.slashModel.items.map(\.kind), [.imageOrFile])
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
+        XCTAssertEqual(asked, true, "the open panel, for the / row")
+        request?.cancel()
+        XCTAssertNil(engine.pendingSlashFile)
+        XCTAssertTrue(textView.string.hasSuffix("/ima"))
+        find("Image or File…", in: controls.router.menuCommands(from: .noteMenu))?.action()
+        XCTAssertEqual(asked, false, "Insert › Image or File… asks too")
+    }
+
+    // MARK: Links
+
+    func testTheLinkCardAddsEditsAndRemovesALink() throws {
+        let (controls, engine, textView) = make()
+        let target = range("free tier", textView)
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertEqual(controls.cardModel.card, .link(hasLink: false))
+        settle { controls.cardHasKeyboard }
+        XCTAssertTrue(controls.cardHasKeyboard, "the card's field takes the keyboard from the note")
+        controls.cardModel.linkText = "not a link"
+        controls.cardModel.submitLink()
+        XCTAssertNotNil(controls.cardModel.linkError, "a bad address says so and keeps the card")
+        XCTAssertTrue(controls.isCardOpen)
+        controls.cardModel.linkText = "example.com/pricing"
+        controls.cardModel.submitLink()
+        XCTAssertFalse(controls.isCardOpen)
+        let link = try XCTUnwrap(engine.document().blocks[1].marks.first)
+        XCTAssertEqual(link.kind, .link)
+        XCTAssertEqual(link.url, "https://example.com/pricing")
+        XCTAssertEqual(textView.selectedRange(), target, "the selection comes back")
+
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .contextMenu)
+        XCTAssertEqual(controls.cardModel.card, .link(hasLink: true))
+        XCTAssertEqual(controls.cardModel.linkText, "https://example.com/pricing", "editing shows the address")
+        controls.cardModel.onRemoveLink?()
+        XCTAssertTrue(engine.document().blocks[1].marks.isEmpty)
+        XCTAssertEqual(engine.history.undoActionName, "Remove Link")
+    }
+
+    func testLinkValidationGrowthUpdatesBoundsAndBottomActionsAtCompactSize() throws {
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let (controls, engine, textView) = make()
+        let window = try XCTUnwrap(textView.window)
+        window.setContentSize(CGSize(width: 320, height: 240))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let target = range("free tier", textView)
+        controls.router.run(.link("https://example.com"), from: .linkPopover, selection: target)
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        settle { controls.cardHasKeyboard }
+        let overlayParent = try XCTUnwrap(window.contentView?.superview)
+        let host = try XCTUnwrap(overlayParent.subviews.compactMap { $0 as? AtticOverlayHostingView }.first { $0.acceptsKeyboard && $0.isInteractive })
+        let before = host.contentRect.size
+        controls.cardModel.linkText = "https://"
+        controls.cardModel.submitLink()
+        settle { host.contentRect.height > before.height }
+        XCTAssertNotNil(controls.cardModel.linkError)
+        XCTAssertGreaterThan(host.contentRect.height, before.height)
+        XCTAssertEqual(host.contentRect.width, before.width, accuracy: 1)
+        let placed = textView.convert(host.contentRect, from: host)
+        XCTAssertGreaterThanOrEqual(placed.minY, textView.visibleRect.minY + 11)
+        XCTAssertLessThanOrEqual(placed.maxY, textView.visibleRect.maxY - 11)
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            let children = (root.accessibilityChildren?() ?? nil) ?? []
+            return [root] + children.flatMap { elements($0 as AnyObject) }
+        }
+        func action(_ identifier: String) throws -> AnyObject {
+            try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? nil) == identifier })
+        }
+        for identifier in ["notes-link-remove", "notes-link-apply"] {
+            let button = try action(identifier)
+            let frame: NSRect = button.accessibilityFrame!()
+            let local = host.convert(window.convertFromScreen(frame), from: nil)
+            let center = CGPoint(x: local.midX, y: local.midY)
+            XCTAssertTrue(host.contentRect.contains(center), "\(identifier) is inside the updated interactive bounds")
+            XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
+        }
+        // Force the error card to overflow, then bring its bottom actions
+        // into view through the real scroll container.
+        window.setContentSize(CGSize(width: 320, height: 145))
+        window.contentView?.layoutSubtreeIfNeeded()
+        textView.onLayout?()
+        settle { controls.cardModel.viewportHeight != nil }
+        XCTAssertNotNil(controls.cardModel.viewportHeight)
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls($0) }
+        }
+        settle { !scrolls(host).isEmpty }
+        let scroll = try XCTUnwrap(scrolls(host).first)
+        let document = try XCTUnwrap(scroll.documentView)
+        document.scrollToVisible(CGRect(x: 0, y: document.bounds.maxY - 1, width: 1, height: 1))
+        spin()
+        controls.cardModel.linkText = "example.org"
+        spin()
+        for identifier in ["notes-link-remove", "notes-link-apply"] {
+            let button = try action(identifier)
+            let frame: NSRect = button.accessibilityFrame!()
+            let local = host.convert(window.convertFromScreen(frame), from: nil)
+            let center = CGPoint(x: local.midX, y: local.midY)
+            XCTAssertTrue(host.contentRect.contains(center), "\(identifier) is reachable after scrolling")
+            XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
+        }
+        XCTAssertTrue(try action("notes-link-apply").accessibilityPerformPress?() == true)
+        XCTAssertFalse(controls.isCardOpen)
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.url, "https://example.org")
+    }
+
+    func testEditLinkAtACaretUpdatesTheWholeLinkAndAStaleTargetCancelsQuietly() throws {
+        let (controls, engine, textView) = make()
+        let target = range("free tier", textView)
+        controls.router.run(.link("https://example.com"), from: .linkPopover, selection: target)
+        textView.setSelectedRange(NSRange(location: target.location + 3, length: 0))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertEqual(controls.cardModel.card, .link(hasLink: true), "⇧⌘K at a caret inside a link edits it")
+        XCTAssertEqual(controls.cardModel.linkText, "https://example.com")
+        controls.cardModel.linkText = "example.org"
+        controls.cardModel.submitLink()
+        let link = try XCTUnwrap(engine.document().blocks[1].marks.first)
+        XCTAssertEqual(link.url, "https://example.org")
+        XCTAssertEqual(NSRange(location: link.offset, length: link.length),
+                       NSRange(location: target.location - range("Lead", textView).location, length: target.length),
+                       "the whole link, not just the caret")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: target.location + 3, length: 0), "the caret comes back")
+
+        textView.setSelectedRange(range("most people", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertTrue(controls.isCardOpen)
+        // The note changes under the open card (an agent, Undo): the target is stale.
+        textView.insertText("So: ", replacementRange: NSRange(location: range("Lead", textView).location, length: 0))
+        textView.setSelectedRange(range("most people", textView))
+        let before = engine.document()
+        controls.cardModel.linkText = "example.com"
+        controls.cardModel.submitLink()
+        XCTAssertFalse(controls.isCardOpen, "the card closes")
+        XCTAssertNil(controls.cardModel.linkError, "no error for a stale target: it just cancels")
+        XCTAssertEqual(engine.document().blocks[1].marks.filter { $0.kind == .link }.count,
+                       before.blocks[1].marks.filter { $0.kind == .link }.count, "and nothing was linked")
+    }
+
+    func testRightClickOnALinkOffersEditCopyAndRemove() throws {
+        let (controls, _, textView) = make()
+        let target = range("free tier", textView)
+        controls.router.run(.link("https://example.com"), from: .linkPopover, selection: target)
+        let rect = try XCTUnwrap(controls.engine.rect(for: target))
+        let point = textView.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+        let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                       windowNumber: textView.window!.windowNumber, context: nil, eventNumber: 0,
+                                       clickCount: 1, pressure: 1)!
+        let menu = try XCTUnwrap(textView.menu(for: event))
+        let titles = menu.items.map(\.title)
+        for title in ["Open Link", "Edit Link…", "Copy Link", "Remove Link", "Format", "Insert"] {
+            XCTAssertEqual(titles.filter { $0 == title }.count, 1, "\(title) once in \(titles)")
+        }
+        invoke(menu.items.first { $0.title == "Copy Link" })
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "https://example.com")
+        XCTAssertEqual(controls.link(at: textView.convert(point, from: nil))?.0, "https://example.com")
+    }
+
+    /// Colour pass (owner, 2026-10-10): links in blue, their underline in
+    /// the same blue at 55 %.
+    func testLinksReadInBlueWithTheirUnderline() {
+        let (_, _, textView) = make()
+        let style = NoteTextStyle(design: .default)
+        XCTAssertEqual(textView.linkTextAttributes?[.foregroundColor] as? NSColor, style.linkColor)
+        XCTAssertEqual(textView.linkTextAttributes?[.underlineColor] as? NSColor, style.linkUnderlineColor)
+        // R14: the stored underline draws (dotted, or solid when underlined too).
+        XCTAssertNil(textView.linkTextAttributes?[.underlineStyle])
+        let link = style.markedAttributes(marks: [.link: "https://example.com"], baseFont: style.bodyFont)
+        XCTAssertEqual(link[.underlineStyle] as? Int, NSUnderlineStyle([.single, .patternDot]).rawValue)
+    }
+
+    // MARK: Hint and dates
+
+    func testEmptyBodyHintHidesWhileEditingATableCell() throws {
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Table"), .text("")]))
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible)
+        XCTAssertTrue(engine.insertTable())
+        controls.refresh()
+        XCTAssertNotNil(engine.focusedTable, "the table insertion puts the keyboard in its first cell")
+        XCTAssertFalse(controls.isHintVisible, "the body hint must not overlap the table's Add Row control")
+        XCTAssertNil(textView.accessibilityHelp(), "the body hint is not help for a table cell")
+        // Page restoration returns the main editor's caret while the table
+        // keeps its cell selection and Add Row chrome.
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        controls.refresh()
+        XCTAssertNotNil(engine.focusedTable)
+        XCTAssertFalse(controls.isHintVisible, "remembered table focus must not bring the overlap back")
+        engine.focusedTable?.deactivate()
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible, "ordinary empty body lines still show their hint after leaving the table")
+    }
+
+    /// Draft 7's hint: an empty body line with the caret in it, every
+    /// note; gone with the first keystroke; never on a line with text, the
+    /// title, a styled empty line or a read-only note. VoiceOver hears it as
+    /// the text's help, never as content.
+    func testTheHintShowsOnAnEmptyBodyLineAndGoesWithTheFirstKeystroke() {
+        let (controls, _, textView) = make()
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        controls.refresh()
+        XCTAssertFalse(controls.isHintVisible, "a line with text")
+        type("\n", textView)
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible, "an empty body line")
+        XCTAssertEqual(textView.accessibilityHelp(), NoteSlashHintView.text)
+        XCTAssertFalse(textView.string.contains("Type /"), "never content")
+        type("a", textView)
+        XCTAssertFalse(controls.isHintVisible, "the first keystroke hides it at once")
+        XCTAssertNil(textView.accessibilityHelp())
+        type("\n", textView)
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible, "on the next empty line again")
+        controls.formatModel.run(.paragraph(.bullet), from: .formatBar)
+        controls.refresh()
+        XCTAssertFalse(controls.isHintVisible, "an empty list item keeps its own look")
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        controls.refresh()
+        XCTAssertFalse(controls.isHintVisible, "the title")
+
+        let (empty, _, emptyView) = make(NoteDocument(blocks: [.text("")]))
+        type("Plan\n", emptyView)
+        empty.refresh()
+        XCTAssertTrue(empty.isHintVisible, "any note, not only new drafts")
+
+        let (readOnly, _, readOnlyView) = make(NoteDocument(blocks: [.text("Plan"), .text("")]), readOnly: true)
+        readOnlyView.setSelectedRange(NSRange(location: (readOnlyView.string as NSString).length, length: 0))
+        readOnly.refresh()
+        XCTAssertFalse(readOnly.isHintVisible, "read only")
+    }
+
+    func testTypingSlashHidesTheHint() {
+        let (controls, _, textView) = make(NoteDocument(blocks: [.text("")]))
+        type("Plan\n", textView)
+        controls.refresh()
+        XCTAssertTrue(controls.isHintVisible)
+        type("/", textView)
+        controls.refresh()
+        XCTAssertFalse(controls.isHintVisible)
+    }
+
+    // MARK: The format row (OD-14)
+
+    /// Opening and closing the row changes nothing the page observes, so
+    /// the page and the note are not redrawn; only the bottom row's switch
+    /// sees it.
+    func testOpeningTheFormatRowDoesNotRedrawThePageOrTheNote() {
+        let chrome = NotesPageChrome()
+        var pageChanges = 0
+        let page = chrome.objectWillChange.sink { _ in pageChanges += 1 }
+        var rowChanges = 0
+        let row = chrome.formatRow.objectWillChange.sink { _ in rowChanges += 1 }
+        chrome.formatRow.open(keyboard: false)
+        XCTAssertTrue(chrome.formatRow.isOpen)
+        chrome.closeFormatBar()
+        XCTAssertFalse(chrome.formatRow.isOpen, "✕ or Esc restores the row")
+        XCTAssertEqual(pageChanges, 0, "the page (and the note under it) is never invalidated")
+        XCTAssertEqual(rowChanges, 2, "the bottom row's switch is")
+        page.cancel()
+        row.cancel()
+
+        let (controls, _, textView) = make()
+        let text = textView.string
+        let snapshots = controls.snapshotCount
+        controls.isFormatBarOpen = true
+        XCTAssertEqual(textView.string, text)
+        XCTAssertEqual(controls.snapshotCount, snapshots + 1, "one state read as it opens")
+    }
+
+    /// A29: a note opens with its caret at the start of the title, where
+    /// nothing in the row applies, so Aa showed a row of dimmed controls
+    /// ("it's greyed out"). Opening the row from the title now puts the caret
+    /// on the first body line (the text is untouched), and every control that
+    /// applies there is enabled.
+    func testOpeningTheFormatRowFromTheTitleFormatsTheFirstBodyLine() {
+        let (controls, _, textView) = make()
+        let text = textView.string
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        controls.isFormatBarOpen = true
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: range("Lead", textView).location, length: 0),
+                       "the caret moves to the start of the first body line")
+        XCTAssertEqual(textView.string, text, "the text is not changed")
+        let snapshot = controls.formatModel.snapshot
+        XCTAssertNil(snapshot.disabledReason)
+        for command in NoteCommandCatalog.lists + NoteCommandCatalog.styles where command != .paragraph(.heading(1)) {
+            XCTAssertTrue(snapshot.isEnabled(command), "\(command) applies to the caret's line")
+        }
+        XCTAssertTrue(NoteCommandCatalog.styles.contains { snapshot.isEnabled($0) }, "the style pill is live")
+
+        // A caret already in the body stays where it is.
+        controls.isFormatBarOpen = false
+        let inBody = NSRange(location: range("Annual", textView).location + 3, length: 0)
+        textView.setSelectedRange(inBody)
+        controls.isFormatBarOpen = true
+        XCTAssertEqual(textView.selectedRange(), inBody)
+
+        // A title-only note has no line to format: the caret and text stay.
+        let (titleOnly, _, titleView) = make(NoteDocument(blocks: [.text("Only a title")]))
+        titleView.setSelectedRange(NSRange(location: 3, length: 0))
+        titleOnly.isFormatBarOpen = true
+        XCTAssertEqual(titleView.selectedRange(), NSRange(location: 3, length: 0))
+        XCTAssertEqual(titleView.string, "Only a title")
+    }
+
+    /// The app's own springs and outward neighbour travel, in every feel:
+    /// in the narrowest panel (a 288 pt row, Aa at 218), the growing glass
+    /// never reaches a visible neighbour, opening or closing. Wider rows
+    /// also retain clear space, and the row at rest is the
+    /// plain bar with its controls fully drawn.
+    func testTheFormatRowGrowsOutOfAaWithOneGlassMoving() {
+        for row in [CGFloat(288), 368, 448] {
+            // Chrome B: 32 pt buttons, Aa 6 from New note.
+            let button = AtticControlSize.panelButton.width, gap = AtticNoteMetrics.formatButtonGap
+            let aa = CGRect(x: row - 2 * button - gap, y: 0, width: button, height: button)
+            let allNotes = (minX: CGFloat(0), maxX: button), newNote = (minX: row - button, maxX: row)
+            // Two equal spacers center the fixed-size, capped status pill.
+            let statusWidth = min(AtticNoteMetrics.pillMaxWidth, 120 + row - 288)
+            let statusCenter = (button + aa.minX) / 2
+            let status = (minX: statusCenter - statusWidth / 2, maxX: statusCenter + statusWidth / 2)
+            for feel in AtticMotionFeel.allCases {
+                let tuning = feel.tuning
+                let plan = NoteFormatMotion.Plan(tuning)
+                XCTAssertEqual(plan.openLeading.response, tuning.expand.response, "\(feel): the glass is expand")
+                XCTAssertEqual(plan.openLeading.bounce, tuning.expand.bounce)
+                XCTAssertEqual(plan.openTrailing.response, tuning.expand.response)
+                XCTAssertEqual(plan.openLeading.delay, 0, "\(feel): Aa answers the click at once")
+                XCTAssertEqual(plan.openTrailing, plan.openLeading, "\(feel): both edges move on one clock")
+                XCTAssertEqual(plan.closeGrow.response, tuning.expand.response)
+                XCTAssertEqual(plan.openControls.response, tuning.popover.response, "\(feel): the controls come as a bar")
+                XCTAssertEqual(plan.comeBack.response, tuning.popover.response)
+                XCTAssertGreaterThan(plan.openControls.delay, plan.openTrailing.delay, "\(feel): controls once the glass is wide")
+                XCTAssertGreaterThan(plan.closeGrow.delay, 0, "\(feel): controls first when closing")
+
+                func visible(_ value: Double) -> Double { min(1, max(0, value)) }
+                func check(_ t: Double, leading: Double, trailing: Double, allAway: Double, rightAway: Double,
+                           statusShows: Double, _ phase: String) {
+                    let extent = AtticFormatRowGrowth(source: aa, rowWidth: row, leading: leading, trailing: trailing,
+                                                      sourceSymbol: "textformat").extent
+                    let glass = (minX: extent.minX, maxX: extent.minX + extent.width)
+                    // A neighbour still showing keeps clear of the glass's edge: New
+                    // note by 4 pt (it rests 6 from Aa), the status by 20, All notes by 24.
+                    func overlaps(_ span: (minX: CGFloat, maxX: CGFloat), offset: CGFloat = 0, clear: CGFloat) -> Bool {
+                        let minX = max(0, span.minX + offset), maxX = min(row, span.maxX + offset)
+                        guard maxX > minX else { return false } // Clipped outside the row.
+                        return glass.minX - clear < maxX && glass.maxX + clear > minX
+                    }
+                    XCTAssertFalse(overlaps(newNote, offset: NoteFormatRowNeighbour.newNote.offset(at: rightAway), clear: gap - 2),
+                                   "\(feel) \(row)pt \(phase) \(t)s: the glass reaches New note")
+                    if overlaps(status, clear: 20) {
+                        XCTAssertLessThanOrEqual(statusShows, 0.05, "\(feel) \(phase) \(t)s: the glass reaches the status")
+                    }
+                    XCTAssertFalse(overlaps(allNotes, offset: NoteFormatRowNeighbour.allNotes.offset(at: allAway), clear: 24),
+                                   "\(feel) \(row)pt \(phase) \(t)s: the glass reaches All notes")
+                }
+                for step in 0...1500 {
+                    let t = Double(step) / 1000
+                    XCTAssertEqual(plan.openLeading.value(at: t), plan.openTrailing.value(at: t),
+                                   "\(feel) \(t)s: no left-then-right expansion")
+                    // Opening: both neighbours slide outward on the glass's
+                    // spring; they stay drawn until clipped outside their edge.
+                    check(t, leading: plan.openLeading.value(at: t), trailing: plan.openTrailing.value(at: t),
+                          allAway: plan.openLeading.value(at: t), rightAway: plan.openTrailing.value(at: t),
+                          statusShows: 0, "opening")
+                    // Closing: New note rides in with the trailing edge on
+                    // the glass's own spring; All notes and the status come
+                    // back on their own clocks.
+                    let back = 1 - plan.closeGrow.value(at: t)
+                    XCTAssertEqual(plan.newNoteBack, plan.closeGrow, "\(feel): New note follows the trailing edge")
+                    check(t, leading: back, trailing: back,
+                          allAway: 1 - visible(plan.comeBack.value(at: t - plan.allNotesReturns)),
+                          rightAway: back,
+                          statusShows: visible(plan.comeBack.value(at: t - plan.statusReturns)), "closing")
+                }
+            }
+        }
+
+        let row: CGFloat = 288
+        let aa = CGRect(x: 208, y: 0, width: 36, height: 36)
+        let start = AtticFormatRowGrowth(source: aa, rowWidth: row, grow: 0, sourceSymbol: "textformat")
+        XCTAssertEqual(start.extent.minX, aa.minX); XCTAssertEqual(start.extent.width, aa.width)
+        XCTAssertEqual(start.sourceGlyphOpacity, 1, "it starts as Aa, glyph and all")
+        let end = AtticFormatRowGrowth(source: aa, rowWidth: row, grow: 1, sourceSymbol: "textformat")
+        XCTAssertEqual(end.extent.minX, 0); XCTAssertEqual(end.extent.width, row)
+        XCTAssertEqual(end.sourceGlyphOpacity, 0)
+        XCTAssertEqual(NoteFormatRowChannels.open,
+                       NoteFormatRowChannels(leading: 1, trailing: 1, controls: 1, allNotes: 1, newNoteAndStatus: 1),
+                       "open, the controls are fully drawn")
+    }
+
+    /// A leaving neighbour's glass narrows to the part still inside its
+    /// slot, on the side it travels toward, so it passes under the row's
+    /// edge instead of being drawn over the panel's margin (A32).
+    func testALeavingNeighboursGlassNarrowsUnderTheRowsEdge() {
+        let button = CGRect(origin: .zero, size: AtticControlSize.panelButton)
+        let radius = button.height / 2
+        for neighbour in [NoteFormatRowNeighbour.allNotes, .newNote] {
+            let rest = neighbour.reveal(at: 0)?.shape(cornerRadius: radius).path(in: button).boundingRect
+            XCTAssertEqual(rest?.width ?? 0, button.width, accuracy: 0.01, "\(neighbour): whole at rest")
+            let half = neighbour.reveal(at: 0.4)
+            let part = half?.shape(cornerRadius: radius).path(in: button).boundingRect ?? .zero
+            let travel = abs(neighbour.offset(at: 0.4))
+            XCTAssertEqual(part.width, button.width - travel, accuracy: 0.01)
+            // In the row, the part left stays inside the slot.
+            let shown = part.offsetBy(dx: neighbour.offset(at: 0.4), dy: 0)
+            XCTAssertGreaterThanOrEqual(shown.minX, button.minX - 0.01, "\(neighbour): nothing past the row's edge")
+            XCTAssertLessThanOrEqual(shown.maxX, button.maxX + 0.01, "\(neighbour): nothing past the row's edge")
+            let gone = neighbour.reveal(at: 1)?.shape(cornerRadius: radius).path(in: button)
+            XCTAssertEqual(gone?.isEmpty, true, "\(neighbour): nothing drawn once it has left")
+        }
+        XCTAssertNil(NoteFormatRowNeighbour.status.reveal(at: 0.5), "the status is plain text and only hides")
+    }
+
+    /// Animations: Reduced and Reduce Motion swap the rows at once; with
+    /// motion, the bottom row stays live in the tree (away) while the glass
+    /// grows. Open, it is disabled, out of the pointer and keyboard.
+    func testReduceMotionSwapsTheFormatRowAtOnce() {
+        final class Seen { var enabled = true, away = false }
+        struct Probe: View {
+            let seen: Seen
+            @Environment(\.isEnabled) private var isEnabled
+            @Environment(\.noteFormatRowStage) private var stage
+            var body: some View {
+                seen.enabled = isEnabled
+                seen.away = stage.sourceHidden
+                return Color.clear.frame(width: 288, height: 36)
+            }
+        }
+        func host(reduceMotion: Bool) -> (NoteFormatRowState, Seen) {
+            let (controls, _, _) = make()
+            let state = NoteFormatRowState()
+            let seen = Seen()
+            var design = AtticDesignContext(mode: .light)
+            design.reduceMotion = reduceMotion
+            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) { Probe(seen: seen) }
+                .environment(\.atticDesign, design)
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 288, height: 36)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            windows.append(window)
+            hosting.layoutSubtreeIfNeeded()
+            return (state, seen)
+        }
+        func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+
+        let (reduced, reducedSeen) = host(reduceMotion: true)
+        settle()
+        XCTAssertTrue(reducedSeen.enabled)
+        reduced.open(keyboard: false)
+        settle()
+        XCTAssertFalse(reducedSeen.enabled, "the row is open at once")
+        XCTAssertTrue(reducedSeen.away)
+        reduced.close()
+        settle()
+        XCTAssertTrue(reducedSeen.enabled, "and back at once")
+        XCTAssertFalse(reducedSeen.away)
+
+        let (moving, movingSeen) = host(reduceMotion: false)
+        settle()
+        moving.open(keyboard: false)
+        settle()
+        XCTAssertTrue(movingSeen.away, "with motion Aa's glass is the row's")
+        XCTAssertTrue(movingSeen.enabled, "and the bottom row is still on its way out")
+    }
+
+    /// A39 F08: the bottom row, with the format row's glass in it, takes the
+    /// room it is given and never more, whatever width it had before. The
+    /// glass's own fixed width (the width last measured) used to hold the
+    /// whole Notes page at its old size after Settings narrowed the panel
+    /// (420 → 320), cutting the right of the page off. Open or closed, and
+    /// back out again.
+    func testTheBottomRowAndItsFormatGlassFollowTheWidthDownAndUp() {
+        final class Box { var width: CGFloat = 0 }
+        for open in [false, true] {
+            let (controls, _, _) = make()
+            let state = NoteFormatRowState()
+            let box = Box()
+            var design = AtticDesignContext(mode: .light)
+            design.reduceMotion = true
+            let view = NoteFormatRowSwitch(state: state, model: { controls.formatModel }) {
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 36, height: 32)
+                    Spacer(minLength: 12)
+                    Color.clear.frame(width: 36, height: 32)
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { box.width = $0 }
+            .frame(maxWidth: .infinity)
+            .environment(\.atticDesign, design)
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 388, height: 40)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            windows.append(window)
+            func settle(to width: CGFloat) {
+                hosting.frame.size.width = width
+                for _ in 0..<3 {
+                    hosting.layoutSubtreeIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                }
+            }
+            settle(to: 388)
+            if open { state.open(keyboard: false); settle(to: 388) }
+            XCTAssertEqual(box.width, 388, accuracy: 0.5, "open: \(open)")
+            for width in [288, 388, 288, 330, 388] as [CGFloat] {
+                settle(to: width)
+                XCTAssertEqual(box.width, width, accuracy: 0.5, "open: \(open), the row follows \(width)")
+            }
+        }
+    }
+
+    /// ⌃Tab reaches the open row; ← → Tab ⇧Tab move round it, Return
+    /// presses, and any other key goes back to writing. The text keeps the
+    /// caret throughout.
+    func testTheFormatRowIsOperableFromTheKeyboard() {
+        let (controls, engine, textView) = make()
+        let window = textView.window!
+        textView.setSelectedRange(NSRange(location: range("Annual", textView).location + 2, length: 0))
+        controls.isFormatBarOpen = true
+        XCTAssertTrue(controls.handleKey(keyEvent("\t", "\t", keyCode: 48, .control, window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 0, "⌃Tab: the style pill")
+        XCTAssertTrue(controls.handleKey(keyEvent("", "", keyCode: 124, [], window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 1, "→: Bulleted")
+        XCTAssertTrue(controls.handleKey(keyEvent("\r", "\r", keyCode: 36, [], window: window)))
+        XCTAssertEqual(engine.document().blocks[3].style, "bullet", "Return applies it to the caret's line")
+        controls.refreshSnapshot()
+        XCTAssertEqual(controls.formatModel.snapshot.value(.paragraph(.bullet)), .on, "the toggle shows it")
+        XCTAssertTrue(controls.handleKey(keyEvent("\t", "\t", keyCode: 48, [], window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 2, "Tab: Numbered")
+        XCTAssertTrue(controls.handleKey(keyEvent("\u{19}", "\u{19}", keyCode: 48, .shift, window: window)))
+        XCTAssertTrue(controls.handleKey(keyEvent("", "", keyCode: 123, [], window: window)))
+        XCTAssertEqual(controls.formatModel.rowKeyboardIndex, 0, "⇧Tab and ← go back")
+        XCTAssertTrue(controls.handleKey(keyEvent(" ", " ", keyCode: 49, [], window: window)))
+        XCTAssertTrue(controls.formatModel.rowStyleListOpen, "Space on the pill opens the style list")
+        controls.formatModel.rowStyleListOpen = false
+        XCTAssertFalse(controls.handleKey(keyEvent("x", "x", keyCode: 7, [], window: window)), "a letter is writing")
+        XCTAssertNil(controls.formatModel.rowKeyboardIndex)
+        XCTAssertTrue(controls.isFormatBarOpen, "the row stays open")
+        XCTAssertTrue(window.firstResponder === textView, "the text never lost the keyboard")
+
+        var closed = 0
+        controls.closeFormatBar = { closed += 1; controls.isFormatBarOpen = false }
+        controls.enterRowKeyboard(at: NoteFormatRowItem.all.count - 1)
+        XCTAssertTrue(controls.handleKey(keyEvent("\r", "\r", keyCode: 36, [], window: window)))
+        XCTAssertEqual(closed, 1, "Return on ✕ closes the row")
+        XCTAssertNil(controls.formatModel.rowKeyboardIndex)
+    }
+
+    /// The row's style list and toggles run the route A22/A24 fixed: on an
+    /// empty line the next typed text keeps the chosen style.
+    func testTheFormatRowsStylesAndListsCarryIntoTheNextTypedText() {
+        for style in [NoteParagraphStyle.heading(2), .quote, .checklist, .number, .mono] {
+            let command = NoteFormatCommand.paragraph(style)
+            let (controls, engine, textView) = make()
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            type("\n", textView)
+            controls.isFormatBarOpen = true
+            if NoteCommandCatalog.styles.contains(command) {
+                // The pill's list: the same model call its rows make.
+                controls.formatModel.rowStyleListOpen = true
+                controls.formatModel.run(command, from: .formatBar)
+            } else {
+                controls.pressRowItem(.command(command))
+            }
+            type("Next words", textView)
+            let typed = range("Next words", textView)
+            XCTAssertNotEqual(typed.location, NSNotFound)
+            XCTAssertEqual(engine.paragraphStyle(at: typed.location + 2), style, "\(style): the next text keeps it")
+            XCTAssertTrue(controls.isFormatBarOpen, "the row stays open while you write")
+        }
+    }
+
+    func testPRB1DateQueryRejectsOverflowingWeekCounts() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 30)))
+        for query in ["\(Int.max) weeks", "\(Int.min) weeks", "in \(Int.max / 7 + 1) weeks", "\(Int.min / 7 - 1) weeks"] {
+            XCTAssertNil(NoteDateQuery.parse(query, today: today, calendar: calendar), query)
+        }
+        XCTAssertEqual(NoteDateQuery.parse("in 2 weeks", today: today, calendar: calendar),
+                       calendar.date(byAdding: .day, value: 14, to: today))
+    }
+
+    func testDateQueriesReadCommonWords() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.firstWeekday = 2
+        let wednesday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 30)))
+        func day(_ text: String) -> Int? {
+            NoteDateQuery.parse(text, today: wednesday, calendar: calendar).map { calendar.component(.day, from: $0) }
+        }
+        XCTAssertEqual(day("fri"), 2)
+        XCTAssertEqual(day("wed"), 30, "today's weekday is today")
+        XCTAssertEqual(day("next wed"), 7)
+        XCTAssertEqual(day("tomorrow"), 1)
+        XCTAssertEqual(day("today"), 30)
+        XCTAssertEqual(day("+3"), 3)
+        XCTAssertEqual(day("in 2 days"), 2)
+        XCTAssertEqual(day("12"), 12, "a passed day of the month is next month's")
+        XCTAssertNil(day("xyzzy"))
+    }
+
+    // MARK: The Esc chain: the innermost thing closes, never the panel too
+
+    private func escape(in window: NSWindow) -> NSEvent {
+        keyEvent("\u{1b}", "\u{1b}", keyCode: 53, [], window: window)
+    }
+
+    func testEscClosesTheBarThenTheListAndOnlyThenReachesThePanel() {
+        let (controls, _, textView) = make()
+        var panelHides = 0
+        textView.escapeFallback = { panelHides += 1 }
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        XCTAssertTrue(controls.formatModel.barShown)
+        textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(controls.formatModel.barShown, "Esc closes the bar")
+        XCTAssertEqual(panelHides, 0, "and is used up there")
+
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(controls.slashModel.shown, "Esc closes the / list")
+        XCTAssertEqual(panelHides, 0)
+        XCTAssertTrue(textView.string.hasSuffix("\n/"), "and leaves the /")
+
+        textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertEqual(panelHides, 1, "with nothing left to close, Esc goes on to the panel")
+    }
+
+    func testEscInTheBarsKeyboardModeLeavesTheBarNotThePanel() {
+        let (controls, _, textView) = make()
+        var panelHides = 0
+        textView.escapeFallback = { panelHides += 1 }
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        controls.enterBarKeyboard()
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)), "the monitor uses it up")
+        XCTAssertNil(controls.formatModel.barKeyboardIndex)
+        XCTAssertTrue(controls.formatModel.barShown, "the first Esc only leaves the bar's keyboard mode")
+        XCTAssertEqual(panelHides, 0)
+    }
+
+    func testPRB1FormatMonitorLeavesAnotherWindowsEscapeAlone() throws {
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false; windows.append(other)
+        var forwarded = 0
+        let monitor = try XCTUnwrap(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.window === other { forwarded += 1 }
+            return event
+        })
+        defer { NSEvent.removeMonitor(monitor) }
+        let (controls, _, text) = make()
+        var closed = 0
+        controls.closeFormatBar = { closed += 1; controls.isFormatBarOpen = false }
+        controls.isFormatBarOpen = true
+        XCTAssertFalse(controls.handleKey(escape(in: other)))
+        NSApp.sendEvent(escape(in: other))
+        XCTAssertEqual(forwarded, 1, "the foreign event remains in NSApp's local-monitor path")
+        XCTAssertEqual(closed, 0)
+        XCTAssertTrue(controls.isFormatBarOpen)
+        controls.isFormatBarOpen = true
+        controls.formatModel.rowStyleListOpen = true
+        NSApp.sendEvent(escape(in: other))
+        XCTAssertEqual(forwarded, 2)
+        XCTAssertTrue(controls.formatModel.rowStyleListOpen)
+        NSApp.sendEvent(escape(in: try XCTUnwrap(text.window)))
+        XCTAssertFalse(controls.formatModel.rowStyleListOpen, "the owner-window monitor still closes its list")
+        NSApp.sendEvent(escape(in: text.window!))
+        XCTAssertEqual(closed, 1, "the owner-window monitor still closes its row")
+    }
+
+    func testEscClosesTheFormatRowAndIsUsedUp() {
+        let (controls, _, textView) = make()
+        var closed = 0
+        controls.closeFormatBar = { closed += 1; controls.isFormatBarOpen = false }
+        var panelHides = 0
+        textView.escapeFallback = { panelHides += 1 }
+        controls.isFormatBarOpen = true
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)), "Esc closes the row and goes no further")
+        XCTAssertEqual(closed, 1)
+        XCTAssertEqual(panelHides, 0, "it never reaches the text view's hide-the-panel")
+        XCTAssertFalse(controls.handleKey(escape(in: textView.window!)), "with the row closed, it isn't the chain's")
+        XCTAssertTrue(textView.window?.firstResponder === textView, "the note keeps the keyboard")
+
+        // D-06: with the row open, a selection's marks are on the row and
+        // the selection bar stays away, so Esc closes the row.
+        controls.isFormatBarOpen = true
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        XCTAssertFalse(controls.formatModel.barShown, "one format surface: the marks are on the row (D-06)")
+        XCTAssertTrue(controls.formatModel.snapshot.hasTextSelection)
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertEqual(closed, 2)
+
+        // The style list first: Esc closes the list only.
+        controls.isFormatBarOpen = true
+        textView.setSelectedRange(NSRange(location: 20, length: 0))
+        controls.refresh()
+        controls.formatModel.rowStyleListOpen = true
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertFalse(controls.formatModel.rowStyleListOpen)
+        XCTAssertEqual(closed, 2, "the row stays")
+    }
+
+    func testEscInACardClosesTheCardOnlyAndIsUsedUp() throws {
+        let (controls, engine, textView) = make()
+        let target = range("free tier", textView)
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        settle { controls.cardHasKeyboard }
+        XCTAssertTrue(controls.cardHasKeyboard)
+        let before = engine.document()
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertFalse(controls.isCardOpen, "Esc closes the link card")
+        XCTAssertTrue(textView.window?.firstResponder === textView, "the keyboard is back in the note")
+        XCTAssertEqual(textView.selectedRange(), target)
+        XCTAssertEqual(engine.document(), before, "nothing changed")
+        XCTAssertNil(controls.closeInnermostOnEscape(escape(in: textView.window!)),
+                     "the next Esc is the text view's own (the bar, then the panel)")
+
+        // A card whose field never took the keyboard still closes first.
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        textView.window?.makeFirstResponder(textView)
+        XCTAssertTrue(controls.isCardOpen)
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertFalse(controls.isCardOpen)
+
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("\n/da", textView)
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
+        settle { controls.cardHasKeyboard }
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertFalse(controls.isCardOpen, "Esc closes the date card")
+        XCTAssertTrue(textView.string.hasSuffix("/da"), "and puts /da back")
+    }
+
+    func testThePanelIgnoresAnEscTypedInAnotherWindow() {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let popover = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
+                               backing: .buffered, defer: false)
+        popover.isReleasedWhenClosed = false
+        windows += [panel, popover]
+        var hides = 0
+        panel.onUnhandledEscape = { hides += 1 }
+        panel.keyDown(with: escape(in: popover))
+        XCTAssertEqual(hides, 0, "a pop-over's Esc never hides the panel as well")
+        panel.keyDown(with: escape(in: panel))
+        XCTAssertEqual(hides, 1, "the panel's own Esc, with nothing to close, still hides it")
+    }
+
+    // MARK: Performance (the engine's 5,000-line stress note)
+
+    /// Keystrokes with the controls installed read no state and cost what
+    /// they cost without them (same run, same note); a selection's snapshot
+    /// and the bar's first and later placements are timed for the report.
+    func testControlsAddNoWorkPerKeystrokeOnAStressNote() throws {
+        var blocks: [NoteBlock] = [.text("Stress")]
+        for index in 0..<5_000 {
+            blocks.append(index % 50 == 10 ? .checklist("Item \(index)")
+                          : .text("Line \(index) with some ordinary words to wrap a little in a narrow panel."))
+        }
+        func ms(_ body: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        func typing(_ textView: NoteEditorTextView) -> [Double] {
+            let middle = range("Line 2501 ", textView).location
+            textView.setSelectedRange(NSRange(location: middle, length: 0))
+            textView.scrollRangeToVisible(textView.selectedRange())
+            textView.displayIfNeeded()
+            spin()
+            return "the quick brown fox jumps over the lazy dog again and again!".map { character in
+                ms {
+                    textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+                    textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+                    textView.displayIfNeeded()
+                    RunLoop.main.run(until: Date())
+                }
+            }
+        }
+        func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+        func p95(_ values: [Double]) -> Double { let s = values.sorted(); return s[Int(Double(s.count - 1) * 0.95)] }
+
+        // Without, with, without again: the first run warms the caches.
+        func plainRun() -> [Double] {
+            let (plainControls, _, plainView) = make(NoteDocument(blocks: blocks))
+            plainControls.invalidate()
+            return typing(plainView)
+        }
+        _ = plainRun()
+        let (controls, _, textView) = make(NoteDocument(blocks: blocks))
+        let before = controls.snapshotCount
+        let withControls = typing(textView)
+        XCTAssertEqual(controls.snapshotCount, before, "typing reads no format state")
+        controls.invalidate()
+        let without = plainRun()
+
+        let (timed, _, timedView) = make(NoteDocument(blocks: blocks))
+        let sentence = range("Line 2600 with some ordinary words", timedView)
+        timedView.setSelectedRange(sentence)
+        timedView.scrollRangeToVisible(sentence)
+        timedView.displayIfNeeded()
+        let snapshot = ms { _ = NoteFormatSnapshot.make(router: timed.router, selection: sentence) }
+        let first = ms { timed.refresh() }
+        XCTAssertTrue(timed.formatModel.barShown)
+        timedView.setSelectedRange(range("Line 2601 with some", timedView))
+        let later = ms { timed.refresh() }
+        timedView.setSelectedRange(NSRange(location: 0, length: (timedView.string as NSString).length))
+        let everything = timedView.selectedRange()
+        let all = ms { _ = NoteFormatSnapshot.make(router: timed.router, selection: everything) }
+        let markAll = ms { _ = timed.engine.validate(.mark(.bold), selection: everything) }
+        let styleAll = ms { _ = timed.engine.validate(.paragraph(.body), selection: everything) }
+        let report = String(format: "NOTE-FORMAT-PERF keystroke median %.2f ms p95 %.2f ms (without controls %.2f / %.2f); sentence snapshot %.2f ms; bar first show %.1f ms, next %.2f ms; select-all snapshot %.0f ms (one mark %.0f ms, one style %.0f ms)",
+                            median(withControls), p95(withControls), median(without), p95(without), snapshot, first, later, all,
+                            markAll, styleAll)
+        print(report)
+        XCTContext.runActivity(named: report) { _ in }
+    }
+}
+
+// MARK: - A17: the keyboard's way back into the text (fake text, fake frames)
+
+@MainActor
+private final class ManualFrames: NotesFrameClock {
+    private var queue: [@MainActor () -> Void] = []
+    var pending: Int { queue.count }
+    func nextFrame(_ block: @escaping @MainActor () -> Void) { queue.append(block) }
+    func cancel() { queue.removeAll() }
+    /// One display frame: runs what was waiting for it.
+    func tick() {
+        let due = queue
+        queue.removeAll()
+        due.forEach { $0() }
+    }
+}
+
+@MainActor
+private final class FakeText: NotesKeyboardReturnTarget {
+    var canTakeKeyboard = true
+    var textHasKeyboard = false
+    var textHasMarkedText = false
+    var textSelection: NSRange? = NSRange(location: 3, length: 0)
+    var focusCount = 0
+    var takesKeyboard = true
+    func focusText() {
+        focusCount += 1
+        if takesKeyboard { textHasKeyboard = true }
+    }
+}
+
+extension NotesFormatControlsTests {
+    private func makeReturn(_ text: FakeText, _ frames: ManualFrames, pacing: NotesKeyboardReturn.Pacing = .init(),
+                            uptime: @escaping () -> TimeInterval = { 0 }) -> NotesKeyboardReturn {
+        NotesKeyboardReturn(target: text, clock: frames, pacing: pacing, uptime: uptime)
+    }
+
+    /// A17 P2: the return waits out SwiftUI's late focus update. The text is
+    /// first responder for two frames, then SwiftUI resigns it on the third:
+    /// the run focuses it again, and settles only after it has held the
+    /// keyboard for three frames in a row, never before six frames.
+    func testReturnToTextSurvivesALateResignAndSettlesOnlyAfterItHeldTheKeyboard() {
+        let text = FakeText(), frames = ManualFrames()
+        let run = makeReturn(text, frames)
+        run.start()
+        XCTAssertTrue(text.textHasKeyboard, "focused at once")
+        for frame in 1...8 {
+            if frame == 3 { text.textHasKeyboard = false }   // SwiftUI's update
+            frames.tick()
+            if frame < 6 { XCTAssertNil(run.end, "frame \(frame): still watching (two quiet frames are not enough)") }
+        }
+        XCTAssertEqual(run.end, .settled)
+        XCTAssertTrue(text.textHasKeyboard, "the text kept the keyboard")
+        XCTAssertEqual(text.focusCount, 2, "focused at the start and once after the resign")
+        XCTAssertEqual(text.textSelection, NSRange(location: 3, length: 0), "caret kept")
+        XCTAssertEqual(frames.pending, 0, "nothing scheduled after settling")
+    }
+
+    func testReturnToTextIsBoundedByFramesAndByTime() {
+        let stubborn = FakeText()
+        stubborn.takesKeyboard = false
+        let frames = ManualFrames()
+        let run = makeReturn(stubborn, frames, pacing: .init(minimumFrames: 6, heldFrames: 3, maximumFrames: 10, maximumSeconds: 100))
+        run.start()
+        var ticks = 0
+        while frames.pending > 0, ticks < 100 { frames.tick(); ticks += 1 }
+        XCTAssertEqual(run.end, .gaveUp)
+        XCTAssertEqual(ticks, 10, "ten frames, then it stops")
+        XCTAssertEqual(stubborn.focusCount, 11)
+
+        var clockNow: TimeInterval = 0
+        let late = makeReturn(stubborn, frames, pacing: .init(minimumFrames: 6, heldFrames: 3, maximumFrames: 1000, maximumSeconds: 1),
+                              uptime: { clockNow })
+        late.start()
+        clockNow = 0.5
+        frames.tick()
+        XCTAssertNil(late.end)
+        clockNow = 1.2
+        frames.tick()
+        XCTAssertEqual(late.end, .gaveUp, "time bounds it even when frames are slow")
+        XCTAssertEqual(frames.pending, 0)
+    }
+
+    /// A17 P2: each way the keyboard (or the note) goes elsewhere ends the
+    /// run, and nothing after it focuses the text again.
+    func testEveryCancellationEndsTheReturnBeforeAnotherAttempt() {
+        func scenario(_ name: String, _ interfere: (FakeText, NotesKeyboardReturn) -> Void) {
+            let text = FakeText(), frames = ManualFrames()
+            let run = makeReturn(text, frames)
+            run.start()
+            frames.tick()
+            interfere(text, run)
+            let focused = text.focusCount
+            frames.tick()
+            frames.tick()
+            XCTAssertEqual(run.end, .cancelled, name)
+            XCTAssertEqual(text.focusCount, focused, "\(name): no attempt after it")
+            XCTAssertEqual(frames.pending, 0, name)
+        }
+        scenario("a click or a later ⌃Tab (cancel)") { text, run in text.textHasKeyboard = false; run.cancel() }
+        scenario("a caret move") { text, _ in text.textHasKeyboard = true; text.textSelection = NSRange(location: 1, length: 0) }
+        scenario("typing") { text, _ in text.textHasKeyboard = true; text.textSelection = NSRange(location: 4, length: 0) }
+        scenario("a note switch or the editor dismantled") { text, _ in text.textHasKeyboard = false; text.canTakeKeyboard = false }
+        scenario("the panel hiding") { text, _ in text.textHasKeyboard = false; text.canTakeKeyboard = false }
+        scenario("composition starting") { text, _ in text.textHasKeyboard = false; text.textHasMarkedText = true }
+    }
+
+    func testReturnNeverStartsInsideCompositionOrAHiddenPanel() {
+        let composing = FakeText(), frames = ManualFrames()
+        composing.textHasMarkedText = true
+        let first = makeReturn(composing, frames)
+        first.start()
+        XCTAssertEqual(first.end, .cancelled)
+        XCTAssertEqual(composing.focusCount, 0)
+        let hidden = FakeText()
+        hidden.canTakeKeyboard = false
+        let second = makeReturn(hidden, frames)
+        second.start()
+        XCTAssertEqual(second.end, .cancelled)
+        XCTAssertEqual(hidden.focusCount, 0)
+        XCTAssertEqual(frames.pending, 0)
+    }
+
+    func testReturnPutsTheCaretBackOnlyWhenItFocusesAndNeverOverTheUsersMove() {
+        let text = FakeText(), frames = ManualFrames()
+        text.textSelection = NSRange(location: 5, length: 2)
+        let run = makeReturn(text, frames)
+        run.start()
+        text.textHasKeyboard = false
+        text.textSelection = NSRange(location: 0, length: 0)    // the text view's selection reset by the loss
+        frames.tick()
+        XCTAssertEqual(text.textSelection, NSRange(location: 5, length: 2), "refocusing restores the caret and selection")
+        frames.tick()
+        text.textSelection = NSRange(location: 6, length: 0)    // the user
+        frames.tick()
+        XCTAssertEqual(text.textSelection, NSRange(location: 6, length: 0), "the user's move is never undone")
+        XCTAssertEqual(run.end, .cancelled)
+    }
+}
+
+// MARK: - A17: the keyboard's way back into the text, on a key window (CI only)
+
+private final class FooterStandIn: NSView {
+    override var acceptsFirstResponder: Bool { true }
+}
+
+/// A key-capable panel that does not activate the app (as the real panel).
+private final class ReturnKeyPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
+extension NotesFormatControlsTests {
+    private struct KeyHarness {
+        let chrome: NotesPageChrome
+        let accessories: NoteTitleAccessories
+        let text: NoteEditorTextView
+        let footer: FooterStandIn
+        let window: NSWindow
+    }
+
+    /// A key window holding the note's text, its title accessories and a view
+    /// standing in for the last control of the bottom row, with the caret at 5
+    /// and the keyboard on the stand-in (⌃Tab's fourth press is about to come).
+    private func keyHarness() throws -> KeyHarness {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("CI only: the return needs a key window, which locally would take the keyboard")
+        }
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Pricing"), .text("Body of the note")]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 560))
+        container.addSubview(scroll)
+        let footer = FooterStandIn(frame: NSRect(x: 10, y: 510, width: 100, height: 30))
+        container.addSubview(footer)
+        let window = ReturnKeyPanel(contentRect: NSRect(x: -4000, y: -4000, width: 320, height: 560),
+                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = container
+        windows.append(window)
+        window.orderFrontRegardless()
+        window.makeKey()
+        XCTAssertTrue(window.isKeyWindow, "a key window")
+        let chrome = NotesPageChrome()
+        let accessories = NoteTitleAccessories(engine: engine, textView: text, scrollView: scroll, chrome: chrome, design: .default,
+                                               headerBottom: 40, isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
+        window.makeFirstResponder(text)
+        text.setSelectedRange(NSRange(location: 5, length: 0))
+        XCTAssertTrue(window.makeFirstResponder(footer))
+        return KeyHarness(chrome: chrome, accessories: accessories, text: text, footer: footer, window: window)
+    }
+
+    private func wait(_ seconds: TimeInterval = 3, until condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline, !condition() { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+    }
+
+    private func pause(_ seconds: TimeInterval = 0.5) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+
+    /// A17 P2 (late focus update): SwiftUI takes the keyboard back after the
+    /// text had it, on a later frame; the return gets it back, waits until it
+    /// stayed, and typing right after the round trip lands at the caret.
+    func testTheReturnSurvivesSwiftUIsLateFocusUpdateAndTypingRightAfterLandsAtTheCaret() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        for delay in [0.03, 0.07] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { _ = h.window.makeFirstResponder(h.footer) }
+        }
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .settled)
+        XCTAssertTrue(h.window.firstResponder === h.text, "the text has the keyboard after SwiftUI's updates")
+        XCTAssertEqual(h.text.selectedRange(), NSRange(location: 5, length: 0), "caret kept")
+        h.text.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(h.text.string, "Prici!ng\nBody of the note", "typing right after the round trip landed at the caret")
+        XCTAssertNil(h.chrome.keyboardReturn, "the ticket is spent")
+    }
+
+    /// A17 P2 (cancellation): a click on another control. The monitor sees
+    /// the mouse-down, and the keyboard stays where the user put it.
+    func testAClickDuringTheReturnCancelsItAndTheKeyboardStaysWhereTheUserPutIt() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 250, y: 545), modifierFlags: [],
+                                                     timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: h.window.windowNumber,
+                                                     context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        NSApp.sendEvent(click)
+        XCTAssertEqual(run.end, .cancelled, "the click ended the return")
+        XCTAssertTrue(h.window.makeFirstResponder(h.footer), "the click's target took the keyboard")
+        pause()
+        XCTAssertTrue(h.window.firstResponder === h.footer, "and the return did not take it back")
+    }
+
+    /// A17 P2: a caret move or typing during the return is the user's, and is
+    /// never undone by a later attempt.
+    func testACaretMoveOrTypingDuringTheReturnCancelsItAndKeepsTheUsersCaret() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        XCTAssertTrue(h.window.firstResponder === h.text)
+        h.text.setSelectedRange(NSRange(location: 2, length: 0))
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .cancelled)
+        h.window.makeFirstResponder(h.footer)
+        pause(0.3)
+        XCTAssertEqual(h.text.selectedRange(), NSRange(location: 2, length: 0), "the caret the user chose")
+        XCTAssertTrue(h.window.firstResponder === h.footer, "no attempt after the cancellation")
+
+        // Typing, the same way.
+        h.window.makeFirstResponder(h.text)
+        h.text.setSelectedRange(NSRange(location: 5, length: 0))
+        h.window.makeFirstResponder(h.footer)
+        h.chrome.returnKeyboardToText()
+        let typing = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.text.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        wait { typing.end != nil }
+        XCTAssertEqual(typing.end, .cancelled)
+        XCTAssertEqual(h.text.selectedRange(), NSRange(location: 6, length: 0), "after what was typed")
+    }
+
+    /// A17 P2: the note is replaced or the editor dismantled (`invalidate`),
+    /// the page moves to another note (`cancelKeyboardReturn`).
+    func testANoteSwitchOrDismantlingCancelsTheReturn() throws {
+        let h = try keyHarness()
+        h.chrome.returnKeyboardToText()
+        let dismantled = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.accessories.invalidate()
+        XCTAssertEqual(dismantled.end, .cancelled, "dismantling the editor ended it")
+        h.window.makeFirstResponder(h.footer)
+        pause(0.3)
+        XCTAssertTrue(h.window.firstResponder === h.footer)
+
+        let again = try keyHarness()
+        defer { again.accessories.invalidate() }
+        again.chrome.returnKeyboardToText()
+        let switched = try XCTUnwrap(again.chrome.keyboardReturn)
+        again.chrome.cancelKeyboardReturn()
+        XCTAssertEqual(switched.end, .cancelled, "the page's note switch ended it")
+        again.window.makeFirstResponder(again.footer)
+        pause(0.3)
+        XCTAssertTrue(again.window.firstResponder === again.footer)
+    }
+
+    /// A17 P2: the panel hides during the return.
+    func testThePanelHidingCancelsTheReturn() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.window.orderOut(nil)
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .cancelled, "a hidden panel ends it")
+        h.window.orderFrontRegardless()
+        h.window.makeKey()
+        h.window.makeFirstResponder(h.footer)
+        pause(0.3)
+        XCTAssertTrue(h.window.firstResponder === h.footer, "shown again, nothing takes the keyboard from the control")
+    }
+
+    /// A17 P2: an input method starts composing during the return; the
+    /// composition is left alone.
+    func testCompositionStartingDuringTheReturnCancelsItAndKeepsTheMarkedText() throws {
+        let h = try keyHarness()
+        defer { h.accessories.invalidate() }
+        h.chrome.returnKeyboardToText()
+        let run = try XCTUnwrap(h.chrome.keyboardReturn)
+        h.text.setMarkedText("é", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(h.text.hasMarkedText())
+        wait { run.end != nil }
+        XCTAssertEqual(run.end, .cancelled)
+        XCTAssertTrue(h.text.hasMarkedText(), "the composition was not disturbed")
+        XCTAssertTrue(h.window.firstResponder === h.text)
+    }
+}
+
+// A18: ending the ticket must disarm its clock in the same turn.
+extension NotesFormatControlsTests {
+    func testReturnClockHasNoPendingFrameAsSoonAsItsTicketEnds() {
+        let text = FakeText(), frames = ManualFrames()
+        let run = makeReturn(text, frames)
+        XCTAssertEqual(frames.pending, 0, "constructing a return never starts its clock")
+        run.start()
+        XCTAssertTrue(run.isRunning)
+        XCTAssertEqual(frames.pending, 1)
+        run.cancel()
+        XCTAssertFalse(run.isRunning)
+        XCTAssertEqual(frames.pending, 0, "no frame may remain armed while no re-focus is pending")
+    }
+}
+
+extension NotesFormatControlsTests {
+    func testDisplayClockIsIdleUntilRequestedAndStopsImmediatelyOnCancellation() async throws {
+        let clock = NotesDisplayFrameClock(view: nil)
+        XCTAssertFalse(clock.isRunning, "creating a clock does not schedule work")
+        let text = FakeText()
+        let run = NotesKeyboardReturn(target: text, clock: clock)
+        XCTAssertFalse(clock.isRunning, "creating a return does not schedule work")
+        run.start()
+        XCTAssertTrue(clock.isRunning, "a pending return arms the fallback")
+        run.cancel()
+        XCTAssertFalse(clock.isRunning, "cancellation disarms the fallback in the same turn")
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(run.focusCount, 1)
+        XCTAssertFalse(clock.isRunning)
+    }
+
+    func testDisplayClockStopsItsFallbackBeforeReportingSettlementOrFrameLimit() async {
+        for settled in [true, false] {
+            let clock = NotesDisplayFrameClock(view: nil)
+            let text = FakeText()
+            text.takesKeyboard = settled
+            let run = NotesKeyboardReturn(target: text, clock: clock,
+                pacing: .init(minimumFrames: 1, heldFrames: 1, maximumFrames: 1, maximumSeconds: 1))
+            let ended = expectation(description: settled ? "settled" : "gave up")
+            run.onEnd = { result in
+                XCTAssertEqual(result, settled ? .settled : .gaveUp)
+                XCTAssertFalse(clock.isRunning, "end callbacks must observe an idle clock")
+                ended.fulfill()
+            }
+            run.start()
+            XCTAssertTrue(clock.isRunning)
+            await fulfillment(of: [ended], timeout: 2)
+            XCTAssertFalse(clock.isRunning)
+        }
+    }
+
+    func testDisplayClockCancelsAReplacedFrameWithoutFiringItsCallback() async {
+        let clock = NotesDisplayFrameClock(view: nil)
+        var replacedCalls = 0
+        clock.nextFrame { replacedCalls += 1 }
+        let frame = expectation(description: "replacement fallback")
+        clock.nextFrame {
+            XCTAssertFalse(clock.isRunning, "a frame disarms both sources before calling back")
+            frame.fulfill()
+        }
+        await fulfillment(of: [frame], timeout: 2)
+        XCTAssertEqual(replacedCalls, 0)
+        XCTAssertFalse(clock.isRunning)
+    }
+}
+
+
+@MainActor
+final class HeadingsBehaviourTests: XCTestCase {
+    func testHeadingRenderingCaptures() throws {
+        guard let output = ProcessInfo.processInfo.environment["ATTIC_HEADINGS_CAPTURE_DIR"] else {
+            throw XCTSkip("explicit native capture run only")
+        }
+        var heading = NoteBlock.text("Research", style: "heading"); heading.level = 1
+        var sub = NoteBlock.text("Sources", style: "heading"); sub.level = 2
+        var next = NoteBlock.text("Next section", style: "heading"); next.level = 1
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Heading review"), heading, .text("The section keeps all of its text."), sub,
+            .text("Nested content stays with Research."), .table(.blank()), next, .text("This stays visible.")
+        ]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 650)
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .white
+        text.textContainerInset = NSSize(width: 28, height: 8)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scroll
+        defer { window.close() }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        func capture(_ name: String) throws {
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            text.layoutSubtreeIfNeeded()
+            text.textLayoutManager?.textViewportLayoutController.layoutViewport()
+            engine.updateHeadingControls()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+            scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: URL(fileURLWithPath: output).appendingPathComponent(name))
+        }
+        try capture("after-open-native.png")
+        XCTAssertEqual(engine.headingControls.count, 3)
+        let button = try XCTUnwrap(engine.headingControls.values.first { $0.headingOffset == (text.string as NSString).range(of: "Research").location })
+        let glyph = try XCTUnwrap(engine.rect(for: NSRange(location: (text.string as NSString).range(of: "Research").location + 7, length: 1)))
+        XCTAssertEqual(button.frame.minX, glyph.maxX + 3, accuracy: 0.5)
+        button.performClick(nil)
+        try capture("after-folded-native.png")
+        XCTAssertEqual(engine.headingControls.count, 2)
+        XCTAssertEqual(engine.foldedHeadingIDs.count, 1)
+        button.performClick(nil)
+        try capture("after-unfolded-native.png")
+        XCTAssertEqual(engine.headingControls.count, 3)
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+    }
+
+    func testR12FoldingLeavesContentUndoAndRedoIntact() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), .text("Heading", style: "heading"), .text("Body")]))
+        let (_, text) = engine.makeView()
+        text.setSelectedRange(NSRange(location: 8, length: 0))
+        text.insertText("X", replacementRange: text.selectedRange())
+        XCTAssertTrue(engine.undoCommand())
+        let undoCount = engine.history.undoOps.count, redoCount = engine.history.redoOps.count
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        XCTAssertEqual(engine.history.undoOps.count, undoCount)
+        XCTAssertEqual(engine.history.redoOps.count, redoCount)
+        XCTAssertTrue(engine.redoCommand())
+        XCTAssertEqual(engine.document().blocks[1].text, "HeXading")
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        XCTAssertTrue(engine.undoCommand())
+        XCTAssertEqual(engine.document().blocks[1].text, "Heading")
+    }
+
+    func testPersistedFoldSkipsNativeLayoutWithoutLosingText() {
+        let id = UUID()
+        var heading = NoteBlock.text("Heading", id: id, style: "heading"); heading.level = 1
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(
+            blocks: [.text("Title"), heading, .text("Retained folded text")],
+            extras: ["foldedHeadings": .array([.string(id.uuidString)])]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame.size = CGSize(width: 320, height: 500)
+        text.layoutSubtreeIfNeeded()
+        let layout = engine.layoutManager!
+        layout.ensureLayout(for: engine.contentStorage.documentRange)
+        var starts: [Int] = []
+        layout.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
+            starts.append(engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: fragment.rangeInElement.location))
+            return true
+        }
+        let body = (text.string as NSString).range(of: "Retained folded text")
+        XCTAssertFalse(starts.contains(body.location), "folded paragraphs must not participate in layout")
+        XCTAssertTrue(text.string.contains("Retained folded text"))
+    }
+
+    private func heading(_ text: String, level: Int, id: UUID = UUID()) -> NoteBlock {
+        var block = NoteBlock.text(text, id: id, style: "heading")
+        block.level = level
+        return block
+    }
+
+    private func location(_ text: String, in engine: NoteEditorEngine) -> Int {
+        (engine.textStorage.string as NSString).range(of: text).location
+    }
+
+    func testR12SplittingAHeadingGivesTheSecondFoldAnIndependentIdentity() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("AlphaBeta", level: 2), .text("Body")]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        XCTAssertTrue(engine.toggleHeadingFold(at: 6))
+        text.setSelectedRange(NSRange(location: 11, length: 0))
+        text.insertText("\n", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.headingSections.count, 2)
+        let second = try XCTUnwrap(engine.headingSections.last)
+        XCTAssertTrue(engine.toggleHeadingFold(at: second.heading.location))
+        let sections = engine.headingSections
+        XCTAssertNotEqual(sections.first?.id, sections.last?.id)
+        XCTAssertFalse(try XCTUnwrap(sections.first?.id.map(engine.foldedHeadingIDs.contains)))
+        XCTAssertFalse(engine.isRangeFolded(try XCTUnwrap(sections.first).content))
+        XCTAssertTrue(engine.isRangeFolded(try XCTUnwrap(sections.last).content))
+        let saved = try NoteContentCodec.encode(engine.document())
+        let reopened = NoteEditorEngine(noteID: engine.noteID, document: try XCTUnwrap(NoteContentCodec.decode(saved).document))
+        XCTAssertFalse(reopened.isRangeFolded(try XCTUnwrap(reopened.headingSections.first).content))
+        XCTAssertTrue(reopened.isRangeFolded(try XCTUnwrap(reopened.headingSections.last).content))
+    }
+
+    func testNestedFoldBoundariesKeepEveryKindOfContentAndNextPeerVisible() throws {
+        let h1 = heading("Research", level: 1), h2 = heading("Sources", level: 2)
+        let next = heading("Next section", level: 1)
+        let image = NoteBlock.image(attachmentID: UUID(), pixelWidth: 80, pixelHeight: 40)
+        let file = NoteBlock.file(filename: "reference.txt", contentTypeIdentifier: "public.text", byteCount: 12, importFailure: "Unavailable")
+        let document = NoteDocument(blocks: [.text("Title"), h1, .text("Hidden prose"), h2, .table(.blank()), image, file, next, .text("Visible prose")])
+        let engine = NoteEditorEngine(noteID: UUID(), document: document)
+        let (scroll, text) = engine.makeView()
+        scroll.frame.size = CGSize(width: 320, height: 800)
+        let original = engine.textStorage.string
+        let peerRange = (original as NSString).range(of: "Next section")
+        let beforeY = try XCTUnwrap(engine.rect(for: peerRange)).minY
+        let section = try XCTUnwrap(engine.headingSection(at: location("Research", in: engine)))
+        XCTAssertEqual(NSMaxRange(section.content), location("Next section", in: engine))
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
+        XCTAssertEqual(engine.textStorage.string, original)
+        XCTAssertEqual(engine.document().blocks, document.blocks)
+        let layout = try XCTUnwrap(engine.layoutManager)
+        layout.ensureLayout(for: engine.contentStorage.documentRange)
+        var starts: [Int] = []
+        layout.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) { fragment in
+            starts.append(engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: fragment.rangeInElement.location))
+            return true
+        }
+        XCTAssertFalse(starts.contains(location("Hidden prose", in: engine)))
+        XCTAssertFalse(starts.contains(location("Sources", in: engine)))
+        XCTAssertTrue(starts.contains(location("Next section", in: engine)))
+        let afterY = try XCTUnwrap(engine.rect(for: peerRange)).minY
+        XCTAssertLessThan(afterY, beforeY - 100, "folding removes layout height, including attachment height")
+        let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(engine.document())).document))
+        XCTAssertEqual(reopened.foldedHeadingIDs, [try XCTUnwrap(h1.id)])
+        XCTAssertTrue(NoteMarkdownExport.markdown(engine.document()).contains("Hidden prose"))
+        XCTAssertTrue(NoteTextExport.plainText(engine.document()).contains("Hidden prose"))
+        XCTAssertTrue(NotePrint.printView(document: engine.document()).string.contains("Hidden prose"))
+        text.setSelectedRange(NSRange(location: section.heading.location + 1, length: 0))
+        // R12-09: folds are view state, so only a toggle changes them.
+        XCTAssertFalse(engine.history.undo())
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
+        XCTAssertEqual(engine.foldedHeadingIDs, [try XCTUnwrap(h1.id)])
+    }
+
+    func testHeadingTypingKeepsFoldAndCaretEntryUnfoldsAllAncestors() throws {
+        let parent = heading("Parent", level: 1), child = heading("Child", level: 2)
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), parent, child, .text("Needle"), heading("Peer", level: 1)]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Child", in: engine)))
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Parent", in: engine)))
+        text.setSelectedRange(NSRange(location: location("Parent", in: engine), length: 0))
+        text.insertText("Edited ", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.foldedHeadingIDs.count, 2)
+        XCTAssertEqual(engine.document().blocks[1].id, parent.id)
+        text.setSelectedRange(NSRange(location: location("Needle", in: engine) + 1, length: 0))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertTrue(text.string.contains("Edited Parent"))
+    }
+
+    func testFoldIdentitySurvivesTypingUndoRedoAndReopening() throws {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Heading", style: "heading"), .text("Body")]))
+        let (_, text) = engine.makeView()
+        let start = location("Heading", in: engine)
+        XCTAssertTrue(engine.toggleHeadingFold(at: start))
+        let id = try XCTUnwrap(engine.document().blocks[1].id)
+        text.setSelectedRange(NSRange(location: start + 3, length: 0))
+        text.insertText("x", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.foldedHeadingIDs, [id])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.foldedHeadingIDs, [id])
+        XCTAssertEqual(engine.document().blocks[1].text, "Heading")
+        XCTAssertFalse(engine.history.undo(), "R12-09: folding creates no Undo entry")
+        XCTAssertEqual(engine.foldedHeadingIDs, [id])
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document().blocks[1].text, "Heaxding")
+        let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(NoteContentCodec.encode(engine.document())).document))
+        XCTAssertEqual(reopened.foldedHeadingIDs, [id])
+    }
+
+    func testFindUnfoldsBodyAndTableCellMatches() throws {
+        let h = heading("Section", level: 1)
+        var table = NoteTable.blank()
+        table[.init(row: 1, column: 0)].text = "Cell needle"
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), h, .text("Body needle"), .table(table)]))
+        let (scroll, text) = engine.makeView()
+        scroll.frame.size = CGSize(width: 320, height: 700)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = scroll
+        defer { window.close() }
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        text.layoutSubtreeIfNeeded()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Section", in: engine)))
+        engine.find.show()
+        engine.find.query = "Body needle"
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Section", in: engine)))
+        engine.find.query = "Cell needle"
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        XCTAssertEqual(engine.find.matches.count, 1)
+        engine.find.close()
+    }
+
+    func testFoldMenuShortcutAndReadOnlyValidationUseSharedCommand() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), heading("Heading", level: 2), .text("Body")]))
+        let (_, text) = engine.makeView()
+        text.setSelectedRange(NSRange(location: location("Heading", in: engine), length: 0))
+        let router = NoteCommandRouter(engine: engine)
+        XCTAssertTrue(NoteCommandCatalog.formatSections.flatMap { $0 }.contains(.toggleHeadingFold))
+        XCTAssertEqual(NoteCommandCatalog.shortcutLabel(.toggleHeadingFold), "⌃⌘H")
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control, .command], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "h", charactersIgnoringModifiers: "h", isARepeat: false, keyCode: 4)!
+        XCTAssertEqual(NoteCommandCatalog.command(for: event), .toggleHeadingFold)
+        XCTAssertTrue(engine.handleShortcut(event))
+        XCTAssertEqual(router.validation(.toggleHeadingFold).state, .on)
+        XCTAssertTrue(router.run(.toggleHeadingFold, from: .menuBar))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+        text.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertFalse(router.validation(.toggleHeadingFold).enabled)
+        let readOnly = NoteEditorEngine(noteID: UUID(), document: engine.document(), readOnly: true)
+        XCTAssertFalse(readOnly.toggleHeadingFold(at: location("Heading", in: readOnly)))
+    }
+
+    func testFoldMetadataSurvivesStoreSaveAndFreshLoad() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let document = NoteDocument(blocks: [.text("Title"), heading("Heading", level: 1), .text("Stored body")])
+        guard case let .success((id, revision)) = store.createDocumentNote(id: UUID(), document: document) else { return XCTFail("create") }
+        let engine = NoteEditorEngine(noteID: id, document: document)
+        _ = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Heading", in: engine)))
+        guard case .success = store.saveDocument(noteID: id, document: engine.document(), baseRevisionID: revision) else { return XCTFail("save") }
+        let loaded = try XCTUnwrap(store.loadDocument(noteID: id)?.content.document)
+        let reopened = NoteEditorEngine(noteID: id, document: loaded)
+        XCTAssertEqual(reopened.foldedHeadingIDs, engine.foldedHeadingIDs)
+        XCTAssertEqual(reopened.document().blocks[2].text, "Stored body")
+    }
+
+    func testCopiedFoldedHeadingGetsIndependentIdentityAndIncludesItsBody() throws {
+        let original = heading("Heading", level: 1)
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), original, .text("Copied hidden body"), heading("Peer", level: 1), .text("")
+        ]))
+        _ = engine.makeView()
+        let section = try XCTUnwrap(engine.headingSection(at: location("Heading", in: engine)))
+        XCTAssertTrue(engine.toggleHeadingFold(at: section.heading.location))
+        let range = NSRange(location: section.heading.location, length: NSMaxRange(section.content) - section.heading.location)
+        let fragment = engine.fragment(for: range)
+        XCTAssertTrue(NoteTextExport.plainText(fragment).contains("Copied hidden body"))
+        let data = try NoteContentCodec.encode(fragment, context: .fragment)
+        XCTAssertTrue(engine.paste(fragmentData: data, at: NSRange(location: engine.textStorage.length, length: 0)))
+        let copies = engine.headingSections.filter { engine.lineText(at: $0.heading.location) == "Heading" }
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertEqual(Set(copies.compactMap(\.id)).count, 2, "copying must not couple two headings' fold states")
+        XCTAssertFalse(engine.isRangeFolded(try XCTUnwrap(copies.last).content))
+    }
+
+    func testCaretAtEndOfFoldedFinalParagraphUnfoldsIt() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("Heading", level: 1), .text("Final folded body")
+        ]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Heading", in: engine)))
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty, "the insertion point at the final paragraph's end must be visible")
+    }
+
+    func testEmptyFinalBodyUnfoldsButTypingAtFinalHeadingEndKeepsFold() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("Heading", level: 1), .text("")
+        ]))
+        let (_, text) = engine.makeView()
+        XCTAssertTrue(engine.toggleHeadingFold(at: location("Heading", in: engine)))
+        text.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertTrue(engine.foldedHeadingIDs.isEmpty)
+
+        let lastHeading = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), heading("Final heading", level: 1)
+        ]))
+        let (_, lastText) = lastHeading.makeView()
+        XCTAssertTrue(lastHeading.toggleHeadingFold(at: location("Final heading", in: lastHeading)))
+        lastText.setSelectedRange(NSRange(location: lastHeading.textStorage.length, length: 0))
+        lastText.insertText(" edited", replacementRange: lastText.selectedRange())
+        XCTAssertEqual(lastHeading.foldedHeadingIDs.count, 1)
+        XCTAssertEqual(lastHeading.document().blocks.last?.text, "Final heading edited")
+    }
+
+    func testHeadingCacheTracksFormattingAndAttributeChanges() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [
+            .text("Title"), .text("First"), .text("Second"), .text("Body")
+        ]))
+        _ = engine.makeView()
+        XCTAssertTrue(engine.headingSections.isEmpty)
+        let first = location("First", in: engine)
+        XCTAssertTrue(engine.perform(.paragraph(.heading(1)), selection: NSRange(location: first, length: 0)))
+        XCTAssertEqual(engine.headingSections.count, 1)
+        let second = engine.paragraphRange(at: location("Second", in: engine))
+        engine.textStorage.addAttribute(.noteBlockStyle, value: "heading", range: second)
+        engine.textStorage.addAttribute(.noteBlockLevel, value: 1, range: second)
+        XCTAssertEqual(engine.headingSections.count, 2)
+        XCTAssertEqual(NSMaxRange(engine.headingSections[0].content), second.location)
+    }
+
+}
+
+/// F4a in the real panel (recording 1937). V-08: the `/` list opened downward
+/// stops above the bottom row's buttons, and opened upward stops below the
+/// header's, measured against the buttons themselves.
+@MainActor
+final class F4aPanelNotesTests: XCTestCase {
+    private func elements(_ root: AnyObject) -> [AnyObject] {
+        let children = (root.accessibilityChildren?() ?? nil) ?? []
+        return [root] + children.flatMap { elements($0 as AnyObject) }
+    }
+
+    private func views<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+        ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views(type, in: $0) }
+    }
+
+    /// The real panel on its Notes page, with a fresh note's editor; `body`
+    /// runs with the panel up.
+    private func withNotesPanel(_ body: (AtticPanel, AtticPanelContentContainer, AtticPanelHostingView, NoteEditorTextView) throws -> Void) throws {
+        let suite = "F4aPanel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        // SwiftUI builds its accessibility tree for an assistive client.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        state.selectSection(.notes)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        content.layoutSubtreeIfNeeded()
+        let textView = try XCTUnwrap(views(NoteEditorTextView.self, in: content).first, "the note's editor")
+        panel.makeFirstResponder(textView)
+        try body(panel, content, host, textView)
+    }
+
+    private func type(_ text: String, into textView: NoteEditorTextView, content: NSView) {
+        for character in text {
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        content.layoutSubtreeIfNeeded()
+    }
+
+    /// V-01 in the real panel (recording 1937): `/` → Diagram on the last
+    /// line of a note that fills the panel. The template goes in with its
+    /// block in one step and is laid out in the same pass; the whole block
+    /// (its label to the template's last line) is then in view above the
+    /// floating bottom controls at once, not under them until a scroll.
+    func testV01TheDiagramAppearsWithItsTemplateAboveTheBottomControls() throws {
+        try withNotesPanel { _, content, _, textView in
+            type("Title\n" + String(repeating: "Line\n", count: 24) + "/diagram", into: textView, content: content)
+            let controls = try XCTUnwrap(NoteFormatControls.active)
+            XCTAssertEqual(controls.slashModel.items.map(\.kind), [.diagram])
+            let engine = try XCTUnwrap(textView.engine)
+            let blockStart = try XCTUnwrap(engine.slashSession).range.location
+            controls.pickSlash(.diagram)
+            // The next frame's pass.
+            content.layoutSubtreeIfNeeded()
+            let end = engine.textStorage.length
+            XCTAssertTrue(engine.textStorage.string.hasSuffix("B --> C[Done]"), "the template is in, with its block")
+            let viewport = try XCTUnwrap(engine.layoutManager?.textViewportLayoutController.viewportRange)
+            let viewportEnd = engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: viewport.endLocation)
+            XCTAssertGreaterThanOrEqual(viewportEnd, end, "laid out for drawing in the same pass")
+            let scroll = try XCTUnwrap(textView.enclosingScrollView)
+            let clip = scroll.contentView.bounds
+            let readable = CGRect(x: clip.minX, y: clip.minY + scroll.contentInsets.top, width: clip.width,
+                                  height: clip.height - scroll.contentInsets.top - scroll.contentInsets.bottom)
+            let top = try XCTUnwrap(engine.rect(for: NSRange(location: blockStart, length: 1)))
+            let caret = try XCTUnwrap(engine.caretRect(at: end))
+            XCTAssertGreaterThanOrEqual(top.minY, readable.minY - 0.5, "the block's label is in view: \(top) in \(readable)")
+            XCTAssertLessThanOrEqual(caret.maxY, readable.maxY + 0.5, "its last line is above the bottom controls: \(caret) in \(readable)")
+        }
+    }
+
+    func testTheSlashListStaysClearOfThePanelsButtons() throws {
+        let suite = "V08Panel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let size = CGSize(width: 340, height: 560)
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        // SwiftUI builds its accessibility tree for an assistive client.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        state.selectSection(.notes)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        content.layoutSubtreeIfNeeded()
+        let textView = try XCTUnwrap(views(NoteEditorTextView.self, in: content).first, "the note's editor")
+        panel.makeFirstResponder(textView)
+        func type(_ text: String) {
+            for character in text {
+                textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            content.layoutSubtreeIfNeeded()
+        }
+        func frame(of identifier: String) throws -> CGRect {
+            let element = try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? "") == identifier }, identifier)
+            let screen = try XCTUnwrap(element.accessibilityFrame?(), identifier)
+            return content.convert(panel.convertFromScreen(screen), from: nil)
+        }
+        func card() throws -> CGRect {
+            let overlay = content.overlayLayer
+            let list = try XCTUnwrap(views(AtticOverlayHostingView.self, in: overlay).first { $0.menuLabel == "Insert" && !$0.isHidden })
+            let room = AtticDropdownMetrics.shadowRoom
+            return content.convert(list.frame.insetBy(dx: room, dy: room), from: list.superview)
+        }
+        // A caret high in the note: the list opens downward.
+        type("Title\n/")
+        let controls = try XCTUnwrap(NoteFormatControls.active)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertFalse(controls.slashModel.above)
+        let allNotes = try frame(of: "notes-all-notes")
+        let below = try card()
+        XCTAssertFalse(below.intersects(allNotes), "downward: \(below) over the bottom row's button \(allNotes)")
+        let clearBelow = content.isFlipped ? allNotes.minY - below.maxY : below.minY - allNotes.maxY
+        XCTAssertGreaterThanOrEqual(clearBelow, 0, "it ends above the bottom row")
+        // A caret low in a long note: the list opens upward.
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type(String(repeating: "Line\n", count: 30) + "/")
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertTrue(controls.slashModel.above)
+        let pin = try frame(of: "panel-pin-button")
+        let above = try card()
+        XCTAssertFalse(above.intersects(pin), "upward: \(above) over the header's pin \(pin)")
+        let clearAbove = content.isFlipped ? above.minY - pin.maxY : pin.minY - above.maxY
+        XCTAssertGreaterThanOrEqual(clearAbove, 0, "it starts below the header")
+    }
+
+    /// F5a V-08 in the panel as the app builds it: the 28 pt native margin
+    /// around the visible surface (shadow room and resize band), the
+    /// `hint`-like note, at the owner's 340 x 560 and the other sizes. The
+    /// `/` list, opened down from the first body line and up from the end
+    /// of a long note (whose title has collapsed into the floating pill),
+    /// stays clear of every floating control: the pin, the page button, the
+    /// title pill, All notes, Aa and New Note.
+    func testF5aV08TheSlashListClearsEveryFloatingControlInTheAppsPanel() throws {
+        for size in [CGSize(width: 340, height: 560), CGSize(width: 320, height: 464), CGSize(width: 420, height: 640),
+                     CGSize(width: 340, height: 380)] {
+            try slashClearance(size: size)
+        }
+    }
+
+    private func slashClearance(size: CGSize) throws {
+        let suite = "F5aV08.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        state.updatePanelSize(size)
+        state.loadPageContent()
+        let chrome = PanelChromeInteractionState()
+        let settings = AppSettings(defaults: defaults)
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(store: store, noteStore: notes,
+                                     canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     chromeInteractionState: chrome, uiState: state, settings: settings,
+                                     tasksPageState: TasksPageState()),
+            panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
+        // As `AtticPanelController.configurePanel` sets it up.
+        let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
+        panel.surfaceMargin = AtticStyle.panelElevationMargin
+        panel.setVisibleContentFrame(CGRect(origin: CGPoint(x: -4000, y: -4000), size: size), display: false)
+        let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: panel.nativeMargin)
+        panel.contentView = content
+        panel.orderFront(nil)
+        defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        state.selectSection(.notes)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        content.layoutSubtreeIfNeeded()
+        let textView = try XCTUnwrap(views(NoteEditorTextView.self, in: content).first, "the note's editor")
+        panel.makeFirstResponder(textView)
+        func type(_ text: String) {
+            for character in text {
+                textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            content.layoutSubtreeIfNeeded()
+        }
+        // The floating controls, in the content container's space.
+        func controls() -> [(String, CGRect)] {
+            let ids = ["panel-pin-button", "panel-section-picker", "notes-header-title", "notes-all-notes",
+                       "notes-format-button", "notes-new-note"]
+            return elements(host).compactMap { element -> (String, CGRect)? in
+                let id = element.accessibilityIdentifier?() ?? ""
+                guard ids.contains(id), let screen = element.accessibilityFrame?(), screen.width > 0 else { return nil }
+                return (id, content.convert(panel.convertFromScreen(screen), from: nil))
+            }
+        }
+        func card() throws -> CGRect {
+            let list = try XCTUnwrap(views(AtticOverlayHostingView.self, in: content.overlayLayer)
+                .first { $0.menuLabel == "Insert" && !$0.isHidden })
+            let room = AtticDropdownMetrics.shadowRoom
+            return content.convert(list.frame.insetBy(dx: room, dy: room), from: list.superview)
+        }
+        func check(_ name: String) throws {
+            let list = try card()
+            let found = controls()
+            XCTAssertTrue(found.contains { $0.0 == "panel-pin-button" } && found.contains { $0.0 == "notes-all-notes" },
+                          "\(size) \(name): the controls are found: \(found.map(\.0))")
+            for (id, frame) in found {
+                XCTAssertFalse(list.intersects(frame), "\(size) \(name): the list \(list) covers \(id) \(frame)")
+            }
+            let surface = content.convert(host.frame, from: host.superview)
+            XCTAssertTrue(surface.insetBy(dx: 11.5, dy: 11.5).contains(list), "\(size) \(name): \(list) within \(surface)")
+        }
+        type("Launch sync\n/")
+        let controls = try XCTUnwrap(NoteFormatControls.active)
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertFalse(controls.slashModel.above, "\(size): a high caret opens the list downward")
+        try check("downward")
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type(String(repeating: "Line\n", count: 40))
+        textView.scrollToEndOfDocument(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        content.layoutSubtreeIfNeeded()
+        type("/")
+        XCTAssertTrue(controls.slashModel.shown)
+        XCTAssertTrue(controls.slashModel.above, "\(size): a low caret opens the list upward")
+        try check("upward")
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.cancelOperation(_:))))
+    }
+}

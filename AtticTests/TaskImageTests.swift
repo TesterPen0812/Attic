@@ -22,8 +22,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testImagesPersistAcrossContextsAndExportTextWithOriginalImageBytes() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let file = try imageFile(in: root)
         let files = TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -37,7 +37,7 @@ final class TaskImageTests: XCTestCase {
         let thumbnail = try await files.thumbnail(image)
         XCTAssertNotNil(thumbnail)
         let exported = try await files.export(title: restored.title, references: restored.attachments)
-        defer { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+        registerTemporaryProductDirectory(exported.deletingLastPathComponent(), parentName: "AtticTaskExports")
         XCTAssertEqual(try String(contentsOf: exported.appendingPathComponent("Task.txt"), encoding: .utf8), "Plan trip")
         XCTAssertEqual(try Data(contentsOf: exported.appendingPathComponent("1-Picture.png")), try Data(contentsOf: file))
         XCTAssertTrue(fresh.removeAttachment(image.id, from: restored.id))
@@ -45,8 +45,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testFailedAttachmentSaveRollsBackReferencesAndLeavesTaskUntouched() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let file = try imageFile(in: root)
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         var fail = false
@@ -64,8 +64,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testCorruptImageIsRejectedAndLegacyTaskPayloadStillDecodes() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let url = root.appendingPathComponent("Broken.png")
         try Data("not an image".utf8).write(to: url)
@@ -78,8 +78,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testTaskImportRejectsOverflowingPersistedByteCountsWithoutTrapping() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let file = try textFile(named: "New.txt", in: root)
         let existing = [
             TaskImageReference(
@@ -108,8 +108,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testFailedExportRemovesItsDisposableDirectory() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let exportRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticTaskExports", isDirectory: true)
         let before = Set((try? FileManager.default.contentsOfDirectory(atPath: exportRoot.path)) ?? [])
@@ -145,8 +145,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testImagesAndGeneralFilesAttachTogetherAndStayUsableAfterRelaunch() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let image = try imageFile(in: root)
         let text = try textFile(named: "Packing List.txt", in: root)
         let storage = root.appendingPathComponent("storage")
@@ -188,14 +188,14 @@ final class TaskImageTests: XCTestCase {
         // Drag-out export keeps the title with every attachment.
         try Data("Packing list".utf8).write(to: privateURL)
         let exported = try await files.export(title: restored.title, references: restored.attachments)
-        defer { try? FileManager.default.removeItem(at: exported.deletingLastPathComponent()) }
+        registerTemporaryProductDirectory(exported.deletingLastPathComponent(), parentName: "AtticTaskExports")
         XCTAssertEqual(try Data(contentsOf: exported.appendingPathComponent("2-Packing List.txt")), try Data(contentsOf: text))
         XCTAssertTrue(FileManager.default.fileExists(atPath: text.path), "originals are never moved or removed")
     }
 
     func testSubtaskAttachmentsResolveToTheParent() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let text = try textFile(named: "Itinerary.txt", in: root)
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("storage")))
@@ -213,8 +213,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testAttachAndRemoveApplyToEveryPhysicalDuplicate() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let text = try textFile(named: "Notes.txt", in: root)
         let image = try imageFile(in: root)
         let storage = root.appendingPathComponent("storage")
@@ -267,8 +267,8 @@ final class TaskImageTests: XCTestCase {
     /// deleting, purging or removing on one side must leave the survivor's
     /// file in place. Only the launch sweep may reclaim true orphans.
     func testRemovingAnAttachmentKeepsFilesAnotherTaskStillReferences() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let text = try textFile(named: "Shared.txt", in: root)
         let storage = root.appendingPathComponent("storage")
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -308,8 +308,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testFailedFileSaveRollsBackAndRemovesOnlyTheNewPrivateCopies() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let first = try textFile(named: "Keep.txt", in: root)
         let second = try textFile(named: "Rejected.pdf", in: root, contents: "%PDF-1.4")
         let storage = root.appendingPathComponent("storage")
@@ -341,8 +341,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testTaskLimitErrorsUseTaskWording() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let urls = try (0...AttachmentLimits.maxAttachmentsPerNote).map {
             try textFile(named: "File \($0).txt", in: root)
         }
@@ -374,8 +374,8 @@ final class TaskImageTests: XCTestCase {
     // MARK: - Batch 2 review fixes
 
     func testTaskImportReadsNoPayloadAndRejectsABatchWithABrokenImage() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let image = try imageFile(in: root)
         let text = try textFile(named: "Packing List.txt", in: root)
         let broken = root.appendingPathComponent("Broken.jpg")
@@ -404,8 +404,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testAttachmentDragPromisesItsRecordedTypeAndHandsOutACopy() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let image = try imageFile(in: root)
         let text = try textFile(named: "Packing List.txt", in: root)
         let files = TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
@@ -445,8 +445,8 @@ final class TaskImageTests: XCTestCase {
     }
 
     func testOpenHandsOutADisposableReadOnlyCopyAndThePrivateCopyStaysVerified() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "TaskImageTests")
+
         let text = try textFile(named: "Packing List.txt", in: root)
         let storage = root.appendingPathComponent("storage")
         let files = TaskImageFiles(rootURL: storage)
@@ -455,7 +455,7 @@ final class TaskImageTests: XCTestCase {
 
         let opened = try await files.openableCopy(for: list)
         let copy = try XCTUnwrap(opened)
-        defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+        registerTemporaryProductDirectory(copy.deletingLastPathComponent(), parentName: "AtticTaskExports")
         XCTAssertFalse(copy.standardizedFileURL.path.hasPrefix(storage.standardizedFileURL.path + "/"))
         XCTAssertEqual(copy.lastPathComponent, "Packing List.txt")
         XCTAssertEqual(try Data(contentsOf: copy), try Data(contentsOf: text))
@@ -466,7 +466,7 @@ final class TaskImageTests: XCTestCase {
         XCTAssertNotNil(verified, "opening never exposes the digest-checked private copy")
         let second = try await files.openableCopy(for: list)
         XCTAssertNotEqual(second, copy, "each open gets its own disposable copy")
-        if let second { try? FileManager.default.removeItem(at: second.deletingLastPathComponent()) }
+        if let second { registerTemporaryProductDirectory(second.deletingLastPathComponent(), parentName: "AtticTaskExports") }
 
         try Data("tampered".utf8).write(to: XCTUnwrap(verified))
         let refused = try await files.openableCopy(for: list)

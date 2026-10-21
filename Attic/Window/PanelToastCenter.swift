@@ -16,6 +16,11 @@ final class PanelToastCenter: ObservableObject {
         /// warning colour, and its button retries (or only dismisses when
         /// retrying cannot help).
         var isFailure = false
+        /// Whether ⌘Z means this toast's action (Tasks: the page's history
+        /// undoes the same step). Notes passes false (B2): ⌘Z there follows
+        /// the text under the caret, then the library's history, so the
+        /// toast never owns it and never says it does.
+        var answersUndoKey = true
 
         static func == (lhs: Toast, rhs: Toast) -> Bool { lhs.id == rhs.id }
     }
@@ -23,7 +28,11 @@ final class PanelToastCenter: ObservableObject {
     typealias Hold = AtticToastHold
 
     @Published private(set) var current: Toast?
+    /// An action that finishes later is running (the toast stays, its
+    /// button waits: a second press does nothing).
+    @Published private(set) var isPerforming = false
     private var action: (@MainActor () -> CommandOutcome)?
+    private var asyncAction: (@MainActor () async -> CommandOutcome)?
     private var dismissWork: DispatchWorkItem?
     private var holds: Set<Hold> = []
     /// How long a toast stays (spec: 6 s). Tests shorten it.
@@ -32,18 +41,66 @@ final class PanelToastCenter: ObservableObject {
     /// Shows `message` with an action that reports what it did, replacing
     /// any toast on screen.
     @discardableResult
-    func show(_ message: String, actionTitle: String = String(localized: "Undo"),
+    func show(_ message: String, actionTitle: String = String(localized: "Undo"), answersUndoKey: Bool = true,
               performing action: @escaping @MainActor () -> CommandOutcome) -> Toast {
-        let toast = Toast(message: message, actionTitle: actionTitle)
+        let toast = Toast(message: message, actionTitle: actionTitle, answersUndoKey: answersUndoKey)
         present(toast, action: action)
-        AccessibilityNotification.Announcement("\(message). \(actionTitle) with Command-Z.").post()
+        let announcement = answersUndoKey
+            ? "\(message). \(actionTitle) with Command-Z."
+            : "\(message). \(actionTitle) is available."
+        AccessibilityNotification.Announcement(announcement).post()
         return toast
     }
 
     /// An action that cannot fail (a page's own bookkeeping).
     @discardableResult
-    func show(_ message: String, actionTitle: String = String(localized: "Undo"), action: @escaping () -> Void) -> Toast {
-        show(message, actionTitle: actionTitle, performing: { action(); return .applied })
+    func show(_ message: String, actionTitle: String = String(localized: "Undo"), answersUndoKey: Bool = true,
+              action: @escaping () -> Void) -> Toast {
+        show(message, actionTitle: actionTitle, answersUndoKey: answersUndoKey, performing: { action(); return .applied })
+    }
+
+    /// An action that finishes later (Notes' durable Undo, which may wait
+    /// for a recovery write): the toast stays until its outcome is known,
+    /// then goes, or says what went wrong and offers Retry, as
+    /// `performAction()` does for an immediate action.
+    @discardableResult
+    func show(_ message: String, actionTitle: String = String(localized: "Undo"), answersUndoKey: Bool = true,
+              performingAsync action: @escaping @MainActor () async -> CommandOutcome) -> Toast {
+        let toast = Toast(message: message, actionTitle: actionTitle, answersUndoKey: answersUndoKey)
+        present(toast, action: nil, asyncAction: action)
+        let announcement = answersUndoKey
+            ? "\(message). \(actionTitle) with Command-Z."
+            : "\(message). \(actionTitle) is available."
+        AccessibilityNotification.Announcement(announcement).post()
+        return toast
+    }
+
+    /// The button of a toast whose action finishes later: runs it once and
+    /// waits for its outcome. Returns nil when nothing ran (no such action,
+    /// or it is already running).
+    @discardableResult
+    func performActionAsync() async -> CommandOutcome? {
+        guard let asyncAction, !isPerforming, let pressed = current else { return nil }
+        isPerforming = true
+        // Nothing expires while the action runs.
+        dismissWork?.cancel()
+        dismissWork = nil
+        let outcome = await asyncAction()
+        isPerforming = false
+        // Another toast replaced this one meanwhile: that one stays. A
+        // failure of a toast the page took down is still said.
+        guard current == nil || current?.id == pressed.id else { return outcome }
+        switch outcome {
+        case .applied:
+            if current?.id == pressed.id { dismiss() }
+        case let .failed(failure):
+            let toast = Toast(id: pressed.id, message: failure.message,
+                              actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
+                              isFailure: true, answersUndoKey: pressed.answersUndoKey)
+            present(toast, action: nil, asyncAction: failure.canRetry ? asyncAction : nil)
+            AccessibilityNotification.Announcement(failure.message).post()
+        }
+        return outcome
     }
 
     /// The toast's button: runs the action once. On success (or when there
@@ -52,6 +109,10 @@ final class PanelToastCenter: ObservableObject {
     /// help. The toast is not dismissed before the action has run.
     @discardableResult
     func performAction() -> CommandOutcome {
+        if asyncAction != nil {
+            Task { await performActionAsync() }
+            return .applied
+        }
         guard let action else {
             dismiss()
             return .applied
@@ -67,7 +128,8 @@ final class PanelToastCenter: ObservableObject {
                 id: current?.id ?? UUID(),
                 message: failure.message,
                 actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
-                isFailure: true
+                isFailure: true,
+                answersUndoKey: current?.answersUndoKey ?? true
             )
             present(toast, action: failure.canRetry ? action : nil)
             AccessibilityNotification.Announcement(failure.message).post()
@@ -79,6 +141,7 @@ final class PanelToastCenter: ObservableObject {
         dismissWork?.cancel()
         dismissWork = nil
         action = nil
+        asyncAction = nil
         holds = []
         current = nil
     }
@@ -102,8 +165,10 @@ final class PanelToastCenter: ObservableObject {
         }
     }
 
-    private func present(_ toast: Toast, action: (@MainActor () -> CommandOutcome)?) {
+    private func present(_ toast: Toast, action: (@MainActor () -> CommandOutcome)?,
+                         asyncAction: (@MainActor () async -> CommandOutcome)? = nil) {
         self.action = action
+        self.asyncAction = asyncAction
         current = toast
         dismissWork?.cancel()
         dismissWork = nil
@@ -114,7 +179,7 @@ final class PanelToastCenter: ObservableObject {
         dismissWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.current == toast, self.holds.isEmpty else { return }
+                guard let self, self.current == toast, self.holds.isEmpty, !self.isPerforming else { return }
                 self.dismiss()
             }
         }

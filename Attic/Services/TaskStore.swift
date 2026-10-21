@@ -134,7 +134,7 @@ struct CloudSyncProtectionState: Equatable {
 
 private struct TaskReplicaSnapshot: Equatable {
     let id: UUID
-    let title: String
+    let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
     let createdAt: Date
@@ -153,18 +153,10 @@ private struct TaskReplicaSnapshot: Equatable {
     let completedFromRaw: String?
     let completedFromOrder: Int64?
 
-    /// The same snapshot without the attachment lists, which each replica
-    /// keeps as its own (they are never copied between replicas).
-    var ignoringAttachmentLists: TaskReplicaSnapshot {
-        var copy = self
-        copy.imageReferencesData = nil
-        copy.removedAttachmentsData = nil
-        return copy
-    }
 
     init(_ task: TaskItem) {
         id = task.id
-        title = task.title
+        title = Array(task.title.utf16)
         statusRaw = task.statusRaw
         priorityRaw = task.priorityRaw
         createdAt = task.createdAt
@@ -188,7 +180,7 @@ private struct TaskReplicaSnapshot: Equatable {
 /// What a task holds, without when it was last touched or how it was
 /// deleted: two replicas with equal content show the same task.
 private struct TaskContentSnapshot: Equatable {
-    let title: String
+    let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
     let createdAt: Date
@@ -204,7 +196,7 @@ private struct TaskContentSnapshot: Equatable {
     let completedFromOrder: Int64?
 
     init(_ task: TaskItem) {
-        title = task.title
+        title = Array(task.title.utf16)
         statusRaw = task.statusRaw
         priorityRaw = task.priorityRaw
         createdAt = task.createdAt
@@ -370,6 +362,11 @@ final class TaskStore: ObservableObject {
         guard let task = task(withID: taskID) else { return nil }
         return familyOwner(of: task)
     }
+    /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
+    var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
+    var tagInventoryDidSave: () -> Void = {}
+    var tagInventoryDidRefresh: () -> Void = {}
+
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
     /// The command layer built over this store (the app has one), so a page
@@ -968,10 +965,6 @@ final class TaskStore: ObservableObject {
         update(task, tags: tags)
     }
 
-    @discardableResult
-    func setDueDay(_ dueDay: DueDay?, for task: TaskItem) -> Bool {
-        update(task, dueDay: .some(dueDay))
-    }
 
     /// The right-click menu's and a row popover's Date and Tags on several
     /// tasks (owner fixes 3 and 5): the due day set or removed, a tag added
@@ -1332,17 +1325,28 @@ final class TaskStore: ObservableObject {
             // kept (see `removeAttachment`).
             let timestamp = now()
             let shownCopy = TaskReplicaSnapshot(current)
-            for replica in try storedTasks(matching: ownerID) {
+            // Decode and encode the entire family before changing any row.
+            // A later malformed sibling must not leave a partial attachment.
+            let proposed = try storedTasks(matching: ownerID).map { replica in
                 let stamp = replica === current || TaskReplicaSnapshot(replica) == shownCopy
                 let shown = try Self.attachmentLists(of: replica).shown
-                replica.imageReferencesData = try Self.encodedAttachments(shown + imported)
+                return (replica, try Self.encodedAttachments(shown + imported), stamp)
+            }
+            for (replica, bytes, stamp) in proposed {
+                replica.imageReferencesData = bytes
                 if stamp { replica.updatedAt = timestamp }
             }
             guard save(owner: errorOwner) else {
                 await taskImageFiles.remove(imported); return nil
             }
             return imported.map(\.id)
+        } catch is CancellationError {
+            // Cancelled (V-13): nothing kept, nothing to report.
+            await taskImageFiles.remove(imported)
+            return nil
         } catch {
+            context.rollback()
+            refresh()
             await taskImageFiles.remove(imported)
             reportAttachmentImportFailure(error, owner: errorOwner)
             return nil
@@ -1473,19 +1477,36 @@ final class TaskStore: ObservableObject {
         return (shown, removed)
     }
 
-    /// Attachments removed from tasks that are still shown, newest first.
+    /// Resolve all replicas before filtering owners: Done-log tasks retain
+    /// the same attachment recovery window as tasks in the active lists.
+    private func attachmentRecoveryOwners() throws -> [TaskItem] {
+        let candidates = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.removedAttachmentsData != nil }))
+        let ids = Array(Set(candidates.map(\.id)))
+        guard !ids.isEmpty else { return [] }
+        let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { ids.contains($0.id) }))
+        return Self.canonicalReplicas(from: replicas).filter { $0.deletedAt == nil }
+    }
+
+    /// Attachments removed from non-deleted tasks, including Done, newest first.
     func recentlyDeletedAttachments() -> [DeletedAttachmentSummary] {
-        tasks.flatMap { task in
-            task.removedAttachments.map {
-                DeletedAttachmentSummary(
-                    attachmentID: $0.reference.id,
-                    owner: AtticItemRef(.task, task.id),
-                    filename: $0.reference.filename,
-                    deletedAt: $0.removedAt
-                )
+        do {
+            return try attachmentRecoveryOwners().flatMap { task in
+                task.removedAttachments.map {
+                    DeletedAttachmentSummary(
+                        attachmentID: $0.reference.id,
+                        owner: AtticItemRef(.task, task.id),
+                        filename: $0.reference.filename,
+                        deletedAt: $0.removedAt
+                    )
+                }
             }
+            .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return []
         }
-        .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
     }
 
     /// Puts a removed attachment back at the end of its task's attachments,
@@ -1493,7 +1514,10 @@ final class TaskStore: ObservableObject {
     /// changed from its own lists, so references only a duplicate holds stay.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
-        guard let task = tasks.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
+        let owners: [TaskItem]
+        do { owners = try attachmentRecoveryOwners() }
+        catch { report(error.localizedDescription, owner: nil); return false }
+        guard let task = owners.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
               let entry = task.removedAttachments.first(where: { $0.reference.id == attachmentID }) else {
             report(TaskReplicaMutationError.attachmentNotRemoved(attachmentID).localizedDescription, owner: nil)
             return false
@@ -2237,13 +2261,16 @@ final class TaskStore: ObservableObject {
     /// there, not on the Find binding's keystroke. Models stay page-sized.
     private struct DoneSearchEntry {
         let id: UUID
-        let title: String
+        // Bridge once when the index changes, not once per title per key.
+        // NSString uses the same locale-aware matching without repeatedly
+        // allocating/transcoding the Swift strings during a query.
+        let title: NSString
         let completed: Date
         let created: Date
 
         init(_ task: TaskItem) {
             id = task.id
-            title = task.title
+            title = task.title as NSString
             completed = task.completedAt ?? task.updatedAt
             created = task.createdAt
         }
@@ -2286,6 +2313,10 @@ final class TaskStore: ObservableObject {
         return ids
     }
 
+    func indexedDoneLogOffset(of id: UUID, matching query: String) -> Int? {
+        doneSearchIDs(matching: query).firstIndex(of: id)
+    }
+
     func indexedDoneLogCount(matching query: String = "") -> Int {
         query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? doneSearchEntries.count : doneSearchIDs(matching: query).count
@@ -2296,6 +2327,7 @@ final class TaskStore: ObservableObject {
     /// The raw physical cursor above remains available to command clients.
     func indexedDoneLogPage(from cursor: DoneLogCursor = DoneLogCursor(), limit: Int,
                             matching query: String = "") -> DoneLogPage {
+        donePageReadCount += 1
         let ids = doneSearchIDs(matching: query)
         let start = min(cursor.rowOffset, ids.count)
         let end = min(start + max(0, limit), ids.count)
@@ -2346,7 +2378,10 @@ final class TaskStore: ObservableObject {
     /// The subtasks of several Done log tasks, read together (one page's
     /// rows, Astra 19), each list in `doneLogSubtasks`' order. A parent
     /// whose read fails is left out (reported); its row shows no checklist.
+    private(set) var doneFamilyParentReadCount = 0
+    private(set) var donePageReadCount = 0
     func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
+        doneFamilyParentReadCount += parentIDs.count
         guard !parentIDs.isEmpty else { return [:] }
         let wanted = Set(parentIDs)
         do {
@@ -2481,15 +2516,6 @@ final class TaskStore: ObservableObject {
         listedTask(withID: id).map(TaskEditableState.init)
     }
 
-    /// Brings a finished main task back to Now as to do, at the top of the
-    /// to-do group: a task still in today's done group simply reopens; one
-    /// the daily cleanup moved to the Done log comes back with its subtasks
-    /// (which keep their own state). Only the fields this changes are
-    /// written, on every replica, in one save.
-    @discardableResult
-    func restoreToNow(taskID: UUID) -> Bool {
-        restoreToNow(taskIDs: [taskID])
-    }
 
     /// Restore to Now for several finished tasks (round 4, Astra's final
     /// review 1): every task, its replicas and any family coming back from
@@ -2591,21 +2617,8 @@ final class TaskStore: ObservableObject {
     /// Puts a family that `restoreToNow` brought back into the Done log
     /// again, when every row is still finished; a family changed since
     /// stays in the list. Written on every replica, in one save.
-    @discardableResult
-    func returnToDoneLog(taskID: UUID, loggedAt: Date) -> Bool {
-        do {
-            guard try stageReturnToDoneLog(taskID: taskID, loggedAt: loggedAt) else { return false }
-        } catch {
-            context.rollback()
-            report(error.localizedDescription, owner: nil)
-            return false
-        }
-        guard save(owner: nil) else { return false }
-        do { try reloadTasks() } catch { report(error.localizedDescription, owner: nil) }
-        return true
-    }
 
-    /// `returnToDoneLog` without saving. False (nothing written) when a row
+    /// Stages a return to the Done log without saving. False when a row
     /// of the family is no longer finished, or is already in the log.
     private func stageReturnToDoneLog(taskID: UUID, loggedAt: Date) throws -> Bool {
         let family = try context.fetch(FetchDescriptor<TaskItem>(
@@ -2729,11 +2742,8 @@ final class TaskStore: ObservableObject {
     ///
     /// The same undoes reopening a Done log task with the circle: `after`
     /// and `before` then hold its family.
-    func undoRestoreToNow(taskID: UUID, from after: [TaskEditableState], to before: [TaskEditableState], loggedAt: Date?) -> UndoOutcome {
-        undoReturnFromDoneLog(from: after, to: before, logging: loggedAt.map { [taskID: $0] } ?? [:])
-    }
 
-    /// `undoRestoreToNow` for several tasks: `logging` maps each main task
+    /// Undoes a return from the Done log: `logging` maps each main task
     /// that came from the Done log to the time it was logged. One save.
     func undoReturnFromDoneLog(from after: [TaskEditableState], to before: [TaskEditableState], logging: [UUID: Date]) -> UndoOutcome {
         let staged: EditableTransitionStage
@@ -3211,19 +3221,6 @@ final class TaskStore: ObservableObject {
         return snapshot
     }
 
-    @discardableResult
-    func startAfterExternalDrag(taskID: UUID) -> Bool {
-        guard let task = tasks.first(where: { $0.id == taskID }) else { return false }
-        switch task.status {
-        case .todo, .backlog:
-            return setStatus(.inProgress, for: task)
-        case .inProgress:
-            return true
-        case .done:
-            return false
-        }
-    }
-
     /// Drop onto another row: same section reorders, a different section
     /// adopts that section's status (placing the task near the target row
     /// when their priorities allow it).
@@ -3338,6 +3335,7 @@ final class TaskStore: ObservableObject {
     /// operation that asked for it; a success clears any notice outright.
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
+        tagInventoryWillSave(context)
         do {
             let changedIDs = Set((context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray)
                 .compactMap { ($0 as? TaskItem)?.id })
@@ -3347,6 +3345,7 @@ final class TaskStore: ObservableObject {
             #else
             try persist(context)
             #endif
+            tagInventoryDidSave()
             // Publish the revision only after the index sees the durable
             // change. Undo/Redo use the same save path; failed saves rebuild
             // from the rolled-back context below. The changed rows are read
@@ -3378,6 +3377,7 @@ final class TaskStore: ObservableObject {
         } catch {
             let saveError = error.localizedDescription
             context.rollback()
+            tagInventoryDidRefresh()
             do {
                 try reloadTasks()
                 report(saveError, owner: owner)
@@ -3394,6 +3394,7 @@ final class TaskStore: ObservableObject {
     #endif
 
     private func reloadTasks() throws {
+        defer { tagInventoryDidRefresh() }
         #if DEBUG
         if listRefreshFailures > 0 {
             listRefreshFailures -= 1

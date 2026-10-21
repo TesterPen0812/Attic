@@ -9,6 +9,41 @@ import XCTest
 /// that can never apply again no longer blocks the steps before it.
 @MainActor
 final class UndoInterleavingTests: XCTestCase {
+    func testU17PurgeRemovesOnlyThePurgedTasksHistory() throws {
+        let library = try makeLibrary()
+        let first = try XCTUnwrap(library.tasks.create(title: "Private"))
+        let other = try XCTUnwrap(library.tasks.create(title: "Other"))
+        XCTAssertTrue(library.updateTask(other.id, title: "Other edited").isApplied)
+        XCTAssertTrue(library.updateTask(first.id, title: "Private edited").isApplied)
+        XCTAssertTrue(library.delete(AtticItemRef(.task, first.id)))
+        let report = library.emptyRecentlyDeleted(RecentlyDeletedSelection(items: library.recentlyDeleted(), attachments: []))
+        XCTAssertTrue(report.taskIDs.contains(first.id))
+        XCTAssertEqual(library.undo.undoCount(in: .tasks), 1)
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertEqual(library.tasks.task(withID: other.id)?.title, "Other")
+    }
+
+    func testU17PurgeAlsoDropsMatchingRedoAndDynamicTagSnapshots() throws {
+        let library = try makeLibrary()
+        let first = try XCTUnwrap(library.tasks.commit([TaskDraft(title: "Private", tags: ["old"])])?.first)
+        let other = try XCTUnwrap(library.tasks.create(title: "Other"))
+        XCTAssertTrue(library.updateTask(other.id, title: "Other edited").isApplied)
+        XCTAssertTrue(library.updateTask(first.id, title: "Private edited").isApplied)
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertTrue(library.renameTag("old", to: "new"))
+        XCTAssertTrue(library.undo.undo(in: .library))
+        let later = try XCTUnwrap(library.tasks.commit([TaskDraft(title: "Later", tags: ["old"])])?.first)
+        XCTAssertTrue(library.undo.redo(in: .library))
+        XCTAssertTrue(library.tasks.delete(later))
+        XCTAssertTrue(library.tasks.delete(first))
+        let report = library.emptyRecentlyDeleted(RecentlyDeletedSelection(items: library.recentlyDeleted()))
+        XCTAssertEqual(report.taskIDs, [first.id, later.id])
+        XCTAssertFalse(library.undo.canRedo(in: .tasks))
+        XCTAssertFalse(library.undo.canUndo(in: .library), "a redo can add snapshot owners after the original step")
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertEqual(library.tasks.task(withID: other.id)?.title, "Other")
+    }
+
     private let day: TimeInterval = 24 * 3_600
 
     private func makeLibrary(clock: MutableNow? = nil) throws -> AtticLibrary {
@@ -16,7 +51,7 @@ final class UndoInterleavingTests: XCTestCase {
         let now: () -> Date = { clock?.value ?? Date() }
         return AtticLibrary(
             tasks: TaskStore(container: container, now: now),
-            notes: NoteStore(container: container, now: now, attachmentFileStore: makeTestAttachmentFileStore()),
+            notes: trackAttachmentReconciliation(of: NoteStore(container: container, now: now, attachmentFileStore: makeTestAttachmentFileStore())),
             canvases: CanvasStore(container: container, now: now),
             now: now
         )

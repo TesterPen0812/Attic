@@ -1,0 +1,413 @@
+import AppKit
+
+/// Maps a document to the editor's attributed text and back. Paragraph i is
+/// block i; objects are `NoteObjectAttachment`s; a text paragraph's id,
+/// style and unknown fields ride on its characters.
+@MainActor
+enum NoteTextCodec {
+    // MARK: Document → text
+
+    static func attributedString(
+        from document: NoteDocument,
+        style: NoteTextStyle,
+        firstBlockIsTitle: Bool = true
+    ) -> NSMutableAttributedString {
+        let result = NSMutableAttributedString()
+        var listStack: [NSTextList] = []
+        var previousListKind: String?
+        // The kind of the block above (for the space between them); a
+        // fragment's first block follows body text.
+        var previousKind: NoteParagraphKind? = firstBlockIsTitle ? nil : .body
+        for (index, block) in document.blocks.enumerated() {
+            let isTitle = firstBlockIsTitle && index == 0
+            let isBlockObject = [.image, .file, .divider, .table, .opaque].contains(block.kind)
+            let kind: NoteParagraphKind = isTitle ? .title
+                : (isBlockObject ? (block.kind == .divider ? .divider : .blockObject) : NoteParagraphKind.of(style: block.kind == .text ? block.style : nil, level: block.level,
+                                                                   callout: block.callout, isChecklist: block.kind == .checklist))
+            let precedingKind: NoteParagraphKind? = kind == .mono && previousKind == .mono &&
+                document.blocks[index - 1].language != block.language ? .blockObject : previousKind
+            var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(
+                style: block.kind == .text ? block.style : nil, level: block.level, indent: block.indent,
+                previous: precedingKind, isChecklist: block.kind == .checklist, isBlockObject: isBlockObject,
+                isDivider: block.kind == .divider,
+                monoHang: kind == .mono ? style.monoHang(for: block.text) : 0, callout: block.callout)
+            previousKind = kind
+            if !isTitle, block.kind == .text, let kind = block.style, ["bullet", "number"].contains(kind) {
+                let depth = block.indent ?? 0
+                let marker: NSTextList.MarkerFormat = kind == "number" ? .decimal : .disc
+                if previousListKind == nil { listStack.removeAll() }
+                if listStack.count > depth + 1 { listStack = Array(listStack.prefix(depth + 1)) }
+                while listStack.count <= depth { listStack.append(NSTextList(markerFormat: marker, options: 0)) }
+                if previousListKind != kind, listStack.count == depth + 1,
+                   listStack[depth].markerFormat != marker {
+                    listStack[depth] = NSTextList(markerFormat: marker, options: 0)
+                }
+                let paragraph = (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                paragraph.textLists = listStack
+                attributes[.paragraphStyle] = paragraph
+                previousListKind = kind
+            } else {
+                listStack.removeAll()
+                previousListKind = nil
+            }
+            if let id = block.id, block.kind == .text { attributes[.noteBlockID] = id }
+            if !block.extras.isEmpty { attributes[.noteBlockExtras] = NoteBlockExtras(block.extras) }
+            if let blockStyle = block.style, block.kind == .text { attributes[.noteBlockStyle] = blockStyle }
+            if let level = block.level { attributes[.noteBlockLevel] = level }
+            if let indent = block.indent { attributes[.noteBlockIndent] = indent }
+            if let language = block.language { attributes[.noteCodeLanguage] = language }
+            if let icon = block.callout { attributes[.noteCalloutIcon] = icon }
+            if let start = block.start { attributes[.noteListStart] = start }
+            let paragraph = NSMutableAttributedString()
+            switch block.kind {
+            case .text:
+                // Stored semantic marks survive; the title only suppresses their rendering.
+                paragraph.append(inlineText(block, attributes: attributes, style: style, rendersMarks: !isTitle))
+            case .checklist:
+                let box = NoteChecklistAttachment(objectID: block.id ?? UUID(), isChecked: block.checked)
+                paragraph.append(attachmentString(box, attributes: attributes))
+                paragraph.append(inlineText(block, attributes: attributes, style: style))
+            case .image:
+                let image = NoteImageAttachment(
+                    objectID: block.id ?? UUID(),
+                    attachmentID: block.attachmentID ?? UUID(),
+                    preferredWidth: block.width,
+                    preferredWidthFraction: block.widthFraction,
+                    pixelSize: pixelSize(block),
+                    extras: block.extras
+                )
+                paragraph.append(attachmentString(image, attributes: attributes))
+            case .file:
+                let file = NoteFileAttachment(objectID: block.id ?? UUID(), attachmentID: block.attachmentID,
+                    filename: block.filename ?? "file", contentTypeIdentifier: block.contentTypeIdentifier ?? "public.data",
+                    byteCount: block.byteCount ?? 0, importFailure: block.importFailure, extras: block.extras)
+                paragraph.append(attachmentString(file, attributes: attributes))
+            case .divider:
+                paragraph.append(attachmentString(NoteDividerAttachment(objectID: block.id ?? UUID()), attributes: attributes))
+            case .opaque:
+                let opaque = NoteOpaqueAttachment(objectID: block.opaqueID ?? UUID(), value: block.opaque ?? .null, isInline: false)
+                paragraph.append(attachmentString(opaque, attributes: attributes))
+            case .table:
+                let table = NoteTableAttachment(objectID: block.id ?? UUID(), table: block.table ?? .blank(), extras: block.extras)
+                paragraph.append(attachmentString(table, attributes: attributes))
+            }
+            if index < document.blocks.count - 1 {
+                paragraph.append(NSAttributedString(string: "\n", attributes: attributes))
+            }
+            result.append(paragraph)
+        }
+        return result
+    }
+
+    private static func pixelSize(_ block: NoteBlock) -> CGSize? {
+        guard let width = block.pixelWidth, let height = block.pixelHeight else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
+    static func attachmentString(_ attachment: NoteObjectAttachment,
+                                 attributes: [NSAttributedString.Key: Any]) -> NSMutableAttributedString {
+        let string = NSMutableAttributedString(attachment: attachment)
+        string.addAttributes(attributes.filter { $0.key != .attachment },
+            range: NSRange(location: 0, length: string.length))
+        return string
+    }
+
+    static func inlineText(_ block: NoteBlock, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle, rendersMarks: Bool = true) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        var run = ""
+        var inlineIndex = 0
+        func flush() {
+            guard !run.isEmpty else { return }
+            result.append(NSAttributedString(string: run, attributes: attributes))
+            run = ""
+        }
+        for character in block.text {
+            guard character == NoteDocument.objectCharacter, inlineIndex < block.inlines.count else {
+                run.append(character)
+                continue
+            }
+            flush()
+            let inline = block.inlines[inlineIndex]
+            inlineIndex += 1
+            let attachment: NoteObjectAttachment = switch inline.kind {
+            case let .date(day): NoteDateAttachment(objectID: inline.id, day: day, extras: inline.extras)
+            case let .opaque(value): NoteOpaqueAttachment(objectID: inline.id, value: value, isInline: true)
+            }
+            result.append(attachmentString(attachment, attributes: attributes))
+        }
+        flush()
+        for mark in block.marks where mark.offset >= 0 && mark.length > 0 && mark.offset + mark.length <= result.length {
+            let range = NSRange(location: mark.offset, length: mark.length)
+            result.addAttribute(.noteMark(mark.kind), value: mark.attributeValue, range: range)
+        }
+        guard rendersMarks else { return result }
+        let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
+        var runs: [([NoteMark.Kind: Any], NSRange)] = []
+        result.enumerateAttributes(in: NSRange(location: 0, length: result.length)) { values, range, _ in
+            let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { kind in
+                values[.noteMark(kind)].map { (kind, $0) }
+            })
+            runs.append((marks, range))
+        }
+        for (marks, range) in runs { result.addAttributes(style.markedAttributes(marks: marks, baseFont: baseFont), range: range) }
+        NoteTextStyle.applyInlineCodeSpacing(to: result, in: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    // MARK: Text → document
+
+    /// `template` supplies the document-level fields (format, requires,
+    /// unknown fields). Objects that sit mid-line (only possible through a
+    /// path the editor did not shape) are split onto their own blocks, never
+    /// dropped. A U+FFFC with no note object behind it is dropped.
+    static func document(
+        from text: NSAttributedString,
+        template: NoteDocument = .blank,
+        firstBlockIsTitle: Bool = true
+    ) -> NoteDocument {
+        let string = text.string as NSString
+        var blocks: [NoteBlock] = []
+        var usedIDs = Set<UUID>()
+        var usedExtras = Set<ObjectIdentifier>()
+        var location = 0
+        repeat {
+            let newline = string.range(of: "\n", options: .literal,
+                                       range: NSRange(location: location, length: string.length - location))
+            let end = newline.location == NSNotFound ? string.length : newline.location
+            let paragraph = NSRange(location: location, length: end - location)
+            let withBreak = NSRange(location: location, length: min(string.length, end + 1) - location)
+            blocks += blocksForParagraph(text, paragraph: paragraph, metadataRange: withBreak,
+                                         usedIDs: &usedIDs, usedExtras: &usedExtras)
+            location = end + 1
+        } while location <= string.length
+
+        if firstBlockIsTitle, blocks.first?.kind != .text {
+            blocks.insert(.text(""), at: 0)
+        }
+        if firstBlockIsTitle, !blocks.isEmpty {
+            blocks[0].style = nil
+            blocks[0].level = nil
+            blocks[0].indent = nil
+        }
+        var document = template
+        document.blocks = blocks.isEmpty ? [.text("")] : blocks
+        document.refreshRequiredCapabilities()
+        return document
+    }
+
+    private struct ParagraphMetadata {
+        var id: UUID?
+        var style: String?
+        var level: Int?
+        var indent: Int?
+        var extras: [String: NoteJSON] = [:]
+    }
+
+    private static func metadata(
+        _ text: NSAttributedString,
+        in range: NSRange,
+        usedIDs: inout Set<UUID>,
+        usedExtras: inout Set<ObjectIdentifier>
+    ) -> ParagraphMetadata {
+        var result = ParagraphMetadata()
+        guard range.length > 0 else { return result }
+        text.enumerateAttributes(in: range) { attributes, _, stop in
+            if result.id == nil, let id = attributes[.noteBlockID] as? UUID, !usedIDs.contains(id) {
+                result.id = id
+            }
+            if result.style == nil, let style = attributes[.noteBlockStyle] as? String { result.style = style }
+            if result.level == nil { result.level = attributes[.noteBlockLevel] as? Int }
+            if result.indent == nil { result.indent = attributes[.noteBlockIndent] as? Int }
+            if result.extras.isEmpty, let box = attributes[.noteBlockExtras] as? NoteBlockExtras,
+               !usedExtras.contains(ObjectIdentifier(box)) {
+                result.extras = box.fields
+                usedExtras.insert(ObjectIdentifier(box))
+            }
+            if result.id != nil, result.style != nil, !result.extras.isEmpty { stop.pointee = true }
+        }
+        // These fields carry into split paragraphs even when the original
+        // extras box belongs to the first half only. Read the leading run:
+        // on a join it owns the resulting paragraph's semantic hints.
+        let leading = text.attributes(at: range.location, effectiveRange: nil)
+        for (key, field) in [(NSAttributedString.Key.noteCodeLanguage, "language"), (.noteCalloutIcon, "callout")] {
+            if let value = leading[key] as? String { result.extras[field] = .string(value) }
+        }
+        if let start = leading[.noteListStart] as? Int, start >= 1 { result.extras["start"] = .int(Int64(start)) }
+        if let id = result.id { usedIDs.insert(id) }
+        return result
+    }
+
+    private static func blocksForParagraph(
+        _ text: NSAttributedString,
+        paragraph: NSRange,
+        metadataRange: NSRange,
+        usedIDs: inout Set<UUID>,
+        usedExtras: inout Set<ObjectIdentifier>
+    ) -> [NoteBlock] {
+        let meta = metadata(text, in: metadataRange, usedIDs: &usedIDs, usedExtras: &usedExtras)
+        var blocks: [NoteBlock] = []
+        // The block being built; the paragraph's own fields go to the first.
+        var current = NoteBlock(kind: .text, id: meta.id, style: meta.style, level: meta.level,
+                                indent: meta.indent, extras: meta.extras)
+        var hasContent = false
+
+        func finishCurrent() {
+            if hasContent || current.kind == .checklist { blocks.append(current) }
+            current = NoteBlock(kind: .text)
+            hasContent = false
+        }
+
+        let string = text.string as NSString
+        var index = paragraph.location
+        while index < NSMaxRange(paragraph) {
+            guard string.character(at: index) == NoteDocument.objectUnit else {
+                // A run of plain characters up to the next object.
+                let rest = NSRange(location: index, length: NSMaxRange(paragraph) - index)
+                let next = string.range(of: "\u{FFFC}", options: .literal, range: rest)
+                let runEnd = next.location == NSNotFound ? NSMaxRange(paragraph) : next.location
+                let baseOffset = (current.text as NSString).length
+                let runRange = NSRange(location: index, length: runEnd - index)
+                for kind in NoteMark.Kind.allCases {
+                    text.enumerateAttribute(.noteMark(kind), in: runRange) { value, markedRange, _ in
+                        guard let value else { return }
+                        let offset = baseOffset + markedRange.location - index
+                        let mark = NoteMark(kind, offset: offset, length: markedRange.length, value: value)
+                        if let last = current.marks.indices.last,
+                           current.marks[last].kind == mark.kind,
+                           current.marks[last].payload == mark.payload,
+                           current.marks[last].offset + current.marks[last].length == mark.offset {
+                            current.marks[last].length += mark.length
+                        } else { current.marks.append(mark) }
+                    }
+                }
+                current.text += string.substring(with: NSRange(location: index, length: runEnd - index))
+                hasContent = true
+                index = runEnd
+                continue
+            }
+            switch text.attribute(.attachment, at: index, effectiveRange: nil) {
+            case let box as NoteChecklistAttachment:
+                let leadsParagraph = index == paragraph.location
+                if !leadsParagraph { finishCurrent() }
+                current = NoteBlock(kind: .checklist, id: box.objectID, indent: meta.indent, checked: box.isChecked,
+                                    extras: leadsParagraph ? meta.extras : [:])
+                hasContent = false
+            case let image as NoteImageAttachment:
+                finishCurrent()
+                var block = NoteBlock.image(id: image.objectID, attachmentID: image.attachmentID,
+                                            width: image.preferredWidth,
+                                            widthFraction: image.preferredWidthFraction,
+                                            pixelWidth: image.pixelSize.map { Int($0.width) },
+                                            pixelHeight: image.pixelSize.map { Int($0.height) })
+                block.extras = image.extras
+                blocks.append(block)
+            case let file as NoteFileAttachment:
+                finishCurrent()
+                var block = NoteBlock.file(id: file.objectID, attachmentID: file.attachmentID,
+                    filename: file.filename, contentTypeIdentifier: file.contentTypeIdentifier,
+                    byteCount: file.byteCount, importFailure: file.importFailure)
+                block.extras = file.extras
+                blocks.append(block)
+            case let opaque as NoteOpaqueAttachment where !opaque.isInline:
+                finishCurrent()
+                blocks.append(.opaque(opaque.value))
+            case let divider as NoteDividerAttachment:
+                finishCurrent()
+                blocks.append(.divider(id: divider.objectID))
+            case let table as NoteTableAttachment:
+                finishCurrent()
+                var block = NoteBlock.table(table.table, id: table.objectID)
+                block.extras = table.extras
+                blocks.append(block)
+            case let date as NoteDateAttachment:
+                current.text.append(NoteDocument.objectCharacter)
+                current.inlines.append(NoteInline(id: date.objectID, kind: .date(date.day), extras: date.extras))
+                hasContent = true
+            case let opaque as NoteOpaqueAttachment:
+                current.text.append(NoteDocument.objectCharacter)
+                current.inlines.append(NoteInline(id: opaque.objectID, kind: .opaque(opaque.value)))
+                hasContent = true
+            default:
+                // A bare U+FFFC (or a foreign attachment) is not an object.
+                break
+            }
+            index += 1
+        }
+        if hasContent || current.kind == .checklist || blocks.isEmpty { blocks.append(current) }
+        return blocks
+    }
+
+    // MARK: Table cells
+
+    /// A line break inside a cell is U+2028 in the cell editor (one
+    /// paragraph per cell) and "\n" in the stored cell.
+    static let cellLineBreak: Character = "\u{2028}"
+
+    /// A cell's text as the cell editor and the grid draw it: marks, links
+    /// and dates (each date an attachment, drawn by `prepare`).
+    static func cellString(_ cell: NoteTable.Cell, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle,
+                           prepare: (NoteObjectAttachment) -> Void = { _ in }) -> NSMutableAttributedString {
+        var block = cell.block
+        block.text = block.text.replacingOccurrences(of: "\n", with: String(cellLineBreak))
+        let result = NSMutableAttributedString(attributedString: inlineText(block, attributes: attributes, style: style))
+        result.enumerateAttribute(.attachment, in: NSRange(location: 0, length: result.length)) { value, _, _ in
+            if let object = value as? NoteObjectAttachment { prepare(object) }
+        }
+        return result
+    }
+
+    /// The cell a cell editor's text stores: "\n" for its line breaks, a
+    /// U+FFFC and an inline for each date, marks by UTF-16 offset (never
+    /// over an object). Any other attachment is dropped, never stored.
+    static func cell(from text: NSAttributedString, keeping template: NoteTable.Cell = .empty) -> NoteTable.Cell {
+        var cell = NoteTable.Cell(extras: template.extras)
+        let string = text.string as NSString
+        var output = ""
+        var index = 0
+        // Plain runs between objects, with their offsets in the output.
+        var runs: [(source: NSRange, offset: Int)] = []
+        var runStart = 0, runOffset = 0
+        func flushRun(to end: Int) {
+            if end > runStart { runs.append((NSRange(location: runStart, length: end - runStart), runOffset)) }
+        }
+        while index < string.length {
+            let unit = string.character(at: index)
+            if unit == NoteDocument.objectUnit {
+                flushRun(to: index)
+                if let date = text.attribute(.attachment, at: index, effectiveRange: nil) as? NoteDateAttachment {
+                    output.append(NoteDocument.objectCharacter)
+                    cell.inlines.append(NoteInline(id: date.objectID, kind: .date(date.day), extras: date.extras))
+                }
+                index += 1
+                runStart = index
+                runOffset = (output as NSString).length
+                continue
+            }
+            let rest = NSRange(location: index, length: string.length - index)
+            let next = string.range(of: "\u{FFFC}", options: .literal, range: rest)
+            let end = next.location == NSNotFound ? string.length : next.location
+            output += string.substring(with: NSRange(location: index, length: end - index))
+                .replacingOccurrences(of: "\u{2028}", with: "\n")
+                .replacingOccurrences(of: "\u{2029}", with: "\n")
+            index = end
+        }
+        flushRun(to: string.length)
+        cell.text = output
+        for kind in NoteMark.Kind.allCases {
+            for run in runs {
+                text.enumerateAttribute(.noteMark(kind), in: run.source) { value, marked, _ in
+                    guard let value else { return }
+                    let offset = run.offset + marked.location - run.source.location
+                    let mark = NoteMark(kind, offset: offset, length: marked.length, value: value)
+                    if let last = cell.marks.indices.last, cell.marks[last].kind == kind,
+                       cell.marks[last].payload == mark.payload, cell.marks[last].offset + cell.marks[last].length == offset {
+                        cell.marks[last].length += mark.length
+                    } else {
+                        cell.marks.append(mark)
+                    }
+                }
+            }
+        }
+        return cell
+    }
+}

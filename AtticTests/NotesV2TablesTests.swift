@@ -1,0 +1,886 @@
+import AppKit
+import ObjectiveC
+import XCTest
+@testable import Attic
+
+/// Notes v2, round 2: tables (spec § 4), in the real TextKit 2 editor.
+///
+/// The prototype's six risks first: the caret between text and cells,
+/// input methods and Writing Tools in a cell, VoiceOver, Undo, save and
+/// export, and a keystroke's cost in a long note. Then the feature.
+@MainActor
+final class NotesV2TablesTests: XCTestCase {
+    private typealias M = AtticNoteTableMetrics
+    private var windows: [NSWindow] = []
+
+    override func tearDown() async throws {
+        windows.forEach { $0.close() }
+        windows.removeAll()
+    }
+
+    // MARK: Harness
+
+    /// An editor in the draft's 264 pt column (a 320 pt panel, 28 in).
+    private func makeEngine(_ blocks: [NoteBlock], height: CGFloat = 520) -> (NoteEditorEngine, NoteEditorTextView) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
+        let (scrollView, textView) = engine.makeView()
+        scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: height)
+        textView.textContainerInset = NSSize(width: 28, height: 0)
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        windows.append(window)
+        window.makeFirstResponder(textView)
+        settle(engine, textView)
+        return (engine, textView)
+    }
+
+    private func settle(_ engine: NoteEditorEngine, _ textView: NoteEditorTextView) {
+        engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        textView.layoutSubtreeIfNeeded()
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+        spin()
+        textView.layoutSubtreeIfNeeded()
+    }
+
+    private func spin(_ seconds: TimeInterval = 0.03) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    private var pillars: NoteTable {
+        NoteTable(texts: [["Pillar", "What happened"],
+                          ["Confidentiality", "Data taken from the IT network"],
+                          ["Integrity", "Systems encrypted by ransomware"],
+                          ["Availability", "Pipeline shut down"]])
+    }
+
+    private func ciaBlocks(_ table: NoteTable? = nil) -> [NoteBlock] {
+        var heading = NoteBlock.text("Colonial Pipeline ransomware attack")
+        heading.style = "heading"
+        heading.level = 1
+        var sources = NoteBlock.text("Sources:")
+        sources.style = "heading"
+        sources.level = 3
+        return [.text("CIA impact"), heading,
+                .text("The attackers breached by compromising password fro a VPN account that did not reqiuire multi factor authentication"),
+                .table(table ?? pillars), sources, .text("After the table")]
+    }
+
+    private func tableAttachment(_ engine: NoteEditorEngine) throws -> NoteTableAttachment {
+        try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+    }
+
+    private func tableView(_ engine: NoteEditorEngine) throws -> NoteTableView {
+        let attachment = try tableAttachment(engine)
+        return try XCTUnwrap(attachment.hostedView, "TextKit hosted the table's view")
+    }
+
+    private func location(of text: String, in engine: NoteEditorEngine) -> Int {
+        (engine.textStorage.string as NSString).range(of: text).location
+    }
+
+    private func type(_ text: String, into editor: NSTextView) {
+        for character in text {
+            editor.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+    }
+
+    private func prb1Key(_ value: String, code: UInt16, flags: NSEvent.ModifierFlags = [], in editor: NSTextView) throws {
+        let window = try XCTUnwrap(editor.window)
+        XCTAssertTrue(window.firstResponder === editor)
+        window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: value,
+            charactersIgnoringModifiers: value, isARepeat: false, keyCode: code)))
+    }
+
+    func testPRB12DeadKeyAccentJoinsSurroundingTypingUndo() throws {
+        let (engine, _) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell)
+        // Synthetic NSEvents have no TSM dead-key session in an invisible
+        // window. Supply its native input-client callbacks inside keyDown,
+        // exercising both entry into composition and its committed accent.
+        let selector = #selector(NSResponder.interpretKeyEvents(_:))
+        let method = try XCTUnwrap(class_getInstanceMethod(NSTextView.self, selector))
+        typealias Interpret = @convention(c) (NSResponder, Selector, NSArray) -> Void
+        let original = method_getImplementation(method)
+        let invoke = unsafeBitCast(original, to: Interpret.self)
+        var compositionKeys = 0
+        let inputMethod: @convention(block) (NSResponder, NSArray) -> Void = { responder, events in
+            guard responder === view.editor, let event = events.firstObject as? NSEvent, event.keyCode == 14 else {
+                invoke(responder, selector, events)
+                return
+            }
+            compositionKeys += 1
+            if event.modifierFlags.contains(.option) {
+                view.editor.setMarkedText("´", selectedRange: NSRange(location: 1, length: 0),
+                                          replacementRange: NSRange(location: NSNotFound, length: 0))
+            } else {
+                view.editor.insertText("é", replacementRange: view.editor.markedRange())
+            }
+        }
+        let replacement = imp_implementationWithBlock(inputMethod)
+        method_setImplementation(method, replacement)
+        defer { method_setImplementation(method, original); imp_removeBlock(replacement) }
+        for (value, code) in [("c", UInt16(8)), ("a", 0), ("f", 3)] {
+            try prb1Key(value, code: code, in: view.editor)
+        }
+        try prb1Key("´", code: 14, flags: .option, in: view.editor)
+        XCTAssertTrue(view.editor.hasMarkedText(), "Option-e starts a native dead-key composition")
+        try prb1Key("e", code: 14, in: view.editor)
+        XCTAssertFalse(view.editor.hasMarkedText())
+        XCTAssertEqual(compositionKeys, 2)
+        XCTAssertEqual(attachment.table[cell].text, "café")
+        try prb1Key("s", code: 1, in: view.editor)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "", "one Undo removes surrounding typing and its accent")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "cafés")
+    }
+
+    func testPRB12MarkedInputCaretMovementDoesNotBreakTypingUndo() throws {
+        let (engine, _) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell)
+        type("abc", into: view.editor)
+        view.editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+        let generation = engine.history.recordingGeneration, selection = view.editor.selectedRange()
+        try prb1Key("\u{F702}", code: 123, in: view.editor)
+        XCTAssertNotEqual(view.editor.selectedRange(), selection, "composition caret moved")
+        XCTAssertEqual(engine.history.recordingGeneration, generation, "composition movement is not a model edit")
+        view.editor.insertText("日本", replacementRange: view.editor.markedRange())
+        type("d", into: view.editor)
+        XCTAssertEqual(attachment.table[cell].text, "abc日本d")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "", "IME commit joins the surrounding typing")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "abc日本d")
+    }
+
+    func testPRB12DeferredPresentationCannotDropLaterBoldTyping() throws {
+        for reentry in ["prepare", "load"] {
+            let (engine, _) = makeEngine(ciaBlocks(.blank()))
+            let attachment = try tableAttachment(engine), view = try tableView(engine)
+            let cell = NoteTable.Position(row: 1, column: 0)
+            view.activate(cell)
+            let editor = view.editor
+            editor.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+            editor.prepare(header: false)
+            view.deactivate()
+            editor.unmarkText()
+            spin()
+            view.activate(cell)
+            // An explicit non-deferred presentation refresh also consumes the flag.
+            if reentry == "prepare" { editor.prepare(header: false) }
+            else { editor.load(view.cellString(cell), keepingSelection: true) }
+            try prb1Key("b", code: 11, flags: .command, in: editor)
+            try prb1Key("a", code: 0, in: editor)
+            spin()
+            XCTAssertNotNil(editor.typingAttributes[.noteMark(.bold)], reentry)
+            try prb1Key("b", code: 11, in: editor)
+            XCTAssertEqual(attachment.table[cell].text, "ab")
+            XCTAssertEqual(attachment.table[cell].marks, [NoteMark(.bold, offset: 0, length: 2)], reentry)
+        }
+    }
+
+    func testPRB12CompositionCommitsToOldCellBeforeActivation() throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine), view = try tableView(engine)
+        let a = NoteTable.Position(row: 1, column: 0), b = NoteTable.Position(row: 1, column: 1)
+        view.activate(a)
+        view.editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0),
+                                  replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.activate(b)
+        view.editor.unmarkText()
+        XCTAssertEqual(attachment.table[b].text, "Data taken from the IT network")
+        XCTAssertEqual(attachment.table[a].text, "Confidentiality日本")
+        XCTAssertEqual(view.editor.string, attachment.table[b].text)
+        XCTAssertFalse(view.editor.hasMarkedText())
+    }
+
+    func testPRB12AuthoritativeChangesDuringCompositionSurvive() throws {
+        for operation in ["agent", "undo", "row shift"] {
+            let (engine, _) = makeEngine(ciaBlocks())
+            let attachment = try tableAttachment(engine), view = try tableView(engine)
+            let a = NoteTable.Position(row: 1, column: 0)
+            view.activate(a)
+            if operation == "undo" { type("X", into: view.editor); engine.history.breakCoalescing() }
+            view.editor.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0),
+                                      replacementRange: NSRange(location: NSNotFound, length: 0))
+            switch operation {
+            case "agent": engine.changeTable(attachment, name: "Agent") { $0[a] = .init("Agent replacement") }
+            case "undo": XCTAssertTrue(engine.history.undo())
+            default: engine.changeTable(attachment, name: "Insert row") { $0.insertRow(at: 0) }
+            }
+            let expected = attachment.table
+            XCTAssertFalse(view.editor.hasMarkedText(), operation)
+            view.editor.unmarkText()
+            spin()
+            XCTAssertEqual(attachment.table, expected, operation)
+            XCTAssertEqual(view.editor.string, attachment.table[try XCTUnwrap(view.activeCell)].text, operation)
+            XCTAssertEqual(attachment.table[.init(row: operation == "row shift" ? 2 : 1, column: 0)].text,
+                           operation == "agent" ? "Agent replacement" : "Confidentiality", operation)
+        }
+    }
+
+    func testPRB1CellMarkOffClearsNativePresentationBeforeTyping() throws {
+        for header in [false, true] {
+            for kind in [NoteMark.Kind.bold, .italic, .underline, .strikethrough, .highlight, .code, .link] {
+                let (engine, _) = makeEngine(ciaBlocks(.blank()))
+                let attachment = try tableAttachment(engine), view = try tableView(engine)
+                let cell = NoteTable.Position(row: header ? 0 : 1, column: 0)
+                view.activate(cell, caret: .start)
+                func toggle() throws {
+                    switch kind {
+                    case .bold: try prb1Key("b", code: 11, flags: .command, in: view.editor)
+                    case .italic: try prb1Key("i", code: 34, flags: .command, in: view.editor)
+                    case .underline: try prb1Key("u", code: 32, flags: .command, in: view.editor)
+                    case .strikethrough: try prb1Key("x", code: 7, flags: [.command, .shift], in: view.editor)
+                    default: XCTAssertTrue(engine.applyCellMark(kind, in: view, url: kind == .link ? "https://example.com" : nil))
+                    }
+                }
+                try toggle()
+                XCTAssertNotNil(view.editor.typingAttributes[.noteMark(kind)])
+                try prb1Key("a", code: 0, in: view.editor)
+                try toggle()
+                XCTAssertNil(view.editor.typingAttributes[.noteMark(kind)])
+                let base = engine.style.tableCellAttributes(header: header)
+                XCTAssertEqual(view.editor.typingAttributes[.font] as? NSFont, base[.font] as? NSFont, kind.rawValue)
+                for key in [NSAttributedString.Key.underlineStyle, .strikethroughStyle, .backgroundColor, .link, .underlineColor] {
+                    XCTAssertNil(view.editor.typingAttributes[key], "\(kind): stale \(key)")
+                }
+                XCTAssertEqual(view.editor.typingAttributes[.foregroundColor] as? NSColor, base[.foregroundColor] as? NSColor)
+                try prb1Key("b", code: 11, in: view.editor)
+                XCTAssertEqual(view.editor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont, base[.font] as? NSFont)
+                XCTAssertEqual(attachment.table[cell].marks, [NoteMark(kind, offset: 0, length: 1,
+                    url: kind == .link ? "https://example.com" : nil)])
+                view.editor.load(view.cellString(cell), keepingSelection: true)
+                XCTAssertEqual(view.editor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont, base[.font] as? NSFont)
+            }
+        }
+    }
+
+    func testPRB1CellTypingUndoStopsAtNativeCaretJumpAndControlDeparture() throws {
+        for boundary in ["caret", "roundtrip", "departure"] {
+            let departure = boundary == "departure"
+            let (engine, text) = makeEngine(ciaBlocks(.blank()))
+            let attachment = try tableAttachment(engine)
+            let view = try tableView(engine)
+            let cell = NoteTable.Position(row: 1, column: 0)
+            view.activate(cell, caret: .start)
+            try prb1Key("a", code: 0, in: view.editor)
+            try prb1Key("b", code: 11, in: view.editor)
+            XCTAssertEqual(attachment.table[cell].text, "ab")
+            if departure {
+                let button = NSButton(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+                text.window?.contentView?.addSubview(button)
+                XCTAssertTrue(text.window!.makeFirstResponder(button))
+                spin()
+                XCTAssertEqual(view.activeCell, cell)
+                XCTAssertTrue(view.hasEditor, "a temporary control departure retains the editor")
+                XCTAssertTrue(text.window!.makeFirstResponder(view.editor))
+            } else {
+                try prb1Key("\u{F702}", code: 123, in: view.editor)
+                try prb1Key("\u{F702}", code: 123, in: view.editor)
+                XCTAssertEqual(view.editor.selectedRange(), NSRange(location: 0, length: 0))
+                if boundary == "roundtrip" {
+                    try prb1Key("\u{F703}", code: 124, in: view.editor)
+                    try prb1Key("\u{F703}", code: 124, in: view.editor)
+                    XCTAssertEqual(view.editor.selectedRange(), NSRange(location: 2, length: 0))
+                }
+            }
+            try prb1Key("X", code: 7, flags: .shift, in: view.editor)
+            let typed = boundary == "caret" ? "Xab" : "abX"
+            XCTAssertEqual(attachment.table[cell].text, typed)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(attachment.table[cell].text, "ab", "Undo removes only typing after the boundary")
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(attachment.table[cell].text, typed)
+            XCTAssertTrue(engine.history.undo()); XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(attachment.table[cell].text, "", "ordinary a/b typing still coalesces")
+        }
+    }
+
+    func testPRB1AppearanceKeepsMarkedCellTextAndItsCommit() throws {
+        let (engine, text) = makeEngine(ciaBlocks(.blank()))
+        let window = try XCTUnwrap(text.window)
+        window.appearance = NSAppearance(named: .aqua)
+        spin()
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        let cell = NoteTable.Position(row: 1, column: 0)
+        view.activate(cell, caret: .start)
+        let editor = view.editor
+        XCTAssertTrue(window.firstResponder === editor)
+        editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[cell].text, "")
+        let marked = editor.markedRange(), selected = editor.selectedRange()
+        window.appearance = NSAppearance(named: .darkAqua)
+        spin()
+        XCTAssertEqual(engine.style.design.mode, .dark, "native appearance callback reached the engine")
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(editor.string, "にほ")
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.markedRange(), marked)
+        XCTAssertEqual(editor.selectedRange(), selected)
+        XCTAssertEqual(attachment.table[cell].text, "", "composition stays out of the model")
+        editor.insertText("日本", replacementRange: editor.markedRange())
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[cell].text, "日本")
+        spin()
+        XCTAssertEqual(editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                       engine.style.tableCellAttributes(header: false)[.foregroundColor] as? NSColor)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[cell].text, "")
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(attachment.table[cell].text, "日本")
+    }
+
+    // MARK: 1 · The table in the text (hosting and look)
+
+    func testTheTableIsHostedAtTheColumnsWidthAndItsLineIsExactlyTheGrid() throws {
+        let (engine, textView) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        XCTAssertNotNil(view.window, "the view is in the note's window")
+        XCTAssertEqual(view.frame.width, 264, accuracy: 0.5, "the table spans the text column")
+        // Rows (R14): one 18.5 pt line and 6 + 6 padding, rounded up to 31; the wrapped cells take two lines.
+        XCTAssertEqual(view.grid.rowHeights.first ?? 0, 31, accuracy: 0.01)
+        XCTAssertEqual(view.grid.width, 264, accuracy: 0.01, "a narrow table stretches to fill the column")
+        XCTAssertEqual(view.frame.height, view.grid.height, accuracy: 0.5)
+        // The table's line: 8 above it, nothing but the grid in its line box.
+        let range = try XCTUnwrap(engine.range(ofTable: try tableAttachment(engine)))
+        var fragments: [NSTextLayoutFragment] = []
+        engine.layoutManager?.enumerateTextLayoutFragments(from: engine.contentStorage.documentRange.location, options: [.ensuresLayout]) {
+            fragments.append($0)
+            return true
+        }
+        let tableFragment = try XCTUnwrap(fragments.first { fragment in
+            engine.contentStorage.offset(from: engine.contentStorage.documentRange.location, to: fragment.rangeInElement.location) == range.location
+        })
+        let line = try XCTUnwrap(tableFragment.textLineFragments.first)
+        XCTAssertEqual(line.typographicBounds.height, view.grid.height, accuracy: 0.5, "the line box is the grid")
+        // 8 above the table, from the paragraph's line box as the draft (CSS) sets it.
+        XCTAssertEqual(line.typographicBounds.minY, AtticNoteType.blockMargin + NoteTextStyle.baselineShift(AtticNoteType.body),
+                       accuracy: 0.5, "8 above the table")
+    }
+
+    func testColumnsSizeFromTheirContentWithinTheirLimitsAndAWideTableScrolls() {
+        let wide = NoteTable(texts: [["Pillar", "What happened", "Control that failed", "Source"],
+                                     ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"]])
+        let attachment = NoteTableAttachment(table: wide)
+        let layout = attachment.layout(width: 264)
+        XCTAssertTrue(layout.scrolls)
+        XCTAssertTrue(layout.columnWidths.allSatisfy { $0 >= M.minColumnWidth && $0 <= M.maxColumnWidth })
+        XCTAssertEqual(layout.columnWidths[1], M.maxColumnWidth, "a long column stops at 168")
+        let narrow = NoteTableAttachment(table: .blank()).layout(width: 264)
+        XCTAssertEqual(narrow.columnWidths, [132, 132], "empty columns share the column")
+    }
+
+    /// The grid draws cells with AppKit's string drawing; the live editor
+    /// is TextKit 2. A cell must not jump when it starts or stops being
+    /// edited: the same line breaks and the same baselines.
+    func testDrawnCellsAndTheCellEditorBreakAndSitTheirLinesAlike() throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        let samples = ["Data taken from the IT network", "Systems encrypted by ransomware", "Pipeline shut down",
+                       "A considerably longer cell that wraps over several lines in a narrow column of the table",
+                       "Confidentiality", "naïve café — ünïcödé ✓ 東京 emoji 🙂 mixed", "x"]
+        for header in [false, true] {
+            for width in [44.0, 84.0, 120.0, 156.0, 252.0] as [CGFloat] {
+                for text in samples {
+                    let attributed = NSAttributedString(string: text, attributes: engine.style.tableCellAttributes(header: header))
+                    // AppKit's typesetter (string drawing and measuring).
+                    let storage = NSTextStorage(attributedString: attributed)
+                    let manager = NSLayoutManager()
+                    let container = NSTextContainer(size: CGSize(width: width, height: 10_000))
+                    container.lineFragmentPadding = 0
+                    manager.addTextContainer(container)
+                    storage.addLayoutManager(manager)
+                    manager.ensureLayout(for: container)
+                    var drawn: [(NSRange, CGFloat)] = []
+                    manager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: manager.numberOfGlyphs)) { rect, _, _, glyphs, _ in
+                        let characters = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+                        // Drawn from `drawnTextRect`, its line spacing above the first line (O18-03).
+                        drawn.append((characters, NoteTextStyle.lineLeading(AtticNoteType.body) + rect.minY + manager.location(forGlyphAt: glyphs.location).y))
+                    }
+                    // The cell editor (TextKit 2).
+                    let editor = view.editor
+                    editor.frame.size.width = width
+                    editor.textContainer?.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+                    editor.load(attributed, keepingSelection: false)
+                    var live: [(NSRange, CGFloat)] = []
+                    editor.textLayoutManager?.enumerateTextLayoutFragments(from: editor.textLayoutManager!.documentRange.location,
+                                                                           options: [.ensuresLayout]) { fragment in
+                        for line in fragment.textLineFragments where line.characterRange.length > 0 {
+                            live.append((line.characterRange, fragment.layoutFragmentFrame.minY + line.typographicBounds.minY + line.glyphOrigin.y))
+                        }
+                        return true
+                    }
+                    XCTAssertEqual(drawn.map(\.0), live.map(\.0), "line breaks of “\(text)” at \(width)")
+                    for (a, b) in zip(drawn, live) {
+                        XCTAssertEqual(a.1, b.1, accuracy: 0.5, "baselines of “\(text)” at \(width)")
+                    }
+                    XCTAssertEqual(NoteTableTextCache.measure(attributed, width: width), CGFloat(max(1, live.count)) * AtticNoteType.body.lineHeight,
+                                   "measured height of “\(text)” at \(width)")
+                }
+            }
+        }
+    }
+
+    // MARK: 2 · The caret between text and cells
+
+    func testArrowsCarryTheCaretIntoTheTableAndOutAgain() throws {
+        let (engine, textView) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        let window = try XCTUnwrap(textView.window)
+        // ↓ from the paragraph's last line: the first row, the column under the caret.
+        // A few characters into the paragraph's last line, wherever it now breaks.
+        let manager = try XCTUnwrap(textView.textLayoutManager)
+        let paragraphStart = location(of: "The attackers breached", in: engine)
+        var caretLocation = location(of: "authentication", in: engine) + 3
+        manager.enumerateTextLayoutFragments(from: manager.documentRange.location, options: [.ensuresLayout]) { fragment in
+            let start = manager.offset(from: manager.documentRange.location, to: fragment.rangeInElement.location)
+            guard start == paragraphStart, let line = fragment.textLineFragments.last else { return true }
+            caretLocation = start + line.characterRange.location + 3
+            return false
+        }
+        textView.setSelectedRange(NSRange(location: caretLocation, length: 0))
+        textView.doCommand(by: #selector(NSResponder.moveDown(_:)))
+        settle(engine, textView)
+        XCTAssertTrue(window.firstResponder === view.editor, "the cell editor has the keyboard")
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 0, column: 0))
+        // ↓ moves down through the rows and out under the table.
+        for row in 1...3 {
+            view.editor.doCommand(by: #selector(NSResponder.moveDown(_:)))
+            XCTAssertEqual(view.activeCell?.row, row)
+        }
+        view.editor.doCommand(by: #selector(NSResponder.moveDown(_:)))
+        settle(engine, textView)
+        XCTAssertTrue(window.firstResponder === textView, "↓ on the last row leaves the table")
+        XCTAssertEqual(engine.lineText(at: textView.selectedRange().location), "Sources:")
+        XCTAssertNil(view.activeCell)
+        // ↑ from below: the last row.
+        textView.doCommand(by: #selector(NSResponder.moveUp(_:)))
+        settle(engine, textView)
+        XCTAssertTrue(window.firstResponder === view.editor)
+        XCTAssertEqual(view.activeCell?.row, 3)
+        // ← at a cell's start crosses to the previous cell's end; → back.
+        view.activate(NoteTable.Position(row: 1, column: 1), caret: .start)
+        view.editor.doCommand(by: #selector(NSResponder.moveLeft(_:)))
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 1, column: 0))
+        XCTAssertEqual(view.editor.selectedRange(), NSRange(location: ("Confidentiality" as NSString).length, length: 0))
+        view.editor.doCommand(by: #selector(NSResponder.moveRight(_:)))
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 1, column: 1))
+        XCTAssertEqual(view.editor.selectedRange().location, 0)
+        // → at the very last cell's end leaves the table to the paragraph after it.
+        view.activate(NoteTable.Position(row: 3, column: 1), caret: .end)
+        view.editor.doCommand(by: #selector(NSResponder.moveRight(_:)))
+        settle(engine, textView)
+        XCTAssertTrue(window.firstResponder === textView)
+        XCTAssertEqual(textView.selectedRange().location, location(of: "Sources:", in: engine))
+        // ← from the next paragraph's start enters the last cell at its end.
+        textView.doCommand(by: #selector(NSResponder.moveLeft(_:)))
+        settle(engine, textView)
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 3, column: 1))
+        XCTAssertEqual(view.editor.selectedRange().location, ("Pipeline shut down" as NSString).length)
+        // ↑ on the first row leaves above the table.
+        view.activate(NoteTable.Position(row: 0, column: 0), caret: .start)
+        view.editor.doCommand(by: #selector(NSResponder.moveUp(_:)))
+        settle(engine, textView)
+        XCTAssertTrue(window.firstResponder === textView)
+        XCTAssertTrue(engine.lineText(at: textView.selectedRange().location).hasPrefix("The attackers"))
+    }
+
+    func testTabReturnAndOptionReturnInCells() throws {
+        let (engine, textView) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 0, column: 0), caret: .start)
+        type("Pillar", into: view.editor)
+        view.editor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 0, column: 1))
+        type("What", into: view.editor)
+        view.editor.doCommand(by: #selector(NSResponder.insertBacktab(_:)))
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 0, column: 0))
+        // Tab in the last cell adds a row.
+        view.activate(NoteTable.Position(row: 2, column: 1), caret: .end)
+        view.editor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertEqual(attachment.table.rowCount, 4)
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 3, column: 0))
+        // Return: the cell below; on the last row it adds one.
+        view.activate(NoteTable.Position(row: 1, column: 1), caret: .end)
+        view.editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 2, column: 1))
+        view.activate(NoteTable.Position(row: 3, column: 1), caret: .end)
+        type("x", into: view.editor)
+        view.editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertEqual(attachment.table.rowCount, 5)
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 4, column: 1))
+        // Return in an empty new last row removes it and leaves the table.
+        view.editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        settle(engine, textView)
+        XCTAssertEqual(attachment.table.rowCount, 4)
+        XCTAssertTrue(textView.window?.firstResponder === textView)
+        // ⌥Return: a line break inside the cell, stored as "\n".
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .end)
+        type("one", into: view.editor)
+        view.editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
+        type("two", into: view.editor)
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "one\ntwo")
+        XCTAssertEqual(view.grid.rowHeights[1], 49, accuracy: 0.01, "the row grows with its cell")
+    }
+
+    func testShiftArrowsPastACellsEdgeSelectCellsAndEscSelectsTheCellThenTheTable() throws {
+        let (engine, textView) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .end)
+        view.editor.doCommand(by: #selector(NSResponder.moveRightAndModifySelection(_:)))
+        XCTAssertEqual(view.cellSelection, NoteTableCellRange(anchor: NoteTable.Position(row: 1, column: 0),
+                                                              head: NoteTable.Position(row: 1, column: 1)))
+        XCTAssertTrue(textView.window?.firstResponder === view.canvas)
+        view.canvas.doCommand(by: #selector(NSResponder.moveDownAndModifySelection(_:)))
+        XCTAssertEqual(view.cellSelection?.positions.count, 4)
+        // Delete clears the cells and keeps the grid (one Undo step).
+        view.canvas.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
+        let attachment = try tableAttachment(engine)
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 2, column: 1)].text, "")
+        XCTAssertEqual(attachment.table.rowCount, 4)
+        engine.history.undo()
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 2, column: 1)].text, "Systems encrypted by ransomware")
+        // Esc in a cell: the cell; Esc again: the whole table, in the text.
+        view.activate(NoteTable.Position(row: 0, column: 1), caret: .end)
+        view.editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertEqual(view.cellSelection?.positions, [NoteTable.Position(row: 0, column: 1)])
+        view.canvas.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertTrue(textView.window?.firstResponder === textView)
+        XCTAssertEqual(textView.selectedRange(), engine.range(ofTable: attachment))
+    }
+
+    func testAnEditAboveTheTableKeepsTheKeyboardInTheCell() throws {
+        let (engine, textView) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 2, column: 1), caret: .end)
+        // An edit before the table (TextKit lays its line out again and may host the view anew).
+        engine.performEdit(NSRange(location: location(of: "The attackers", in: engine), length: 0),
+                           with: NSAttributedString(string: "Note: ", attributes: engine.style.bodyAttributes), name: "Typing")
+        settle(engine, textView)
+        spin(0.1)
+        let current = try tableView(engine)
+        XCTAssertTrue(current === view, "the same view is hosted again")
+        XCTAssertTrue(textView.window?.firstResponder === current.editor, "the cell keeps the keyboard")
+        XCTAssertEqual(current.activeCell, NoteTable.Position(row: 2, column: 1))
+    }
+
+    // MARK: 3 · Input methods and Writing Tools in a cell
+
+    func testAnInputMethodComposesInACellAndCommitsAsOneStep() throws {
+        let (engine, _) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .start)
+        let editor = view.editor
+        editor.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "", "the model waits for the commit")
+        editor.insertText("日本", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "日本")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "", "one Undo takes the composition back")
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 1, column: 0))
+    }
+
+    func testCellsOfferWritingToolsAndARewriteIsOneUndoableChange() throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 2, column: 1), caret: .all)
+        let editor = view.editor
+        XCTAssertEqual(editor.writingToolsBehavior, .complete, "Writing Tools work inline in a cell (TextKit 2)")
+        XCTAssertNotNil(editor.textLayoutManager, "the cell editor is TextKit 2")
+        // A Writing Tools session: the note's safety copy first, then the rewrite.
+        editor.delegate?.textViewWritingToolsWillBegin?(editor)
+        XCTAssertEqual(engine.activity, .writingToolsSafe)
+        editor.insertText("Ransomware encrypted the systems", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        editor.delegate?.textViewWritingToolsDidEnd?(editor)
+        XCTAssertEqual(engine.activity, .idle)
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 2, column: 1)].text, "Ransomware encrypted the systems")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 2, column: 1)].text, "Systems encrypted by ransomware")
+    }
+
+    // MARK: 4 · VoiceOver
+
+    func testVoiceOverReadsATableWithRowsColumnsAndHeaders() throws {
+        let (engine, textView) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        XCTAssertEqual(view.accessibilityRole(), .table)
+        XCTAssertEqual(view.accessibilityLabel(), "Table, 2 columns, 4 rows")
+        XCTAssertEqual(view.accessibilityRowCount(), 4)
+        XCTAssertEqual(view.accessibilityColumnCount(), 2)
+        XCTAssertEqual(view.accessibilityRows()?.count, 4)
+        XCTAssertEqual(view.accessibilityColumns()?.count, 2)
+        let headers = try XCTUnwrap(view.accessibilityColumnHeaderUIElements() as? [NoteTableAXCell])
+        XCTAssertEqual(headers.map { $0.accessibilityValue() as? String }, ["Pillar", "What happened"])
+        let cell = try XCTUnwrap(view.accessibilityCell(forColumn: 1, row: 2) as? NoteTableAXCell)
+        XCTAssertEqual(cell.accessibilityRole(), .cell)
+        XCTAssertEqual(cell.accessibilityRowIndexRange(), NSRange(location: 2, length: 1))
+        XCTAssertEqual(cell.accessibilityColumnIndexRange(), NSRange(location: 1, length: 1))
+        XCTAssertEqual(cell.accessibilityValue() as? String, "Systems encrypted by ransomware")
+        XCTAssertNotEqual(cell.accessibilityFrame(), .zero)
+        // The grips' and chips' actions are named actions on each cell.
+        let actions = cell.accessibilityCustomActions()?.map(\.name) ?? []
+        XCTAssertTrue(actions.contains("Add Row Below"))
+        XCTAssertTrue(actions.contains("Delete Column"))
+        // The table is one of the note's children, and a target of its Tables rotor.
+        XCTAssertTrue(textView.accessibilityChildren()?.contains { ($0 as AnyObject) === view } == true)
+        let rotor = try XCTUnwrap(textView.accessibilityCustomRotors().first { $0.type == .table })
+        let found = rotor.itemSearchDelegate?.rotor(rotor, resultFor: NSAccessibilityCustomRotor.SearchParameters())
+        XCTAssertTrue(found?.targetElement as AnyObject === view)
+        // Editing a cell: the cell holds the live text editor.
+        view.activate(NoteTable.Position(row: 2, column: 1), caret: .end)
+        XCTAssertTrue(cell.accessibilityChildren()?.first as AnyObject === view.editor)
+        XCTAssertTrue(view.editor.accessibilityParent() as AnyObject === view.axCell(NoteTable.Position(row: 2, column: 1)))
+        XCTAssertTrue(cell.accessibilityPerformPress())
+    }
+
+    // MARK: 5 · Undo
+
+    func testTypingInACellCoalescesAndUndoRestoresTheCellAndTheCaret() throws {
+        let (engine, textView) = makeEngine(ciaBlocks(.blank()))
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 0), caret: .start)
+        type("Integrity", into: view.editor)
+        let undoCount = engine.history.undoOps.count
+        view.editor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        type("Systems", into: view.editor)
+        XCTAssertEqual(engine.history.undoOps.count, undoCount + 1, "each cell's typing is one step")
+        // A structure change between.
+        XCTAssertTrue(engine.addColumn(to: attachment, at: 2, focusingRow: 1))
+        XCTAssertEqual(attachment.table.columnCount, 3)
+        // Text typed in the note after the table.
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        textView.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        // Undo walks back through all of them, in order.
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertFalse(engine.textStorage.string.hasSuffix("!"))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table.columnCount, 2)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 1)].text, "")
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 1, column: 1), "the keyboard returns to the cell")
+        XCTAssertTrue(textView.window?.firstResponder === view.editor)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "")
+        // Redo all.
+        while engine.history.redo() {}
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 0)].text, "Integrity")
+        XCTAssertEqual(attachment.table[NoteTable.Position(row: 1, column: 1)].text, "Systems")
+        XCTAssertEqual(attachment.table.columnCount, 3)
+        XCTAssertTrue(engine.textStorage.string.hasSuffix("!"))
+    }
+
+    func testDeletingAndRestoringAWholeTableKeepsItsLatestGrid() throws {
+        let (engine, textView) = makeEngine(ciaBlocks())
+        let attachment = try tableAttachment(engine)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 3, column: 1), caret: .end)
+        type(" fast", into: view.editor)
+        XCTAssertTrue(engine.deleteTable(attachment))
+        settle(engine, textView)
+        XCTAssertNil(engine.range(ofTable: attachment))
+        XCTAssertFalse(engine.document().blocks.contains { $0.kind == .table })
+        XCTAssertTrue(engine.history.undo())
+        settle(engine, textView)
+        let restored = try tableAttachment(engine)
+        XCTAssertEqual(restored.table[NoteTable.Position(row: 3, column: 1)].text, "Pipeline shut down fast")
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(restored.table[NoteTable.Position(row: 3, column: 1)].text, "Pipeline shut down")
+    }
+
+    // MARK: 6 · Save, reopen, export
+
+    func testATableSavesReopensAndExportsAsMarkdown() throws {
+        let (engine, _) = makeEngine(ciaBlocks())
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 1), caret: .all)
+        engine.applyCellMark(.bold, in: view)
+        let document = engine.document()
+        XCTAssertTrue(document.requires.contains("table-v1"))
+        let data = try NoteContentCodec.encode(document)
+        guard case let .editable(decoded) = NoteContentCodec.decode(data) else { return XCTFail("the note reads back") }
+        XCTAssertEqual(decoded, document)
+        let table = try XCTUnwrap(decoded.blocks.first { $0.kind == .table }?.table)
+        XCTAssertEqual(table.texts, pillars.texts)
+        XCTAssertEqual(table[NoteTable.Position(row: 1, column: 1)].marks, [NoteMark(.bold, offset: 0, length: 30)])
+        // Reopened in a new editor, the same grid.
+        let (reopened, _) = makeEngine(decoded.blocks)
+        XCTAssertEqual(reopened.document().blocks.first { $0.kind == .table }?.table, table)
+        // Markdown: a GFM pipe table.
+        let markdown = NoteMarkdownExport.markdown(decoded)
+        XCTAssertTrue(markdown.contains("""
+        | Pillar | What happened |
+        | --- | --- |
+        | Confidentiality | **Data taken from the IT network** |
+        """), markdown)
+        XCTAssertTrue(NoteTextExport.plainText(decoded).contains("Integrity\tSystems encrypted by ransomware"))
+    }
+
+    // MARK: 7 · A keystroke's cost
+
+    func testTypingInACellOfALongNoteCostsWhatTypingInItsTextDoes() throws {
+        var blocks: [NoteBlock] = [.text("Stress")]
+        let big = NoteTable(texts: (0..<10).map { row in (0..<20).map { "r\(row)c\($0)" } })
+        for index in 0..<5_000 {
+            blocks.append(.text("Line \(index) with some ordinary words to wrap a little in a narrow panel."))
+            if index == 2_500 { blocks.append(.table(big)) }
+        }
+        let (engine, textView) = makeEngine(blocks)
+        let attachment = try tableAttachment(engine)
+        let range = try XCTUnwrap(engine.range(ofTable: attachment))
+        textView.scrollRangeToVisible(range)
+        settle(engine, textView)
+        let view = try tableView(engine)
+        func measure(_ body: () -> Void) -> [Double] {
+            var samples: [Double] = []
+            for _ in 0..<40 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                body()
+                textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+                textView.displayIfNeeded()
+                samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            }
+            return samples.sorted()
+        }
+        view.activate(NoteTable.Position(row: 5, column: 3), caret: .end)
+        let cell = measure { view.editor.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: location(of: "Line 2501 ", in: engine), length: 0))
+        let text = measure { textView.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        let cellMedian = cell[cell.count / 2], textMedian = text[text.count / 2]
+        let report = String(format: "TABLE-PERF cell keystroke median %.2f ms p90 %.2f; note text median %.2f ms p90 %.2f",
+                            cellMedian, cell[cell.count * 9 / 10], textMedian, text[text.count * 9 / 10])
+        print(report)
+        XCTContext.runActivity(named: report) { _ in }
+        XCTAssertLessThan(cellMedian, max(4, textMedian * 2), "a cell keystroke stays in the note's budget")
+    }
+
+    /// Opening a long note: a 20 × 10 table on screen against the same note
+    /// without it (cold engine, view, layout and first display).
+    func testOpeningALongNoteWithATwentyByTenTableOnScreen() throws {
+        func note(withTable: Bool) -> [NoteBlock] {
+            var blocks: [NoteBlock] = [.text("Heavy")]
+            for index in 0..<400 {
+                blocks.append(.text("Line \(index) with some ordinary words to wrap a little in a narrow panel."))
+                if withTable, index == 2 {
+                    blocks.append(.table(NoteTable(texts: (0..<20).map { row in (0..<10).map { "r\(row) c\($0)" } })))
+                }
+            }
+            return blocks
+        }
+        func open(_ blocks: [NoteBlock]) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let (engine, textView) = makeEngine(blocks)
+            textView.displayIfNeeded()
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+            if blocks.contains(where: { $0.kind == .table }) {
+                XCTAssertNotNil(engine.tableViews().first?.window, "the table is on screen")
+            }
+            windows.forEach { $0.close() }
+            windows.removeAll()
+            return elapsed
+        }
+        _ = open(note(withTable: true))
+        var plain: [Double] = [], table: [Double] = []
+        for _ in 0..<5 {
+            plain.append(open(note(withTable: false)))
+            table.append(open(note(withTable: true)))
+        }
+        plain.sort()
+        table.sort()
+        let report = String(format: "TABLE-OPEN long note median %.1f ms, with a 20 x 10 table on screen %.1f ms", plain[2], table[2])
+        print(report)
+        XCTContext.runActivity(named: report) { _ in }
+    }
+
+    /// Sideways scrolling over a wide table moves the table; scrolling up
+    /// and down over it moves the note.
+    func testScrollingOverAWideTableGoesSidewaysToItAndUpAndDownToTheNote() throws {
+        let wide = NoteTable(texts: [["Pillar", "What happened", "Control that failed", "Source"],
+                                     ["Confidentiality", "Data taken from the IT network", "No MFA on the VPN account", "beerman2023review"]])
+        var blocks = ciaBlocks(wide)
+        for index in 0..<40 { blocks.append(.text("Filler line \(index) to give the note something to scroll.")) }
+        let (engine, textView) = makeEngine(blocks, height: 300)
+        let view = try tableView(engine)
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        func scroll(dx: Int32, dy: Int32) throws {
+            let cgEvent = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0))
+            let event = try XCTUnwrap(NSEvent(cgEvent: cgEvent))
+            view.scrollWheel(with: event)
+            spin(0.05)
+        }
+        let noteBefore = scrollView.contentView.bounds.minY
+        // A gesture is many events; AppKit settles the first.
+        for _ in 0..<2 { try scroll(dx: -30, dy: 0) }
+
+        XCTAssertEqual(view.scrollOffset, 60, accuracy: 0.5, "sideways: the table")
+        for _ in 0..<40 { try scroll(dx: -30, dy: 0) }
+        XCTAssertEqual(view.scrollOffset, view.maxScrollOffset, accuracy: 0.5, "until its end, and no further")
+        XCTAssertEqual(scrollView.contentView.bounds.minY, noteBefore, accuracy: 0.5)
+        let tableOffset = view.scrollOffset
+        for _ in 0..<3 { try scroll(dx: 0, dy: -40) }
+        XCTAssertEqual(view.scrollOffset, tableOffset, accuracy: 0.5)
+        XCTAssertGreaterThan(scrollView.contentView.bounds.minY, noteBefore, "up and down: the note")
+    }
+
+    func testSidewaysScrollOverTheDrawnGridReachesTheTable() throws {
+        var wide = NoteTable(texts: [["First wide column", "Second wide column", "Third wide column", "Fourth wide column"]])
+        for index in wide.columns.indices { wide.columns[index].width = 168 }
+        let (engine, _) = makeEngine(ciaBlocks(wide))
+        let view = try tableView(engine)
+        XCTAssertGreaterThan(view.maxScrollOffset, 60)
+        let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: -30, wheel3: 0))
+        let event = try XCTUnwrap(NSEvent(cgEvent: cg))
+        view.canvas.scrollWheel(with: event)
+        spin(0.05)
+        view.canvas.scrollWheel(with: event)
+        XCTAssertEqual(view.scrollOffset, 60, accuracy: 0.5)
+        view.activate(NoteTable.Position(row: 0, column: 0), caret: .end)
+        let before = view.scrollOffset
+        view.editor.scrollWheel(with: event)
+        XCTAssertEqual(view.scrollOffset, min(before + 30, view.maxScrollOffset), accuracy: 0.5)
+    }
+
+    /// Scrolling the note while a cell has the keyboard: the cell keeps it.
+    func testScrollingTheTableOutOfViewKeepsTheCellsKeyboard() throws {
+        var blocks = ciaBlocks()
+        for index in 0..<200 { blocks.append(.text("Filler line \(index) to give the note something to scroll.")) }
+        let (engine, textView) = makeEngine(blocks, height: 300)
+        let view = try tableView(engine)
+        view.activate(NoteTable.Position(row: 1, column: 1), caret: .end)
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 3_000))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        settle(engine, textView)
+        spin(0.2)
+        XCTAssertTrue(textView.window?.firstResponder === view.editor, "typing still goes to the cell")
+        view.editor.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(try tableAttachment(engine).table[NoteTable.Position(row: 1, column: 1)].text, "Data taken from the IT network!")
+        // Back in view: TextKit hosts the same view again, still editing.
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        settle(engine, textView)
+        spin(0.1)
+        XCTAssertFalse(view.isParked)
+        XCTAssertTrue(textView.window?.firstResponder === view.editor)
+        XCTAssertEqual(view.activeCell, NoteTable.Position(row: 1, column: 1))
+    }
+}

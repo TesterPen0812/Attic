@@ -59,6 +59,29 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertEqual(store.task(withID: id)?.title, "New title")
     }
 
+    func testBlockedAlternateSubmissionFromDoneStillSaysAddedToNow() throws {
+        let store = try makeTestStore(persist: { context in
+            if try context.fetch(FetchDescriptor<TaskItem>()).contains(where: { $0.title == "Unsaved edit" }) {
+                throw PersistenceGate.Failure()
+            }
+            try context.save()
+        })
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let other = try XCTUnwrap(store.create(title: "Original title"))
+        model.select(tab: .done)
+        model.beginEditingTitle(other.id)
+        model.editingTitle = "Unsaved edit"
+        model.addBar.text = "Added despite blocked navigation"
+        let id = try XCTUnwrap(model.submitAddBar(openingPage: true))
+        XCTAssertEqual(store.task(withID: id)?.status, .todo)
+        XCTAssertEqual(model.tab, .done, "the failed edit keeps its page")
+        XCTAssertEqual(model.editingTitleID, other.id)
+        XCTAssertEqual(model.editingTitle, "Unsaved edit")
+        XCTAssertEqual(store.task(withID: other.id)?.title, "Original title")
+        XCTAssertEqual(model.toasts.current?.message, "Added to Now")
+        XCTAssertTrue(model.expandedFiles.contains(id))
+    }
+
     func testAFailedPasteKeepsTheOfferUntilTheTasksExist() throws {
         let gate = PersistenceGate()
         let store = try makeTestStore(persist: gate.save)
@@ -284,8 +307,8 @@ final class TasksReviewFixTests: XCTestCase {
     // MARK: 5. "Open page" works for a task in the Done log
 
     func testOpenPageOnADoneLogTaskShowsItsSubtasksAndKeptFiles() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDoneDetail-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticDoneDetail")
+
         let files = TaskImageFiles(rootURL: root.appendingPathComponent("files", isDirectory: true))
         let source = root.appendingPathComponent("plan.txt")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -293,8 +316,7 @@ final class TasksReviewFixTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let clock = MutableNow(base)
         let store = TaskStore(container: container, now: { clock.value }, taskImageFiles: files)
-        var opened: [UUID] = []
-        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices(openPage: { opened.append($0) }))
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let task = try XCTUnwrap(store.create(title: "Ship"))
         _ = try XCTUnwrap(store.create(title: "Pack", parentID: task.id))
         let attached = await store.attachFiles([source], to: task.id)
@@ -305,7 +327,7 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertNil(store.task(withID: task.id))
 
         model.openPage(task.id)
-        XCTAssertTrue(opened.isEmpty, "the host's route can't show a logged task")
+        XCTAssertTrue(model.expandedFiles.isEmpty, "a logged task opens its read-only details, not a files list")
         XCTAssertEqual(model.doneDetailID, task.id)
         let detail = try XCTUnwrap(model.doneDetail(for: task.id))
         XCTAssertEqual(detail.title, "Ship")
@@ -316,7 +338,9 @@ final class TasksReviewFixTests: XCTestCase {
 
         let live = try XCTUnwrap(store.create(title: "Live"))
         model.openPage(live.id)
-        XCTAssertEqual(opened, [live.id], "a task in the lists still goes to the host's route")
+        XCTAssertEqual(model.expandedFiles, [live.id], "a task in the lists opens its files under its row")
+        model.openPage(live.id)
+        XCTAssertTrue(model.expandedFiles.isEmpty, "and the same command closes them")
     }
 
     // MARK: 6. Own focus rings only for the keyboard

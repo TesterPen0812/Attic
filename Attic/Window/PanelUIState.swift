@@ -1,4 +1,5 @@
 import Combine
+import SwiftUI
 import Foundation
 
 /// Independent reasons that make hover-driven auto-hide unsafe. Presentation
@@ -8,14 +9,14 @@ enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
     case taskEditing
-    case taskFiles
-    case subtaskComposer
+    case taskFilesVisible
     case taskConfirmation
     case notesEditorFocus
     case notesDirty
     case notesConflict
     case notesImport
     case notesPopover
+    case notesFilePicker
     case menuTracking
     case canvasConfirmation
     case windowMove
@@ -28,6 +29,7 @@ enum PanelInteractionLockReason: Hashable, Sendable {
 @MainActor
 final class TaskRenameDraft: ObservableObject {
     @Published var title = ""
+    @Published var focusRequest: UInt64 = 0
 }
 
 @MainActor
@@ -50,21 +52,9 @@ final class PanelUIState: ObservableObject {
         get { renameDraft.title }
         set { renameDraft.title = newValue }
     }
-    @Published var editingNoteID: UUID?
-    @Published var subtaskDrafts: [UUID: String] = [:]
-    /// Families whose inline Add entry is activated. Separate from drafts: an
-    /// activated-but-empty entry stays visible, a draft reactivates the entry
-    /// on any surface that presents the family, and only an explicit cancel
-    /// (Escape) deactivates.
-    @Published private(set) var subtaskEntryActiveIDs: Set<UUID> = []
-    @Published var focusedSubtaskParentID: UUID?
-    @Published private(set) var subtaskEntryRequest: UInt64 = 0
     @Published var confirmingTaskDeletionID: UUID?
     @Published var confirmingTaskCompletionID: UUID?
-    /// A child row's legacy attachments popover.
-    @Published var presentedTaskAttachmentsID: UUID?
-    /// The owner whose Add attachment picker is up. Kept apart from the
-    /// popover mark so neither interaction can overwrite the other's; only
+    /// The owner whose Add attachment picker is up. Only
     /// the picker's own completion clears it, because the picker stays up
     /// across section switches and task reconciliation.
     @Published var taskAttachmentPickerOwnerID: UUID?
@@ -75,28 +65,19 @@ final class PanelUIState: ObservableObject {
     @Published var dockingPreviewCorner: ScreenCorner?
     @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
     @Published private(set) var selectedSection: PanelSection = .tasks
-    private(set) var draggedTaskID: UUID?
     @Published private var managedInteractionLocks: Set<PanelInteractionLockReason> = []
 
-    /// Tasks/Backlog still drive `TaskStore`; Notes and Canvas use their own
-    /// focused stores and surfaces.
-    var selectedScope: TaskScope { selectedSection.taskScope ?? .tasks }
 
-    var isDraggingTask: Bool { draggedTaskID != nil }
 
     var interactionLockReasons: Set<PanelInteractionLockReason> {
         var reasons = managedInteractionLocks
         if editingTaskID != nil {
             reasons.insert(.taskEditing)
         }
-        if confirmingTaskDeletionID != nil || confirmingTaskCompletionID != nil || presentedTaskAttachmentsID != nil
+        if confirmingTaskDeletionID != nil || confirmingTaskCompletionID != nil
             || taskAttachmentPickerOwnerID != nil || isComposerAttachmentPickerPresented {
             reasons.insert(.taskConfirmation)
         }
-        // .subtaskComposer is a managed lock owned by SubtaskPanelController:
-        // it only engages while a TRANSIENT surface holds a draft or focused
-        // entry — a draft typed into the independent pinned window, or one
-        // retained after dismissal, must never hold the main panel open.
         if isCanvasConfirmationPresented {
             reasons.insert(.canvasConfirmation)
         }
@@ -105,10 +86,6 @@ final class PanelUIState: ObservableObject {
 
     var isInteractionLocked: Bool { !interactionLockReasons.isEmpty }
 
-    var isWindowInteractionActive: Bool {
-        managedInteractionLocks.contains(.windowMove)
-            || managedInteractionLocks.contains(.windowResize)
-    }
 
     /// Shared shell hook for focused editors, attachment imports, popovers,
     /// conflict UI, and blocking saves. Notes owns when its asynchronous work
@@ -218,38 +195,24 @@ final class PanelUIState: ObservableObject {
 
     func beginAdding() {
         editingTaskID = nil
-        editingNoteID = nil
         isComposerPresented = true
     }
 
-    /// Focused entry lives in the auxiliary subtask surface (transient or
-    /// pinned), which watches `subtaskEntryRequest` for re-focus bumps.
-    func focusSubtaskEntry(for parentID: UUID) {
-        focusedSubtaskParentID = parentID
-        subtaskEntryRequest &+= 1
-    }
+    /// The last page switch. Not published: the pages' transitions read it
+    /// as they run (a page leaving was last drawn before the switch, so its
+    /// own copy of where to go would be stale).
+    private(set) var lastPageSwitch: PanelPageSwitch?
 
-    /// The '+ Add subtask' affordance opens the entry field and focuses it.
-    func activateSubtaskEntry(for parentID: UUID) {
-        subtaskEntryActiveIDs.insert(parentID)
-        focusSubtaskEntry(for: parentID)
-    }
-
-    /// Commit/save paths keep the entry active for chain-adding; the focus
-    /// pointer simply moves on.
-    func deactivateSubtaskEntry(for parentID: UUID) {
-        subtaskEntryActiveIDs.remove(parentID)
-        if focusedSubtaskParentID == parentID {
-            focusedSubtaskParentID = nil
+    /// The one way the shell switches page (A20): every route makes the
+    /// switch with `motion` (and `alongside` in the same transaction), and
+    /// records it for the pages' transitions.
+    func switchPage(to section: PanelSection, motion: PanelPageMotion, alongside: () -> Void = {}) {
+        guard selectedSection != section else { return }
+        lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
+        withAnimation(motion.animation) {
+            selectSection(section)
+            alongside()
         }
-    }
-
-    /// Escape cancels the entry deliberately: deactivates it and discards the
-    /// unsubmitted draft. Incidental focus loss, pin/unpin and surface hide
-    /// all preserve the draft — only this path drops it.
-    func cancelSubtaskEntry(for parentID: UUID) {
-        deactivateSubtaskEntry(for: parentID)
-        subtaskDrafts[parentID] = nil
     }
 
     func selectSection(_ section: PanelSection) {
@@ -265,28 +228,21 @@ final class PanelUIState: ObservableObject {
         managedInteractionLocks.remove(.quickEntryFocus)
         managedInteractionLocks.remove(.notesEditorFocus)
         managedInteractionLocks.remove(.notesPopover)
-        managedInteractionLocks.remove(.subtaskComposer)
         isComposerPresented = false
         editingTaskID = nil
         editingDraftTitle = ""
-        editingNoteID = nil
-        draggedTaskID = nil
-        focusedSubtaskParentID = nil
         confirmingTaskDeletionID = nil
         confirmingTaskCompletionID = nil
-        presentedTaskAttachmentsID = nil
         isCanvasConfirmationPresented = false
         selectedSection = section
     }
 
     func endAdding() {
         isComposerPresented = false
-        editingNoteID = nil
     }
 
     func beginEditing(_ task: TaskItem) {
         isComposerPresented = false
-        editingNoteID = nil
         editingTaskID = task.id
         editingDraftTitle = task.title
     }
@@ -294,14 +250,6 @@ final class PanelUIState: ObservableObject {
     func endEditing() {
         editingTaskID = nil
         editingDraftTitle = ""
-    }
-
-    /// Editing a note reuses the composer slot so the panel reserves height
-    /// for a multi-line body instead of clipping an inline editor.
-    func beginEditingNote(_ note: NoteItem) {
-        editingTaskID = nil
-        editingNoteID = note.id
-        isComposerPresented = true
     }
 
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
@@ -313,39 +261,15 @@ final class PanelUIState: ObservableObject {
         if let taskAttachmentPickerOwnerID, !availableIDs.contains(taskAttachmentPickerOwnerID) {
             TaskAttachmentPicker.cancelIfOwned(by: taskAttachmentPickerOwnerID)
         }
-        if let presentedTaskAttachmentsID, !availableIDs.contains(presentedTaskAttachmentsID) {
-            self.presentedTaskAttachmentsID = nil
-        }
         if let confirmingTaskDeletionID, !availableIDs.contains(confirmingTaskDeletionID) {
             self.confirmingTaskDeletionID = nil
-        }
-        subtaskDrafts = subtaskDrafts.filter { availableIDs.contains($0.key) }
-        if let focusedSubtaskParentID, !availableIDs.contains(focusedSubtaskParentID) {
-            self.focusedSubtaskParentID = nil
         }
         if let editingTaskID, !availableIDs.contains(editingTaskID) {
             self.editingTaskID = nil
             editingDraftTitle = ""
         }
-        subtaskEntryActiveIDs = subtaskEntryActiveIDs.intersection(availableIDs)
-        if let draggedTaskID, !availableIDs.contains(draggedTaskID) {
-            self.draggedTaskID = nil
-        }
     }
 
-    func beginDragging(_ task: TaskItem) {
-        draggedTaskID = task.id
-    }
-
-    func endDragging() {
-        draggedTaskID = nil
-    }
-
-    func finishDragging(releasedOutsidePanel: Bool) -> UUID? {
-        guard let draggedTaskID else { return nil }
-        self.draggedTaskID = nil
-        return releasedOutsidePanel ? draggedTaskID : nil
-    }
 }
 
 /// Edit mode's hold on the panel (round 5, the owner's item 2): while an

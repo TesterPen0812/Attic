@@ -12,6 +12,7 @@ import XCTest
 final class TasksFollowup2Tests: XCTestCase {
     // MARK: - Low priority (option A)
 
+    #if !ATTIC_GENERATED_TESTS
     func testEveryPickerOffersAllFourPrioritiesWithTheirKeys() {
         XCTAssertEqual(TaskPriority.choices, [.none, .low, .medium, .high])
         XCTAssertEqual(TaskPriority.choices.map(\.shortcut), AtticTaskShortcut.priorities)
@@ -46,6 +47,7 @@ final class TasksFollowup2Tests: XCTestCase {
     /// ⌥⌘1 on the selected row sets Low (one step, with its toast), ⌥⌘0
     /// takes the priority away; the row menu shows the keys.
     func testPriorityKeysSetTheSelectedTasksPriority() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" })
@@ -73,7 +75,7 @@ final class TasksFollowup2Tests: XCTestCase {
 
     // MARK: - L5: the rarer commands under More
 
-    /// The top level keeps the common actions; Open Files…, Move Up and
+    /// The top level keeps the common actions; Show Files, Move Up and
     /// Move Down sit under More with their keys, and the keys still find
     /// them in the one list.
     func testTheRarerCommandsSitUnderMoreWithTheirKeys() throws {
@@ -86,7 +88,7 @@ final class TasksFollowup2Tests: XCTestCase {
         XCTAssertEqual(top, ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
                              "Add Subtask", "Copy", "Duplicate", "More", "Delete"])
         let more = try XCTUnwrap(commands.first { $0.title == "More" })
-        XCTAssertEqual(more.children.map(\.title), ["Open Files…", "Move Up", "Move Down"])
+        XCTAssertEqual(more.children.map(\.title), ["Show Files", "Move Up", "Move Down"])
         XCTAssertEqual(more.children.map(\.shortcut), [AtticTaskShortcut.openPage, AtticTaskShortcut.moveUp, AtticTaskShortcut.moveDown])
         // Call the plumber is the last to do: Move Down is off, Move Up runs.
         XCTAssertEqual(more.children.map(\.isDisabled), [false, false, true])
@@ -95,7 +97,7 @@ final class TasksFollowup2Tests: XCTestCase {
         // The native menu keeps the sections inside More.
         let menu = AtticNativeMenu.make(commands)
         let submenu = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu)
-        XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title }, ["Open Files…", "—", "Move Up", "Move Down"])
+        XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title }, ["Show Files", "—", "Move Up", "Move Down"])
     }
 
     // MARK: - L6: a Done task's details show its metadata
@@ -133,6 +135,7 @@ final class TasksFollowup2Tests: XCTestCase {
         hosted.page.actions(for: row.id, in: .done).openPage()
         XCTAssertNil(hosted.model.doneDetailID, "⌘Return again closes them")
     }
+    #endif
 }
 
 /// Item 6 (option A): Find and View Options on Now and Later. The view's
@@ -175,6 +178,7 @@ final class TasksViewOptionsTests: XCTestCase {
 
     /// Five tasks on Now (the mockup's): the filters show what they say,
     /// Now's view leaves Later alone, and the store's order never changes.
+    #if !ATTIC_GENERATED_TESTS
     func testFiltersAndSortsAreViewsOnly() throws {
         // New tasks go to the top: made last to first.
         try make("E high", .high)
@@ -312,6 +316,7 @@ final class TasksViewOptionsTests: XCTestCase {
         XCTAssertEqual(TasksViewOptions(priority: .highOnly).summary, "High priority only")
         XCTAssertFalse(TasksViewOptions(sort: .priority).filters, "a sort hides nothing: no dot")
     }
+    #endif
 
     // MARK: - On the page
 
@@ -328,6 +333,7 @@ final class TasksViewOptionsTests: XCTestCase {
 
     /// The View Options menu: Show, the priority filter, Sort by, Reset
     /// View, the current choices ticked; a choice changes only that page.
+    #if !ATTIC_GENERATED_TESTS
     func testTheViewOptionsMenu() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -349,6 +355,7 @@ final class TasksViewOptionsTests: XCTestCase {
     /// ⌥⌘V is View Options' on Now and Later, never Done's; ⌘F is Find's
     /// on every page.
     func testTheKeysBelongToTheRightPages() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         func event(_ characters: String, _ code: UInt16, _ modifiers: NSEvent.ModifierFlags) -> NSEvent {
@@ -373,6 +380,7 @@ final class TasksViewOptionsTests: XCTestCase {
     /// ⌘F on Now, typing, the match shown with the count; ↓ gives the
     /// keyboard to the first match; Esc there ends the search.
     func testFindOnNowWithTheKeys() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         makeKey(hosted)
@@ -392,6 +400,7 @@ final class TasksViewOptionsTests: XCTestCase {
     /// A sorted view: ⌘↑ moves nothing (the hint says why), the menu's
     /// Move Up is off, VoiceOver has no Move up.
     func testASortedViewDoesNotReorder() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.model.setViewOptions(TasksViewOptions(sort: .priority), for: .now)
@@ -405,6 +414,7 @@ final class TasksViewOptionsTests: XCTestCase {
         XCTAssertEqual(more.children.first { $0.title == "Move Up" }?.isDisabled, true)
         XCTAssertNil(hosted.page.actions(for: row.id, in: .now).moveUp)
     }
+    #endif
 }
 
 /// L7: the Tasks page remembers its page and each page's view across
@@ -425,6 +435,7 @@ final class TasksPageMemoryTests: XCTestCase {
         defaults = nil
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testThePageAndViewsSurviveARelaunch() throws {
         let store = try makeTestStore()
         let memory = TasksPageMemory(defaults: defaults)
@@ -463,6 +474,7 @@ final class TasksPageMemoryTests: XCTestCase {
         XCTAssertNil(memory.page)
         XCTAssertTrue(memory.viewOptions.isEmpty)
     }
+    #endif
 }
 
 /// L1–L4 (the owner's look decisions of 2026-09-30): the tab underline,
@@ -477,6 +489,7 @@ final class TasksLookDecisionTests: XCTestCase {
         return context.tokens
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testL4StepsOnlyDarkGlassAndFrosted() {
         for surface in [PanelSurfaceStyle.glass, .frosted] {
             let dark = tokens(.dark, surface)
@@ -498,11 +511,13 @@ final class TasksLookDecisionTests: XCTestCase {
         XCTAssertEqual(AtticRingMetrics.rowLineWidth, 1)
         XCTAssertEqual(AtticFlatSurfaceMetrics.hairline, 1)
     }
+    #endif
 }
 
 /// CI run 1: the UI test's tab sequence (every page from every other).
 @MainActor
 final class TasksTabSequenceTests: XCTestCase {
+    #if ATTIC_GENERATED_TESTS
     func testEveryTabFromEveryOther() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -513,4 +528,5 @@ final class TasksTabSequenceTests: XCTestCase {
             XCTAssertEqual(hosted.shownPage(), TasksTab.allCases.firstIndex(of: to), "\(from) → \(to)")
         }
     }
+    #endif
 }

@@ -1,0 +1,500 @@
+import AppKit
+import SwiftUI
+import XCTest
+@testable import Attic
+
+/// `attic.note/1`: stable ids, capability checks, read-only future formats
+/// kept as their original bytes, opaque unknown blocks (requirement 1).
+final class NoteFormatTests: XCTestCase {
+
+    #if !ATTIC_GENERATED_TESTS
+    func testU18PlainTextBoundsHeadingAndIndent() {
+        var heading = NoteBlock.text("x", style: "heading"); heading.level = 7
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "###### x")
+        heading.indent = 3
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "    ###### x")
+        heading.level = Int.max; heading.indent = Int.max
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "    ###### x")
+        heading.indent = Int.min
+        XCTAssertEqual(NoteTextExport.plainLine(heading), "###### x")
+        var check = NoteBlock.checklist("x")
+        check.indent = 3
+        XCTAssertEqual(NoteTextExport.plainLine(check), "    [ ] x")
+        check.indent = Int.min
+        XCTAssertEqual(NoteTextExport.plainLine(check), "[ ] x")
+        check.indent = Int.max
+        XCTAssertEqual(NoteTextExport.plainLine(check), "    [ ] x")
+    }
+
+    func testFix14MarkdownEscapesLiteralsInProseAndTables() throws {
+        let literal = "*stars* _under_ [link](url) <br> &amp;"
+        var table = NoteTable(texts: [["Header"], [literal], ["bold"]])
+        table.rows[2].cells[0].marks = [NoteMark(.bold, offset: 0, length: 4)]
+        let doc = NoteDocument(blocks: [.text(literal), .text(literal), .checklist(literal), .table(table)])
+        let markdown = NoteMarkdownExport.markdown(doc)
+        let prose = try NoteMarkdownImport.document(markdown).blocks.prefix(3)
+        XCTAssertEqual(prose.map(\.text), [literal, literal, literal])
+        XCTAssertTrue(prose.allSatisfy { $0.marks.isEmpty })
+        let grid = try XCTUnwrap(markdown.range(of: "| Header |"))
+        let imported = try XCTUnwrap(NoteTableText.parseMarkdown(String(markdown[grid.lowerBound...])))
+        XCTAssertEqual(imported.texts, table.texts)
+        XCTAssertTrue(imported.rows[1].cells[0].marks.isEmpty)
+        XCTAssertEqual(imported.rows[2].cells[0].marks, table.rows[2].cells[0].marks)
+    }
+
+    func testFix14MarkdownKeepsBlockLeadingLiteralsAndCodeSpanEdges() throws {
+        for literal in ["# heading", "1. literal", "12) literal", "- item", "+ item", "---", "[ref]: url", "<https://example.com>"] {
+            let doc = NoteDocument(blocks: [.text("T"), .text(literal)])
+            let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(doc))
+            XCTAssertEqual(restored.blocks.map(\.text), ["T", literal], literal)
+            XCTAssertNil(restored.blocks.last?.style, literal)
+            XCTAssertEqual(restored.blocks.last?.marks, [], literal)
+        }
+        for literal in ["`x`", "``x```", " x ", " ", "  x  ", "` x "] {
+            var block = NoteBlock.text(literal)
+            block.marks = [NoteMark(.code, offset: 0, length: (literal as NSString).length)]
+            let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(NoteDocument(blocks: [.text("T"), block])))
+            XCTAssertEqual(restored.blocks.last?.text, literal, literal)
+            XCTAssertEqual(restored.blocks.last?.marks, block.marks, literal)
+        }
+    }
+
+    func testFix14MarkdownKeepsEmptyBulletAndNumberItems() throws {
+        var number = NoteBlock.text("", style: "number"); number.start = 12
+        let blocks: [NoteBlock] = [.text("T"), .text("", style: "bullet"), .text("next", style: "bullet"), .text("break"), number, .text("last", style: "number")]
+        let restored = try NoteMarkdownImport.document(NoteMarkdownExport.markdown(NoteDocument(blocks: blocks)))
+        XCTAssertEqual(restored.blocks.map(\.text), blocks.map(\.text))
+        XCTAssertEqual(restored.blocks.dropFirst().map(\.style), blocks.dropFirst().map(\.style))
+        XCTAssertEqual(restored.blocks.map(\.start), blocks.map(\.start))
+    }
+    #endif
+
+    private let dateID = UUID()
+    private let checklistID = UUID()
+    private let imageID = UUID()
+    private let attachmentID = UUID()
+
+    private func sampleDocument() -> NoteDocument {
+        var dated = NoteBlock.text("Ship on \u{FFFC}.")
+        dated.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        return NoteDocument(blocks: [
+            .text("Launch notes"),
+            dated,
+            .checklist("Buy cake", id: checklistID, checked: true),
+            .image(id: imageID, attachmentID: attachmentID, width: 240, pixelWidth: 1200, pixelHeight: 500),
+            .text("")
+        ])
+    }
+
+    #if !ATTIC_GENERATED_TESTS
+    func testDocumentRoundTripsThroughBytes() throws {
+        let document = sampleDocument()
+        let data = try NoteContentCodec.encode(document)
+        guard case let .editable(decoded) = NoteContentCodec.decode(data) else { return XCTFail("not editable") }
+        XCTAssertEqual(decoded, document)
+        XCTAssertEqual(try NoteContentCodec.encode(decoded), data, "encoding is deterministic")
+        XCTAssertEqual(decoded.objectIDs, [dateID, checklistID, imageID])
+        XCTAssertEqual(decoded.title, "Launch notes")
+    }
+
+    func testNewImageWidthUsesAColumnFractionWhileOldPointWidthsStillDecode() throws {
+        let fraction = NoteDocument(blocks: [.text("Images"),
+                                             .image(attachmentID: attachmentID, widthFraction: 0.6)])
+        guard case let .editable(decoded) = NoteContentCodec.decode(try NoteContentCodec.encode(fraction)) else {
+            return XCTFail()
+        }
+        XCTAssertEqual(decoded.blocks[1].widthFraction, 0.6)
+        let old = sampleDocument()
+        guard case let .editable(legacyWidth) = NoteContentCodec.decode(try NoteContentCodec.encode(old)) else {
+            return XCTFail()
+        }
+        XCTAssertEqual(legacyWidth.blocks[3].width, 240)
+        XCTAssertNil(legacyWidth.blocks[3].widthFraction)
+    }
+
+    func testUnknownFieldsAndSixtyFourBitIntegersAreKeptAtEveryLevel() throws {
+        let json = """
+        {"format":1,"future":{"big":9223372036854775807,"huge":18446744073709551615,"odd":9007199254740993},
+         "blocks":[{"kind":"text","text":"T","color":"blue"},
+                   {"kind":"text","text":"a\u{FFFC}","inline":[{"kind":"date","id":"\(dateID.uuidString)","offset":1,"date":"2026-10-01","tz":"x"}]},
+                   {"kind":"checklist","id":"\(checklistID.uuidString)","text":"x","checked":false,"due":-9223372036854775808}]}
+        """
+        guard case let .editable(document) = NoteContentCodec.decode(Data(json.utf8)) else { return XCTFail("not editable") }
+        XCTAssertEqual(document.extras["future"]?.objectValue?["big"], .int(Int64.max))
+        XCTAssertEqual(document.extras["future"]?.objectValue?["huge"], .uint(UInt64.max))
+        XCTAssertEqual(document.extras["future"]?.objectValue?["odd"], .int(9_007_199_254_740_993))
+        XCTAssertEqual(document.blocks[0].extras["color"], .string("blue"))
+        XCTAssertEqual(document.blocks[1].inlines.first?.extras["tz"], .string("x"))
+        XCTAssertEqual(document.blocks[2].extras["due"], .int(Int64.min))
+        let reencoded = try NoteContentCodec.encode(document)
+        guard case let .editable(again) = NoteContentCodec.decode(reencoded) else { return XCTFail() }
+        XCTAssertEqual(again, document)
+    }
+
+    func testNewerFormatIsReadOnlyAndKeepsItsOriginalBytes() throws {
+        // Deliberately odd spacing and key order: only the original bytes are ever written back.
+        let bytes = Data("{ \"blocks\" : [ {\"kind\":\"text\",\"text\":\"Hi\"} ],   \"format\": 2 , \"x\":1.50}".utf8)
+        guard case let .readOnly(original, reason, preview) = NoteContentCodec.decode(bytes) else { return XCTFail() }
+        XCTAssertEqual(original, bytes)
+        XCTAssertEqual(reason, .newerFormat(2))
+        XCTAssertEqual(preview?.title, "Hi")
+    }
+
+    func testUnknownRequiredCapabilityIsReadOnly() {
+        let bytes = Data(#"{"format":1,"requires":["tables"],"blocks":[{"kind":"text","text":"Hi"}]}"#.utf8)
+        guard case let .readOnly(original, reason, _) = NoteContentCodec.decode(bytes) else { return XCTFail() }
+        XCTAssertEqual(original, bytes)
+        XCTAssertEqual(reason, .requiresCapabilities(["tables"]))
+        let known = Data(#"{"format":1,"requires":["checklist","date"],"blocks":[{"kind":"text","text":"Hi"}]}"#.utf8)
+        XCTAssertTrue(NoteContentCodec.decode(known).isEditable)
+    }
+
+    func testUnreadableBytesAreReadOnlyAndKept() {
+        let bytes = Data("not json".utf8)
+        guard case let .readOnly(original, .unreadable, nil) = NoteContentCodec.decode(bytes) else { return XCTFail() }
+        XCTAssertEqual(original, bytes)
+    }
+
+    func testUnknownKindsAndChangedFieldTypesAreKeptOpaquely() throws {
+        let unknown = #"{"kind":"table","id":"\#(UUID().uuidString)","rows":[[1,2]]}"#
+        let numericID = #"{"kind":"checklist","id":42,"text":"x"}"#
+        let badOffset = #"{"kind":"text","text":"a￼","inline":[{"kind":"date","id":"\#(UUID().uuidString)","offset":0,"date":"2026-10-01"}]}"#
+        let noKind = #"{"text":"orphan"}"#
+        let json = #"{"format":1,"blocks":[{"kind":"text","text":"T"},\#(unknown),\#(numericID),\#(badOffset),\#(noKind),"just a string"]}"#
+        guard case let .readOnly(original, .unsupportedContent, preview) = NoteContentCodec.decode(Data(json.utf8)),
+              let document = preview else { return XCTFail() }
+        XCTAssertEqual(original, Data(json.utf8))
+        XCTAssertEqual(document.blocks.map(\.kind), [.text, .opaque, .opaque, .opaque, .opaque, .opaque])
+        let reencoded = try NoteContentCodec.encode(document)
+        let originalBlocks = try JSONDecoder().decode(NoteJSON.self, from: Data(json.utf8)).objectValue?["blocks"]
+        let newBlocks = try JSONDecoder().decode(NoteJSON.self, from: reencoded).objectValue?["blocks"]
+        XCTAssertEqual(originalBlocks, newBlocks, "every unreadable block is written back as it was")
+    }
+
+    func testUnknownInlineObjectIsReadOnlyAndKeptVerbatim() throws {
+        let id = UUID()
+        let json = #"{"format":1,"blocks":[{"kind":"text","text":"T"},{"kind":"text","text":"a￼b","inline":[{"kind":"mention","id":"\#(id.uuidString)","offset":1,"who":"sam"}]}]}"#
+        guard case let .readOnly(original, .unsupportedContent, preview) = NoteContentCodec.decode(Data(json.utf8)),
+              let document = preview else { return XCTFail() }
+        guard case let .opaque(value) = document.blocks[1].inlines.first?.kind else { return XCTFail("opaque inline") }
+        XCTAssertEqual(original, Data(json.utf8))
+        XCTAssertEqual(value.objectValue?["who"], .string("sam"))
+    }
+
+    func testPlainTextAndAgentText() {
+        let document = sampleDocument()
+        XCTAssertEqual(NoteTextExport.plainText(document), "Launch notes\nShip on 2026-10-01.\n[x] Buy cake\n[Image]\n")
+        XCTAssertEqual(NoteTextExport.agentBody(document),
+                       "Ship on [date:2026-10-01].\n- [x] Buy cake\n![image](attic://image/\(imageID.uuidString))\n")
+    }
+
+    func testAgentTextKeepsObjectsItKeptAndRefusesUnknownImages() throws {
+        let base = sampleDocument()
+        let body = "Ship on [date:2026-10-01].\n- [ ] Buy cake\n![image](attic://image/\(imageID.uuidString))\n"
+        let edited = try NoteAgentTextParser.document(title: "Launch notes", body: body, base: base)
+        XCTAssertEqual(edited.blocks[0], base.blocks[0])
+        XCTAssertEqual(edited.blocks[1], base.blocks[1], "an unchanged line keeps its date id")
+        XCTAssertEqual(edited.blocks[2].id, checklistID, "unticked by the agent, same item")
+        XCTAssertFalse(edited.blocks[2].checked)
+        XCTAssertEqual(edited.blocks[3].id, imageID)
+        XCTAssertEqual(edited.blocks[3].attachmentID, attachmentID)
+        XCTAssertEqual(Set(edited.objectIDs).count, edited.objectIDs.count, "ids stay unique")
+
+        let duplicated = "Ship on [date:2026-10-01].\n- [ ] Buy cake\n![image](attic://image/\(imageID.uuidString))\n![image](attic://image/\(imageID.uuidString))"
+        XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Launch notes", body: duplicated, base: base),
+            "the A1 guard forbids adding an object through a text replacement")
+
+        XCTAssertThrowsError(try NoteAgentTextParser.document(
+            title: "T", body: "![image](attic://image/\(UUID().uuidString))", base: base))
+    }
+
+    func testDayParsingIsStrict() {
+        XCTAssertNotNil(NoteDay(isoString: "2026-02-28"))
+        XCTAssertNil(NoteDay(isoString: "2026-02-30"))
+        XCTAssertNil(NoteDay(isoString: "26-02-01"))
+        XCTAssertNil(NoteDay(isoString: "2026-2-1"))
+    }
+
+    @MainActor func testStructureAndMarksRoundTripWithDeepHeadingAndObjectBoundary() throws {
+        var heading = NoteBlock.text("Imported", style: "heading")
+        heading.level = 5
+        var list = NoteBlock.text("A😀B\u{FFFC}C", style: "bullet")
+        list.indent = 2
+        list.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        list.marks = [NoteMark(.bold, offset: 0, length: 4),
+                      NoteMark(.link, offset: 5, length: 1, url: "https://example.com")]
+        let document = NoteDocument(blocks: [.text("Title"), heading, list, .divider()])
+        let bytes = try NoteContentCodec.encode(document)
+        let json = try XCTUnwrap(JSONDecoder().decode(NoteJSON.self, from: bytes).objectValue)
+        XCTAssertEqual(Set(json["requires"]?.arrayValue?.compactMap(\.stringValue) ?? []),
+                       ["structure-v1", "inline-marks-v1"])
+        guard case let .editable(decoded) = NoteContentCodec.decode(bytes) else { return XCTFail("not editable") }
+        XCTAssertEqual(decoded.blocks, document.blocks)
+        XCTAssertEqual(decoded.blocks[1].level, 5)
+        XCTAssertEqual(try NoteContentCodec.encode(decoded), bytes)
+        XCTAssertEqual(NoteTextKitRoundTrip.document(afterRoundTrip: decoded).blocks, document.blocks)
+        XCTAssertTrue(NoteMarkdownExport.markdown(decoded).contains("##### Imported"))
+    }
+
+    func testOlderEditorRejectsNewCapabilitiesWithoutChangingBytes() throws {
+        var block = NoteBlock.text("bold")
+        block.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        let bytes = try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), block]))
+        let json = try XCTUnwrap(JSONDecoder().decode(NoteJSON.self, from: bytes).objectValue)
+        let required = Set(json["requires"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+        XCTAssertFalse(required.isSubset(of: ["text", "checklist", "image", "date"]), "older slice-1 preview must open read-only")
+        let olderFixture = Data(#"{"format":1,"requires":["inline-marks-v1"],"blocks":[{"kind":"text","text":"T"}]}"#.utf8)
+        XCTAssertEqual(NoteContentCodec.decode(olderFixture).isEditable, true, "this build knows the capability")
+        let corrupt = Data(#"{"format":1,"requires":["inline-marks-v1"],"blocks":[{"kind":"text","text":"T"},{"kind":"text","text":"abc","marks":[{"kind":"bold","offset":2,"length":2}]}]}"#.utf8)
+        guard case let .readOnly(original, .unsupportedContent, _) = NoteContentCodec.decode(corrupt) else { return XCTFail() }
+        XCTAssertEqual(original, corrupt)
+    }
+    #endif
+
+    #if ATTIC_GENERATED_TESTS
+    func testMarkOffsetFuzzNeverProducesWritableShiftedRange() {
+        for offset in -2...7 {
+            for length in -1...7 {
+                let json = #"{"format":1,"requires":["inline-marks-v1"],"blocks":[{"kind":"text","text":"T"},{"kind":"text","text":"A😀￼B","inline":[{"kind":"date","id":"\#(dateID.uuidString)","offset":3,"date":"2026-10-01"}],"marks":[{"kind":"bold","offset":\#(offset),"length":\#(length)}]}]}"#
+                let editable = NoteContentCodec.decode(Data(json.utf8)).isEditable
+                let units = Array("A😀\u{FFFC}B".utf16)
+                let valid = offset >= 0 && length > 0 && offset + length <= units.count &&
+                    !units[offset..<min(units.count, offset + length)].contains(NoteDocument.objectUnit) &&
+                    offset != 2 && offset + length != 2
+                XCTAssertEqual(editable, valid, "offset \(offset), length \(length)")
+            }
+        }
+    }
+    #endif
+
+    #if !ATTIC_GENERATED_TESTS
+    func testEncoderRefusesMarkAcrossObjectOrEmojiBoundary() {
+        var block = NoteBlock.text("A😀\u{FFFC}B")
+        block.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        block.marks = [NoteMark(.bold, offset: 2, length: 1)]
+        XCTAssertThrowsError(try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), block])))
+        block.marks = [NoteMark(.bold, offset: 1, length: 3)]
+        XCTAssertThrowsError(try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), block])))
+    }
+
+    func testStyledFirstBlockIsReadOnlyInsteadOfSilentlyBecomingATitle() {
+        let raw = Data(#"{"format":1,"requires":["structure-v1"],"blocks":[{"kind":"text","text":"T","style":"heading","level":2}]}"#.utf8)
+        guard case let .readOnly(original, .unsupportedContent, _) = NoteContentCodec.decode(raw) else { return XCTFail() }
+        XCTAssertEqual(original, raw)
+    }
+
+    func testMarkdownExportsNumberedSequenceAndAllMarks() {
+        var first = NoteBlock.text("Read", style: "number")
+        first.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        var second = NoteBlock.text("Visit", style: "number")
+        second.marks = [NoteMark(.link, offset: 0, length: 5, url: "https://example.com")]
+        let document = NoteDocument(blocks: [.text("Plan"), first, second])
+        XCTAssertEqual(NoteMarkdownExport.markdown(document),
+                       "# Plan\n\n1. **Read**\n2. [Visit](https://example.com)")
+    }
+
+    func testAgentTextRefusesLossyRichEditsButKeepsCheckboxMetadataAndObjects() throws {
+        var heading = NoteBlock.text("Hi 😀", style: "heading")
+        heading.level = 2
+        heading.marks = [NoteMark(.bold, offset: 0, length: 2)]
+        var checked = NoteBlock.checklist("Due \u{FFFC}")
+        checked.indent = 2
+        checked.marks = [NoteMark(.italic, offset: 0, length: 3)]
+        checked.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        let base = NoteDocument(blocks: [.text("Title"), heading, checked])
+        let body = NoteTextExport.agentBody(base)
+        XCTAssertEqual(try NoteAgentTextParser.document(title: "Title", body: body, base: base), base)
+        var renamed = base
+        renamed.blocks[0].text = "New title"
+        XCTAssertEqual(try NoteAgentTextParser.document(title: "New title", body: body, base: base), renamed)
+        let ticked = try NoteAgentTextParser.document(title: "Title", body: body.replacingOccurrences(of: "- [ ]", with: "- [x]"), base: base)
+        var expected = base
+        expected.blocks[2].checked = true
+        XCTAssertEqual(ticked, expected)
+        XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Title", body: body.replacingOccurrences(of: "Hi 😀", with: "Bye 😀"), base: base)) {
+            XCTAssertEqual($0 as? NoteAgentTextError, .lossyFormatting)
+        }
+        XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Title", body: body + "\nNew text", base: base))
+    }
+
+    func testFragmentContextAllowsStyledFirstBlockButSavedDocumentDoesNot() throws {
+        var first = NoteBlock.text("Heading", style: "heading")
+        first.level = 2
+        first.marks = [NoteMark(.bold, offset: 0, length: 7)]
+        let fragment = NoteDocument(blocks: [first, .image(attachmentID: UUID())])
+        let data = try NoteContentCodec.encode(fragment, context: .fragment)
+        guard case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return XCTFail() }
+        XCTAssertEqual(decoded.blocks, fragment.blocks)
+        XCTAssertThrowsError(try NoteContentCodec.encode(fragment))
+        XCTAssertFalse(NoteContentCodec.decode(data).isEditable)
+    }
+
+    func testChecklistReplacementRequiresPreservedNestingMarksAndExtras() throws {
+        var item = NoteBlock.checklist("Oat")
+        item.indent = 1
+        item.marks = [NoteMark(.bold, offset: 0, length: 3)]
+        item.extras = ["owner": .string("person")]
+        let base = NoteDocument(blocks: [.text("Title"), item])
+        var replacement = item
+        replacement.id = UUID()
+        replacement.text = "Oat milk 2L"
+        replacement.checked = true
+        XCTAssertNoThrow(try NoteAgentTextSafety.validate(base: base,
+            proposed: NoteDocument(blocks: [.text("Title"), replacement])))
+        for field in ["indent", "marks", "extras"] {
+            var lossy = replacement
+            switch field {
+            case "indent": lossy.indent = nil
+            case "marks": lossy.marks = []
+            default: lossy.extras = [:]
+            }
+            XCTAssertThrowsError(try NoteAgentTextSafety.validate(base: base,
+                proposed: NoteDocument(blocks: [.text("Title"), lossy]))) {
+                XCTAssertEqual($0 as? NoteAgentTextError, .unsafeChecklist, field)
+            }
+        }
+        let ticked = try NoteAgentTextParser.document(title: "Title", body: "- [x] Oat", base: base)
+        var expected = base
+        expected.blocks[1].checked = true
+        XCTAssertEqual(ticked, expected, "wire edits keep all metadata when the text survives")
+    }
+    #endif
+}
+
+/// Command metadata and routing without a window or application host.
+@MainActor
+final class NotesShortcutMetadataTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
+    func testOwnerShortcutsAreSharedByEveryFormatMenuAndHaveNoNotesCollisions() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Title"), .text("Body")]))
+        let router = NoteCommandRouter(engine: engine)
+        for surface: NoteCommandSurface in [.noteMenu, .contextMenu, .menuBar, .formatBar, .selectionBar] {
+            let menu = router.formatMenuCommands(from: surface)
+            let expected: [(String, KeyEquivalent, EventModifiers)] = [
+                ("Quote", "4", [.command, .option]), ("Code Block", "5", [.command, .option]),
+                ("Checklist", "9", [.command, .shift])
+            ]
+            for (title, key, modifiers) in expected {
+                XCTAssertEqual(menu.first { $0.title == title }?.shortcut, KeyboardShortcut(key, modifiers: modifiers))
+            }
+            for title in ["Highlight", "Code"] { XCTAssertNil(menu.first { $0.title == title }?.shortcut) }
+        }
+        let labels = NoteCommandCatalog.allCommands.compactMap(NoteCommandCatalog.shortcutLabel)
+        XCTAssertEqual(labels.count, Set(labels).count, "each Notes chord routes to one command")
+        XCTAssertEqual(NoteCommandCatalog.shortcutLabel(.paragraph(.quote)), "⌥⌘4")
+        XCTAssertEqual(NoteCommandCatalog.shortcutLabel(.paragraph(.mono)), "⌥⌘5")
+    }
+
+    func testOptionCommandDigitsUseTheLayoutTranslationLikeShiftCommandLists() throws {
+        let cases: [(String, UInt16, NoteFormatCommand)] = [
+            ("¢", 21, .paragraph(.quote)), ("∞", 23, .paragraph(.mono))
+        ]
+        for (characters, keyCode, command) in cases {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: [.command, .option], timestamp: 0, windowNumber: 0, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
+            XCTAssertEqual(NoteCommandCatalog.command(for: event), command)
+        }
+        for modifiers: NSEvent.ModifierFlags in [.command, [.command, .option, .shift], [.command, .control]] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: 0, windowNumber: 0, context: nil, characters: "4", charactersIgnoringModifiers: "4",
+                isARepeat: false, keyCode: 21))
+            XCTAssertNil(NoteCommandCatalog.command(for: event))
+        }
+    }
+    #endif
+}
+
+@MainActor
+final class PlainNoteTitleTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
+    func testR12StoredTitleMarksSurviveLoadRestyleEditSaveAndReopen() throws {
+        var title = NoteBlock.text("Plain title")
+        title.marks = [.init(.italic, offset: 0, length: 5),
+            .init(.underline, offset: 6, length: 5),
+            .init(.link, offset: 6, length: 5, url: "https://example.com/original?q=1")]
+        let original = NoteDocument(blocks: [title, .text("Body")])
+        let engine = NoteEditorEngine(noteID: UUID(), document: original)
+        let (_, text) = engine.makeView()
+        func assertPlain(_ engine: NoteEditorEngine) {
+            XCTAssertEqual(engine.textStorage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, engine.style.titleFont)
+            for key in [NSAttributedString.Key.link, .underlineStyle, .strikethroughStyle, .backgroundColor] {
+                XCTAssertNil(engine.textStorage.attribute(key, at: 6, effectiveRange: nil))
+            }
+        }
+        assertPlain(engine)
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
+        engine.restyle(NSRange(location: 0, length: engine.textStorage.length))
+        text.setSelectedRange(NSRange(location: text.string.utf16.count, length: 0))
+        text.insertText(" edited", replacementRange: text.selectedRange())
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
+        let saved = try NoteContentCodec.encode(engine.document())
+        let reopened = NoteEditorEngine(noteID: UUID(), document: try XCTUnwrap(NoteContentCodec.decode(saved).document))
+        _ = reopened.makeView()
+        XCTAssertEqual(reopened.document().blocks[0].marks, title.marks)
+        assertPlain(reopened)
+        try r12Capture(text, name: "stored-title-plain.png")
+    }
+
+    func testR12UndoTitleJoinRestoresBodyMarksAndLinkTargetsEvenAfterSave() throws {
+        for command in ["backspace", "forward", "selection", "replace"] {
+            for saveBeforeUndo in [false, true] {
+                var body = NoteBlock.text("see site")
+                body.marks = [.init(.bold, offset: 4, length: 4),
+                    .init(.link, offset: 4, length: 4, url: "https://example.com/original?q=1")]
+                let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Plan"), body, .text("Tail")]))
+                let (_, text) = engine.makeView()
+                let original = engine.document()
+                if command == "backspace" {
+                    text.setSelectedRange(NSRange(location: 5, length: 0))
+                    text.deleteBackward(nil)
+                } else if command == "forward" {
+                    text.setSelectedRange(NSRange(location: 4, length: 0))
+                    text.deleteForward(nil)
+                } else {
+                    text.setSelectedRange(NSRange(location: 3, length: 4))
+                    text.insertText(command == "replace" ? "X" : "", replacementRange: text.selectedRange())
+                }
+                XCTAssertEqual(engine.document().blocks.count, 2)
+                XCTAssertNil(engine.textStorage.attribute(.link, at: 0, effectiveRange: nil), "titles render plain; joined marks remain stored")
+                if saveBeforeUndo { _ = try NoteContentCodec.encode(engine.document()) }
+                XCTAssertTrue(engine.undoCommand(), "\(command), save=\(saveBeforeUndo)")
+                XCTAssertEqual(engine.document(), original, "\(command), save=\(saveBeforeUndo)")
+                if command == "backspace", !saveBeforeUndo { try r12Capture(text, name: "title-join-undo.png") }
+                XCTAssertTrue(engine.redoCommand())
+                XCTAssertNil(engine.textStorage.attribute(.link, at: 0, effectiveRange: nil))
+                XCTAssertTrue(engine.undoCommand())
+                XCTAssertEqual(engine.document().blocks[1].marks, original.blocks[1].marks)
+            }
+        }
+    }
+
+    func testTitleSelectionCannotAcquireAnyInlineMark() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Plain title"), .text("Body")]))
+        let (_, text) = engine.makeView()
+        text.setSelectedRange(NSRange(location: 0, length: 5))
+        for kind in NoteMark.Kind.allCases {
+            XCTAssertFalse(engine.validate(.mark(kind)).enabled, "title: \(kind)")
+            XCTAssertFalse(engine.perform(.mark(kind)))
+        }
+        XCTAssertTrue(engine.document().blocks[0].marks.isEmpty)
+    }
+
+    func testLoadedAndPastedTitlesStayPlainAndMixedSelectionMarksOnlyBody() {
+        var title = NoteBlock.text("Plain title")
+        title.marks = [.init(.bold, offset: 0, length: 5), .init(.link, offset: 6, length: 5, url: "https://example.com")]
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [title, .text("Body")]))
+        let (_, text) = engine.makeView()
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
+        text.selectAll(nil)
+        XCTAssertTrue(engine.perform(.mark(.italic)))
+        XCTAssertEqual(engine.document().blocks[0].marks, title.marks)
+        XCTAssertEqual(engine.document().blocks[1].marks.first?.kind, .italic)
+        text.setSelectedRange(NSRange(location: 2, length: 0))
+        text.insertText(NSAttributedString(string: "X", attributes: [.noteMark(.underline): true]), replacementRange: text.selectedRange())
+        XCTAssertNotNil(engine.textStorage.attribute(.noteMark(.underline), at: 2, effectiveRange: nil), "pasted data survives")
+        XCTAssertNil(engine.textStorage.attribute(.underlineStyle, at: 2, effectiveRange: nil))
+        XCTAssertEqual(engine.document().blocks[0].marks.first(where: { $0.kind == .link })?.url, "https://example.com")
+    }
+    #endif
+}

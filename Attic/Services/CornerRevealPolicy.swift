@@ -15,7 +15,7 @@ enum RevealModifier: String, CaseIterable, Identifiable, Codable {
 
     var title: String {
         switch self {
-        case .none: String(localized: "No Key")
+        case .none: String(localized: "No key")
         case .option: String(localized: "⌥ Option")
         case .control: String(localized: "⌃ Control")
         case .command: String(localized: "⌘ Command")
@@ -53,8 +53,8 @@ enum RevealDisplays: String, CaseIterable, Identifiable, Codable {
 
     var title: String {
         switch self {
-        case .all: String(localized: "All Displays")
-        case .selected: String(localized: "Selected Displays")
+        case .all: String(localized: "All displays")
+        case .selected: String(localized: "Selected displays")
         }
     }
 }

@@ -113,11 +113,18 @@ enum PerformanceSeed {
             let length = [80, 400, 2_000, 8_000][random.number(4)]
             let sentence = "Notes for project \(index). Follow up with the team and record decisions. "
             let body = String(repeating: sentence, count: max(1, length / sentence.count))
-            context.insert(NoteItem(id: id, title: "Project note \(index)", body: body,
-                                    createdAt: today.addingTimeInterval(TimeInterval(-index * 3_600))))
+            let note = NoteItem(id: id, title: "Project note \(index)", body: body,
+                                createdAt: today.addingTimeInterval(TimeInterval(-index * 3_600)))
+            context.insert(note)
             if index % 17 == 0 {
+                let attachmentID = random.identifier()
+                let document = NoteDocument(blocks: [.text(note.title), .text(body), .image(attachmentID: attachmentID)])
+                note.content = try NoteContentCodec.encode(document)
+                note.body = NoteTextExport.plainBody(document)
+                note.plainText = NoteTextExport.plainText(document)
+                note.imageCount = 1
                 context.insert(NoteAttachment(
-                    id: random.identifier(), noteID: id, originalFilename: "note-image-\(index).png",
+                    id: attachmentID, noteID: id, originalFilename: "note-image-\(index).png",
                     contentTypeIdentifier: "public.png", byteCount: Int64(image.count),
                     sortIndex: 0, contentDigest: digest, payload: image
                 ))

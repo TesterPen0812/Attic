@@ -25,6 +25,7 @@ extension AtticLibrary {
             guard before != after else { return nil }
             return UndoStep(
                 name: ids.count == 1 ? "Edit Task" : "Edit Tasks",
+                items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
                 redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
             )

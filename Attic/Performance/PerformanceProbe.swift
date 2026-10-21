@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import AppKit
 
 /// Test-only control plane. Marker writes are event-driven and outside samples.
 enum PerformanceProbe {
@@ -84,3 +85,127 @@ enum PerformanceProbe {
         try? handle.write(contentsOf: data)
     }
 }
+
+#if DEBUG
+/// Finite, externally stepped diagnostic workload in an owned on-disk store.
+/// Installed only by the phasex UI-test control plane. No synthetic editor:
+/// every visit waits for the actual SwiftUI-hosted text view to appear.
+@MainActor
+final class SmoothPerformanceProbe {
+    private let root: URL
+    private let notes: NoteStore
+    private let tasks: TaskStore
+    private let pages: NotesPageController
+    private let reveal: (PanelSection) -> Void
+    private let hide: () -> Void
+    private var step = 0
+    private var busy = false
+    private var ids: [UUID] = []
+    private final class Weak {
+        weak var value: AnyObject?
+        init(_ value: AnyObject) { self.value = value }
+    }
+    private var engines: [Weak] = []
+    private var views: [Weak] = []
+    private var layouts: [Weak] = []
+
+    init(root: URL, notes: NoteStore, tasks: TaskStore, pages: NotesPageController,
+         reveal: @escaping (PanelSection) -> Void, hide: @escaping () -> Void) {
+        self.root = root; self.notes = notes; self.tasks = tasks; self.pages = pages
+        self.reveal = reveal; self.hide = hide
+    }
+
+    func advance() {
+        guard !busy, step <= 62 else { return }
+        busy = true
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                let phase: String
+                switch step {
+                case 0:
+                    reveal(.tasks)
+                    try await Task.sleep(for: .seconds(1))
+                    phase = "smooth_tasks"
+                case 1:
+                    try seed()
+                    await pages.startAndWait()
+                    phase = "smooth_seeded"
+                case 2...61:
+                    try await visit(step - 2)
+                    phase = "smooth_visit_\(step - 1)"
+                default:
+                    guard await pages.prepareToLeaveDurably(.quit) else { throw ProbeError.failed }
+                    hide()
+                    try await Task.sleep(for: .seconds(3))
+                    phase = "smooth_hidden"
+                }
+                PerformanceProbe.writePhase(phase, root: root, details: [
+                    "engines": engines.compactMap(\.value).count,
+                    "views": views.compactMap(\.value).count,
+                    "layouts": layouts.compactMap(\.value).count,
+                    "tasks": tasks.tasks.count
+                ])
+                step += 1
+            } catch {
+                PerformanceProbe.writePhase("smooth_failed", root: root)
+            }
+        }
+    }
+
+    private enum ProbeError: Error { case failed }
+
+    private func seed() throws {
+        guard notes.notes.isEmpty else { throw ProbeError.failed }
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 800, pixelsHigh: 400,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        bitmap.setColor(.systemBlue, atX: 0, y: 0)
+        let data = bitmap.representation(using: .png, properties: [:])!
+        for index in 0..<12 {
+            let count = index == 0 && ProcessInfo.processInfo.environment["ATTIC_SMOOTH_LONG"] == "1" ? 5_000 : 200
+            var blocks = (0..<count).map { NoteBlock.text("Smooth note \(index), line \($0)") }
+            blocks.insert(.table(NoteTable(texts: [["Task", "Date"], ["Write", "Monday"]])), at: 10)
+            let item = StagedNoteAttachment(id: UUID(), filename: "smooth.png", contentTypeIdentifier: "public.png",
+                byteCount: Int64(data.count), digest: NotePayloadDigest.sha256(data), data: data)
+            blocks.insert(.image(attachmentID: item.id, pixelWidth: 800, pixelHeight: 400), at: 5)
+            guard case let .success((id, _)) = notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: blocks), staged: [item]) else { throw ProbeError.failed }
+            ids.append(id)
+        }
+    }
+
+    private func visit(_ index: Int) async throws {
+        reveal(.notes)
+        guard await pages.openDurably(noteID: ids[index % ids.count]), let session = pages.active else { throw ProbeError.failed }
+        let deadline = Date().addingTimeInterval(5)
+        while session.engine.textView?.window == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        guard let view = session.engine.textView, view.window != nil else { throw ProbeError.failed }
+        // Let the page's keyboard-return frames finish before setting a
+        // diagnostic caret. Typing during restoration measures a different
+        // (first-use focus) path and can move the insertion into the title.
+        try await Task.sleep(for: .milliseconds(250))
+        guard view.window?.makeFirstResponder(view) == true else { throw ProbeError.failed }
+        engines.append(Weak(session.engine)); views.append(Weak(view))
+        if let layout = session.engine.layoutManager { layouts.append(Weak(layout)) }
+        let before = session.engine.textStorage.string
+        view.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
+        for _ in 0..<40 {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: view.window!.windowNumber,
+                context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)!
+            let start = DispatchTime.now().uptimeNanoseconds
+            view.keyDown(with: event)
+            PerformanceSignposts.recordProbeTiming("NoteKeyCall", milliseconds:
+                Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard session.engine.textStorage.string == before + String(repeating: "a", count: 40) else { throw ProbeError.failed }
+        guard await pages.prepareToLeaveDurably(.openNote),
+              let task = tasks.create(title: "Smooth visit \(index)"),
+              tasks.update(task, title: "Renamed visit \(index)"), tasks.setStatus(.done, for: task) else { throw ProbeError.failed }
+        try await Task.sleep(for: .milliseconds(250))
+    }
+}
+#endif

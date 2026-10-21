@@ -32,9 +32,6 @@ struct SettingsPanelMiniature: View {
     let cornerSize: CGFloat
 
     @Environment(\.atticDesign) private var design
-    /// The corner buttons as the panel draws them (Liquid Glass, or flat
-    /// where the controls are not glass).
-    @ObservedObject private var cornerButtons = AtticCornerButtonsLab.shared
 
     private static let pages: [AtticPageButton<Int>.Item] = [
         .init(page: 0, systemName: "checkmark.circle", title: String(localized: "Tasks"), shortcut: "⌘1"),
@@ -85,7 +82,7 @@ struct SettingsPanelMiniature: View {
             }
             .padding(.horizontal, pageInset)
             AtticControlGroup {
-                let flat = cornerButtons.style.drawsFlat(in: design)
+                let flat = design.effectiveControls != .liquidGlass
                 HStack(spacing: 0) {
                     AtticRaisedButton(systemName: "pin", label: "Pin",
                                       glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true, flat: flat) {}

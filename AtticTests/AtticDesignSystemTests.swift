@@ -5,6 +5,34 @@ import XCTest
 /// The design system's tokens and the automated appearance check.
 @MainActor
 final class AtticDesignSystemTests: XCTestCase {
+    #if !ATTIC_GENERATED_TESTS
+    func testA38PageSwitchKeepsContrastOnOpaqueSurfaces() {
+        let contexts = [AtticPanelTheme.electricBlue, .seaGlass].flatMap { palette in
+            [false, true].flatMap { reduced in
+                PanelTintLevel.allCases.map { tint in
+                    AtticDesignContext(mode: .light, palette: palette, surface: .solid, tint: tint, reduceTransparency: reduced)
+                }
+            }
+        }
+        let report = AtticAppearanceCheck.run(families: [.pageSwitch], contexts: contexts, scale: 2)
+        if let context = contexts.first {
+            let capture = AtticGalleryStage(family: .pageSwitch, demo: AtticGalleryDemo())
+                .atticDesign(context)
+                .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .desktop(.midGrey)))
+                .coordinateSpace(.named(AtticCaptureContext.coordinateSpace))
+            let renderer = ImageRenderer(content: capture)
+            renderer.scale = 2
+            if let image = renderer.cgImage, let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                attachment.name = "A38-page-switch-opaque"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        let remaining = OpenRingException.remaining(Phase0AccentException.remaining(Phase0TranslucentException.remaining(report.failures)))
+        XCTAssertTrue(remaining.isEmpty, remaining.map { "\($0.key): \($0.value)" }.joined(separator: "\n"))
+    }
+
     // MARK: Tokens
 
     func testSpacingSitsOnTheFourPointGrid() {
@@ -33,15 +61,16 @@ final class AtticDesignSystemTests: XCTestCase {
 
     /// Phase 0's qualities in Direction A (2026-09-26): the pin and the
     /// page button are equal 36 pt squares (radius 15; the page button opens
-    /// to 96); Settings' back button keeps 38 × 34. Rows are 44 / 56 with
+    /// to 96); Settings keeps a 34 pt title line. Rows are 44 / 56 with
     /// highlights 2 shorter, text blocks centred; circles 16 at 28, titles
     /// at 56 (12 apart).
     func testControlSizesFollowPhase0Room() {
-        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 36, height: 36))
-        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 15)
-        XCTAssertEqual(AtticControlSize.settingsBackButton, CGSize(width: 38, height: 34))
-        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 36)
-        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 96)
+        // Chrome B (Notes v2, owner 2026-10-08): 32 pt, radius 13.5.
+        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 13.5)
+        XCTAssertEqual(AtticControlSize.settingsHeaderHeight, 34)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 32)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 84)
         // Compact round (owner): rows 36 / 50, highlights 30 / 44.
         XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [34, 30, 48, 44])
         XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 2)
@@ -49,9 +78,9 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 12)
         let m = AtticTaskRowMetrics.self
         XCTAssertEqual(m.titleTop(twoLine: false), 8, "18 pt title centred in 34")
-        XCTAssertEqual(m.titleTop(twoLine: true), 6, "18 + 2 + 16 centred in 48")
+        XCTAssertEqual(m.titleTop(twoLine: true), 8, "D-13: the title line where a one-line row has it")
         XCTAssertEqual(m.circleCentreY(twoLine: false), 17)
-        XCTAssertEqual(m.circleCentreY(twoLine: true), 15)
+        XCTAssertEqual(m.circleCentreY(twoLine: true), 17)
     }
 
     /// Round 9 (owner item 26): springy by default, pages firm (never a
@@ -66,7 +95,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertGreaterThan(AtticMotionPreset.popover.bounce, 0, "things that appear land with a bounce")
         XCTAssertGreaterThan(AtticMotionPreset.settle.bounce, 0, "rows settle with a bounce")
         XCTAssertLessThanOrEqual(AtticMotionPreset.slide.bounce, 0.15, "pages bounce no more than snappy")
-        XCTAssertEqual(AtticMotionPreset.pageSwitch.bounce, 0)
+        XCTAssertEqual(AtticMotionPreset.pageSwitch.spring(in: .current), AtticMotionPreset.slide.spring(in: .current),
+                       "a page switch is navigation: the feel's slide")
         XCTAssertNil(AtticMotionPreset.pageSwitch.animation(reduceMotion: true), "Page switch is instant under Reduce Motion")
         XCTAssertNil(AtticMotionPreset.expand.animation(reduceMotion: true), "Card expand is instant under Reduce Motion")
         XCTAssertNotNil(AtticMotionPreset.slide.animation(reduceMotion: true), "Slides crossfade under Reduce Motion")
@@ -88,11 +118,12 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.panel.base.hexString, "#FFFFFF")
         XCTAssertEqual(light.ink(.heading).hexString, "#272727")
         XCTAssertEqual(light.ink(.body).hexString, "#4B4B4B")
-        XCTAssertEqual(light.ink(.helper).hexString, "#7A7A7A")
+        XCTAssertEqual(light.ink(.helper).hexString, "#737373", "T-16 B (owner, 2026-10-15): 4.74 : 1 on white")
         XCTAssertEqual(light.ink(.priorityNone).hexString, "#838383")
         XCTAssertEqual(light.ink(.priorityMark).hexString, "#B35D27")
-        XCTAssertEqual(light.doneDisc.hexString, "#E4E4E4")
-        XCTAssertEqual(light.ink(.doneCheck).hexString, "#797979")
+        // Done (owner, 2026-10-10): the title's ink, the tick its inverse.
+        XCTAssertEqual(light.ink(.doneFill).hexString, "#272727")
+        XCTAssertEqual(light.ink(.onDone).hexString, "#FFFFFF")
         XCTAssertEqual(light.hover.over(light.panel.base).hexString, "#F1F1F1")
         XCTAssertEqual(light.selected.over(light.panel.base).hexString, "#E7E7E7")
         // Phase 0's drawn control look (as before visual A) over this surface.
@@ -106,8 +137,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(dark.ink(.helper).hexString, "#A4A4A4")
         XCTAssertEqual(dark.ink(.priorityNone).hexString, "#959595")
         XCTAssertEqual(dark.ink(.priorityMark).hexString, "#D9A16C")
-        XCTAssertEqual(dark.doneDisc.hexString, "#464646")
-        XCTAssertEqual(dark.ink(.doneCheck).hexString, "#B8B8B8")
+        XCTAssertEqual(dark.ink(.doneFill).hexString, "#F1F1F1")
+        XCTAssertEqual(dark.ink(.onDone).hexString, "#1E1E1F")
         XCTAssertEqual(dark.hover.over(dark.panel.base).hexString, "#383838")
         XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#454545")
         XCTAssertEqual(dark.controlFace.hexString, "#454545")
@@ -119,8 +150,8 @@ final class AtticDesignSystemTests: XCTestCase {
             // No green cast: every grey the default look draws is neutral.
         for tokens in [light, dark] {
             let base = tokens.panel.base
-            let greys = [tokens.ink(.heading), tokens.ink(.body), tokens.ink(.helper), tokens.ink(.priorityNone), tokens.doneDisc,
-                         tokens.ink(.doneCheck), tokens.controlFace,
+            let greys = [tokens.ink(.heading), tokens.ink(.body), tokens.ink(.helper), tokens.ink(.priorityNone), tokens.ink(.doneFill),
+                         tokens.ink(.onDone), tokens.controlFace,
                          tokens.hover.over(base), tokens.selected.over(base)]
             for grey in greys {
                 XCTAssertTrue(abs(grey.red - grey.green) < 0.006 && abs(grey.green - grey.blue) < 0.006, "\(grey.hexString) is not neutral")
@@ -191,8 +222,7 @@ final class AtticDesignSystemTests: XCTestCase {
             let tokens = context.tokens
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
-                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, doneDisc: tokens.doneDisc,
-                recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
             )
             let onControls = pairs.filter { $0.overlays.first == tokens.controlFace || $0.onGlass }
             XCTAssertEqual(onControls.filter(\.onGlass).count, onControls.count / 2, context.caption)
@@ -247,8 +277,9 @@ final class AtticDesignSystemTests: XCTestCase {
             let helper = tokens.ink(.helper).contrast(on: base)
             let muted = tokens.ink(.muted).contrast(on: base)
             XCTAssertGreaterThanOrEqual(muted, 3, context.caption)
-            // Visual A's Dark secondary grey is deliberately 5.46 : 1.
-            XCTAssertLessThan(helper, context.mode == .dark ? 5.5 : 4.5 * 1.05, "\(context.caption): helper stays soft (\(helper))")
+            // Visual A's Dark secondary grey is deliberately 5.46 : 1, and
+            // the Light one 4.74 : 1 (T-16 B, owner 2026-10-15).
+            XCTAssertLessThan(helper, context.mode == .dark ? 5.5 : 4.8, "\(context.caption): helper stays soft (\(helper))")
             XCTAssertLessThanOrEqual(muted, helper + 0.001, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.body).contrast(on: base), 4.5)
         }
@@ -287,9 +318,11 @@ final class AtticDesignSystemTests: XCTestCase {
             }
         }
     }
+    #endif
 
     // MARK: The colour model
 
+    #if ATTIC_GENERATED_TESTS
     func testEveryCombinationKeepsItsReadabilityFloors() {
         var report = AtticAppearanceCheck.Report()
         let contexts = AtticAppearanceCheck.allContexts()
@@ -307,14 +340,14 @@ final class AtticDesignSystemTests: XCTestCase {
             let tokens = context.tokens
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
-                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, doneDisc: tokens.doneDisc,
-                recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
             )
             for pair in pairs where tokens.panel.worstMargin([pair]) < 0.999 {
                 XCTAssertEqual(pair.ink, .accentText, context.caption)
             }
         }
     }
+    #endif
 
     /// Phase 0's surface treatment for a context's colours.
     static func phase0Treatment(_ context: AtticDesignContext) -> AtticPanelSurfaceTreatment {
@@ -331,16 +364,19 @@ final class AtticDesignSystemTests: XCTestCase {
     /// owner kept in round 6: Readable Glass's backing (only the foundation
     /// opacity grows) and the defined dark edge (Dark only). Reduce
     /// Transparency still makes the surface Solid.
+    #if !ATTIC_GENERATED_TESTS
     func testGlassAndFrostedArePhase0sPlusTheReadableBacking() {
         for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid {
             let treatment = Self.phase0Treatment(context)
             let phase0 = AtticSurfaceModel.phase0(treatment, increaseContrast: context.increaseContrast)
             let panel = context.tokens.panel
-            XCTAssertEqual(panel, phase0.readable(primary: AtticRGBA(treatment.palette.primaryForeground),
-                                                  secondary: AtticRGBA(treatment.palette.secondaryForeground)).definedDarkEdge(),
+            let primary = AtticRGBA(treatment.palette.primaryForeground)
+            let secondary = AtticRGBA(treatment.palette.secondaryForeground)
+            XCTAssertEqual(panel, phase0.readable(primary: primary, secondary: secondary)
+                .darkTinted(primary: primary, secondary: secondary).definedDarkEdge(),
                            context.caption)
-            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity), phase0.definedDarkEdge(),
-                           "only the backing and the dark edge differ from Phase 0: \(context.caption)")
+            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity).withDarkTint(0), phase0.definedDarkEdge(),
+                           "only the backing, Dark's dark tint and the dark edge differ from Phase 0: \(context.caption)")
         }
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
         // Phase 0's Original coverage (far more see-through than PR #5's 67 / 80 / 66 / 82).
@@ -360,13 +396,16 @@ final class AtticDesignSystemTests: XCTestCase {
                     for ink in [AtticInk.heading, .body, .label] {
                         XCTAssertEqual(tokens.ink(ink), AtticRGBA(p0.primaryForeground), "\(mode) \(palette) \(surface) \(ink)")
                     }
-                    XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
-                    XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
+                    // D-02 (owner, 2026-10-11): the secondary is a real step
+                    // under Phase 0's primary, not Phase 0's near-primary grey
+                    // (its floors: `PhaseXPicksTests`).
+                    XCTAssertNotEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
+                    XCTAssertEqual(tokens.ink(.placeholder), tokens.ink(.helper), "\(mode) \(palette) \(surface)")
                 }
             }
         }
         // Solid keeps its text: Original's Light (neutral greys) and Dark.
-        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.ink(.helper).hexString, "#7A7A7A")
+        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.ink(.helper).hexString, "#737373")
         XCTAssertNotEqual(AtticDesignContext(mode: .dark).tokens.ink(.helper), AtticRGBA(AtticPanelTheme.original.palette(for: AtticPanelThemeAppearance.dark).secondaryForeground))
     }
 
@@ -382,8 +421,13 @@ final class AtticDesignSystemTests: XCTestCase {
                 XCTAssertEqual(tokens.panel.base, AtticRGBA(p0.opaqueSurface), "\(palette) \(surface)")
                 XCTAssertEqual(tokens.ink(.heading), AtticRGBA(p0.primaryForeground))
                 XCTAssertEqual(tokens.ink(.body), AtticRGBA(p0.primaryForeground))
-                XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground))
-                XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground))
+                // Glass and Frosted step the secondary (D-02); Solid keeps Phase 0's.
+                if surface == .solid {
+                    XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground))
+                    XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground))
+                } else {
+                    XCTAssertEqual(tokens.ink(.placeholder), tokens.ink(.helper))
+                }
                 XCTAssertEqual(tokens.ink(.accent), AtticRGBA(p0.accent))
                 XCTAssertEqual(tokens.ink(.accentText), AtticRGBA(p0.accent))
                 XCTAssertNotNil(tokens.pageChipAccent)
@@ -446,9 +490,9 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testSendButtonNestsInsideTheAddBar() {
         let send = AtticControlSize.sendButton
-        XCTAssertEqual(send, CGSize(width: 28, height: 28), "Owner's decision: 28 × 28 inside the bar")
+        XCTAssertEqual(send, CGSize(width: 24, height: 24), "Chrome B: 32 − 2 × 4 inside the bar")
         XCTAssertEqual(send.height, AtticControlSize.addBarHeight - 2 * AtticControlSize.sendInset)
-        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 11)
+        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 9.5)
     }
 
     /// Astra 19: one definition of what a row can do. VoiceOver offers
@@ -537,6 +581,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(empty, typed, "The send button's slot is reserved: the field never changes size")
         XCTAssertGreaterThan(empty.width, 200)
     }
+    #endif
 
     // MARK: The appearance check (representative subset)
 
@@ -549,6 +594,7 @@ final class AtticDesignSystemTests: XCTestCase {
     /// The full matrix (every combination, every family) and the contact
     /// sheets run separately: `Scripts/run_appearance_matrix.zsh`
     /// (`AtticAppearanceMatrixTests`).
+    #if ATTIC_GENERATED_TESTS
     func testRepresentativeAppearanceSubset() {
         let started = Date()
         let report = AtticAppearanceCheck.run(contexts: AtticAppearanceCheck.sheetContexts().map(\.context), scale: 2)
@@ -571,6 +617,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(report.geometryMeasured, 15)
         XCTAssertTrue(OpenRingException.remaining(Phase0TranslucentException.remaining(report.failures)).isEmpty, report.summary)
     }
+    #endif
 
     /// Renders `view` in capture mode at 2× on a flat panel background and
     /// runs the pixel contrast check on whatever it reported.
@@ -597,6 +644,7 @@ final class AtticDesignSystemTests: XCTestCase {
         return report
     }
 
+    #if !ATTIC_GENERATED_TESTS
     func testAProbeWhoseGlyphDrewNothingFails() throws {
         // A visible run passes and is counted.
         let visible = try pixelReport(AtticText(verbatim: "Book dentist", style: .rowTitle, ink: .body))
@@ -619,12 +667,11 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testCheckMarksAreMeasuredAgainstTheirFill() throws {
         for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark), AtticDesignContext(mode: .light, surface: .glass, tint: .bold)] {
-            // The model: the done check keeps 3 : 1 on the quiet disc (the
-            // old filled Done's pairs still hold for the coverage).
+            // The model: the done tick keeps 3 : 1 on the ink mark, and on
+            // the disabled mark.
             let tokens = context.tokens
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.doneFill)), 3, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.disabledIcon)), 3, context.caption)
-            XCTAssertGreaterThanOrEqual(tokens.ink(.doneCheck).contrast(on: tokens.doneDisc), 3, context.caption)
             // The pixels: a drawn check is measured and passes. Done's fill
             // (the task's disc, the subtask's square) is decoration: the
             // check is judged.
@@ -691,7 +738,9 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertNil(AtticStatusCircle.pieShare((0, 0)))
         XCTAssertEqual(AtticStatusCircle.pieShare((1, 3))!, 1.0 / 3, accuracy: 1e-9)
         XCTAssertEqual(AtticStatusCircle.pieShare((1, 10))!, 0.1, accuracy: 1e-9, "no minimum")
-        XCTAssertEqual(AtticStatusCircle.pieShare((3, 3)), 1)
+        // Capped at 92 % (colour pass, owner 2026-10-10): all ticked keeps
+        // a sliver of ring, so only done is a full filled disc.
+        XCTAssertEqual(AtticStatusCircle.pieShare((3, 3)), 0.92)
     }
 
     /// In progress is a ring with a centre dot, never a share: VoiceOver
@@ -772,6 +821,7 @@ final class AtticDesignSystemTests: XCTestCase {
         )
         XCTAssertGreaterThan(abs((wrong?.radius ?? 10) - 10), 1)
     }
+    #endif
 }
 
 private extension AtticRGBA {
@@ -863,4 +913,50 @@ enum Phase0AccentException {
             return rest.isEmpty ? nil : rest
         }
     }
+}
+
+// MARK: - UI review 14 (F2): states and Reduce Transparency
+
+@MainActor
+extension AtticDesignSystemTests {
+    /// U-07: a hovered row is visibly lighter than a selected one on every
+    /// surface: selection at least twice hover's step from the panel.
+    #if !ATTIC_GENERATED_TESTS
+    func testU07HoverIsLighterThanSelectionEverywhere() {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            for surface in [PanelSurfaceStyle.solid, .glass, .frosted] {
+                let tokens = AtticDesignContext(mode: mode, surface: surface).tokens
+                let base = tokens.controlBase
+                let hoverStep = tokens.hover.over(base).contrast(on: base)
+                let selectedStep = tokens.selected.over(base).contrast(on: base)
+                XCTAssertGreaterThanOrEqual(selectedStep - 1, (hoverStep - 1) * 1.6, "\(mode) \(surface)")
+            }
+        }
+    }
+
+    /// U-40: Reduce Transparency makes Glass solid without dimming its
+    /// secondary text: each role keeps Glass's contrast (capped at what
+    /// Glass's grey has on the solid base, so Light never goes near-black),
+    /// the placeholder 4.5 : 1 on its field, and titles stay a step above.
+    func testU40ReduceTransparencyKeepsGlassContrast() {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            let glass = AtticDesignContext(mode: mode, surface: .glass).tokens
+            let glassSurface = glass.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop)
+            let solid = AtticDesignContext(mode: mode, surface: .solid).tokens
+            let reduced = AtticDesignContext(mode: mode, surface: .glass, reduceTransparency: true).tokens
+            let base = reduced.controlBase
+            for ink in [AtticInk.heading, .body, .label, .helper, .placeholder, .muted] {
+                let wanted = AtticColorTokens.reducedTransparencyTarget(glass: glass.ink(ink), glassSurface: glassSurface, base: base)
+                XCTAssertGreaterThanOrEqual(reduced.ink(ink).contrast(on: base) + 0.02, wanted, "\(mode) \(ink)")
+                XCTAssertGreaterThanOrEqual(reduced.ink(ink).contrast(on: base) + 1e-9, solid.ink(ink).contrast(on: base), "\(mode) \(ink)")
+            }
+            XCTAssertGreaterThanOrEqual(reduced.ink(.placeholder).contrast(on: reduced.raised.face.over(base)), 4.5, "\(mode)")
+            XCTAssertLessThan(reduced.ink(.helper).contrast(on: base) * 1.2, reduced.ink(.body).contrast(on: base),
+                              "secondary text stays a clear step below the titles (\(mode))")
+            // Solid chosen keeps its own (owner-approved) greys.
+            XCTAssertEqual(AtticDesignContext(mode: mode, surface: .solid, reduceTransparency: true).tokens.ink(.helper),
+                           AtticDesignContext(mode: mode, surface: .solid).tokens.ink(.helper))
+        }
+    }
+    #endif
 }

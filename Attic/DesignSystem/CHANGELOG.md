@@ -3,11 +3,412 @@
 The design system was frozen when the owner signed off the Phase 0 gallery.
 Every later change is recorded here: what changed, why, and who asked.
 
+## Phase X
+
+### 2026-10-20 · Table add-chip cancellation (owner review round PRB1, B7-01)
+
+- Releasing a table add-chip press outside its 28 pt target cancels the click. Returning inside before release still clicks; grip dragging and Escape cancellation keep their existing behavior.
+
+### 2026-10-17 · Content shows under every floating control (owner, O17-01)
+
+- Content scrolls all the way under the Tasks tabs line, the composer, the corner buttons and the Notes header and footer rows, and stays visible through the 1.5 pt / 28 pt variable blur. No fade hides it: T-03 C's content fade on see-through panels, the opaque panel's surface fade over the blur, and the plain-line rules (content gone above a plain top line and 3 pt below it, or behind the composer's strip) are removed, with `AtticFloatingEdgesMask`, `atticFloatingEdgesMask`, `TasksViewport.maskStops` and the lists' masks. The scroll insets are unchanged.
+- With no blur (Reduce Transparency, or no filter), an opaque panel keeps the solid surface under the controls and a 12 pt fade past them (U-02).
+
+### 2026-10-16 · Settled comparisons retired
+
+- Native scroll edges use a parameterless, always-hidden policy. Former defaults and environment values have no reader; negative hosted/UI checks remain.
+- Corner buttons use Liquid Glass, with the existing Flat rendering for Reduce Transparency and non-glass/non-key controls. The Glass/Flat picker and override are retired. Row hover always tints.
+- Animations keeps Lively, Subtle and Reduced. Preview feel/style pickers, tuning sliders and motion overrides are retired. Blur strength/reach sliders, the native-popover experiment, scroller/lift overrides, gallery and glass lab routes remain.
+- Proposal previews keep their live scroll offset across document replacement without an unwritten binding. Duplicate exit-animation API, unused scroll-mask wrapper and unreferenced TaskStatusButton are removed.
+
+## Phase 2
+
+### S4: All notes' tag line (ux-plan §3.10, owner decisions 3 and 6, 2026-10-09)
+
+- **`AtticNoteLibraryLine`** takes `tags`, `activeTag`, `onSelectTag` and More
+  tags… (`moreTagsShown`, `moreTagsCard`). With tags, "All notes" and the tags
+  are `AtticPageTabs` (the Tasks tabs' look, underline on the active filter),
+  as many as fit with the active tag never dropped, then a quiet "More tags…"
+  label that opens the shared tag picker card. With no tags the line is the
+  plain heading it was.
+- **`AtticPageTabs.groupLabel`**: VoiceOver's name for the group (default
+  "Pages"; All notes says "Filter notes by tag").
+
+### A41: integrated Notes v2 hands-on repairs (owner, 2026-10-09)
+
+Keep size C, A39 width re-layout and A38 behavior repairs together. Find takes
+keyboard focus before immediate typing; table deletion records the surviving
+cell for Redo. New and restyled tables complete viewport layout, and table
+controls follow the attachment's final frame. Empty mark lists skip UTF-16
+validation allocation on save. Focused regressions cover these interactions; the subtask standalone
+oracle invokes the mounted accessibility command.
+
+### A37: Dark's dark tint (owner, 2026-10-08, "Dark-mode glass keeps light text readable")
+- **`AtticSurfaceModel.darkTint`**: on Dark Glass and Frosted, black laid
+  over the readable foundation and under the Tint, at the least opacity
+  (half-percent steps) at which Phase 0's primary text keeps 4.5 : 1 and
+  its secondary text 3 : 1 (4.5 under Increase Contrast) over a white
+  window the glass passes straight through (`passedThroughWindow`, 255).
+  Live Liquid Glass adapts to what is behind it, so the measured 143 for
+  Dark Glass over white did not hold over a white window (owner-26: the
+  note's white text vanished). Original Dark Glass: 0.425 over a 0.26
+  foundation; Dark Frosted: 0.330 over 0.38.
+- **`backing`**: the foundation with the dark tint, as one colour, which
+  the surface draws and the edge veil fades into. Exactly the foundation
+  when there is no dark tint, so Light, Solid and Reduce Transparency are
+  unchanged.
+
+### A38: page-switch contrast on opaque surfaces (CI repair, 2026-10-09)
+
+The palette-colored selected page glyph missed the 3:1 icon floor on the
+opaque tinted chip, both on Solid and with Reduce Transparency. On opaque
+surfaces it uses the existing strong glyph ink, retaining the palette's
+selected fill and hairline. Translucent surfaces and Dark glass are unchanged.
+The focused pixel regression uses Electric Blue and Sea Glass at every Tint
+step, with and without Reduce Transparency; no contrast exception or threshold
+is added or relaxed.
+
+### A38: subtask drag reorder (functional audit repair, 2026-10-08)
+
+`AtticQuickLook` accepts a completion-group reorder callback. A subtask's title
+starts the drag, using the parent row's target and neighbor-offset calculations;
+checkboxes, actions and title editors retain their existing gestures. Release
+commits one move, cancellation settles back, and the lifted row uses the
+existing recessed card surface and radius.
+
+### Notes v2, round 2: tables (owner, 2026-10-08, sheet 3 as drafted)
+- **`AtticNoteTableMetrics`**: cell padding 6 × 4 around the body's 14 / 21
+  lines (a one-line row is 29), columns 56–168 by content, a 0.5 pt grid
+  (1 pt under Increase Contrast) in a 10 pt card, a 16 pt fade at a cut
+  edge, a 3 pt indicator 2.5 under a wide table, the active cell's 1.5 pt
+  ring (radius 3), the 18 × 5 column grip, the 5 × 14 row grip 12 left of
+  the column, 14 pt "+" chips; every grip and chip keeps a 28 pt target.
+- **Colour tokens** (`AtticColorTokens`): `tableGrid` (the text's ink at
+  13 % Light, 18 % Dark, 30 % with Increase Contrast), `tableHeaderFill`
+  (3.5 % Light), `tableActiveRing` (a neutral 42 % ink, as the draft draws
+  it, not the accent), `tableSelectionFill` (= `tagFillSelected`),
+  `tableIndicator`, `tableGripFill`, `tableGripDot`, `tableAddFill`.
+- **Components**: `AtticNoteTableGripView`, `AtticNoteTableAddChipView`
+  and `AtticNoteTableIndicatorView` (AppKit, drawn from the tokens), and
+  `AtticTableToolGlyph` (Aa's row in a table: add or delete a row or
+  column, the draft's glyphs).
+- **Aa's row** (owner pick Q6): Table takes Quote's cell; Quote joins the
+  style list after Mono. In a table the row shows Table ⌄, the four tools
+  and ✕ in the same capsule.
+
+### Notes v2, round 1: chrome B and text direction 5 (owner, 2026-10-08)
+- **Chrome B** (Notes and Tasks): `AtticControlSize.headerControl` 36 → 32
+  (radius 13.5 by the 42 % rule) and `AtticStyle.chromeMinimumInset`
+  24 → 16. Following them: the pin, the page button (24 pt chips,
+  `AtticPageButtonMetrics.segment`), All notes, Aa, New note, the status
+  pill (`AtticNoteMetrics.pillHeight`), the header title, Aa's format row
+  (24 pt cells, `AtticNoteFormatMetrics.rowCellHeight`) and the add bar
+  (`addBarHeight`, its send button 24). Aa sits 6 from New note
+  (`formatButtonGap`). Chips and cells under 28 pt keep a 28 pt target
+  (`AtticControlSize.hitOutset`).
+- **The content line stays at 28** (`AtticLayout.contentFromChrome`, 12
+  inside the chrome's line): the note's column, the Tasks circles and tabs;
+  the add bar's plus stays on the circles' centre line
+  (`AtticAddBarMetrics.leadingPadding` 8).
+- **The status pill never outgrows the bottom row**
+  (`AtticNoteMetrics.pillMaxWidth(panelWidth:chromeInset:showsFormat:)`),
+  and the panel's root always takes its window's size from its origin
+  (`PanelRootLayout`): the corner buttons can no longer be pushed off
+  both edges.
+- **Note text** (`AtticNoteType`, text direction 5): SF Pro throughout the
+  note (`noteTitle` / `noteBody` are no longer Rounded), one near-black ink;
+  Title 22 bold / 27, Title style 18 / 24, Heading 16.5 / 22, Subheading
+  15 / 21 (weight 650), Body 14 / 21, Quote 15 / 22, Mono 12 / 18; gaps 3,
+  12 after the title, 16 / 14 / 12 above headings and 2 / 1 / 1 below; lists
+  22 in with a 5 pt dot; the quote's 3 pt bar, text 14 in; the Mono block's
+  radius 10, 12 pt above and below and 9.5 at the sides (the draft's 14 wrapped
+  the owner's 33-character citation line; 33 SF Mono characters at 12 pt are
+  244.8 pt, and 10 pt sides leave 244). Copy is a 20 pt `doc.on.doc` chip,
+  opaque in the block's fill, 3 pt into its top-right corner, shown on hover,
+  with the caret in the block, or for VoiceOver. All notes' rows: `noteRowTitle` (13
+  medium) and `noteRowMeta` (11.5), SF Pro.
+
+### A32: Aa's neighbours pass under the row's edges; the close no longer waits (2026-10-08)
+- **`atticControlReveal` / `AtticRevealedControlShape`**: a raised control
+  can draw only part of itself. A glass container ignores a clip set on its
+  members, so All notes and New note were drawn sliding out over the
+  panel's margin and then vanished at once. Their glass shape now narrows to
+  the part still inside the slot, so each passes under the row's edge.
+- Closing: the glass starts back after 0.4 of a leave (was 0.8, which held
+  a wide, empty glass for several frames in Calm). New note rides back in
+  with the glass's trailing edge on the same spring, keeping the 8 pt gap;
+  All notes and the status return on their own clocks as before.
+
+### Aa neighbours slide into their sides (owner refinement, 2026-10-08)
+- All notes' stack travels left and New note travels right as Aa expands,
+  on the same selected app spring. Their glass and glyphs clip at the row
+  edges, instead of fading in place or disappearing immediately.
+- Closing brings them back from those sides. Returning travel stops at
+  each resting slot, keeping the gap beside Aa clear. Reduced motion
+  still swaps at once; Aa's paired-edge spring and timings are unchanged.
+
+### Aa opens as one shape (owner refinement, 2026-10-08)
+- Both glass edges start together on the selected `expand` spring. Removed
+  the trailing-edge leave delay and the dependent controls delay, so Aa no
+  longer stretches left and then right. Other app motion tokens are unchanged.
+- New note retires immediately to clear its adjacent slot; All notes keeps
+  its existing short fade. Closing, reduced motion and reversal cancellation
+  retain their existing behavior.
+
+### A29 round 4: content dissolves into the panel's edges; Aa answers at once (2026-10-06)
+- **`atticScrollUnderFade(plainText:topEdge:bottomEdge:)`**: content eases
+  from `edgeFloor` (0.10) at the panel's top and bottom edges to full at the
+  middle of the header's controls and of the bottom row
+  (`PanelPageLayout.scrollEdgeFadeTop/Bottom`); still none behind glass.
+- **`AtticFormatRowGrowth.leading/trailing`**: the glass's two edges travel
+  on their own clocks (both together still available).
+
+### A29 round 3: no fade behind glass; the format row on the app's springs (2026-10-06)
+Owner decisions of 2026-10-06 ~09:50. No colour, size or glass changed.
+- **`AtticScrollUnderFade` / `atticScrollUnderFade(plainText:)`**: content
+  runs under glass controls at full strength. Only a line of plain text over
+  the content (Tasks' Now · Later · Done line, All notes' label line) keeps a
+  short fade: `behindText` 0.10 across the text's own height, back to full
+  within `textRamp` 6 pt either side. Removed: the A15 profile (`edgeOpacity`,
+  `overTopControls`, `overBottomControls`, `controlsEdge`, the eased rise).
+  The Notes editor (glass only) has no fade.
+- **`NoteFormatMotion.Plan`**: the format row's motion takes `expand` (the
+  glass), `popover` (the controls; the neighbours' return) and the feel's
+  leave (the neighbours going, the controls going) from the chosen feel, with
+  delays as shares of those springs.
+
+### A29 the format row grows out of Aa (redesign/p2-format-motion-2, 2026-10-06)
+Owner pick p2-37 draft 1 ("Aa grows into the bar"). No token, colour,
+radius or size changed.
+- **`AtticFormatRowSurface.growth`** (`AtticFormatRowGrowth`, animatable):
+  the row's one glass spans from a button's frame to the whole row as it
+  grows; the controls are the glass's content (clipped to it, at their
+  resting places), and the button's glyph rides on it for the first third.
+  Nil or fully grown, it draws exactly as before.
+- **`AtticFormatRowSurface.contentOpacity`**: the controls' own fade.
+- **`atticControlAway` / `atticControlGone`** (environment, round 2): a
+  raised control fades out of a glass group (the identity glass, its content
+  faded inside the glass), then drops its glass altogether. A glass container
+  ignores a plain `.opacity` on its members. Unset, nothing changes.
+
+### A25 Notes format row replaces Aa's pop-over (redesign/p2-integration, 2026-10-06)
+Owner decision OD-14 (`mockups/p2-36-format-no-panel-drafts.png`, draft 1
+plus draft 7's hint). No colour, radius or size token changed.
+- **New `AtticFormatRowSurface`**: the bottom row's own raised material
+  (Liquid Glass, the drawn recipe under Reduce Transparency) as wide as the
+  row and 36 tall, controls 4 pt in; probed at radius 15.
+- **New `AtticFormatSeparator`**: a 1 × 16 upright line in the `divider`
+  token, 4 pt from each group (the draft's group lines).
+- **New `AtticFormatStyleKind`**: each style's name in a hint of its own
+  style (Title 15 bold … Mono 12 monospaced) for the style list.
+- **`AtticDropdownRow.titleFont`**: an optional font for the name (the style
+  list); every other row is unchanged.
+- **`AtticFormatToggle.announcesState`**: actions in a row of toggles
+  (outdent, indent, close) say no on/off value.
+- **Removed** `AtticFormatStyleChip` and Aa's pop-over metrics
+  (`popoverToggleWidth`, `popoverWidth`, `popoverRowGap`, `popoverGroupGap`,
+  `styleChipPadding`); **added** `rowToggleWidth` 28, `rowCompactToggleWidth`
+  24, `rowSeparatorHeight` 16, `rowSeparatorPadding` 4.
+
+### A21 header title makes room for the page switcher (redesign/p2-integration, 2026-10-05)
+Owner decision B (Canvas, 2026-10-03), applied to Notes now and shared with
+Canvas later (OD-11). No token, colour, radius or size changed.
+- **New `AtticHeaderTitleRoom` / `AtticHeaderTitleLayout` / `AtticHeaderTitleSlot`
+  (`AtticControls.swift`)**: a header title is centred between the pin and
+  the page button; while the page switcher is open it left-aligns beside the
+  pin and truncates in the space the switcher leaves (8 pt clear), then
+  returns to the centre when it closes. It moves with the `expand` preset;
+  Reduce Motion and Animations: Reduced give the new width at once.
+- **`AtticPageSwitcherPresence`** (environment, owned by the shell): the page
+  button reports whether it is open; only the title wrapper observes it, so
+  the header's own body never re-evaluates (`CornerGlassTests` still holds).
+- The Notes header title uses it; the page switcher itself is unchanged.
+- **Uneven glass buttons fixed** (owner, `p2-33`): `AtticControlGroup`'s
+  `GlassEffectContainer(spacing:)` was 12 pt, wider than the 8 pt between
+  Notes' Aa and New note, so the system blended their facing edges and each
+  button's two sides had different curvature. The merge distance is now 0
+  (`AtticControlShape.mergeDistance`) and every control draws one explicit
+  symmetric continuous rounded rectangle (`AtticControlShape.shape`).
+
+### A15 scroll-under fade (redesign/p2-integration, 2026-10-04)
+Owner decision (2026-10-04, option A of the p2-27 draft; it replaces D1's
+"rows fade out before the controls"). No token, colour, radius or size
+changed; how scrolling content meets the fixed controls changed.
+- **`AtticControlsFade` / `atticControlsFade(restTop:bottomControls:)` are
+  replaced by `AtticScrollUnderFade` / `atticScrollUnderFade(topBand:
+  restTop:bottomBand:restBottom:)`**: an opacity mask, static geometry, no
+  blur and no native soft edge. Content runs under the top and bottom
+  controls, faintly visible so the Liquid Glass picks it up: 6 % at the
+  panel's edges, 10 % over the controls' middle, 22 % at their inner edge,
+  then an eased (smoothstep) rise to full at the first and last resting
+  places, which are unchanged and fully opaque.
+- Tasks' lists (Now, Later, Done, Find results) use it through
+  `TasksViewport.maskStops`; the Notes editor and All notes use it directly.
+  All notes now runs its list under the label line (the line floats over it,
+  with a click band as Tasks' tabs band; VoiceOver still reads the line
+  first).
+
+### Overnight A1 overlay construction review (2026-10-04)
+- Overlay hierarchy deferral also covers initial title accessories, slash
+  hint and object-control attachment during panel layout. Initial joins
+  preserve geometry calculated while waiting; a flush reached through a
+  nested run loop waits until the outer layout pass ends. The freeze cause
+  remains a hypothesis for the separate on-screen check.
+
+
+### Combined app fix round 2 (redesign/p2-fix2)
+
+Requested by GPT-6.1's review of the combined fix round (2026-10-03). No
+E1 value, token, colour, radius or size changed; nothing looks different.
+
+- **`AtticTagPickerCard`'s highlight is the row's identity**
+  (`AtticTagPickerHighlight`: a tag's name, or the "New tag" row), not its
+  number: a toggle that reorders the rows (Notes lists the note's own tags
+  first) no longer moves Return or Space onto another tag. One typing rule
+  for Tasks and Notes: typing lights the tag with exactly the typed name,
+  else "New tag" for it, never another tag. A prefix's Return adds what was
+  typed (Notes' rule before; in Tasks it used to toggle the first match).
+- **New `AtticOverlayHierarchy`** (P1-01 experiment): every overlay host's
+  attach, detach and reparent (dropdown cards through
+  `AtticDropdownSpace.show` and `AtticDropdownPresenter`, Notes' overlays)
+  waits for the next run-loop turn when it is asked for inside a layout
+  pass, coalesced per view; a host already in its parent moves at once.
+  `AtticOverlayHostingView` marks its own layout pass.
+
+### Combined app fix round (redesign/p2-integration)
+
+Requested by the combined Tasks + Notes CU reviews of 2026-10-03. No E1
+value, token, colour, radius or size changed.
+
+- **A measured dropdown card grows for a wider row** (CU P3-03: the tag
+  picker's "New tag “#cu2”" was cut to "New tag “#c…" in a half-empty
+  card). Content reports its widest row with `atticDropdownIdealWidth(_:)`;
+  `AtticDropdownCard` passes it on (`atticDropdownContentWidthChanged`) and
+  `AtticDropdownPresenter.grow(toWidth:)` widens the open card within the
+  width rule, keeping its side. It never narrows while open, so filtering
+  never makes it jump in. `AtticTagPicker` reports its rows' width
+  (`rowsWidth(tags:create:)`, measured from the names without a layout pass).
+- **New `AtticTagPickerCard`**: the tag picker with its state and keys (the
+  query, the one highlight, ↑ ↓, Return, Space on the rows under Full
+  Keyboard Access, Tab between field and rows), moved out of Tasks'
+  `TaskTagPickerView` so Notes' ⋯ → Tags… uses the same card (CU P2-03: it
+  was a translucent arrow popover with dark-on-dark text in Dark and no
+  keyboard highlight). The caller supplies the rows for a query. Typing now
+  lights the tag with exactly the typed name when there is one, else the
+  first match (Notes lists the note's own tags first). `AtticTagPicker.Tag`
+  gains an optional `detail` (Notes' per-tag count, in the row's detail
+  column).
+- **New `AtticControlsFade` / `atticControlsFade(restTop:bottomControls:)`**
+  (D1 for any page that scrolls between fixed controls; CU P2-02): the
+  opacity mask Tasks' lists use (`TasksViewport.maskStops`: nothing over
+  the top controls, the edge veil's eased ramp over the last 6 pt before
+  the first line's resting place, the same ramp in the 6 pt before the
+  bottom controls, nothing under them). Notes' editor and All notes use it
+  with Clean cut (owner, 2026-10-03: no native soft edge on Notes). The
+  editor's two `AtticEdgeVeil` overlays and the library rows' per-row
+  `AtticScrollEdgeFade` (a blur and fade per row, by position) are gone;
+  `AtticNoteMetrics.listTopFade` is removed. Tasks is unchanged.
+- **Removed `AtticNoteTagList`** and its `AtticNoteMetrics.tagEditorWidth` /
+  `tagEditorMaxListHeight`: replaced by the shared card above.
+
+### Notes audit fix B2 (redesign/p2-audit-fix)
+
+Requested by the Phase 2 audit (finding B2: the delete toast could take
+⌘Z away from the text). No token, colour, radius or size changed.
+
+- **`AtticUndoToast` gains `answersUndoKey`** (default true, so Tasks is
+  unchanged) and **`PanelToastCenter.show` gains the same parameter**. With
+  false the toast's button no longer carries the ⌘Z shortcut: it answers the
+  pointer and VoiceOver only, and the VoiceOver announcement no longer says
+  "with Command-Z". Notes' "Note deleted" toast passes false: ⌘Z there follows
+  the text under the caret, then the library's history.
+
+### Notes rebuild, slice 2 (redesign/phase-2)
+
+Requested by the slice 2 brief (the writing view, the bottom row and slot,
+All notes). Every addition reuses existing tokens: no colour, radius or
+type size changed, except the one type change below, which is the owner's
+decision.
+
+- **`noteTitle` and `noteBody` are SF Pro Rounded** (`AtticTextStyle.isNoteText`):
+  owner decision 4 (2026-09-27), the Tasks list's voice for the page of text.
+  Sizes and weights unchanged (17 bold, 14 regular).
+- **`AtticMenuCommand` gains `submenu`, `isChecked` and `identifier`**, and
+  `AtticMenuItems` draws submenus and checkmarks (the note menu's Insert ▸ and
+  Format ▸). **New `AtticNativeMenu`**: the same commands as an `NSMenu` popped
+  up from an AppKit view (the ⋯ lives inside the note's text view, and ⇧⌘I
+  opens the menu from the keyboard). Menus stay native.
+- **New `AtticNoteMenuButton`** (the ⋯, a 28 pt target, icon ink, hover and
+  pressed fills from `chipHover`/`chipSelected`), **`AtticNoteTagLine`**
+  (tags under a title: the `tag` style in the secondary ink, 12 apart,
+  wrapping) with **`AtticWrapLayout`** (items and lines with their own gaps),
+  and **`AtticHeaderTitle`** (a scrolled-away title in the header: a raised
+  control 36 tall with the `panelHeading` title and the title menu's chevron).
+- **New `AtticNoteRow`, `AtticNoteRowModel` and `AtticNoteGroupHeading`**: All
+  notes' 48 pt rows (the task row's metrics: title line, details line,
+  highlight inset) with the time, a warning glyph beside it, a preview and
+  counts; group headings like the Done log's days.
+- **New `AtticNoteTagList`**: the note's tag editor ("Find or add a tag",
+  ticked rows with counts, "New tag"). It follows Phase 1's tag list and should
+  be unified with `AtticTagPicker` when Phase 1's final rounds are merged into
+  this branch.
+- **New `AtticTagSuggestion` and `AtticTagSuggestionList`**: the suggestions
+  under a hashtag typed in a note's title (p2-01 #3), on the pop-over surface
+  with `AtticPopoverRow`s; the keyboard's row uses the rows' highlight.
+- **New `AtticStatusItem`, `AtticStatusPill` and `AtticStatusDetails`**: the
+  Notes status slot (a raised capsule 36 tall, at most 176 wide, with the
+  warning ink for problems, an inline action chip, "+N" or ✕) and its details.
+  The toast's inner button gains `answersUndoKey` so the pill's Retry never
+  takes ⌘Z.
+- **`AtticListSearchField` gains `iconX`/`textX`, `onKeyPress` and
+  `onEscapeWhenEmpty`** (defaults keep the Tasks Done search exactly as it
+  was): All notes puts the search on the note column, ↑ ↓ and Return reach the
+  list, and Esc in the empty field goes back.
+- **New `AtticNoteMetrics`** (column, ⋯, tag line, header title, slot and
+  All notes geometry).
+
+### Notes, the owner's first feedback on slice 2
+
+- **New `AtticMotionPreset.springy(reduceMotion:)`** (and `springyBounce`,
+  0.24): a preset's motion 1.5 × as long with a soft overshoot, for Notes'
+  slides, the search take-over, the status slot, the tag line and list
+  changes (owner: "springy, alive"). Reduce Motion (and the Phase 1
+  Animations setting, when merged) gives the preset's own fade or instant
+  change. The existing presets are unchanged.
+- **New `AtticNoteLibraryLine`**: All notes' label line with a quiet
+  magnifier at its end; searching turns the line into a recessed field with
+  an "Esc" hint (the Tasks Done search's pattern; to be unified with Phase 1's
+  `AtticTabsSearchField` at the merge). Replaces All notes' search row.
+- **`AtticNoteTagLine`** springs new tags in and fades removed ones.
+- **`NoteObjectRenderer`** redraws only when the colour key changes (a
+  control-material or Reduce Motion change redraws nothing).
+
+### Notes rebuild, slice 1 (redesign/phase-2)
+
+- **New `AtticDateChip`** (and `AtticDateChipMetrics`: a 10 pt calendar glyph,
+  4 pt gap): a date inside note text. It reuses the tag chip's pill (18 tall,
+  radius 7.5, `tagFill`, `AtticTagMetrics.horizontalPadding`) and the
+  `chipLabel` style in body ink; no new colour, radius or type style. The note
+  editor renders it (and `AtticSubtaskCheckbox`, for checklist lines) into
+  images for its text attachments, so notes draw only design-system parts.
+  Requested by the Phase 2 slice 1 brief (one inline date object).
+
 ## Phase 1
 
 Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
+
+### Native soft edge disabled everywhere (owner, overnight A1, 2026-10-04)
+
+- `AtticScrollEdgeLab` ignores former preview defaults and environment
+  overrides and offers no A/B switch. Stored preferences are left intact.
+  Tasks, Done, the Notes editor and All notes use Clean cut with the D1
+  control fade. A7 also disables the native edge in every E1 dropdown list
+  and rejects former soft choices injected in code. A source guard rejects
+  any surface or card enabling native scroll edges; hosted list and card
+  tests assert no native pockets.
+  This supersedes the preview exception in the earlier entry below.
 
 ### Clean cut by default (owner, 2026-10-03)
 
@@ -560,6 +961,20 @@ additive; no token, colour, radius or type style changed.
   so a list can skip redrawing a row whose model did not change.
 - No token, colour, radius or type style changed.
 
+### Phase 2 slice 3a — Notes format controls (2026-09-29)
+
+- **New components** (`AtticNoteFormatComponents.swift`): `AtticFormatToggle` (a flat 28 pt
+  toggle whose fill says off, on or mixed; the keyboard ring only for the keyboard; VoiceOver value
+  "on/off/mixed"), `AtticFormatValue`, `AtticHighlightGlyph`, `AtticFormatBarSurface` (a capsule on the
+  pop-over surface, 36 tall, 4 pt inset, groups 4 apart and never lines), `AtticFormatGroup`,
+  `AtticFormatStyleFace` ("Body ⌄"), `AtticFormatStyleChip` (Aa's style chips, each in a hint of its
+  own style) and `AtticDateCalendar` (the date card's month).
+- **New metrics:** `AtticNoteFormatMetrics` (bar 36 tall with 24 pt toggles so it fits a 320 pt
+  panel, 6 from the selection; Aa 300 wide with 32 pt toggles; the `/` list 256 wide; the date card
+  236; the link card 272; 12 pt shadow room).
+- The `/` list, date card and link card reuse `AtticPopover` and `AtticPopoverRow`; motion is the
+  popover preset's springy variant (fade, 4 pt rise, 0.96 grow), a fade under Reduce Motion.
+
 ### Phase 1 follow-up: control audit items 5, 10 and 11 (2026-09-29)
 
 - **New `AtticTaskPicker`** (Move to Task…): the tag picker's pattern for
@@ -685,3 +1100,78 @@ additive; no token, colour, radius or type style changed.
   keyboard's row's only (`showsActionsButton(forced:keyboardFocused:)`), so
   nothing moves as the pointer passes.
 - No token, colour, radius or type style changed.
+
+### Phase 2: the dropdown family, E1 (owner, 2026-10-02: "this works I guess")
+
+- **New `AtticDropdown.swift`**, one component for every Attic pop-over
+  list: the `/` list, the date card (Notes and Tasks), the tag picker, the
+  priority picker, Aa and the link card. Native menus stay native.
+  - `AtticDropdownCard` on `AtticDropdownSurface`: a solid card
+    (`popoverFill` #FEFEFE / #363637), one 0.5 pt hairline outside it
+    (`popoverOuterRim`, 1 pt and stronger under Increase Contrast) and D's
+    shadow (`AtticShadows.dropdown` 16 / 12 and `dropdownContact` 3 / 2, in
+    the new `dropdownShadow` and `dropdownContactShadow`); 20 pt corners,
+    rows 10 pt in. No blur, so Reduce Transparency changes nothing.
+  - `AtticDropdownRow`: 32 pt, touching; check, priority mark, a 14 pt icon
+    in an 18 pt slot, the 14 pt name (new `dropdownRow` style), a short
+    detail; the pill (new `dropdownHighlight`, #F1F1F1 / #444445) is the
+    whole row, concentric with the corner. No hint column. One highlight
+    per list, moved by the keyboard and the pointer.
+  - `AtticDropdownField`: a row's height and pill on `recessed`; its
+    placeholder sets its width.
+  - `AtticDropdownLayout`: the width rule (fits its content, never under
+    144 pt, never past the panel's 12 pt margin) and where it opens (left
+    edge on the caret's column or the strip button; below when there is
+    room, else above).
+  - `atticDropdown(isPresented:prefer:label:content:)`: the card in the
+    panel's overlay layer (`AtticDropdownPresenter`), with the pop-over
+    preset's motion (Lively by default, a fade under Reduced). Its own host,
+    so opening, filtering and closing never re-render the page behind. Its
+    keys are its own while open (`AtticTextInput.isPopoverOpen`); Esc, a
+    click outside or the panel letting go closes it and the keyboard goes
+    back. VoiceOver hears a menu (`AtticOverlayHostingView.menuLabel`).
+- **`AtticOverlayHostingView`** (was Notes' `NoteOverlayHostingView`) is the
+  design system's overlay host.
+- The Tasks date and tag pickers, the priority picker (⌥⌘0–3 on every row),
+  the composer strip and the selection bar's pickers leave the native
+  pop-over for the dropdown. `atticPopover` stays for Move to Task… and the
+  subtask quick look.
+- The month (both date cards): 30 × 28 cells, a 26 pt disc, a 30 pt header
+  with a 14 pt semibold title (new `dropdownHeading`).
+- Removed: `AtticPickerMetrics.dateWidth`, `tagWidth` and the old month
+  values; `AtticNoteFormatMetrics.slashWidth`, `dateCardWidth`,
+  `calendarCell`, `popoverPadding`. `tagListMaxHeight` is seven 32 pt rows.
+- Preview capture seam `ATTIC_UI_TEST_POPOVER` (`AtticDropdownCaptureSeam`).
+
+
+### Phase 2: E1 dropdown fix round 2 (2026-10-03)
+
+- Unmodified Esc dismisses only after the active text input has finished its
+  marked-text composition. Modified Esc and composition cancellation pass on.
+- Cards keep their opening width and report natural content-height changes to
+  their presenter. Link validation and calendar month changes update placement,
+  hit bounds and the bounded native soft-edge scrolling viewport together.
+  Dynamic cards retain their month, editing query and retry state when crossing
+  the scrolling threshold, without adding edge space while the card fits.
+- Priority picker rows route their displayed ⌥⌘0–3 shortcuts to the pick action
+  while the picker is mounted. Menu-item semantics from round 1 are retained.
+
+### Phase 2: E1 dropdown review fixes (Opus, 2026-10-03)
+
+Requested by the Opus review of the dropdown fixes (P2-B1, P3-B2–B4, P3-T1).
+Behaviour only: no token, colour, radius, size or motion preset changed.
+
+- **One placement for every card**: `AtticDropdownLayout.place` (anchor,
+  bounds, preferred side and the open card's current side → frame, side,
+  width and height limit) and `AtticDropdownSpace` (the overlay, the panel
+  less its 12 pt margin, and the host's frame). The presenter, the `/` list,
+  Notes' date and link cards and the title's tag suggestions all use it. An
+  open card keeps its side and flips only when that side can't hold it; a
+  card that opens anew still opens below the caret when there is room.
+- **The title's tag suggestions follow their `#`** as the note scrolls, and
+  wait out of sight while it is under the header.
+- **A measured card's natural height** is its laid-out height plus what any
+  part gave up to fit (`atticDropdownHeightGivenUp`, the tag picker's list),
+  read as one preference value, so a cut-short tag picker settles at once.
+- **VoiceOver**: a dropdown row is "selected" only while it has the list's
+  highlight; a tick is the menu item's mark (`AXMenuItemMarkChar`).

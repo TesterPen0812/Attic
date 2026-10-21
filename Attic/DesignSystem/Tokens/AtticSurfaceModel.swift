@@ -58,6 +58,11 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// stroked on the shape's edge (half shows inside the clip). Nil keeps
     /// the design system's own rim.
     var edge: Edge?
+    /// A37, Dark's dark tint (owner, 2026-10-08): the opacity of black laid
+    /// over the foundation, under the Tint, on Dark Glass and Frosted, so the
+    /// surface stays dark whatever window is behind it (`darkTinted`). 0 in
+    /// Light and on Solid.
+    var darkTint: Double = 0
 
     struct Edge: Equatable, Sendable {
         let color: AtticRGBA
@@ -85,9 +90,6 @@ struct AtticSurfaceModel: Equatable, Sendable {
     static func calmSheen(dark: Bool) -> AtticRGBA { dark ? .white(0.025) : .clear }
 
     /// The porcelain face, top to bottom (Light only; before visual A).
-    static let porcelainStops: [(colour: AtticRGBA, location: Double)] = [
-        (AtticRGBA(0xFFFFFE), 0), (AtticRGBA(0xFCFCFA), 0.42), (AtticRGBA(0xFBFBF9), 1)
-    ]
 
     struct Pair: Equatable, Sendable {
         let ink: AtticInk
@@ -172,7 +174,77 @@ struct AtticSurfaceModel: Equatable, Sendable {
             porcelain: porcelain, materialWash: materialWash, brightNative: brightNative
         )
         copy.edge = edge
+        copy.darkTint = darkTint
         return copy
+    }
+
+    /// The same surface with another dark tint.
+    func withDarkTint(_ opacity: Double) -> AtticSurfaceModel {
+        var copy = self
+        copy.darkTint = min(max(opacity, 0), 1)
+        return copy
+    }
+
+    // MARK: Dark's dark tint (A37)
+
+    /// The brightest a window behind a Dark translucent panel can reach
+    /// through the native surface. The measured renders (`renderEndpoints`)
+    /// hold only while the glass keeps its Dark look: live Liquid Glass
+    /// adapts to what is behind it, and over a white window it passed the
+    /// window almost untouched (owner-26, 2026-10-08: 250 where the model
+    /// expected 143, and the note's white text vanished). So the dark tint
+    /// is solved over a white window that reaches the foundation unchanged.
+    static let passedThroughWindow = AtticRGBA.grey(255)
+
+    /// The surface over a window the native surface passes untouched, at a
+    /// height (the dark tint's worst case).
+    func compositeOverPassedThroughWindow(at location: Double) -> AtticRGBA {
+        composite(over: materialWash.over(Self.passedThroughWindow), at: location)
+    }
+
+    /// The text's worst margin over that window, at the first content line
+    /// and the bottom (>= 1 passes).
+    func passedThroughMargin(_ pairs: [Pair]) -> Double {
+        let heights = tintStops.isEmpty ? [Self.contentTop] : [Self.contentTop, 1]
+        var margin = Double.infinity
+        for pair in pairs {
+            for height in heights {
+                let background = pair.overlays.reduce(compositeOverPassedThroughWindow(at: height)) { $1.over($0) }
+                margin = min(margin, pair.foreground.contrast(on: background) / floor(for: pair.ink))
+            }
+        }
+        return margin
+    }
+
+    /// A37 (owner, 2026-10-08, "Dark-mode glass keeps light text
+    /// readable"): in Dark, the least black, laid over the readable
+    /// foundation and under the Tint, at which the text Glass and Frosted
+    /// draw keeps its floors (titles and body 4.5 : 1, secondary text 3 : 1,
+    /// all text 4.5 : 1 under Increase Contrast) even over a white window
+    /// the glass lets straight through, so a little of the backdrop still
+    /// shows. Light, Solid and Reduce Transparency (which draws Solid) are
+    /// unchanged; the foundation, Tint, wash and edge are untouched.
+    func darkTinted(primary: AtticRGBA, secondary: AtticRGBA) -> AtticSurfaceModel {
+        guard kind != .solid, appearance == .dark else { return self }
+        let pairs = [
+            Pair(ink: .heading, foreground: primary, overlays: []),
+            Pair(ink: increaseContrast ? .heading : .helper, foreground: secondary, overlays: [])
+        ]
+        // Half-percent steps: the lightest tint that passes.
+        for step in 0...200 {
+            let candidate = withDarkTint(Double(step) / 200)
+            if candidate.passedThroughMargin(pairs) >= Self.solverMargin { return candidate }
+        }
+        return withDarkTint(1)
+    }
+
+    /// What the surface lays over the native material, as one colour: the
+    /// palette-hued base at its foundation opacity, with Dark's tint over
+    /// it. Exactly the base at its foundation when there is no dark tint.
+    var backing: AtticRGBA {
+        let foundation = base.withAlpha(foundationOpacity)
+        guard darkTint > 0 else { return foundation }
+        return AtticRGBA.black(darkTint).over(foundation)
     }
 
     /// The appearance the native material is drawn (and measured) in.
@@ -209,9 +281,6 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// The desktops this surface is judged over (Solid transmits nothing).
     var desktops: [Desktop] { kind == .solid ? [.midGrey] : Desktop.allCases }
 
-    /// Secondary text (`AtticInk.isSecondaryText`): 3 : 1 unless Increase
-    /// Contrast is on.
-    static func isSecondaryText(_ ink: AtticInk) -> Bool { ink.isSecondaryText }
 
     /// The least contrast a role must keep on this surface (the rule above).
     func floor(for ink: AtticInk) -> Double {
@@ -237,7 +306,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
     }
 
     func composite(over underlay: AtticRGBA, at location: Double = 0) -> AtticRGBA {
-        let founded = kind == .solid ? base : base.withAlpha(foundationOpacity).over(underlay)
+        let founded = kind == .solid ? base : backing.over(underlay)
         return washColor.withAlpha(tintOpacity(at: location)).over(founded)
     }
 
@@ -393,7 +462,6 @@ struct AtticSurfaceModel: Equatable, Sendable {
         glassPressed: AtticRGBA,
         chipSelected: AtticRGBA,
         chipHover: AtticRGBA,
-        doneDisc: AtticRGBA,
         recessed: AtticRGBA,
         tagFill: AtticRGBA,
         tagFillSelected: AtticRGBA
@@ -428,9 +496,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
             p(.disabledIcon, []), p(.disabledIcon, [recessed]),
             // The check mark on its fill (opaque, so the surface below
             // does not matter): done, and done while disabled.
-            p(.onDone, [inks[.doneFill] ?? .black(1)]), p(.onDone, [inks[.disabledIcon] ?? .black(1)]),
-            // A done task's check on its quiet disc (opaque).
-            p(.doneCheck, [doneDisc])
+            p(.onDone, [inks[.doneFill] ?? .black(1)]), p(.onDone, [inks[.disabledIcon] ?? .black(1)])
         ]
     }
 

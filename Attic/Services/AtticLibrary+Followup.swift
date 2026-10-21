@@ -37,6 +37,7 @@ extension AtticLibrary {
             let after = scopeAfter.filter { changed.contains($0.id) }
             return UndoStep(
                 name: newParentID == nil ? "Make Standalone Task" : "Move to Task",
+                items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     let outcome = self.tasks.applyEditableTransition(from: after, to: before)
@@ -98,6 +99,7 @@ extension AtticLibrary {
             let progress = BulkRestoreProgress(items: restoredItems, attachments: restoredAttachments, owned: owned)
             return UndoStep(
                 name: count == 1 ? "Restore Item" : "Restore \(count) Items",
+                items: { Set(restoredItems + restoredAttachments.map(\.owner)) },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.sendBack(progress)
@@ -284,14 +286,6 @@ extension AtticLibrary {
         return .obsolete
     }
 
-    /// One outcome for a step made of several: applied when any part
-    /// applied and none failed; failed when one failed; obsolete when
-    /// nothing could apply again.
-    static func combined(_ outcomes: [UndoOutcome]) -> UndoOutcome {
-        if outcomes.contains(.failed) { return .failed }
-        if outcomes.contains(.applied) { return .applied }
-        return .obsolete
-    }
 
     private func performRestoreAll(
         items: [AtticItemRef],

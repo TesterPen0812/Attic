@@ -12,6 +12,8 @@ struct TasksScrollKeeper: NSViewRepresentable {
     let tab: TasksTab
     /// Where the page finds this list's scroll view (a `show`'s reveal).
     var proxies: TasksListProxies?
+    var pointer: TasksPointer?
+    var focusSelection: (UUID?) -> Void = { _ in }
     /// False while the page is kept built but not drawn (round 11): the
     /// list's scroll view is hidden, so it draws nothing, takes no event
     /// and VoiceOver does not read it (SwiftUI's own hiding did not reach
@@ -23,6 +25,8 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.model = model
         view.tab = tab
         view.proxies = proxies
+        view.pointer = pointer
+        view.focusSelection = focusSelection
         view.drawn = drawn
         return view
     }
@@ -31,6 +35,8 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.model = model
         view.tab = tab
         view.proxies = proxies
+        view.pointer = pointer
+        view.focusSelection = focusSelection
         view.drawn = drawn
     }
 
@@ -88,6 +94,9 @@ struct TasksScrollKeeper: NSViewRepresentable {
         weak var model: TasksPageModel?
         var tab: TasksTab = .now
         weak var proxies: TasksListProxies?
+        weak var pointer: TasksPointer?
+        var focusSelection: (UUID?) -> Void = { _ in }
+        private var marquee: TasksMarqueeSelection?
         private weak var observedClip: NSClipView?
         private var observer: NSObjectProtocol?
         /// Until the remembered place is back, the list's own first layout
@@ -114,6 +123,10 @@ struct TasksScrollKeeper: NSViewRepresentable {
             applyDrawn()
             proxies?.scrollViews[tab] = scroll
             observe(scroll.contentView)
+            if let model, let pointer {
+                marquee = TasksMarqueeSelection(scroll: scroll, model: model, pointer: pointer, tab: tab,
+                    focusSelection: { [weak self] id in self?.focusSelection(id) })
+            }
             // After `observe`, which starts from a clean slate.
             keepOverlayScrollers(scroll)
             restoring = true
@@ -158,6 +171,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
         }
 
         func stopObserving() {
+            marquee = nil
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = nil
             observedClip = nil

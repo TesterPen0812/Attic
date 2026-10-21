@@ -223,35 +223,27 @@ final class TasksRound5Tests: XCTestCase {
     func testTheDatePickerLightsOneThingAtATime() throws {
         let choices = TaskDateChoices(parser: TaskTextParser(calendar: Calendar(identifier: .gregorian),
                                                              locale: Locale(identifier: "en_GB"), now: { [clock] in clock.value }))
-        let today = choices.today
-        var highlight = TaskDatePickerHighlight(cursor: TaskDateCursor(start: today))
-        XCTAssertFalse(highlight.cursor.isKeyboardActive, "nothing lit when it opens")
+        let card = choices.cardCalendar
+        let today = try XCTUnwrap(choices.today.startDate(in: card))
+        var highlight = AtticDateCardState(start: today)
+        XCTAssertNil(highlight.lit, "nothing lit when it opens")
         // The keyboard lights a day.
-        highlight.moveByKeyboard { $0.move(days: 1, in: choices) }
-        XCTAssertTrue(highlight.cursor.isKeyboardActive)
-        let keyboardDay = highlight.cursor.active
-        // The pointer on a quick day's row takes the highlight from it.
-        highlight.hoverRow("tomorrow", inside: true)
-        XCTAssertEqual(highlight.row, "tomorrow")
-        XCTAssertFalse(highlight.cursor.isKeyboardActive, "the day is no longer lit")
-        XCTAssertEqual(highlight.cursor.active, keyboardDay, "the cursor stays put for the next arrow")
-        // An arrow brings it back to the grid, off the row.
-        highlight.moveByKeyboard { $0.move(days: 1, in: choices) }
-        XCTAssertNil(highlight.row)
-        XCTAssertTrue(highlight.cursor.isKeyboardActive)
-        // The pointer on a day of the month shown moves the cursor there.
-        let pointed = choices.day(today, movedBy: 5)
-        highlight.hoverDay(pointed, inside: true, inShownMonth: true)
-        XCTAssertEqual(highlight.cursor.active, pointed)
-        XCTAssertTrue(highlight.cursor.isKeyboardActive)
-        // Off it, nothing is lit.
-        highlight.hoverDay(pointed, inside: false, inShownMonth: true)
-        XCTAssertFalse(highlight.cursor.isKeyboardActive)
-        // A neighbouring month's day never turns the page under the pointer.
-        let month = highlight.cursor.month(in: choices)
-        highlight.hoverDay(choices.day(pointed, movedByMonths: 1), inside: true, inShownMonth: false)
-        XCTAssertEqual(highlight.cursor.month(in: choices), month)
-        XCTAssertFalse(highlight.cursor.isKeyboardActive)
+        _ = highlight.apply(.right, calendar: card, suggestions: 0, typing: false, hasRemove: true)
+        XCTAssertTrue(highlight.isLit(today, calendar: card))
+        // The pointer on Remove date takes the highlight from it.
+        highlight.hover(.remove, inside: true)
+        XCTAssertEqual(highlight.lit, .remove)
+        XCTAssertFalse(highlight.isLit(today, calendar: card), "the day is no longer lit")
+        XCTAssertEqual(highlight.cursor, today, "the cursor stays put for the next arrow")
+        // An arrow brings it back to the grid, on the same day.
+        _ = highlight.apply(.right, calendar: card, suggestions: 0, typing: false, hasRemove: true)
+        XCTAssertTrue(highlight.isLit(today, calendar: card))
+        // The pointer on a day moves the highlight there; off it, nothing is lit.
+        let pointed = try XCTUnwrap(card.date(byAdding: .day, value: 5, to: today))
+        highlight.hoverDay(pointed, inside: true, calendar: card)
+        XCTAssertTrue(highlight.isLit(pointed, calendar: card))
+        highlight.hoverDay(pointed, inside: false, calendar: card)
+        XCTAssertNil(highlight.lit)
     }
 
     // MARK: - A row lit only while the keyboard drives (the owner's Done row)

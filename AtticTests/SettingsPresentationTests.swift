@@ -161,26 +161,18 @@ final class SettingsPresentationTests: XCTestCase {
     }
 
     @MainActor
-    func testNavigationRemembersThePageAndGoesBackThroughHistory() throws {
+    func testSidebarNavigationRemembersThePageAndFollowsSidebarOrder() throws {
         try withSettingsDefaults { defaults in
             let navigation = SettingsNavigation(defaults: defaults)
             XCTAssertEqual(navigation.selection, .general)
-            XCTAssertFalse(navigation.canGoBack)
 
             navigation.select(.appearance)
             navigation.select(.recentlyDeleted)
             navigation.select(.recentlyDeleted)
-            XCTAssertEqual(navigation.history, [.general, .appearance], "selecting the current page adds nothing")
             XCTAssertEqual(defaults.string(forKey: SettingsSection.selectionStorageKey), "recentlyDeleted")
             XCTAssertEqual(SettingsNavigation(defaults: defaults).selection, .recentlyDeleted, "the page survives a relaunch")
 
-            navigation.goBack()
-            XCTAssertEqual(navigation.selection, .appearance)
-            navigation.goBack()
-            XCTAssertEqual(navigation.selection, .general)
-            XCTAssertFalse(navigation.canGoBack)
-            navigation.goBack()
-            XCTAssertEqual(navigation.selection, .general, "back with no history does nothing")
+            navigation.select(.general)
 
             // ↑ ↓ follow sidebar order and stop at the ends.
             XCTAssertNil(navigation.neighbour(offset: -1))
@@ -189,15 +181,12 @@ final class SettingsPresentationTests: XCTestCase {
             XCTAssertNil(navigation.neighbour(offset: 1))
             XCTAssertEqual(navigation.neighbour(offset: -1), .agentAccess)
 
-            for _ in 0..<(SettingsNavigation.historyLimit + 10) {
-                navigation.select(navigation.selection == .panel ? .general : .panel)
-            }
-            XCTAssertEqual(navigation.history.count, SettingsNavigation.historyLimit)
+
         }
     }
 
-    /// The traffic lights' target: the back button's centre (8 pt card inset
-    /// + 12 pt header padding + half of the 34 pt button). Real placement
+    /// The traffic lights' target: the title line's centre (8 pt card inset
+    /// + 12 pt header padding + half of the 34 pt header). Real placement
     /// is checked on a live window in `SettingsWindowHostedTests`.
     func testTrafficLightsShareThePageTitleLine() {
         XCTAssertEqual(SettingsChromeLayout.titleLineCenterY, 8 + 12 + 17)

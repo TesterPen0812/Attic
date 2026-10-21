@@ -78,7 +78,7 @@ struct AtticRaisedBackground: View {
             case .rest, .focused: tokens.raised
             }
         }
-        AtticRecipeBackground(recipe: recipe, cornerRadius: cornerRadius)
+        AtticRecipeBackground(recipe: recipe.opaque(design), cornerRadius: cornerRadius)
             .overlay {
                 // The glass stand-in shows hover and press as the live glass
                 // control does: a fill inside it.
@@ -169,7 +169,19 @@ struct AtticRaisedShapeBackground<S: InsettableShape>: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        AtticRecipeShapeBackground(recipe: design.tokens.raised, shape: shape)
+        AtticRecipeShapeBackground(recipe: design.tokens.raised.opaque(design), shape: shape)
+    }
+}
+
+extension AtticRaisedRecipe {
+    /// Under Reduce Transparency a raised control is opaque (U-02): its
+    /// face is laid over the panel's own solid surface, so nothing behind
+    /// it (a title scrolled under the header) ever shows through.
+    func opaque(_ design: AtticDesignContext) -> AtticRaisedRecipe {
+        guard design.reduceTransparency, base == nil else { return self }
+        var recipe = self
+        recipe.base = design.tokens.panel.base.withAlpha(1)
+        return recipe
     }
 }
 
@@ -194,28 +206,148 @@ struct AtticRaisedMaterialModifier: ViewModifier {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
+    @Environment(\.atticControlAway) private var away
+    @Environment(\.atticControlGone) private var gone
+    @Environment(\.atticControlReveal) private var reveal
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if capture == nil, design.effectiveControls == .liquidGlass {
-            let tokens = design.tokens
-            content
-                .background {
-                    if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
-                        shape.fill(fill.color)
-                    }
-                }
-                .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
-                .overlay {
-                    if design.increaseContrast {
-                        shape.inset(by: AtticHairline.widthIncreased / 2)
-                            .stroke(AtticGlassModel.contrastEdge(dark: design.mode == .dark).color, lineWidth: AtticHairline.widthIncreased)
-                            .allowsHitTesting(false)
-                    }
-                }
+        let shape = AtticControlShape.shape(cornerRadius: cornerRadius)
+        if gone {
+            // Away and settled: no glass at all, so not even the faint rim
+            // an identity glass keeps while it fades stays in the group.
+            content.opacity(0)
+        } else if capture == nil, design.effectiveControls == .liquidGlass {
+            if let reveal {
+                glass(content.clipShape(reveal.shape(cornerRadius: cornerRadius)),
+                      in: reveal.shape(cornerRadius: cornerRadius))
+            } else {
+                glass(content, in: shape)
+            }
         } else {
             content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
+                .opacity(away ? 0 : 1)
         }
+    }
+
+    private func glass<Content: View, S: InsettableShape>(_ content: Content, in shape: S) -> some View {
+        let tokens = design.tokens
+        let glass: Glass = away ? .identity : (interactive ? .regular.interactive() : .regular)
+        return content
+            .background {
+                if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
+                    shape.fill(fill.color)
+                }
+            }
+            // Inside the glass: a glass container draws its members
+            // itself and ignores an opacity set on them from outside.
+            .opacity(away ? 0 : 1)
+            .glassEffect(glass, in: shape)
+            .overlay {
+                if design.increaseContrast {
+                    shape.inset(by: AtticHairline.widthIncreased / 2)
+                        .stroke(AtticGlassModel.contrastEdge(dark: design.mode == .dark).color, lineWidth: AtticHairline.widthIncreased)
+                        .opacity(away ? 0 : 1)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+}
+
+/// The part of a raised control that is drawn while it slides under an
+/// edge (A32, Aa's neighbours leaving into the row's sides): the control's
+/// frame less `leading` and `trailing` points. A glass container draws its
+/// members itself and ignores a clip set on them from outside, so the
+/// glass's own shape narrows to the part still inside, and the content is
+/// clipped to it. Its corners stay the control's until the part is
+/// narrower than two of them. Unset (nil), a control draws as before.
+struct AtticControlReveal: Equatable {
+    var leading: CGFloat = 0
+    var trailing: CGFloat = 0
+
+    func shape(cornerRadius: CGFloat) -> AtticRevealedControlShape {
+        AtticRevealedControlShape(cornerRadius: cornerRadius, leading: leading, trailing: trailing)
+    }
+}
+
+struct AtticRevealedControlShape: InsettableShape {
+    var cornerRadius: CGFloat
+    var leading: CGFloat
+    var trailing: CGFloat
+    var inset: CGFloat = 0
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(leading, trailing) }
+        set { leading = newValue.first; trailing = newValue.second }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let width = rect.width - max(0, leading) - max(0, trailing)
+        guard width > 0.5 else { return Path() }
+        let part = CGRect(x: rect.minX + max(0, leading), y: rect.minY, width: width, height: rect.height)
+        return RoundedRectangle(cornerRadius: min(cornerRadius, width / 2, rect.height / 2), style: .continuous)
+            .inset(by: inset)
+            .path(in: part)
+    }
+
+    func inset(by amount: CGFloat) -> AtticRevealedControlShape {
+        var shape = self
+        shape.inset += amount
+        return shape
+    }
+}
+
+private struct AtticControlAwayKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// The raised controls below are away: their glass becomes the identity
+    /// glass and their content fades, in the transaction's animation. A
+    /// glass container ignores a plain `.opacity` on its members (A29 round
+    /// 2: the bottom row's buttons stayed drawn under the growing format
+    /// row), so a control that must fade out of a glass group uses this.
+    var atticControlAway: Bool {
+        get { self[AtticControlAwayKey.self] }
+        set { self[AtticControlAwayKey.self] = newValue }
+    }
+
+    /// Away and settled: the control draws no glass at all (set without
+    /// animation once its fade is over, and cleared before it returns).
+    var atticControlGone: Bool {
+        get { self[AtticControlGoneKey.self] }
+        set { self[AtticControlGoneKey.self] = newValue }
+    }
+}
+
+private struct AtticControlGoneKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private struct AtticControlRevealKey: EnvironmentKey {
+    static let defaultValue: AtticControlReveal? = nil
+}
+
+extension EnvironmentValues {
+    /// The raised controls below draw only this part of themselves (see
+    /// `AtticControlReveal`). Nil, the default, changes nothing.
+    var atticControlReveal: AtticControlReveal? {
+        get { self[AtticControlRevealKey.self] }
+        set { self[AtticControlRevealKey.self] = newValue }
+    }
+}
+
+/// The one shape of Attic's controls: a continuous rounded rectangle with
+/// the same radius on all four corners, set explicitly so no control takes
+/// the system's default or container-concentric glass shape near the panel's
+/// corner. The pin, the page button, the bottom-row buttons, the add bar and
+/// the selection bar all draw it (`AtticRadius.control(height:)`).
+enum AtticControlShape {
+    /// How close two glass controls may be before the system blends them
+    /// (`GlassEffectContainer(spacing:)`): never.
+    static let mergeDistance: CGFloat = 0
+
+    static func shape(cornerRadius: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
     }
 }
 
@@ -230,7 +362,7 @@ extension View {
 /// surface: the recessed fill and one 1 pt hairline (the selected-chip
 /// ink), no rim, sheen, shadow or glass. Since 2026-10-02 the corner buttons
 /// are Liquid Glass; this is their opaque look wherever the controls are not
-/// live glass, and the preview's Flat arm (`AtticCornerButtonStyle`). Hover lays the chip hover over the
+/// live glass. Hover lays the chip hover over the
 /// fill, press (and a selected toggle, the pinned pin) the selected chip.
 /// The keyboard's ring is drawn by the control, as before.
 struct AtticFlatSurface: ViewModifier {
@@ -251,6 +383,8 @@ struct AtticFlatSurface: ViewModifier {
         content
             .background {
                 ZStack {
+                    // Under Reduce Transparency the corner buttons are opaque (U-02).
+                    if design.reduceTransparency { shape.fill(tokens.panel.base.withAlpha(1).color) }
                     shape.fill(tokens.recessed.color)
                     if let overlay { shape.fill(overlay.color) }
                     shape.strokeBorder(tokens.chipSelected.color, lineWidth: AtticFlatSurfaceMetrics.hairline)
@@ -271,8 +405,15 @@ extension View {
 /// Controls that float together (the header's pin and page switch): live
 /// Liquid Glass shares one `GlassEffectContainer`, so neighbouring glass
 /// renders and blends as one material. A plain group otherwise.
+///
+/// Its `spacing` is the distance at which neighbouring glass shapes begin to
+/// flow into each other. Attic's controls are separate buttons and must keep
+/// their own shapes, so it is 0: with the old 12 pt, two buttons 8 pt apart
+/// (Notes' Aa and New note) pulled their facing edges toward each other and
+/// the left and right sides of each button had different curvature
+/// (owner, 2026-10-05, `mockups/p2-33-owner-uneven-buttons.png`).
 struct AtticControlGroup<Content: View>: View {
-    var spacing: CGFloat = AtticSpacing.betweenControls
+    var spacing: CGFloat = AtticControlShape.mergeDistance
     @ViewBuilder let content: Content
 
     @Environment(\.atticDesign) private var design
@@ -429,7 +570,8 @@ struct AtticSurfaceBackground<S: Shape>: View {
         ZStack {
             if model.kind != .solid {
                 underlay
-                shape.fill(model.base.withAlpha(model.foundationOpacity).color)
+                // The foundation, with Dark's dark tint over it (A37).
+                shape.fill(model.backing.color)
             } else if model.porcelain {
                 // Visual A: the flat surface, with its top sheen kept within
                 // the first 24 pt.
@@ -580,7 +722,13 @@ struct AtticPanelRim: View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         let dark = design.mode == .dark
         ZStack {
-            if let edge = design.tokens.panel.edge {
+            if let hairline = Self.lightHairline(for: design) {
+                // T-15 B (owner, 2026-10-15): Light panels get one faint
+                // 0.5 pt hairline inside their edge, so a white panel holds
+                // its shape over a white window.
+                shape.inset(by: Self.lightHairlineWidth / 2)
+                    .stroke(hairline.color, lineWidth: Self.lightHairlineWidth)
+            } else if let edge = design.tokens.panel.edge {
                 // Phase 0's hairline: the palette's edge colour on the shape's
                 // edge (half of it shows inside the clip).
                 shape.stroke(edge.color.color, lineWidth: edge.width)
@@ -600,6 +748,17 @@ struct AtticPanelRim: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// T-15 B: the Light Solid and Frosted panels' edge (Original's
+    /// neutral palettes; the other palettes keep their tinted edge, Glass
+    /// keeps its own, and Increase Contrast its stronger one). Nil keeps
+    /// the existing rim.
+    static let lightHairlineWidth = AtticHairline.width
+    static func lightHairline(for design: AtticDesignContext) -> AtticRGBA? {
+        guard design.mode == .light, !design.increaseContrast, design.palette == .original,
+              design.effectiveSurface != .glass else { return nil }
+        return .black(0.14)
     }
 
     @ViewBuilder
@@ -683,8 +842,10 @@ struct AtticEdgeVeil: View {
     var body: some View {
         let model = design.tokens.panel
         let location: Double = edge == .top ? 0 : 1
-        let colour = model.washColor.withAlpha(model.tintOpacity(at: location)).over(model.base)
-        let strength = model.kind == .solid ? 1 : model.foundationOpacity
+        // The surface's own colour and opacity (with Dark's dark tint, A37).
+        let backing = model.kind == .solid ? model.base : model.backing
+        let colour = model.washColor.withAlpha(model.tintOpacity(at: location)).over(backing.withAlpha(1))
+        let strength = backing.alpha
         let ramp = AtticEdgeBlur.veilStops.map {
             Gradient.Stop(color: colour.withAlpha($0.opacity * strength).color, location: $0.location)
         }

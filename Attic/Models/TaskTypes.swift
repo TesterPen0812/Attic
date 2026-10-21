@@ -41,14 +41,6 @@ enum TaskStatus: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    var doubleClickTitle: String {
-        switch self {
-        case .backlog: "Double-click to move to To do"
-        case .todo: "Double-click to start"
-        case .inProgress: "Double-click to move back to To do"
-        case .done: title
-        }
-    }
 
     static let moveMenuOrder: [TaskStatus] = [.backlog, .inProgress, .todo, .done]
 }

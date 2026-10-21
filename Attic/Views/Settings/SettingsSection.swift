@@ -85,18 +85,10 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     }
 }
 
-/// Where Settings is and where it has been: the sidebar picks a page, and
-/// the header's back button (⌘[) returns to the one before, the way the
-/// back button in System Settings does. The history lives for the window's
-/// session; the current page is remembered across launches.
+/// The sidebar's current page, remembered across launches.
 @MainActor
 final class SettingsNavigation: ObservableObject {
     @Published private(set) var selection: SettingsSection
-    @Published private(set) var history: [SettingsSection] = []
-
-    /// A generous bound: nobody walks back further than this.
-    static let historyLimit = 50
-
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -106,18 +98,10 @@ final class SettingsNavigation: ObservableObject {
         )
     }
 
-    var canGoBack: Bool { !history.isEmpty }
-
     func select(_ section: SettingsSection) {
         guard section != selection else { return }
-        history.append(selection)
-        if history.count > Self.historyLimit { history.removeFirst(history.count - Self.historyLimit) }
-        show(section)
-    }
-
-    func goBack() {
-        guard let previous = history.popLast() else { return }
-        show(previous)
+        selection = section
+        defaults.set(section.rawValue, forKey: SettingsSection.selectionStorageKey)
     }
 
     /// The page above or below the current one in sidebar order (↑ ↓ in
@@ -127,11 +111,6 @@ final class SettingsNavigation: ObservableObject {
         guard let index = all.firstIndex(of: selection) else { return nil }
         let target = index + offset
         return all.indices.contains(target) ? all[target] : nil
-    }
-
-    private func show(_ section: SettingsSection) {
-        selection = section
-        defaults.set(section.rawValue, forKey: SettingsSection.selectionStorageKey)
     }
 }
 
@@ -153,8 +132,9 @@ enum SettingsVisibility {
     /// Under Haptics and Animations: what each does, and why motion is
     /// reduced whatever Animations says while the Mac's Reduce Motion is on.
     static func behaviourFootnote(systemReducesMotion: Bool) -> String {
+        // One line per row (D-22): what Haptics does, then Animations.
         systemReducesMotion
-            ? String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Reduce Motion is on in System Settings, so animations are reduced.")
-            : String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Lively springs things in and away, Subtle does the same more quietly, and Reduced fades instead of moving.")
+            ? String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place.\nAnimations: Reduce Motion is on in System Settings, so they are reduced.")
+            : String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place.\nAnimations: Lively springs things in and away, Subtle does the same more quietly, Reduced fades instead of moving.")
     }
 }

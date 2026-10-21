@@ -54,8 +54,8 @@ final class CornerRevealSettingsTests: XCTestCase {
         XCTAssertEqual(RevealModifier.control.flags, .control)
         XCTAssertEqual(RevealModifier.command.flags, .command)
         XCTAssertEqual(RevealModifier.shift.flags, .shift)
-        XCTAssertEqual(RevealModifier.allCases.map(\.title), ["No Key", "⌥ Option", "⌃ Control", "⌘ Command", "⇧ Shift"])
-        XCTAssertEqual(RevealDisplays.allCases.map(\.title), ["All Displays", "Selected Displays"])
+        XCTAssertEqual(RevealModifier.allCases.map(\.title), ["No key", "⌥ Option", "⌃ Control", "⌘ Command", "⇧ Shift"])
+        XCTAssertEqual(RevealDisplays.allCases.map(\.title), ["All displays", "Selected displays"])
     }
 
     // MARK: - Persistence

@@ -451,6 +451,10 @@ final class CanvasStore: ObservableObject {
     #endif
     @Published var boardGeneration: Int64 = 0
     @Published var lastErrorMessage: String?
+    /// Wired by AtticLibrary to the shared tag inventory. No store scans on save.
+    var tagInventoryWillSave: (ModelContext) -> Void = { _ in }
+    var tagInventoryDidSave: () -> Void = {}
+    var tagInventoryDidRefresh: () -> Void = {}
     @Published var revision: UInt64 = 0
     @Published var cloudSyncStatus = CloudSyncStatus()
 

@@ -455,7 +455,7 @@ enum AtticGlassLab {
 }
 
 private final class AtticGlassLabPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
 
     override func cancelOperation(_ sender: Any?) {
         NSApp.terminate(nil)

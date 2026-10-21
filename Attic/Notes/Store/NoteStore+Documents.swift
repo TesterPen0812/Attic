@@ -1,0 +1,1421 @@
+import Foundation
+import CryptoKit
+import SwiftData
+
+/// One payload digest entry point, with a thread probe for production-path
+/// regressions. Observers are opt-in and protected independently of actors.
+enum NotePayloadDigest {
+    private final class Probe: @unchecked Sendable {
+        let lock = NSLock()
+        var observer: (@Sendable (Bool, Int) -> Void)?
+    }
+    private static let probe = Probe()
+    static func observe(_ observer: (@Sendable (Bool, Int) -> Void)?) {
+        probe.lock.lock(); probe.observer = observer; probe.lock.unlock()
+    }
+    static func sha256(_ data: Data) -> String {
+        probe.lock.lock(); let observer = probe.observer; probe.lock.unlock()
+        observer?(Thread.isMainThread, data.count)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Destructive decisions use complete physical UUID families, including
+/// divergent replicas. Any protected or unknown member keeps every member.
+enum NotePhysicalFamilyRetention {
+    enum Decision: Equatable { case eligible, protected, unknown }
+
+    static func mayDelete<Row>(_ family: [Row], decision: (Row) throws -> Decision) rethrows -> Bool {
+        guard !family.isEmpty else { return false }
+        for row in family {
+            guard try decision(row) == .eligible else { return false }
+        }
+        return true
+    }
+    @MainActor
+    static func versionEligible(_ family: [NoteVersion], noteIDs: Set<UUID>,
+                                proposalBases: Set<UUID>, recoveryBases: Set<UUID>) -> Bool {
+        guard let first = family.first else { return false }
+        return mayDelete(family) { row in
+            guard noteIDs.contains(row.noteID), row.noteID == first.noteID, row.reason != nil,
+                  row.reasonRaw == first.reasonRaw, row.createdAt == first.createdAt,
+                  row.content == first.content, row.contentFormat == first.contentFormat,
+                  NoteTextReplacement.utf16Equal(row.title, first.title), NoteTextReplacement.utf16Equal(row.body, first.body),
+                  row.attachmentIDsRaw == first.attachmentIDsRaw,
+                  row.sourceRevisionID == first.sourceRevisionID,
+                  (row.contentFormat == NoteDocument.currentFormat
+                        && row.content.map { NoteContentCodec.decode($0).isEditable } == true),
+                  row.attachmentIDsRaw.split(separator: " ").allSatisfy({ UUID(uuidString: String($0)) != nil })
+            else { return .unknown }
+            if proposalBases.contains(row.id) || row.sourceRevisionID.map(recoveryBases.contains) == true {
+                return .protected
+            }
+            return .eligible
+        }
+    }
+
+    @MainActor
+    static func proposalEligible(_ family: [NotePendingEdit], noteIDs: Set<UUID>) -> Bool {
+        guard let first = family.first else { return false }
+        return mayDelete(family) { row in
+            guard noteIDs.contains(row.noteID), row.noteID == first.noteID,
+                  row.baseRevisionToken == first.baseRevisionToken, row.baseVersionID == first.baseVersionID,
+                  row.proposedContent == first.proposedContent, NoteTextReplacement.utf16Equal(row.agentName, first.agentName),
+                  row.createdAt == first.createdAt, row.needsReview == first.needsReview,
+                  row.isDeletion == first.isDeletion,
+                  row.proposedContent.map({ NoteContentCodec.decode($0).isEditable }) == true
+            else { return .unknown }
+            return .eligible
+        }
+    }
+
+}
+
+/// Immutable ownership input: no live models cross to the decoding worker.
+struct NoteDocumentRetentionSnapshot: Sendable {
+    enum Owner: Sendable { case note, version, proposal }
+    struct Version: Sendable {
+        let format: Int
+        let content: Data?
+        let attachmentIDsRaw: String
+    }
+    let notes: [Data?]
+    let versions: [Version]
+    let proposals: [Data?]
+
+    /// The context and its models stay on the calling executor. File retention
+    /// calls this on a detached worker with a fresh context; synchronous store
+    /// collectors can still include pending changes in their own context.
+    static func read(in context: ModelContext, excludingNoteID excluded: UUID? = nil,
+                     observeRead: (@Sendable (Owner) -> Void)? = nil) throws -> Self {
+        let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.contentFormat >= 1 }))
+            .filter { $0.id != excluded }.map { note in
+                observeRead?(.note)
+                return note.content
+            }
+        let versions = try context.fetch(FetchDescriptor<NoteVersion>())
+            .filter { $0.noteID != excluded }.map { version in
+                observeRead?(.version)
+                return Version(format: version.contentFormat, content: version.content, attachmentIDsRaw: version.attachmentIDsRaw)
+            }
+        let proposals = try context.fetch(FetchDescriptor<NotePendingEdit>())
+            .filter { $0.noteID != excluded }.map { proposal in
+                observeRead?(.proposal)
+                return proposal.proposedContent
+            }
+        return Self(notes: notes, versions: versions, proposals: proposals)
+    }
+
+    func attachmentIDs(observeDecode: (@Sendable () -> Void)? = nil) throws -> Set<UUID> {
+        func decodedIDs(_ data: Data?) throws -> [UUID] {
+            observeDecode?()
+            guard let data, case let .editable(document) = NoteContentCodec.decode(data) else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            return document.attachmentIDs
+        }
+        var ids = Set<UUID>()
+        for content in notes { ids.formUnion(try decodedIDs(content)) }
+        for version in versions {
+            let raw = version.attachmentIDsRaw.split(separator: " ")
+            let cached = raw.compactMap { UUID(uuidString: String($0)) }
+            guard cached.count == raw.count else { throw NoteDocumentStoreError.readOnly }
+            ids.formUnion(cached)
+            guard version.format == NoteDocument.currentFormat else { throw NoteDocumentStoreError.readOnly }
+            ids.formUnion(try decodedIDs(version.content))
+        }
+        for content in proposals { ids.formUnion(try decodedIDs(content)) }
+        return ids
+    }
+}
+
+/// An image imported by the editor but not yet saved. Its bytes stay with
+/// the editor session (and its draft journal) until the document that
+/// shows it is saved: the attachment row is inserted in the same save as
+/// that document, or never (requirement 7).
+struct StagedNoteAttachment: Equatable, Sendable {
+    let id: UUID
+    let filename: String
+    let contentTypeIdentifier: String
+    let byteCount: Int64
+    let digest: String
+    let data: Data
+    /// Computed once where bytes enter the engine (production loaders and
+    /// stored-byte verification run off-main). Immutable copies retain proof.
+    private let verifiedDigest: String
+    var payloadIsVerified: Bool { byteCount == Int64(data.count) && digest == verifiedDigest }
+
+    init(id: UUID, filename: String, contentTypeIdentifier: String, byteCount: Int64, digest: String, data: Data) {
+        self.id = id; self.filename = filename; self.contentTypeIdentifier = contentTypeIdentifier
+        self.byteCount = byteCount; self.digest = digest; self.data = data
+        verifiedDigest = data.isEmpty ? "" : NotePayloadDigest.sha256(data)
+    }
+
+    private init(id: UUID, copying original: StagedNoteAttachment) {
+        self.id = id; filename = original.filename; contentTypeIdentifier = original.contentTypeIdentifier
+        byteCount = original.byteCount; digest = original.digest; data = original.data
+        verifiedDigest = original.verifiedDigest
+    }
+    func copying(id: UUID) -> StagedNoteAttachment { .init(id: id, copying: self) }
+    var identityExtras: [String: NoteJSON] {
+        ["contentDigest": .string(digest), "expectedByteCount": .int(byteCount),
+         "expectedContentType": .string(contentTypeIdentifier), "expectedFilename": .string(filename)]
+    }
+}
+
+/// Immutable projection prepared away from the main actor for autosave.
+struct PreparedNoteDocument: Sendable {
+    private let source: NoteDocument
+    let content: Data
+    let title: String
+    let body: String
+    let plainText: String
+    let imageCount: Int
+    let fileCount: Int
+    let firstFileName: String?
+    let attachmentBlocks: [NoteBlock]
+
+    init(_ document: NoteDocument) throws {
+        source = document
+        content = try NoteContentCodec.encode(document)
+        title = NoteStore.normalizedTitle(document.title)
+        body = NoteTextExport.plainBody(document)
+        plainText = NoteTextExport.plainText(document)
+        attachmentBlocks = document.blocks.filter { $0.kind == .image || $0.kind == .file }
+        imageCount = attachmentBlocks.filter { $0.kind == .image }.count
+        fileCount = attachmentBlocks.filter { $0.kind == .file }.count
+        firstFileName = attachmentBlocks.first { $0.kind == .file }?.filename
+    }
+
+    /// Only a projection of these exact source values may bypass preparation.
+    func matching(_ document: NoteDocument) -> PreparedNoteDocument? {
+        source == document ? self : nil
+    }
+}
+
+enum NoteDocumentStoreError: LocalizedError, Equatable {
+    /// No live row has this id: a write that would change nothing fails.
+    case noteMissing(UUID)
+    /// The note moved on since the caller read it.
+    case staleRevision(expected: String, current: String)
+    /// Stored by a newer Attic (or unreadable): only its original bytes are kept.
+    case readOnly
+    case versionMissing(UUID)
+    case encodingFailed(String)
+    case saveFailed(String)
+    case invalidDocument(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .noteMissing(id): "No note exists with id \(id.uuidString)."
+        case let .staleRevision(expected, current):
+            "The note changed since it was read (read revision \(expected), now \(current)). Read it again and retry."
+        case .readOnly: "This note was saved by a newer version of Attic and is read-only here."
+        case let .versionMissing(id): "No saved version exists with id \(id.uuidString)."
+        case let .encodingFailed(message): "The note could not be encoded: \(message)"
+        case let .saveFailed(message): message
+        case let .invalidDocument(message): message
+        }
+    }
+}
+
+/// What the editor opens.
+struct NoteDocumentLoad: Equatable {
+    let noteID: UUID
+    let content: NoteContent
+    let revisionID: UUID?
+}
+
+enum NoteAgentWriteOutcome: Equatable {
+    /// Written; the note is at this new revision.
+    case applied(revisionToken: String)
+    /// The note is open in the editor: kept as a pending edit (by id).
+    case pending(editID: UUID)
+}
+
+enum NoteAgentWriteDisposition: Equatable {
+    case proposal, direct, refuse(String)
+}
+
+enum NoteMutationFormat: Equatable {
+    case document
+    case editable
+}
+
+struct NoteMutationPreflight {
+    let replicas: [NoteItem]
+    let canonical: NoteItem
+}
+
+private struct NotePreservationState: Hashable {
+    let format: Int
+    let content: Data?
+    let title: [UInt16]
+    let body: [UInt16]
+
+    init(_ note: NoteItem) {
+        format = note.contentFormat
+        content = note.content
+        title = Array(note.title.utf16)
+        body = Array(note.body.utf16)
+    }
+}
+
+/// The note-format side of `NoteStore`: documents, versions, agents'
+/// pending edits and reference-aware attachment retention. Every write
+/// here stages all of its rows in one context and saves them together, so
+/// a document and the version that preserves what it replaced commit (or
+/// fail) as one transaction.
+extension NoteStore {
+    /// Recently Deleted acts on a document placement, not only its row.
+    /// saveDocument commits placement, version, derived columns and row
+    /// visibility across the replica family in one transaction.
+    func removeDocumentAttachment(_ id: UUID, noteID: UUID) -> Bool {
+        guard let loaded = loadDocument(noteID: noteID), var document = loaded.content.document,
+              document.attachmentIDs.contains(id) else { return false }
+        document.blocks.removeAll { $0.attachmentID == id && ($0.kind == .image || $0.kind == .file) }
+        switch saveDocument(noteID: noteID, document: document, baseRevisionID: loaded.revisionID) {
+        case .success: return true
+        case let .failure(error): setAttachmentError(error.localizedDescription); return false
+        }
+    }
+
+    func restoreDocumentAttachment(_ row: NoteAttachment) -> Bool {
+        let noteID = row.noteID
+        guard let loaded = loadDocument(noteID: noteID), var document = loaded.content.document else { return false }
+        if !document.attachmentIDs.contains(row.id) {
+            let history: [NoteVersion]
+            do { history = try readVersions(noteID: noteID) }
+            catch {
+                NSLog("Attic attachment placement read failed")
+                recordError("This attachment’s place in the note could not be read. Try again. Your note is kept.")
+                return false
+            }
+            let past = history.compactMap { version -> (NoteDocument, Int)? in
+                guard let data = version.content, let historical = NoteContentCodec.decode(data).document,
+                      let index = historical.blocks.firstIndex(where: { $0.attachmentID == row.id }) else { return nil }
+                return (historical, index)
+            }.first
+            let block = past.map { $0.0.blocks[$0.1] } ?? (row.isImage
+                ? .image(attachmentID: row.id)
+                : .file(attachmentID: row.id, filename: row.originalFilename,
+                        contentTypeIdentifier: row.contentTypeIdentifier, byteCount: row.byteCount))
+            let index = min(max(1, past?.1 ?? document.blocks.count), document.blocks.count)
+            document.blocks.insert(block, at: index)
+        }
+        switch saveDocument(noteID: noteID, document: document, baseRevisionID: loaded.revisionID) {
+        case .success: return true
+        case let .failure(error): setAttachmentError(error.localizedDescription); return false
+        }
+    }
+
+    /// Every writer uses this before touching a physical replica. Format 0
+    /// has no document bytes; format 1 must be fully understood. A future or
+    /// damaged row makes the entire logical note read-only.
+    func noteMutationPreflight(_ noteID: UUID, format: NoteMutationFormat) throws -> NoteMutationPreflight {
+        let replicas = try liveReplicas(of: noteID)
+        guard let selected = canonical(replicas) else { throw NoteDocumentStoreError.noteMissing(noteID) }
+        for replica in replicas {
+            switch replica.contentFormat {
+            case 1:
+                guard let data = replica.content else { throw NoteDocumentStoreError.readOnly }
+                let key = ObjectIdentifier(replica)
+                let editable: Bool
+                if let cached = documentReplicaCapabilityCache[key],
+                   cached.revisionID == replica.revisionID, cached.content == data {
+                    editable = cached.editable
+                } else {
+                    let decoded = NoteContentCodec.decode(data)
+                    editable = decoded.isEditable
+                    countDocumentReplicaDecode()
+                    documentReplicaCapabilityCache[key] = (replica.revisionID, data, editable,
+                        decoded.document?.blocks.filter { $0.kind == .image || $0.kind == .file } ?? [])
+                }
+                guard editable else {
+                    throw NoteDocumentStoreError.readOnly
+                }
+            default:
+                throw NoteDocumentStoreError.readOnly
+            }
+        }
+        return NoteMutationPreflight(replicas: replicas, canonical: selected)
+    }
+
+    /// Preserve each different displaced document, including two physical
+    /// rows with the same revision token but different bytes or derived text.
+    @discardableResult
+    func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date,
+                                excludingUnchangedBase baseRevisionID: UUID? = nil) -> Int {
+        // A singleton at the excluded base cannot have a divergent sibling.
+        // Skip it before constructing and hashing whole-body UTF-16 identity;
+        // the family path below still preserves exact spellings for replicas.
+        if replicas.count == 1, let baseRevisionID,
+           replicas[0].revisionID == baseRevisionID { return 0 }
+        var seen = Set<NotePreservationState>()
+        var inserted = 0
+        let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }
+        let commonBaseState = Set(baseReplicas.map(NotePreservationState.init)).count == 1
+            ? baseReplicas.first.map(NotePreservationState.init) : nil
+        for replica in replicas where seen.insert(NotePreservationState(replica)).inserted {
+            if baseRevisionID != nil, replica.revisionID == baseRevisionID,
+               commonBaseState == NotePreservationState(replica) { continue }
+            if let latest = latestVersion(noteID: replica.id), isSameState(latest, replica) { continue }
+            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext)
+            inserted += 1
+        }
+        return inserted
+    }
+
+    // MARK: Metadata
+
+    /// Pin to Top / Unpin from Top, on every replica. Metadata, like tags:
+    /// the note keeps its place in the newest-first order and its revision.
+    @discardableResult
+    func setPinned(_ pinned: Bool, noteID: UUID) -> Bool {
+        switch setPinnedOutcome(pinned, noteID: noteID) {
+        case .changed, .unchanged: return true
+        case .failed: return false
+        }
+    }
+
+    /// What a pin request did to the UUID's whole replica family.
+    enum PinResult: Equatable {
+        /// At least one replica disagreed and every replica now agrees.
+        case changed
+        /// Every replica already had the requested state; nothing was written.
+        case unchanged
+        /// The note is gone or the write was refused or did not save.
+        case failed
+    }
+
+    /// The replica-aware pin: the store, not a presentation representative,
+    /// decides between a mutation and a no-op across every live replica, and
+    /// says which happened so history records the actual result.
+    @discardableResult
+    func setPinnedOutcome(_ pinned: Bool, noteID: UUID) -> PinResult {
+        do {
+            let replicas = try liveReplicas(of: noteID)
+            guard !replicas.isEmpty else { throw NoteDocumentStoreError.noteMissing(noteID) }
+            guard replicas.contains(where: { $0.isPinned != pinned }) else { return .unchanged }
+            let timestamp = pinned ? currentDate : nil
+            for replica in replicas { replica.pinnedAt = timestamp }
+        } catch {
+            modelContext.rollback()
+            recordError(error.localizedDescription)
+            return .failed
+        }
+        return commitStagedChanges() ? .changed : .failed
+    }
+
+    // MARK: Search
+
+    /// All notes' search: titles, text, tags, image or file names, and
+    /// displayed dates (a search that is a date, "1 October", finds the
+    /// notes whose date chips show that day). Read from its own context away
+    /// from the main actor, so typing never waits for it; the caller keeps
+    /// its earlier results on screen meanwhile.
+    func searchNoteIDs(matching query: String) async throws -> Set<UUID> {
+        let container = self.container
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        let tagText = text.hasPrefix("#") ? String(text.dropFirst()) : text
+        // Stored text holds a chip's day as its ISO day (`2026-10-01`).
+        let dayText = Self.searchedDay(text)?.isoString ?? ""
+        return try await Task.detached(priority: .userInitiated) {
+            let context = ModelContext(container)
+            let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { note in
+                note.deletedAt == nil && (note.title.localizedStandardContains(text)
+                    || note.plainText.localizedStandardContains(text)
+                    || note.body.localizedStandardContains(text)
+                    || (!tagText.isEmpty && note.tagsRaw.localizedStandardContains(tagText))
+                    || (!dayText.isEmpty && note.plainText.contains(dayText)))
+            }))
+            var ids = Set(notes.map(\.id))
+            let files = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { attachment in
+                attachment.deletedAt == nil && attachment.originalFilename.localizedStandardContains(text)
+            }))
+            ids.formUnion(files.map(\.noteID))
+            return ids
+        }.value
+    }
+
+    /// The day a search names when the whole search is a date ("1 Oct",
+    /// "October 1, 2026", "tomorrow"); nil for anything else, so words that
+    /// merely contain a date stay a text search.
+    nonisolated static func searchedDay(_ text: String, calendar: Calendar = .current) -> NoteDay? {
+        // A time ("10:30", "2pm", "now") reads as today: not a day you
+        // searched for (review S4-R4).
+        let timeOnly = #"\d:\d\d|\d\s*[ap]\.?m\b|^\s*(now|noon|midnight|tonight)\s*$"#
+        guard text.range(of: timeOnly, options: [.regularExpression, .caseInsensitive]) == nil,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
+        let whole = NSRange(text.startIndex..., in: text)
+        guard let match = detector.firstMatch(in: text, options: [], range: whole),
+              match.range == whole, let date = match.date else { return nil }
+        return NoteDay(date: date, calendar: calendar)
+    }
+
+    // MARK: Loading
+
+    func loadDocument(noteID: UUID) -> NoteDocumentLoad? {
+        guard let note = note(withID: noteID), note.usesDocumentFormat, let data = note.content else { return nil }
+        return NoteDocumentLoad(noteID: noteID, content: NoteContentCodec.decode(data), revisionID: note.revisionID)
+    }
+
+    // MARK: Saving
+
+    /// Creates a note in the new format. The reserved id must remain stable;
+    /// callers that want a new note supply a new id themselves.
+    func createDocumentNote(
+        id: UUID,
+        document: NoteDocument,
+        staged: [StagedNoteAttachment] = [],
+        prepared: PreparedNoteDocument? = nil,
+        tags: [String]? = nil,
+        resolvingProposal: UUID? = nil
+    ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
+        let context = modelContext
+        if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
+            if existing.contains(where: { $0.deletedAt != nil }) { return .failure(.noteMissing(id)) }
+            // A crashed first save or a deleted row may already own this ID.
+            // The caller has no revision proving it may replace that row.
+            return .failure(.staleRevision(expected: NoteItem.initialRevisionToken,
+                                           current: canonical(existing)?.revisionToken ?? NoteItem.initialRevisionToken))
+        }
+        let projection: PreparedNoteDocument
+        let attachmentPlan: NoteAttachmentAdmission.Plan
+        do {
+            guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+            projection = try prepared?.matching(document) ?? PreparedNoteDocument(document)
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: id)
+        } catch let error as NoteDocumentStoreError {
+            return .failure(error)
+        } catch {
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
+        let timestamp = currentDate
+        let note = NoteItem(id: id, createdAt: timestamp, updatedAt: timestamp)
+        let revisionID: UUID
+        do {
+            revisionID = stageValidated(document, on: [note], timestamp: timestamp, revision: 0, projection: projection,
+                                   tags: tags.map(AtticTag.encode))
+            stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
+        } catch let error as NoteDocumentStoreError {
+            context.rollback()
+            return .failure(error)
+        } catch {
+            context.rollback()
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
+        if let resolvingProposal {
+            guard let family = try? pendingEditRows(resolvingProposal), let first = family.first,
+                  NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [first.noteID]) else {
+                context.rollback()
+                return .failure(.saveFailed("The proposal changed. Review it again."))
+            }
+            family.forEach(context.delete)
+        }
+        context.insert(note)
+        guard commitStagedChanges() else {
+            return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
+        }
+        present(note)
+        refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+        for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
+        return .success((id, revisionID))
+    }
+
+    /// Saves an editor's document to every replica. When the presented copy
+    /// moved past `baseRevisionID`, reject the draft. Divergent secondary
+    /// replicas are preserved as versions before the family is converged.
+    ///
+    /// `tags` (the editor's tag set, when the person changed it) is written
+    /// in the same transaction as the text, so a title shorthand's text and
+    /// tag commit together. When only the tags changed (every replica already
+    /// holds this exact document), only the tags are written: like
+    /// `setTags`, that neither moves the note nor changes its revision.
+    func saveDocument(
+        noteID: UUID,
+        document: NoteDocument,
+        baseRevisionID: UUID?,
+        staged: [StagedNoteAttachment] = [],
+        prepared: PreparedNoteDocument? = nil,
+        tags: [String]? = nil
+    ) -> Result<UUID, NoteDocumentStoreError> {
+        let preflight: NoteMutationPreflight
+        do {
+            preflight = try noteMutationPreflight(noteID, format: .document)
+        } catch {
+            return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
+        }
+        let replicas = preflight.replicas
+        // The editor based its draft on the presented row. A secondary row
+        // arriving later may become the preflight's sorting winner before the
+        // page refreshes, but it does not make that presented base stale.
+        let main = note(withID: noteID) ?? preflight.canonical
+        let presentedRevisionID = main.revisionID
+        documentSaveAttempt?(baseRevisionID, presentedRevisionID)
+        guard replicas.contains(where: { $0 === main }),
+              main.usesDocumentFormat, presentedRevisionID == baseRevisionID else {
+            return .failure(.staleRevision(expected: baseRevisionID?.uuidString ?? NoteItem.initialRevisionToken,
+                                           current: main.revisionToken))
+        }
+        let encodedTags = tags.map(AtticTag.encode)
+        if staged.isEmpty, let encodedTags, let presentedRevisionID,
+           let projection = try? prepared?.matching(document) ?? PreparedNoteDocument(document),
+           replicas.allSatisfy({ $0.content == projection.content && $0.contentFormat == document.format
+               && $0.revisionID == presentedRevisionID }) {
+            guard replicas.contains(where: { $0.tagsRaw != encodedTags }) else { return .success(presentedRevisionID) }
+            for replica in replicas { replica.tagsRaw = encodedTags }
+            guard commitStagedChanges() else {
+                return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
+            }
+            documentSaveCommitted?(baseRevisionID, presentedRevisionID)
+            return .success(presentedRevisionID)
+        }
+        // Reject an invalid batch before touching any presented replica or
+        // displaced version. SwiftData rollback need not restore the same
+        // in-memory object graph on every supported macOS version.
+        let projection: PreparedNoteDocument
+        let attachmentPlan: NoteAttachmentAdmission.Plan
+        let base: NoteDocument
+        let placements: NoteDocument
+        do {
+            guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+            projection = try prepared?.matching(document) ?? PreparedNoteDocument(document)
+            // Preflight already proved these exact bytes editable. Local
+            // staging also records the placements with the bytes it writes.
+            // Re-decoding the entire body here (and again for removed IDs)
+            // made every prepared autosave block main for hundreds of ms.
+            guard let cached = documentReplicaCapabilityCache[ObjectIdentifier(main)], cached.editable,
+                  cached.revisionID == main.revisionID, cached.content == main.content else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            base = NoteDocument(blocks: cached.attachmentBlocks)
+            placements = NoteDocument(blocks: projection.attachmentBlocks)
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: placements, noteID: noteID,
+                previouslyReferencedBy: base)
+        } catch let error as NoteDocumentStoreError {
+            return .failure(error)
+        } catch {
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
+        let timestamp = currentDate
+        let context = modelContext
+        let priorIDs = Set(base.attachmentIDs)
+        let removedIDs = priorIDs.subtracting(placements.attachmentIDs)
+        stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
+                               excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
+        do {
+            let revisionID = stageValidated(document, on: replicas, timestamp: timestamp,
+                                       revision: replicas.map(\.revision).max() ?? 0, projection: projection,
+                                       tags: encodedTags)
+            stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
+            let visibilityChanged = try stageAttachmentVisibility(referencedBy: placements, noteID: noteID,
+                timestamp: timestamp, rows: attachmentPlan.existingRows)
+            guard commitStagedChanges() else {
+                return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
+            }
+            refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty || visibilityChanged)
+            for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
+            documentSaveCommitted?(baseRevisionID, presentedRevisionID)
+            return .success(revisionID)
+        } catch let error as NoteDocumentStoreError {
+            context.rollback()
+            return .failure(error)
+        } catch {
+            context.rollback()
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
+    }
+
+    /// Writes `document` and its derived columns onto rows (not saved).
+    @discardableResult
+    private func stage(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
+                       prepared: PreparedNoteDocument? = nil, tags: String? = nil) throws -> UUID {
+        guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+        let projection: PreparedNoteDocument
+        do { projection = try prepared?.matching(document) ?? PreparedNoteDocument(document) }
+        catch { throw NoteDocumentStoreError.encodingFailed(error.localizedDescription) }
+        return stageValidated(document, on: replicas, timestamp: timestamp, revision: revision,
+                              projection: projection, tags: tags)
+    }
+
+    /// Both save entry points have already checked writability and prepared
+    /// the projection before admission. Agent paths use `stage` above.
+    private func stageValidated(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
+                                projection: PreparedNoteDocument, tags: String? = nil) -> UUID {
+        let revisionID = UUID()
+        let canonical = canonical(replicas)
+        for replica in replicas {
+            replica.content = projection.content
+            replica.contentFormat = document.format
+            replica.title = projection.title
+            replica.body = projection.body
+            replica.plainText = projection.plainText
+            replica.imageCount = projection.imageCount
+            replica.fileCount = projection.fileCount
+            replica.firstFileName = projection.firstFileName
+            replica.revision = revision &+ 1
+            replica.revisionID = revisionID
+            replica.updatedAt = timestamp
+            replica.deletedAt = nil
+            replica.deletedAttachmentIDsRaw = nil
+            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks)
+            if let canonical, canonical !== replica {
+                replica.createdAt = canonical.createdAt
+                replica.tagsRaw = canonical.tagsRaw
+                replica.taskID = canonical.taskID
+                replica.pinnedAt = canonical.pinnedAt
+                replica.externalEditorName = canonical.externalEditorName
+                replica.externalEditedAt = canonical.externalEditedAt
+            }
+            if let tags { replica.tagsRaw = tags }
+        }
+        return revisionID
+    }
+
+    /// One admission component used by both pre-edit gates and the final
+    /// transaction. The candidate is the complete proposed document, so a
+    /// copied missing placement cannot pass a reduced ID-only check.
+    private enum NoteAttachmentAdmission {
+        struct Plan {
+            let new: [StagedNoteAttachment]
+            let nextSortIndex: Int64
+            let repairs: [(NoteAttachment, StagedNoteAttachment)]
+            let existingRows: [NoteAttachment]
+        }
+
+        static func evaluate(_ staged: [StagedNoteAttachment], referencedBy document: NoteDocument,
+                             previouslyReferencedBy base: NoteDocument?, rows: [NoteAttachment],
+                             metadataOnlyIDs: Set<UUID>) throws -> Plan {
+        let shown = Set(document.attachmentIDs)
+        guard staged.filter({ shown.contains($0.id) }).allSatisfy({
+            $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment
+                && $0.filename.utf8.count <= AttachmentLimits.maxFilenameUTF8Bytes
+                && (metadataOnlyIDs.contains($0.id) || $0.payloadIsVerified)
+        }) else {
+            throw NoteDocumentStoreError.invalidDocument("An image has no complete payload.")
+        }
+        // Divergent replicas of an existing file never block a save; its
+        // largest replica counts toward the limits.
+        let existing = Set(rows.map(\.id))
+        let visible = Dictionary(rows.filter { shown.contains($0.id) }.map { ($0.id, $0) },
+            uniquingKeysWith: { first, other in other.byteCount > first.byteCount ? other : first }).values
+        let new = staged.filter { shown.contains($0.id) && !existing.contains($0.id) }
+        var repairs: [(NoteAttachment, StagedNoteAttachment)] = []
+        for item in staged where shown.contains(item.id) && existing.contains(item.id) && !metadataOnlyIDs.contains(item.id) {
+            let family = rows.filter { $0.id == item.id }
+            guard family.allSatisfy({ $0.byteCount == item.byteCount && $0.contentDigest == item.digest
+                && NoteTextReplacement.utf16Equal($0.contentTypeIdentifier, item.contentTypeIdentifier)
+                && ($0.payload == nil || $0.payload == item.data) }) else {
+                throw NoteDocumentStoreError.invalidDocument("Stored attachment bytes disagree with recovery. Recovery is being kept.")
+            }
+            repairs += family.filter { $0.payload == nil }.map { ($0, item) }
+        }
+        let baseIDs = Set(base?.attachmentIDs ?? [])
+        let addedIDs = shown.subtracting(baseIDs)
+        let missing = shown.subtracting(existing).subtracting(new.map(\.id))
+        let baseBlocks = Dictionary(grouping: (base?.blocks ?? []).compactMap { block -> (UUID, NoteBlock)? in
+            guard let id = block.attachmentID, block.kind == .image || block.kind == .file else { return nil }
+            return (id, block)
+        }, by: { $0.0 })
+        let unchangedMissing = missing.isEmpty || document.blocks.filter { $0.attachmentID.map(missing.contains) == true }.allSatisfy { block in
+            guard let id = block.attachmentID, let originals = baseBlocks[id] else { return false }
+            return originals.contains { pair in
+                let original = pair.1
+                return block.id == original.id && block.kind == original.kind
+                    && block.filename.map { Array($0.utf16) } == original.filename.map { Array($0.utf16) }
+                    && block.contentTypeIdentifier.map { Array($0.utf16) } == original.contentTypeIdentifier.map { Array($0.utf16) }
+                    && block.byteCount == original.byteCount
+                    && block.pixelWidth == original.pixelWidth && block.pixelHeight == original.pixelHeight
+            }
+        }
+        let noIncrease = addedIDs.isEmpty
+        // A missing original keeps its placement and counts toward the same
+        // budget as a stored file. Use its recorded size; older images with
+        // no size reserve the per-file ceiling rather than counting as zero.
+        let missingSizes = missing.map { id in
+            (baseBlocks[id] ?? []).map { pair in
+                let block = pair.1
+                let recorded: Int64? = if case let .int(size)? = block.extras["expectedByteCount"] { size } else { nil }
+                if block.byteCount == nil && recorded == nil { return AttachmentLimits.maxBytesPerAttachment }
+                return max(block.byteCount ?? 0, recorded ?? 0)
+            }.max()
+                ?? AttachmentLimits.maxBytesPerAttachment
+        }
+        let total = visible.map(\.byteCount) + new.map(\.byteCount) + missingSizes
+        let totalBytes = total.reduce(Int64.zero) { partial, size in
+            let (sum, overflow) = partial.addingReportingOverflow(size)
+            return overflow ? Int64.max : sum
+        }
+        guard shown.count <= AttachmentLimits.maxAttachmentsPerNote || (noIncrease && shown.count <= baseIDs.count),
+              missing.isSubset(of: baseIDs), unchangedMissing,
+              missingSizes.allSatisfy({ noIncrease || ($0 > 0 && $0 <= AttachmentLimits.maxBytesPerAttachment) }),
+              visible.allSatisfy({ $0.byteCount > 0 && ($0.byteCount <= AttachmentLimits.maxBytesPerAttachment
+                  || (noIncrease && baseIDs.contains($0.id))) }),
+              totalBytes <= AttachmentLimits.maxBytesPerNote || noIncrease else {
+            throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
+        }
+        return Plan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1, repairs: repairs, existingRows: rows)
+        }
+    }
+
+    /// Staged images the document no longer shows (an undone paste) are
+    /// ignored. A metadata-only source may be preflighted before its read;
+    /// the complete payload is checked again before editor insertion/save.
+    private func attachmentStagePlan(
+        _ staged: [StagedNoteAttachment], referencedBy document: NoteDocument,
+        noteID: UUID, previouslyReferencedBy base: NoteDocument? = nil,
+        metadataOnlyIDs: Set<UUID> = []
+    ) throws -> NoteAttachmentAdmission.Plan {
+        try NoteAttachmentAdmission.evaluate(staged, referencedBy: document,
+            previouslyReferencedBy: base, rows: attachmentRows(forNoteID: noteID),
+            metadataOnlyIDs: metadataOnlyIDs)
+    }
+
+    /// Pre-edit controller entry point: exactly the same rule as final save.
+    func attachmentAdmissionFailure(noteID: UUID, document: NoteDocument,
+                                    staged: [StagedNoteAttachment], metadataOnlyIDs: Set<UUID> = []) -> String? {
+        do {
+            let base: NoteDocument?
+            if let main = note(withID: noteID) {
+                let preflight = try noteMutationPreflight(noteID, format: .document)
+                guard preflight.replicas.contains(where: { $0 === main }),
+                      let cached = documentReplicaCapabilityCache[ObjectIdentifier(main)], cached.editable,
+                      cached.revisionID == main.revisionID, cached.content == main.content else {
+                    throw NoteDocumentStoreError.readOnly
+                }
+                base = NoteDocument(blocks: cached.attachmentBlocks)
+            } else { base = nil } // A never-saved draft has no committed placements.
+            _ = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID,
+                                        previouslyReferencedBy: base, metadataOnlyIDs: metadataOnlyIDs)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Inserts validated rows; note, rows and versions still save together.
+    private func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
+                                  context: ModelContext, timestamp: Date) {
+        for (row, item) in plan.repairs { row.payload = item.data }
+        var nextIndex = plan.nextSortIndex
+        for item in plan.new {
+            let row = NoteAttachment(
+                id: item.id,
+                noteID: noteID,
+                originalFilename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier,
+                byteCount: item.byteCount,
+                sortIndex: nextIndex,
+                contentDigest: item.digest,
+                createdAt: timestamp,
+                payload: item.data
+            )
+            nextIndex &+= 1
+            context.insert(row)
+        }
+    }
+
+    /// The document, deletion timestamp and displaced version commit in the
+    /// same SwiftData save. Undo can restore the same row by referencing it
+    /// again; purge waits for versions, drafts and proposals to release it.
+    @discardableResult
+    private func stageAttachmentVisibility(referencedBy document: NoteDocument, noteID: UUID,
+                                           timestamp: Date, rows: [NoteAttachment]? = nil) throws -> Bool {
+        let shown = Set(document.attachmentIDs)
+        var changed = false
+        for row in try rows ?? attachmentRows(forNoteID: noteID) {
+            if shown.contains(row.id) {
+                if row.deletedAt != nil {
+                    changed = true
+                    row.updatedAt = timestamp
+                }
+                row.deletedAt = nil
+            } else if row.deletedAt == nil {
+                row.deletedAt = timestamp
+                row.updatedAt = timestamp
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    private func refreshAfterDocumentSave(insertedAttachments: Bool) {
+        // A plain text save changes no attachment: the rows already shown are
+        // current. New rows need a reload so they are presented and their
+        // files reconciled.
+        guard insertedAttachments else { return }
+        do {
+            try reloadAfterDocumentSave()
+        } catch {
+            recordError("Saved, but the note could not be refreshed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: Versions
+
+    /// Keeps the note as it is now as a version, unless the newest version
+    /// already holds this exact revision.
+    @discardableResult
+    func recordVersion(noteID: UUID, reason: NoteVersionReason) -> Bool {
+        guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { return false }
+        let inserted = stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate)
+        if inserted == 0 { return true }
+        guard commitStagedChanges() else { return false }
+        thinVersions(noteID: noteID)
+        return true
+    }
+
+    /// Keep every snapshot from the last day, then the newest in each hour
+    /// for a week and each day for a month. Proposal bases and recovery bases
+    /// remain until their owner is gone. Safety versions taken at exactly the
+    /// same instant are kept together so divergent replicas are not collapsed.
+    func thinVersions(noteID: UUID) {
+        let physical: [NoteVersion]
+        let protectedIDs: Set<UUID>
+        let recoveryBases: Set<UUID>
+        do {
+            // Discover UUIDs on this note, then fetch their complete physical
+            // families. A divergent replica can belong to another note.
+            let targetID = noteID
+            let target = try modelContext.fetch(FetchDescriptor<NoteVersion>(
+                predicate: #Predicate { $0.noteID == targetID }))
+            let familyIDs = Array(Set(target.map(\.id)))
+            guard !familyIDs.isEmpty else { return }
+            physical = try modelContext.fetch(FetchDescriptor<NoteVersion>(
+                predicate: #Predicate { familyIDs.contains($0.id) }))
+            let proposals: [NotePendingEdit]
+            if let override = pendingEditRetentionRowsOverride {
+                proposals = try override(noteID)
+            } else {
+                proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
+            }
+            // Rich snapshots are retained: an image or table may be the
+            // only recoverable copy of content absent from today's note.
+            let rich = physical.filter { version in
+                !version.attachmentIDs.isEmpty || version.content.flatMap { NoteContentCodec.decode($0).document }
+                    .map { !$0.attachmentIDs.isEmpty || $0.blocks.contains { $0.kind == .table } } == true
+            }.map(\.id)
+            protectedIDs = Set(proposals.compactMap(\.baseVersionID)).union(rich).union(historyRetainedVersionIDs)
+            recoveryBases = try recoveryProtectedRevisionIDs()
+        } catch {
+            // Unknown proposal, version or recovery ownership keeps history.
+            return
+        }
+        let copies = Dictionary(grouping: physical, by: \.id)
+        let all = copies.values.filter { family in
+            family.contains { $0.noteID == noteID }
+        }.compactMap { family in family.max { $0.createdAt < $1.createdAt } }.sorted { lhs, rhs in
+            lhs.createdAt != rhs.createdAt ? lhs.createdAt > rhs.createdAt : lhs.id.uuidString > rhs.id.uuidString
+        }
+        let day: TimeInterval = 86_400
+        let hour: TimeInterval = 3_600
+        let now = currentDate
+        var buckets = Set<Int64>()
+        var keptTimes = Set<Date>()
+        var removed = false
+        for version in all {
+            let family = copies[version.id] ?? []
+            guard NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [noteID],
+                proposalBases: protectedIDs, recoveryBases: recoveryBases) else {
+                keptTimes.formUnion(family.map(\.createdAt))
+                continue
+            }
+            let age = max(0, now.timeIntervalSince(version.createdAt))
+            if age < day { keptTimes.insert(version.createdAt); continue }
+            if keptTimes.contains(version.createdAt) { continue }
+            let bucket: Int64
+            if age < 7 * day {
+                bucket = Int64(version.createdAt.timeIntervalSince1970 / hour)
+            } else if age < 30 * day {
+                bucket = Int64(version.createdAt.timeIntervalSince1970 / day) - 1_000_000_000
+            } else {
+                family.forEach(modelContext.delete)
+                removed = true
+                continue
+            }
+            if buckets.insert(bucket).inserted {
+                keptTimes.insert(version.createdAt)
+            } else {
+                family.forEach(modelContext.delete)
+                removed = true
+            }
+        }
+        if removed { _ = commitStagedChanges() }
+    }
+
+    /// Newest first, one per id.
+    func versions(noteID: UUID) -> [NoteVersion] {
+        do { return try readVersions(noteID: noteID) }
+        catch {
+            reportAuxiliaryReadFailure("Version history could not be read: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    func readVersions(noteID: UUID) throws -> [NoteVersion] {
+        let targetID = noteID
+        let rows = try fetchAuxiliary(FetchDescriptor<NoteVersion>(
+            predicate: #Predicate { $0.noteID == targetID }
+        ))
+        var seen = Set<UUID>()
+        return rows.sorted { lhs, rhs in
+            lhs.createdAt != rhs.createdAt ? lhs.createdAt > rhs.createdAt : lhs.id.uuidString > rhs.id.uuidString
+        }.filter { seen.insert($0.id).inserted }
+    }
+
+    /// Restores a version. What the note holds now is kept as a version
+    /// first, in the same save: Restore succeeds only when both commit.
+    func restoreVersion(_ versionID: UUID, noteID: UUID, expectedRevisionID: UUID? = nil,
+                        preservationID: UUID? = nil) -> Result<String, NoteDocumentStoreError> {
+        let preflight: NoteMutationPreflight
+        do {
+            preflight = try noteMutationPreflight(noteID, format: .editable)
+        } catch {
+            return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
+        }
+        let replicas = preflight.replicas
+        if let expectedRevisionID, preflight.canonical.revisionID != expectedRevisionID {
+            return .failure(.staleRevision(expected: expectedRevisionID.uuidString, current: preflight.canonical.revisionToken))
+        }
+        let targetID = versionID
+        let family = ((try? modelContext.fetch(FetchDescriptor<NoteVersion>(
+            predicate: #Predicate { $0.id == targetID }
+        ))) ?? [])
+        guard let version = family.first, version.noteID == noteID else {
+            return .failure(.versionMissing(versionID))
+        }
+        // Admission uses the same complete-family rule as retention. No
+        // member may be ambiguous, unreadable or owned by another note.
+        guard NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [noteID],
+            proposalBases: [], recoveryBases: []) else {
+            let unreadable = family.contains { row in
+                row.reason == nil || !((row.contentFormat == NoteDocument.currentFormat
+                        && row.content.map { NoteContentCodec.decode($0).isEditable } == true))
+            }
+            return .failure(.invalidDocument(unreadable
+                ? "This saved version can't be read by this version of Attic."
+                : "This saved version has conflicting copies and cannot be restored safely."))
+        }
+        let timestamp = currentDate
+        let context = modelContext
+        if let preservationID {
+            stageVersion(of: preflight.canonical, reason: .beforeRestore, timestamp: timestamp,
+                         context: context, id: preservationID)
+            stageDisplacedReplicas(replicas.filter { $0 !== preflight.canonical }, reason: .beforeRestore, timestamp: timestamp)
+        } else {
+            stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
+        }
+        let revisionID = UUID()
+        let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
+        let derived = Self.derivedColumns(content: version.content, format: version.contentFormat,
+                                          title: version.title, body: version.body)
+        for replica in replicas {
+            replica.content = version.contentFormat >= 1 ? version.content : nil
+            replica.contentFormat = version.contentFormat
+            replica.title = derived.title
+            replica.body = derived.body
+            replica.plainText = derived.plainText
+            replica.imageCount = derived.imageCount
+            replica.fileCount = derived.fileCount
+            replica.firstFileName = derived.firstFileName
+            replica.revision = revision
+            replica.revisionID = revisionID
+            replica.updatedAt = timestamp
+            replica.deletedAt = nil
+            replica.deletedAttachmentIDsRaw = nil
+            if replica !== preflight.canonical {
+                replica.createdAt = preflight.canonical.createdAt
+                replica.tagsRaw = preflight.canonical.tagsRaw
+                replica.taskID = preflight.canonical.taskID
+                replica.pinnedAt = preflight.canonical.pinnedAt
+                replica.externalEditorName = preflight.canonical.externalEditorName
+                replica.externalEditedAt = preflight.canonical.externalEditedAt
+            }
+        }
+        if let data = version.content, let restored = NoteContentCodec.decode(data).document {
+            do {
+                let rows = try attachmentRows(forNoteID: noteID)
+                try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp, rows: rows)
+            }
+            catch {
+                context.rollback()
+                return .failure(.saveFailed(error.localizedDescription))
+            }
+        }
+
+        #if DEBUG
+        if s7FailNextRestoreForUITesting,
+           ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
+           PreviewIdentity.isPreview(Bundle.main.bundleIdentifier) {
+            s7FailNextRestoreForUITesting = false
+            context.rollback()
+            return .failure(.saveFailed("The version could not be saved. The current note is kept. Try again."))
+        }
+        #endif
+        guard commitStagedChanges() else {
+            return .failure(.saveFailed(lastErrorMessage ?? "The version could not be restored."))
+        }
+        refreshAfterDocumentSave(insertedAttachments: true)
+        return .success(revisionID.uuidString)
+    }
+
+    func stageVersion(of replica: NoteItem, reason: NoteVersionReason, timestamp: Date, context: ModelContext,
+                      id: UUID = UUID()) {
+        let attachmentIDs: [UUID]
+        if replica.usesDocumentFormat, let data = replica.content,
+           case let .editable(document) = NoteContentCodec.decode(data) {
+            attachmentIDs = document.attachmentIDs
+        } else {
+            // Newer or unreadable content: keep every row the note has.
+            attachmentIDs = ((try? attachmentRows(forNoteID: replica.id)) ?? [])
+                .filter { $0.deletedAt == nil }.map(\.id)
+        }
+        context.insert(NoteVersion(
+            id: id,
+            noteID: replica.id,
+            createdAt: timestamp,
+            reason: reason,
+            content: replica.content,
+            contentFormat: replica.contentFormat,
+            title: replica.title,
+            body: replica.body,
+            attachmentIDs: attachmentIDs,
+            sourceRevisionID: replica.revisionID
+        ))
+    }
+
+    private func latestVersion(noteID: UUID) -> NoteVersion? {
+        let targetID = noteID
+        var descriptor = FetchDescriptor<NoteVersion>(
+            predicate: #Predicate { $0.noteID == targetID },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first
+    }
+
+    private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
+        guard version.contentFormat == note.contentFormat, version.content == note.content,
+              NoteTextReplacement.utf16Equal(version.title, note.title),
+              NoteTextReplacement.utf16Equal(version.body, note.body) else { return false }
+        return true
+    }
+
+    /// The replica presentation shows for these rows.
+    private func canonical(_ replicas: [NoteItem]) -> NoteItem? {
+        Self.canonicalReplicas(from: replicas).first
+    }
+
+    static func derivedColumns(content: Data?, format: Int, title: String, body: String)
+        -> (title: String, body: String, plainText: String, imageCount: Int, fileCount: Int, firstFileName: String?) {
+        guard format >= 1, let content else {
+            return (title, body, body.isEmpty ? title : title + "\n" + body, 0, 0, nil)
+        }
+        guard let document = NoteContentCodec.decode(content).document else { return (title, body, title, 0, 0, nil) }
+        return (normalizedTitle(document.title), NoteTextExport.plainBody(document), NoteTextExport.plainText(document),
+                document.blocks.filter { $0.kind == .image }.count,
+                document.blocks.filter { $0.kind == .file }.count,
+                document.blocks.first { $0.kind == .file }?.filename)
+    }
+
+    // MARK: Agent edits (requirement 5)
+
+    /// An agent's whole-note edit. The note must exist, `baseRevisionToken`
+    /// must be the token the agent read, and the write must change a row;
+    /// anything else fails. A note on screen receives a proposal instead.
+    func agentWrite(
+        noteID: UUID,
+        baseRevisionToken: String,
+        document: NoteDocument,
+        agentName: String,
+        disposition: NoteAgentWriteDisposition
+    ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
+        if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        let preflight: NoteMutationPreflight
+        do {
+            preflight = try noteMutationPreflight(noteID, format: disposition == .proposal ? .editable : .document)
+        } catch {
+            return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
+        }
+        let replicas = preflight.replicas
+        let current = preflight.canonical
+        guard current.revisionToken == baseRevisionToken else {
+            return .failure(.staleRevision(expected: baseRevisionToken, current: current.revisionToken))
+        }
+        if let content = current.content, case let .editable(base) = NoteContentCodec.decode(content) {
+            do { try NoteAgentTextSafety.validate(base: base, proposed: document) }
+            catch { return .failure(.saveFailed(error.localizedDescription)) }
+        }
+        let data: Data
+        guard document.isWritableByThisBuild else { return .failure(.readOnly) }
+        do {
+            data = try NoteContentCodec.encode(document)
+        } catch {
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
+        let timestamp = currentDate
+        if disposition == .proposal {
+            // The proposal and the exact base it compared with commit together.
+            let baseVersionID = UUID()
+            modelContext.insert(NoteVersion(id: baseVersionID, noteID: noteID, createdAt: timestamp,
+                                            reason: .beforeAgentEdit, content: current.content,
+                                            contentFormat: current.contentFormat, title: current.title, body: current.body,
+                                            attachmentIDs: (try? attachmentRows(forNoteID: noteID).map(\.id)) ?? [],
+                                            sourceRevisionID: current.revisionID))
+            let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
+                                       proposedContent: data, agentName: agentName, createdAt: timestamp,
+                                       baseVersionID: baseVersionID)
+            modelContext.insert(edit)
+            guard commitStagedChanges() else {
+                return .failure(.saveFailed(lastErrorMessage ?? "The edit could not be kept."))
+            }
+            return .success(.pending(editID: edit.id))
+        }
+        stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+        do {
+            let revisionID = try stage(document, on: replicas, timestamp: timestamp,
+                                       revision: replicas.map(\.revision).max() ?? 0)
+            attributeExternalEdit(replicas, name: agentName, at: timestamp)
+            guard commitStagedChanges() else {
+                return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
+            }
+            return .success(.applied(revisionToken: revisionID.uuidString))
+        } catch let error as NoteDocumentStoreError {
+            modelContext.rollback()
+            return .failure(error)
+        } catch {
+            modelContext.rollback()
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
+    }
+
+    /// The owner-facing notice stays readable; database details belong in the log.
+    func reportProposalReadFailure(_ error: Error) {
+        NSLog("Attic proposals read failed")
+        reportAuxiliaryReadFailure("Proposals could not be read. Reopen Notes to try again. Your notes are kept.")
+    }
+
+    /// Oldest first, one per id.
+    func pendingEdits(noteID: UUID) -> [NotePendingEdit] {
+        do { return try readPendingEdits(noteID: noteID) }
+        catch {
+            reportProposalReadFailure(error)
+            return []
+        }
+    }
+
+    func readPendingEdits(noteID: UUID) throws -> [NotePendingEdit] {
+        pendingEditFetchCount += 1
+        let targetID = noteID
+        let rows = try fetchAuxiliary(FetchDescriptor<NotePendingEdit>(
+            predicate: #Predicate { $0.noteID == targetID }
+        ))
+        var seen = Set<UUID>()
+        return rows.sorted { lhs, rhs in
+            lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id.uuidString < rhs.id.uuidString
+        }.filter { seen.insert($0.id).inserted }
+    }
+
+    /// Runs when the user leaves a note: each pending edit whose base is
+    /// still the note's revision applies (a version first, then the edit,
+    /// then the pending row goes, in one save); any other waits for review.
+    /// Returns how many applied.
+    @discardableResult
+    func applyPendingEdits(noteID: UUID) -> Int {
+        var applied = 0
+        for edit in pendingEdits(noteID: noteID) {
+            guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { break }
+            let replicas = preflight.replicas
+            let current = preflight.canonical
+            guard let editRows = try? pendingEditRows(edit.id),
+                  NotePhysicalFamilyRetention.proposalEligible(editRows, noteIDs: [noteID]),
+                  !edit.needsReview, !edit.isDeletion else { continue }
+            guard current.revisionToken == edit.baseRevisionToken,
+                  let data = edit.proposedContent,
+                  case let .editable(document) = NoteContentCodec.decode(data),
+                  let baseData = current.content,
+                  case let .editable(base) = NoteContentCodec.decode(baseData),
+                  (try? NoteAgentTextSafety.validate(base: base, proposed: document)) != nil else {
+                if editRows.contains(where: { !$0.needsReview }) {
+                    editRows.forEach { $0.needsReview = true }
+                    _ = commitStagedChanges()
+                }
+                continue
+            }
+            let timestamp = currentDate
+            stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+            do {
+                try stage(document, on: replicas, timestamp: timestamp, revision: replicas.map(\.revision).max() ?? 0)
+            } catch {
+                modelContext.rollback()
+                continue
+            }
+            attributeExternalEdit(replicas, name: edit.agentName, at: timestamp)
+            editRows.forEach(modelContext.delete)
+            if commitStagedChanges() { applied += 1 }
+        }
+        return applied
+    }
+
+    func pendingEditRows(_ id: UUID) throws -> [NotePendingEdit] {
+        let targetID = id
+        return try modelContext.fetch(FetchDescriptor<NotePendingEdit>(
+            predicate: #Predicate { $0.id == targetID }
+        ))
+    }
+
+    /// All outside surfaces use these same revision and presence rules.
+    func agentDelete(noteID: UUID, baseRevisionToken: String, agentName: String,
+                     disposition: NoteAgentWriteDisposition) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
+        if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
+        do {
+            let preflight = try noteMutationPreflight(noteID, format: .editable)
+            let note = preflight.canonical
+            guard note.revisionToken == baseRevisionToken else {
+                return .failure(.staleRevision(expected: baseRevisionToken, current: note.revisionToken))
+            }
+            // A divergent replica makes deletion unsafe even if the displayed revision agrees.
+            guard preflight.replicas.allSatisfy({ $0.revisionToken == baseRevisionToken &&
+                $0.content == note.content && NoteTextReplacement.utf16Equal($0.title, note.title) && NoteTextReplacement.utf16Equal($0.body, note.body) }) else {
+                return .failure(.saveFailed("The note's replicas disagree. Deletion was not performed."))
+            }
+            let timestamp = currentDate
+            if disposition == .proposal {
+                let document = note.content.flatMap { NoteContentCodec.decode($0).document }
+                    ?? NoteDocument(blocks: [.text(note.title)] + note.body.components(separatedBy: "\n").map { .text($0) })
+                let baseID = UUID()
+                modelContext.insert(NoteVersion(id: baseID, noteID: noteID, createdAt: timestamp,
+                    reason: .beforeAgentEdit, content: note.content, contentFormat: note.contentFormat,
+                    title: note.title, body: note.body, attachmentIDs: try attachmentRows(forNoteID: noteID).map(\.id),
+                    sourceRevisionID: note.revisionID))
+                let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
+                    proposedContent: try NoteContentCodec.encode(document), agentName: agentName,
+                    createdAt: timestamp, baseVersionID: baseID)
+                edit.isDeletion = true
+                edit.needsReview = true
+                modelContext.insert(edit)
+                guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion could not be kept.") }
+                return .success(.pending(editID: edit.id))
+            }
+            stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+            attributeExternalEdit(preflight.replicas, name: agentName, at: timestamp)
+            guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
+            return .success(.applied(revisionToken: baseRevisionToken))
+        } catch {
+            modelContext.rollback()
+            return .failure(error as? NoteDocumentStoreError ?? .saveFailed(error.localizedDescription))
+        }
+    }
+
+    func attributeExternalEdit(_ replicas: [NoteItem], name: String, at timestamp: Date) {
+        for row in replicas {
+            row.externalEditorName = name.isEmpty ? "Agent" : name
+            row.externalEditedAt = timestamp
+        }
+    }
+
+    @discardableResult
+    func acknowledgeExternalEdit(noteID: UUID) -> Bool {
+        guard let rows = try? liveReplicas(of: noteID), !rows.isEmpty else { return false }
+        rows.forEach { $0.externalEditorName = nil; $0.externalEditedAt = nil }
+        return commitStagedChanges()
+    }
+
+    /// Resolves precisely one complete proposal UUID family, never its siblings.
+    func discardProposal(_ id: UUID, noteID: UUID) -> Bool {
+        guard let rows = try? pendingEditRows(id),
+              NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]) else { return false }
+        rows.forEach(modelContext.delete)
+        return commitStagedChanges()
+    }
+
+    /// Replacement, preservation of the live text, attribution and resolution commit together.
+    func replaceWithProposal(_ id: UUID, noteID: UUID, expectedRevision: String,
+                             expectedSavedContent: Data?, expectedProposal: NoteProposalSignature,
+                             preserving current: NoteDocument) -> Result<String, NoteDocumentStoreError> {
+        do {
+            let preflight = try noteMutationPreflight(noteID, format: .editable)
+            let note = preflight.canonical
+            guard note.revisionToken == expectedRevision, note.content == expectedSavedContent else {
+                throw NoteDocumentStoreError.staleRevision(expected: expectedRevision, current: note.revisionToken)
+            }
+            let rows = try pendingEditRows(id)
+            guard NotePhysicalFamilyRetention.proposalEligible(rows, noteIDs: [noteID]),
+                  let edit = rows.first, NoteProposalSignature(edit) == expectedProposal else {
+                throw NoteDocumentStoreError.saveFailed("The proposal changed. Review it again.")
+            }
+            let timestamp = currentDate
+            stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
+            // This can be unsaved typing; preserve it even when it differs from the store.
+            modelContext.insert(NoteVersion(noteID: noteID, createdAt: timestamp, reason: .replacedByDraft,
+                content: try NoteContentCodec.encode(current), contentFormat: current.format,
+                title: current.title, body: NoteTextExport.plainBody(current), attachmentIDs: current.attachmentIDs,
+                sourceRevisionID: note.revisionID))
+            if edit.isDeletion {
+                guard preflight.replicas.allSatisfy({ $0.revisionToken == expectedRevision && $0.content == note.content &&
+                    NoteTextReplacement.utf16Equal($0.title, note.title) && NoteTextReplacement.utf16Equal($0.body, note.body) }) else {
+                    throw NoteDocumentStoreError.saveFailed("The note's replicas disagree. Deletion was not performed.")
+                }
+                rows.forEach(modelContext.delete)
+                attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)
+                guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
+                return .success(expectedRevision)
+            }
+            guard let bytes = edit.proposedContent, case let .editable(document) = NoteContentCodec.decode(bytes) else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            let token = try stage(document, on: preflight.replicas, timestamp: timestamp,
+                                  revision: preflight.replicas.map(\.revision).max() ?? 0)
+            attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)
+            rows.forEach(modelContext.delete)
+            guard commitStagedChanges() else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Replacement failed.") }
+            return .success(token.uuidString)
+        } catch {
+            modelContext.rollback()
+            return .failure(error as? NoteDocumentStoreError ?? .saveFailed(error.localizedDescription))
+        }
+    }
+
+    // MARK: Retention
+
+    /// Every attachment row a note in the new format shows, a kept version
+    /// shows, or a pending agent edit would show. Unreadable ownership or
+    /// a failed read makes the inventory unknown, so callers retain all
+    /// bytes rather than treating existing rows as a complete inventory.
+    func documentReferencedAttachmentIDs(excludingNoteID excluded: UUID? = nil) throws -> Set<UUID> {
+        var ids = try recoveryReferencedAttachmentIDs()
+        ids.formUnion(try documentRetentionSnapshot(excludingNoteID: excluded).attachmentIDs())
+        return ids
+    }
+
+    /// Synchronous collectors include uncommitted ownership on their actor.
+    /// The asynchronous file provider reads through a fresh worker context and
+    /// keeps everything while this context has any uncommitted changes.
+    func documentRetentionSnapshot(excludingNoteID excluded: UUID? = nil) throws -> NoteDocumentRetentionSnapshot {
+        try NoteDocumentRetentionSnapshot.read(in: modelContext, excludingNoteID: excluded)
+    }
+
+    /// Stages the removal of purged notes' versions and pending edits.
+    func stageRemovalOfHistory(forNoteIDs noteIDs: Set<UUID>) throws {
+        let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
+        let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
+        let recoveryBases = try recoveryProtectedRevisionIDs()
+        // Proposals outside the same removal transaction keep their bases.
+        let externalBases = Set(proposals.filter { !noteIDs.contains($0.noteID) }.compactMap(\.baseVersionID))
+        let versionFamilies = Dictionary(grouping: versions, by: \.id).values.filter {
+            $0.contains { noteIDs.contains($0.noteID) }
+        }
+        let proposalFamilies = Dictionary(grouping: proposals, by: \.id).values.filter {
+            $0.contains { noteIDs.contains($0.noteID) }
+        }
+        guard versionFamilies.allSatisfy({ NotePhysicalFamilyRetention.versionEligible($0,
+                noteIDs: noteIDs, proposalBases: externalBases, recoveryBases: recoveryBases) }),
+              proposalFamilies.allSatisfy({ NotePhysicalFamilyRetention.proposalEligible($0, noteIDs: noteIDs) }) else {
+            throw NoteDocumentStoreError.invalidDocument("Protected, divergent or unreadable history keeps this deleted note safe.")
+        }
+        versionFamilies.forEach { $0.forEach(modelContext.delete) }
+        proposalFamilies.forEach { $0.forEach(modelContext.delete) }
+    }
+}

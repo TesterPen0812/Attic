@@ -140,6 +140,11 @@ final class LinkStore {
     /// save therefore leaves both for the next cleanup, and no link outlives
     /// the item it points at. Returns how many link ids it staged.
     func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext) throws -> Int {
+        try Self.stagePurge(touching: items, in: context)
+    }
+
+    /// Pure transaction staging also used before stores are presented at launch.
+    nonisolated static func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext) throws -> Int {
         guard !items.isEmpty else { return 0 }
         let ids = Array(Set(items.map(\.id)))
         let candidates = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
@@ -206,7 +211,7 @@ final class LinkStore {
         let kind: String
     }
 
-    private static func ends(of link: ItemLink) -> LinkEnds {
+    nonisolated private static func ends(of link: ItemLink) -> LinkEnds {
         LinkEnds(sourceKind: link.sourceKindRaw, sourceID: link.sourceID,
                  targetKind: link.targetKindRaw, targetID: link.targetID, kind: link.kindRaw)
     }

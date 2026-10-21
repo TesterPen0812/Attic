@@ -9,9 +9,9 @@ final class SubtaskTests: XCTestCase {
     }
 
     func testExistingOnDiskTaskMigratesWithoutLosingFields() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSubtaskMigration-\(UUID().uuidString)")
+        let directory = ownedTemporaryDirectory(prefix: "AtticSubtaskMigration")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+
         let url = directory.appendingPathComponent("legacy.store")
         let id = UUID()
         try seedLegacyStore(at: url, id: id)
@@ -307,53 +307,6 @@ final class SubtaskTests: XCTestCase {
             XCTAssertThrowsError(try tools.call(name: "create_task", arguments: ["title": "Child", "parent_id": invalid]))
         }
         XCTAssertTrue(store.tasks.isEmpty)
-    }
-
-    /// Drafts live in `uiState.subtaskDrafts` and never own the main panel by
-    /// themselves: `.subtaskComposer` is a managed lock the surface controller
-    /// engages only while a transient surface holds the family's composer.
-    /// A draft retained after dismissal — or one inside the independent
-    /// pinned window — must never keep the main panel from auto-hiding.
-    func testSubtaskDraftSurvivesSurfaceDismissalWithoutLockingMain() throws {
-        let state = PanelUIState()
-        let id = UUID()
-        state.subtaskDrafts[id] = "Unfinished thought"
-        state.focusSubtaskEntry(for: id)
-        XCTAssertEqual(state.focusedSubtaskParentID, id)
-        XCTAssertEqual(state.subtaskDrafts[id], "Unfinished thought")
-        XCTAssertFalse(state.interactionLockReasons.contains(.subtaskComposer))
-        state.focusedSubtaskParentID = nil
-        XCTAssertFalse(state.interactionLockReasons.contains(.subtaskComposer))
-        state.selectSection(.notes)
-        XCTAssertEqual(state.subtaskDrafts[id], "Unfinished thought")
-        XCTAssertFalse(state.interactionLockReasons.contains(.subtaskComposer))
-        state.reconcileTaskIDs([])
-        XCTAssertTrue(state.subtaskDrafts.isEmpty)
-    }
-
-    /// The Add entry is a deliberate state: activation opens it, an
-    /// unsubmitted draft re-shows it on any surface, deactivation without a
-    /// draft preserves the draft, and only the Escape-cancel path drops it.
-    func testSubtaskEntryStateLifecycle() throws {
-        let state = PanelUIState()
-        let id = UUID()
-        XCTAssertFalse(state.subtaskEntryActiveIDs.contains(id))
-
-        state.activateSubtaskEntry(for: id)
-        XCTAssertTrue(state.subtaskEntryActiveIDs.contains(id))
-        XCTAssertEqual(state.focusedSubtaskParentID, id)
-
-        state.subtaskDrafts[id] = "Typed"
-        state.deactivateSubtaskEntry(for: id)
-        XCTAssertEqual(state.subtaskDrafts[id], "Typed")
-        XCTAssertNil(state.focusedSubtaskParentID)
-
-        state.subtaskDrafts[id] = "Typed"
-        state.activateSubtaskEntry(for: id)
-        state.cancelSubtaskEntry(for: id)
-        XCTAssertFalse(state.subtaskEntryActiveIDs.contains(id))
-        XCTAssertNil(state.subtaskDrafts[id])
-        XCTAssertNil(state.focusedSubtaskParentID)
     }
 
     /// Rename drafts live in uiState so a row recreated mid-edit (pin

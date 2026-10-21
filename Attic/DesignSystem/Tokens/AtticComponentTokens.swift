@@ -52,6 +52,11 @@ enum AtticShadows {
     static let carry = AtticShadowSpec(radius: 10, y: 6)
     /// A row lifted straight up for reordering: lower than a carry.
     static let reorder = AtticShadowSpec(radius: 8, y: 3, alphaScale: 0.8)
+    /// Attic's own dropdowns (E1, p2-25): D's drop shadow, CSS
+    /// `0 12px 32px` and `0 2px 6px` (a SwiftUI radius is half a CSS blur),
+    /// in `dropdownShadow` and `dropdownContactShadow`.
+    static let dropdown = AtticShadowSpec(radius: 16, y: 12)
+    static let dropdownContact = AtticShadowSpec(radius: 3, y: 2)
 }
 
 /// Hairlines of raised surfaces over content (menus, pop-overs, toasts, drag cards).
@@ -119,9 +124,16 @@ enum AtticTaskRowMetrics {
     static let titleLineHeight: CGFloat = 18
     static let detailsLineHeight: CGFloat = 16
     static let titleToDetails: CGFloat = 2
-    /// The text block (title, or title + 2 + details) is centred in the
-    /// row: 8 from the top of a 34 pt row, 6 in a 48 pt one.
+    /// The title line sits 8 from the row's top in a 34 pt row and in a
+    /// 48 pt two-line one alike (D-13: centring the two-line block put its
+    /// title 2 pt high, so the circles' pitch read 32 then 50 around it;
+    /// now it is exactly 34 and 48).
     static func titleTop(twoLine: Bool) -> CGFloat {
+        (AtticLayout.rowPitch - titleLineHeight) / 2
+    }
+    /// The text block centred in its row (All notes' rows keep it: 6 from
+    /// the top of a 48 pt row).
+    static func centredBlockTop(twoLine: Bool) -> CGFloat {
         let block = titleLineHeight + (twoLine ? titleToDetails + detailsLineHeight : 0)
         return ((twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch) - block) / 2
     }
@@ -201,7 +213,17 @@ enum AtticTaskCardMetrics {
 enum AtticRaisedButtonMetrics {
     /// The pin's glyph sits half a point up in its button (visual A), so
     /// its visible outline reads as centred.
-    static let pinGlyphOffsetY: CGFloat = -0.5
+    /// The pin sits on its bounds' centre (icon audit A3-03: the −0.5 nudge
+    /// left its bounds 0.62 pt high; at 0 they are 0.12 pt high, and its
+    /// broad head keeps its mass high either way).
+    static let pinGlyphOffsetY: CGFloat = 0
+    /// O14-05: the pinned pin, and what hovering it offers (Unpin).
+    static let pinnedSymbol = "pin.fill"
+    static let unpinSymbol = "pin.slash"
+    /// New note's `square.and.pencil` (A3-01: measured low and right).
+    static let newNoteGlyphOffset = CGSize(width: -0.5, height: -0.5)
+    /// All notes' `rectangle.stack` (A3-02: measured high).
+    static let stackGlyphOffsetY: CGFloat = 0.5
     /// Icon and label buttons: padding each side and icon-to-label gap.
     static let labelPadding: CGFloat = 12
     static let iconLabelGap: CGFloat = 6
@@ -209,23 +231,30 @@ enum AtticRaisedButtonMetrics {
     static let labelIconSize: CGFloat = 13
 }
 
-/// The header's page button (Phase 0's mode dock): 36 pt, inset 4,
-/// 28 pt segments 2 apart (36 shut, 96 open), 13 pt icons.
+/// The header's page button (Phase 0's mode dock): 32 pt (chrome B), inset
+/// 4, 24 pt segments 2 apart (32 shut, 84 open), 13 pt icons.
 enum AtticPageButtonMetrics {
     static let inset: CGFloat = 4
-    static let segment: CGFloat = 28
+    static let segment: CGFloat = AtticControlSize.headerControl - 2 * inset
     static let gap: CGFloat = 2
     static let iconSize: CGFloat = 13
     /// Phase 0's hairline around an accented current page.
     static let accentStrokeWidth: CGFloat = 0.75
 }
 
-/// The add bar (spec: 36 tall, radius 15; the send button inside).
+/// The add bar (chrome B: 32 tall, radius 13.5; the send button inside).
+/// Composers that grow with their text (O17-05): the add bar and a
+/// subtask's entry wrap onto more lines up to this many, then scroll
+/// inside, and shrink back when the text is cleared or added.
+enum AtticComposerMetrics {
+    static let maxLines = 6
+}
+
 enum AtticAddBarMetrics {
-    /// With the bar 24 from the panel's edge, the plus is centred on the
-    /// status circles' centre line (36 = 24 + 24 / 2) and the text starts
-    /// on the task titles' line (56 = 24 + 24 + 8).
-    static let leadingPadding: CGFloat = 0
+    /// With the bar 16 from the panel's edge, the plus is centred on the
+    /// status circles' centre line (36 = 16 + 8 + 24 / 2) and the text
+    /// starts on the task titles' line (56 = 16 + 8 + 24 + 8).
+    static let leadingPadding: CGFloat = AtticLayout.contentFromChrome + AtticControlSize.statusCircle / 2 - iconSlot / 2
     static let iconSlot: CGFloat = 24
     static let gap: CGFloat = 8
     static let plusSize: CGFloat = 12.5
@@ -282,6 +311,10 @@ enum AtticSubtaskChecklistMetrics {
 enum AtticRowActionsMetrics {
     static let width: CGFloat = 22
     static let iconSize: CGFloat = 12
+    /// The ellipsis symbol's weight (O17-10): heavy enough that its three
+    /// dots sit closer than they are wide and read as one glyph, as the
+    /// typeset "…" does, not three spaced dots.
+    static let iconWeight: Font.Weight = .black
     /// After the date (or the title when there is none).
     static let gap: CGFloat = 4
 }
@@ -293,7 +326,6 @@ enum AtticCompletedLineMetrics {
     static let gap: CGFloat = 6
     /// An 8 pt medium chevron, 6 after the count.
     static let chevronSize: CGFloat = 8
-    static let horizontalPadding: CGFloat = 6
 }
 
 /// The Done page's search on the tabs line (`AtticTabsSearchField`).
@@ -315,6 +347,86 @@ enum AtticPopoverMetrics {
     static let trailingMinGap: CGFloat = 16
     /// A quiet grouping gap between sections (space, never a line).
     static let groupGap: CGFloat = 6
+}
+
+/// Attic's own dropdowns, the E1 family (owner, 2026-10-02; mockups p2-25
+/// E1, p2-24 D, p2-23): the `/` list, the date card (Notes and Tasks), the
+/// tag and priority pickers, Aa and the link card. A solid card (no blur)
+/// with one hairline and D's shadow. The Compact size (owner, 2026-10-05,
+/// p2-28): 16 pt corners, 28 pt rows touching, 6 pt in from the edge, with
+/// 13 pt names (`AtticTextStyle.dropdownRow`).
+/// Every value of the look is here, so it is tuned in one place.
+enum AtticDropdownMetrics {
+    static let cornerRadius: CGFloat = 16
+    /// Rows and fields sit this far in from the card's edge.
+    static let inset: CGFloat = 6
+    static let rowHeight: CGFloat = 28
+    static let rowPadding: CGFloat = 9
+    /// The pill: the whole row.
+    static let highlightRadius: CGFloat = 8
+    /// Native soft scroll edges overlap this small inset in cramped lists.
+    static let iconSize: CGFloat = 13
+    static let iconSlot: CGFloat = 16
+    /// Between a row's columns (check, mark, icon, name).
+    static let columnGap: CGFloat = 10
+    static let checkSize: CGFloat = 10.5
+    /// The tick's column, at the row's end (N-4's card design).
+    static let checkSlot: CGFloat = 12
+    /// A tag's colour dot before its name (N-4's card: 7 pt), in a column
+    /// as wide as the tick's.
+    static let dotSize: CGFloat = 7
+    static let dotSlot: CGFloat = 12
+    /// A priority's mark (↓, !, !!).
+    static let markSlot: CGFloat = 15
+    /// The least room before a trailing detail (⌥⌘2, 2 Oct).
+    static let detailGap: CGFloat = 14
+    /// A field (Find or add a tag, the link): 26 pt on the row's pill; the
+    /// gap under it.
+    static let fieldHeight: CGFloat = 26
+    static let fieldGap: CGFloat = 3
+    /// A quiet gap between groups (space, never a line).
+    static let groupGap: CGFloat = 5
+    /// The width rule (p2-23): fits its content, never under 144 pt, never
+    /// past the panel's 12 pt margin.
+    static let minWidth: CGFloat = 144
+    static let panelMargin: CGFloat = 12
+    /// From the anchor (the caret's line, a strip button) to the card.
+    static let anchorGap: CGFloat = 6
+    /// Room around the card for its shadow (12 down plus a 32 pt blur).
+    static let shadowRoom: CGFloat = 44
+    /// The date card (p2-30 draft 2 on p2-29 draft A; O14-09's polish,
+    /// 2026-10-14): one grid of 29 x 29 cells, each holding a 25 pt
+    /// rounded-square mark (7 pt corners), so the marks are 4 pt apart
+    /// across and down. The month header is a row as tall as a week (3 pt
+    /// more above it), on the grid's edges: the title starts at the first
+    /// column's mark and › ends at the last column's. Then a 16 pt weekday
+    /// row and the weeks. Every mark is 11 pt from the card's edges (3 pt
+    /// in from the rows' edge, 3 pt above the card's).
+    static let monthHeaderTop: CGFloat = 3
+    static let monthChevron: CGFloat = 10
+    /// ‹ and ›: 22 pt marks (6 pt corners), 2 pt apart, lit as a day is.
+    static let monthNavMark: CGFloat = 22
+    static let monthNavRadius: CGFloat = 6
+    static let monthNavGap: CGFloat = 2
+    /// Today in the month header: 12 pt text on a mark as tall as ‹ ›
+    /// (their corners too), 2 pt before ‹.
+    static let todayHeight: CGFloat = 22
+    static let todayPadding: CGFloat = 6
+    static let todayRadius: CGFloat = 6
+    static let monthTodayGap: CGFloat = 2
+    static let weekdayHeight: CGFloat = 16
+    static let monthCellWidth: CGFloat = 29
+    static let monthCellHeight: CGFloat = 29
+    static let monthMark: CGFloat = 25
+    static let monthMarkRadius: CGFloat = 7
+    static let monthGridInset: CGFloat = 3
+    static let monthGridBottom: CGFloat = 3
+    /// The month title's start and ›'s end: the first and last columns'
+    /// marks.
+    static let monthTitleLeading: CGFloat = monthGridInset + (monthCellWidth - monthMark) / 2
+    static let monthHeaderTrailing: CGFloat = monthTitleLeading
+    /// How long a closing card stays in the overlay for its leave motion.
+    static let leaveCleanup: TimeInterval = 0.3
 }
 
 /// The title that opens a native menu (a note's or a page's title).
@@ -471,19 +583,355 @@ enum AtticPaletteTileMetrics {
     static let swatchRimDark = AtticRGBA.black(0.25)
     static let accentDot: CGFloat = 5
     static let accentDotInset: CGFloat = 6
-    /// Three tiles per row, 12 apart.
-    static let perRow = 3
     static let spacing: CGFloat = 12
 }
 
 /// Tag chips (18 tall, control corner rule).
 enum AtticTagMetrics {
     static let horizontalPadding: CGFloat = 6
+    /// A tag set in a line of text (a row's details, a note's tag line):
+    /// its hue's fill reaches this far past the words on each side, so the
+    /// fill changes no layout (colour pass sheet: 4 px padding, -2 px margin).
+    static let inlineFillOutset: CGFloat = 4
+    static let inlineFillRadius: CGFloat = 5
 }
 
-/// The pickers of owner fix 5 (v17): the date picker, the tag list, the
-/// composer strip and the suggestions over the add bar. The date grid is
-/// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.
+// MARK: - Notes (Phase 2, slice 2)
+
+/// The writing view and All notes (UX plan § 2, mockups p2-01, p2-02,
+/// p2-05, p2-15).
+/// Notes v2's type and spacing (text direction 5, "Notion-like", owner
+/// 2026-10-08; the values are the draft's own, `redesign-notes-v2/drafts/
+/// v2-04-text-directions.html`, `notion`). SF Pro throughout the note, one
+/// near-black ink for the text and its headings; SF Mono for code.
+///
+/// Every gap is the space between two blocks' line boxes, set by the lower
+/// block's kind, except that a heading binds to what follows it. The
+/// editor adds each one as the lower paragraph's `paragraphSpacingBefore`
+/// (`NoteTextStyle`), so no gap is ever counted twice.
+enum AtticNoteType {
+    struct Role: Equatable, Hashable, Sendable {
+        let size: CGFloat
+        let lineHeight: CGFloat
+        /// The draft's CSS weight: 400 regular, 650 (between semibold and
+        /// bold) for the headings, 700 bold for the note's title.
+        let weight: CGFloat
+        var monospaced = false
+    }
+
+    /// The note's first line.
+    static let title = Role(size: 18.5, lineHeight: 22, weight: 700)
+    /// R14 (Codex Pages scaled to the panel, `notes-r14-spec.md` B.2):
+    /// Codex's sizes × 12.5 / 15, the body kept at the owner's 12.5. The
+    /// Title style inside the note (H1), Heading (H2), Subheading (H3) and
+    /// Small Heading (H4–H6: the body's size, the headings' weight).
+    static let titleStyle = Role(size: 16.5, lineHeight: 21, weight: 650)
+    static let heading = Role(size: 15, lineHeight: 20, weight: 650)
+    static let subheading = Role(size: 13.5, lineHeight: 18.5, weight: 650)
+    static let smallHeading = Role(size: 12.5, lineHeight: 18.5, weight: 650)
+    /// Body, lists, checklists, quotes, callouts and table cells: 12.5 on
+    /// a 1.48 line (Codex's 1.53 for a shorter measure).
+    static let body = Role(size: 12.5, lineHeight: 18.5, weight: 400)
+    /// A quote: the body's size and ink beside a 3 pt bar (Codex).
+    static let quote = Role(size: 12.5, lineHeight: 18.5, weight: 400)
+    /// Code (SF Mono) on Codex's 1.5 line, in one rounded block.
+    static let mono = Role(size: 11, lineHeight: 16.5, weight: 400, monospaced: true)
+    /// A code block's language label: Attic's smallest content text.
+    static let codeLabel = Role(size: 11, lineHeight: 14, weight: 400)
+    /// Inline code's face in its chip (Codex 0.87 em).
+    static let inlineCodeSize: CGFloat = 11
+
+    /// Spacing (B.3, Codex's whitespace × 0.6): between paragraphs (and
+    /// inside quotes and callouts), between list or checklist items, and
+    /// from the note's title to its first block.
+    static let paragraphGap: CGFloat = 8
+    static let listItemGap: CGFloat = 3
+    static let titleToText: CGFloat = 10
+    /// Above the Title style, Heading, Subheading and Small Heading; below
+    /// each, to the block it introduces (above : below ≈ 2.7 : 1); a
+    /// heading right after a heading sits 6 under it.
+    static let aboveTitleStyle: CGFloat = 20
+    static let aboveHeading: CGFloat = 16
+    static let aboveSubheading: CGFloat = 14
+    static let aboveSmallHeading: CGFloat = 12
+    static let belowTitleStyle: CGFloat = 6
+    static let belowHeading: CGFloat = 6
+    static let belowSubheading: CGFloat = 6
+    static let belowSmallHeading: CGFloat = 6
+    static let headingAfterHeading: CGFloat = 6
+    /// Around a box (code, a callout, a quote run) and a block object (an
+    /// image, a file, a divider, a table); 6 when it follows a heading.
+    static let blockMargin: CGFloat = 12
+    static let blockAfterHeading: CGFloat = 6
+    /// The code block (B.4): 8 above and below its lines, 12 at the sides,
+    /// the content card's radius 10 and a 0.5 pt hairline. Its label row
+    /// (14 tall) sits at the top, 4 above the first code line.
+    static let monoPaddingV: CGFloat = 8
+    static let monoPaddingH: CGFloat = 12
+    static let monoRadius: CGFloat = AtticRadius.contentCard
+    static let monoHairline: CGFloat = 0.5
+    static let monoLabelHeight: CGFloat = 14
+    static let monoLabelGap: CGFloat = 4
+    /// Copy: a 16 pt icon chip in the label row, 7 in from the block's
+    /// right edge and 7 down from its top (centred on the row), so it never
+    /// covers code by layout. Its radius is a third of its size (5.3).
+    /// Shown on hover, while the caret is in the block, or for VoiceOver.
+    static let monoCopySize: CGFloat = 16
+    static let monoCopyInset: CGFloat = 7
+    static let monoCopyTop: CGFloat = 7
+    static let monoCopyGlyph: CGFloat = 9
+    /// Lists and checklists: their text 20 in (each level 20 more). Every
+    /// marker sits in one 14 pt slot at the line's start, 6 before the
+    /// text: a 4 pt disc, a 4.5 pt ring (1 pt stroke) and a 3.5 pt square
+    /// by depth, centred on x 7 and raised 0.5 off the first line's
+    /// x-height middle; numbers, letters and roman numerals end at x 14.
+    static let listTextInset: CGFloat = 20
+    static let listLevelStep: CGFloat = 20
+    static let markerSlot: CGFloat = 14
+    static let bulletDot: CGFloat = 4
+    static let bulletRing: CGFloat = 4.5
+    static let bulletRingStroke: CGFloat = 1
+    static let bulletSquare: CGFloat = 3.5
+    static let bulletSquareRadius: CGFloat = 0.5
+    static let bulletCentre: CGFloat = 7
+    static let bulletLift: CGFloat = 0.5
+    static let numberGap: CGFloat = 6
+    /// Quote: a 3 pt bar at the column's edge, the text 20 in (the lists'
+    /// column).
+    static let quoteBar: CGFloat = 3
+    static let quoteTextInset: CGFloat = 20
+    /// Callout: the recessed fill in a radius-10 box, 8 above and below
+    /// its lines and 12 at the sides; the emoji at 15 pt in a 16 pt slot
+    /// 12 in, centred on the first line's cap height, the text at 36 (12
+    /// without an icon).
+    static let calloutPaddingV: CGFloat = 8
+    static let calloutPaddingH: CGFloat = 12
+    static let calloutRadius: CGFloat = AtticRadius.contentCard
+    static let calloutIconSize: CGFloat = 15
+    static let calloutIconSlot: CGFloat = 16
+    static let calloutTextInset: CGFloat = 36
+    /// Inline code: a 14 pt chip centred on the x-height middle, radius 4,
+    /// 4 outside the glyphs on each side (kerned in, so the line keeps its
+    /// width rhythm).
+    static let inlineCodeChipHeight: CGFloat = 14
+    static let inlineCodeChipRadius: CGFloat = 4
+    static let inlineCodeChipPadding: CGFloat = 4
+    /// A divider: a 1 pt hairline across the column.
+    static let dividerThickness: CGFloat = 1
+    /// The block handle (D.2): 2 × 3 dots of 2 pt, 4 apart both ways (a
+    /// 6 × 10 glyph), centred 12 left of the column (the table row grip's
+    /// line) on the block's first line; a 24 × 28 hit area.
+    static let handleDot: CGFloat = 2
+    static let handlePitch: CGFloat = 4
+    static let handleFromColumn: CGFloat = 12
+    static let handleHitSize = CGSize(width: 24, height: 28)
+    /// The drop line: 2 pt in the accent, radius 1.
+    static let dropLineThickness: CGFloat = 2
+    /// The fold chevron after a heading's last glyph: 8 wide, 6 after it.
+    static let foldChevronWidth: CGFloat = 8
+    static let foldChevronGap: CGFloat = 6
+}
+
+/// Notes v2 tables (spec § 4.1, sheet 3, owner 2026-10-08): the body's
+/// type in cells (direction 5: 14 / 21), 6 pt side and 4 pt top and bottom
+/// padding, columns 56–168 by content, a 0.5 pt grid in a 10 pt card, a
+/// 16 pt fade at a cut edge and a 3 pt scroll indicator under a wide table.
+enum AtticNoteTableMetrics {
+    /// R14: Codex's 13 / 10 × 0.6.
+    static let cellPaddingH: CGFloat = 8
+    static let cellPaddingV: CGFloat = 6
+    static let minColumnWidth: CGFloat = 56
+    static let maxColumnWidth: CGFloat = 168
+    /// The narrowest a dragged column may get.
+    static let minDraggedWidth: CGFloat = 32
+    static let radius: CGFloat = AtticRadius.contentCard
+    static let hairline: CGFloat = 0.5
+    /// Increase Contrast raises the grid to 1 pt.
+    static let contrastHairline: CGFloat = 1
+    static let edgeFade: CGFloat = 16
+    static let indicatorHeight: CGFloat = 3
+    /// The indicator's top, under the table's bottom edge (inside the 8 pt
+    /// block margin, so scrolling never moves the text below).
+    static let indicatorGap: CGFloat = 2.5
+    static let activeRingWidth: CGFloat = 1.5
+    static let activeRingRadius: CGFloat = 3
+    /// The column grip (above the active column) and the row grip (in the
+    /// margin, 16 from the panel's edge: 12 left of the column).
+    static let columnGripSize = CGSize(width: 18, height: 5)
+    static let rowGripSize = CGSize(width: 5, height: 14)
+    static let rowGripFromColumn: CGFloat = 12
+    static let columnGripAbove: CGFloat = 7
+    /// The "+" chips at the end of the last column and under the last row.
+    static let addChipSize: CGFloat = 14
+    static let addChipGlyph: CGFloat = 8
+    /// Grips and chips keep a 28 pt hit target, as every small control.
+    static let gripHitTarget: CGFloat = 28
+    /// The vertical grid line's drag area.
+    static let resizeHitWidth: CGFloat = 8
+}
+
+enum AtticNoteMetrics {
+    /// The note's text column: 12 inside the chrome's 16 pt line (28 from
+    /// the panel's edge, the Tasks circles' line), moving inward with it.
+    static let columnInset: CGFloat = AtticLayout.contentFromChrome
+    /// The title's first line sits 16 under the header (y = 76 in a
+    /// 320 × 520 panel).
+    static let titleTopGap: CGFloat = 16
+    /// The ⋯ at the end of the title's first line: a 28 pt target, its
+    /// glyph on the column's trailing edge; the title's lines keep 32 clear.
+    static let menuButtonSize: CGFloat = 28
+    static let menuGlyphSize: CGFloat = 15
+    static let titleTrailingReserve: CGFloat = 32
+    /// Tags under the title: 12 apart, lines 4 apart.
+    static let tagSpacing: CGFloat = 12
+    static let tagLineSpacing: CGFloat = 2
+    /// The header title (a scrolled-away title): 36 tall, at most as wide as
+    /// the room between the pin and the page button.
+    static let headerTitlePadding: CGFloat = 14
+    /// The status slot's pill: as tall as the bottom row's buttons (32), at
+    /// most 176 wide, and never wider than the room the row has left
+    /// (`pillMaxWidth(panelWidth:chromeInset:showsFormat:)`), so the row can
+    /// never outgrow the panel and push its corner buttons off its edges.
+    static let pillHeight: CGFloat = AtticControlSize.headerControl
+    static let pillMaxWidth: CGFloat = 176
+    /// Aa to New note: the spec's 12 pt between separate controls (D-15:
+    /// at chrome B's 6 they read as two glass blobs almost touching).
+    static let formatButtonGap: CGFloat = 12
+    /// The status pill's room between the bottom row's buttons: the panel
+    /// less the chrome insets, the buttons (All notes, Aa, New note), Aa's
+    /// gap and 12 clear on each side of the pill.
+    static func pillMaxWidth(panelWidth: CGFloat, chromeInset: CGFloat, showsFormat: Bool) -> CGFloat {
+        let buttons = AtticControlSize.panelButton.width * (showsFormat ? 3 : 2) + (showsFormat ? formatButtonGap : 0)
+        let room = panelWidth - 2 * chromeInset - buttons - 2 * pillMinGap
+        return max(0, min(pillMaxWidth, room))
+    }
+    static let pillIconSize: CGFloat = 13
+    static let pillGap: CGFloat = 6
+    static let pillPadding: CGFloat = 12
+    /// The least room between the pill and All notes or Aa: 9, so every
+    /// notice headline still fits a 320 pt panel's 162 pt slot with D-15's
+    /// 12 pt between Aa and New note. It is only ever this tight beside the
+    /// longest headline; a shorter pill sits in more room.
+    static let pillMinGap: CGFloat = 9
+    /// The details pop-over (p2-15 #2): 280 wide, items 14 apart.
+    static let detailsWidth: CGFloat = 280
+    static let detailsPadding: CGFloat = 16
+    static let detailsItemGap: CGFloat = 14
+    /// All notes: the rows' text on the note column (16 inside the list's
+    /// 12 pt page edge). Its search field uses Tasks' columns (S-06).
+    static let rowTextX: CGFloat = 16
+    /// All notes sits on the shared content column (design review D-07): the
+    /// page's edge is Tasks' (the text, 16 into it, lands 12 inside the
+    /// controls' line: 28 at the default corner), the rows' highlights and
+    /// the search field's edges are on the controls' own line (16 at the
+    /// default corner, 12 clear of the text), and the right-hand edges
+    /// mirror the left.
+    static func libraryPageEdge(chromeInset: CGFloat) -> CGFloat {
+        max(0, chromeInset + AtticLayout.contentFromChrome - AtticLayout.circleX)
+    }
+    /// How far a row's highlight (or the search field) sits inside the
+    /// library's page edge: `circleX - contentFromChrome`, so its edge is
+    /// the controls' line.
+    static let libraryHighlightInset: CGFloat = AtticLayout.circleX - AtticLayout.contentFromChrome
+    /// The ⋯ at the end of a row's title line (in the time's place).
+    static let rowActionsGlyphSize: CGFloat = 14
+    static let countIconSize: CGFloat = 10
+    static let countGap: CGFloat = 3
+    static let countsSpacing: CGFloat = 8
+}
+
+/// Notes' format controls (Phase 2 slice 3, mockups p2-16 D and p2-03):
+/// the selection bar, Aa's pop-over, the `/` list and its date card, and
+/// the link card. The bar is a raised capsule 36 tall (28 pt controls in a
+/// 4 pt inset, like the selection bar), 24 pt toggles so it fits a 320 pt
+/// panel; it floats 6 above the selection (below when there is no room).
+enum AtticNoteFormatMetrics {
+    static let barHeight: CGFloat = AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
+    /// V-03: a showing bar glides to a new selection's place on its side,
+    /// and fades in when it changes sides (never crossing the selection).
+    static let barMoveDuration: Double = AtticMotionScale.standard
+    static let barFadeDuration: Double = AtticMotionScale.fast
+    static let barToggleWidth: CGFloat = 24
+    /// The highlighter's chevron (N-2 option A): a narrow second half of
+    /// the highlight cell, its glyph 7 pt.
+    static let highlightChevronWidth: CGFloat = 12
+    static let highlightChevronSize: CGFloat = 7
+    static let barGroupGap: CGFloat = 4
+    static let barStylePadding: CGFloat = 7
+    static let barStyleChevron: CGFloat = 8
+    /// U-01: extra room after the bar's last toggle, so its glyph stands as
+    /// far from the capsule's end as the style's name does from its start
+    /// (4 + 7 = 11 at the leading end; 4 + about 3.5 of the cell's own
+    /// side bearing + 4 at the trailing end).
+    static let barTrailingRoom: CGFloat = 4
+    /// From the selection's line to the bar, and from the panel's edge.
+    static let barGap: CGFloat = 6
+    static let barEdgeMargin: CGFloat = 4
+    /// The format row (OD-14): 28 pt cells, 24 when a long style name
+    /// would not fit the panel; 16 pt upright lines 4 from their groups.
+    /// Chrome B: the row is the corner controls' 32, its cells 24 tall in
+    /// the 4 pt inset (the capsule-chip rule).
+    static let rowCellHeight: CGFloat = AtticControlSize.headerControl - 2 * AtticControlSize.capsuleInset
+    static let rowToggleWidth: CGFloat = 28
+    static let rowCompactToggleWidth: CGFloat = 24
+    static let rowSeparatorHeight: CGFloat = 16
+    static let rowSeparatorPadding: CGFloat = 4
+    /// The compact row's lines (24 pt cells): 2 from their groups, so
+    /// "Subheading" fits a 320 pt panel's 288 pt row whole (A39 F11).
+    static let rowCompactSeparatorPadding: CGFloat = 2
+    /// The `/` list, the date card and the link card, 6 below the line.
+    static let linkCardWidth: CGFloat = 272
+    /// Room around a floating control for its shadow.
+    static let shadowRoom: CGFloat = 12
+}
+
+/// Notes' images and files (Phase 2 slice 3b, UX plan § 3.5, p2-13): the
+/// file card, a failure drawn on its object with its actions, the selected
+/// object's ring and resize corner, the drop line and the carry card.
+enum AtticNoteObjectMetrics {
+    /// The card: a content card (radius 10), 12 in, a 22 pt type glyph and
+    /// two 12 pt lines: the name, then the size or the failure.
+    static let cardHeight: CGFloat = 54
+    static let cardRadius: CGFloat = AtticRadius.contentCard
+    static let cardPadding: CGFloat = 12
+    static let cardIcon: CGFloat = 20
+    static let cardIconSlot: CGFloat = 22
+    static let cardIconGap: CGFloat = 10
+    /// The two lines' centres in the 54 pt card.
+    static let cardFirstLine: CGFloat = 18
+    static let cardSecondLine: CGFloat = 36
+    /// The actions drawn on a failed object: quiet chips 18 tall, 6 in,
+    /// 4 apart, 8 after the message. Only those that fit are drawn; every
+    /// one is also in the object's menu and its VoiceOver actions.
+    static let chipHeight: CGFloat = 18
+    static let chipPadding: CGFloat = 6
+    static let chipGap: CGFloat = 4
+    static let messageGap: CGFloat = 8
+    /// A failed image's face: the glyph (14) over the message, the chips
+    /// under it, 6 apart; one row when the reserved space is under 64 tall.
+    static let failureGlyph: CGFloat = 14
+    static let failureRowGap: CGFloat = 6
+    static let failureStackMinHeight: CGFloat = 64
+    /// The selected object: a ring, and a resize corner (a 10 pt disc on
+    /// the object's bottom-trailing corner, 20 pt to grab).
+    /// The selected object's ring (F-06b, owner 2026-10-11): one 1.5 pt
+    /// ring on the object's own edge, inside it, on its own corner radius,
+    /// so it hugs the card or image with no gap and no second ring.
+    static let ringWidth: CGFloat = 1.5
+    static let resizeHandle: CGFloat = 10
+    static let resizeHitTarget: CGFloat = 20
+    /// The drop line: 2 pt, with a 6 pt disc at its leading end, across
+    /// the column.
+    static let dropLineWidth: CGFloat = 2
+    static let dropLineCap: CGFloat = 6
+    /// The carry card: the file card's look at 220 × 44, "+N" for more.
+    static let carryWidth: CGFloat = 220
+    static let carryHeight: CGFloat = 44
+}
+
+/// The pickers of owner fix 5 (v17): the composer strip, the suggestions
+/// over the add bar and Move to Task…. The date and tag pickers' card, rows
+/// and month are the dropdown family's (`AtticDropdownMetrics`).
 enum AtticPickerMetrics {
     static let rowGap: CGFloat = 8
     /// Between two lit rows' fills (round 5, the owner saw two adjacent tag
@@ -491,28 +939,18 @@ enum AtticPickerMetrics {
     static let highlightGap: CGFloat = 2
     static let checkSize: CGFloat = 10
     static let checkSlot: CGFloat = 12
-    static let dividerGap: CGFloat = 4
-    static let dateWidth: CGFloat = 212
-    static let tagWidth: CGFloat = 200
+    /// Seven dropdown rows (28 pt) before the tag list scrolls.
     static let tagListMaxHeight: CGFloat = 196
     /// Move to Task… (control audit item 5): wider than the tag list, for
     /// task titles and where each is listed; seven rows before it scrolls.
-    static let taskWidth: CGFloat = 260
     static let taskListMaxHeight: CGFloat = 196
-    static let suggestionWidth: CGFloat = 220
-    static let monthHeaderHeight: CGFloat = 26
-    static let monthButton: CGFloat = 20
-    static let chevronSize: CGFloat = 10
-    static let weekdayHeight: CGFloat = 18
-    static let dayCell: CGFloat = 28
-    static let dayRow: CGFloat = 26
-    static let dayDisc: CGFloat = 24
     static let todayRing: CGFloat = 1.2
-    static let gridInset: CGFloat = 4
-    static let gridBottom: CGFloat = 2
     /// The strip's buttons 4 apart (v19, so two filled pills never touch),
     /// 8 above the bar.
     static let stripSpacing: CGFloat = 4
+    /// The strip's first button from the add bar's leading edge: flush, so
+    /// a filled button never reaches past the bar (U-21).
+    static let stripLeading: CGFloat = 0
     /// The room a squeezed value keeps for its first characters and "…"
     /// (a tag's "#laun…", a date's "Wed …"); round 12.
     static let stripTagPrefix: CGFloat = 34

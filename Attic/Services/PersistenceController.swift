@@ -11,7 +11,7 @@ enum PersistenceController {
     static let cloudKitContainerIdentifier = "iCloud.com.emanueledipietro.Attic"
     private static let cloudKitEnvironmentInfoKey = "AtticCloudKitEnvironment"
 
-    #if DEBUG
+    #if DEBUG && !ATTIC_LOCAL_ONLY
     /// Kept alive for the rest of the process because Core Data may finish
     /// CloudKit bookkeeping after `initializeCloudKitSchema` returns.
     @MainActor private static var retainedSchemaContainers: [NSPersistentCloudKitContainer] = []
@@ -32,7 +32,13 @@ enum PersistenceController {
             CanvasStrokeItem.self,
             CanvasImageItem.self,
             CanvasSemanticObjectItem.self,
-            ItemLink.self
+            ItemLink.self,
+            // Phase 2: note versions and agents' pending note edits.
+            NoteVersion.self,
+            NotePendingEdit.self,
+            StoreMaintenance.self,
+            // Colour pass (2026-10-10): each tag's stored colour.
+            TagColour.self
         ]
         #else
         [
@@ -52,10 +58,16 @@ enum PersistenceController {
         environment: AtticCloudKitEnvironment? = nil,
         storeDirectory: URL? = nil
     ) -> ModelConfiguration {
+        #if ATTIC_LOCAL_ONLY
+        // The compiled mode owns this boundary; a caller cannot opt a
+        // local-only build into the deferred cloud infrastructure.
+        let cloudDatabase: ModelConfiguration.CloudKitDatabase = .none
+        #else
         let cloudDatabase: ModelConfiguration.CloudKitDatabase =
             inMemory || !cloudSyncEnabled
                 ? .none
                 : .private(cloudKitContainerIdentifier)
+        #endif
 
         // `storeDirectory` relocates the store (tests open copies of
         // fixture stores through this exact path); nil is the app's default
@@ -101,13 +113,19 @@ enum PersistenceController {
             cloudSyncEnabled: cloudSyncEnabled,
             storeDirectory: storeDirectory
         )
+        #if !ATTIC_LOCAL_ONLY
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
-        return try ModelContainer(
+        #endif
+        let container = try ModelContainer(
             for: Schema(appModelTypes),
             configurations: configuration
         )
+        #if os(macOS)
+        _ = try OldNotesPurge.run(in: container)
+        #endif
+        return container
     }
 
     /// A durable, CloudKit-free store used only by controlled UI tests that
@@ -142,13 +160,17 @@ enum PersistenceController {
             url: storeURL,
             cloudKitDatabase: .none
         )
-        return try ModelContainer(
+        let container = try ModelContainer(
             for: Schema(appModelTypes),
             configurations: configuration
         )
+        #if os(macOS)
+        _ = try OldNotesPurge.run(in: container)
+        #endif
+        return container
     }
 
-    #if DEBUG
+    #if DEBUG && !ATTIC_LOCAL_ONLY
     /// Creates the Core Data record types in CloudKit's Development
     /// environment before SwiftData starts using the same store. Apple
     /// requires this schema bootstrap to happen only in development builds.
@@ -269,7 +291,7 @@ enum PersistenceController {
     }
 }
 
-#if DEBUG
+#if DEBUG && !ATTIC_LOCAL_ONLY
 private enum CloudKitSchemaInitializationError: LocalizedError {
     case unableToCreateManagedObjectModel
 

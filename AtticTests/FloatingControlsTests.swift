@@ -1,0 +1,199 @@
+import AppKit
+import SwiftUI
+import XCTest
+@testable import Attic
+
+/// Floating controls over the approved variable blur (owner, 2026-10-14):
+/// content runs on under every page's fixed controls, top and bottom.
+@MainActor
+final class FloatingControlsTests: XCTestCase {
+    func testTheApprovedBlurIsTheDefault() {
+        XCTAssertEqual(AtticEdgeBlurMetrics.radius, 1.5, "the owner's strength, 2026-10-12")
+        XCTAssertEqual(AtticEdgeBlurMetrics.reach, 28, "the owner's reach, 2026-10-12")
+    }
+
+    func testOnlyAPreviewTunesTheBlurAndOnlyThereIsItKept() throws {
+        let suite = "AtticEdgeBlurLabTest-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(9.0, forKey: AtticEdgeBlurLab.radiusKey)
+        defaults.set(400.0, forKey: AtticEdgeBlurLab.reachKey)
+
+        let product = AtticEdgeBlurLab(defaults: defaults, isPreview: false, blurAvailable: true)
+        XCTAssertFalse(product.offersTuning)
+        XCTAssertEqual(product.radius, 1.5, "a product identity ignores a stored value")
+        XCTAssertEqual(product.reach, 28)
+        product.radius = 4
+        XCTAssertEqual(defaults.double(forKey: AtticEdgeBlurLab.radiusKey), 9, "and keeps nothing")
+
+        let preview = AtticEdgeBlurLab(defaults: defaults, isPreview: true, blurAvailable: true)
+        XCTAssertTrue(preview.offersTuning)
+        XCTAssertEqual(preview.radius, 9)
+        XCTAssertEqual(preview.reach, AtticEdgeBlurLab.reachRange.upperBound, "clamped")
+        preview.reach = 20
+        XCTAssertEqual(defaults.double(forKey: AtticEdgeBlurLab.reachKey), 20)
+
+        XCTAssertFalse(AtticEdgeBlurLab(defaults: defaults, isPreview: true, blurAvailable: false).offersTuning,
+                       "no tuning where there is no blur")
+    }
+
+    /// The owner's 10-17 decision: content shows under every control,
+    /// blurred, with no fade hiding it, on every surface: no surface fade
+    /// over the blur on an opaque panel, and no content fade on a
+    /// see-through one (T-03 C). The pixels: `RoundO3ControlsTests`.
+    func testWithTheBlurNothingButTheBlurIsDrawnUnderTheControls() {
+        for surface in PanelSurfaceStyle.allCases {
+            for mode in [AtticDesignContext.Mode.light, .dark] {
+                let design = AtticDesignContext(mode: mode, surface: surface)
+                XCTAssertTrue(AtticEdgeBlurBackdrop.blurs(design, available: true), "\(surface) \(mode)")
+                XCTAssertFalse(AtticEdgeBlurBackdrop.drawsSolidSurface(design, available: true), "\(surface) \(mode): no fade")
+                let contrast = AtticDesignContext(mode: mode, surface: surface, increaseContrast: true)
+                XCTAssertFalse(AtticEdgeBlurBackdrop.drawsSolidSurface(contrast, available: true), "\(surface) \(mode): Increase Contrast too")
+            }
+        }
+    }
+
+    /// A plain-text line among the top controls is part of them: the blur
+    /// covers it, from the panel's edge (owner, 2026-10-17: content is no
+    /// longer gone above its lower edge).
+    func testAPlainTopLineIsPartOfTheTopControls() {
+        let tabsTop: CGFloat = 80
+        XCTAssertGreaterThanOrEqual(TasksViewport.topEdges(tabsTop: tabsTop).top, TasksViewport.plainLine(tabsTop: tabsTop).upperBound)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 520))
+        XCTAssertGreaterThanOrEqual(NoteHistoryPage.edges(layout).top, NoteHistoryPage.versionLine(layout).upperBound)
+    }
+
+    func testTheBlurIsStrongestAtThePanelsEdge() throws {
+        func alphas(_ edge: VerticalEdge) throws -> [UInt8] {
+            let image = try XCTUnwrap(AtticVariableBlurView.maskImage(height: 40, edge: edge))
+            let data = try XCTUnwrap(image.dataProvider?.data as Data?)
+            return (0..<image.height).map { data[$0 * image.bytesPerRow + 3] }
+        }
+        let top = try alphas(.top)
+        XCTAssertEqual(top.first, 255)
+        XCTAssertEqual(top.last, 0)
+        XCTAssertEqual(top, top.sorted(by: >))
+        XCTAssertEqual(try alphas(.bottom), top.reversed(), "the bottom edge's blur is the top's, mirrored")
+    }
+
+    /// Reduce Transparency, or a system without the filter: an opaque fade
+    /// in the blur's place (U-02), the deliberate look with no blur.
+    func testReduceTransparencyGivesTheBlurWayToAFade() {
+        XCTAssertTrue(AtticEdgeBlurBackdrop.blurs(AtticDesignContext(), available: true))
+        XCTAssertFalse(AtticEdgeBlurBackdrop.blurs(AtticDesignContext(reduceTransparency: true), available: true))
+        XCTAssertFalse(AtticEdgeBlurBackdrop.blurs(AtticDesignContext(), available: false))
+        for surface in PanelSurfaceStyle.allCases {
+            XCTAssertTrue(AtticEdgeBlurBackdrop.drawsSolidSurface(AtticDesignContext(surface: surface, reduceTransparency: true), available: true),
+                          "\(surface): solid under the controls with Reduce Transparency")
+        }
+    }
+
+    /// Tasks: the tabs' plain line is part of the top controls; the
+    /// bottom edge follows the stack, the composer's strip included.
+    func testTasksEdgesFollowTheTabsAndTheBottomStack() {
+        let tabsTop: CGFloat = 80
+        let top = TasksViewport.topEdges(tabsTop: tabsTop)
+        XCTAssertEqual(top.top, TasksViewport.controlsBottom(tabsTop: tabsTop))
+        XCTAssertEqual(TasksViewport.plainLine(tabsTop: tabsTop).upperBound,
+                       tabsTop + AtticLayout.pageTabsHeight + AtticPageTabsMetrics.underlineHeight + AtticPageTabsMetrics.underlineGap,
+                       "the underline is part of the line")
+        XCTAssertGreaterThanOrEqual(top.top, TasksViewport.plainLine(tabsTop: tabsTop).upperBound)
+        XCTAssertGreaterThan(TasksViewport.listTop(tabsTop: tabsTop), TasksViewport.plainLine(tabsTop: tabsTop).upperBound,
+                             "a resting row is clear of the line")
+
+        let inset: CGFloat = 12
+        let idle = TasksViewport.bottomEdges(stack: TasksViewport.reservedStack - AtticControlSize.smallHeight, bottomInset: inset)
+        XCTAssertEqual(idle.bottom, AtticControlSize.addBarHeight + inset)
+        let strip = TasksViewport.bottomEdges(stack: TasksViewport.reservedStack, bottomInset: inset)
+        XCTAssertEqual(strip.bottom, TasksViewport.reservedStack + inset, "the strip is part of the bottom controls")
+    }
+
+    /// S3-01: a plain row over the composer (Date, Tag, Priority) lies on
+    /// the blur at full strength: the mask is opaque `plateau` points in
+    /// from the edge, then eases to clear over the rest, as it always has.
+    /// No plateau is the approved mask, unchanged.
+    func testAPlateauKeepsTheBlurFullUnderAPlainRow() throws {
+        func alphas(_ edge: VerticalEdge, plateau: CGFloat) throws -> [UInt8] {
+            let image = try XCTUnwrap(AtticVariableBlurView.maskImage(height: 60, edge: edge, plateau: plateau))
+            let data = try XCTUnwrap(image.dataProvider?.data as Data?)
+            return (0..<image.height).map { data[$0 * image.bytesPerRow + 3] }
+        }
+        let plain = try alphas(.bottom, plateau: 0)
+        XCTAssertEqual(plain, try XCTUnwrap(AtticVariableBlurView.maskImage(height: 60, edge: .bottom)).alphaRows(),
+                       "no plateau: the approved mask")
+        let bottom = try alphas(.bottom, plateau: 24)
+        XCTAssertEqual(bottom.suffix(25), Array(repeating: 255, count: 25), "full strength across the row")
+        XCTAssertEqual(bottom.first, 0, "clear at the inner end, as before")
+        XCTAssertEqual(bottom, bottom.sorted(), "it only eases towards the edge")
+        XCTAssertEqual(try alphas(.top, plateau: 24), bottom.reversed())
+    }
+
+    /// S3-01: the plateau rises with the composer's strip (Date, Tag,
+    /// Priority) and covers the whole stack once it shows; idle it is the
+    /// approved blur's (none).
+    func testTheBlurIsFullUnderTheComposersStripWhileItShows() {
+        let inset: CGFloat = 12
+        let idle = TasksViewport.reservedStack - AtticControlSize.smallHeight
+        XCTAssertEqual(TasksViewport.controlsPlateau(stack: idle, bottomInset: inset), 0)
+        XCTAssertEqual(TasksViewport.controlsPlateau(stack: AtticControlSize.addBarHeight, bottomInset: inset), 0)
+        let shown = TasksViewport.controlsPlateau(stack: TasksViewport.reservedStack, bottomInset: inset)
+        XCTAssertEqual(shown, TasksViewport.controlsInset(stack: TasksViewport.reservedStack, bottomInset: inset),
+                       "full up to the strip's top")
+        let half = TasksViewport.controlsPlateau(stack: idle + AtticControlSize.smallHeight / 2, bottomInset: inset)
+        XCTAssertGreaterThan(half, 0)
+        XCTAssertLessThan(half, shown, "it moves with the strip as it rises")
+        let grown = TasksViewport.reservedStack + 32
+        XCTAssertEqual(TasksViewport.controlsPlateau(stack: grown, bottomInset: inset),
+                       TasksViewport.controlsInset(stack: grown, bottomInset: inset), "a grown bar keeps it to the top")
+    }
+
+    /// U-02: with no blur (Reduce Transparency) the surface is solid under
+    /// the controls, out to their inner edge, and gone 12 pt past it, so no
+    /// text shows sharp behind a control and the title's rest (16 below
+    /// the header) is untouched.
+    func testWithoutTheBlurTheSurfaceIsSolidUnderTheControls() {
+        let extent: CGFloat = 52, height = extent + AtticEdgeBlurMetrics.reach
+        let stops = AtticEdgeBlurBackdrop.solidStops(height: height, extent: extent)
+        XCTAssertEqual(stops.solid * height, extent, accuracy: 0.01)
+        XCTAssertEqual(stops.clear * height, extent + AtticEdgeBlurMetrics.solidFade, accuracy: 0.01)
+        XCTAssertLessThan(AtticEdgeBlurMetrics.solidFade, AtticNoteMetrics.titleTopGap, "the resting title stays clear")
+    }
+
+    /// U-02: under Reduce Transparency a raised control lies on the panel's
+    /// solid surface; otherwise its recipe is unchanged.
+    func testReduceTransparencyMakesRaisedControlsOpaque() throws {
+        var design = AtticDesignContext(mode: .dark)
+        let plain = design.tokens.raised
+        XCTAssertEqual(plain.opaque(design), plain)
+        design.reduceTransparency = true
+        let opaque = design.tokens.raised.opaque(design)
+        let base = try XCTUnwrap(opaque.base)
+        XCTAssertEqual(base.alpha, 1)
+        XCTAssertEqual(opaque.fill, design.tokens.raised.fill)
+    }
+}
+
+private extension CGImage {
+    /// Each row's alpha (a one-column mask).
+    func alphaRows() -> [UInt8] {
+        guard let data = dataProvider?.data as Data? else { return [] }
+        return (0..<height).map { data[$0 * bytesPerRow + 3] }
+    }
+}
+
+/// V-10: what opens under a task row is uncovered from its top as the rows
+/// below make room: never drawn over them mid-spring.
+@MainActor
+final class TopRevealTests: XCTestCase {
+    func testTheRevealUncoversFromTheTopOnly() {
+        let rect = CGRect(x: 0, y: 40, width: 300, height: 120)
+        let shut = AtticTopRevealShape(fraction: 0).path(in: rect).boundingRect
+        XCTAssertEqual(shut.maxY, rect.minY, accuracy: 0.01, "nothing below the row shows")
+        let half = AtticTopRevealShape(fraction: 0.5).path(in: rect).boundingRect
+        XCTAssertEqual(half.maxY, rect.minY + 60, accuracy: 0.01, "as far down as the rows below have moved")
+        XCTAssertLessThan(half.minX, rect.minX, "only the bottom edge cuts")
+        XCTAssertLessThan(half.minY, rect.minY)
+        let rest = AtticTopRevealShape(fraction: 1).path(in: rect).boundingRect
+        XCTAssertTrue(rest.contains(rect.insetBy(dx: -20, dy: -20)), "at rest it cuts nothing")
+    }
+}

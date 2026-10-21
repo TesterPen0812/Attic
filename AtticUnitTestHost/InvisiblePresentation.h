@@ -1,0 +1,1 @@
+void AtticInstallInvisiblePresentation(void);

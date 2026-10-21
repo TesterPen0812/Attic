@@ -8,7 +8,155 @@ import XCTest
 /// the agent's `show` tool.
 @MainActor
 final class PanelShellTests: XCTestCase {
+    private final class NativeTrackingView: NSView {
+        var onDown: ((NSEvent) -> Void)?
+        override func mouseDown(with event: NSEvent) { onDown?(event) }
+    }
+
+    func testG06NativeTrackingConsumesReleaseAndFinalisesPanelPressExactlyOnce() throws {
+        let panel = AtticPanel(contentRect: NSRect(x: -6000, y: -6000, width: 300, height: 300),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        let tracker = NativeTrackingView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        panel.contentView = tracker
+        let requestedSize = panel.frame.size
+        if TestPresentationPolicy.isInvisible {
+            // Deliberately request a displayed origin: the host boundary,
+            // rather than a fixture's hard-coded coordinates, must protect it.
+            panel.setFrameOrigin(try XCTUnwrap(NSScreen.main).frame.origin)
+        }
+        panel.orderFront(nil)
+        if TestPresentationPolicy.isInvisible {
+            XCTAssertEqual(panel.frame.size, requestedSize)
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !panel.frame.intersects($0.frame) })
+            panel.makeKeyAndOrderFront(nil)
+            XCTAssertFalse(panel.canBecomeKey)
+            XCTAssertFalse(panel.isKeyWindow)
+            NSApp.activate()
+            XCTAssertFalse(NSApp.isActive)
+            panel.setFrameOrigin(try XCTUnwrap(NSScreen.main).frame.origin)
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !panel.frame.intersects($0.frame) },
+                          "A visible window's frame update must also stay off every display")
+            XCTAssertEqual(panel.frame.size, requestedSize)
+            // Exercise native cell entry points as well as NSMenu: the
+            // bundle canary rejects even transient menu tracking.
+            let popup = NSPopUpButton(frame: CGRect(x: 10, y: 10, width: 100, height: 24), pullsDown: false)
+            popup.addItem(withTitle: "Invisible menu probe")
+            tracker.addSubview(popup)
+            let cell = try XCTUnwrap(popup.cell as? NSPopUpButtonCell)
+            cell.performClick(withFrame: popup.bounds, in: popup)
+            cell.attachPopUp(withFrame: popup.bounds, in: popup)
+            // Eager titled initialization can recenter internally before
+            // returning, even when its requested content rect is off-screen.
+            let titled = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 500),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            titled.isReleasedWhenClosed = false
+            defer { titled.close() }
+            XCTAssertTrue(NSScreen.screens.allSatisfy { !titled.frame.intersects($0.frame) })
+            XCTAssertEqual(titled.contentView?.bounds.size, CGSize(width: 320, height: 500))
+            XCTAssertGreaterThan(titled.windowNumber, 0, "eager initialization still creates the backing window")
+            XCTAssertFalse(titled.isVisible, "eager initialization still returns a hidden window")
+        }
+        var presses = 0
+        var releases = 0
+        panel.onPressEnded = { releases += 1 }
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 150, y: 150), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+        }
+        let up = try event(.leftMouseUp)
+        tracker.onDown = { _ in
+            presses += 1
+            XCTAssertTrue(panel.isPressing)
+            XCTAssertEqual(releases, 0, "key appearance waits until tracking returns")
+            NSApp.postEvent(up, atStart: true)
+            let consumed = panel.nextEvent(matching: .leftMouseUp, until: Date().addingTimeInterval(1), inMode: .eventTracking, dequeue: true)
+            XCTAssertEqual(consumed?.type, .leftMouseUp, "the same dequeue used by the block handle")
+            XCTAssertTrue(panel.isPressing, "never finalise during mouseDown dispatch")
+            XCTAssertEqual(releases, 0)
+        }
+        panel.sendEvent(try event(.leftMouseDown))
+        XCTAssertEqual(presses, 1, "the native tracking callback must actually run")
+        XCTAssertFalse(panel.isPressing, "native tracking already released the button")
+        XCTAssertEqual(releases, 1, "the key appearance updates immediately")
+        panel.sendEvent(up)
+        panel.sendEvent(try event(.mouseMoved))
+        XCTAssertEqual(releases, 1, "late events cannot finalise the same press twice")
+    }
+
     // MARK: Pages and the header
+
+    /// A20: every switch, the first and every later one, between every pair
+    /// of pages, uses the feel's spring with the pages travelling sideways.
+    /// Before, the shell crossfaded for 180 ms whatever the feel, and only
+    /// the first visit to Notes looked sprung (the editor's own slide for
+    /// the note its session started on).
+    func testEveryPageSwitchUsesTheFeelsMotionEveryTime() throws {
+        let saved = AtticMotionTuning.current
+        defer { AtticMotionTuning.current = saved }
+        for feel in [AtticAnimationLevel.lively, .subtle] {
+            AtticMotionTuning.current = feel.feel.tuning
+            let ui = PanelUIState()
+            ui.loadPageContent()
+            XCTAssertEqual(PanelPage(ui.selectedSection), .tasks)
+            let route: [PanelPage] = [.notes, .tasks, .notes, .tasks, .canvas, .tasks, .canvas, .notes, .canvas, .notes, .tasks]
+            var used: [PanelPageSwitch] = []
+            for page in route {
+                ui.switchPage(to: page.section, motion: .current(reduceMotion: false))
+                used.append(try XCTUnwrap(ui.lastPageSwitch))
+            }
+            XCTAssertEqual(used.map(\.to), route)
+            let spring = feel.feel.tuning.slide
+            XCTAssertGreaterThan(spring.bounce, 0, "\(feel): never a plain fade")
+            for (index, record) in used.enumerated() {
+                XCTAssertEqual(record.motion, PanelPageMotion(spring: spring), "\(feel) switch \(index) to \(record.to)")
+                XCTAssertEqual(record.motion.animation, .spring(duration: spring.response, bounce: spring.bounce))
+                XCTAssertNotEqual(record.motion.animation, .spring(duration: 0.18, bounce: 0), "the old crossfade")
+            }
+            // First and repeated visits to Notes are the same switch.
+            XCTAssertEqual(used[0], used[2])
+            XCTAssertEqual(used[1], used[3])
+            // Sideways in page order: in from its side of the page left, out
+            // to its side of the new one.
+            XCTAssertEqual(used[0].restingSide(of: .notes), 1, "Tasks → Notes: Notes comes in from the right")
+            XCTAssertEqual(used[0].restingSide(of: .tasks), -1, "Tasks goes out to the left")
+            XCTAssertEqual(used[1].restingSide(of: .notes), 1, "Notes → Tasks: Notes goes out to the right")
+            XCTAssertEqual(used[1].restingSide(of: .tasks), -1, "Tasks comes in from the left")
+            XCTAssertEqual(used[7].restingSide(of: .notes), -1, "Canvas → Notes: Notes comes in from the left")
+            XCTAssertEqual(used[8].restingSide(of: .notes), -1, "Notes → Canvas: Notes goes out to the left")
+            XCTAssertEqual(used[8].restingSide(of: .canvas), 1)
+            // A kept page rests on its side of the current page.
+            XCTAssertEqual(PanelPage.canvas.side(from: .tasks), 1)
+            XCTAssertEqual(PanelPage.tasks.side(from: .canvas), -1)
+            XCTAssertEqual(PanelPage.notes.side(from: .notes), 0)
+        }
+        // Reduce Motion and Animations: Reduced keep their instant switch.
+        AtticMotionTuning.current = .lively
+        let ui = PanelUIState()
+        ui.loadPageContent()
+        ui.switchPage(to: .notes, motion: .current(reduceMotion: true))
+        XCTAssertEqual(ui.lastPageSwitch?.motion, .instant)
+        XCTAssertNil(ui.lastPageSwitch?.motion.animation)
+        XCTAssertEqual(ui.lastPageSwitch?.restingSide(of: .notes), 0, "no travel")
+        XCTAssertNil(AtticMotionPreset.pageSwitch.animation(reduceMotion: true))
+        // The cause: the Notes editor's springy slide no longer plays for the
+        // note the page opens on, only for a new or another note.
+        XCTAssertNil(NotesEditorPage.noteSlideAnimation(hasShownNote: false, reduceMotion: false))
+        XCTAssertEqual(NotesEditorPage.noteSlideAnimation(hasShownNote: true, reduceMotion: false),
+                       AtticMotionPreset.slide.animation(reduceMotion: false))
+    }
+
+    /// A20 and N-4: the "New tag" row's + sits in the dots' column, so its
+    /// name starts where the tags' names do; the tick's column is at the end.
+    func testTheNewTagRowsPlusSitsInTheDotColumn() {
+        let m = AtticDropdownMetrics.self
+        let name = String(localized: "New tag “#plan”")
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: [], create: "plan"),
+                       ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth(name)
+                            + m.columnGap + m.checkSlot))
+    }
 
     func testSectionsMapToThreePagesAndTasksAlwaysOpensOnNow() {
         XCTAssertEqual(PanelPage(.tasks), .tasks)
@@ -29,11 +177,13 @@ final class PanelShellTests: XCTestCase {
     /// Phase 0's symmetrical top: the pin and the page button are equal
     /// 36 pt squares; the page button opens leftward to 96, the region the
     /// header's hit testing keeps for it.
-    func testHeaderIsTwoEqualSquaresAndThePageButtonOpensTo96() {
-        XCTAssertEqual(PanelHeaderLayout.height, 36)
-        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 36, height: 36))
+    /// Chrome B (Notes v2, owner 2026-10-08): 32 pt squares, the page
+    /// button opening to 84 (three 24 pt chips 2 apart in a 4 pt inset).
+    func testHeaderIsTwoEqualSquaresAndThePageButtonOpensTo84() {
+        XCTAssertEqual(PanelHeaderLayout.height, 32)
+        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 32, height: 32))
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), PanelHeaderLayout.pinSize.width)
-        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 96)
+        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 84)
     }
 
     func testPageLayoutUsesTheCornerAwareInsetsAndPlacesTheHeaderBand() {
@@ -42,13 +192,13 @@ final class PanelShellTests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: corner, panelSize: size)
             XCTAssertEqual(layout.contentInsets, PanelGeometry.contentInsets(cornerSize: corner, panelSize: size))
             XCTAssertEqual(layout.chromeInsets, PanelGeometry.chromeInsets(cornerSize: corner, panelSize: size))
-            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 36)
+            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 32)
         }
-        // Phase 0's room: the controls sit 24 from every edge at the default
-        // corner (the header 24–60), and move inward with larger corners.
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 24)
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).headerBottom, 60)
-        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 24)
+        // Chrome B: the controls sit 16 from every edge at the default
+        // corner (the header 16–48), and move inward with larger corners.
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 16)
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).headerBottom, 48)
+        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 16)
     }
 
     // MARK: Key window
@@ -174,7 +324,7 @@ final class PanelShellTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         let controller = AtticPanelController(
             store: store, noteStore: notes,
@@ -221,7 +371,7 @@ final class PanelShellTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         let controller = AtticPanelController(
             store: store, noteStore: notes,
@@ -252,7 +402,7 @@ final class PanelShellTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let controller = AtticPanelController(
             store: store, noteStore: notes,
             canvasSession: CanvasSession(store: CanvasStore(container: container)),
@@ -329,5 +479,41 @@ final class PanelShellTests: XCTestCase {
         let result = try XCTUnwrap(call["result"] as? [String: Any])
         XCTAssertEqual(result["isError"] as? Bool, false)
         XCTAssertEqual(presenter.targets, [.page(.tasks)])
+    }
+}
+
+// MARK: - UI review 14 (F2): header and page column
+
+@MainActor
+extension PanelShellTests {
+    /// U-04: shut, the page button's glyph is the pin's: the strong glyph
+    /// ink at regular weight (the pin is `emphasisedGlyph`), never the quiet
+    /// outline icon that reads as disabled.
+    func testU04TheShutPageGlyphMatchesThePin() {
+        let shut = AtticPageButtonMetrics.glyphFace(isSelected: true, open: false, accent: false, solid: false)
+        XCTAssertEqual(shut.ink, .glyph)
+        XCTAssertEqual(shut.weight, .regular)
+        XCTAssertEqual(AtticPageButtonMetrics.glyphFace(isSelected: true, open: false, accent: true, solid: false).ink, .glyph,
+                       "a Light palette's accent marks the current page only among the others")
+        XCTAssertEqual(AtticPageButtonMetrics.glyphFace(isSelected: true, open: true, accent: true, solid: false).ink, .accent)
+        XCTAssertEqual(AtticPageButtonMetrics.glyphFace(isSelected: true, open: true, accent: true, solid: true).ink, .glyph)
+        let other = AtticPageButtonMetrics.glyphFace(isSelected: false, open: true, accent: false, solid: false)
+        XCTAssertEqual(other.ink, .icon)
+        XCTAssertEqual(other.weight, AtticIconWeight.outline)
+    }
+
+    /// U-42: a panel wider than the reading width keeps a centred column of
+    /// that width; at and under it nothing changes.
+    func testU42AWidePanelKeepsAReadingColumn() {
+        let narrow = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 320, height: 520))
+        XCTAssertEqual(narrow.readingColumn(), narrow)
+        let wide = PanelPageLayout(cornerSize: 24, panelSize: CGSize(width: 1700, height: 520))
+        let column = wide.readingColumn()
+        let extra = (1700 - PanelPageLayout.readingWidth) / 2
+        XCTAssertEqual(column.chromeInsets.leading, wide.chromeInsets.leading + extra, accuracy: 0.5)
+        XCTAssertEqual(column.chromeInsets.trailing, wide.chromeInsets.trailing + extra, accuracy: 0.5)
+        XCTAssertEqual(column.contentInsets.leading, wide.contentInsets.leading + extra, accuracy: 0.5)
+        XCTAssertEqual(column.chromeInsets.top, wide.chromeInsets.top, "the header row keeps its place")
+        XCTAssertEqual(column.panelSize, wide.panelSize)
     }
 }

@@ -31,6 +31,14 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         configure(nsView)
     }
 
+    /// The canvas takes exactly the room it is given. Otherwise SwiftUI asks
+    /// the view for its fitting size, which is its current frame, and a page
+    /// kept built behind the current one holds the whole panel at the old
+    /// width after Settings narrows it (A39 F08).
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: CanvasNSView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 400))
+    }
+
     static func dismantleNSView(
         _ nsView: CanvasNSView,
         coordinator: ()
@@ -624,8 +632,12 @@ final class CanvasNSView: NSView {
     /// behind another (round 10: the hidden Canvas's open hand showed over
     /// Tasks rows; an opacity-0 view keeps its cursor rects and tracking).
     func pointerCursorRects() -> [(CGRect, NSCursor)] {
-        guard isPageShown else { return [] }
-        return [(bounds, baseCursor)] + excludedControlRects.map { ($0.intersection(bounds), NSCursor.arrow) }
+        guard isPageShown, !bounds.isEmpty else { return [] }
+        // A control rect that no longer overlaps the board (the page is
+        // sliding during a page switch) intersects to CGRect.null, and
+        // addCursorRect throws on it, which crashed the app. Skip those.
+        let controls = excludedControlRects.map { $0.intersection(bounds) }.filter { !$0.isNull && !$0.isEmpty }
+        return [(bounds, baseCursor)] + controls.map { ($0, NSCursor.arrow) }
     }
 
     /// Whether the Canvas page is the one shown. Hidden, it sets no cursor.

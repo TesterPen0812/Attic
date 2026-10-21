@@ -16,13 +16,12 @@ final class SchemaMigrationTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AtticSchemaMigration-\(UUID().uuidString)", isDirectory: true)
+        root = ownedTemporaryDirectory(prefix: "AtticSchemaMigration")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
-        if let root { try? FileManager.default.removeItem(at: root) }
+
     }
 
     // MARK: - Registration
@@ -34,7 +33,8 @@ final class SchemaMigrationTests: XCTestCase {
             let entities = Dictionary(uniqueKeysWithValues: container.schema.entities.map { ($0.name, $0) })
             XCTAssertEqual(Set(entities.keys), [
                 "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem",
-                "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink"
+                "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance",
+                "TagColour"
             ])
             let taskAttributes = Set(entities["TaskItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(taskAttributes.isSuperset(of: [
@@ -45,6 +45,8 @@ final class SchemaMigrationTests: XCTestCase {
             XCTAssertTrue(attachmentAttributes.contains("deletedAt"))
             let noteAttributes = Set(entities["NoteItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(noteAttributes.isSuperset(of: ["deletedAt", "deletedAttachmentIDsRaw", "tagsRaw"]))
+            // Phase 2: the note format fields (all defaulted or optional).
+            XCTAssertTrue(noteAttributes.isSuperset(of: ["content", "contentFormat", "plainText", "taskID", "revision", "revisionID"]))
             let boardAttributes = Set(entities["CanvasBoardItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(boardAttributes.isSuperset(of: ["tagsRaw", "purgedAt", "recentlyDeletedAt", "deletedContentCount"]))
         }
@@ -68,7 +70,35 @@ final class SchemaMigrationTests: XCTestCase {
 
     // MARK: - Migration of a pre-Phase 0 store
 
-    func testCopiedPrePhase0StoreMigratesInPlaceWithoutLosingOrDeletingAnything() async throws {
+    func testDailyToRedesignDiffIsEntirelyAdditiveAndInfersAMapping() throws {
+        let old = try XCTUnwrap(NSManagedObjectModel.makeManagedObjectModel(for: Self.prePhase0Types))
+        let current = try XCTUnwrap(NSManagedObjectModel.makeManagedObjectModel(for: PersistenceController.appModelTypes))
+        for entity in old.entities {
+            let destination = try XCTUnwrap(current.entitiesByName[try XCTUnwrap(entity.name)])
+            XCTAssertEqual(destination.renamingIdentifier, entity.renamingIdentifier)
+            XCTAssertEqual(destination.uniquenessConstraints.count, 0)
+            XCTAssertTrue(entity.relationshipsByName.isEmpty)
+            XCTAssertTrue(destination.relationshipsByName.isEmpty)
+            for attribute in entity.attributesByName.values {
+                let retained = try XCTUnwrap(destination.attributesByName[attribute.name])
+                XCTAssertEqual(retained.attributeType, attribute.attributeType)
+                XCTAssertEqual(retained.isOptional, attribute.isOptional)
+                XCTAssertEqual(retained.renamingIdentifier, attribute.renamingIdentifier)
+                XCTAssertEqual(retained.allowsExternalBinaryDataStorage, attribute.allowsExternalBinaryDataStorage)
+            }
+            for attribute in destination.attributesByName.values where entity.attributesByName[attribute.name] == nil {
+                XCTAssertTrue(attribute.isOptional || attribute.defaultValue != nil,
+                              "Added fields must be optional or defaulted")
+            }
+        }
+        XCTAssertEqual(Set(current.entitiesByName.keys).subtracting(old.entitiesByName.keys),
+                       ["ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance", "TagColour"])
+        XCTAssertEqual(current.entitiesByName["NoteItem"]?.attributesByName["contentFormat"]?.defaultValue as? Int, 0)
+        XCTAssertEqual(current.entitiesByName["TaskItem"]?.attributesByName["listOrderVersion"]?.defaultValue as? Int, 0)
+        _ = try NSMappingModel.inferredMappingModel(forSourceModel: old, destinationModel: current)
+    }
+
+    func testCopiedPrePhase0StorePurgesOldNotesAndPreservesOtherContent() async throws {
         let fixture = try await makePrePhase0Fixture()
         // Only copies are ever opened; the fixture itself stays untouched.
 
@@ -80,13 +110,13 @@ final class SchemaMigrationTests: XCTestCase {
             .appendingPathComponent(bundleComponent, isDirectory: true)
         try copyStoreFamily(from: fixture.storeURL, to: uiTestDirectory.appendingPathComponent("canvas.store"))
         let migratedUITest = try PersistenceController.makeCanvasUITestContainer(reset: false, baseDirectory: uiTestBase)
-        try await assertNothingLost(in: migratedUITest, fixture: fixture)
+        try await assertOwnerApprovedUpgrade(in: migratedUITest, fixture: fixture)
 
         // 2. The normal app container, through PersistenceController's real
         // configuration code (local-only, as this build runs), relocated to a
         // copy of the fixture.
         let normal = try openThroughAppContainer(copyOf: fixture, in: "app-copy")
-        try await assertNothingLost(in: normal, fixture: fixture)
+        try await assertOwnerApprovedUpgrade(in: normal, fixture: fixture)
         XCTAssertEqual(
             try storedEntityHashes(at: PersistenceController.makeConfiguration(
                 cloudSyncEnabled: false, storeDirectory: root.appendingPathComponent("app-copy")
@@ -154,7 +184,7 @@ final class SchemaMigrationTests: XCTestCase {
         let container = try openThroughAppContainer(copyOf: fixture, in: "cleanup-copy")
         let rowsBefore = try rowCounts(in: container)
         let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: fixture.taskFilesRoot))
-        let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot))
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot)))
         let canvases = CanvasStore(container: container)
         let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
         let cleanup = DailyCleanupService(
@@ -176,12 +206,12 @@ final class SchemaMigrationTests: XCTestCase {
 
         // Deleting and restoring migrated items keeps every row too.
         XCTAssertTrue(library.delete(AtticItemRef(.task, fixture.parentTaskID)))
-        XCTAssertTrue(library.delete(AtticItemRef(.note, fixture.noteID)))
+        XCTAssertFalse(library.delete(AtticItemRef(.note, fixture.noteID)), "the old family was purged once at store open")
         XCTAssertEqual(try rowCounts(in: container), rowsBefore)
         XCTAssertTrue(library.restore(AtticItemRef(.task, fixture.parentTaskID)))
-        XCTAssertTrue(library.restore(AtticItemRef(.note, fixture.noteID)))
+        XCTAssertFalse(library.restore(AtticItemRef(.note, fixture.noteID)))
         XCTAssertEqual(Set(tasks.subtasks(of: fixture.parentTaskID).map(\.id)), Set(fixture.childTaskIDs))
-        XCTAssertEqual(notes.attachments(for: fixture.noteID).count, 2)
+        XCTAssertTrue(notes.attachments(for: fixture.noteID).isEmpty)
         XCTAssertEqual(try rowCounts(in: container), rowsBefore)
     }
 
@@ -313,8 +343,12 @@ final class SchemaMigrationTests: XCTestCase {
         return fixture
     }
 
-    private func assertNothingLost(in container: ModelContainer, fixture: Fixture) async throws {
-        XCTAssertEqual(try rowCounts(in: container), fixture.rowCounts)
+    private func assertOwnerApprovedUpgrade(in container: ModelContainer, fixture: Fixture) async throws {
+        // Owner decision 2026-10-09: old Notes are intentionally deleted;
+        // every unrelated pre-Phase 0 invariant below still applies.
+        var expected = fixture.rowCounts
+        expected["NoteItem"] = 0; expected["NoteAttachment"] = 0
+        XCTAssertEqual(try rowCounts(in: container), expected)
         let context = ModelContext(container)
 
         let taskRows = try context.fetch(FetchDescriptor<TaskItem>())
@@ -328,17 +362,8 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(taskRows.first { $0.id == fixture.taskWithFileID }?.attachments, [fixture.taskFile])
         XCTAssertTrue(taskRows.allSatisfy { $0.manualOrder == 1_024 })
 
-        let noteRows = try context.fetch(FetchDescriptor<NoteItem>())
-        XCTAssertEqual(noteRows.count, 2)
-        XCTAssertTrue(noteRows.allSatisfy {
-            $0.id == fixture.noteID && $0.body == "Bring the passport." && $0.deletedAt == nil
-                && $0.deletedAttachmentIDsRaw == nil
-        }, "new note fields take their defaults")
-        let attachments = try context.fetch(FetchDescriptor<NoteAttachment>())
-        XCTAssertTrue(attachments.allSatisfy { $0.deletedAt == nil })
-        XCTAssertEqual(Dictionary(uniqueKeysWithValues: attachments.map { ($0.id, $0.payload) }),
-                       fixture.notePayloads.mapValues { Optional($0) })
-
+        XCTAssertTrue(try context.fetch(FetchDescriptor<NoteItem>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
         let boards = try context.fetch(FetchDescriptor<CanvasBoardItem>())
         XCTAssertEqual(Set(boards.map(\.name)), ["Canvas", "Sketches", "Old board"])
         XCTAssertTrue(boards.contains { $0.id == CanvasBoardItem.logicalBoardID && $0.name == "Canvas" })
@@ -350,7 +375,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<CanvasImageItem>()).first?.encodedData, Data([1, 2, 3, 4]))
         XCTAssertEqual(try context.fetch(FetchDescriptor<CanvasSemanticObjectItem>()).first?.id, fixture.semanticID)
 
-        // The stores present the same content as before.
+        // Live Tasks and Canvas still present the same content as before.
         let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: fixture.taskFilesRoot))
         XCTAssertEqual(tasks.tasks.count, 6, "one row per logical task")
         XCTAssertEqual(tasks.task(withID: fixture.duplicateTaskID)?.title, "Replica B")
@@ -358,9 +383,9 @@ final class SchemaMigrationTests: XCTestCase {
         let fileURL = try await tasks.taskImageFiles.verifiedURL(for: fixture.taskFile)
         XCTAssertNotNil(fileURL, "task files on disk are untouched")
 
-        let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot))
-        XCTAssertEqual(notes.notes.map(\.id), [fixture.noteID])
-        XCTAssertEqual(notes.attachments(for: fixture.noteID).count, 2)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot)))
+        XCTAssertTrue(notes.notes.isEmpty)
+        XCTAssertTrue(notes.attachments(for: fixture.noteID).isEmpty)
 
         let canvases = CanvasStore(container: container)
         XCTAssertEqual(Set(canvases.canvases.map(\.id)), [CanvasBoardItem.logicalBoardID, fixture.canvasID])
@@ -369,7 +394,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(canvases.strokes.map(\.id), [fixture.strokeIDs[0]])
         XCTAssertEqual(canvases.images.map(\.id), [fixture.imageID])
         XCTAssertEqual(canvases.semanticObjects.map(\.id), [fixture.semanticID])
-        XCTAssertEqual(try rowCounts(in: container), fixture.rowCounts, "opening the stores wrote no rows away")
+        XCTAssertEqual(try rowCounts(in: container), expected, "opening presentation stores makes no further deletions")
     }
 
     private func rowCounts(in container: ModelContainer) throws -> [String: Int] {

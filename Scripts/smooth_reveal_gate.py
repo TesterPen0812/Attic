@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Compare adjacent AB/BA reveal pairs; no fixed millisecond allowance.
+
+Use fresh owned stores, the same configuration and display, and reverse the
+launch order in alternate pairs. The median paired difference must not exceed
+zero: the candidate must be no slower than the measured reference.
+"""
+import argparse
+import json
+import math
+import statistics
+from pathlib import Path
+
+
+def reveal(document):
+    if document.get('bundle') != 'com.taha.Attic.preview.phasex':
+        raise ValueError('Expected the isolated phasex preview')
+    if (document.get('settings') or {}).get('reveal_counts'):
+        raise ValueError('Count-instrumented reveals cannot establish timing acceptance')
+    values = [r['milliseconds'] for r in document['timings']
+              if r['name'] == 'PanelRevealToOrderedFront']
+    if len(values) != 1 or not math.isfinite(values[0]) or values[0] <= 0:
+        raise ValueError('Expected exactly one finite cold reveal')
+    if (document.get('settings') or {}).get('reveal_breakdown'):
+        for name in ('BuildPages', 'PrepareGeometry', 'SetColdFrame', 'OrderFront', 'Pointer', 'Animate'):
+            stages = [r['milliseconds'] for r in document['timings']
+                      if r['name'] == 'RevealStage.' + name]
+            if len(stages) != 1 or not math.isfinite(stages[0]) or stages[0] < 0:
+                raise ValueError('Requested reveal instrumentation is missing or invalid: ' + name)
+    return values[0]
+
+
+def compare(pairs):
+    if len(pairs) < 2:
+        raise ValueError('At least two interleaved AB/BA pairs are required')
+    # Legacy evidence predates settings metadata. New captures must agree
+    # on warm-up and instrumentation, including across the reversed pair.
+    settings = pairs[0][0].get('settings')
+    keys = ('mode', 'frame_monitor', 'settle_seconds', 'idle_sample_seconds', 'allocations',
+            'reveal_breakdown', 'sampled_reveal', 'reveal_counts')
+    expected = None if settings is None else {key: settings.get(key) for key in keys}
+    for pair in pairs:
+        for document in pair:
+            current = document.get('settings')
+            actual = None if current is None else {key: current.get(key) for key in keys}
+            if actual != expected:
+                raise ValueError('Paired reveals must use identical warm-up and instrumentation')
+    before = [reveal(a) for a, _ in pairs]
+    after = [reveal(b) for _, b in pairs]
+    deltas = [b - a for a, b in zip(before, after)]
+    return dict(reference_ms=before, candidate_ms=after, paired_deltas_ms=deltas,
+                reference_spread_ms=max(before) - min(before),
+                candidate_spread_ms=max(after) - min(after),
+                median_paired_delta_ms=statistics.median(deltas),
+                passed=statistics.median(deltas) <= 0)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--pair', nargs=2, action='append', required=True,
+                        metavar=('REFERENCE_JSON', 'CANDIDATE_JSON'))
+    args = parser.parse_args()
+    result = compare([(json.loads(Path(a).read_text()), json.loads(Path(b).read_text()))
+                      for a, b in args.pair])
+    print(json.dumps(result, indent=2))
+    raise SystemExit(0 if result['passed'] else 1)
+
+
+if __name__ == '__main__':
+    main()

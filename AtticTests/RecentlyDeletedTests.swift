@@ -5,6 +5,36 @@ import XCTest
 /// Soft delete and Recently Deleted across tasks, notes and canvases.
 @MainActor
 final class RecentlyDeletedTests: XCTestCase {
+
+    func testR1_03PurgeKeepsByteDivergentTitles() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container), id = UUID()
+        let date = Date(timeIntervalSince1970: 1000)
+        for title in ["Café", "Cafe\u{301}"] {
+            let row = TaskItem(id: id, title: title, createdAt: date, updatedAt: date)
+            row.deletedAt = date; row.deletionRootID = id; row.deletionMembersRaw = id.uuidString
+            context.insert(row)
+        }
+        try context.save()
+        XCTAssertTrue(TaskStore(container: container).purgeDeleted(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try allTasks(container).count, 2)
+    }
+
+    func testR1_03RestoreRefusesByteDivergentLiveCopy() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container), id = UUID()
+        let date = Date(timeIntervalSince1970: 1000)
+        let deleted = TaskItem(id: id, title: "Café", createdAt: date, updatedAt: date)
+        deleted.deletedAt = date; deleted.deletionRootID = id; deleted.deletionMembersRaw = id.uuidString
+        let live = TaskItem(id: id, title: "Cafe\u{301}", createdAt: date, updatedAt: date)
+        context.insert(deleted); context.insert(live)
+        try context.save()
+        XCTAssertFalse(TaskStore(container: container).restoreDeleted(taskID: id))
+        let rows = try allTasks(container)
+        XCTAssertEqual(rows.filter { $0.deletedAt != nil }.count, 1)
+        XCTAssertEqual(Set(rows.map { Array($0.title.utf16) }).count, 2)
+    }
+
     private var calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
@@ -18,8 +48,8 @@ final class RecentlyDeletedTests: XCTestCase {
     // MARK: - Tasks
 
     func testDeletingATaskHidesItsFamilyEverywhereButKeepsEveryRowAndFile() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSoftDelete-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticSoftDelete")
+
         let source = root.appendingPathComponent("brief.txt")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("brief".utf8).write(to: source)
@@ -149,8 +179,8 @@ final class RecentlyDeletedTests: XCTestCase {
     // MARK: - Purge
 
     func testPurgeRemovesOnlyDeletesOlderThanTheCutoffWithTheirFamiliesAndFiles() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPurge-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticPurge")
+
         let source = root.appendingPathComponent("brief.txt")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("brief".utf8).write(to: source)
@@ -239,7 +269,7 @@ final class RecentlyDeletedTests: XCTestCase {
         seed.insert(NoteAttachment(noteID: note.id, originalFilename: "a.txt", byteCount: 1, sortIndex: 0,
                                    contentDigest: String(repeating: "a", count: 64), payload: Data([1])))
         try seed.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         XCTAssertEqual(store.orderedNotes().map(\.id), [newer.id, note.id])
 
         XCTAssertTrue(store.delete(store.note(withID: note.id)!))
@@ -287,7 +317,7 @@ final class RecentlyDeletedTests: XCTestCase {
         seed.insert(deleted)
         seed.insert(other)
         try seed.save()
-        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 2)
     }
@@ -359,7 +389,7 @@ final class RecentlyDeletedTests: XCTestCase {
         let clock = MutableNow(Date(timeIntervalSince1970: 100))
         let container = try PersistenceController.makeContainer(inMemory: true)
         let tasks = TaskStore(container: container, now: { clock.value })
-        let notes = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         let canvases = CanvasStore(container: container, now: { clock.value })
         let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
         let task = try XCTUnwrap(tasks.create(title: "Task"))

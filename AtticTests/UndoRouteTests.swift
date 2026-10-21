@@ -100,7 +100,7 @@ final class UndoRouteTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         return AtticLibrary(
             tasks: TaskStore(container: container, persist: persist),
-            notes: NoteStore(container: container, persist: persist, attachmentFileStore: makeTestAttachmentFileStore()),
+            notes: trackAttachmentReconciliation(of: NoteStore(container: container, persist: persist, attachmentFileStore: makeTestAttachmentFileStore())),
             canvases: CanvasStore(container: container, persist: persist)
         )
     }

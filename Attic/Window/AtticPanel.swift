@@ -1,4 +1,5 @@
 import AppKit
+import ObjectiveC
 import QuartzCore
 import SwiftUI
 
@@ -16,6 +17,11 @@ final class AtticPanel: NSPanel {
     var onTrackpadDismissProgress: ((CGFloat) -> Void)?
     var onTrackpadDismissCancelled: (() -> Void)?
     var onDirectContentInteraction: (() -> Void)?
+    /// A mouse button came up over the panel (after the window delivered it).
+    var onPressEnded: (() -> Void)?
+    /// A press the panel received is still down (O14-01).
+    private(set) var isPressing = false
+    private var trackingConsumedRelease = false
     /// Esc that nothing inside the panel used (a menu, a field, the list's
     /// own Esc all come first): the panel hides.
     var onUnhandledEscape: (() -> Void)?
@@ -78,7 +84,7 @@ final class AtticPanel: NSPanel {
         frameRect
     }
 
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { false }
 
     /// Esc reaches the window only when no responder in it handled the key:
@@ -86,6 +92,15 @@ final class AtticPanel: NSPanel {
     /// clearing a selection) and an open menu all see it first. A text view
     /// never passes Esc on here (it has its own completion behaviour), so
     /// the field's owner decides whether Esc leaves it.
+    /// An Esc typed in another window (a pop-over over the panel, such as
+    /// Notes' Aa) closes that window only: AppKit can hand the pop-over's
+    /// unhandled key on to the window it came from, and it must not hide
+    /// the panel as well.
+    private static func isOwnEscape(_ event: NSEvent?, in window: NSWindow) -> Bool {
+        guard let event, event.type == .keyDown else { return true }
+        return event.window == nil || event.window === window
+    }
+
     // MARK: Undo registrations that outlive their text view
 
     /// Every text view that took the keyboard in this panel, held until its
@@ -125,6 +140,21 @@ final class AtticPanel: NSPanel {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if Self.isUndoKey(event) { removeDepartedUndoParticipants() }
+        // MenuBarExtra does not supply the Edit menu's matching-style
+        // shortcut. NSTextView handles ordinary Paste itself, but this chord
+        // otherwise falls through (only the note body had a keyDown fallback).
+        // Route it to the actual text responder, including native field editors.
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        if event.type == .keyDown, event.window == nil || event.window === self,
+           flags == [.command, .option, .shift], event.charactersIgnoringModifiers?.lowercased() == "v",
+           let editor = firstResponder as? NSTextView, editor.window === self,
+           editor.isEditable, !editor.hasMarkedText() {
+            let item = NSMenuItem(title: "", action: #selector(NSTextView.pasteAsPlainText(_:)), keyEquivalent: "")
+            if editor.validateMenuItem(item) {
+                editor.pasteAsPlainText(self)
+                return true
+            }
+        }
         return super.performKeyEquivalent(with: event)
     }
 
@@ -189,7 +219,7 @@ final class AtticPanel: NSPanel {
         if event.keyCode == 53,
            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
            !(firstResponder is NSTextView) {
-            onUnhandledEscape?()
+            if Self.isOwnEscape(event, in: self) { onUnhandledEscape?() }
             return
         }
         if Self.isUndoKey(event), !AtticTextInput.isTyping(firstResponder), let onUnhandledUndo {
@@ -204,7 +234,21 @@ final class AtticPanel: NSPanel {
             super.cancelOperation(sender)
             return
         }
+        guard Self.isOwnEscape(NSApp.currentEvent, in: self) else { return }
         onUnhandledEscape?()
+    }
+
+    /// O14-01 (owner, 2026-10-14): every click on the panel does what it
+    /// was aimed at the first time, whatever is active. `sendEvent` makes
+    /// the panel key before AppKit sees a press, and the key look waits for
+    /// the release (`AtticPanelController.windowDidBecomeKey`). Wherever a
+    /// press still reaches a panel that is not key (AppKit then spends it
+    /// unless the view under it accepts the first mouse), the panel's text,
+    /// scroll and table views accept it. (SwiftUI's
+    /// `allowsWindowActivationEvents` is not used: on a dropdown's root it
+    /// kept the tag field from the keyboard, TasksPageUITests.)
+    nonisolated static func acceptsEveryFirstMouse(in window: NSWindow?) -> Bool {
+        window is AtticPanel
     }
 
     /// The presses that make an inactive panel key and still act.
@@ -217,12 +261,31 @@ final class AtticPanel: NSPanel {
         super.resignKey()
     }
 
+    override func nextEvent(matching mask: NSEvent.EventTypeMask) -> NSEvent? {
+        let event = super.nextEvent(matching: mask)
+        recordTrackedRelease(event)
+        return event
+    }
+
+    override func nextEvent(matching mask: NSEvent.EventTypeMask, until expiration: Date?, inMode mode: RunLoop.Mode, dequeue deqFlag: Bool) -> NSEvent? {
+        let event = super.nextEvent(matching: mask, until: expiration, inMode: mode, dequeue: deqFlag)
+        if deqFlag { recordTrackedRelease(event) }
+        return event
+    }
+
+    private func recordTrackedRelease(_ event: NSEvent?) {
+        if let event, [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+            trackingConsumedRelease = true
+        }
+    }
+
     override func sendEvent(_ event: NSEvent) {
         // One click both activates the panel and acts (owner, 2026-10-01):
         // the panel becomes key before AppKit sees the press, so the press
         // is never spent on activation, whatever view is under it (SwiftUI's
         // own views in a list do not accept the first mouse). The panel is
         // non-activating, so Attic stays where it is.
+        if Self.takesFirstPress(event.type) { isPressing = true; trackingConsumedRelease = false }
         if Self.takesFirstPress(event.type), !isKeyWindow, canBecomeKey, isVisible,
            visibleContentFrame.contains(convertPoint(toScreen: event.locationInWindow)) {
             makeKey()
@@ -235,6 +298,16 @@ final class AtticPanel: NSPanel {
                 onDirectContentInteraction?()
             }
             super.sendEvent(event)
+            // A native tracking loop can dequeue mouse-up inside mouseDown.
+            // Reconcile only after dispatch returns and all buttons are up;
+            // late releases/moves must not finalise the same press twice.
+            if isPressing, NSEvent.pressedMouseButtons == 0,
+               (Self.takesFirstPress(event.type) && trackingConsumedRelease)
+                || [.leftMouseUp, .rightMouseUp, .otherMouseUp, .mouseMoved, .keyDown].contains(event.type) {
+                isPressing = false
+                trackingConsumedRelease = false
+                onPressEnded?()
+            }
             return
         }
         guard (event.momentumPhase.isEmpty || event.phase.contains(.ended)),
@@ -384,6 +457,7 @@ final class AtticPanel: NSPanel {
         var view = contentView.hitTest(contentView.convert(windowPoint, from: nil))
         while let candidate = view {
             if candidate is CanvasNSView || candidate is NSControl { return true }
+            if let owner = candidate as? AtticHorizontalScrollOwner, owner.ownsHorizontalScrolling { return true }
             if let scroll = candidate as? NSScrollView,
                let document = scroll.documentView,
                document.bounds.width > scroll.contentView.bounds.width + 1 {
@@ -977,8 +1051,18 @@ final class AtticPanelContentContainer: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard allowsContentInteraction,
               bounds.contains(convert(point, from: superview)) else { return nil }
-        return hostingView.hitTest(convert(point, from: superview))
+        // Floating page controls (Notes' format bar, `/` list and cards) sit
+        // above the page in the same motion layer and answer first.
+        let local = convert(point, from: superview)
+        for overlay in motionView.subviews.reversed() where overlay !== hostingView && !overlay.isHidden {
+            if let hit = overlay.hitTest(motionView.convert(local, from: self)) { return hit }
+        }
+        return hostingView.hitTest(local)
     }
+
+    /// Where a page lays controls that float over the whole page (above its
+    /// bottom row): they move with the panel and are hit-tested first.
+    var overlayLayer: NSView { motionView }
 
     var presentationTransform: CATransform3D {
         guard let layer = motionView.layer else { return CATransform3DIdentity }
@@ -1135,7 +1219,12 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         self.panelCornerRadius = panelCornerRadius
         self.dockedCorner = dockedCorner
         self.chromeInteractionState = chromeInteractionState
+        AtticHostDragHooks.install()
         super.init(rootView: rootView)
+        // The window decides the panel's size, never the content: no
+        // minimum, maximum or intrinsic size flows from SwiftUI to AppKit
+        // (`PanelRootLayout` fills whatever frame the window has).
+        sizingOptions = []
         chromeInteractionState.onModeDockWidthChanged = { [weak self] in
             guard let self, let window = self.window else { return }
             window.invalidateCursorRects(for: self)
@@ -1168,8 +1257,22 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
             cancelActiveInteraction(reason: .lostWindow)
+        } else {
+            // This panel adds/removes native editors and SwiftUI controls.
+            // Let AppKit maintain that dynamic key loop. With the default
+            // static mode SwiftUI eagerly rebuilds its focus proxies from
+            // preferencesDidChange inside layout; the CU import hang was
+            // sampled indefinitely walking responder ancestry there.
+            newWindow?.autorecalculatesKeyViewLoop = true
         }
         super.viewWillMove(toWindow: newWindow)
+    }
+
+    /// The page's SwiftUI update runs in this pass (a page's controls are
+    /// made and dismantled here): overlay hierarchy changes from it wait
+    /// for the next turn (`AtticOverlayHierarchy`, P1-01 hypothesis).
+    override func layout() {
+        AtticOverlayHierarchy.layoutPass { super.layout() }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -1210,6 +1313,67 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    // MARK: Drags out of the panel (O14-11)
+
+    /// A file dragged out of a task (SwiftUI's drag, this view its source)
+    /// springs home on a cancelled drop, as a task does, instead of the
+    /// system's slide back and fade. NSHostingView's drag-source methods are
+    /// not open to Swift, so `AtticHostDragHooks` adds these to this class
+    /// at run time, each after SwiftUI's own.
+    private var dragReturn: AtticDragReturn?
+    /// How the dragged picture lies against the pointer (O17-12): its
+    /// place on a cancel is the release point plus this, on screen.
+    private var dragGrip: AtticDragGrip?
+
+    func hostDragWillBegin(_ session: NSDraggingSession, at screenPoint: NSPoint) {
+        let starting = AtticDragReturn.starting(session, from: self, at: screenPoint, level: window?.level,
+                                                source: AtticDragReturn.SourceFrame.take())
+        dragReturn = starting?.dragReturn
+        dragGrip = starting?.grip
+        guard let dragReturn, let dragGrip else { return }
+        session.animatesToStartingPositionsOnCancelOrFail = false
+        // V-09: the picture is the drag's only one; the system's is clear.
+        session.enumerateDraggingItems(options: [], for: self, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+            item.setDraggingFrame(item.draggingFrame, contents: AtticDragReturn.clearImage(size: item.draggingFrame.size))
+        }
+        dragReturn.moved(drawn: dragGrip.frame(at: screenPoint))
+    }
+
+    func hostDragMoved(_ session: NSDraggingSession, to screenPoint: NSPoint) {
+        guard let dragGrip else { return }
+        dragReturn?.moved(drawn: dragGrip.frame(at: screenPoint))
+    }
+
+    func hostDragEnded(_ session: NSDraggingSession, at screenPoint: NSPoint, operation: NSDragOperation) {
+        guard let dragReturn, let dragGrip else { return }
+        self.dragReturn = nil
+        self.dragGrip = nil
+        let start = dragGrip.frame(at: screenPoint)
+        if operation.isEmpty {
+            TasksDragOut.Probe.shared.fileHome = dragReturn.homeOnScreen
+            TasksDragOut.Probe.shared.fileStart = start
+            TasksDragOut.Probe.shared.fileWindow = dragReturn.windowFrame
+        }
+        dragReturn.ended(operation: operation, drawn: start) { withExtendedLifetime(dragReturn) {} }
+    }
+
+    // MARK: Drops that land (O17-13)
+
+    /// Where the accepted drop's pictures settle (this view's space).
+    private var dropLanding: CGRect?
+
+    /// After SwiftUI's own `prepareForDragOperation:`: a drop it will take
+    /// over a place that knows where it lands animates there.
+    func hostDropPrepared(_ info: NSDraggingInfo, accepted: Bool) {
+        dropLanding = AtticDropLanding.prepare(info, accepted: accepted, in: self)
+    }
+
+    /// After SwiftUI's own `performDragOperation:`.
+    func hostDropPerformed(_ info: NSDraggingInfo, accepted: Bool) {
+        AtticDropLanding.perform(info, accepted: accepted, slot: dropLanding, in: self)
+        dropLanding = nil
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1643,5 +1807,80 @@ extension NSResponder {
     /// (the window, in the end) and does nothing when none does.
     func passUp(_ action: Selector, _ sender: Any?) {
         _ = nextResponder?.tryToPerform(action, with: sender)
+    }
+}
+
+/// A view that scrolls sideways itself (a wide note table): a trackpad
+/// gesture that starts over it while it can scroll is its own, never a page
+/// swipe or swipe-to-close.
+@MainActor
+protocol AtticHorizontalScrollOwner: AnyObject {
+    var ownsHorizontalScrolling: Bool { get }
+}
+
+
+/// Adds `AtticPanelHostingView`'s drag-source hooks (O14-11) after
+/// NSHostingView's own implementations, which Swift cannot override.
+@MainActor
+enum AtticHostDragHooks {
+    private static var installed = false
+
+    static func install() {
+        guard !installed, let parent = class_getSuperclass(AtticPanelHostingView.self) else { return }
+        installed = true
+        let cls: AnyClass = AtticPanelHostingView.self
+        do {
+            let selector = NSSelectorFromString("draggingSession:willBeginAtPoint:")
+            if let method = class_getInstanceMethod(parent, selector) {
+                typealias Super = @convention(c) (AnyObject, Selector, NSDraggingSession, NSPoint) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+                let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
+                    original(object, selector, session, point)
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragWillBegin(session, at: point) }
+                }
+                class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
+            }
+        }
+        do {
+            let selector = NSSelectorFromString("draggingSession:movedToPoint:")
+            if let method = class_getInstanceMethod(parent, selector) {
+                typealias Super = @convention(c) (AnyObject, Selector, NSDraggingSession, NSPoint) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+                let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint) -> Void = { object, session, point in
+                    original(object, selector, session, point)
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragMoved(session, to: point) }
+                }
+                class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
+            }
+        }
+        for (name, after) in [
+            ("prepareForDragOperation:", { (view: AtticPanelHostingView, info: NSDraggingInfo, accepted: Bool) in view.hostDropPrepared(info, accepted: accepted) }),
+            ("performDragOperation:", { (view: AtticPanelHostingView, info: NSDraggingInfo, accepted: Bool) in view.hostDropPerformed(info, accepted: accepted) })
+        ] {
+            let selector = NSSelectorFromString(name)
+            guard let method = class_getInstanceMethod(parent, selector) else { continue }
+            typealias Super = @convention(c) (AnyObject, Selector, NSDraggingInfo) -> ObjCBool
+            let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+            let block: @convention(block) (AnyObject, NSDraggingInfo) -> ObjCBool = { object, info in
+                let accepted = original(object, selector, info)
+                MainActor.assumeIsolated {
+                    if let view = object as? AtticPanelHostingView { after(view, info, accepted.boolValue) }
+                }
+                return accepted
+            }
+            class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
+        }
+        do {
+            let selector = NSSelectorFromString("draggingSession:endedAtPoint:operation:")
+            if let method = class_getInstanceMethod(parent, selector) {
+                typealias Super = @convention(c) (AnyObject, Selector, NSDraggingSession, NSPoint, NSDragOperation) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Super.self)
+                let block: @convention(block) (AnyObject, NSDraggingSession, NSPoint, NSDragOperation) -> Void = { object, session, point, operation in
+                    original(object, selector, session, point, operation)
+                    MainActor.assumeIsolated { (object as? AtticPanelHostingView)?.hostDragEnded(session, at: point, operation: operation) }
+                }
+                class_addMethod(cls, selector, imp_implementationWithBlock(block), method_getTypeEncoding(method))
+            }
+        }
     }
 }

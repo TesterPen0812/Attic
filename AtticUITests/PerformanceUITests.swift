@@ -65,15 +65,22 @@ final class PerformanceUITests: XCTestCase {
         app = visible
         let launchOptions = XCTMeasureOptions()
         launchOptions.iterationCount = 3
-        measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)],
+        launchOptions.invocationOptions = [.manuallyStart, .manuallyStop]
+        measure(metrics: [XCTClockMetric()],
                 options: launchOptions) {
-            // Every iteration is a cold launch: the previous one has fully
-            // exited before the next starts, or the metric records nothing.
+            // XCTest's launch signpost intermittently returns "0 metrics".
+            // Measure the real cold launch through visible readiness with a
+            // clock metric instead; automation latency is included and recorded.
+            // Termination is outside the measurement.
             if visible.state != .notRunning {
                 visible.terminate()
-                _ = visible.wait(for: .notRunning, timeout: 15)
+                XCTAssertTrue(visible.wait(for: .notRunning, timeout: 15))
             }
+            startMeasuring()
             visible.launch()
+            XCTAssertTrue(visible.descendants(matching: .any)["panel-section-picker"]
+                .waitForExistence(timeout: 20), "seeded launch never became ready")
+            stopMeasuring()
         }
         XCTAssertTrue(visible.descendants(matching: .any)["panel-section-picker"]
             .waitForExistence(timeout: 20))

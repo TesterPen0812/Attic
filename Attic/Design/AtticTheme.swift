@@ -2,11 +2,14 @@ import SwiftUI
 
 // Cross-platform design atoms shared by the macOS panel and the iOS app.
 
+/// The older views' motion, on the app's one scale (the macOS
+/// `AtticMotionScale`, repeated here as numbers because this file is shared
+/// with the iPhone app): M/S for a state change, F/E for hover and drops,
+/// M/E for a surface crossfade.
 enum AtticMotion {
-    static let spring = Animation.spring(response: 0.30, dampingFraction: 0.84)
-    static let quick = Animation.easeOut(duration: 0.14)
-    static let modeDock = Animation.spring(response: 0.24, dampingFraction: 0.90)
-    static let background = Animation.easeInOut(duration: 0.22)
+    static let spring = Animation.spring(duration: 0.20, bounce: 0.12)
+    static let quick = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.12)
+    static let background = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.20)
 }
 
 extension TaskPriority {
@@ -26,6 +29,9 @@ struct TaskStatusMark: View {
     var size: CGFloat = 15
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var contrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
     #if os(macOS)
     @Environment(\.atticPanelThemePalette) private var palette
     #endif
@@ -66,12 +72,25 @@ struct TaskStatusMark: View {
                     .fill(indicatorColor)
                     .frame(width: size * 0.7, height: size * 0.7)
             case .done:
+                #if os(macOS)
+                // The design system's done mark (owner, 2026-10-10): the
+                // title's ink with the inverse tick, as on the Tasks page.
+                let tokens = AtticDesignContext(mode: colorScheme == .dark ? .dark : .light,
+                                                increaseContrast: contrast == .increased).tokens
+                Circle()
+                    .fill(tokens.color(.doneFill))
+                    .frame(width: size, height: size)
+                Image(systemName: "checkmark")
+                    .font(.system(size: size * 0.47, weight: .bold))
+                    .foregroundStyle(tokens.color(.onDone))
+                #else
                 Circle()
                     .fill(indicatorColor)
                     .frame(width: size, height: size)
                 Image(systemName: "checkmark")
                     .font(.system(size: size * 0.47, weight: .bold))
                     .foregroundStyle(checkColor)
+                #endif
             case .backlog:
                 Circle()
                     .stroke(
@@ -116,7 +135,9 @@ enum AtticClearGlassReadabilityPolicy {
 private struct ClearGlassForegroundReadabilityModifier: ViewModifier {
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    /// The Mac's contrast (or a UI-test launch's, `AtticContrastSeam`).
+    private var contrast: ColorSchemeContrast { AtticContrastSeam.resolve(systemContrast) }
 
     @ViewBuilder
     func body(content: Content) -> some View {

@@ -255,21 +255,19 @@ enum AtticGeometryCheck {
         let noop = demo.record("Geometry check")
         let tokens = AtticDesignContext.default.tokens
         let panelButton = AtticControlSize.panelButton
-        let back = AtticControlSize.settingsBackButton
         let row = CGSize(width: AtticLayout.panelSize.width - 2 * AtticLayout.rowHighlightInset, height: AtticLayout.rowHighlightHeight)
         let checkbox = AtticControlSize.subtaskCheckbox
         return [
             Specimen(name: "Single button", view: AnyView(AtticRaisedButton(systemName: "pin", label: "Pin", action: noop)),
                      expectedSize: panelButton, expectedRadius: AtticRadius.control(height: panelButton.height)),
-            Specimen(name: "Settings back button", view: AnyView(AtticRaisedButton(systemName: "chevron.left", label: "Back", size: back, action: noop)),
-                     expectedSize: back, expectedRadius: 14.5),
             Specimen(name: "Label button", view: AnyView(AtticRaisedButton(systemName: "list.bullet", title: "All notes", action: noop)),
                      expectedSize: CGSize(width: 0, height: panelButton.height), expectedRadius: AtticRadius.control(height: panelButton.height)),
             Specimen(name: "Page button", view: AnyView(AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false)),
                      expectedSize: panelButton, expectedRadius: AtticRadius.control(height: panelButton.height)),
             Specimen(name: "Add bar", view: AnyView(AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: noop)),
                      layoutSize: CGSize(width: 296, height: AtticControlSize.addBarHeight),
-                     expectedSize: CGSize(width: 296, height: 36), expectedRadius: 15),
+                     expectedSize: CGSize(width: 296, height: AtticControlSize.addBarHeight),
+                     expectedRadius: AtticRadius.control(height: AtticControlSize.addBarHeight)),
             Specimen(name: "Small control (pressed)", view: AnyView(AtticSmallButton(systemName: "flag", label: "Priority", action: noop).atticForcedState(.pressed)),
                      expectedSize: CGSize(width: AtticControlSize.smallMinWidth, height: AtticControlSize.smallHeight), expectedRadius: 12),
             Specimen(name: "Selection bar", view: AnyView(AtticSelectionBar(count: 3, actions: [.init(systemName: "flag", label: "Priority", handler: noop)])),

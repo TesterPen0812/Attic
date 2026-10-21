@@ -21,6 +21,42 @@ final class NoteItem {
     var deletedAttachmentIDsRaw: String? = nil
     /// Normalised tags (see `AtticTag`), space-separated and sorted.
     var tagsRaw: String = ""
+    /// Pinned to the top of All notes ("Pin to Top", Phase 2); nil when not
+    /// pinned. Metadata, like tags: pinning never moves the note in the
+    /// newest-first order or changes its revision, on every replica.
+    var pinnedAt: Date? = nil
+
+    /// Durable, unacknowledged outside-edit attribution. Local typing does not clear it.
+    var externalEditorName: String? = nil
+    var externalEditedAt: Date? = nil
+
+    // MARK: Phase 2 note format (`attic.note/1`, see `NoteDocument`)
+    //
+    // All defaulted or optional, no uniqueness (CloudKit rules). A note with
+    // Persisted format zero identifies historical rows for the one-time removal.
+    // Keep that storage default so schema upgrades do not relabel old rows.
+    // From format 1 on, `content` is the truth and `title`, `body` and
+    // `plainText` are derived from it on every save, on every replica.
+
+    /// The stored document. Kept byte for byte
+    /// when this build can only read it (a newer format).
+    @Attribute(.externalStorage) var content: Data? = nil
+    /// 0 historical format (purged once), 1 `attic.note/1`, higher = a newer Attic.
+    var contentFormat: Int = 0
+    /// Derived search and agent text (title, then one line per block).
+    var plainText: String = ""
+    /// Revision-matched library facts, written with document bytes on every replica.
+    var imageCount: Int = 0
+    var fileCount: Int = 0
+    var firstFileName: String? = nil
+    /// This note is that task's page (phase 3); nil for ordinary notes.
+    var taskID: UUID? = nil
+    /// +1 per content save (ordering).
+    var revision: Int64 = 0
+    /// A new random value per content save: "unchanged since an agent read
+    /// it" is exact even across divergent replicas. nil until the first
+    /// save that records one.
+    var revisionID: UUID? = nil
 
     init(
         id: UUID = UUID(),
@@ -34,6 +70,13 @@ final class NoteItem {
         self.body = body
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
+        #if os(macOS)
+        let document = NoteDocument(blocks: [.text(title)] + body.components(separatedBy: "\n").map { .text($0) })
+        do { self.content = try NoteContentCodec.encode(document) }
+        catch { preconditionFailure("Plain-text note encoding failed") }
+        self.contentFormat = NoteDocument.currentFormat
+        self.plainText = NoteTextExport.plainText(document)
+        #endif
     }
 
     /// The recorded attachment family, or nil when none was recorded or
@@ -49,4 +92,14 @@ final class NoteItem {
         get { AtticTag.decode(tagsRaw) }
         set { tagsRaw = AtticTag.encode(newValue) }
     }
+
+    var isPinned: Bool { pinnedAt != nil }
+
+    /// Stored in the new format (editable or not): the new editor owns it.
+    var usesDocumentFormat: Bool { contentFormat >= 1 }
+
+    /// The token agents read and must send back with a write.
+    var revisionToken: String { revisionID?.uuidString ?? NoteItem.initialRevisionToken }
+
+    static let initialRevisionToken = "initial"
 }

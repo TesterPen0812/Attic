@@ -13,6 +13,7 @@ final class TasksRound6Tests: XCTestCase {
 
     /// The page hosted in a window, as the panel hosts it: selecting a tab
     /// (as a click does, with its slide) scrolls the pager exactly there.
+    #if ATTIC_GENERATED_TESTS
     func testEveryTabLandsOnItsOwnPageFromEveryOther() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -27,6 +28,7 @@ final class TasksRound6Tests: XCTestCase {
             }
         }
     }
+    #endif
 
     // MARK: - Done rows take clicks (the owner's item 23)
 
@@ -35,6 +37,7 @@ final class TasksRound6Tests: XCTestCase {
     /// above the add bar (round 5's CI: "Pay rent" sat in the lists' bottom
     /// margin, where a scroll view takes no clicks). Restore on the
     /// selection is one step.
+    #if !ATTIC_GENERATED_TESTS
     func testDoneRowsAreClickSelectableAndRestoreTogether() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -71,6 +74,7 @@ final class TasksRound6Tests: XCTestCase {
     /// opens): the search takes the tabs' line with the keyboard in it
     /// (CI run 1: the field showed without it).
     func testCommandFOnDoneGivesTheSearchTheKeyboard() throws {
+        try requireKeyWindowTests()
         // The apps' Edit menu has Find on ⌘F, sent to the text view with
         // the keyboard (CI run 3: it took ⌘F from the page).
         let saved = NSApp.mainMenu
@@ -110,6 +114,7 @@ final class TasksRound6Tests: XCTestCase {
     /// A click on Done's magnifier, with the add bar holding the keyboard:
     /// the field takes the tabs' line and the keyboard (CI run 1).
     func testTheMagnifierGivesTheSearchTheKeyboard() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
@@ -155,6 +160,7 @@ final class TasksRound6Tests: XCTestCase {
         let bottom = 100 + fraction * (visible - 34) + 34
         XCTAssertEqual(bottom, 520 - clearance, accuracy: 0.5)
     }
+    #endif
     // MARK: - CU recheck 4b (P2s)
 
     private func post(_ hosted: Hosted, key characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) throws {
@@ -183,7 +189,9 @@ final class TasksRound6Tests: XCTestCase {
     /// ↓ again: the field takes the keyboard back, and ↓ reaches the
     /// results again (CU recheck 4b, P2: the click left the keyboard with
     /// the panel and ↓ did nothing).
+    #if !ATTIC_GENERATED_TESTS
     func testAClickBackOnTheQueryTextLetsDownReachTheResultsAgain() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.window.makeKey()
@@ -217,6 +225,7 @@ final class TasksRound6Tests: XCTestCase {
     /// recheck 4b, P2): ⌘Return with no draft opens the row's files; with
     /// a draft it stays the composer's (it adds the task and opens it).
     func testCommandReturnInTheComposerOpensTheSelectedRowsFilesOnlyWithoutADraft() throws {
+        try requireKeyWindowTests()
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.actions, composerDraft: "a draft"), "⇧⌘I: no field acts on it")
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: "  "))
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: nil), "Find has no ⌘Return")
@@ -228,8 +237,7 @@ final class TasksRound6Tests: XCTestCase {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.window.makeKey()
-        var opened: [UUID] = []
-        hosted.model.services.openPage = { opened.append($0) }
+        var opened: [UUID] { Array(hosted.model.expandedFiles) }
         hosted.go(to: .backlog)
         let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id)
         hosted.model.selectOnly(later)
@@ -241,7 +249,7 @@ final class TasksRound6Tests: XCTestCase {
         hosted.spin(0.3)
         XCTAssertEqual(opened, [later], "⌘Return with no draft opens the selected row's files")
 
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         hosted.model.addBar = TaskAddBarText(text: "Call the plumber")
         hosted.spin(0.3)
         let before = Set(hosted.model.rows(for: .backlog).map(\.id) + hosted.model.rows(for: .now).map(\.id))
@@ -252,6 +260,7 @@ final class TasksRound6Tests: XCTestCase {
         XCTAssertEqual(added.count, 1, "the draft was added")
         XCTAssertEqual(opened, Array(added), "and its page opened")
     }
+    #endif
 
     // MARK: - Done's first results: a new query's rows in the last query's views
 
@@ -262,6 +271,7 @@ final class TasksRound6Tests: XCTestCase {
     /// `TasksDoneSlots`: a task keeps its row's view within a query; a new
     /// query takes the last query's views in order only when the page says
     /// the rows are interchangeable, and asks only when the query changed.
+    #if !ATTIC_GENERATED_TESTS
     func testDoneSlotsKeepATasksViewAndPassViewsOnOnlyForANewQuery() {
         let slots = TasksDoneSlots()
         let today = Date(timeIntervalSince1970: 1_800_000_000)
@@ -360,6 +370,7 @@ final class TasksRound6Tests: XCTestCase {
             check(query.isEmpty ? "all again" : query)
         }
     }
+    #endif
 }
 
 /// The Tasks page with the demo tasks in a window off screen, as the panel
@@ -383,7 +394,8 @@ final class Hosted {
     final class Focus { var addBar = false }
     let focus = Focus()
 
-    init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false) throws {
+    init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true,
+         chrome: TasksPageChrome = TasksPageChrome()) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -394,13 +406,13 @@ final class Hosted {
         let focus = focus
         page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
                          addBarFocused: Binding(get: { focus.addBar }, set: { focus.addBar = $0 }),
-                         pointer: pointer)
+                         chrome: chrome, pointer: pointer)
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light)).frame(width: size.width, height: size.height))
         window.orderFront(nil)
-        window.makeKey()
+        if keyWindow { window.makeKey() }
         spin(1)
     }
 
@@ -583,6 +595,7 @@ final class TasksRound6ComposerTests: XCTestCase {
 
     // MARK: Picks sit on the buttons
 
+    #if !ATTIC_GENERATED_TESTS
     func testAPickNeverTouchesTheTextAndPickingAgainReplacesIt() {
         draft("Pay rent")
         model.pickDate(day("2026-10-01"), editor: editor)
@@ -731,6 +744,7 @@ final class TasksRound6ComposerTests: XCTestCase {
         XCTAssertEqual(TaskPriority.choices, [.none, .low, .medium, .high])
         XCTAssertEqual(TaskPriority.none.pickerTitle, "No Priority")
     }
+    #endif
 }
 
 /// Round 6: the Done search on the tabs line (owner item 17).
@@ -761,6 +775,7 @@ final class TasksRound6SearchTests: XCTestCase {
 
     /// "N of M done tasks": matches of all, each task once however many
     /// copies it has; nothing without a search.
+    #if !ATTIC_GENERATED_TESTS
     func testTheSearchCountsMatchesOfAllDoneTasksOnce() throws {
         let (_, model) = try model(logging: ["Send invoice", "Pay invoice", "Call the bank", "Renew passport"], duplicate: "Pay invoice")
         model.select(tab: .done)
@@ -810,4 +825,5 @@ final class TasksRound6SearchTests: XCTestCase {
         XCTAssertFalse(TasksPage.startsSearch("ab"))
         XCTAssertFalse(TasksPage.startsSearch(""))
     }
+    #endif
 }

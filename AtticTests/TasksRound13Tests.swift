@@ -10,6 +10,48 @@ import XCTest
 /// a real menu, never by calling the handlers.
 @MainActor
 final class TasksRound13Tests: XCTestCase {
+    // H12-06: native Tab focus must supersede a previous arrow selection.
+    func testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("native keyboard interaction runs on CI only")
+        }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        let first = try XCTUnwrap(hosted.model.keyboardFocus)
+        XCTAssertEqual(hosted.model.selection, [first.id])
+        hosted.press("\t", keyCode: 48)
+        let next = try XCTUnwrap(hosted.model.keyboardFocus)
+        XCTAssertNotEqual(next.id, first.id, "Tab reached the next row's visible focus ring")
+        XCTAssertEqual(hosted.model.selection, [next.id], "selection follows keyboard focus")
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, next.id, "Return edits the visibly focused task")
+    }
+
+    func testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("native keyboard interaction runs on CI only")
+        }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.press("\u{F701}", keyCode: 125)
+        hosted.press("\u{F701}", keyCode: 125, modifiers: .shift)
+        let selection = hosted.model.selection
+        XCTAssertEqual(selection.count, 2)
+        for _ in 0..<6 {
+            hosted.press("\t", keyCode: 48)
+            XCTAssertEqual(hosted.model.selection, selection, "Tab never silently collapses a range")
+            if let focus = hosted.model.keyboardFocus, !selection.contains(focus.id) { break }
+        }
+        let outside = try XCTUnwrap(hosted.model.keyboardFocus)
+        XCTAssertFalse(selection.contains(outside.id))
+        hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+        XCTAssertEqual(hosted.model.selection, selection, "Shift-Tab preserves the range")
+        let back = try XCTUnwrap(hosted.model.keyboardFocus)
+        hosted.press("\r", keyCode: 36)
+        XCTAssertEqual(hosted.model.editingTitleID, back.id, "Return edits the visibly focused row")
+    }
+
     // MARK: - Bug 3: a Tab-focused subtask owns ⌘↑ ⌘↓ and Return
 
     /// The demo task with subtasks, expanded, and a Tab pressed until a
@@ -32,6 +74,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testCommandDownReordersATabFocusedSubtaskNotItsParent() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let (parent, subtask) = try tabToASubtask(hosted)
@@ -50,6 +93,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnRenamesATabFocusedSubtaskNotItsParent() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let (_, subtask) = try tabToASubtask(hosted)
@@ -59,6 +103,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testDeleteStillDeletesATabFocusedSubtask() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let (parent, subtask) = try tabToASubtask(hosted)
@@ -120,6 +165,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnInTheActionsMenuActivatesTheHighlightedItemNotEditTitle() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try openActionsMenu(hosted, on: "Ship appearance PR", keys: [("\u{F701}", 125), ("\u{F701}", 125), ("\r", 36)])
@@ -129,6 +175,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnOnAddSubtaskInTheActionsMenuOpensTheSubtaskEditor() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
@@ -141,6 +188,7 @@ final class TasksRound13Tests: XCTestCase {
     /// menu tracker, including its internal key-equivalent lookup. No direct
     /// responder dispatch or permission-dependent CGEvent posting is used.
     func testCoreGraphicsBackedReturnInTheActionsMenuRunsTheHighlightedItem() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
@@ -152,6 +200,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnOpensAHighlightedSubmenuAndRunsItsHighlightedCommand() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
@@ -163,6 +212,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnWithoutAnActionsMenuStillEditsTheSelectedTitle() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
@@ -173,6 +223,7 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testReturnAfterCancellingAnActionsMenuStillEditsTheSelectedTitle() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let row = try openActionsMenu(hosted, on: "Call the plumber", keys: [("\u{1B}", 53)])
@@ -230,6 +281,34 @@ final class TasksRound13Tests: XCTestCase {
 
     // MARK: - Bug 1: ⌘Z after a task-menu change
 
+    /// Synthetic typing goes to the key window's first responder. A requested
+    /// SwiftUI focus binding does not prove its deferred AppKit focus landed.
+    /// Find the actual composer and establish the same state a click gives it.
+    private func focusComposer(in hosted: Hosted) throws {
+        func composers(in view: NSView) -> [AtticTokenTextView] {
+            if let text = view as? AtticTokenTextView,
+               text.owner?.parent.accessibilityLabel == hosted.model.addPlaceholder,
+               !text.isHiddenOrHasHiddenAncestor { return [text] }
+            return view.subviews.flatMap { composers(in: $0) }
+        }
+        print("ROUND13_COMPOSER_FOCUS requested=\(hosted.focus.addBar) key=\(hosted.window.isKeyWindow) responder=\(String(describing: hosted.window.firstResponder))")
+        hosted.focus.addBar = true
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let deadline = Date().addingTimeInterval(2)
+        var fields = composers(in: content)
+        while fields.isEmpty, Date() < deadline {
+            content.layoutSubtreeIfNeeded()
+            hosted.spin(0.01)
+            fields = composers(in: content)
+        }
+        XCTAssertEqual(fields.count, 1, "one live composer is ready")
+        let composer = try XCTUnwrap(fields.first)
+        hosted.window.makeKey()
+        XCTAssertTrue(hosted.window.makeFirstResponder(composer))
+        XCTAssertTrue(hosted.window.isKeyWindow)
+        XCTAssertTrue(hosted.window.firstResponder === composer)
+    }
+
     private func priority(of id: UUID, _ hosted: Hosted) -> TaskPriority? {
         hosted.store.listedTask(withID: id)?.priority
     }
@@ -239,12 +318,14 @@ final class TasksRound13Tests: XCTestCase {
     /// undoes that change and keeps the draft; ⌘Z again is the draft's own
     /// typing undo; typing after a menu change gives ⌘Z back to the field.
     func testCommandZAfterATaskMenuChangeUndoesTheChangeAndKeepsTheDraft() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         hosted.spin(1)
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
         let original = try XCTUnwrap(priority(of: row.id, hosted))
+        try focusComposer(in: hosted)
         XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the composer has the keyboard")
         hosted.press("a", keyCode: 0)
         hosted.press("b", keyCode: 11)
@@ -265,12 +346,15 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testTypingAfterATaskMenuChangeGivesCommandZBackToTheComposer() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         hosted.spin(1)
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        try focusComposer(in: hosted)
         hosted.press("a", keyCode: 0)
+        XCTAssertEqual(model.addBar.text, "a")
         model.setPriority(.high, for: [row.id])
         hosted.spin(0.3)
         hosted.press("b", keyCode: 11)
@@ -281,16 +365,20 @@ final class TasksRound13Tests: XCTestCase {
     }
 
     func testRedoBringsBackATaskMenuChangeAfterAClaimedUndo() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         hosted.spin(1)
         let model = hosted.model
         let row = try XCTUnwrap(model.rows(for: .now).first { hosted.store.listedTask(withID: $0.id)?.priority != .high })
+        try focusComposer(in: hosted)
         hosted.press("a", keyCode: 0)
+        XCTAssertEqual(model.addBar.text, "a", "the real key reached the composer before the menu change")
         model.setPriority(.high, for: [row.id])
         hosted.spin(0.3)
         hosted.press("z", keyCode: 6, modifiers: .command)
         XCTAssertNotEqual(priority(of: row.id, hosted), .high)
+        XCTAssertEqual(model.addBar.text, "a", "claimed Undo preserved the draft")
         hosted.press("z", keyCode: 6, modifiers: [.command, .shift])
         XCTAssertEqual(priority(of: row.id, hosted), .high, "⇧⌘Z redid the menu change")
         XCTAssertEqual(model.addBar.text, "a")
@@ -322,6 +410,7 @@ final class TasksRound13Tests: XCTestCase {
     /// hold ink between the lines the titles sit on before and after (two
     /// rows sliding through each other put titles and circles there).
     func testAFullAnimationReorderNeverPutsInkBetweenTheRowsLines() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1)
@@ -365,34 +454,18 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertLessThan(Double(worst), Double(text) * 0.06, "ink between the titles' lines while rows reorder: \(worst) of \(text)")
     }
 
-    // MARK: - Item 5: no edge ghosts
+    // MARK: - Item 5, revised by A15: faint under the controls, whole at rest
 
-    /// A row scrolled past the tabs or toward the add bar is cut at the
-    /// fixed band, not left half-faded in a long ramp (the review's "faint
-    /// title fragments"): the partly-transparent stretch of the list's mask
-    /// is no longer than the edge softening, at either edge, for every
-    /// bottom stack, and the resting rows keep full opacity.
-    func testTheListsMaskCutsRowsCleanlyAtTheFixedBands() {
-        for stack in [CGFloat(36), 60, 96, 136] {
-            let height: CGFloat = 520
-            let stops = TasksViewport.maskStops(height: height, tabsTop: 80, listTop: 110, bottomStack: stack)
-            func opacity(_ y: CGFloat) -> Double {
-                let x = y / height
-                for (a, b) in zip(stops, stops.dropFirst()) where x <= b.location {
-                    let t = Double((x - a.location) / max(b.location - a.location, 0.000001))
-                    return a.opacity + (b.opacity - a.opacity) * min(max(t, 0), 1)
-                }
-                return stops.last?.opacity ?? 1
-            }
-            let partial = stride(from: CGFloat(0), through: height, by: 0.5).filter { (0.02...0.98).contains(opacity($0)) }
-            let top = partial.filter { $0 < height / 2 }, bottom = partial.filter { $0 >= height / 2 }
-            XCTAssertLessThanOrEqual((top.last ?? 0) - (top.first ?? 0), TasksViewport.softEdge + 0.5, "top ramp, stack \(stack)")
-            XCTAssertLessThanOrEqual((bottom.last ?? 0) - (bottom.first ?? 0), TasksViewport.softEdge + 0.5, "bottom ramp, stack \(stack)")
-            XCTAssertEqual(opacity(110), 1, accuracy: 0.001, "the resting row is whole")
-            XCTAssertEqual(opacity(height - stack - 18), 1, accuracy: 0.001, "and so is the row above the bar")
-            XCTAssertEqual(opacity(height - stack), 0, accuracy: 0.001, "nothing under the bar")
-            XCTAssertEqual(opacity(100), 0, accuracy: 0.05, "nothing just under the tabs' band")
-        }
+    /// N-6 D hid rows under the header and the tabs line; the owner's
+    /// 10-17 decision supersedes it (rows run on under them, visible
+    /// through the blur: `RoundO3ControlsTests`). Still: the tabs' plain
+    /// line (its underline included) is part of the top controls, and the
+    /// first row's words rest below it.
+    func testTheFirstRowsWordsRestBelowTheTabsLine() {
+        let rest = TasksViewport.listTop(tabsTop: 80) + AtticTaskRowMetrics.titleTop(twoLine: false)
+        XCTAssertGreaterThan(rest, TasksViewport.plainLine(tabsTop: 80).upperBound)
+        XCTAssertGreaterThanOrEqual(TasksViewport.topEdges(tabsTop: 80).top, TasksViewport.plainLine(tabsTop: 80).upperBound,
+                                    "the blur covers the whole line")
     }
 
     // MARK: - Item 6: the new-subtask field says what it is

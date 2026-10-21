@@ -73,6 +73,61 @@ struct TaskAttachmentDragItem: Sendable {
     }
 }
 
+/// One of a task's files as a dragged task carries it out of the panel
+/// (O17-15): a file promise under the file's own type, so Finder, Mail,
+/// Notes and the like each write their own copy of the verified private
+/// file where they want it, only once the drop is accepted. Never the
+/// private copy in place. Its own delegate (the provider is held by the
+/// drag's pasteboard for as long as a receiver may ask for the file).
+final class TaskAttachmentFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate, @unchecked Sendable {
+    let reference: TaskImageReference
+    let files: TaskImageFiles
+    private static let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Attic task file promises"
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
+
+    init(reference: TaskImageReference, files: TaskImageFiles) {
+        self.reference = reference
+        self.files = files
+        super.init()
+        fileType = TaskAttachmentDragItem(reference: reference, files: files).contentType.identifier
+        delegate = self
+    }
+
+    /// The receiver's copy keeps the file's own name.
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        AttachmentFileStore.sanitizedFilename(reference.filename)
+    }
+
+    func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
+        Self.queue
+    }
+
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL,
+                             completionHandler: @escaping (Error?) -> Void) {
+        let reference = reference, files = files
+        // AppKit's handler may be called from any thread.
+        nonisolated(unsafe) let completion = completionHandler
+        Task.detached(priority: .userInitiated) {
+            do {
+                try await Self.write(reference, from: files, to: url)
+                completion(nil)
+            } catch {
+                completion(error)
+            }
+        }
+    }
+
+    /// Copies the verified private file to `url` (internal for the tests).
+    static func write(_ reference: TaskImageReference, from files: TaskImageFiles, to url: URL) async throws {
+        guard let source = try await files.verifiedURL(for: reference) else { throw CocoaError(.fileNoSuchFile) }
+        try FileManager.default.copyItem(at: source, to: url)
+    }
+}
+
 struct TaskDragPayload: Codable, Sendable, Transferable {
     static let internalTaskType = UTType(
         exportedAs: "com.taha.attic.task-id"

@@ -1,3 +1,4 @@
+# Dispatch fka for the focused native keyboard gate; costs for optimized costs; fast for build/analyzer/unit; full for milestones.
 name: Attic CI
 
 on:
@@ -8,8 +9,25 @@ on:
       - feature/canvas-ink
   workflow_dispatch:
     inputs:
+      lane:
+        description: Verification scope (full, fast, costs, or focused FKA)
+        required: false
+        default: full
+        type: choice
+        options: [full, fast, costs, fka]
+      headless_costs:
+        description: Run integration costs without key-window or UI fixtures (lane=costs)
+        required: false
+        default: false
+        type: boolean
       run_iphone:
         description: Run the deferred iPhone build-for-testing lane
+        required: false
+        default: false
+        type: boolean
+
+      inspect_dropdown_sampling:
+        description: Record repeated old/paired priority estimates on the same runner
         required: false
         default: false
         type: boolean
@@ -22,6 +40,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Every CI unit-test lane retains native presentation/key-window coverage,
+  # including optimized cost hosts. Local hosts default to invisible.
+  TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+  # Script-driven builds use the same wrapper as explicit xcodebuild steps.
+  XCODEBUILD: ${{ github.workspace }}/Scripts/xcodebuild_locked.sh
+  ATTIC_XCODEBUILD_COMMAND: ${{ github.workspace }}/Scripts/xcodebuild_locked.sh
   LUNA_REPAIRED_COMMIT: 8063d92c995015b77a0493723270b6c183adb784
   BUNDLE_FROZEN: "true"
   PERF_REFERENCE_COMMIT: fb450820f5ccab289a050de3cf0695958786a465
@@ -31,12 +55,160 @@ env:
   COST_BASELINE_COMMIT: 3eee023e537717fbc42538a0a563643880f586eb
   # The Done search query samples compare against the last accepted build
   # with the Done search index (redesign/p1-glass at dab5d2f, CI run
-  # 37121778773): the slowest sample is held to no regression there, and
+  # 37121778773): query medians compare with its same-job samples, and
   # each query's median to the 16 ms budget (owner, 2026-10-03).
+  # New relative gates use A10 before these test-only repairs, with identical fixtures.
+  INTEGRATION_COST_REFERENCE_COMMIT: cb95a0e7ba164ca3c15927b9eb1e9ee7ea90f9b2
   DONE_SEARCH_BASELINE_COMMIT: dab5d2fb74b081529b0053797aca1af591b06e8b
 
 jobs:
+  validate-inputs:
+    name: Validate verification scope
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject headless costs outside the costs lane
+        env:
+          LANE: ${{ inputs.lane }}
+          HEADLESS_COSTS: ${{ inputs.headless_costs }}
+        run: |
+          if [ "$HEADLESS_COSTS" = true ] && [ "$LANE" != costs ]; then
+            echo '::error::headless_costs=true requires lane=costs'
+            exit 1
+          fi
+
+  fka:
+    needs: validate-inputs
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.lane == 'fka' || inputs.lane == 'full' }}
+    name: Focused Full Keyboard Access verification
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Build local-only test host
+        run: |
+          Scripts/xcodebuild_locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticFKA" CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete
+      - name: Run Notes Undo before enabling Full Keyboard Access
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests \
+            -skip-testing:AtticTests/NotesKeyboardUndoTests/testTheToastNeverTakesKeyboardFocusDuringNativeFullKeyboardAccessTraversal
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-normal.xcresult" --format json > "$RUNNER_TEMP/fka-notes-normal-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==7 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-normal-summary.json"
+      - name: Run the native FKA test alone, then the H5-04 focus regressions
+        if: always()
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          ATTIC_CI_KEYBOARD_MODE: fka
+          TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
+        run: |
+          run_tests() { # name, expected passes, tests...
+            name=$1; expected=$2; shift 2
+            only=(); for t in "$@"; do only+=(-only-testing:"AtticTests/AtticDropdownTests/$t"); done
+            Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+              -configuration Local -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/AtticFKA" -resultBundlePath "$RUNNER_TEMP/AtticFKA-$name.xcresult" \
+              CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO "${only[@]}" || true
+            xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-$name.xcresult" --format json > "$RUNNER_TEMP/fka-$name-summary.json" || echo '{}' > "$RUNNER_TEMP/fka-$name-summary.json"
+            if python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==int(sys.argv[2]) and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-$name-summary.json" "$expected"; then
+              echo "FKA_RESULT $name: pass"; return 0
+            fi
+            echo "FKA_RESULT $name: FAIL"; cat "$RUNNER_TEMP/fka-$name-summary.json"; return 1
+          }
+          status=0
+          # The native key-window interaction runs alone in its own process first.
+          run_tests native 1 testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess || status=1
+          run_tests unit 4 \
+            testH5_04OpeningGivesTheHostTheKeyboardAndOnlySwiftUIFocusesTheField \
+            testH5_04ATabBeforeTheOpeningHandoffIsNotUndoneByIt \
+            testH5_04AReusedPresenterOpensItsNextCardAsItOpenedTheFirst \
+            testH5_04TabHandsTheKeyboardBetweenFieldAndRowsOnAReusedPresenter || status=1
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticTests/TasksRound13Tests/testH12_06TabFocusMovesSelectionAndReturnEditsTheFocusedTask \
+            -only-testing:AtticTests/DeepReviewFixTests/testEveryTabStopIsAVisibleRowOrAField \
+            -only-testing:AtticTests/TasksRound13Tests/testAR08NativeTabAndShiftTabPreserveExtendedSelectionAndReturnEditsFocus || status=1
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-task-focus.xcresult" --format json > "$RUNNER_TEMP/fka-task-focus-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==3 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-task-focus-summary.json" || status=1
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticFKA" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" CODE_SIGNING_ALLOWED=NO \
+            -parallel-testing-enabled NO -only-testing:AtticTests/NotesKeyboardUndoTests || status=1
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticFKA-notes-undo.xcresult" --format json > "$RUNNER_TEMP/fka-notes-undo-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"]==8 and s["skippedTests"]==0 and s["failedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/fka-notes-undo-summary.json" || status=1
+          exit $status
+      - name: Upload focused keyboard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-fka-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticFKA-*.xcresult
+            ${{ runner.temp }}/fka-*-summary.json
+            ${{ runner.temp }}/attic-input-modes.log
+
+
+  round-trips:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    name: Generated models, matrices, stress, and Notes round trips
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: Install project generator dependencies
+        run: |
+          export BUNDLE_PATH="$RUNNER_TEMP/AtticRoundTripBundle"
+          bundle install --jobs 4 --retry 3
+          bundle exec ruby Scripts/generate_project.rb
+          bundle exec ruby Scripts/verify_project_generation.rb
+      - name: Resolve the committed parser versions
+        run: |
+          Scripts/xcodebuild_locked.sh -resolvePackageDependencies -onlyUsePackageVersionsFromResolvedFile \
+            -project Attic.xcodeproj -scheme AtticRoundTrips -configuration Local \
+            -derivedDataPath "$RUNNER_TEMP/AtticRoundTrips"
+      - name: Run every generated model, matrix, stress test, and FX3 property
+        run: |
+          Scripts/xcodebuild_locked.sh test -project Attic.xcodeproj -scheme AtticRoundTrips \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticRoundTrips" \
+            -resultBundlePath "$RUNNER_TEMP/AtticRoundTrips.xcresult" \
+            CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete \
+            -parallel-testing-enabled NO -only-testing:AtticRoundTripTests
+          xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/AtticRoundTrips.xcresult" --format json > "$RUNNER_TEMP/round-trips-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); routes=json.load(open("Scripts/generated_test_routes.json")); assert s["passedTests"]==31+sum(map(len,routes.values())) and s["failedTests"]==0 and s["skippedTests"]==0 and s["expectedFailures"]==0' "$RUNNER_TEMP/round-trips-summary.json"
+      - name: Upload round-trip evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-round-trip-results-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticRoundTrips.xcresult
+            ${{ runner.temp }}/round-trips-summary.json
+          if-no-files-found: error
+          retention-days: 7
+
   macos:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
     timeout-minutes: 180
@@ -49,6 +221,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify reveal probe and count gate plumbing
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_required_checks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_performance_probe.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
+
       - name: Verify branch ancestry and initial cleanliness
         run: |
           git merge-base --is-ancestor "$LUNA_REPAIRED_COMMIT" HEAD
@@ -58,10 +238,10 @@ jobs:
 
       - name: Verify Xcode 26 toolchain
         run: |
-          xcodebuild -version
+          Scripts/xcodebuild_locked.sh -version
           sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
           echo "macOS SDK $sdk_version"
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
           test "${sdk_version%%.*}" = 26
 
       - name: Set up Ruby
@@ -97,13 +277,23 @@ jobs:
       - name: Verify generated Xcode project
         id: project_verify
         continue-on-error: true
-        run: bundle exec ruby Scripts/verify_project_generation.rb
+        run: |
+          bundle exec ruby Scripts/verify_project_generation.rb
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_required_checks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_ci_input_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_content_privacy.py
+
+      - name: Resolve the committed parser versions
+        run: |
+          Scripts/xcodebuild_locked.sh -resolvePackageDependencies -onlyUsePackageVersionsFromResolvedFile \
+            -project Attic.xcodeproj -scheme Attic -configuration Local \
+            -derivedDataPath "$RUNNER_TEMP/AtticBuild"
 
       - name: Build macOS target
         id: mac_build
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -116,7 +306,7 @@ jobs:
         id: strict_build
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -126,17 +316,38 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=complete \
             clean build
 
+      - name: Preflight the pinned integration cost host with current fixtures
+        if: inputs.inspect_dropdown_sampling
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/AtticIntegrationPreflight" "$INTEGRATION_COST_REFERENCE_COMMIT"
+          for fixture in DoneSearchCostTests TaskPerformanceGateTests TasksKeystrokeCostTests; do
+            cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationPreflight/AtticTests/$fixture.swift"
+          done
+          git -C "$RUNNER_TEMP/AtticIntegrationPreflight" diff --exit-code -- Attic Attic.xcodeproj
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticIntegrationPreflight" integration
+          Scripts/xcodebuild_locked.sh build-for-testing -project "$RUNNER_TEMP/AtticIntegrationPreflight/Attic.xcodeproj" \
+            -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticIntegrationPreflightDD" CODE_SIGNING_ALLOWED=NO \
+            SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule ENABLE_DEBUG_DYLIB=NO \
+            ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO \
+            'OTHER_SWIFT_FLAGS=$(inherited) -DATTIC_COST_REFERENCE_HOST'
+
       - name: Run macOS unit tests
         id: unit_tests
         continue-on-error: true
-        timeout-minutes: 20
+        # CIT moves broad generated/model/matrix/stress coverage to the required
+        # parallel round-trips job; keep the existing watchdog as headroom.
+        timeout-minutes: 35
         env:
           # The runner has no person at it: unit tests may make a window key
           # and let AppKit resolve targetless menu actions for real.
           TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         run: |
+          # The bundle runs in the default keyboard mode, as most people use
+          # it: Tab-order tests expect rows and fields, not every button.
+          # Full Keyboard Access has its own step below.
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -148,7 +359,99 @@ jobs:
             -skip-testing:AtticTests/DoneSearchCostTests \
             -skip-testing:AtticTests/TasksFrameCostTests \
             -skip-testing:AtticTests/TasksRowBuildCostTests \
+            -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBefore \
+            -skip-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn \
+            -skip-testing:AtticTests/AtticDropdownTests/testPairedSamplerRejectsARealPriorityOpeningSlowdown \
             test
+
+      # Native timing collection has its own bounded step. Its required
+      # outcome retains all three assertions without consuming the functional
+      # suite's unchanged 25-minute watchdog on a slower virtual machine.
+      - name: Run native dropdown timing gates
+        id: dropdown_tests
+        if: always() && steps.strict_build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+            -only-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBefore \
+            -only-testing:AtticTests/AtticDropdownTests/testOpenAndFilterCostNoMoreThanBeforeWithAccessibilityOn \
+            -only-testing:AtticTests/AtticDropdownTests/testPairedSamplerRejectsARealPriorityOpeningSlowdown
+          summary=$(xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" --format json)
+          echo "$summary"
+          python3 -c 'import json, sys; s = json.load(sys.stdin); sys.exit(0 if s.get("passedTests") == 3 and s.get("skippedTests", 0) == 0 else 1)' <<<"$summary"
+
+      - name: Summarize both dropdown cost attempts
+        if: always() && steps.strict_build.outcome == 'success'
+        run: |
+          xcrun xcresulttool get log --type action --path "$RUNNER_TEMP/AtticDropdownTimingTests.xcresult" > "$RUNNER_TEMP/dropdown-cost-console.json"
+          python3 Scripts/summarize_dropdown_costs.py "$RUNNER_TEMP/dropdown-cost-console.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload native dropdown timing results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dropdown-timing-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticDropdownTimingTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Record repeated old and paired dropdown estimates
+        if: always() && inputs.inspect_dropdown_sampling && steps.strict_build.outcome == 'success'
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          TEST_RUNNER_ATTIC_DROPDOWN_SAMPLING_DIAGNOSTIC: "1"
+        run: |
+          Scripts/xcodebuild_locked.sh test-without-building -project Attic.xcodeproj -scheme Attic \
+            -configuration Local -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO \
+            -only-testing:AtticTests/AtticDropdownTests/testRepeatedOldAndPairedPriorityEstimatesOnTheSameRunner \
+            | tee "$RUNNER_TEMP/dropdown-sampling.log"
+          python3 -c 'import sys; assert "DROPDOWN_SAMPLING priorityOpen_AX old=" in open(sys.argv[1]).read()' "$RUNNER_TEMP/dropdown-sampling.log"
+
+      - name: Upload repeated dropdown timing evidence
+        if: always() && inputs.inspect_dropdown_sampling
+        uses: actions/upload-artifact@v4
+        with:
+          name: dropdown-sampling-${{ github.sha }}
+          path: ${{ runner.temp }}/dropdown-sampling.log
+          retention-days: 7
+
+      - name: Run Full Keyboard Access unit tests
+        id: fka_tests
+        if: inputs.lane != 'fast'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
+          ATTIC_CI_KEYBOARD_MODE: fka
+          TEST_RUNNER_ATTIC_FULL_KEYBOARD_ACCESS_TESTS: "1"
+        run: |
+          # Enable AppKit Full Keyboard Access before the host starts, for
+          # the tests written for it only. This changes only this disposable
+          # CI runner and restores its setting.
+          rm -rf "$RUNNER_TEMP/AtticFullKeyboardAccessTests.xcresult"
+          Scripts/xcodebuild_locked.sh \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticFullKeyboardAccessTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticTests/AtticDropdownTests/testTheTagPickerWorksFromTheKeyboardWithFullKeyboardAccess \
+            test-without-building
+          # It must have run, not skipped.
+          summary=$(xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/AtticFullKeyboardAccessTests.xcresult" --format json)
+          echo "$summary"
+          python3 -c 'import json, sys; s = json.load(sys.stdin); sys.exit(0 if s.get("passedTests") == 1 and s.get("skippedTests", 0) == 0 else 1)' <<<"$summary"
 
       - name: Print macOS unit-test summary
         if: always()
@@ -164,65 +467,29 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-unit-test-results-${{ github.sha }}
-          path: ${{ runner.temp }}/AtticUnitTests.xcresult
+          path: |
+            ${{ runner.temp }}/AtticUnitTests.xcresult
+            ${{ runner.temp }}/attic-input-modes.log
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Run macOS UI tests
-        id: ui_tests
-        continue-on-error: true
-        timeout-minutes: 40
-        run: |
-          rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
-          rm -rf "$RUNNER_TEMP/attic-visual-uat"
-          mkdir -p "$RUNNER_TEMP/attic-visual-uat"
-          ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
-          xcodebuild \
-            -project Attic.xcodeproj \
-            -scheme AtticUI \
-            -configuration Local \
-            -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
-            -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:AtticUITests \
-            -skip-testing:AtticUITests/PerformanceUITests \
-            test
-
-      - name: Print macOS UI-test summary
-        if: always()
-        run: |
-          if [ -d "$RUNNER_TEMP/AtticUITests.xcresult" ]; then
-            xcrun xcresulttool get test-results summary \
-              --path "$RUNNER_TEMP/AtticUITests.xcresult" \
-              --format json
-          fi
-
-      - name: Upload macOS UI-test results
+      - name: Upload Full Keyboard Access test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-ui-test-results-${{ github.sha }}
-          path: ${{ runner.temp }}/AtticUITests.xcresult
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Upload visual UAT screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-visual-uat-${{ github.sha }}
-          path: ${{ runner.temp }}/attic-visual-uat
+          name: macos-full-keyboard-access-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticFullKeyboardAccessTests.xcresult
           if-no-files-found: ignore
           retention-days: 7
 
       - name: Run seeded macOS performance UI tests
         id: perf_ui_tests
+        if: inputs.lane != 'fast'
         continue-on-error: true
         timeout-minutes: 45
         run: |
           rm -rf "$RUNNER_TEMP/AtticPerformanceUITests.xcresult"
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme AtticUI \
             -configuration Local \
@@ -251,7 +518,7 @@ jobs:
         id: analyzer
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
@@ -280,49 +547,134 @@ jobs:
       - name: Require established macOS verifications
         if: always()
         env:
+          LANE: ${{ inputs.lane }}
           PROJECT_VERIFY: ${{ steps.project_verify.outcome }}
           MAC_BUILD: ${{ steps.mac_build.outcome }}
           STRICT_BUILD: ${{ steps.strict_build.outcome }}
           UNIT_TESTS: ${{ steps.unit_tests.outcome }}
-          UI_TESTS: ${{ steps.ui_tests.outcome }}
+          DROPDOWN_TESTS: ${{ steps.dropdown_tests.outcome }}
+          FKA_TESTS: ${{ steps.fka_tests.outcome }}
           PERF_UI_TESTS: ${{ steps.perf_ui_tests.outcome }}
           ANALYZER: ${{ steps.analyzer.outcome }}
           FINAL_STATE: ${{ steps.final_state.outcome }}
+        run: python3 Scripts/ci_required_checks.py
+
+  required:
+    needs: [validate-inputs, macos, round-trips]
+    if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    name: Require macOS and generated coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require both parallel test lanes
+        env:
+          LANE: ${{ inputs.lane }}
+          MACOS_JOB: ${{ needs.macos.result }}
+          ROUND_TRIPS: ${{ needs.round-trips.result }}
+        run: python3 Scripts/ci_required_checks.py --parallel
+
+
+  ui:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    name: macOS UI tests (${{ matrix.shard }} of 2)
+    runs-on: macos-26
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Run macOS UI tests
+        id: ui_tests
+        # Run 37234266502: 2,295 s tests + bundle writing exceeded 40 min.
+        # Classes below split the completed attempt's 2,132 s into 1,214/918 s.
+        # 35 min allows ~1,307 s at the slower runtime + 180 s build + 600 s
+        # bundle/runner headroom. Separate runners shorten the critical path.
+        timeout-minutes: 35
         run: |
-          printf '%-24s %s\n' \
-            project-generation "$PROJECT_VERIFY" \
-            mac-build "$MAC_BUILD" \
-            strict-concurrency "$STRICT_BUILD" \
-            unit-tests "$UNIT_TESTS" \
-            ui-tests "$UI_TESTS" \
-            performance-ui-tests "$PERF_UI_TESTS" \
-            analyzer "$ANALYZER" \
-            final-worktree "$FINAL_STATE"
-          if [ "$PERF_UI_TESTS" != success ]; then
-            echo "::warning::Performance UI metrics are observational until the signed lane passes on macos-26"
+          rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
+          rm -rf "$RUNNER_TEMP/attic-visual-uat"
+          mkdir -p "$RUNNER_TEMP/attic-visual-uat"
+          shard_flags=()
+          for suite in AtticUITests CanvasUITests NotesFormatUITests; do
+            if [ "${{ matrix.shard }}" = 1 ]; then
+              shard_flags+=("-only-testing:AtticUITests/$suite")
+            else
+              shard_flags+=("-skip-testing:AtticUITests/$suite")
+            fi
+          done
+          if [ "${{ matrix.shard }}" = 2 ]; then
+            shard_flags+=(-only-testing:AtticUITests)
           fi
-          test "$PROJECT_VERIFY" = success
-          test "$MAC_BUILD" = success
-          test "$STRICT_BUILD" = success
-          test "$UNIT_TESTS" = success
-          test "$UI_TESTS" = success
-          test "$ANALYZER" = success
-          test "$FINAL_STATE" = success
+          ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
+          Scripts/xcodebuild_locked.sh \
+            -project Attic.xcodeproj \
+            -scheme AtticUI \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ci.ui \
+            CODE_SIGNING_ALLOWED=NO \
+            "${shard_flags[@]}" \
+            -skip-testing:AtticUITests/PerformanceUITests \
+            test
+
+      - name: Print macOS UI-test summary
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/AtticUITests.xcresult" ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/AtticUITests.xcresult" \
+              --format json
+          fi
+
+      - name: Upload macOS UI-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-ui-test-results-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticUITests.xcresult
+            ${{ runner.temp }}/attic-input-modes.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload visual UAT screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-visual-uat-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ runner.temp }}/attic-visual-uat
+          if-no-files-found: ignore
+          retention-days: 7
 
 
   costs:
-    name: Optimized frame, row and Done search cost gates
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' }}
+    name: Optimized costs and opt-in soak retention gates
     runs-on: macos-26
     timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      # Candidate commands inherit enforcement; only reference commands opt out.
+      TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY: "0"
       COST_FLAGS: >-
         CODE_SIGNING_ALLOWED=NO SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule
         ENABLE_DEBUG_DYLIB=NO ENABLE_TESTABILITY=YES ENABLE_HARDENED_RUNTIME=NO
 
     # These fixtures time wall-clock work, so they run only here, on
     # optimized builds and one test at a time; the -Onone unit lane skips
-    # them. Each fixture runs once per sample; nothing runs twice.
+    # them. OD-15 re-samples a failing comparison family once, AB/BA/AB;
+    # first-attempt passing rows remain accepted. Done rendered rows collect
+    # eight paired AB/BA invocations (24 readings/side) on each attempt.
     steps:
       - name: Check out candidate and baseline history
         uses: actions/checkout@v5
@@ -331,36 +683,97 @@ jobs:
 
       - name: Verify Xcode 26 toolchain and the cost baseline
         run: |
-          xcodebuild -version
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
           git merge-base --is-ancestor "$COST_BASELINE_COMMIT" HEAD
           git merge-base --is-ancestor "$DONE_SEARCH_BASELINE_COMMIT" HEAD
+          git merge-base --is-ancestor "$INTEGRATION_COST_REFERENCE_COMMIT" HEAD
           mkdir -p "$RUNNER_TEMP/AtticCosts"
 
+      - name: Verify reveal probe and count gate plumbing
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_smooth*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts -p 'test_reveal*.py' -v
+          PYTHONDONTWRITEBYTECODE=1 python3 Scripts/test_soak_test_plumbing.py
+
+      - name: Verify cost gate plumbing
+        run: python3 -m unittest discover -s Scripts -p 'test_*cost*.py' -v
+
       - name: Build optimized baseline and candidate test hosts
+        id: cost_builds
         run: |
           git worktree add --detach "$RUNNER_TEMP/AtticCostBaseline" "$COST_BASELINE_COMMIT"
           git worktree add --detach "$RUNNER_TEMP/AtticDoneSearchBaseline" "$DONE_SEARCH_BASELINE_COMMIT"
-          for name in baseline candidate donebase; do
+          git worktree add --detach "$RUNNER_TEMP/AtticIntegrationCostReference" "$INTEGRATION_COST_REFERENCE_COMMIT"
+          # Test-only overlay: identical measurement code, pinned reference app.
+          # Mixed functional/cost files receive only measured members below.
+          for fixture in DoneSearchCostTests TaskPerformanceGateTests TasksKeystrokeCostTests; do
+            cp "AtticTests/$fixture.swift" "$RUNNER_TEMP/AtticIntegrationCostReference/AtticTests/$fixture.swift"
+          done
+          git -C "$RUNNER_TEMP/AtticIntegrationCostReference" diff --exit-code -- Attic Attic.xcodeproj
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticIntegrationCostReference" integration
+          # Retain the historical fixtures and all measurements. Adapt only
+          # their absolute timing assertions to the shared OD-6 policy.
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticCostBaseline" frame-row
+          python3 Scripts/prepare_cost_reference.py "$RUNNER_TEMP/AtticDoneSearchBaseline" done
+          builds=(baseline candidate donebase integrationbase)
+          if [ "${{ inputs.headless_costs }}" = true ]; then builds=(candidate integrationbase); fi
+          for name in "${builds[@]}"; do
+            fixture_flags=()
             source="$GITHUB_WORKSPACE"
             if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
             if [ "$name" = donebase ]; then source="$RUNNER_TEMP/AtticDoneSearchBaseline"; fi
+            if [ "$name" = integrationbase ]; then
+              source="$RUNNER_TEMP/AtticIntegrationCostReference"
+              # This pre-table app runs identical cost fixtures; the new
+              # table-only functional test belongs to the candidate suite.
+              fixture_flags=('OTHER_SWIFT_FLAGS=$(inherited) -DATTIC_COST_REFERENCE_HOST')
+            fi
             # shellcheck disable=SC2086
-            (cd "$source" && xcodebuild build-for-testing \
+            (cd "$source" && "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" build-for-testing \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
-              -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS) \
+              -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" $COST_FLAGS "${fixture_flags[@]}") \
               > "$RUNNER_TEMP/AtticCosts/$name-build.log" 2>&1 \
               || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-build.log"; exit 1; }
           done
 
-      - name: Compare interleaved frame and row costs with the baseline
+      # Keep XCTest's compressed-hour allocation workload out of the default
+      # unit suite; costs and every full CI still require all retention gates.
+      - name: Run opt-in soak and retention gates
+        if: always() && steps.cost_builds.outcome == 'success'
+        timeout-minutes: 15
+        env:
+          TEST_RUNNER_ATTIC_SOAK_TESTS: "1"
+        run: |
+          # shellcheck disable=SC2086
+          Scripts/xcodebuild_locked.sh test-without-building \
+            -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticCost-candidate" \
+            -resultBundlePath "$RUNNER_TEMP/AtticCosts/soak.xcresult" $COST_FLAGS \
+            -parallel-testing-enabled NO \
+            -only-testing:AtticTests/NoteEditorEngineTests/testPerf2SimulatedHourRetainsOnlyTheWarmNoteSessions \
+            -only-testing:AtticTests/NoteEditorEngineTests/testPerf2TableMeasurementRetentionOverAnHourOfEdits \
+            -only-testing:AtticTests/NoteEditorEngineTests/testPerf2TableCacheKeepsAMaximumTableWarmAndRemeasuresEvictedText \
+            > "$RUNNER_TEMP/AtticCosts/soak.log" 2>&1 \
+            || { tail -n 100 "$RUNNER_TEMP/AtticCosts/soak.log"; exit 1; }
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/AtticCosts/soak.xcresult" \
+            --format json > "$RUNNER_TEMP/AtticCosts/soak-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"] == 3 and s["skippedTests"] == 0 and s["failedTests"] == 0 and s["expectedFailures"] == 0' "$RUNNER_TEMP/AtticCosts/soak-summary.json"
+          grep -E 'PERF2_SOAK|SMOOTH_LIFETIME|PERF2_TABLE_CACHE' "$RUNNER_TEMP/AtticCosts/soak.log"
+
+      - name: Record three interleaved frame and row samples
+        if: ${{ !inputs.headless_costs }}
         run: |
           for sample in 1 2 3; do
             for name in baseline candidate; do
               source="$GITHUB_WORKSPACE"
-              if [ "$name" = baseline ]; then source="$RUNNER_TEMP/AtticCostBaseline"; fi
+              reference_only=0
+              if [ "$name" = baseline ]; then
+                source="$RUNNER_TEMP/AtticCostBaseline"
+                reference_only=1
+              fi
               # shellcheck disable=SC2086
-              (cd "$source" && xcodebuild test-without-building \
+              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
                 -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
                 -derivedDataPath "$RUNNER_TEMP/AtticCost-$name" \
                 -resultBundlePath "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.xcresult" $COST_FLAGS \
@@ -368,35 +781,80 @@ jobs:
                 -only-testing:AtticTests/TasksFrameCostTests -only-testing:AtticTests/TasksRowBuildCostTests) \
                 > "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log" 2>&1 \
                 || { tail -n 80 "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"; exit 1; }
-              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD' "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"
+              grep -E 'ATTIC_FRAME_COST|ATTIC_ROW_BUILD|ATTIC_COST_REFERENCE' "$RUNNER_TEMP/AtticCosts/$name-cost-$sample.log"
             done
           done
-          python3 Scripts/check_cost_comparison.py "$RUNNER_TEMP/AtticCosts"
+
+      - name: Record interleaved integration reference and candidate costs
+        run: |
+          for sample in 1 2 3; do
+            # Balance order so runner drift does not always penalize candidate.
+            sides=(baseline candidate)
+            if [ "$sample" = 2 ]; then sides=(candidate baseline); fi
+            for side in "${sides[@]}"; do
+              source="$GITHUB_WORKSPACE"
+              build=candidate
+              keystroke=()
+              if [ "${{ inputs.headless_costs }}" != true ]; then
+                keystroke=(-only-testing:AtticTests/TasksKeystrokeCostTests/testTheFirstKeystrokeCostsAboutWhatTheOthersDo)
+              fi
+              if [ "$side" = baseline ]; then
+                source="$RUNNER_TEMP/AtticIntegrationCostReference"
+                build=integrationbase
+              fi
+              # Reference collects timings only (OD-6); functional assertions remain.
+              reference_only=0
+              if [ "$side" = baseline ]; then reference_only=1; fi
+              # shellcheck disable=SC2086
+              (cd "$source" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY="$reference_only" "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
+                -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
+                -derivedDataPath "$RUNNER_TEMP/AtticCost-$build" $COST_FLAGS \
+                -resultBundlePath "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.xcresult" \
+                -parallel-testing-enabled NO \
+                -only-testing:AtticTests/NotesPageControllerTests/testMeasuredMainActorSaveOnFiveThousandLineNote \
+                -only-testing:AtticTests/NotesPageControllerTests/testMeasuredMainActorSaveIsIndependentOfUnrelatedStoreContents \
+                -only-testing:AtticTests/NotesPageControllerTests/testCheckpointRetirementKeepsMainActorWithinSaveTolerance \
+                -only-testing:AtticTests/NoteSlice3bTests/testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport \
+                -only-testing:AtticTests/TaskPerformanceGateTests/testFamilySummaryPassAtSixThousandTasksIsMilliseconds \
+                -only-testing:AtticTests/TaskPerformanceGateTests/testStatusToggleAtSixThousandTasksStaysBounded \
+                "${keystroke[@]}") \
+                > "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log" 2>&1 \
+                || { tail -n 100 "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"; exit 1; }
+              grep -E 'ATTIC_INTEGRATION_COST|ATTIC_DONE_RESULTS|ATTIC_DONE_KEY' "$RUNNER_TEMP/AtticCosts/integration-$side-$sample.log"
+            done
+          done
+
+      - name: Record eight paired AB/BA Done input and results invocations
+        if: ${{ !inputs.headless_costs }}
+        run: python3 Scripts/sample_done_costs.py "$RUNNER_TEMP/AtticCosts"
 
       - name: Done search query samples of the accepted baseline
+        if: ${{ !inputs.headless_costs }}
         run: |
           # Three runs of the accepted build's query fixtures, for the
-          # slowest-sample comparison below. Its own per-sample 16 ms
-          # assertions may fail on a slow runner; only its samples are used,
-          # and every run must have printed them.
+          # median comparison below. OD-6 disables only the
+          # reference's absolute timing assertions; correctness still gates.
           for sample in 1 2 3; do
             # shellcheck disable=SC2086
-            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && xcodebuild test-without-building \
+            (cd "$RUNNER_TEMP/AtticDoneSearchBaseline" && TEST_RUNNER_ATTIC_COST_REFERENCE_ONLY=1 "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
               -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
               -derivedDataPath "$RUNNER_TEMP/AtticCost-donebase" \
               -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.xcresult" $COST_FLAGS \
               -parallel-testing-enabled NO \
               -only-testing:AtticTests/DoneSearchCostTests/testMeasuresDoneSearchOn5000Tasks \
               -only-testing:AtticTests/DoneSearchCostTests/testTheDiskBackedPhase5SeedAlsoFitsTheQueryBudget) \
-              > "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log" 2>&1 || true
+              > "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log" 2>&1 \
+              || { tail -n 120 "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"; exit 1; }
             grep -q 'ATTIC_DONE_SEARCH session=2 ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
             grep -q 'ATTIC_PHASE5_DONE query=z ' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
+            grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_COST_REFERENCE' "$RUNNER_TEMP/AtticCosts/done-search-baseline-$sample.log"
           done
 
       - name: Done search query, keystroke and results-frame budgets
+        if: always() && steps.cost_builds.outcome == 'success' && !inputs.headless_costs
         run: |
           # shellcheck disable=SC2086
-          xcodebuild test-without-building \
+          "$GITHUB_WORKSPACE/Scripts/xcodebuild_locked.sh" test-without-building \
             -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticCost-candidate" \
             -resultBundlePath "$RUNNER_TEMP/AtticCosts/done-search.xcresult" $COST_FLAGS \
@@ -405,19 +863,39 @@ jobs:
             || { tail -n 120 "$RUNNER_TEMP/AtticCosts/done-search.log"; exit 1; }
           grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_QUERY_MEDIAN|ATTIC_DONE_INPUT|ATTIC_DONE_RESULTS' "$RUNNER_TEMP/AtticCosts/done-search.log"
 
-      - name: Compare the slowest Done search query sample with the baseline
-        run: python3 Scripts/check_done_search_costs.py "$RUNNER_TEMP/AtticCosts"
+      - name: Compare cost rows and re-check failures once in this job
+        if: always() && steps.cost_builds.outcome == 'success'
+        run: |
+          scope=()
+          if [ "${{ inputs.headless_costs }}" = true ]; then scope=(--headless-only); fi
+          python3 Scripts/recheck_cost_gates.py "${scope[@]}" "$RUNNER_TEMP/AtticCosts"
+
+      - name: Print Done query and input evidence even on failure
+        if: always() && !inputs.headless_costs
+        run: |
+          if [ -f "$RUNNER_TEMP/AtticCosts/done-search.log" ]; then
+            grep -E 'ATTIC_DONE_SEARCH|ATTIC_PHASE5_DONE|ATTIC_DONE_INPUT|ATTIC_NATIVE_INPUT|ATTIC_DONE_RESULTS' \
+              "$RUNNER_TEMP/AtticCosts/done-search.log" || true
+          fi
+          if [ -d "$RUNNER_TEMP/AtticCosts/done-search.xcresult" ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/AtticCosts/done-search.xcresult" --format json
+          fi
 
       - name: Upload cost evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-cost-gates-${{ github.sha }}
-          path: ${{ runner.temp }}/AtticCosts
-          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/AtticCosts
+            ${{ runner.temp }}/attic-input-modes.log
+          if-no-files-found: error
           retention-days: 14
 
   performance:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -434,8 +912,8 @@ jobs:
         id: perf_xcode
         continue-on-error: true
         run: |
-          xcodebuild -version
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
 
       - name: Record interleaved reference and candidate samples
         id: perf_probe
@@ -450,8 +928,8 @@ jobs:
           python3 Scripts/interleave_performance.py \
             "$RUNNER_TEMP/AtticPerfReference" . "$RUNNER_TEMP/AtticPerfFirst" --pairs 6
 
-      # Runner variance needs observed macos-26 jobs before comparison can
-      # block. Confirmation must repeat the same primary measure.
+      # Confirmation must repeat the same primary measure before a
+      # performance regression fails the required lane.
       - name: Report and confirm seeded preview comparison
         id: perf_compare
         if: steps.perf_probe.outcome == 'success'
@@ -485,10 +963,11 @@ jobs:
             ${{ runner.temp }}/AtticPerfFirst-*.json
             ${{ runner.temp }}/AtticPerfConfirm-*.json
             ${{ runner.temp }}/AtticPerfDurations.txt
+            ${{ runner.temp }}/attic-input-modes.log
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Report observational lane outcome
+      - name: Require seeded performance lane success
         if: always()
         env:
           PERF_XCODE: ${{ steps.perf_xcode.outcome }}
@@ -498,11 +977,13 @@ jobs:
           echo "Xcode 26 toolchain: $PERF_XCODE"
           echo "Seeded probe: $PERF_PROBE"
           echo "Comparison and confirmation: $PERF_COMPARE"
-          if [ "$PERF_XCODE" != success ] || [ "$PERF_PROBE" != success ] || [ "$PERF_COMPARE" = failure ]; then
-            echo "::warning::Performance lane requires macos-26 investigation before promotion to a blocking gate"
-          fi
+          test "$PERF_XCODE" = success
+          test "$PERF_PROBE" = success
+          test "$PERF_COMPARE" = success
 
   appearance:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
@@ -554,13 +1035,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: appearance-matrix-${{ github.sha }}-${{ matrix.shard }}
-          path: ${{ runner.temp }}/AtticAppearance
+          path: |
+            ${{ runner.temp }}/AtticAppearance
+            ${{ runner.temp }}/attic-input-modes.log
           if-no-files-found: ignore
           retention-days: 14
 
   iphone:
+    needs: validate-inputs
     name: Build Attic for iPhone Simulator
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -581,10 +1065,10 @@ jobs:
 
       - name: Verify Xcode 26 toolchain
         run: |
-          xcodebuild -version
+          Scripts/xcodebuild_locked.sh -version
           sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
           echo "macOS SDK $sdk_version"
-          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          Scripts/xcodebuild_locked.sh -version | head -n 1 | grep -Eq '^Xcode 26\.'
           test "${sdk_version%%.*}" = 26
 
       - name: Set up Ruby
@@ -633,7 +1117,7 @@ jobs:
         id: iphone_build
         continue-on-error: true
         run: |
-          xcodebuild \
+          Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
             -scheme AtticMobile \
             -configuration Local \

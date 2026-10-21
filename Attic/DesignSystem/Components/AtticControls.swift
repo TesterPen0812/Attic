@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private struct AtticControlStateKey: EnvironmentKey {
@@ -63,9 +64,8 @@ private struct AtticRaisedButtonBody: View {
     }
 }
 
-/// A single raised button: pin, All notes, New note, the Settings back
-/// button. Icon only (36 × 32 in the panel, 38 × 34 in Settings), or icon
-/// and label at the same height.
+/// A single raised button: pin, All notes or New note. Icon only, or
+/// icon and label at the same height.
 struct AtticRaisedButton: View {
     let systemName: String?
     let title: String?
@@ -80,21 +80,33 @@ struct AtticRaisedButton: View {
     /// An optical nudge of the glyph inside the button (the pin: −0.5,
     /// visual A), so its visible outline looks centred.
     var glyphOffsetY: CGFloat = 0
+    /// The same, sideways (New note: −0.5, icon audit A3-01).
+    var glyphOffsetX: CGFloat = 0
     /// The header's glyphs (Phase 0's qualities): the strong ink at regular
     /// weight, level with the page button's current page.
     var emphasisedGlyph = false
     /// L3: the header's flat corner surface (one fill, one hairline, no
     /// inner chip); a selected toggle takes the selected chip's fill whole.
     var flat = false
+    /// A toggle that says "on" with its glyph (O14-05, the pinned pin): the
+    /// glyph when selected (`pin.fill`) and, under the pointer, the action
+    /// a click takes (`pin.slash`), cross-faded. Such a toggle draws no
+    /// inner chip or selected fill: the filled glyph is the state.
+    var selectedSystemName: String?
+    var selectedHoverSystemName: String?
     let action: () -> Void
 
     @State private var probeID = UUID()
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
-         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, emphasisedGlyph: Bool = false, flat: Bool = false,
+         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, glyphOffsetX: CGFloat = 0, emphasisedGlyph: Bool = false,
+         flat: Bool = false, selectedSystemName: String? = nil, selectedHoverSystemName: String? = nil,
          action: @escaping () -> Void) {
         self.flat = flat
+        self.selectedSystemName = selectedSystemName
+        self.selectedHoverSystemName = selectedHoverSystemName
+        self.glyphOffsetX = glyphOffsetX
         self.systemName = systemName
         self.title = nil
         self.accessibilityLabel = String(localized: label)
@@ -119,18 +131,22 @@ struct AtticRaisedButton: View {
 
     var body: some View {
         let radius = AtticRadius.control(height: size.height)
+        // A toggle whose glyph says "on" draws no chip (O14-05).
+        let chip = isSelected && selectedSystemName == nil
         Button(action: action) {
-            AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph)
-                .offset(y: glyphOffsetY)
+            AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph,
+                                   onSystemName: isSelected ? selectedSystemName : nil,
+                                   onHoverSystemName: isSelected ? selectedHoverSystemName : nil)
+                .offset(x: glyphOffsetX, y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
                 .background {
-                    if isSelected, !flat {
+                    if chip, !flat {
                         AtticSelectedChip(outerHeight: size.height)
                     }
                 }
         }
-        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius, flat: flat, isSelected: isSelected))
+        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius, flat: flat, isSelected: chip))
         .focusEffectDisabled()
         .help(help ?? accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
@@ -145,11 +161,27 @@ struct AtticRaisedButton: View {
     }
 }
 
+extension AtticRaisedButtonMetrics {
+    /// A toggle's glyph (O14-05): off, its own; on, the "on" glyph, and
+    /// under the pointer (or while pressed) the action a click takes
+    /// ("Unpin"), so the toggle says what it does.
+    nonisolated static func shownSymbol(_ systemName: String, on: String?, onHover: String?,
+                                        state: AtticControlState) -> String {
+        guard let on else { return systemName }
+        if let onHover, state == .hover || state == .pressed { return onHover }
+        return on
+    }
+}
+
 private struct AtticRaisedButtonLabel: View {
     let systemName: String?
     let title: String?
     var isSelected = false
+    /// A toggle that is on: its glyph, and the one under the pointer.
+    var onSystemName: String?
+    var onHoverSystemName: String?
     @Environment(\.atticControlState) private var state
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         // Icons are lighter and thinner than text (v4): the secondary icon
@@ -164,8 +196,23 @@ private struct AtticRaisedButtonLabel: View {
             if let systemName {
                 // Selected (the pinned pin), the glyph is regular weight, as
                 // the page switch's selected icon is (visual A).
-                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize,
-                          weight: isSelected ? .regular : AtticIconWeight.outline, ink: glyph)
+                let size = title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize
+                let weight: Font.Weight = isSelected ? .regular : AtticIconWeight.outline
+                if onSystemName == nil {
+                    AtticIcon(systemName: systemName, size: size, weight: weight, ink: glyph)
+                } else {
+                    // Every glyph the toggle can show, laid on one centre and
+                    // cross-faded (F/E), so a change never moves the button.
+                    let shown = AtticRaisedButtonMetrics.shownSymbol(systemName, on: onSystemName, onHover: onHoverSystemName, state: state)
+                    let names = [onSystemName, onHoverSystemName].compactMap { $0 }
+                    ZStack {
+                        ForEach(names, id: \.self) { name in
+                            AtticIcon(systemName: name, size: size, weight: weight, ink: glyph)
+                                .opacity(name == shown ? 1 : 0)
+                        }
+                    }
+                    .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: shown)
+                }
             }
             if let title {
                 AtticText(verbatim: title, style: .controlLabel, ink: state == .disabled ? .disabledText : .heading)
@@ -192,15 +239,23 @@ struct AtticSelectedChip: View {
     }
 }
 
+// MARK: - Hover gate
+
+/// Hover UI opens only while no mouse button is down (V-04): a drag that
+/// started elsewhere and passes over a hover control never opens it.
+enum AtticHoverGate {
+    static func opens(pressedButtons: Int) -> Bool { pressedButtons == 0 }
+}
+
 // MARK: - Page button (collapsed page dock)
 
 /// The header's page button (Phase 0's mode dock, brought into Direction
 /// A, 2026-09-26): at rest a square the size and shape of the pin, showing
-/// only the current page's icon on the selected inner chip. Under the
+/// only the current page's icon, plain as the pin's (D-11). Under the
 /// pointer or keyboard focus it opens leftward into all the pages' icons
 /// (the current one on the chip, each with a tooltip and its shortcut); a
 /// click goes there, and it folds back when the pointer leaves. 36 pt,
-/// inset 4, 28 pt segments 2 apart: 36 wide shut, 96 open.
+/// inset 4, 24 pt segments 2 apart: 32 wide shut, 84 open.
 ///
 /// One control for the keyboard (← → move between pages while it has
 /// focus; ⌘1–⌘3 work from anywhere). VoiceOver reads one group, "Pages",
@@ -234,6 +289,7 @@ struct AtticPageButton<Page: Hashable>: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticPageSwitcherPresence) private var presence
     @FocusState private var focused: Bool
     @State private var hovering = false
     @State private var hoveredPage: Page?
@@ -262,8 +318,11 @@ struct AtticPageButton<Page: Hashable>: View {
                     ZStack {
                         let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
                         let accent = design.tokens.pageChipAccent
-                        if isSelected, flat, !open {
-                            // L3: shut, the glyph sits on the flat surface.
+                        if isSelected, !open {
+                            // Shut, the current page's glyph sits plain, as the
+                            // pin's does (D-11, owner 2026-10-11): the chip
+                            // means "on" only for a pinned pin, and marks the
+                            // current page only among the others once open.
                         } else if isSelected, let accent {
                             // Phase 0's Light palettes: the current page in the accent.
                             shape.fill(accent.fill.color)
@@ -273,12 +332,14 @@ struct AtticPageButton<Page: Hashable>: View {
                         } else if hoveredPage == item.page {
                             shape.fill(design.tokens.chipHover.color)
                         }
-                        AtticIcon(systemName: item.systemName, size: M.iconSize,
-                                  weight: isSelected ? .regular : AtticIconWeight.outline,
-                                  ink: isSelected ? (accent == nil ? .glyph : .accent) : .icon)
+                        let face = M.glyphFace(isSelected: isSelected, open: open, accent: accent != nil,
+                                               solid: design.effectiveSurface == .solid)
+                        AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
                     }
                     .frame(width: M.segment, height: M.segment)
-                    .contentShape(Rectangle())
+                    // 24 pt chips (chrome B) still answer a 28 pt target,
+                    // reaching into the gap and the capsule's inset.
+                    .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: M.segment)))
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
@@ -304,11 +365,25 @@ struct AtticPageButton<Page: Hashable>: View {
         .modifier(AtticPageButtonSurface(flat: flat, cornerRadius: radius, hovered: hovering))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: radius)
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .onHover { inside in
-            hovering = inside
-            if inside { onApproach() } else { hoveredPage = nil }
+        // V-04: it opens under a resting or moving pointer, never under a
+        // mouse drag that started elsewhere (a marquee or a selection
+        // passing over the header); the first move after the button comes
+        // up opens it.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard !hovering, AtticHoverGate.opens(pressedButtons: NSEvent.pressedMouseButtons) else { return }
+                hovering = true
+                onApproach()
+            case .ended:
+                if hovering { hovering = false }
+                hoveredPage = nil
+            }
         }
         .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: open)
+        // The header title makes room while it is open (OD-11).
+        .onChange(of: open) { _, isOpen in presence?.set(isOpen) }
+        .onDisappear { presence?.set(false) }
         // A Tab stop like a button: only when keyboard navigation is on,
         // so the panel never opens it by focusing it when revealed.
         .focusable(capture == nil, interactions: .activate)
@@ -357,13 +432,172 @@ private struct AtticPageButtonSurface: ViewModifier {
     }
 }
 
+extension AtticPageButtonMetrics {
+    /// A page's glyph. The current page's, shut or open, is the pin's
+    /// (U-04): the strong glyph ink at regular weight, so the two corner
+    /// buttons read as one pair and the page button never looks disabled.
+    /// Open, a Light palette marks it in its accent on its tinted chip,
+    /// except on an opaque surface (Reduce Transparency included), where
+    /// palette ink can fall below the icon's floor on that chip. The other
+    /// pages are quiet outline icons.
+    nonisolated static func glyphFace(isSelected: Bool, open: Bool, accent: Bool, solid: Bool)
+        -> (weight: Font.Weight, ink: AtticInk) {
+        guard isSelected else { return (AtticIconWeight.outline, .icon) }
+        return (.regular, open && accent && !solid ? .accent : .glyph)
+    }
+}
+
+// MARK: - Header title room (OD-11)
+
+/// Whether the page switcher is open, for the header title that must give
+/// way to it. The page button reports into it; the title reads it. A
+/// reference type in the environment, so the header never re-evaluates when
+/// it flips: only the one title wrapper that observes it does.
+@MainActor
+final class AtticPageSwitcherPresence: ObservableObject {
+    @Published private(set) var isOpen = false
+
+    func set(_ open: Bool) {
+        if isOpen != open { isOpen = open }
+    }
+}
+
+private struct AtticPageSwitcherPresenceKey: EnvironmentKey {
+    static let defaultValue: AtticPageSwitcherPresence? = nil
+}
+
+extension EnvironmentValues {
+    /// The shell's page switcher presence (nil in the gallery and captures,
+    /// where nothing makes room).
+    var atticPageSwitcherPresence: AtticPageSwitcherPresence? {
+        get { self[AtticPageSwitcherPresenceKey.self] }
+        set { self[AtticPageSwitcherPresenceKey.self] = newValue }
+    }
+}
+
+/// Where a header title sits between the pin and the page switcher (owner
+/// decision B for Canvas, reused for Notes, OD-11). Shut, the title is
+/// centred between the two 36 pt buttons. While the switcher is open it
+/// takes the width to its left: the title left-aligns beside the pin and
+/// truncates in what the switcher leaves, so it never sits under it, then
+/// returns to the centre when the switcher closes. Pure geometry in the
+/// panel's x axis, so a test can check it at any title length and width.
+enum AtticHeaderTitleSlot {
+    struct Placement: Equatable {
+        /// The title's left edge, from the panel's left edge.
+        let x: CGFloat
+        let width: CGFloat
+        var maxX: CGFloat { x + width }
+    }
+
+    /// The clear gap kept between the title and either neighbour.
+    static let gap = AtticSpacing.s8
+
+    /// The switcher's open frame, from the panel's left edge.
+    static func switcherFrame(panelWidth: CGFloat, chromeInset: CGFloat, switcherWidth: CGFloat) -> ClosedRange<CGFloat> {
+        let maxX = panelWidth - chromeInset
+        return (maxX - switcherWidth)...maxX
+    }
+
+    static func placement(
+        titleWidth: CGFloat,
+        panelWidth: CGFloat,
+        chromeInset: CGFloat,
+        switcherWidth: CGFloat,
+        switcherOpen: Bool
+    ) -> Placement {
+        let left = chromeInset + AtticControlSize.headerControl + gap
+        let right = switcherOpen
+            ? panelWidth - chromeInset - switcherWidth - gap
+            : panelWidth - left
+        let room = max(0, right - left)
+        let width = min(max(0, titleWidth), room)
+        let x = switcherOpen ? left : left + (room - width) / 2
+        return Placement(x: x, width: width)
+    }
+}
+
+/// Places its one child with `AtticHeaderTitleSlot`: full panel width, the
+/// child's own height. The child is proposed the slot's width, so a long
+/// title truncates there.
+struct AtticHeaderTitleLayout: Layout {
+    var chromeInset: CGFloat
+    var switcherWidth: CGFloat
+    var switcherOpen: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 0, height: subviews.first?.sizeThatFits(.unspecified).height ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let title = subviews.first else { return }
+        let placement = AtticHeaderTitleSlot.placement(
+            titleWidth: title.sizeThatFits(.unspecified).width,
+            panelWidth: bounds.width,
+            chromeInset: chromeInset,
+            switcherWidth: switcherWidth,
+            switcherOpen: switcherOpen
+        )
+        title.place(at: CGPoint(x: bounds.minX + placement.x, y: bounds.minY), anchor: .topLeading,
+                    proposal: ProposedViewSize(width: placement.width, height: bounds.height))
+    }
+}
+
+/// A header title that makes room for the page switcher: it slides left and
+/// truncates while the switcher is open and slides back when it closes, with
+/// the selected motion preset (Reduce Motion and Reduced: no slide, the new
+/// width at once). One behaviour for every page's header title.
+struct AtticHeaderTitleRoom<Content: View>: View {
+    var chromeInset: CGFloat
+    var switcherWidth: CGFloat
+    /// Tests and captures pin the switcher open or shut; nil follows the
+    /// shell's presence.
+    var forcedOpen: Bool?
+    @ViewBuilder var content: () -> Content
+
+    @Environment(\.atticPageSwitcherPresence) private var presence
+
+    var body: some View {
+        if let presence, forcedOpen == nil {
+            Observing(presence: presence, room: self)
+        } else {
+            Placed(room: self, open: forcedOpen ?? false)
+        }
+    }
+
+    private struct Observing: View {
+        @ObservedObject var presence: AtticPageSwitcherPresence
+        let room: AtticHeaderTitleRoom
+
+        var body: some View { Placed(room: room, open: presence.isOpen) }
+    }
+
+    private struct Placed: View {
+        let room: AtticHeaderTitleRoom
+        let open: Bool
+        @Environment(\.atticDesign) private var design
+
+        var body: some View {
+            AtticHeaderTitleLayout(chromeInset: room.chromeInset, switcherWidth: room.switcherWidth, switcherOpen: open) {
+                room.content()
+            }
+            // The switcher's own motion: the title moves with it. Instant
+            // (no animation) in Reduce Motion and Reduced.
+            .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: open)
+        }
+    }
+}
+
 // MARK: - Add bar
 
 /// The add bar: one raised field, 36 tall, radius 15. The send button
 /// lives inside it and appears only when there is text. Its slot is always
 /// reserved, so the field never changes width: the button only fades in
 /// with a short rise (opacity and position). Return adds; the bar keeps
-/// focus for the next one.
+/// focus for the next one. Its live field wraps long text onto more lines
+/// (O17-05): the bar grows upward a line at a time, up to
+/// `AtticComposerMetrics.maxLines`, with its plus and send button resting
+/// on its last line, and shrinks back when the text is added or cleared.
 struct AtticAddBar: View {
     /// The chip-drawing field (Phase 1, logged in `CHANGELOG.md`): what it
     /// draws as chips, its focus and what it reports.
@@ -402,6 +636,8 @@ struct AtticAddBar: View {
     @State private var hovered = false
     @State private var probeID = UUID()
     @State private var fieldProbeID = UUID()
+    /// The live field's height: one line, or more as it wraps (O17-05).
+    @State private var fieldHeight = AtticTokenFieldMetrics.height
 
     init(placeholder: String.LocalizationValue, text: Binding<String>, onSubmit: @escaping () -> Void) {
         self.placeholder = String(localized: placeholder)
@@ -449,10 +685,16 @@ struct AtticAddBar: View {
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false,
                                        isFocused: isFieldFocused && keyboardFocusVisible).state
         let send = AtticControlSize.sendButton
-        HStack(spacing: m.gap) {
+        // Grown by the lines the live field wraps onto; the plus and the send
+        // button rest on the last line (the bar grows upward, so they never
+        // move while typing).
+        let grown = max(0, fieldHeight - AtticTokenFieldMetrics.height)
+        HStack(alignment: .bottom, spacing: m.gap) {
             AtticIcon(systemName: systemImage, size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
-                .frame(width: m.iconSlot)
+                .frame(width: m.iconSlot, height: height)
             field(disabled: state == .disabled)
+                .frame(height: AtticTokenFieldMetrics.height + grown)
+                .padding(.vertical, (height - AtticTokenFieldMetrics.height) / 2)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             // Built with the bar and only shown when there is text: the
             // first keystroke changes an opacity and an offset instead of
@@ -471,15 +713,19 @@ struct AtticAddBar: View {
                 }
             }
             .frame(width: send.width, height: send.height)
+            .padding(.vertical, (height - send.height) / 2)
         }
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, AtticControlSize.sendInset)
-        .frame(height: height)
+        .frame(height: height + grown)
         .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: hasText), value: hasText)
-        .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        // A line more or less: the bar's own spring, its text kept in view.
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: grown > 0), value: grown)
+        .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius,
+                           expectedRadius: AtticRadius.control(height: AtticControlSize.addBarHeight))
     }
 
     @ViewBuilder
@@ -492,9 +738,9 @@ struct AtticAddBar: View {
                 accessibilityLabel: placeholder,
                 isEnabled: !disabled,
                 actions: tokens.actions,
-                editor: tokens.editor
+                editor: tokens.editor,
+                growth: AtticTokenFieldGrowth(height: $fieldHeight, minHeight: AtticTokenFieldMetrics.height)
             )
-            .frame(height: AtticTokenFieldMetrics.height)
             .overlay(alignment: .leading) {
                 if text.isEmpty {
                     AtticText(verbatim: placeholder, style: .listBody, ink: disabled ? .disabledText : .placeholder)
@@ -629,44 +875,33 @@ struct AtticTabsSearchField: View {
             // keyboard directly (review P3).
             if nativeInputIdentifier != nil, capture == nil {
                 if isFocused?.wrappedValue != true { isFocused?.wrappedValue = true }
-                takeKeyboard()
+                takeKeyboard(request: claim.beginFocusRequest())
             } else {
                 focused = true
             }
         }
         .onAppear {
-            // Once the field is in the window (a focus set as it appears is
-            // lost, and the click that opened it ends after this): the
-            // keyboard goes to it, the insertion point after its text.
-            // A field that held the keyboard (the add bar) gives it up in
-            // the same turn, so a second try follows if the first was lost.
-            guard isFocused?.wrappedValue == true else { return }
-            for delay in [0.0, 0.15, 0.4] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    guard isFocused?.wrappedValue == true else { return }
-                    if delay == 0 { focused = true }
-                    takeKeyboard()
-                }
-            }
+            if isFocused?.wrappedValue == true { requestKeyboard() }
         }
+        .onDisappear { claim.cancelFocusRequest() }
         .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }
         .onChange(of: isFocused?.wrappedValue) { _, wanted in
-            if let wanted, wanted != focused {
-                focused = wanted
-                if wanted { DispatchQueue.main.async { takeKeyboard() } }
+            if wanted == true, !focused { requestKeyboard() }
+            else if wanted == false {
+                claim.cancelFocusRequest()
+                focused = false
             }
         }
         .padding(.horizontal, AtticLayout.rowHighlightInset)
     }
 
-    /// Focus given from outside (typing on the Done page, ⌘F, Search): the
-    /// insertion point goes after what is there, as if typed, never
-    /// selecting it (a first letter typed on the page must not be replaced
-    /// by the next).
-    private func caretToEnd() {
-        DispatchQueue.main.async {
-            guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor else { return }
-            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+    private func requestKeyboard() {
+        let request = claim.beginFocusRequest()
+        for delay in [0.0, 0.15, 0.4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard isFocused?.wrappedValue == true else { return }
+                takeKeyboard(request: request)
+            }
         }
     }
 
@@ -688,18 +923,9 @@ struct AtticTabsSearchField: View {
     /// away in the same moment (the tabs it replaces, CI run 1): if the
     /// focus asked for did not land, the window's first responder becomes
     /// this field's own text field.
-    private func takeKeyboard() {
-        // Only while the page still wants it (a page hidden since, R2).
+    private func takeKeyboard(request: Int) {
         guard isFocused?.wrappedValue ?? true, let window = NSApp.keyWindow else { return }
-        // This field's own AppKit field, when it is in the window.
-        if let field = claim.field, field.window === window {
-            if (window.firstResponder as? NSTextView)?.delegate as? NSTextField !== field { window.makeFirstResponder(field) }
-            caretToEnd()
-            return
-        }
-        // Not found yet: the probe gives it the keyboard the moment it is
-        // in the window (never a window-wide guess, which could pick the
-        // field fading out with the last search).
+        if claim.takeKeyboard(request: request, in: window) { focused = true }
     }
 }
 
@@ -709,6 +935,36 @@ struct AtticTabsSearchField: View {
 @MainActor
 final class AtticFieldClaim {
     weak var field: NSTextField?
+    private(set) var focusGeneration = 0
+    private var awaitingFocus = false
+
+    func beginFocusRequest() -> Int {
+        focusGeneration += 1
+        awaitingFocus = true
+        return focusGeneration
+    }
+
+    func cancelFocusRequest() {
+        focusGeneration += 1
+        awaitingFocus = false
+    }
+
+    /// Only the first acquisition places the caret. A retry never edits a
+    /// selection, and a completed or superseded request cannot take focus.
+    @discardableResult
+    func takeKeyboard(request: Int, in window: NSWindow) -> Bool {
+        guard request == focusGeneration, awaitingFocus,
+              let field, field.window === window else { return false }
+        if (window.firstResponder as? NSTextView)?.delegate as? NSTextField === field {
+            awaitingFocus = false
+            return true
+        }
+        guard window.makeFirstResponder(field), self.field === field, field.window === window,
+              let editor = field.currentEditor(), window.firstResponder === editor else { return false }
+        awaitingFocus = false
+        editor.selectedRange = NSRange(location: (editor.string as NSString).length, length: 0)
+        return true
+    }
 }
 
 /// Finds its field (`AtticTabsSearchField.isSearchField`) among its nearest
@@ -734,6 +990,7 @@ struct AtticFieldClaimProbe: NSViewRepresentable {
         private var claim: AtticFieldClaim?
         private var placeholder = ""
         private var wanted: () -> Bool = { false }
+        private var attachmentGeneration = 0
 
         func configure(claim: AtticFieldClaim, placeholder: String, wanted: @escaping () -> Bool) {
             self.claim = claim
@@ -745,20 +1002,18 @@ struct AtticFieldClaimProbe: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            guard window != nil else { return }
-            // The field is laid out beside the probe in the same pass.
-            DispatchQueue.main.async { [weak self] in self?.take() }
-        }
-
-        private func take() {
-            guard let window, let field = ownField() else { return }
-            claim?.field = field
-            guard wanted(), window.isKeyWindow || window.canBecomeKey else { return }
-            if (window.firstResponder as? NSTextView)?.delegate as? NSTextField !== field {
-                window.makeFirstResponder(field)
-            }
-            if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
-                editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            attachmentGeneration += 1
+            guard let window else { claim?.cancelFocusRequest(); return }
+            let attachment = attachmentGeneration
+            let request = claim?.focusGeneration
+            // Resolve this probe's field after layout, but never replay an
+            // old attachment's focus request into a different field/window.
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.window === window,
+                      self.attachmentGeneration == attachment, let field = self.ownField() else { return }
+                self.claim?.field = field
+                guard let request, self.wanted(), window.isKeyWindow || window.canBecomeKey else { return }
+                self.claim?.takeKeyboard(request: request, in: window)
             }
         }
 
@@ -804,6 +1059,11 @@ struct AtticSmallButton: View {
     let systemName: String?
     let title: String?
     let accessibilityLabel: String
+    /// A quiet icon sits beside page labels (the tabs line's Find and View
+    /// Options, design review D-10: icons are never darker than the words
+    /// next to them): the secondary tier's ink instead of the primary glyph's
+    /// (`AtticColorTokens.quietIconInk`).
+    let quietIcon: Bool
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -813,10 +1073,12 @@ struct AtticSmallButton: View {
     @State private var hovered = false
     @State private var probeID = UUID()
 
-    init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue, action: @escaping () -> Void) {
+    init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue,
+         quietIcon: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title.map { String(localized: $0) }
         self.accessibilityLabel = String(localized: label)
+        self.quietIcon = quietIcon
         self.action = action
     }
 
@@ -825,7 +1087,7 @@ struct AtticSmallButton: View {
         let radius = AtticRadius.control(height: height)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Button(action: action) {
-            AtticSmallButtonFace(systemName: systemName, title: title, radius: radius, hovered: hovered)
+            AtticSmallButtonFace(systemName: systemName, title: title, quietIcon: quietIcon, radius: radius, hovered: hovered)
                 .contentShape(shape)
         }
         .buttonStyle(AtticFlatPressStyle())
@@ -868,6 +1130,7 @@ extension EnvironmentValues {
 private struct AtticSmallButtonFace: View {
     let systemName: String?
     let title: String?
+    let quietIcon: Bool
     let radius: CGFloat
     let hovered: Bool
 
@@ -885,7 +1148,7 @@ private struct AtticSmallButtonFace: View {
         case .pressed: tokens.chipSelected
         default: .clear
         }
-        let ink: AtticInk = state == .disabled ? .disabledIcon : .glyph
+        let ink: AtticInk = state == .disabled ? .disabledIcon : (quietIcon ? tokens.quietIconInk : .glyph)
         HStack(spacing: AtticSmallControlMetrics.iconLabelGap) {
             if let systemName {
                 AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, weight: .regular, ink: ink)
@@ -951,7 +1214,7 @@ struct AtticSelectionBar: View {
                     AtticMenuButton(systemName: action.systemName, label: action.label, commands: menu)
                 } else if let popover = action.popover {
                     AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
-                        .atticPopover(isPresented: popover.isPresented, arrowEdge: .top) { popover.content() }
+                        .atticDropdown(isPresented: popover.isPresented, prefer: .above, label: String(localized: action.label)) { popover.content() }
                 } else {
                     AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
                 }
@@ -993,6 +1256,13 @@ struct AtticMenuCommand: Identifiable {
     var children: [AtticMenuCommand] = []
     /// A section's heading ("3 Tasks"): not a command.
     var isHeader = false
+    /// For UI tests and automation (Notes' menus): the item's identifier.
+    var identifier: String?
+    /// A tag colour's dot before the title (the tag menu's Colour row, tag
+    /// filters and the multi-select tag action).
+    var swatch: AtticTagHue?
+    /// Any other image before the title (the highlighter's colours).
+    var image: NSImage?
     let action: () -> Void
 
     init(
@@ -1002,10 +1272,13 @@ struct AtticMenuCommand: Identifiable {
         isDestructive: Bool = false,
         isDisabled: Bool = false,
         startsSection: Bool = false,
+        isChecked: Bool = false,
+        identifier: String? = nil,
         action: @escaping () -> Void
     ) {
         self.init(verbatim: String(localized: title), systemImage: systemImage, shortcut: shortcut, isDestructive: isDestructive,
-                  isDisabled: isDisabled, startsSection: startsSection, action: action)
+                  isDisabled: isDisabled, startsSection: startsSection, state: isChecked ? .on : nil, action: action)
+        self.identifier = identifier
     }
 
     /// A title already localized (a switched Phase 1 label).
@@ -1018,9 +1291,11 @@ struct AtticMenuCommand: Identifiable {
         startsSection: Bool = false,
         state: AtticCheckState? = nil,
         detail: String? = nil,
+        swatch: AtticTagHue? = nil,
         action: @escaping () -> Void
     ) {
         self.title = title
+        self.swatch = swatch
         self.systemImage = systemImage
         self.shortcut = shortcut
         self.isDestructive = isDestructive
@@ -1029,6 +1304,13 @@ struct AtticMenuCommand: Identifiable {
         self.state = state
         self.detail = detail
         self.action = action
+    }
+
+    /// A submenu with an identifier (Notes' Insert ▸ and Format ▸).
+    init(_ title: String.LocalizationValue, startsSection: Bool = false, identifier: String? = nil,
+         submenu: [AtticMenuCommand]) {
+        self.init(title, startsSection: startsSection, identifier: identifier, action: {})
+        children = submenu
     }
 
     /// A submenu.
@@ -1152,10 +1434,25 @@ struct AtticCommandMenu<Label: View>: View {
     @ViewBuilder let label: Label
 
     @Environment(\.atticCapture) private var capture
+    @State private var anchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         if capture != nil {
             label
+        } else if commands.contains(where: { $0.state != nil }) {
+            // A menu of choices (the style, the alignment): the native menu,
+            // which draws each tick after its item (N-4's card design).
+            Button {
+                guard let view = anchor.view else { return }
+                AtticNativeMenu.popUp(commands, in: view)
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityHint(String(localized: "Opens a menu"))
         } else {
             Menu {
                 AtticMenuItems(commands: commands)
@@ -1264,6 +1561,10 @@ struct AtticMenuItems: View {
     private func label(_ command: AtticMenuCommand) -> some View {
         if let systemImage = command.systemImage {
             SwiftUI.Label(command.title, systemImage: systemImage)
+        } else if let image = command.image {
+            SwiftUI.Label { Text(verbatim: command.title) } icon: { Image(nsImage: image) }
+        } else if let swatch = command.swatch {
+            SwiftUI.Label { Text(verbatim: command.title) } icon: { Image(nsImage: AtticTagSwatch.image(swatch)) }
         } else {
             Text(verbatim: command.title)
         }
@@ -1286,6 +1587,11 @@ private struct AtticMenuBadge: ViewModifier {
     }
 }
 
+/// A native menu's trailing tick: this far past the menu's widest title.
+enum AtticMenuTickMetrics {
+    static let gap: CGFloat = 16
+}
+
 /// The same commands as an `NSMenu` (round 10): what a row's actions
 /// button, ⇧⌘I and the selection bar open, anchored to a view. Native in
 /// every way (keyboard, type-to-select, VoiceOver), with each command's
@@ -1296,6 +1602,11 @@ enum AtticNativeMenu {
     static func make(_ commands: [AtticMenuCommand], title: String = "") -> NSMenu {
         let menu = NSMenu(title: title)
         menu.autoenablesItems = false
+        // The tick after the item (N-4's card design, owner 2026-10-11: on
+        // every dropdown): a menu with choices draws no leading tick column,
+        // and each chosen item ends in its tick, one column for the menu.
+        let tickColumn = trailingTickColumn(commands)
+        if tickColumn != nil { menu.showsStateColumn = false }
         var first = true
         for command in commands {
             if command.isHeader {
@@ -1306,16 +1617,51 @@ enum AtticNativeMenu {
             }
             if command.startsSection, !first { menu.addItem(.separator()) }
             first = false
-            menu.addItem(item(command))
+            menu.addItem(item(command, tickColumn: tickColumn))
         }
         return menu
     }
 
-    private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
+    /// Where a menu's trailing ticks go (from the titles' start): past its
+    /// widest title, or nil for a menu with no choice in it.
+    static func trailingTickColumn(_ commands: [AtticMenuCommand]) -> CGFloat? {
+        let items = commands.filter { !$0.isHeader }
+        guard items.contains(where: { $0.state != nil }) else { return nil }
+        let font = NSFont.menuFont(ofSize: 0)
+        let widest = items.map { ($0.title as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return ceil(widest) + AtticMenuTickMetrics.gap
+    }
+
+    /// `title` with its tick (or the mixed dash) after it, at `column`.
+    static func tickedTitle(_ title: String, state: AtticCheckState, column: CGFloat) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .left, location: column)]
+        let mark = state == .mixed ? "\u{2013}" : "\u{2713}"
+        return NSAttributedString(string: title + "\t" + mark,
+                                  attributes: [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph])
+    }
+
+    /// A menu opened the way the system opens a right-click menu. AppKit
+    /// appends the context-menu plug-ins to such a menu (the system's
+    /// AutoFill submenu, Services) wherever a text input could be its
+    /// target; these are Attic's own menus, so they get none (design review
+    /// D-14: a stray "AutoFill ›" ended Notes' ⋯ menu).
+    static func makeContextMenu(_ commands: [AtticMenuCommand], appearance: NSAppearance?) -> NSMenu {
+        let menu = make(commands)
+        menu.allowsContextMenuPlugIns = false
+        menu.appearance = appearance
+        return menu
+    }
+
+    private static func item(_ command: AtticMenuCommand, tickColumn: CGFloat? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
         item.keyEquivalentModifierMask = []
         if let systemImage = command.systemImage, command.state != .mixed {
             item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        } else if let image = command.image {
+            item.image = image
+        } else if let swatch = command.swatch, command.state != .mixed {
+            item.image = AtticTagSwatch.image(swatch)
         }
         if !command.children.isEmpty {
             item.submenu = make(command.children, title: command.title)
@@ -1329,12 +1675,26 @@ enum AtticNativeMenu {
         case .mixed?: item.state = .mixed
         case .off?, nil: item.state = .off
         }
+        if let tickColumn {
+            // The state stays the item's (VoiceOver reads it); only where
+            // the tick is drawn moves, to the end.
+            item.onStateImage = nil
+            item.mixedStateImage = nil
+            if let state = command.state, state != .off {
+                item.attributedTitle = tickedTitle(command.title, state: state, column: tickColumn)
+                item.setAccessibilityTitle(command.title)
+            }
+        }
         item.isEnabled = !command.isDisabled
         if let shortcut = command.menuShortcut, let key = keyEquivalent(shortcut.key) {
             item.keyEquivalent = key
             item.keyEquivalentModifierMask = modifiers(shortcut.modifiers)
         }
         if let detail = command.menuBadge { item.badge = NSMenuItemBadge(string: detail) }
+        if let identifier = command.identifier {
+            item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            item.setAccessibilityIdentifier(identifier)
+        }
         return item
     }
 
@@ -1368,6 +1728,16 @@ enum AtticNativeMenu {
     /// Opens the menu under `view` (at its bottom-left, or at `point` in
     /// its coordinates), as a pop-up button does. Returns at once: the
     /// menu tracks on the next turn, so the caller's own event finishes.
+    /// Opens the menu under `rect` (in `view`'s coordinates), aligned to
+    /// its leading edge, and returns when the menu closes (Notes' ⋯ and
+    /// ⇧⌘I, whose callers restore the keyboard afterwards).
+    static func popUp(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
+        let menu = make(commands)
+        menu.appearance = view.window?.effectiveAppearance
+        let point = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
+        menu.popUp(positioning: nil, at: point, in: view)
+    }
+
     static func popUp(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
         let menu = make(commands)
         menu.appearance = view.window?.effectiveAppearance
@@ -1378,6 +1748,27 @@ enum AtticNativeMenu {
         }
     }
 
+    /// Opens the menu as the system opens a right-click menu, under `rect`
+    /// (in `view`'s coordinates, aligned to its leading edge), and returns
+    /// when it closes: Notes' ⋯ menu (A39 F06). The pop-up style above keeps
+    /// a menu beside its button and, at the panel's screen corner, squeezes
+    /// the Format submenu's names to "H…g"; a context menu places its
+    /// submenus as the system does, names whole. Falls back to the pop-up
+    /// style if no event can be made.
+    static func popUpContextMenu(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
+        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
+        let location = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
+        guard let window = view.window,
+              let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
+                                             modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                             clickCount: 1, pressure: 1) else {
+            menu.popUp(positioning: nil, at: location, in: view)
+            return
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
+    }
+
     /// Opens the menu as the system opens a right-click menu, with its top
     /// left at `point` in `view` (under its bottom-left corner by default):
     /// a row's actions (⇧⌘I, the row's ⋯, VoiceOver's Show actions). The
@@ -1386,8 +1777,7 @@ enum AtticNativeMenu {
     /// More's Open Files…, Move Up and Move Down showed as "…"); a context
     /// menu places its submenus as the right-click menu does, titles whole.
     static func popUpContextMenu(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
-        let menu = make(commands)
-        menu.appearance = view.window?.effectiveAppearance
+        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
         let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
         DispatchQueue.main.async {
             guard let window = view.window else { return }
@@ -1468,12 +1858,14 @@ struct AtticMenuButton: View {
     var showsDot = false
     /// What VoiceOver reads as the button's value (the current choice).
     var value: String? = nil
+    /// A quiet icon (see `AtticSmallButton.quietIcon`).
+    var quietIcon = false
 
     @State private var ownAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let anchor = holder ?? ownAnchor
-        AtticSmallButton(systemName: systemName, label: label) {
+        AtticSmallButton(systemName: systemName, label: label, quietIcon: quietIcon) {
             guard let view = anchor.view else { return }
             AtticNativeMenu.popUp(commands(), in: view)
         }
@@ -1559,6 +1951,9 @@ struct AtticPopoverRow: View {
     /// Keeps the icon column when this row has no icon, so a list of rows
     /// where only one is ticked stays aligned.
     var reservesIconSlot = false
+    /// nil: no tick column. Otherwise the tick's column at the row's end,
+    /// ticked when true (N-4's card design: the tick after the item).
+    var checked: Bool?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1568,12 +1963,13 @@ struct AtticPopoverRow: View {
     @State private var probeID = UUID()
 
     init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false,
-         reservesIconSlot: Bool = false, action: @escaping () -> Void) {
+         reservesIconSlot: Bool = false, checked: Bool? = nil, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title
         self.detail = detail
         self.isHighlighted = isHighlighted
         self.reservesIconSlot = reservesIconSlot
+        self.checked = checked
         self.action = action
     }
 
@@ -1602,6 +1998,17 @@ struct AtticPopoverRow: View {
                 if let detail {
                     AtticText(verbatim: detail, style: .shortcut, ink: state == .disabled ? .disabledText : .helper)
                 }
+                if let checked {
+                    Group {
+                        if checked {
+                            AtticIcon(systemName: "checkmark", size: AtticDropdownMetrics.checkSize, weight: .semibold, ink: .glyph)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(width: AtticDropdownMetrics.checkSlot)
+                    .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, m.rowPadding)
             .frame(height: height)
@@ -1611,6 +2018,7 @@ struct AtticPopoverRow: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .onHover { hovered = $0 }
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
+        .accessibilityValue(checked == true ? String(localized: "Selected") : "")
         .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
     }
 }

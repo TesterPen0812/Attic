@@ -4,50 +4,64 @@ import SwiftUI
 struct AtticApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    private let coordinator = AppCoordinator.shared
+    @ObservedObject private var startup = AppCoordinator.startup
     /// A gallery launch shows no menu-bar item (and never opens the store:
     /// `AppRuntimeEnvironment.usesInMemoryStore`).
     private let showsMenuBarItem = AppRuntimeEnvironment().showsMenuBarItem
 
     var body: some Scene {
         MenuBarExtra(menuBarTitle, systemImage: menuBarSystemImage, isInserted: .constant(showsMenuBarItem)) {
-            MenuBarView(coordinator: coordinator)
+            if let coordinator = startup.value {
+                MenuBarView(coordinator: coordinator)
+            } else {
+                Text(startup.failureMessage ?? "Attic could not open its local data.")
+                Button("Try Again") { AppCoordinator.retryStartup() }
+                    .accessibilityIdentifier("attic.startup.retry")
+                Divider()
+                Button("Quit Attic") { NSApp.terminate(nil) }
+                    .keyboardShortcut("q", modifiers: .command)
+            }
         }
         .menuBarExtraStyle(.menu)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
-                    coordinator.openSettings()
+                    startup.value?.openSettings()
                 }
                 .keyboardShortcut(",", modifiers: .command)
+                .disabled(startup.value == nil)
             }
-            CanvasEditCommands(
-                session: coordinator.canvasSession,
-                uiState: coordinator.uiState,
-                focus: coordinator.canvasEditFocus
-            )
+            if let coordinator = startup.value {
+                CanvasEditCommands(
+                    session: coordinator.canvasSession,
+                    uiState: coordinator.uiState,
+                    focus: coordinator.canvasEditFocus
+                )
+            }
         }
     }
 
     private var menuBarTitle: String {
+        if startup.failureMessage != nil { return "Attic — local data unavailable" }
         #if ATTIC_DAILY
-        "Attic Daily"
+        return "Attic Daily"
         #elseif ATTIC_GLASSMORPHISM_PREVIEW
-        "Attic Glassmorphism"
+        return "Attic Glassmorphism"
         #elseif ATTIC_LOCAL_ONLY
-        "Attic Notes Local"
+        return "Attic Notes Local"
         #else
-        "Attic"
+        return "Attic"
         #endif
     }
 
     private var menuBarSystemImage: String {
+        if startup.failureMessage != nil { return "exclamationmark.triangle" }
         #if ATTIC_GLASSMORPHISM_PREVIEW
-        "circle.lefthalf.filled"
+        return "circle.lefthalf.filled"
         #elseif ATTIC_LOCAL_ONLY
-        "note.text"
+        return "note.text"
         #else
-        "eye"
+        return "eye"
         #endif
     }
 }

@@ -25,7 +25,7 @@ final class SettingsPhase1Tests: XCTestCase {
         let clock = MutableNow(start)
         let container = try PersistenceController.makeContainer(inMemory: true)
         let tasks = TaskStore(container: container, now: { clock.value })
-        let notes = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore()))
         let canvases = CanvasStore(container: container, now: { clock.value })
         let library = AtticLibrary(tasks: tasks, notes: notes, canvases: canvases)
         return Fixture(clock: clock, container: container, tasks: tasks, notes: notes, canvases: canvases, library: library)
@@ -261,8 +261,8 @@ final class SettingsPhase1Tests: XCTestCase {
     }
 
     func testRemovedTaskFilesAreListedUnderTheirTaskAndComeBack() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSettingsRD-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = ownedTemporaryDirectory(prefix: "AtticSettingsRD")
+
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = root.appendingPathComponent("brief.txt")
         try Data("brief".utf8).write(to: source)
@@ -307,7 +307,7 @@ final class SettingsPhase1Tests: XCTestCase {
         seed.insert(attachment)
         try seed.save()
         let tasks = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let library = AtticLibrary(tasks: tasks, notes: notes)
         XCTAssertTrue(notes.removeAttachment(try XCTUnwrap(notes.attachments(for: note.id).first)))
 

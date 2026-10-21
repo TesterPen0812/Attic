@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Token field
 
@@ -46,6 +47,13 @@ struct AtticTokenFieldActions {
     /// command answers a key the field has (round 5).
     var undoFallback: () -> Void = {}
     var redoFallback: () -> Void = {}
+    /// A paste of files or an image (O17-06, `AtticPastedFiles`): return
+    /// true when the owner takes them (the add bar keeps them for the new
+    /// task); nil or false pastes as usual.
+    var pasteFiles: (([NSItemProvider]) -> Bool)? = nil
+    /// Files dragged over the field (true) or away (false), when it takes
+    /// them (`pasteFiles`): the owner shows where they will land.
+    var fileDragTargeted: ((Bool) -> Void)? = nil
 }
 
 /// A recognised piece of typed text (`#tag`, a date, `!`, `!!`) and how it
@@ -99,8 +107,6 @@ final class AtticTokenFieldEditor {
         return true
     }
 
-    /// The insertion point (UTF-16), or nil when the field is not live.
-    var caret: Int? { textView?.selectedRange().location }
     var selection: NSRange? { textView?.selectedRange() }
 
     /// Gives the field the keyboard again (after a picker closes).
@@ -140,6 +146,9 @@ struct AtticTokenField: NSViewRepresentable {
     var editor: AtticTokenFieldEditor?
     /// For UI tests and automation.
     var accessibilityIdentifier = "AtticTokenField"
+    /// A composer's field wraps onto more lines as the text grows (O17-05);
+    /// nil keeps one line that scrolls sideways (a row's title editor).
+    var growth: AtticTokenFieldGrowth? = nil
 
     @Environment(\.atticDesign) private var design
 
@@ -151,12 +160,24 @@ struct AtticTokenField: NSViewRepresentable {
         view.textView.owner = context.coordinator
         context.coordinator.view = view
         editor?.textView = view.textView
+        if let growth {
+            view.wrap(minHeight: growth.minHeight, maxLines: growth.maxLines) { [weak coordinator = context.coordinator] height in
+                coordinator?.heightChanged(height)
+            }
+        }
         return view
     }
 
     func updateNSView(_ view: AtticTokenFieldView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
+        coordinator.isUpdating = true
+        defer {
+            // The text the owner set (a cleared draft) or a piece's room
+            // can change the lines a wrapping field needs.
+            view.measureWrappedHeight()
+            coordinator.isUpdating = false
+        }
         editor?.textView = view.textView
         let tokens = design.tokens
         view.apply(style: AtticTokenFieldView.Style(
@@ -218,6 +239,8 @@ struct AtticTokenField: NSViewRepresentable {
         var parent: AtticTokenField
         weak var view: AtticTokenFieldView?
         var isApplyingModel = false
+        /// Inside `updateNSView`: SwiftUI's update, where no state changes.
+        var isUpdating = false
 
         init(_ parent: AtticTokenField) { self.parent = parent }
 
@@ -247,13 +270,48 @@ struct AtticTokenField: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             isEditPending = false
+            // A wrapping field grows or shrinks with this keystroke, in the
+            // same frame as its text (O17-05).
+            view?.measureWrappedHeight()
             guard !isApplyingModel, let textView = view?.textView else { return }
             if parent.text != textView.string { parent.text = textView.string }
             reportSelection(of: textView)
         }
 
+        /// The wrapped text needs a different height: the host's binding
+        /// changes now when typing changed it, or after the layout pass
+        /// that found it (a new width), never inside SwiftUI's update.
+        func heightChanged(_ height: CGFloat) {
+            guard let growth = parent.growth, growth.height.wrappedValue != height else { return }
+            if isUpdating || view?.isInLayout == true {
+                DispatchQueue.main.async { [weak self] in
+                    guard let growth = self?.parent.growth, growth.height.wrappedValue != height else { return }
+                    growth.height.wrappedValue = height
+                }
+            } else {
+                growth.height.wrappedValue = height
+            }
+        }
+
+        private var modelSelectionReportPending = false
+
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView = view?.textView, !isEditPending else { return }
+            if isApplyingModel {
+                // AppKit reports the replacement's selection synchronously
+                // inside updateNSView. Refresh the draft after that SwiftUI
+                // update, using the final selection rather than publishing
+                // back into the view that is still being updated.
+                guard !modelSelectionReportPending else { return }
+                modelSelectionReportPending = true
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self else { return }
+                    self.modelSelectionReportPending = false
+                    guard let textView, textView.delegate === self, !self.isEditPending else { return }
+                    self.reportSelection(of: textView)
+                }
+                return
+            }
             reportSelection(of: textView)
         }
 
@@ -296,8 +354,24 @@ struct AtticTokenField: NSViewRepresentable {
     }
 }
 
+/// How a composer's token field grows (O17-05): the visible height it asks
+/// its host for, from one line (`minHeight`) up to `maxLines` lines; past
+/// that it scrolls inside.
+struct AtticTokenFieldGrowth {
+    var height: Binding<CGFloat>
+    var minHeight: CGFloat
+    var maxLines: Int = AtticComposerMetrics.maxLines
+
+    /// The visible height for `lines` wrapped lines of `lineHeight` (pure,
+    /// tested): one line is `minHeight`, each more adds a line.
+    static func height(lines: Int, lineHeight: CGFloat, minHeight: CGFloat, maxLines: Int) -> CGFloat {
+        minHeight + CGFloat(min(max(lines, 1), max(maxLines, 1)) - 1) * lineHeight
+    }
+}
+
 /// The token field's AppKit view: a text view in a clip view that scrolls
-/// sideways when the line is longer than the field.
+/// sideways when the line is longer than the field, or (a composer's,
+/// `wrap`) wraps onto more lines and scrolls down past its last one.
 final class AtticTokenFieldView: NSView {
     struct Style: Equatable {
         var font: NSFont
@@ -312,6 +386,7 @@ final class AtticTokenFieldView: NSView {
 
     let textView: AtticTokenTextView
     private let scrollView = NSScrollView()
+    private let clip = AtticLineClipView()
     private let layoutManager = AtticChipLayoutManager()
     private var style: Style?
     private var chips: [AtticTokenChip] = []
@@ -322,6 +397,11 @@ final class AtticTokenFieldView: NSView {
     private var fadeTimer: Timer?
     private var fadeStart: Date?
     private var fadeFrom: [CGFloat] = []
+    /// Wrapping (a composer's field): its one-line height, its most lines,
+    /// and who hears the height it needs.
+    private var wrapping: (minHeight: CGFloat, maxLines: Int, changed: (CGFloat) -> Void)?
+    private var measuredHeight: CGFloat?
+    private(set) var isInLayout = false
 
     override init(frame: NSRect) {
         let storage = NSTextStorage()
@@ -352,6 +432,12 @@ final class AtticTokenFieldView: NSView {
         scrollView.hasVerticalScroller = false
         scrollView.horizontalScrollElasticity = .none
         scrollView.verticalScrollElasticity = .none
+        scrollView.contentView = clip
+        // O5-02: the scroll view turned off the background of the clip it
+        // had, not this one. A clip draws the control background (white in
+        // Light, black in Dark) by default: the text sits on the composer's
+        // own surface instead.
+        clip.drawsBackground = false
         scrollView.documentView = textView
         scrollView.focusRingType = .none
         addSubview(scrollView)
@@ -364,10 +450,84 @@ final class AtticTokenFieldView: NSView {
         NSSize(width: NSView.noIntrinsicMetric, height: ceil(layoutManager.defaultLineHeight(for: style?.font ?? .systemFont(ofSize: 13))))
     }
 
+    private var lineHeight: CGFloat {
+        ceil(layoutManager.defaultLineHeight(for: style?.font ?? .systemFont(ofSize: 13)))
+    }
+
+    /// The clip the text scrolls in (tests).
+    var textClip: NSClipView { clip }
+
+    /// Makes the field wrap (O17-05): the text breaks at the field's width
+    /// and the field asks for one more line each time it does.
+    func wrap(minHeight: CGFloat, maxLines: Int, changed: @escaping (CGFloat) -> Void) {
+        wrapping = (minHeight, maxLines, changed)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.textContainer?.widthTracksTextView = true
+        scrollView.verticalScrollElasticity = .none
+        needsLayout = true
+    }
+
+    /// Lays the text out at the field's width and tells the host when the
+    /// height it needs changed. One layout of what typing already lays out.
+    func measureWrappedHeight() {
+        guard let wrapping, bounds.width > 0, let container = textView.textContainer else { return }
+        if abs(container.size.width - bounds.width) > 0.5 {
+            container.size = NSSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
+        }
+        layoutManager.ensureLayout(for: container)
+        let used = layoutManager.usedRect(for: container).height
+        let lines = max(1, Int((used / lineHeight - 0.01).rounded(.up)))
+        let height = AtticTokenFieldGrowth.height(lines: lines, lineHeight: lineHeight,
+                                                  minHeight: wrapping.minHeight, maxLines: wrapping.maxLines)
+        guard height != measuredHeight else { return }
+        measuredHeight = height
+        wrapping.changed(height)
+    }
+
+    /// The lines the text takes at the field's width (tests).
+    var wrappedLineCount: Int {
+        guard let container = textView.textContainer else { return 1 }
+        layoutManager.ensureLayout(for: container)
+        return max(1, Int((layoutManager.usedRect(for: container).height / lineHeight - 0.01).rounded(.up)))
+    }
+
     override func layout() {
+        isInLayout = true
+        defer { isInLayout = false }
         super.layout()
+        let lineHeight = lineHeight
+        if let wrapping {
+            // The text keeps the one-line field's top and bottom room, as
+            // room around the clip, not inside the text (V-12): the clip
+            // is whole lines tall at the most lines and scrolls by whole
+            // lines, so no line is ever cut and no sliver of the line
+            // above shows. It keeps the insertion point in view while the
+            // field is shorter than its text (past the last line, or
+            // growing).
+            let pad = max(0, (wrapping.minHeight - lineHeight) / 2)
+            scrollView.frame = bounds.insetBy(dx: 0, dy: pad)
+            clip.lineHeight = lineHeight
+            let visible = scrollView.frame.height
+            textView.textContainerInset = .zero
+            textView.minSize = NSSize(width: bounds.width, height: visible)
+            textView.maxSize = NSSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
+            textView.frame.size.width = bounds.width
+            measureWrappedHeight()
+            if let container = textView.textContainer {
+                let content = layoutManager.usedRect(for: container).height
+                textView.frame.size.height = max(visible, ceil(content))
+            }
+            if textView.frame.height <= visible + 0.5 {
+                scrollView.contentView.scroll(to: .zero)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            } else {
+                textView.scrollRangeToVisible(textView.selectedRange())
+            }
+            return
+        }
         scrollView.frame = bounds
-        let lineHeight = ceil(layoutManager.defaultLineHeight(for: style?.font ?? .systemFont(ofSize: 13)))
+        clip.lineHeight = nil
         let top = max(0, (bounds.height - lineHeight) / 2)
         textView.textContainerInset = NSSize(width: 0, height: top)
         textView.minSize = NSSize(width: bounds.width, height: bounds.height)
@@ -479,6 +639,62 @@ extension NSAttributedString.Key {
     static let atticDateIcon = NSAttributedString.Key("AtticDateIcon")
 }
 
+/// A wrapping composer's clip (V-12): it scrolls by whole lines, so a
+/// grown field never shows half a line at its bottom or a sliver of the
+/// line above at its top. Sideways (one line) it scrolls freely.
+final class AtticLineClipView: NSClipView {
+    var lineHeight: CGFloat?
+
+    /// Every scroll comes here (the insertion point kept in view, a wheel,
+    /// `scroll(to:)`): it lands on a whole line.
+    override func scroll(to newOrigin: NSPoint) {
+        super.scroll(to: snapped(newOrigin))
+    }
+
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        rect.origin = snapped(rect.origin, height: rect.height)
+        return rect
+    }
+
+    /// A clip resized by the bar's spring keeps its origin wherever the
+    /// spring left it: it settles back on a line.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        let origin = snapped(bounds.origin)
+        if origin != bounds.origin { super.scroll(to: origin) }
+    }
+
+    private func snapped(_ origin: NSPoint, height: CGFloat? = nil) -> NSPoint {
+        guard let lineHeight, lineHeight > 0 else { return origin }
+        let limit = (documentView?.frame.height ?? 0) - (height ?? bounds.height)
+        return NSPoint(x: origin.x, y: AtticLineSnap.offset(origin.y, line: lineHeight, limit: limit))
+    }
+}
+
+/// Whole-line scrolling for the growing composers (V-12, pure): the
+/// nearest whole line, never past the last one.
+@MainActor
+enum AtticLineSnap {
+    /// A font's line pitch as the composers lay it out (rounded up), kept
+    /// for the last font asked about: drawing asks on every frame.
+    private static var cached: (font: NSFont, line: CGFloat)?
+
+    static func lineHeight(of font: NSFont) -> CGFloat {
+        if let cached, cached.font == font { return cached.line }
+        let line = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        cached = (font, line)
+        return line
+    }
+
+    nonisolated static func offset(_ y: CGFloat, line: CGFloat, limit: CGFloat) -> CGFloat {
+        guard line > 0 else { return y }
+        let snapped = (y / line).rounded() * line
+        let last = (max(0, limit) / line).rounded(.down) * line
+        return max(0, min(snapped, last))
+    }
+}
+
 /// Draws a date's calendar icon in the room kept before it (owner item 15,
 /// option H): decoration, not a character, in the piece's secondary ink,
 /// faded by its progress.
@@ -532,6 +748,12 @@ final class AtticTokenTextView: NSTextView {
     /// nothing anywhere (not the window's, which outlives it); ⌘Z and the
     /// Edit menu reach the owner's draft history through `undo(_:)`.
     override var undoManager: UndoManager? { nil }
+
+    /// O14-01: one click on a panel that is not key both makes it key and
+    /// acts here (`AtticPanel.acceptsEveryFirstMouse`).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        AtticPanel.acceptsEveryFirstMouse(in: window) || super.acceptsFirstMouse(for: event)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
@@ -650,7 +872,51 @@ final class AtticTokenTextView: NSTextView {
         passUp(#selector(cancelOperation(_:)), sender)
     }
 
+    // Files dragged onto a composer's field wait for its new task, as a
+    // paste does (O17-06); a plain text view would type their paths.
+
+    private func draggedFiles(_ sender: NSDraggingInfo) -> [NSItemProvider]? {
+        guard owner?.parent.actions.pasteFiles != nil else { return nil }
+        let providers = AtticPastedFiles.providers(from: sender.draggingPasteboard, filesOnly: true)
+        return providers.isEmpty ? nil : providers
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard draggedFiles(sender) != nil else { return super.draggingEntered(sender) }
+        owner?.parent.actions.fileDragTargeted?(true)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard draggedFiles(sender) != nil else { return super.draggingUpdated(sender) }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        owner?.parent.actions.fileDragTargeted?(false)
+        super.draggingExited(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        draggedFiles(sender) != nil || super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let providers = draggedFiles(sender) else { return super.performDragOperation(sender) }
+        owner?.parent.actions.fileDragTargeted?(false)
+        return owner?.parent.actions.pasteFiles?(providers) == true
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        owner?.parent.actions.fileDragTargeted?(false)
+        super.concludeDragOperation(sender)
+    }
+
     override func paste(_ sender: Any?) {
+        if let take = owner?.parent.actions.pasteFiles {
+            let providers = AtticPastedFiles.providers(from: .general)
+            if !providers.isEmpty, take(providers) { return }
+        }
         if let string = NSPasteboard.general.string(forType: .string),
            string.split(whereSeparator: \.isNewline).filter({ !$0.trimmingCharacters(in: .whitespaces).isEmpty }).count > 1,
            owner?.parent.actions.multilinePaste(string) == true {
@@ -708,7 +974,7 @@ struct AtticChipText: View {
 }
 
 enum AtticTokenFieldMetrics {
-    /// The field's height inside the add bar.
+    /// The field's height inside the add bar (one line).
     static let height: CGFloat = 20
     /// A date's calendar icon (option H): the size of a details-line icon
     /// a step up for the body text, 3 pt before the date's first letter.
@@ -716,4 +982,29 @@ enum AtticTokenFieldMetrics {
     static let dateIconGap: CGFloat = 3
     /// The icon's fade and its room opening (the popover motion's length).
     static let iconFade: TimeInterval = 0.18
+}
+
+/// What a paste into a composer holds as files (O17-06): copied files
+/// (Finder), or an image with no text beside it (a screenshot, an image
+/// copied in Preview). Text, and text with an image beside it, pastes as
+/// text. Read from the pasteboard given, so tests never touch the general
+/// one.
+enum AtticPastedFiles {
+    /// `filesOnly`: a drag, where a file or an image is the whole point
+    /// even with text beside it (a browser's image drag carries its URL).
+    static func providers(from pasteboard: NSPasteboard, filesOnly: Bool = false) -> [NSItemProvider] {
+        let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if !urls.isEmpty {
+            return urls.map { NSItemProvider(object: $0 as NSURL) }
+        }
+        guard filesOnly || pasteboard.string(forType: .string) == nil else { return [] }
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            guard let data = pasteboard.data(forType: type),
+                  let uti = UTType(type.rawValue) else { continue }
+            let provider = NSItemProvider(item: data as NSData, typeIdentifier: uti.identifier)
+            provider.suggestedName = String(localized: "Pasted Image")
+            return [provider]
+        }
+        return []
+    }
 }

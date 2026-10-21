@@ -6,11 +6,65 @@ import XCTest
 /// The first keystroke's cost, headless (round 4: no screen): the Tasks
 /// page hosted in an unordered window over a 500-task list, the add bar's
 /// real text view, each keystroke followed by the page's layout and a draw
-/// pass. Prints what it measures (`ATTIC_KEYSTROKE`) and holds the budget
-/// loosely, so a regression back to the strip-building cost shows here.
+/// pass. The median of fresh hosts compares with a same-job reference.
 @MainActor
 final class TasksKeystrokeCostTests: XCTestCase {
     private var window: NSWindow?
+
+    #if !ATTIC_COST_REFERENCE_HOST
+    func testPerf2DraftTypingDoesNotWriteTheStore() throws {
+        let store = try makeTestStore()
+        let task = try XCTUnwrap(store.create(title: "Original"))
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let revision = store.revision
+        var pageChanges = 0
+        let observation = model.objectWillChange.sink { pageChanges += 1 }
+        defer { observation.cancel() }
+        for key in "twenty five ordinary keys" { model.addBar.text.append(key) }
+        print("PERF2_TASK_ADD keys=25 page_publications=\(pageChanges) store_revisions=\(store.revision - revision)")
+        XCTAssertEqual(pageChanges, 0, "the add bar owns its draft; the list does not observe each key")
+        XCTAssertEqual(store.revision, revision)
+
+        model.beginEditingTitle(task.id)
+        pageChanges = 0
+        for key in "twenty five ordinary keys" { model.editingTitle.append(key) }
+        print("PERF2_TASK_RENAME keys=25 page_publications=\(pageChanges) store_revisions=\(store.revision - revision)")
+        XCTAssertEqual(pageChanges, 0, "only the edited row observes rename keys")
+        XCTAssertEqual(store.revision, revision, "typing a rename must not save per key")
+        XCTAssertEqual(task.title, "Original")
+        XCTAssertTrue(model.commitTitle())
+        XCTAssertEqual(store.task(withID: task.id)?.title, "Originaltwenty five ordinary keys")
+
+        let (hostModel, _, hosting) = try page(tasks: 500, addBarFocused: false)
+        let id = try XCTUnwrap(hostModel.rows(for: .now).first?.id)
+        hostModel.beginEditingTitle(id)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        hosting.layoutSubtreeIfNeeded()
+        func titleField(in view: NSView) -> AtticTokenTextView? {
+            if let field = view as? AtticTokenTextView, field.accessibilityIdentifier() == "AtticTitleField" { return field }
+            for child in view.subviews { if let field = titleField(in: child) { return field } }
+            return nil
+        }
+        let field = try XCTUnwrap(titleField(in: hosting))
+        window?.makeFirstResponder(field)
+        field.setSelectedRange(NSRange(location: field.string.utf16.count, length: 0))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        hosting.layoutSubtreeIfNeeded()
+        var hostChanges = 0
+        var cellChanges = 0
+        let pageObservation = hostModel.objectWillChange.sink { hostChanges += 1 }
+        let cellsObservation = hostModel.cellUpdates.objectWillChange.sink { cellChanges += 1 }
+        defer { pageObservation.cancel(); cellsObservation.cancel() }
+        let times = "twenty five ordinary keys".map { keystroke(String($0), into: field, hosting: hosting) }
+        print("PERF3_RENAME_FRAME keys=25 page_publications=\(hostChanges) all_cells_publications=\(cellChanges) median_ms=\(TasksFrameCostTests.median(times)) raw_ms=\(times)")
+        XCTAssertEqual(hostChanges, 0)
+        XCTAssertEqual(cellChanges, 0)
+        XCTAssertTrue(hostModel.editingTitle.hasSuffix("twenty five ordinary keys"))
+        XCTAssertTrue(hostModel.commitTitle())
+        XCTAssertTrue(hostModel.store.task(withID: id)?.title.hasSuffix("twenty five ordinary keys") == true)
+
+    }
+    #endif
 
     override func tearDown() async throws {
         window?.close()
@@ -22,14 +76,19 @@ final class TasksKeystrokeCostTests: XCTestCase {
         override var isKeyWindow: Bool { true }
     }
 
-    private func page(tasks count: Int) throws -> (model: TasksPageModel, field: AtticTokenTextView, hosting: NSView) {
+    private func page(tasks count: Int, addBarFocused: Bool = true) throws -> (model: TasksPageModel, field: AtticTokenTextView, hosting: NSView) {
+        // This fixture is also overlaid on historical cost hosts whose
+        // TestSupport predates the shared key-window helper.
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1 and an exclusive desktop")
+        }
         let store = try makeTestStore()
         for index in 0..<count { _ = store.create(title: "Task number \(index)") }
         let library = AtticLibrary(tasks: store)
         let model = TasksPageModel(library: library)
         let size = CGSize(width: 344, height: 520)
         let root = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
-                             addBarFocused: .constant(true))
+                             addBarFocused: .constant(addBarFocused))
             .frame(width: size.width, height: size.height)
             .atticDesign(.default)
         let hosting = NSHostingView(rootView: root)
@@ -65,15 +124,18 @@ final class TasksKeystrokeCostTests: XCTestCase {
     }
 
     func testTheFirstKeystrokeCostsAboutWhatTheOthersDo() throws {
-        let (_, field, hosting) = try page(tasks: 500)
-        var times: [Double] = []
-        for character in "quiet probe" { times.append(keystroke(String(character), into: field, hosting: hosting)) }
-        let rest = times.dropFirst().sorted()
-        let median = rest[rest.count / 2]
-        print(String(format: "ATTIC_KEYSTROKE first %.1f ms, then median %.1f ms (500 tasks)", times[0], median))
-        // Loose: the first keystroke (the strip appearing, the list making
-        // room) may cost a few frames, never the 70+ ms it did.
-        XCTAssertLessThan(times[0], 60, "first keystroke \(times[0]) ms")
+        var first: [Double] = []
+        for _ in 0..<3 {
+            let (_, field, hosting) = try page(tasks: 500)
+            var times: [Double] = []
+            for character in "quiet probe" { times.append(keystroke(String(character), into: field, hosting: hosting)) }
+            first.append(times[0])
+            print("ATTIC_KEYSTROKE raw_ms=\(times)")
+            window?.close()
+        }
+        // Typical first-key cost, compared with the same-job reference.
+        print("ATTIC_INTEGRATION_COST first-keystroke median_ms=\(TasksFrameCostTests.median(first))")
+        print("ATTIC_COST_SAMPLES metric=first-keystroke raw_ms=\(first)")
     }
 
     /// Where the first keystroke's time goes (printed, not asserted).

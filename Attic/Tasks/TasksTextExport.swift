@@ -24,6 +24,9 @@ struct TasksTextExport: Equatable {
         /// The priority's name, or nil for none.
         var priority: String?
         var subtasks: [Subtask] = []
+        /// The task's files (O17-15): a drag out carries them beside the
+        /// text, as file promises; the text itself never names them.
+        var files: [TaskImageReference] = []
 
         /// Date, tags and priority, in that order, as one line.
         var details: String? {
@@ -69,8 +72,9 @@ struct TasksTextExport: Equatable {
         let body = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let bold = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
         let text = NSMutableAttributedString()
+        let separator = items.allSatisfy(\.isTitleOnly) ? "\n" : "\n\n"
         for (index, item) in items.enumerated() {
-            if index > 0 { text.append(NSAttributedString(string: items.allSatisfy(\.isTitleOnly) ? "\n" : "\n\n")) }
+            if index > 0 { text.append(NSAttributedString(string: separator)) }
             text.append(NSAttributedString(string: item.title, attributes: [.font: bold]))
             if let details = item.details {
                 text.append(NSAttributedString(string: "\n" + details, attributes: [.font: body, .foregroundColor: NSColor.secondaryLabelColor]))
@@ -92,9 +96,15 @@ struct TasksTextExport: Equatable {
         return item
     }
 
+    /// A native drag offers the text as a promised file as well as inline
+    /// text. Finder can receive every item as a file; text editors can keep
+    /// using the plain text, Markdown or RTF on this same item.
+    func dragWriter() -> NSPasteboardWriting { TasksTextFilePromise(export: self) }
+
     /// What ⌘C puts on the pasteboard: the titles as plain text (the add
     /// bar's round trip), the full text as Markdown and RTF.
     func write(to pasteboard: NSPasteboard) {
+        let rtf = self.rtf
         pasteboard.clearContents()
         pasteboard.declareTypes([.string, Self.markdownType] + (rtf == nil ? [] : [.rtf]), owner: nil)
         pasteboard.setString(titles, forType: .string)
@@ -119,5 +129,81 @@ struct TasksTextExport: Equatable {
             result.append(character)
         }
         return result
+    }
+}
+
+/// The leading task item must have a file representation too: a bare text
+/// item beside attachment promises does not promise Finder the task text.
+/// Snapshot the representations before the drag; fulfilling the promise
+/// neither consults the task store nor exposes any private file URL.
+private final class TasksTextFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate, @unchecked Sendable {
+    private let plain: String
+    private let markdown: String
+    private let richText: Data?
+    private let filename: String
+    private static let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Attic task text promises"
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
+
+    init(export: TasksTextExport) {
+        plain = export.plain
+        markdown = export.markdown
+        richText = export.rtf
+        let title = export.items.count == 1 ? export.items[0].title : String(localized: "Tasks")
+        let suffix = ".txt"
+        var name = AttachmentFileStore.sanitizedFilename(title)
+        // Task titles can exceed a filesystem filename. Reserve the suffix
+        // within a 255-byte name, without cutting a Unicode character.
+        while name.utf8.count + suffix.utf8.count > 255 { name.removeLast() }
+        if name.isEmpty { name = "Task" }
+        filename = name + suffix
+        super.init()
+        fileType = UTType.utf8PlainText.identifier
+        delegate = self
+    }
+
+    private var textTypes: [NSPasteboard.PasteboardType] {
+        [.string, TasksTextExport.markdownType] + (richText == nil ? [] : [.rtf])
+    }
+
+    /// V-13: marks the drag as Attic tasks, so a drop back on the panel
+    /// reads it as tasks (`TaskDropContent.task`), never as files to
+    /// attach: a task released over its own row only springs home. It
+    /// carries nothing (no title or identifier); other apps ignore it.
+    static let taskMarkerType = NSPasteboard.PasteboardType(TaskDragPayload.internalTaskType.identifier)
+
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        super.writableTypes(for: pasteboard) + textTypes + [Self.taskMarkerType]
+    }
+
+    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        textTypes.contains(type) || type == Self.taskMarkerType ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
+    }
+
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        switch type {
+        case .string: plain
+        case TasksTextExport.markdownType: markdown
+        case .rtf: richText
+        case Self.taskMarkerType: Data()
+        default: super.pasteboardPropertyList(forType: type)
+        }
+    }
+
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType type: String) -> String { filename }
+
+    func operationQueue(for provider: NSFilePromiseProvider) -> OperationQueue { Self.queue }
+
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL,
+                             completionHandler: @escaping (Error?) -> Void) {
+        do {
+            try Data(plain.utf8).write(to: url, options: .withoutOverwriting)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
     }
 }

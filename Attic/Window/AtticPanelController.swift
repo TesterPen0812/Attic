@@ -154,6 +154,8 @@ enum PanelHideRequestResult: Equatable {
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
+    /// Whether the panel is on screen (a page switch then animates).
+    var isPanelVisible: Bool { panel.isVisible }
     /// Tests: the panel's window, to send it a swipe as the system does.
     var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0
@@ -165,7 +167,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let chromeInteractionState: PanelChromeInteractionState
     private let settings: AppSettings
     private let uiState: PanelUIState
-    let subtaskPanels: SubtaskPanelController
     /// The panel's Undo toast; dismissed whenever the panel hides.
     let toasts: PanelToastCenter
     private var cancellables: Set<AnyCancellable> = []
@@ -193,6 +194,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// Where the pointer is, for the click-through hit test. Tests place it.
     var pointerLocation: () -> CGPoint = { NSEvent.mouseLocation }
     private var isResamplingPassthrough = false
+    /// O14-01: the panel became key under a press; its key look waits for
+    /// the release.
+    private var keyLookAwaitsRelease = false
 
     private var contentContainer: AtticPanelContentContainer? {
         panel.contentView as? AtticPanelContentContainer
@@ -228,11 +232,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             backing: .buffered,
             defer: true
         )
-        subtaskPanels = SubtaskPanelController(
-            store: store,
-            uiState: uiState,
-            settings: settings
-        )
         hostingView = AtticPanelHostingView(
             rootView: AtticPanelView(
                 store: store,
@@ -242,7 +241,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 chromeInteractionState: chromeInteractionState,
                 uiState: uiState,
                 settings: settings,
-                subtaskPanels: subtaskPanels,
                 toasts: toasts,
                 // The Tasks page remembers its page and views (L7).
                 tasksPageState: TasksPageState(memory: tasksMemory)
@@ -271,8 +269,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let top = corner == .topRight || corner == .topLeft
         let proposed = CGRect(x: right ? frame.maxX + 8 : frame.minX - 36,
                               y: top ? frame.maxY - 28 : frame.minY, width: 28, height: 28)
-        let target = SubtaskPanelLayout.avoidingOverlap(proposed, occupied: [frame],
-            within: screen.visibleFrame.insetBy(dx: 4, dy: 4), gap: 8)
+        let target = PanelGeometry.avoidingOverlap(proposed, occupied: [frame],
+            within: TestPresentationPolicy.placementFrame(screen.visibleFrame).insetBy(dx: 4, dy: 4), gap: 8)
         let indicator = dockingIndicator ?? NSPanel(contentRect: target,
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         indicator.isOpaque = false
@@ -302,16 +300,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    var visibleFrame: CGRect? {
-        panel.isVisible ? panel.visibleContentFrame : nil
-    }
-
-    /// Pointer inside the open transient subtask surface counts as inside
-    /// the panel for auto-hide purposes: the checklist is useless without
-    /// its anchor. The pinned window is excluded — it is independent.
-    func auxiliarySurfaceContains(_ point: CGPoint) -> Bool {
-        subtaskPanels.containsTransientPoint(point)
-    }
 
     func containsScreenPoint(_ point: CGPoint) -> Bool {
         guard panel.isVisible, panel.frame.contains(point) else { return false }
@@ -337,7 +325,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // activity; no additional polling or rendering loop is needed.
         if panel.isVisible, !isLiveResizing, !isWindowDragging,
            let screen = panel.screen ?? currentScreen,
-           lastUsableFrame != screen.visibleFrame {
+           lastUsableFrame != TestPresentationPolicy.placementFrame(screen.visibleFrame) {
             recoverPanelInsideUsableArea(preferredScreen: screen)
         }
         guard !isLiveResizing else {
@@ -396,6 +384,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             PerformanceSignposts.cancelPageSwitch()
             return false
         }
+        if uiState.selectedSection.isNotes { noteDraft.pages.present() }
         let visibleFrame = workArea.visibleFrame
         let priorFrame = panel.visibleContentFrame
         currentCorner = corner
@@ -500,7 +489,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let screen = panel.screen ?? currentScreen else {
             return .rejected(.missingUsableScreen)
         }
-        guard noteDraft.flush() else {
+        guard noteDraft.prepareToLeave(.hide) else {
             return .rejected(.draftFlushFailed)
         }
         clearInteractiveDismissal()
@@ -518,7 +507,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let generation = visibilityTransition.beginHideTransition(completion: completion)
         isShowing = false
         needsResizeAfterShowing = false
-        let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: screen.visibleFrame)
+        let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: TestPresentationPolicy.placementFrame(screen.visibleFrame))
         if !framesMatch(panel.visibleContentFrame, safeFrame) {
             panel.setVisibleContentFrame(safeFrame, display: true)
         }
@@ -526,7 +515,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Move its fixed-size native frame back while the same live subtree
         // collapses, so every hide reason converges on the actual dock anchor.
         let targetFrame = PanelGeometry.panelFrame(
-            in: screen.visibleFrame, size: safeFrame.size, corner: currentCorner
+            in: TestPresentationPolicy.placementFrame(screen.visibleFrame), size: safeFrame.size, corner: currentCorner
         )
         let reducedFade = hideFadesWhenReduced
         hideFadesWhenReduced = false
@@ -539,7 +528,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.uiState.panelDidHide()
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
-                self.subtaskPanels.mainPanelDidHide()
                 self.toasts.dismiss()
                 self.schedulePageRelease()
                 self.visibilityTransition.completeHideTransition(generation)
@@ -606,6 +594,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return false }
             return redo ? library.undo.canRedo(in: .tasks) : library.undo.canUndo(in: .tasks)
         }
+        panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
             self.clearInteractiveDismissal()
@@ -651,7 +640,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         panel.delegate = self
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        subtaskPanels.attach(panel: panel, hostView: hostingView)
     }
 
     private func bindContentSize() {
@@ -696,7 +684,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                     hostingView.cancelActiveInteraction(reason: .screenChanged)
                     recoverPanelInsideUsableArea()
                 case .applicationActivated:
-                    recoverPanelInsideUsableArea()
+                    recoverPanelInsideUsableArea(preservingPlacement: true)
                 case .applicationDeactivated:
                     panel.cancelTrackpadSwipe()
                     hostingView.cancelActiveInteraction(reason: .applicationDeactivated)
@@ -821,12 +809,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let resizedPanel = notification.object as? NSWindow else { return }
         uiState.updatePanelSize(((resizedPanel as? AtticPanel)?.visibleContentFrame ?? resizedPanel.frame).size)
-        subtaskPanels.mainPanelFrameDidChange()
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidMove(_ notification: Notification) {
-        subtaskPanels.mainPanelFrameDidChange()
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
@@ -903,7 +889,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
             return frame
         }
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         if currentScreen !== screen {
             currentScreen = screen
             updateResizeLimits(in: visibleFrame)
@@ -937,7 +923,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         currentScreen = screen
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         updateResizeLimits(in: visibleFrame)
         let releaseAction = PanelDockingPolicy.releaseAction(
             velocity: velocity,
@@ -1042,7 +1028,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             isApplyingInteractiveCorner = false
         }
 
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         updateResizeLimits(in: visibleFrame)
         let targetFrame = PanelGeometry.workAreaPlacement(
             preferredSize: CGSize(
@@ -1131,14 +1117,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func screen(containing point: CGPoint) -> NSScreen? {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+            ?? NSScreen.screens.first { NSMouseInRect(point, TestPresentationPolicy.placementFrame($0.frame), false) }
             ?? NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
     }
 
     private func bestScreen(for frame: CGRect) -> NSScreen? {
+        let frame = TestPresentationPolicy.offscreenFrame(frame)
         let screens = NSScreen.screens
         let overlapCandidate = screens
             .map { screen in
-                let overlap = screen.frame.intersection(frame)
+                let overlap = TestPresentationPolicy.placementFrame(screen.frame).intersection(frame)
                 return (screen, max(0, overlap.width) * max(0, overlap.height))
             }
             .max { $0.1 < $1.1 }
@@ -1147,7 +1135,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         let frameCenter = CGPoint(x: frame.midX, y: frame.midY)
         return screens.min {
-            squaredDistance(from: frameCenter, to: $0.frame) < squaredDistance(from: frameCenter, to: $1.frame)
+            squaredDistance(from: frameCenter, to: TestPresentationPolicy.placementFrame($0.frame))
+                < squaredDistance(from: frameCenter, to: TestPresentationPolicy.placementFrame($1.frame))
         }
     }
 
@@ -1167,14 +1156,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 ?? panel.screen
                 ?? currentScreen
                 ?? NSScreen.main else { return nil }
-        let visibleFrame = screen.visibleFrame
+        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
         currentScreen = screen
         updateResizeLimits(in: visibleFrame)
         return PanelWorkAreaSnapshot(visibleFrame: visibleFrame)
     }
 
     private func recoverPanelInsideUsableArea(
-        preferredScreen: NSScreen? = nil
+        preferredScreen: NSScreen? = nil,
+        preservingPlacement: Bool = false
     ) {
         let frameBeforeWorkAreaRefresh = panel.visibleContentFrame
         guard let workArea = refreshCurrentWorkArea(
@@ -1192,7 +1182,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         let targetFrame: CGRect
-        if isWindowDragging || isLiveResizing {
+        if preservingPlacement, workArea.visibleFrame.contains(frameBeforeWorkAreaRefresh) {
+            return
+        }
+        if preservingPlacement || isWindowDragging || isLiveResizing {
             targetFrame = PanelGeometry.constrainedFrame(
                 panel.visibleContentFrame,
                 to: workArea.visibleFrame
@@ -1225,10 +1218,27 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        uiState.setPanelKey(true)
+        // O14-01 (owner, 2026-10-14): one click on a panel that is not key
+        // must act. That press makes it key, and the key look (a Solid
+        // panel's corner buttons turn from flat to glass) redrew the very
+        // control being pressed, so its press was lost and the click only
+        // focused the panel. The look follows once the button is up.
+        if panel.isPressing {
+            keyLookAwaitsRelease = true
+        } else {
+            uiState.setPanelKey(true)
+        }
+    }
+
+    /// The press that made the panel key ended: it shows as key now.
+    private func pressEnded() {
+        guard keyLookAwaitsRelease else { return }
+        keyLookAwaitsRelease = false
+        if panel.isKeyWindow { uiState.setPanelKey(true) }
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        keyLookAwaitsRelease = false
         uiState.setPanelKey(false)
         hostingView.cancelActiveInteraction(reason: .windowDeactivated)
     }

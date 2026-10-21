@@ -42,7 +42,7 @@ final class PanelIntegrationTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         let gate = PersistenceGate()
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore()))
         let canvasStore = CanvasStore(container: container)
         let canvasSession = CanvasSession(store: canvasStore)
         let noteDraft = NoteDraftController(noteStore: notes)
@@ -88,6 +88,21 @@ final class PanelIntegrationTests: XCTestCase {
         _ = panel.controller.requestHide { hidden = $0 == .hidden }
         spin(until: { hidden })
         XCTAssertTrue(hidden)
+    }
+
+    func testR12FilesHoldAllowsAgentShowAndTrackpadSwipeWhileThePanelIsKey() throws {
+        let panel = try makePanel()
+        panel.uiState.setPanelKey(true)
+        panel.uiState.setInteractionLock(.taskFilesVisible, isActive: true)
+        XCTAssertFalse(panel.presenter.isUserTypingInPanel)
+        XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(reasons: panel.uiState.interactionLockReasons,
+            pointerInside: false, secondsSinceKeyboardInput: 60))
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 0))
+        XCTAssertEqual(panel.controller.panelForTesting.canBeginTrackpadSwipe?(event), true)
+        panel.uiState.setInteractionLock(.taskEditing, isActive: true)
+        XCTAssertTrue(panel.presenter.isUserTypingInPanel, "real editing still protects the user")
+        XCTAssertEqual(panel.controller.panelForTesting.canBeginTrackpadSwipe?(event), false)
     }
 
     // MARK: Agent `show` over the real panel
@@ -144,8 +159,9 @@ final class PanelIntegrationTests: XCTestCase {
         let second = try XCTUnwrap(panel.canvasSession.createCanvas(name: "Second"))
         XCTAssertTrue(panel.canvasSession.selectCanvas(first.id))
         panel.uiState.selectSection(.notes)
-        XCTAssertTrue(panel.noteDraft.beginNew())
-        panel.noteDraft.body = "Keep this draft"
+        panel.noteDraft.pages.start()
+        XCTAssertTrue(panel.noteDraft.pages.newNote())
+        XCTAssertTrue(try XCTUnwrap(panel.noteDraft.pages.active).engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Keep this draft"), name: "Type"))
         panel.gate.shouldFail = true
 
         let tools = AgentShellTools()
@@ -159,8 +175,8 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertEqual(panel.uiState.selectedSection, .notes)
         XCTAssertEqual(panel.canvasSession.selectedCanvasID, first.id, "a refused reveal selects no board")
         XCTAssertFalse(panel.controller.isVisibleForPerformanceProbe, "nothing was revealed")
-        XCTAssertTrue(panel.noteDraft.isActive)
-        XCTAssertEqual(panel.noteDraft.body, "Keep this draft")
+        XCTAssertNotNil(panel.noteDraft.pages.active)
+        XCTAssertEqual(panel.noteDraft.pages.active?.engine.plainText, "Keep this draft")
 
         // Saving works again: the same request shows the board.
         panel.gate.shouldFail = false

@@ -1,8 +1,8 @@
 import AppKit
 import XCTest
 
-/// The lists' edges on screen: Clean cut, D1's fade before the controls
-/// (owner, 2026-10-03, reversing D4b's system soft edge). The soft edge is a
+/// Clean cut with the owner's revised 2026-10-06 scroll-under rule:
+/// full content under glass, short fades behind plain labels and at edges. The system soft edge is a
 /// preview identity's choice only, and CI runs the official identity, which
 /// ignores `ATTIC_UI_TEST_SCROLL_EDGES`, so every capture here is Clean cut,
 /// whatever `edge` a fixture names. These captures are the evidence the
@@ -100,9 +100,12 @@ final class ScrollEdgeUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
-    /// Window-server pixels: scrolling changes row ink in the body, but
-    /// must change virtually no ink behind either the tabs or strip pills.
-    func testRowsDisappearBeforeTheTabsAndMetadataPills() throws {
+    /// Window-server pixels: N-6 D (owner, 2026-10-11;
+    /// phaseX/orchestrator-decisions.md) supersedes the 10-06 requirement
+    /// for readable rows under glass. Metadata pills keep rows out; plain
+    /// labels and panel edges retain their fade checks. Body movement
+    /// prevents an empty capture passing.
+    func testRowsStayOutOfMetadataPillsAndFadeBehindPlainTabsAndPanelEdges() throws {
         for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
             let app = launchPixelFixture(surface: surface, mode: mode, edge: "soft")
             defer { app.terminate() }
@@ -119,9 +122,17 @@ final class ScrollEdgeUITests: XCTestCase {
             let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
             middle.hover()
             RunLoop.current.run(until: Date().addingTimeInterval(1))
-            let tabs = app.buttons["tasks-page-now"].frame.union(app.buttons["tasks-page-backlog"].frame)
+            let tabsHit = app.buttons["tasks-page-now"].frame.union(app.buttons["tasks-page-backlog"].frame)
                 .union(app.buttons["tasks-page-done"].frame)
+            // AX reports the comfortable hit target, six points beyond
+            // each label (AtticPageTabsMetrics.hitOutset), not its ink line.
+            // The 16 pt plain line fades; the surrounding ramps return to
+            // full ink and must not be tested as if they were plain labels.
+            XCTAssertEqual(tabsHit.height, 28, accuracy: 0.5)
+            let tabs = tabsHit.insetBy(dx: 6, dy: 6)
+            XCTAssertEqual(tabs.height, 16, accuracy: 0.5)
             let pills = date.frame.union(app.buttons["composer-tag"].frame).union(app.buttons["composer-priority"].frame)
+            print("A38_SCROLL_BANDS hit=\(tabsHit) plain=\(tabs) glass=\(pills)")
             let before = try bitmap(panel)
             save(panel.screenshot(), name: "d1-\(surface)-\(mode)-controls-reference")
             for identifier in ["tasks-page-now", "tasks-page-backlog", "tasks-page-done", "panel-pin-button", "panel-section-picker"] {
@@ -132,20 +143,48 @@ final class ScrollEdgeUITests: XCTestCase {
                               width: panel.frame.width - 110, height: pills.minY - tabs.maxY - 50)
             // One sign advances this list regardless of natural scrolling.
             var moved = false
-            for delta in [CGFloat(-170), 340] {
+            var faintEdges = [Double](repeating: 0, count: 2)
+            var faintLabels = 0.0, strongChangesUnderPills = 0.0
+            // Small phase shifts place glyphs through each narrow edge band,
+            // so a gap between lines is not mistaken for clipping.
+            for delta in [CGFloat(-170), 11, 11, 340] {
                 middle.scroll(byDeltaX: 0, deltaY: delta)
                 RunLoop.current.run(until: Date().addingTimeInterval(1))
                 let after = try bitmap(panel)
                 let movement = changedFraction(before, after, in: body, panel: panel.frame)
                 guard movement > 0.02 else { continue }
                 moved = true
-                XCTAssertLessThan(changedFraction(before, after, in: tabs, panel: panel.frame), 0.003,
-                                  "\(surface) \(mode): row ink behind tabs labels")
-                XCTAssertLessThan(changedFraction(before, after, in: pills, panel: panel.frame), 0.003,
-                                  "\(surface) \(mode): row ink behind metadata pills")
-                save(panel.screenshot(), name: "d1-\(surface)-\(mode)-controls-clear")
+                // The body moves, but the owner's fixed control region
+                // must not receive moving row ink.
+                faintLabels = max(faintLabels, changedFraction(before, after, in: tabs, panel: panel.frame))
+                XCTAssertLessThanOrEqual(changedFraction(before, after, in: pills, panel: panel.frame), 0.0005,
+                                         "\(surface) \(mode): N-6 keeps moving row ink out of the metadata pills")
+                // Plain labels still never carry text-strength changes.
+                XCTAssertLessThan(changedFraction(before, after, in: tabs, panel: panel.frame, threshold: 0.35), 0.002,
+                                  "\(surface) \(mode): never readable under the tabs labels")
+                strongChangesUnderPills = max(strongChangesUnderPills, changedFraction(before, after, in: pills, panel: panel.frame, threshold: 0.35))
+                let topEdge = CGRect(x: panel.frame.minX + 75, y: panel.frame.minY,
+                                     width: panel.frame.width - 110, height: 8)
+                let bottomEdge = CGRect(x: topEdge.minX, y: panel.frame.maxY - 8,
+                                        width: topEdge.width, height: 8)
+                for (index, edge) in [topEdge, bottomEdge].enumerated() {
+                    faintEdges[index] = max(faintEdges[index], changedFraction(before, after, in: edge, panel: panel.frame))
+                    XCTAssertLessThan(changedFraction(before, after, in: edge, panel: panel.frame, threshold: 0.35), 0.002,
+                                      "\(surface) \(mode): ink dissolves at the panel's own edge")
+                }
+                save(panel.screenshot(), name: "revised-\(surface)-\(mode)-pills-clear-labels-faint")
             }
             XCTAssertTrue(moved, "positive control: scrolling visibly changed row ink in the body")
+            // A particular phase can put a gap between glyphs in a band.
+            // The sweep must contain real ink there; every phase must obey
+            // the label/edge upper bounds and keep the pills clear.
+            // N-6 D (owner 2026-10-11): rows fade out before the tabs line and
+            // the panel's edges, so no moving ink reaches them at all.
+            XCTAssertLessThanOrEqual(faintLabels, 0.0005, "\(surface) \(mode): no moving ink behind the plain label line")
+            XCTAssertLessThanOrEqual(strongChangesUnderPills, 0.002, "\(surface) \(mode): no readable row ink sits under glass metadata pills")
+            for (index, faint) in faintEdges.enumerated() {
+                XCTAssertLessThanOrEqual(faint, 0.0005, "\(surface) \(mode): no moving ink at edge \(index)")
+            }
         }
     }
 
@@ -217,12 +256,13 @@ final class ScrollEdgeUITests: XCTestCase {
         return ink
     }
 
-    private func changedFraction(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in rect: CGRect, panel: CGRect) -> Double {
+    private func changedFraction(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, in rect: CGRect, panel: CGRect,
+                                 threshold: CGFloat = 0.05) -> Double {
         var changed = 0
         let total = sample(b, in: rect, panel: panel) { x, y, color in
             guard let other = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return }
             if max(abs(color.redComponent - other.redComponent), abs(color.greenComponent - other.greenComponent),
-                   abs(color.blueComponent - other.blueComponent)) > 0.05 { changed += 1 }
+                   abs(color.blueComponent - other.blueComponent)) > threshold { changed += 1 }
         }
         XCTAssertGreaterThan(total, 100, "a nonempty pixel sample")
         return Double(changed) / Double(max(total, 1))

@@ -1,30 +1,19 @@
 import AppKit
+import Combine
+import Quartz
 import SwiftUI
 import XCTest
 @testable import Attic
 
 /// Phase 1's deep review, the UI fix round: Find from far down a list
-/// (P2-01), the soft edge's pockets over the whole control regions
-/// (P2-02, a preview's choice since Clean cut became the default), one Open Files command for every route (P2-03), a visible
+/// (P2-01), Clean cut's fade over the control regions (A15 replaced D1)
+/// (P2-02, owner A7: no native soft edges), one Open Files command for every route (P2-03), a visible
 /// keyboard focus at every Tab stop (P2-04), the composer strip's values
 /// in full (P3-01) and the pager's test-only settle (code review). Each is
 /// driven the way a person drives it where the hosted page allows: real
 /// key and mouse events through the app's queue, real menus.
 @MainActor
 final class DeepReviewFixTests: XCTestCase {
-    private var savedEdge: AtticScrollEdgeStyle?
-
-    override func tearDown() async throws {
-        if let savedEdge { AtticScrollEdgeLab.shared.style = savedEdge }
-        savedEdge = nil
-        try await super.tearDown()
-    }
-
-    private func useSoftEdge() {
-        if savedEdge == nil { savedEdge = AtticScrollEdgeLab.shared.style }
-        AtticScrollEdgeLab.shared.style = .systemSoft
-    }
-
     private func layout(_ hosted: Hosted) -> PanelPageLayout {
         PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: hosted.height))
     }
@@ -91,12 +80,12 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertFalse(hosted.model.rows(for: .now).isEmpty)
     }
 
-    // MARK: - D1: viewport clears every visible control
+    // MARK: - Revised scroll-under: full ink under glass, faint at labels and edges
 
     func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
-        useSoftEdge()
-        let hosted = try Hosted(height: 520, long: true)
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false)
         defer { hosted.close() }
+        XCTAssertFalse(hosted.window.isKeyWindow)
         let list = try shownList(hosted)
         scrollToEnd(list, hosted)
         let layout = layout(hosted)
@@ -108,39 +97,117 @@ final class DeepReviewFixTests: XCTestCase {
             return list.convert(list.bounds, to: hosted.window.contentView)
         }
         let resting = frame()
-        XCTAssertEqual(resting.minY, TasksViewport.controlsBottom(tabsTop: tabsTop), accuracy: 0.5)
-        XCTAssertEqual(resting.maxY, hosted.height - idle, accuracy: 0.5)
-        let pocketHeights = ScrollEdgeTests.pockets(in: list).map(\.frame.height).sorted()
+        XCTAssertEqual(resting.minY, 0, accuracy: 0.5)
+        XCTAssertEqual(resting.maxY, hosted.height, accuracy: 0.5)
+        XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: tabsTop), accuracy: 0.5)
+        // Clean cut keeps a full viewport; content runs on under every
+        // control (owner, 2026-10-17). Compare two
+        // actual scroll positions in each state, with visible body movement
+        // as a positive control so an empty capture cannot pass.
+        func assertClear(bottom: CGFloat, state: String) throws {
+            let content = try XCTUnwrap(hosted.window.contentView)
+            func capture(_ y: CGFloat) throws -> NSBitmapImageRep {
+                list.contentView.scroll(to: CGPoint(x: 0, y: y))
+                list.reflectScrolledClipView(list.contentView)
+                hosted.spin(0.5)
+                content.layoutSubtreeIfNeeded()
+                let image = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+                content.cacheDisplay(in: content.bounds, to: image)
+                return image
+            }
+            // The long demo has only fourteen added errands. 1,300 scrolls
+            // past its end and captures an empty list, hiding edge regressions.
+            // These two positions keep real row ink through the viewport.
+            var first = try capture(260), second = try capture(200)
+            if state == "idle", ProcessInfo.processInfo.environment["ATTIC_A38_EDGE_OUTPUT"] != nil {
+                let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attic-a38-edges-\(UUID().uuidString)")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try first.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("edge-first.png"))
+                try second.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("edge-second.png"))
+                print("A38_EDGE_ARTIFACTS \(folder.path)")
+            }
+            let scale = CGFloat(first.pixelsWide) / content.bounds.width
+            func difference(top: CGFloat, bottom: CGFloat, threshold: CGFloat = 0.03) -> Double {
+                var changed = 0, total = 0
+                for y in Int(top * scale)..<min(Int(bottom * scale), first.pixelsHigh, second.pixelsHigh) {
+                    for x in 0..<first.pixelsWide {
+                        guard let a = first.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                              let b = second.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        total += 1
+                        // Over white: a near-transparent pixel whose colour
+                        // flips (white at 0.4 % alpha against clear, seen in
+                        // the add bar's band) is not ink.
+                        let (p, q) = (a.alphaComponent, b.alphaComponent)
+                        func over(_ c: CGFloat, _ alpha: CGFloat) -> CGFloat { c * alpha + 1 - alpha }
+                        if max(abs(over(a.redComponent, p) - over(b.redComponent, q)), abs(over(a.greenComponent, p) - over(b.greenComponent, q)),
+                               abs(over(a.blueComponent, p) - over(b.blueComponent, q))) > threshold { changed += 1 }
+                    }
+                }
+                return total == 0 ? 1 : Double(changed) / Double(total)
+            }
+            let bodyTop = TasksViewport.listTop(tabsTop: tabsTop) + 30, bodyBottom = bottom - 30
+            func bodyInk(_ image: NSBitmapImageRep) -> Double {
+                var ink = 0, total = 0
+                for y in Int(bodyTop * scale)..<Int(bodyBottom * scale) {
+                    for x in 0..<image.pixelsWide {
+                        guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        total += 1
+                        if max(1 - c.redComponent, 1 - c.greenComponent, 1 - c.blueComponent) * c.alphaComponent > 0.35 { ink += 1 }
+                    }
+                }
+                return total == 0 ? 0 : Double(ink) / Double(total)
+            }
+            for image in [first, second] {
+                XCTAssertGreaterThan(bodyInk(image), 0.01, "\(state): each capture contains real body ink; neither may be past the list's end")
+            }
+            XCTAssertGreaterThan(difference(top: bodyTop, bottom: bodyBottom), 0.02,
+                                 "\(state): rows actually moved between captures")
+            // Floating controls (owner 2026-10-17, superseding 10-14 and
+            // N-6 D): the rows run on under the header, the tabs' plain line
+            // and the bottom stack, visible through the blur behind them
+            // (which an in-process capture does not draw). The body's
+            // movement above is the positive control.
+            for phase in [CGFloat(0), AtticLayout.rowPitch / 3, AtticLayout.rowPitch * 2 / 3] {
+                if phase > 0 { first = try capture(260 - phase); second = try capture(200 - phase) }
+                XCTAssertGreaterThan(difference(top: 0, bottom: TasksViewport.plainLine(tabsTop: tabsTop).upperBound), 0.0005,
+                                     "\(state): rows run on under the header and the tabs at phase \(phase)")
+                XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
+                                     "\(state): rows run on under the bottom stack at phase \(phase)")
+            }
+            XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
+            XCTAssertEqual(frame(), resting, "\(state): controls never change the viewport")
+        }
+        try assertClear(bottom: hosted.height - idle, state: "idle")
 
-        hosted.press("f", keyCode: 3, modifiers: .command)
+        hosted.model.setSearchQuery(" ", for: .now)
+        hosted.spin(0.8)
         XCTAssertTrue(hosted.searchFieldShown)
-        XCTAssertEqual(frame().minY, resting.minY, accuracy: 0.5, "Find has the same taller control boundary")
-        hosted.press("\u{1B}", keyCode: 53)
+        try assertClear(bottom: hosted.height - idle, state: "Find")
+        hosted.model.setSearchQuery("", for: .now)
 
         hosted.model.addBar = TaskAddBarText(text: "Pay rent tomorrow #home !!")
         hosted.spin(0.8)
         let strip = AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight
-        XCTAssertEqual(frame().maxY, resting.maxY - strip, accuracy: 0.5)
-        XCTAssertEqual(ScrollEdgeTests.pockets(in: list).map(\.frame.height).sorted(), pocketHeights,
-                       "the native fade stays small; the viewport moves above the strip")
+        try assertClear(bottom: hosted.height - idle - strip, state: "metadata strip")
         hosted.model.addBarState.clearDraft()
         hosted.spin(0.8)
-        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        try assertClear(bottom: hosted.height - idle, state: "strip cleared")
 
         let ids = hosted.model.rows(for: .now).prefix(2).map(\.id)
         hosted.model.selectOnly(ids[0])
         hosted.model.selectCopies(ids)
         hosted.spin(0.8)
-        XCTAssertLessThan(frame().maxY, resting.maxY - 20, "the selection bar is excluded too")
+        let bar = AtticSpacing.s8 + AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
+        try assertClear(bottom: hosted.height - idle - bar, state: "selection")
         hosted.model.clearSelection()
         hosted.spin(0.8)
-        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        try assertClear(bottom: hosted.height - idle, state: "selection cleared")
         hosted.model.pasteOffer = TaskPasteOffer("Milk\nEggs\nBread")
         hosted.spin(0.8)
-        XCTAssertLessThan(frame().maxY, resting.maxY - 20, "the paste offer is excluded too")
+        try assertClear(bottom: hosted.height - idle - bar, state: "paste offer")
         hosted.model.dismissPasteOffer()
         hosted.spin(0.8)
-        XCTAssertEqual(frame().maxY, resting.maxY, accuracy: 0.5)
+        try assertClear(bottom: hosted.height - idle, state: "paste offer cleared")
         XCTAssertTrue(ScrollEdgeTests.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty)
     }
 
@@ -150,10 +217,10 @@ final class DeepReviewFixTests: XCTestCase {
     /// click on the row gets), from ⇧⌘I's menu (a real ⇧⌘I, the menu's own
     /// keys) and from ⌘Return: each opens the row's files, once.
     func testOpenFilesOpensFromTheRightClickMenuTheActionsMenuAndCommandReturn() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
-        var opened: [UUID] = []
-        hosted.model.services.openPage = { opened.append($0) }
+        var opened: [UUID] { Array(hosted.model.expandedFiles) }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
         // The right-click menu: the menu SwiftUI shows for a secondary click
         // on the row, its More › Open Files… chosen as AppKit chooses an
@@ -171,13 +238,13 @@ final class DeepReviewFixTests: XCTestCase {
         menu.update()
         let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
         more.update()
-        let open = try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Open Files") }, "holding Open Files…")
+        let open = try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Show Files") }, "holding Show Files")
         more.performActionForItem(at: open)
         hosted.spin(0.5)
         XCTAssertEqual(opened, [row], "the right-click menu's Open Files… opens the row's files")
 
         // ⇧⌘I's menu: down to More (its eleventh item), into it, Return.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         try hosted.clickRow(row, tab: .now)
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let actionTimers = schedule(Array(repeating: down, count: 11) + [("\u{F703}", 124), ("\r", 36)], in: hosted)
@@ -187,7 +254,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(opened, [row], "⇧⌘I's Open Files… opens them the same way")
 
         // ⌘Return on the selected row.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         try hosted.clickRow(row, tab: .now)
         hosted.press("\r", keyCode: 36, modifiers: .command)
         hosted.spin(0.3)
@@ -235,8 +302,7 @@ final class DeepReviewFixTests: XCTestCase {
     func testOpenFilesChosenWithReturnOpensWhileSomethingHasTheKeyboard() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
-        var opened: [UUID] = []
-        hosted.model.services.openPage = { opened.append($0) }
+        var opened: [UUID] { Array(hosted.model.expandedFiles) }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
 
         let keyboardOwner = NSPanel(contentRect: CGRect(x: -6_000, y: -6_000, width: 40, height: 40),
@@ -257,7 +323,7 @@ final class DeepReviewFixTests: XCTestCase {
             menu.update()
             let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
             more.update()
-            more.performActionForItem(at: try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Open Files") }))
+            more.performActionForItem(at: try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Show Files") }))
             hosted.spin(0.3)
         }
 
@@ -275,7 +341,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(opened, [row], "the right-click menu's Open Files…, chosen with Return, opens the row's files")
 
         // ⇧⌘I's menu (the same commands as an NSMenu), on a Later row.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         hosted.go(to: .backlog)
         let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id, "Later lists a task")
         makeCurrent(try keyEvent("\r", keyCode: 36))
@@ -283,7 +349,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(opened, [later], "⇧⌘I's Open Files…, chosen with Return, opens them too")
 
         // The item's own ⌘Return while something types stays with it.
-        opened = []
+        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
         makeCurrent(try keyEvent("\r", keyCode: 36, modifiers: .command))
         try chooseOpenFiles(in: AtticNativeMenu.make(hosted.page.taskCommands(later, tab: .backlog)))
         XCTAssertEqual(opened, [], "a typing field keeps its own ⌘Return")
@@ -297,10 +363,13 @@ final class DeepReviewFixTests: XCTestCase {
                                                             in: hosted.page.taskCommands(row, tab: .now)))
         var openedMode: CFRunLoopMode?
         let opened = expectation(description: "Open Files is delivered")
-        hosted.model.services.openPage = { _ in
+        // The files list opens in the model's own turn: the mode it opens
+        // in is the mode of the presentation.
+        let observation = hosted.model.$expandedFiles.dropFirst().sink { _ in
             openedMode = CFRunLoopCopyCurrentMode(CFRunLoopGetMain())
             opened.fulfill()
         }
+        defer { observation.cancel() }
         // Enter the native tracking mode from a run-loop source, not from
         // a main-dispatch callback (which forbids nested queue servicing).
         let invoke = Timer(timeInterval: 0.01, repeats: false) { _ in
@@ -357,10 +426,11 @@ final class DeepReviewFixTests: XCTestCase {
     /// does not see change, so the cells' own record is read here; the
     /// pixels are `TasksPageUITests`'s.)
     ///
-    /// The hosted page is alone in its window, so the window's key loop
-    /// passes once through nothing (no view of the page has the keyboard,
-    /// nothing is drawn as focused) before it wraps to the first row.
+    /// A10: the page orders Tab itself (`TasksTabOrder`), so the order no
+    /// longer passes through nothing before it wraps: after the add bar
+    /// comes the first row again.
     func testEveryTabStopIsAVisibleRowOrAField() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1)
@@ -384,7 +454,7 @@ final class DeepReviewFixTests: XCTestCase {
             forward.append(stop())
             check(forward.last!, forward)
         }
-        XCTAssertEqual(forward, now.map(Stop.row) + [.addBar, .none, .row(now[0])],
+        XCTAssertEqual(forward, now.map(Stop.row) + [.addBar, .row(now[0]), .row(now[1])],
                        "Tab: Now's rows, the add bar, then round again (\(forward))")
 
         var backward: [Stop] = []
@@ -394,12 +464,339 @@ final class DeepReviewFixTests: XCTestCase {
             backward.append(stop())
             check(backward.last!, backward)
         }
-        XCTAssertEqual(backward, [.none, .addBar, .row(now[now.count - 1]), .row(now[now.count - 2])],
+        XCTAssertEqual(backward, [.row(now[0]), .addBar, .row(now[now.count - 1]), .row(now[now.count - 2])],
                        "Shift-Tab retraces it, never into a hidden page (\(backward))")
 
         // Return edits the row that shows the keyboard.
         hosted.press("\r", keyCode: 36)
         XCTAssertEqual(hosted.model.editingTitleID, now[now.count - 2], "Return edits the row that shows the keyboard")
+    }
+
+    func testCommandReturnFromDoneRevealsTheNewTasksInlineFiles() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 560, addBarFocused: true)
+        defer { hosted.close() }
+        hosted.go(to: .done)
+        hosted.model.addBarState.text.text = "Command Return from Done"
+        hosted.spin(0.3)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.spin(1.2)
+        let task = try XCTUnwrap(hosted.store.tasks.first { $0.title == "Command Return from Done" })
+        XCTAssertEqual(task.status, .todo)
+        XCTAssertEqual(hosted.model.tab, .now)
+        XCTAssertEqual(hosted.shownPage(), TasksTab.now.rawValue)
+        XCTAssertTrue(hosted.model.expandedFiles.contains(task.id))
+        XCTAssertTrue(hosted.model.hasVisibleInlineFiles)
+        let open = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
+        hosted.model.setFilesExpanded(task.id, false)
+        hosted.spin(0.5)
+        let closed = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
+        XCTAssertEqual(open.height - closed.height, AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding, accuracy: 2,
+                       "the created task's inline Attach file line is rendered")
+        XCTAssertNotNil(hosted.window.firstResponder, "the keyboard remains in the window after navigation")
+    }
+
+    func testDeletingFocusedFileLeavesPageShortcutsAndDoneTypingWorking() async throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 680)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-delete-\(UUID()).txt")
+        try Data("file".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let imported = await hosted.store.attachFiles([url], to: id)
+        XCTAssertTrue(imported)
+        let file = try XCTUnwrap(hosted.store.task(withID: id)?.attachments.first)
+        hosted.spin(0.3)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.press("\t", keyCode: 48)
+        let target = TasksFileFocusID.file(owner: id, id: file.id)
+        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(target))
+        hosted.press("\u{F728}", keyCode: 117)
+        XCTAssertTrue(try XCTUnwrap(hosted.store.task(withID: id)).attachments.isEmpty)
+        // Reproduce SwiftUI resetting FocusState before disappearance can
+        // report blur, or delivering a final focus report after removal.
+        let requests = try XCTUnwrap(hosted.pointer.keyboardControlRequests)
+        requests.note(target, focused: true)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("1", keyCode: 18, modifiers: [.command, .option])
+        XCTAssertEqual(hosted.store.task(withID: id)?.priority, .low)
+        NSPasteboard.general.clearContents()
+        hosted.press("c", keyCode: 8, modifiers: .command)
+        XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
+            try XCTUnwrap(hosted.store.task(withID: id)).title) == true)
+        hosted.go(to: .done)
+        let done = try XCTUnwrap(hosted.model.doneDays().first?.rows.first?.id)
+        try hosted.clickRow(done, tab: .done)
+        requests.note(target, focused: true)
+        hosted.press("q", keyCode: 12)
+        XCTAssertEqual(hosted.model.searchQuery(for: .done), "q")
+    }
+
+    func testTabVisitsInlineFilesAndTheirActionsInBothDirections() async throws {
+        try requireKeyWindowTests()
+        let policy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.accessory)
+        defer { NSApp.setActivationPolicy(policy) }
+        let hosted = try Hosted(height: 680)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        NSApp.activate(ignoringOtherApps: true)
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-files-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let urls = try (0..<6).map { index -> URL in
+            let image = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            for x in 0..<2 { for y in 0..<2 {
+                image.setColor(NSColor(calibratedRed: CGFloat(index) / 6, green: 0.5, blue: 0.5, alpha: 1), atX: x, y: y)
+            } }
+            let url = root.appendingPathComponent("File \(index).png")
+            try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: url)
+            return url
+        }
+        let imported = await hosted.store.attachFiles(urls, to: id)
+        XCTAssertTrue(imported)
+        let files = try XCTUnwrap(hosted.store.task(withID: id)).attachments
+        XCTAssertEqual(files.count, 6)
+        var attached: [UUID] = []
+        hosted.model.services.chooseFiles = { attached.append($0) }
+        hosted.spin(0.5)
+        try hosted.clickRow(id, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        XCTAssertTrue(hosted.model.expandedFiles.contains(id))
+        XCTAssertTrue(hosted.window.isKeyWindow)
+
+        func focused() -> String? {
+            // AppKit reports the NSHostingView for SwiftUI content focus.
+            // Read the live view's FocusState report, not the requested stop.
+            switch hosted.pointer.keyboardControl?()?.base as? TasksFileFocusID {
+            case let .file(_, file)?: "task-attachment-\(file.uuidString)"
+            case .more?: "tasks-files-more"
+            case .attach?: "tasks-files-attach"
+            case nil: nil
+            }
+        }
+        func preview(_ file: TaskImageReference) async throws {
+            let verified = try await hosted.store.taskImageFiles.verifiedURL(for: file)
+            let expected = try XCTUnwrap(verified)
+            hosted.press(" ", keyCode: 49)
+            let panel = try XCTUnwrap(QLPreviewPanel.shared())
+            defer { panel.orderOut(nil); hosted.window.makeKey(); hosted.spin(0.2) }
+            func url() -> URL? {
+                AttachmentQuickLookPresenter.shared.previewPanel(panel, previewItemAt: 0) as? URL
+            }
+            let end = Date().addingTimeInterval(5)
+            while url() != expected, Date() < end { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(url(), expected, "Space previews the exact file reached through Tab")
+            XCTAssertEqual(hosted.store.task(withID: id)?.status, .todo, "file activation never completes the selected parent")
+        }
+        let fileStops = files.map { "task-attachment-\($0.id.uuidString)" }
+        let collapsed = Array(fileStops.prefix(4)) + ["tasks-files-more", "tasks-files-attach"]
+        for expected in collapsed {
+            hosted.press("\t", keyCode: 48)
+            let actual = try XCTUnwrap(focused(), "Tab must land on a live inline control")
+            XCTAssertEqual(actual, expected, "Tab reaches each visible file/action")
+            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
+        }
+        for expected in collapsed.dropLast().reversed() {
+            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+            XCTAssertEqual(focused(), expected, "Shift-Tab retraces each visible file/action")
+        }
+        // A focused file owns Space, even while its parent is selected.
+        try await preview(files[0])
+
+        // Forward to More; its Space expands the list. Backward now reaches
+        // both newly visible files before the original four.
+        for _ in 0..<4 { hosted.press("\t", keyCode: 48) }
+        XCTAssertEqual(focused(), "tasks-files-more")
+        hosted.press(" ", keyCode: 49)
+        for expected in fileStops.reversed() {
+            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+            XCTAssertEqual(focused(), expected)
+            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
+        }
+        for expected in Array(fileStops.dropFirst()) + ["tasks-files-more", "tasks-files-attach"] {
+            hosted.press("\t", keyCode: 48)
+            XCTAssertEqual(focused(), expected)
+        }
+        hosted.press(" ", keyCode: 49)
+        XCTAssertEqual(attached, [id], "Attach file is reachable and acts on the owner")
+        XCTAssertNil(hosted.model.editingTitleID)
+    }
+
+    /// A8 P2-A8-1 (A10): in the combined app Tab reached rows out of view
+    /// (`R12` while rows 1–7 showed), with no ring and no scroll, and a
+    /// filtered list's cycle had blank stops and skipped Find. In a list
+    /// taller than the viewport, and in a filtered one: every stop is Find,
+    /// a row or the add bar, each row the keyboard reaches is drawn with
+    /// its ring inside the part of the list nothing covers, and Tab goes
+    /// round without a blank stop. Run on a panel whose key loop is
+    /// AppKit's, as the combined app's is (the import freeze's fix).
+    func testTabKeepsEveryRowItReachesInViewInALongAndAFilteredList() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520, addBarFocused: true, long: true)
+        defer { hosted.close() }
+        hosted.window.autorecalculatesKeyViewLoop = true
+        hosted.spin(1)
+        enum Stop: Equatable { case find, row(UUID), addBar, none }
+        func stop() -> Stop {
+            if let row = hosted.pointer.keyboardRow { return .row(row.id) }
+            if hosted.focus.addBar { return .addBar }
+            if AtticTextInput.hasKeyboard { return .find }
+            return .none
+        }
+        // The add bar's top: a row below it is under the controls.
+        let clearBottom = hosted.height - AtticControlSize.addBarHeight - AtticSpacing.panelMargin
+        func checkInView(_ stop: Stop, _ trail: [Stop]) {
+            guard case let .row(id) = stop else { return }
+            hosted.window.contentView?.layoutSubtreeIfNeeded()
+            XCTAssertEqual(hosted.pointer.drawnFocus.map(\.id), [id], "the row Tab reached draws the ring (\(trail.count))")
+            guard let frame = hosted.pointer.frames[TasksRowID(tab: .now, id: id)] else {
+                return XCTFail("the row Tab reached is laid out (\(trail.count))")
+            }
+            XCTAssertGreaterThanOrEqual(frame.minY, 0, "row \(trail.count) is not above the viewport (\(frame))")
+            XCTAssertLessThanOrEqual(frame.maxY, clearBottom + 1, "row \(trail.count) is not under the add bar (\(frame))")
+        }
+        func walk(_ count: Int, shift: Bool = false) -> [Stop] {
+            var trail: [Stop] = []
+            for _ in 0..<count {
+                if shift { hosted.press("\u{19}", keyCode: 48, modifiers: .shift) } else { hosted.press("\t", keyCode: 48) }
+                hosted.spin(0.3)
+                trail.append(stop())
+                checkInView(trail.last!, trail)
+            }
+            return trail
+        }
+
+        // The whole list, taller than the viewport, and round again.
+        XCTAssertTrue(hosted.model.expanded.isEmpty, "no quick look open: rows only")
+        let now = hosted.model.rows(for: .now).map(\.id)
+        let last = try XCTUnwrap(now.last)
+        hosted.window.contentView?.layoutSubtreeIfNeeded()
+        let lastFrame = hosted.pointer.frames[TasksRowID(tab: .now, id: last)]
+        XCTAssertTrue(lastFrame.map { $0.minY > clearBottom } ?? true, "the list is taller than the viewport")
+        let forward = walk(now.count + 2)
+        XCTAssertEqual(forward, now.map(Stop.row) + [.addBar, .row(now[0])], "Tab: every row in order, the add bar, round again")
+        let backward = walk(2, shift: true)
+        XCTAssertEqual(backward, [.addBar, .row(last)], "Shift-Tab from the first row: the add bar, then the last row, in view")
+
+        // Filtered: Find, the matches, the add bar, round again; no blank.
+        hosted.model.setSearchQuery("Errand", for: .now)
+        hosted.spin(0.8)
+        let matches = hosted.model.rows(for: .now).map(\.id)
+        XCTAssertGreaterThan(matches.count, 8, "enough matches to scroll")
+        XCTAssertLessThan(matches.count, now.count)
+        let cycle: [Stop] = [.find] + matches.map(Stop.row) + [.addBar]
+        let filtered = walk(cycle.count + 2)
+        XCTAssertFalse(filtered.contains(.none), "no blank stop (\(filtered))")
+        // Wherever the keyboard was when the list narrowed, each Tab takes
+        // the next stop of Find, the matches in order, the add bar.
+        for (stop, next) in zip(filtered, filtered.dropFirst()) {
+            guard let index = cycle.firstIndex(of: stop) else { XCTFail("\(stop) is not a stop of the filtered page"); continue }
+            XCTAssertEqual(next, cycle[(index + 1) % cycle.count], "Tab after \(stop)")
+        }
+        XCTAssertTrue(filtered.contains(.find), "Find is on the way")
+    }
+
+    private final class FileListPresence: ObservableObject {
+        @Published var original = true
+        @Published var replacement = false
+    }
+
+    private struct FileListLifetimeProbe: View {
+        @ObservedObject var presence: FileListPresence
+        let store: TaskStore
+        let owner: UUID
+        let pointer: TasksPointer
+
+        private var list: some View {
+            TasksFilesList(files: [], store: store, owner: owner, canAttach: true,
+                           isImporting: false, onAttach: {}, onRemove: { _ in },
+                           onTabStopsChanged: { list, stops in
+                               pointer.registerFileTabStops(stops, for: TasksRowID(tab: .now, id: list.owner), instance: list.instance)
+                           }, onTabStopsRemoved: { list in
+                               pointer.unregisterFileTabStops(for: TasksRowID(tab: .now, id: list.owner), instance: list.instance)
+                           })
+        }
+
+        var body: some View {
+            VStack {
+                if presence.original { list }
+                if presence.replacement { list }
+            }
+        }
+    }
+
+    func testDisappearingFileListCannotClearReplacementStops() throws {
+        let hosted = try Hosted(height: 520, keyWindow: false)
+        defer { hosted.close() }
+        let presence = FileListPresence(), pointer = TasksPointer(), owner = UUID()
+        hosted.window.contentView = NSHostingView(rootView: FileListLifetimeProbe(
+            presence: presence, store: hosted.store, owner: owner, pointer: pointer)
+            .atticDesign(AtticDesignContext(mode: .light)))
+        hosted.spin(0.2)
+        let row = TasksRowID(tab: .now, id: owner)
+        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)])
+        presence.replacement = true
+        hosted.spin(0.2)
+        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)])
+        presence.original = false
+        hosted.spin(0.2)
+        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)], "a late old disappearance cannot erase the visible list")
+        presence.replacement = false
+        hosted.spin(0.2)
+        XCTAssertTrue(pointer.fileTabStops[row]?.isEmpty ?? true, "the last list unregisters its own stops")
+    }
+
+    func testShiftTabReachesFilesAfterTheirListScrollsOut() async throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520, long: true)
+        defer { hosted.close() }
+        let screen = try XCTUnwrap(NSScreen.main)
+        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.spin(0.3)
+        hosted.model.services.chooseFiles = { _ in }
+        let owner = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-scroll-\(UUID()).txt")
+        try Data("file".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let imported = await hosted.store.attachFiles([url], to: owner)
+        XCTAssertTrue(imported)
+        hosted.spin(0.3)
+        try hosted.clickRow(owner, tab: .now)
+        hosted.press("\r", keyCode: 36, modifiers: .command)
+        hosted.press("\t", keyCode: 48) // File.
+        hosted.press("\t", keyCode: 48) // Attach.
+        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(TasksFileFocusID.attach(owner)))
+        hosted.press("\t", keyCode: 48) // Next task.
+        XCTAssertNotNil(hosted.pointer.keyboardRow)
+        XCTAssertNotEqual(hosted.pointer.keyboardRow?.id, owner)
+        let next = try XCTUnwrap(hosted.pointer.keyboardRow?.id)
+        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: next)])
+        let list = try shownList(hosted)
+        let listTop = TasksViewport.listTop(tabsTop: layout(hosted).headerBottom + AtticLayout.pageTabsTop)
+        let clip = list.contentView
+        clip.scroll(to: CGPoint(x: 0, y: clip.bounds.origin.y + frame.minY - listTop))
+        list.reflectScrolledClipView(clip)
+        hosted.spin(0.5)
+        try hosted.clickRow(next, tab: .now)
+        XCTAssertEqual(hosted.pointer.keyboardRow?.id, next, "the next row stays visible and owns Shift-Tab")
+        XCTAssertFalse(hosted.pointer.fileTabStops[TasksRowID(tab: .now, id: owner)]?.isEmpty ?? true,
+                       "lazy disappearance must retain the expanded list's stops")
+        hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
+        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(TasksFileFocusID.attach(owner)))
     }
 
     // MARK: - P3-01: the strip's values in full
@@ -426,6 +823,83 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(TasksComposerValues.tags(["qatest", "work"])?.full, "#qatest #work", "the tooltip names every tag")
     }
 
+    /// CU review P3 (combined app): "Tomorrow" and a short tag with
+    /// Priority unset. The empty Priority button gave up nothing, so the
+    /// tag was cut to "#c…". Now an unset button shows its icon alone
+    /// (Priority first) before any value is cut short or closed up, and it
+    /// keeps its name whenever the strip fits.
+    func testAnUnsetButtonGivesUpItsNameBeforeAValueIsCutShort() throws {
+        typealias Strip = AtticComposerStrip<EmptyView, EmptyView, EmptyView>
+        let tomorrow = AtticStripValue(text: "Tomorrow", spoken: "Tomorrow")
+        for tag in ["cuqa", "qatest"] {
+            let faces: [(title: String, value: AtticStripValue?)] = [
+                ("Date", tomorrow), ("Tag", TasksComposerValues.tags([tag])), ("Priority", nil),
+            ]
+            for available: CGFloat in [276, 300] {
+                let full = Strip.usualWidth(faces)
+                let iconOnly = Strip.iconOnlyButtons(faces, available: available)
+                if full > available {
+                    XCTAssertEqual(iconOnly, [2], "#\(tag) at \(available): Priority shows its icon alone (\(full))")
+                    XCTAssertLessThanOrEqual(Strip.usualWidth(faces, iconOnly: iconOnly), available,
+                                             "#\(tag) at \(available): then the values fit in full")
+                    XCTAssertFalse(Strip.needsCompactGaps(faces, available: available, iconOnly: iconOnly))
+                } else {
+                    XCTAssertEqual(iconOnly, [], "it fits: every name stays")
+                }
+            }
+        }
+        // The capture's case does need it at the review's width.
+        let capture: [(title: String, value: AtticStripValue?)] = [("Date", tomorrow), ("Tag", TasksComposerValues.tags(["cuqa"])), ("Priority", nil)]
+        XCTAssertGreaterThan(Strip.usualWidth(capture), 276, "the names did not fit")
+        // Unset buttons only, and only with a value to make room for.
+        let empty: [(title: String, value: AtticStripValue?)] = [("Date", nil), ("Tag", nil), ("Priority", nil)]
+        XCTAssertEqual(Strip.iconOnlyButtons(empty, available: 100), [])
+        let set: [(title: String, value: AtticStripValue?)] = [("Date", tomorrow), ("Tag", TasksComposerValues.tags(["a-much-longer-tag"])),
+                                                               ("Priority", TasksComposerValues.priority(.high))]
+        XCTAssertEqual(Strip.iconOnlyButtons(set, available: 200), [], "a set button keeps its value")
+        // Short of room still, Tag's empty name goes next, never Date's value.
+        let tagless: [(title: String, value: AtticStripValue?)] = [("Date", AtticStripValue(text: "Wednesday, 15 October", spoken: "")), ("Tag", nil), ("Priority", nil)]
+        XCTAssertEqual(Strip.iconOnlyButtons(tagless, available: 200), [1, 2])
+    }
+
+    /// A39 F12: "tomorrow #a33 !!" in the 268 pt strip showed the tag as
+    /// "#…" beside the date and the priority. A short tag now keeps its whole
+    /// text at every width the strip is laid out in; the date gives way.
+    func testAShortTagKeepsItsWholeTextBesideADateAndAPriority() throws {
+        typealias Strip = AtticComposerStrip<EmptyView, EmptyView, EmptyView>
+        let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(attribute)
+        NSApp.accessibilitySetValue(true, forAttribute: attribute)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: attribute) }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        for available: CGFloat in [226, 234, 242, 252, 260, 268, 276, 288] {
+            let strip = Strip(datePresented: .constant(false), tagsPresented: .constant(false), priorityPresented: .constant(false),
+                              date: AtticStripValue(text: "Tomorrow", spoken: "Tomorrow"), tags: TasksComposerValues.tags(["a33"]),
+                              priority: TasksComposerValues.priority(.high), onClearDate: {}, onClearTags: {}, onClearPriority: {},
+                              datePicker: { EmptyView() }, tagPicker: { EmptyView() }, priorityPicker: { EmptyView() })
+            let host = NSHostingView(rootView: strip.frame(width: available).atticDesign(AtticDesignContext(reduceMotion: true)))
+            host.frame = NSRect(x: 0, y: 0, width: available, height: 40)
+            window.contentView?.addSubview(host)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            host.layoutSubtreeIfNeeded()
+            func all(_ element: AnyObject) -> [AnyObject] {
+                [element] + ((element.accessibilityChildren?() ?? nil) ?? []).flatMap { all($0 as AnyObject) }
+            }
+            func width(_ identifier: String) -> CGFloat? {
+                all(host).first { (($0 as? NSObject)?.perform(Selector(("accessibilityIdentifier")))?.takeUnretainedValue() as? String) == identifier }
+                    .map { $0.accessibilityFrame().width }
+            }
+            let tag = try XCTUnwrap(width("composer-tag"), "the tag button at \(available)")
+            let natural = AtticSmallControlMetrics.labelPadding + AtticSmallControlMetrics.iconSize + AtticPickerMetrics.stripCompactIconGap
+                + AtticTextStyle.controlLabel.measuredWidth("#a33")
+            XCTAssertGreaterThanOrEqual(tag, natural - 0.5, "#a33 whole at \(available) (\(tag) vs \(natural))")
+            host.removeFromSuperview()
+        }
+    }
+
     // MARK: - Code review: the pager's test-only settle
 
     func testThePagerSettleOverrideNeedsAUITestPreviewAndASaneDuration() {
@@ -445,5 +919,49 @@ final class DeepReviewFixTests: XCTestCase {
         }
         XCTAssertEqual(resolve("0.05"), 0.05)
         XCTAssertEqual(resolve("10"), 10)
+    }
+}
+
+/// A10: the Tasks page's own Tab order and Move to Task's focus return,
+/// as data (the hosted walks are `DeepReviewFixTests`').
+final class TasksTabOrderTests: XCTestCase {
+    func testTheOrderIsFindRowsWithTheirOpenSubtasksTheAddBarThenTheStrip() {
+        let (a, b, c, s1, s2) = (UUID(), UUID(), UUID(), UUID(), UUID())
+        let stops = TasksTabOrder.stops(find: true, rows: [(a, []), (b, [s1, s2]), (c, [])], strip: true)
+        XCTAssertEqual(stops, [.find, .row(a), .row(b), .subtask(s1), .subtask(s2), .row(c), .addBar]
+                       + AtticStripFocusID.all.map(TasksTabStop.strip))
+        XCTAssertEqual(TasksTabOrder.stops(find: false, rows: [(a, [])], strip: false), [.row(a), .addBar],
+                       "no Find while it is hidden, no strip without a draft or keyboard navigation")
+        XCTAssertEqual(TasksTabOrder.next(after: nil, in: stops, forward: true), .find, "from nowhere: the first stop")
+        XCTAssertEqual(TasksTabOrder.next(after: nil, in: stops, forward: false), stops.last)
+        XCTAssertEqual(TasksTabOrder.next(after: .row(b), in: stops, forward: true), .subtask(s1))
+        XCTAssertEqual(TasksTabOrder.next(after: stops.last, in: stops, forward: true), .find, "round the end")
+        XCTAssertEqual(TasksTabOrder.next(after: .find, in: stops, forward: false), stops.last)
+        XCTAssertEqual(TasksTabOrder.next(after: .row(UUID()), in: stops, forward: true), .find, "a stop no longer drawn: start again")
+        XCTAssertNil(TasksTabOrder.next(after: nil, in: [], forward: true))
+        XCTAssertEqual(TasksTabOrder.parent(of: s2, in: stops), b)
+        XCTAssertTrue(TasksTabOrder.isListNeighbour(.row(a), of: .row(b), in: stops))
+        XCTAssertFalse(TasksTabOrder.isListNeighbour(.addBar, of: .row(c), in: stops), "from a field the list goes to the row first")
+        XCTAssertFalse(TasksTabOrder.isListNeighbour(.row(c), of: .row(a), in: stops), "nor round the end")
+    }
+
+    /// A8 P3-A8-1: Esc (or a click outside) closing Move to Task… gives
+    /// the keyboard back to the subtask's line; other pickers keep theirs.
+    func testClosingMoveToTaskGivesTheKeyboardBackToTheSubtask() {
+        let (row, subtask) = (UUID(), UUID())
+        let move = TasksMetaPopover(id: row, tab: .now, kind: .move, targets: [subtask])
+        XCTAssertEqual(TasksPage.subtaskToRefocus(closed: move, now: nil), subtask)
+        XCTAssertNil(TasksPage.subtaskToRefocus(closed: move, now: move), "still open")
+        XCTAssertNil(TasksPage.subtaskToRefocus(closed: TasksMetaPopover(id: row, tab: .now, kind: .date, targets: [row]), now: nil))
+        XCTAssertNil(TasksPage.subtaskToRefocus(closed: nil, now: nil))
+    }
+}
+
+/// A white view that draws itself (a capture by `cacheDisplay` ignores a
+/// layer's background), laid over a band to clip what is under it.
+final class OpaqueCover: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill()
+        dirtyRect.fill()
     }
 }

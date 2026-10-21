@@ -8,7 +8,7 @@ import SwiftUI
 /// matches highlighted, with a quiet "N of M done tasks"; each task restorable to
 /// Now (its circle, or right-click). Loaded a page at a time as it scrolls,
 /// so 5,000 finished tasks never load at once.
-struct TasksDonePage<Cell: View, Mask: View>: View {
+struct TasksDonePage<Cell: View>: View {
     let model: TasksPageModel
     /// Every change to the model while the page is drawn; nothing while it
     /// is kept built but not drawn (round 11, `TasksCellUpdates`).
@@ -34,10 +34,6 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     let bottomStack: TasksBottomStackHeight
     /// False while the page is kept built but not shown (round 11).
     var drawn = true
-    /// How the log meets the floating controls (`TasksPage.edgeStyle`).
-    var edges: AtticScrollEdgeStyle = .cleanCut
-    /// Clean cut's fade, the default (the system soft edge needs none).
-    let mask: Mask
     /// A row the keyboard moved to: brought into the visible area (review 8).
     @Binding var reveal: TasksPageModel.ScrollRequest?
     /// Brings a row into the uncovered part of the list (the page's rule).
@@ -45,6 +41,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     let cell: (TasksListRow) -> Cell
     /// Where the page keeps the log's scroll view and proxy (round 10).
     var proxies: TasksListProxies?
+    var pointer: TasksPointer?
+    var focusSelection: (UUID?) -> Void = { _ in }
     var registerList: (ScrollViewProxy) -> Void = { _ in }
     /// Which view draws each line (`TasksDoneSlots`); the page scrolls to
     /// a row through it.
@@ -109,9 +107,12 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                 }
                 if lines.isEmpty, model.doneLogFailure == nil {
                     let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // A no-match line sits on the search's text column, as
+                    // its count does (U-12).
                     AtticEmptyLine(text: query.isEmpty
                         ? String(localized: "Finished tasks collect here.")
-                        : String(localized: "No finished tasks match “\(query)”."))
+                        : String(localized: "No finished tasks match “\(query)”."),
+                        leading: query.isEmpty ? AtticLayout.pageTabsX : AtticLayout.textX)
                 } else if let count = model.doneSearchCount() {
                     // A quiet line under the results (v22 card B).
                     AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) done tasks"), style: .rowMeta, ink: .helper)
@@ -119,16 +120,14 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         .padding(.leading, AtticLayout.textX)
                         .accessibilityIdentifier("tasks-done-search-count")
                 }
-                if edges == .systemSoft {
-                    TasksListTailClearance(stack: bottomStack, bottomInset: bottomInset, bottomClearance: bottomClearance)
-                }
             }
-            .padding(.bottom, edges == .cleanCut ? bottomClearance - bottomMargin : 0)
+            .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).
-            .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, drawn: drawn).accessibilityHidden(true))
+            .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,
+                focusSelection: focusSelection, drawn: drawn).accessibilityHidden(true))
         }
-        .tasksListEdges(edges, top: viewportTop, listTop: listTop, bottomInset: bottomInset,
-                        bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack, mask: mask)
+        .tasksListEdges(top: viewportTop, listTop: listTop, bottomInset: bottomInset,
+                        bottomMargin: bottomMargin, bottomClearance: bottomClearance, stack: bottomStack)
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in
             guard let request else { return }

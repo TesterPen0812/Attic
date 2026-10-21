@@ -10,6 +10,58 @@ import XCTest
 /// of one task are two rows). Plus the computer-use review's bugs.
 @MainActor
 final class TasksRound12Tests: XCTestCase {
+    private func sendFindKey(_ hosted: Hosted, characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: hosted.window.windowNumber,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+        NSApp.postEvent(event, atStart: false)
+        Hosted.pumpEvents()
+    }
+
+    func testG08FindRetriesPreserveSelectionAndMidQueryCaretOnNowAndLater() throws {
+        try requireKeyWindowTests()
+        for tab in [TasksTab.now, .backlog] {
+            for selection in [NSRange(location: 1, length: 3), NSRange(location: 2, length: 0)] {
+                let hosted = try Hosted(height: 520)
+                defer { hosted.window.contentView = nil; hosted.close() }
+                if tab != .now { hosted.go(to: tab) }
+                sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
+                hosted.spin(0.06)
+                let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: hosted.window.contentView!,
+                    placeholder: hosted.model.searchPlaceholder(for: tab)))
+                let editor = try XCTUnwrap(hosted.window.firstResponder as? NSTextView)
+                XCTAssertTrue(editor.delegate as? NSTextField === field, "Find acquired its own field before the retry")
+                editor.insertText("invoice", replacementRange: NSRange(location: NSNotFound, length: 0))
+                editor.setSelectedRange(selection)
+                hosted.spin(0.5)
+                XCTAssertTrue(hosted.window.firstResponder === editor)
+                XCTAssertEqual(editor.selectedRange(), selection, "later retries must not move the caret: \(tab)")
+                editor.insertText("X", replacementRange: NSRange(location: NSNotFound, length: 0))
+                XCTAssertEqual(hosted.model.searchQuery(for: tab), ("invoice" as NSString).replacingCharacters(in: selection, with: "X"))
+            }
+        }
+    }
+
+    func testG08DismissingFindDuringRetriesDoesNotTakeTheNextFieldsKeyboard() throws {
+        try requireKeyWindowTests()
+        let hosted = try Hosted(height: 520)
+        defer { hosted.window.contentView = nil; hosted.close() }
+        sendFindKey(hosted, characters: "f", code: 3, modifiers: .command)
+        hosted.spin(0.06)
+        XCTAssertTrue((hosted.window.firstResponder as? NSTextView)?.isFieldEditor == true)
+        sendFindKey(hosted, characters: "\u{1b}", code: 53)
+        let next = NSTextField(string: "Other field")
+        next.frame = CGRect(x: 10, y: 10, width: 180, height: 25)
+        hosted.window.contentView!.addSubview(next)
+        XCTAssertTrue(hosted.window.makeFirstResponder(next))
+        let editor = try XCTUnwrap(next.currentEditor())
+        editor.selectedRange = NSRange(location: 2, length: 3)
+        hosted.spin(0.5)
+        XCTAssertTrue(next.currentEditor() === editor)
+        XCTAssertEqual(editor.selectedRange, NSRange(location: 2, length: 3))
+        XCTAssertEqual(hosted.model.searchQuery(for: .now), "")
+    }
+
     // MARK: - P2-1: a failed subtask rename leaves no failure behind
 
     private func renameFixture() throws -> (gate: PersistenceGate, model: TasksPageModel, library: AtticLibrary, parent: TaskItem, child: TaskItem) {
@@ -84,6 +136,7 @@ final class TasksRound12Tests: XCTestCase {
     /// the keyboard was not on. ⇧↓ grows from that row, never back to a row
     /// remembered from before.
     func testShiftDownGrowsFromTheMenuSelectedRowNotFromAStaleOne() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520, long: true)
         defer { hosted.close() }
         let model = hosted.model
@@ -139,6 +192,22 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertEqual(model.selection.count, 3)
         model.extendSelection(to: ids[23], visible: Array(visible.filter { $0 != ids[20] }), from: ids[22])
         XCTAssertFalse(model.selection.contains(ids[20]) && model.selection.count > 4, "no jump across a row that has left the list")
+    }
+
+    func testCompletedTodayDisclosureAndRestorationKeepTheirNativeMouseClicks() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let plumber = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
+        try hosted.clickRow(plumber, tab: .now)
+        let disclosure = try XCTUnwrap(hosted.pointer.completedTodayFrames[.now])
+        hosted.click(y: disclosure.midY, x: disclosure.midX)
+        XCTAssertTrue(model.completedTodayExpanded, "the disclosure receives its actual laid-out click")
+        hosted.spin(0.4)
+        let done = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Renew domain" }?.id)
+        try hosted.clickRow(done, tab: .now, x: AtticLayout.circleX + AtticControlSize.statusCircle / 2)
+        hosted.spin(0.5)
+        XCTAssertEqual(hosted.store.task(withID: done)?.status, .todo, "the circle restores the completed row")
     }
 
     // MARK: - P2-2 and CU bug 1: one row, one identity per (tab, task)
@@ -247,6 +316,7 @@ final class TasksRound12Tests: XCTestCase {
     /// keyboard and is visible; an unrelated store update leaves it alone; a
     /// tab switch closes it and the other page's copy never opens one.
     func testOnlyTheActivePageHoldsTheEditor() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -282,6 +352,7 @@ final class TasksRound12Tests: XCTestCase {
     /// ⌘D on the selected row acts once, on the page shown, though the task
     /// has a row on two pages; ⌘C and the actions menu key belong to it too.
     func testKeysActOnceOnTheActivePageWhenATaskIsListedTwice() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -297,6 +368,7 @@ final class TasksRound12Tests: XCTestCase {
     /// A parent selected while one of its subtasks has the keyboard: ⌘D is
     /// the subtask's, so it duplicates nothing.
     func testCommandDWithASubtaskFocusedDuplicatesNothing() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let model = hosted.model
@@ -315,6 +387,7 @@ final class TasksRound12Tests: XCTestCase {
     // MARK: - CU bug 4: Esc closes an open quick look first
 
     func testEscClosesTheQuickLookFirstThenClearsTheSelection() throws {
+        try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let model = hosted.model
@@ -344,7 +417,7 @@ final class TasksRound12Tests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container)
         let store = TaskStore(container: container)
-        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
         state.updatePanelSize(CGSize(width: 340, height: 560))
         state.loadPageContent()
@@ -357,7 +430,6 @@ final class TasksRound12Tests: XCTestCase {
                 canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes),
                 chromeInteractionState: chrome, uiState: state, settings: settings,
-                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
                 tasksPageState: tasksState
             ),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome
@@ -566,47 +638,16 @@ final class TasksRound12Tests: XCTestCase {
 
     // MARK: - Bug 5: rows are not readable under the tabs or the add bar
 
-    /// The mask's opacity at `y` (the gradient's linear interpolation).
-    private func maskOpacity(_ stops: [(location: CGFloat, opacity: Double)], at y: CGFloat, height: CGFloat) -> Double {
-        let x = y / height
-        guard let first = stops.first, let last = stops.last else { return 1 }
-        if x <= first.location { return first.opacity }
-        if x >= last.location { return last.opacity }
-        for (a, b) in zip(stops, stops.dropFirst()) where x <= b.location {
-            let t = Double((x - a.location) / (b.location - a.location))
-            return a.opacity + (b.opacity - a.opacity) * t
-        }
-        return last.opacity
-    }
-
-    /// Nothing scrolled under the tabs or the bottom stack survives the
-    /// list's mask (round 11 left 18 % under the tabs' gap and 22 % to 6 %
-    /// under the bar, which text still read through glass), for the bottom
-    /// stack as it grows (a strip, a selection bar), and the rows fade
-    /// along the edge veil's ramp, nothing at the resting place.
-    func testNothingIsReadableUnderTheTabsOrTheBottomStack() {
+    /// N-6 D (owner 2026-10-11) hid rows scrolled behind the tabs; the
+    /// owner's 10-17 decision supersedes it: rows run on under the tabs and
+    /// the bottom stack, visible through the blur (`RoundO3ControlsTests`).
+    /// Still: a resting row is clear of both, whatever the stack shows.
+    func testRestingRowsAreClearOfTheTabsAndTheStack() {
+        XCTAssertGreaterThanOrEqual(TasksViewport.listTop(tabsTop: 80), TasksViewport.controlsBottom(tabsTop: 80))
         for stack in [CGFloat(36), 60, 96, 136] {
-            let height: CGFloat = 520
-            let stops = TasksViewport.maskStops(height: height, tabsTop: 80, listTop: 110, bottomStack: stack)
-            XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
-            for y in stride(from: CGFloat(0), through: 96, by: 1) {
-                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "under the tabs at \(y), stack \(stack)")
-            }
-            for y in stride(from: height - stack, through: height, by: 1) {
-                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "under the bar at \(y), stack \(stack)")
-            }
-            XCTAssertEqual(maskOpacity(stops, at: 110, height: height), 1, accuracy: 0.001, "the resting row is whole")
-            XCTAssertEqual(maskOpacity(stops, at: height - stack - 44, height: height), 1, accuracy: 0.001, "and the last rows above the fade")
-            // Eased both ways: never rising under the bar, never falling in the gap.
-            let bottom = stride(from: height - stack - 28, through: height - stack, by: 1).map { maskOpacity(stops, at: $0, height: height) }
-            XCTAssertEqual(bottom, bottom.sorted(by: >), "falls toward the bar")
-            let top = stride(from: CGFloat(96), through: 110, by: 1).map { maskOpacity(stops, at: $0, height: height) }
-            XCTAssertEqual(top, top.sorted(), "rises toward the first row")
+            XCTAssertGreaterThan(TasksViewport.bottomClearance(stackHeight: stack, bottomInset: 12),
+                                 TasksViewport.controlsInset(stack: stack, bottomInset: 12), "stack \(stack)")
         }
-        // The ramp is the edge veil's, scaled: half the veil, about a half.
-        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0), 1)
-        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 1), 0, accuracy: 1e-9)
-        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0.55), 1 - 0.30 / AtticEdgeBlur.maximumVeil, accuracy: 1e-9)
     }
 
     // MARK: - Astra P2: a page kept behind another section takes no mouse
@@ -680,14 +721,20 @@ final class TasksRound12Tests: XCTestCase {
 
     /// The page drawn with a long list scrolled to two places (a hosted
     /// stand-in for the round's UI test, which no runner could make find the
-    /// panel). Clean cut (the default, owner 2026-10-03): what is drawn under
-    /// the tabs and the add bar's band is the same picture at both, whatever
-    /// rows lie beneath.
-    func testNoRowIsDrawnUnderTheTabsOrTheAddBarsBandWithTheCleanCut() throws {
-        let shares = try bandShares(.cleanCut)
+    /// panel). Owner, 2026-10-17 (superseding 2026-10-06's "never readable
+    /// behind the tabs' line"): rows run on under the tabs' plain-text line
+    /// and the add bar, visible through the blur (which an in-process
+    /// capture does not draw).
+    func testRowsRunOnUnderTheTabsAndUnderTheAddBar() throws {
+        let shares = try bandShares()
         XCTAssertGreaterThan(shares.moved, 0.02, "the long list scrolled between the captures (\(shares.moved))")
-        XCTAssertLessThan(shares.top, 0.004, "rows show through the tabs' line (\(shares.top))")
-        XCTAssertLessThan(shares.bottom, 0.004, "rows show through the add bar's band (\(shares.bottom))")
+        XCTAssertGreaterThan(shares.strongTop, 0.002, "rows show behind the tabs' line (\(shares.strongTop))")
+        // Floating controls (owner 2026-10-14, replacing N-6 D): rows run on
+        // under the add bar's glass, into the blur behind it.
+        XCTAssertGreaterThan(shares.bottom, 0.0005, "rows run on under the add bar (\(shares.bottom))")
+        // Negative control: the same band clipped fails it.
+        let clipped = try bandShares(clipBands: true)
+        XCTAssertLessThan(clipped.bottom, 0.0005, "a clipped add bar's band shows nothing (\(clipped.bottom))")
     }
 
     // The system soft edge (a preview's choice since 2026-10-03) is checked in
@@ -696,11 +743,8 @@ final class TasksRound12Tests: XCTestCase {
 
     /// How much of the list's middle, the tabs' line (to a quarter of the
     /// gap under it) and the add bar's band differ between two scroll places.
-    private func bandShares(_ style: AtticScrollEdgeStyle) throws -> (moved: Double, top: Double, bottom: Double) {
-        let lab = AtticScrollEdgeLab.shared
-        let saved = lab.style
-        lab.style = style
-        defer { lab.style = saved }
+    private func bandShares(clipBands: Bool = false) throws
+        -> (moved: Double, top: Double, bottom: Double, strongTop: Double, strongBottom: Double) {
         let height: CGFloat = 520
         let hosted = try Hosted(height: height, long: true)
         defer { hosted.close() }
@@ -719,7 +763,8 @@ final class TasksRound12Tests: XCTestCase {
             content.cacheDisplay(in: content.bounds, to: rep)
             return rep
         }
-        func share(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, from top: CGFloat, to bottom: CGFloat) throws -> Double {
+        func share(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, from top: CGFloat, to bottom: CGFloat,
+                   threshold: CGFloat = 0.03) throws -> Double {
             XCTAssertEqual(a.pixelsWide, b.pixelsWide)
             let scale = CGFloat(a.pixelsWide) / content.bounds.width
             var differing = 0, total = 0
@@ -727,25 +772,41 @@ final class TasksRound12Tests: XCTestCase {
                 for x in 0..<a.pixelsWide {
                     guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                     total += 1
-                    if max(abs(p.redComponent - q.redComponent), abs(p.greenComponent - q.greenComponent),
-                           abs(p.blueComponent - q.blueComponent)) > 0.03 { differing += 1 }
+                    // Over white: a near-transparent pixel's colour is not ink.
+                    let (u, v) = (p.alphaComponent, q.alphaComponent)
+                    func over(_ c: CGFloat, _ a: CGFloat) -> CGFloat { c * a + 1 - a }
+                    if max(abs(over(p.redComponent, u) - over(q.redComponent, v)), abs(over(p.greenComponent, u) - over(q.greenComponent, v)),
+                           abs(over(p.blueComponent, u) - over(q.blueComponent, v))) > threshold { differing += 1 }
                 }
             }
             return total == 0 ? 1 : Double(differing) / Double(total)
         }
-        let first = try capture(scrolledTo: 260)
-        let second = try capture(scrolledTo: 1_300)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: height))
         let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
         let bottomInset = max(AtticSpacing.panelMargin, layout.chromeInsets.bottom)
         let barTop = height - bottomInset - AtticControlSize.addBarHeight
+        // The negative control: the bands covered by an opaque view.
+        var covers: [NSView] = []
+        if clipBands {
+            covers = [(tabsTop, TasksViewport.listTop(tabsTop: tabsTop)), (barTop - 4, height)].map { band in
+                let cover = OpaqueCover(frame: NSRect(x: 0, y: content.isFlipped ? band.0 : height - band.1,
+                                                      width: content.bounds.width, height: band.1 - band.0))
+                content.addSubview(cover, positioned: .above, relativeTo: nil)
+                return cover
+            }
+        }
+        defer { covers.forEach { $0.removeFromSuperview() } }
+        let first = try capture(scrolledTo: 260)
+        let second = try capture(scrolledTo: 1_300)
         // The list itself moved, or the bands prove nothing.
         let moved = try share(first, second, from: tabsBottom + 40, to: barTop - 40)
         // The tabs' line, and the gap under it down to where the rows start their
         // ramp back (a quarter of the way to the resting place).
         let clear = tabsBottom + (TasksViewport.listTop(tabsTop: tabsTop) - tabsBottom) * 0.25 - 1
-        return (moved, try share(first, second, from: tabsTop, to: clear), try share(first, second, from: barTop - 4, to: height))
+        return (moved, try share(first, second, from: tabsTop, to: clear), try share(first, second, from: barTop - 4, to: height),
+                try share(first, second, from: tabsTop, to: clear, threshold: 0.35),
+                try share(first, second, from: barTop, to: height, threshold: 0.35))
     }
 
     // MARK: - Hidden Done reads nothing
