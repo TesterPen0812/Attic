@@ -244,9 +244,11 @@ final class TaskPageSliceTests: XCTestCase {
         let hosting = NSHostingController(rootView: AnyView(
             TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
                                   layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: {})))
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        hosting.sizingOptions = []
         window.contentViewController = hosting
+        window.setContentSize(panel)
         windows.append(window)
         func mounted(where condition: (TaskNotePresenter) -> Bool) async throws -> TaskNotePresenter {
             for _ in 0..<200 {
@@ -266,6 +268,51 @@ final class TaskPageSliceTests: XCTestCase {
         presenters.append(reopened)
         XCTAssertNil(first.host.scrollView.window, "the old page's editor left the window")
         XCTAssertFalse(reopened.host.engine.isReadOnly)
+        // Clicks on the reopened page reach its head and block.
+        hosting.view.layoutSubtreeIfNeeded()
+        let frameView = try XCTUnwrap(window.contentView?.superview)
+        for (name, region) in [("head", reopened.host.headView), ("block", reopened.host.blockView)] {
+            let inWindow = region.convert(NSPoint(x: region.bounds.midX, y: region.bounds.midY), to: nil)
+            let hit = frameView.hitTest(inWindow)
+            XCTAssertTrue(hit.map { $0 === region || $0.isDescendant(of: region) } ?? false,
+                          "a click in the reopened \(name) \(inWindow) lands on \(String(describing: hit).prefix(80))")
+        }
+    }
+
+    /// A click on the head or the Subtasks block reaches them, never the
+    /// writing under them, in the page as the panel hosts it (SwiftUI over
+    /// the composed scroll). On screen a click on a row or Restore Note put
+    /// the caret at the end of the writing instead.
+    func testClicksOnTheHeadAndTheBlockReachThemNotTheWriting() async throws {
+        let id = try seed(.boundary)
+        let hosting = NSHostingController(rootView: AnyView(
+            TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                  layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: {})))
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(panel)
+        windows.append(window)
+        var mounted: TaskNotePresenter?
+        for _ in 0..<200 {
+            hosting.view.layoutSubtreeIfNeeded()
+            if let current = notes.taskNotePresenter, current.host.scrollView.window === window { mounted = current; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let presenter = try XCTUnwrap(mounted)
+        presenters.append(presenter)
+        let host = presenter.host
+        host.scrollToTop()
+        hosting.view.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let frameView = try XCTUnwrap(window.contentView?.superview)
+        for (name, region) in [("head", host.headView), ("block", host.blockView)] {
+            let inWindow = region.convert(NSPoint(x: region.bounds.midX, y: region.bounds.midY), to: nil)
+            let hit = frameView.hitTest(inWindow)
+            XCTAssertTrue(hit.map { $0 === region || $0.isDescendant(of: region) } ?? false,
+                          "a click in the \(name) lands on \(String(describing: hit).prefix(80))")
+        }
     }
 
     // MARK: All notes (`p3-22` row 3)

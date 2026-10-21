@@ -283,6 +283,7 @@ struct TaskNotePage: View {
             }
         }
         .onAppear(perform: installMenus)
+        .onAppear(perform: installClickDiagnostics)
         // Esc from the head or the block goes Back (§ 7: after inner layers).
         .onKeyPress(.escape) {
             guard !model.isEditingTitle, model.renamingID == nil else { return .ignored }
@@ -484,6 +485,21 @@ struct TaskNotePage: View {
 
     private static let log = Logger(subsystem: "com.taha.Attic", category: "TaskPage")
 
+    /// `ATTIC_TASKPAGE_DIAG=1` (UI-testing launches): where each click on the
+    /// page lands, for on-screen diagnosis.
+    private func installClickDiagnostics() {
+        guard ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
+              ProcessInfo.processInfo.environment["ATTIC_TASKPAGE_DIAG"] == "1" else { return }
+        let host = presenter.host
+        _ = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak host] event in
+            guard let host, let window = host.scrollView.window, event.window === window else { return event }
+            let hit = window.contentView?.superview?.hitTest(event.locationInWindow)
+            let point = host.documentView.convert(event.locationInWindow, from: nil)
+            Self.log.notice("TASKPAGE-DIAG click doc \(point.debugDescription, privacy: .public) hit \(String(describing: hit.map { Swift.type(of: $0) }), privacy: .public) head \(host.headView.frame.debugDescription, privacy: .public) block \(host.blockView.frame.debugDescription, privacy: .public) text \(host.textView.frame.debugDescription, privacy: .public) first \(String(describing: window.firstResponder.map { Swift.type(of: $0) }), privacy: .public)")
+            return event
+        }
+    }
+
     private func deleteNote() {
         guard let session = presenter.session else { return }
         let id = session.noteID
@@ -629,6 +645,8 @@ struct TaskNotePageContainer: View {
     @State private var presenter: TaskNotePresenter?
     @State private var openFailed = false
     @State private var closing = false
+    /// Each reopen mounts a new page (never a recycled object's identity).
+    @State private var pageGeneration = 0
 
     var body: some View {
         Group {
@@ -639,7 +657,7 @@ struct TaskNotePageContainer: View {
                              onReopen: reopen, onBack: back)
                     // A reopened page is a new presenter with its own host:
                     // its native views must be mounted, never the old ones.
-                    .id(ObjectIdentifier(presenter))
+                    .id(pageGeneration)
             } else if openFailed {
                 AtticText("This task's note can't be opened here.", style: .body, ink: .helper)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -711,6 +729,7 @@ struct TaskNotePageContainer: View {
             if let presenter, presenter.lease != nil { guard await presenter.close() else { return } }
             presenter = nil
             openFailed = false
+            pageGeneration &+= 1
             open()
         }
     }
