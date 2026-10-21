@@ -394,4 +394,66 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(tasks.subtasks(of: id).first { $0.id == made.id }?.title, "Renamed", "nothing changed")
         XCTAssertFalse(presenter.host.textView.string.hasPrefix("Everything"))
     }
+
+    // MARK: Make Note Checkbox (§ 2.3.3)
+
+    func testMakeNoteCheckboxPutsTheTitleAtTheTopAndKeepsTheWholeRecordForUndo() async throws {
+        let (id, presenter, session) = try makeSubtaskFixture()
+        let subtask = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title == "Write release notes" })
+        XCTAssertTrue(tasks.update(subtask, tags: ["copy"], dueDay: .some(DueDay(date: Date().addingTimeInterval(86_400 * 3), calendar: .current))))
+        let subtaskID = subtask.id
+        let before = NSAttributedString(attributedString: presenter.host.textView.textStorage!)
+        let result = await presenter.makeNoteCheckbox(subtaskID: subtaskID, tasks: tasks, notes: notes)
+        guard case let .madeCheckbox(entryID, recovery) = result else { return XCTFail("\(result)") }
+        XCTAssertEqual(recovery, "its date and 1 tag are in Recently Deleted")
+        XCTAssertNil(tasks.task(withID: subtaskID), "the subtask went to Recently Deleted in the same commit")
+        let stored = try storedDocument(session.noteID)
+        XCTAssertEqual(stored.blocks[1].kind, .checklist, "a note checkbox at the top of the writing")
+        XCTAssertEqual(stored.blocks[1].text, "Write release notes")
+        XCTAssertEqual(stored.blocks[1].checked, false)
+        let records = try ModelContext(container).fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.rootID == subtaskID }
+        XCTAssertEqual(records.count, 1, "the complete record is in the operation's recovery record")
+        XCTAssertEqual(session.state, .clean)
+        let undone = await presenter.page.history.undoLatest(stepID: entryID)
+        XCTAssertEqual(undone, .applied)
+        let back = try XCTUnwrap(tasks.task(withID: subtaskID), "Undo brings the same record back")
+        XCTAssertEqual(back.title, "Write release notes")
+        XCTAssertEqual(back.tags, ["copy"])
+        XCTAssertNotNil(back.dueDay)
+        XCTAssertTrue(presenter.host.textView.textStorage!.isEqual(to: before))
+        let redone = await presenter.page.history.replay(redo: true)
+        XCTAssertEqual(redone, .applied)
+        XCTAssertNil(tasks.task(withID: subtaskID))
+    }
+
+    func testMakeNoteCheckboxCreatesTheNoteWhenTheTaskHasNone() async throws {
+        let id = try seed(.nonote)
+        let subtask = try XCTUnwrap(tasks.create(title: "Call the venue", parentID: id))
+        let presenter = try open(id)
+        XCTAssertTrue(try ownNotes(id).isEmpty)
+        let session = try XCTUnwrap(presenter.session)
+        let result = await presenter.makeNoteCheckbox(subtaskID: subtask.id, tasks: tasks, notes: notes)
+        guard case .madeCheckbox = result else { return XCTFail("\(result)") }
+        let own = try ownNotes(id)
+        XCTAssertEqual(own.map(\.id), [session.noteID], "the page's draft became the task's own note, in the commit")
+        XCTAssertTrue(session.isPersisted)
+        XCTAssertEqual(try associations(note: session.noteID).filter { $0.detachedAt == nil }.map(\.taskID), [id])
+        XCTAssertEqual(try storedDocument(session.noteID).blocks.dropFirst().first?.text, "Call the venue")
+        XCTAssertNil(tasks.task(withID: subtask.id))
+        XCTAssertEqual(session.state, .clean)
+    }
+
+    func testAFailedMakeNoteCheckboxSaveChangesNothing() async throws {
+        let id = try seed(.nonote)
+        let subtask = try XCTUnwrap(tasks.create(title: "Call the venue", parentID: id))
+        let presenter = try open(id)
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        let result = await presenter.makeNoteCheckbox(subtaskID: subtask.id, tasks: tasks, notes: notes)
+        coordinator.save = { try $0.save() }
+        XCTAssertEqual(result, .refused("Couldn't make the note checkbox"))
+        XCTAssertNotNil(tasks.task(withID: subtask.id), "the subtask stays")
+        XCTAssertTrue(try ownNotes(id).isEmpty, "no note was created")
+        XCTAssertEqual(presenter.session?.isPersisted, false)
+        XCTAssertEqual(presenter.host.textView.string, "", "the writing is untouched")
+    }
 }

@@ -213,6 +213,8 @@ struct TaskNoteSubtasksBlock: View {
     /// Restore Note (§ 5.6), shown while the task's note is in Recently
     /// Deleted.
     var restoreNote: () -> Void = {}
+    /// A row's menu (right-click), from the page.
+    var subtaskMenu: (UUID) -> [AtticMenuCommand] = { _ in [] }
 
     /// What has the keyboard inside the block.
     enum Field: Hashable { case row(UUID), add }
@@ -378,6 +380,7 @@ struct TaskNoteSubtasksBlock: View {
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in rowKey(press, row: row.id) }
             .onTapGesture { select(row.id) }
+            .contextMenu { AtticMenuItems(commands: subtaskMenu(row.id)) }
             .id(row.id)
         return rowAccessibility(line, row: row, value: value)
     }
@@ -391,6 +394,9 @@ struct TaskNoteSubtasksBlock: View {
             .accessibilityAction { model.toggle(row.id) }
             .accessibilityAction(named: Text("Rename")) { model.beginRename(row.id, undoManager: undoManager) }
             .accessibilityAction(named: Text("Delete Subtask")) { model.delete(row.id) }
+            .accessibilityAction(named: Text("Make Note Checkbox")) {
+                subtaskMenu(row.id).first { $0.identifier == "task-note-subtask-make-checkbox" }?.action()
+            }
             .accessibilityIdentifier("task-note-subtask-row")
     }
 

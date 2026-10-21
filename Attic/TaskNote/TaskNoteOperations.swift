@@ -230,7 +230,7 @@ extension TaskNotePresenter {
                         } else {
                             for id in ids { try TaskStore.stageSoftDeletion(in: commit, taskID: id, preservationID: preservations[id]!, timestamp: Date()) }
                         }
-                    })
+                    }, restores: redo ? Set(ids) : [])
             })
         switch outcome {
         case .committed, .publicationPending:
@@ -239,6 +239,102 @@ extension TaskNotePresenter {
         case .notCommitted, .conflict, .unknown:
             return .refused(String(localized: "Couldn't make the subtask"))
         }
+    }
+}
+
+extension TaskNotePresenter {
+    /// Make Note Checkbox (§ 2.3.3, the subtask's menu): the subtask's title
+    /// goes to the top of the writing as a note checkbox (ticked as it
+    /// was), creating the note when there is none, and the subtask is soft
+    /// deleted in the same commit. Its complete record stays in the
+    /// operation's recovery record and in Recently Deleted; Undo brings the
+    /// same record back. Not an inverse of Make Subtask.
+    func makeNoteCheckbox(subtaskID: UUID, tasks: TaskStore, notes: NotesPageController) async -> OperationResult {
+        guard let session, lease != nil else { return .refused(String(localized: "Couldn't make the note checkbox")) }
+        guard tasks.task(withID: taskID) != nil else { return .refused(String(localized: "The task is deleted")) }
+        guard !session.isReadOnly else { return .refused(String(localized: "This note is read-only")) }
+        guard let subtask = tasks.task(withID: subtaskID), subtask.parentID == taskID else {
+            return .refused(String(localized: "The subtask is gone"))
+        }
+        let engine = session.engine
+        guard engine.textView?.hasMarkedText() != true, engine.activity == .idle else {
+            return .refused(String(localized: "Finish typing first"))
+        }
+        // An untouched draft becomes the note inside the operation; any
+        // other writing is saved first, so the commit starts from it.
+        let creates = !session.isPersisted && session.isUntouchedDraft
+        if !creates {
+            let source = NSAttributedString(attributedString: engine.textStorage)
+            guard notes.settleForWorkspaceOperation(session), session.engine === engine,
+                  source.isEqual(to: engine.textStorage) else {
+                return .refused(String(localized: "Couldn't save the note first"))
+            }
+        }
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else {
+            return .refused(String(localized: "Couldn't make the note checkbox"))
+        }
+        let source = NSAttributedString(attributedString: engine.textStorage)
+        let line = NSMutableAttributedString(attributedString: engine.bodyText(for: [.checklist(subtask.title, checked: subtask.status == .done)]))
+        let candidate = NSMutableAttributedString(attributedString: line)
+        if source.length > 0 {
+            candidate.append(NSAttributedString(string: "\n", attributes: line.length > 0 ? line.attributes(at: line.length - 1, effectiveRange: nil) : [:]))
+            candidate.append(source)
+        }
+        let selection = engine.textView?.selectedRange() ?? NSRange(location: 0, length: 0)
+        let shift = candidate.length - source.length
+        // The caret stays with the text it was in.
+        let caret = creates ? line.length : selection.location + shift
+        var edit = TaskNoteTextEdit(engine: engine, session: session, notes: notes, tasks: tasks,
+                                    coordinator: coordinator, history: page.history, noteID: session.noteID,
+                                    parentID: taskID, selectionBefore: selection, caretAfter: caret)
+        edit.createsNote = creates
+        let preservation = UUID()
+        let entry = UUID()
+        let parent = taskID
+        let outcome = await edit.perform(name: String(localized: "Make Note Checkbox"), candidate: candidate, entryID: entry,
+            forwardWrites: [.init(entity: .task, id: subtaskID), .init(entity: .preservation, id: preservation)],
+            forward: { commit in
+                try TaskStore.stageSoftDeletion(in: commit, taskID: subtaskID, preservationID: preservation, timestamp: Date())
+            },
+            inverse: { redo in
+                // Undo brings the same record back; Redo deletes it again.
+                TaskNoteTextEdit.TaskStep(writes: [.init(entity: .task, id: subtaskID)],
+                    check: { context in
+                        let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == subtaskID }))
+                        guard !rows.isEmpty, rows.allSatisfy({ ($0.deletedAt == nil) == redo && $0.parentID == parent }) else {
+                            throw WorkspaceFoundationError.conflict
+                        }
+                    },
+                    preservations: redo ? [subtaskID: UUID()] : [:],
+                    stage: { commit, preservations in
+                        if redo {
+                            try TaskStore.stageSoftDeletion(in: commit, taskID: subtaskID, preservationID: preservations[subtaskID]!, timestamp: Date())
+                        } else {
+                            try TaskStore.stageRestoreDeleted(in: commit, taskIDs: [subtaskID], timestamp: Date())
+                        }
+                    }, restores: redo ? [] : [subtaskID])
+            })
+        switch outcome {
+        case .committed, .publicationPending:
+            return .madeCheckbox(entryID: entry, recovery: Self.recoveryDetail(subtask))
+        case .notCommitted, .conflict, .unknown:
+            return .refused(String(localized: "Couldn't make the note checkbox"))
+        }
+    }
+
+    /// What the checkbox can't show and Recently Deleted keeps (§ 2.3.3:
+    /// "its date and 1 tag are in Recently Deleted").
+    static func recoveryDetail(_ subtask: TaskItem) -> String? {
+        var parts: [String] = []
+        if subtask.dueDay != nil { parts.append(String(localized: "its date")) }
+        if subtask.priority != .none { parts.append(String(localized: "its priority")) }
+        let tags = subtask.tags.count
+        if tags == 1 { parts.append(String(localized: "1 tag")) } else if tags > 1 { parts.append(String(localized: "\(tags) tags")) }
+        guard !parts.isEmpty else { return nil }
+        let list = parts.count == 1 ? parts[0] : parts.dropLast().joined(separator: ", ") + " " + String(localized: "and") + " " + parts.last!
+        // One thing that is singular reads "is"; anything else "are".
+        let verb = parts.count == 1 && tags <= 1 ? String(localized: "is") : String(localized: "are")
+        return list + " " + verb + " " + String(localized: "in Recently Deleted")
     }
 }
 
@@ -255,6 +351,9 @@ struct TaskNoteTextEdit {
         /// A soft deletion's new preservation records, by task.
         let preservations: [UUID: UUID]
         let stage: (ModelContext, [UUID: UUID]) throws -> Void
+        /// Tasks this step restores from Recently Deleted: their open
+        /// preservation records retire in the same commit.
+        var restores: Set<UUID> = []
     }
 
     let engine: NoteEditorEngine
@@ -350,10 +449,9 @@ struct TaskNoteTextEdit {
             let versions = Dictionary(uniqueKeysWithValues: rows.map { ($0.persistentModelID, UUID()) })
             var writes = step.writes.union([.init(entity: .note, id: id)]).union(versions.values.map { .init(entity: .version, id: $0) })
             writes.formUnion(step.preservations.values.map { .init(entity: .preservation, id: $0) })
-            if redo {
-                let restored = Set(step.writes.filter { $0.entity == .task }.map(\.id))
+            if !step.restores.isEmpty {
                 writes.formUnion(try context.fetch(FetchDescriptor<TaskDeletionPreservation>())
-                    .filter { restored.contains($0.rootID) && $0.retiredAt == nil }
+                    .filter { step.restores.contains($0.rootID) && $0.retiredAt == nil }
                     .map { .init(entity: .preservation, id: $0.id) })
             }
             let envelope = try edit.coordinator.newEnvelope(intent: "Replay " + name,

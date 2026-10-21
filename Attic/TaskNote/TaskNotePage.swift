@@ -134,7 +134,8 @@ final class TaskNotePresenter: ObservableObject {
     }
 
     private static func blockView(_ model: TaskNotePageModel, design: AtticDesignContext, menus: TaskNoteMenuRelay) -> AnyView {
-        return AnyView(TaskNoteSubtasksBlock(model: model, restoreNote: { menus.restoreNote() })
+        return AnyView(TaskNoteSubtasksBlock(model: model, restoreNote: { menus.restoreNote() },
+                                                     subtaskMenu: { menus.subtaskMenu($0) })
             .environment(\.atticDesign, design).atticKeyboardFocusTracking(focusTracker))
     }
 
@@ -207,6 +208,8 @@ final class TaskNoteMenuRelay {
     var noteMenu: () -> Void = {}
     var taskMenu: () -> [AtticMenuCommand] = { [] }
     var restoreNote: () -> Void = {}
+    /// A subtask row's menu (Rename, Make Note Checkbox, Delete Subtask).
+    var subtaskMenu: (UUID) -> [AtticMenuCommand] = { _ in [] }
 }
 
 /// Where a task's page lives (OD-1: one place at a time).
@@ -422,6 +425,7 @@ struct TaskNotePage: View {
         presenter.menus.noteMenu = { presentNoteMenu() }
         presenter.menus.taskMenu = { taskCommands() }
         presenter.menus.restoreNote = { restoreNote() }
+        presenter.menus.subtaskMenu = { id in subtaskCommands(id) }
     }
 
     /// The note's ⋯: Insert and Format, then the note's own commands.
@@ -579,6 +583,36 @@ struct TaskNotePage: View {
             return outcome == .applied ? .applied
                 : .failed(CommandFailure(String(localized: "Can't undo: the line was edited since")))
         })
+    }
+
+    /// A subtask row's menu (§ 6): Rename, Make Note Checkbox, Delete.
+    func subtaskCommands(_ id: UUID) -> [AtticMenuCommand] {
+        guard model.head.exists else { return [] }
+        let readOnly = presenter.session?.isReadOnly == true
+        return [
+            AtticMenuCommand(verbatim: String(localized: "Rename")) { model.beginRename(id) }.identified("task-note-subtask-rename"),
+            AtticMenuCommand(verbatim: String(localized: "Make Note Checkbox"), isDisabled: readOnly) {
+                makeNoteCheckbox(id)
+            }.identified("task-note-subtask-make-checkbox"),
+            AtticMenuCommand(verbatim: String(localized: "Delete Subtask"), shortcut: AtticTaskShortcut.delete,
+                             isDestructive: true, startsSection: true) { model.delete(id) }.identified("task-note-subtask-delete"),
+        ]
+    }
+
+    func makeNoteCheckbox(_ id: UUID) {
+        let presenter = presenter, model = model, controller = controller, toasts = toasts
+        Task { @MainActor in
+            switch await presenter.makeNoteCheckbox(subtaskID: id, tasks: model.store, notes: controller) {
+            case let .madeCheckbox(entryID, recovery):
+                model.clearFailure()
+                let message = recovery.map { String(localized: "Made note checkbox") + " · " + $0 } ?? String(localized: "Made note checkbox")
+                Self.showUndoToast(message, entryID: entryID, presenter: presenter, toasts: toasts)
+            case let .refused(reason):
+                model.reportUnavailable(reason)
+            case .made:
+                break
+            }
+        }
     }
 
     /// The writing's own commands on a task's page (its context menu).
