@@ -113,6 +113,13 @@ actor AttachmentFileStore {
     nonisolated let ownership: WorkspaceOwnershipGate
     /// Task imports have no row payload. Keep their only private original
     /// admitted until the model binds it or the composer explicitly discards it.
+    nonisolated func admitCandidate(_ id: UUID) throws {
+        guard let admission = ownership.tryAcquire([id], kind: .admission) else { throw WorkspaceFoundationError.protectedOwner }
+        retention.lock.withLock {
+            retention.candidates.removeValue(forKey: id)?.release()
+            retention.candidates[id] = admission
+        }
+    }
     nonisolated func finishCandidates(_ ids: Set<UUID>) {
         let leases = retention.lock.withLock { ids.compactMap { retention.candidates.removeValue(forKey: $0) } }
         leases.forEach { $0.release() }
@@ -675,8 +682,7 @@ actor AttachmentFileStore {
         )
         let finalDirectory = try validatedDirectory(for: reference)
         if !includePayload {
-            guard let admission = ownership.tryAcquire([attachmentID], kind: .admission) else { throw WorkspaceFoundationError.protectedOwner }
-            retention.lock.withLock { retention.candidates[attachmentID] = admission }
+            try admitCandidate(attachmentID)
         }
         // Register the directory before any filesystem operation that can
         // partially succeed. If directory creation or the move fails, the

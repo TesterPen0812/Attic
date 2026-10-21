@@ -7,6 +7,18 @@ import XCTest
 
 @MainActor
 final class TaskImageTests: XCTestCase {
+    func testP3_4ReadmittingCandidateReleasesEveryAdmissionAfterFinish() throws {
+        let files = AttachmentFileStore(rootURL: ownedTemporaryDirectory(prefix: "ReadmittedCandidate"))
+        let id = UUID()
+        try files.admitCandidate(id)
+        try files.admitCandidate(id)
+        XCTAssertNil(files.ownership.tryAcquire([id], kind: .collection))
+        files.finishCandidates([id])
+        let collection = files.ownership.tryAcquire([id], kind: .collection)
+        XCTAssertNotNil(collection)
+        collection?.release()
+    }
+
     private func imageFile(in directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let context = try XCTUnwrap(CGContext(data: nil, width: 32, height: 32,
