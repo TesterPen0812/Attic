@@ -10,6 +10,18 @@ import XCTest
 @MainActor
 final class NoteDocumentStoreTests: XCTestCase {
 
+    func testP2_3PreUpgradeVersionWithNoFingerprintDoesNotDuplicate() throws {
+        let (id, _) = try create(document("Already preserved"))
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let version = try XCTUnwrap(store.modelContext.fetch(FetchDescriptor<NoteVersion>()).first { $0.noteID == id })
+        version.contentFingerprint = nil
+        try store.modelContext.save() // Persist the pre-upgrade representation.
+        store.refresh()
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .beforeRestore))
+        XCTAssertEqual(versions(id).count, 1)
+        XCTAssertEqual(versions(id).first?.id, version.id)
+    }
+
     func testR1_02StagedRecoveryAttachmentRequiresExactType() throws {
         let bytes = Data("file".utf8), attachmentID = UUID()
         let staged = StagedNoteAttachment(id: attachmentID, filename: "file.txt", contentTypeIdentifier: "test.café",

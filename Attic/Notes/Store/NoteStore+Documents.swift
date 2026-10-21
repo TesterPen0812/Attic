@@ -1163,7 +1163,8 @@ extension NoteStore {
     }
 
     private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
-        guard version.contentFormat == note.contentFormat, version.contentFingerprint != nil, version.contentFingerprint == WorkspaceModelFields.digest(note.content),
+        guard version.contentFormat == note.contentFormat,
+              version.contentFingerprint.map({ $0 == WorkspaceModelFields.digest(note.content) }) ?? (version.content == note.content),
               NoteTextReplacement.utf16Equal(version.title, note.title),
               NoteTextReplacement.utf16Equal(version.body, note.body) else { return false }
         return true
