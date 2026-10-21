@@ -4133,3 +4133,10 @@ extension TaskStore {
         return (root, ordered)
     }
 }
+
+extension TaskStore {
+    /// The newest replica of a note's rows (agent reads).
+    static func firstNote(_ rows: [NoteItem]) -> NoteItem? {
+        rows.max { $0.updatedAt < $1.updatedAt }
+    }
+}

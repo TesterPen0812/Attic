@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 enum AgentToolError: Error {
     case unknownTool(String)
@@ -261,6 +262,23 @@ final class AgentTaskTools {
     ]
 
     static let noteDefinitions: [[String: Any]] = [
+        [
+            "name": "get_task_workspace",
+            "title": "Read a Task's Workspace",
+            "description": "One consistent read of a task and its own note (Phase 3): the task's fields, its subtasks by group (open in order, then done), the note's body as Markdown without its title line, and the tokens for the task, the note and their association. Edit the body with update_note (body only: a task's note has no title of its own; rename the task with update_task); subtasks change only through task operations.",
+            "annotations": [
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": ["id": ["type": "string", "description": "The task's id (UUID)."]],
+                "required": ["id"],
+                "additionalProperties": false
+            ]
+        ],
         [
             "name": "list_notes",
             "title": "List Attic Notes",
@@ -576,6 +594,7 @@ final class AgentTaskTools {
         case "duplicate_task": try duplicateTask(arguments)
         case "move_subtask": try moveSubtask(arguments)
         case "list_notes": try listNotes(arguments)
+        case "get_task_workspace": try getTaskWorkspace(arguments)
         case "create_note": try createNote(arguments)
         case "update_note": try updateNote(arguments)
         case "update_note_table": try updateNoteTable(arguments)
@@ -930,13 +949,24 @@ final class AgentTaskTools {
         guard let load = noteStore.loadDocument(noteID: note.id), case let .editable(current) = load.content else {
             throw AgentToolError.notPerformed("This note was saved by a newer version of Attic and is read-only here.")
         }
-        let document: NoteDocument
+        // A task's own note (§ 2.9, § 2.12): its body only. The title is the
+        // task's; subtasks, the task and the association never change here.
+        let taskTitle = try note.taskID.map { taskID -> String in
+            guard title == nil else {
+                throw AgentToolError.invalidArguments("A task's note has no title of its own: rename the task with update_task.")
+            }
+            return taskTitleForNote(taskID) ?? current.title
+        }
+        var document: NoteDocument
         do {
             document = try NoteAgentTextParser.document(
                 title: title ?? NoteTextExport.agentLine(current.blocks.first ?? .text(""), index: 0),
                 body: body ?? NoteTextExport.agentBody(current),
                 base: current
             )
+            // Block 0 is the store's title snapshot, refreshed from the live
+            // title, and the document keeps its task form.
+            if let taskTitle { document = try document.taskSnapshot(title: taskTitle) }
         } catch {
             throw AgentToolError.invalidArguments(error.localizedDescription)
         }
@@ -1039,6 +1069,62 @@ final class AgentTaskTools {
                 "message": "Deletion is waiting for review. The person's text stays in Attic."])
         case let .failure(error): throw AgentToolError.notPerformed(error.localizedDescription)
         }
+    }
+
+    /// A task note's live title: the task's, or its deletion snapshot's.
+    private func taskTitleForNote(_ taskID: UUID) -> String? {
+        store.listedTask(withID: taskID)?.title ?? store.deletedFamily(rootID: taskID)?.root.title
+    }
+
+    /// `get_task_workspace` (§ 5.9): one snapshot of one context, so the
+    /// tokens agree. Tokens cover every physical replica (S2).
+    private func getTaskWorkspace(_ arguments: [String: Any]) throws -> String {
+        guard noteStore != nil else { throw AgentToolError.unknownTool("get_task_workspace") }
+        guard let rawID = arguments["id"] as? String, let id = UUID(uuidString: rawID) else {
+            throw AgentToolError.invalidArguments("A task id (UUID) is required.")
+        }
+        let context = ModelContext(store.container)
+        context.autosaveEnabled = false
+        let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        guard let task = TaskStore.canonicalReplicas(from: rows).first else { throw AgentToolError.notFound(rawID) }
+        let children = TaskStore.canonicalReplicas(from: try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == id })))
+            .filter { task.deletedAt == nil ? $0.deletedAt == nil : $0.deletionRootID == id }
+        // Canonical order (§ 2.3.1): open by manual order, then done.
+        func ordered(_ group: [TaskItem]) -> [TaskItem] {
+            group.sorted { lhs, rhs in
+                let left: Int64 = lhs.manualOrder ?? 0, right: Int64 = rhs.manualOrder ?? 0
+                return left != right ? left > right : lhs.createdAt < rhs.createdAt
+            }
+        }
+        let open = ordered(children.filter { $0.status != .done })
+        let done = ordered(children.filter { $0.status == .done })
+        let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == id && $0.deletedAt == nil }))
+        let ownID = try WorkspaceSessionRegistry.orderedOwnNotes(Set(notes.map { (note: NoteItem) in note.id }), in: context).first
+        var tokenOwners = [WorkspaceOwner(entity: .task, id: id)] + children.map { WorkspaceOwner(entity: .task, id: $0.id) }
+        var payload: [String: Any] = [
+            "task": serialize(task).merging(["deleted": task.deletedAt != nil]) { _, new in new },
+            "subtasks": [
+                "open": open.map { ["id": $0.id.uuidString, "title": $0.title] },
+                "done": done.map { ["id": $0.id.uuidString, "title": $0.title] }
+            ],
+            "association_generation": rows.map { (row: TaskItem) in row.associationGeneration }.max() ?? 0
+        ]
+        if let ownID, let note = TaskStore.firstNote(notes.filter { $0.id == ownID }) {
+            tokenOwners.append(WorkspaceOwner(entity: .note, id: ownID))
+            payload["own_note_id"] = ownID.uuidString
+            payload["note_revision"] = note.revisionToken
+            if let data = note.content, case let .editable(document) = NoteContentCodec.decode(data) {
+                payload["body"] = NoteTextExport.agentBody(document)
+            } else {
+                payload["body"] = NSNull()
+                payload["read_only"] = true
+            }
+        } else {
+            payload["own_note_id"] = NSNull()
+        }
+        let tokens = try tokenOwners.map { try WorkspaceModelToken.read($0, in: context) }
+        payload["task_token"] = WorkspaceModelFields.digest(try WorkspaceModelFields.encode(Array(tokens.prefix(1 + children.count))))
+        return try encode(payload)
     }
 
     private func findNote(_ arguments: [String: Any]) throws -> NoteItem {

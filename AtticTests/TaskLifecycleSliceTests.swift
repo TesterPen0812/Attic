@@ -713,4 +713,53 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(try rows(session.noteID).allSatisfy { $0.taskID == id }, "the association stays")
         XCTAssertTrue(presenter.host.textView.string.hasPrefix("Everything that has"), "the page shows the restored text")
     }
+
+    // MARK: Agents (§ 5.9): the workspace read and body-only note writes
+
+    private func json(_ text: String) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+    }
+
+    func testGetTaskWorkspaceReadsTheTaskItsSubtasksAndItsBodyWithoutTheTitleInOneSnapshot() throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let tools = AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
+        XCTAssertTrue(tools.definitions.contains { ($0["name"] as? String) == "get_task_workspace" })
+        let payload = try json(tools.call(name: "get_task_workspace", arguments: ["id": id.uuidString]))
+        XCTAssertEqual((payload["task"] as? [String: Any])?["title"] as? String, "Finalize launch checklist")
+        let subtasks = try XCTUnwrap(payload["subtasks"] as? [String: Any])
+        XCTAssertEqual((subtasks["open"] as? [[String: Any]])?.compactMap { $0["title"] as? String }, ["Write release notes"])
+        XCTAssertEqual((subtasks["done"] as? [[String: Any]])?.compactMap { $0["title"] as? String }, ["Freeze strings"])
+        XCTAssertEqual(payload["own_note_id"] as? String, noteID.uuidString)
+        let body = try XCTUnwrap(payload["body"] as? String)
+        XCTAssertTrue(body.hasPrefix("Everything that has"), "the body without block 0")
+        XCTAssertFalse(body.contains("Finalize launch checklist"))
+        XCTAssertNotNil(payload["task_token"] as? String)
+        XCTAssertNotNil(payload["note_revision"] as? String)
+        // The token covers the family: a subtask change makes it stale.
+        let first = payload["task_token"] as? String
+        XCTAssertTrue(library.updateTask(try XCTUnwrap(tasks.subtasks(of: id).first).id, status: .done).isApplied)
+        let again = try json(tools.call(name: "get_task_workspace", arguments: ["id": id.uuidString]))
+        XCTAssertNotEqual(again["task_token"] as? String, first)
+    }
+
+    func testAnAgentWritesATasksNoteBodyOnlyAndNeverItsTitle() throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        // The agent server's own note store (no editor on screen here).
+        let agentNotes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: agentNotes, library: library)
+        let revision = try XCTUnwrap(agentNotes.note(withID: noteID)?.revisionToken)
+        XCTAssertThrowsError(try tools.call(name: "update_note", arguments: ["id": noteID.uuidString, "title": "Hijack",
+                                                                             "base_revision": revision]),
+                             "a task's note has no title of its own")
+        _ = try tools.call(name: "update_note", arguments: ["id": noteID.uuidString, "body": "Agent wrote this.",
+                                                            "base_revision": revision])
+        let stored = try storedDocument(noteID)
+        XCTAssertEqual(stored.title, "Finalize launch checklist", "block 0 stays the live title snapshot")
+        XCTAssertTrue(stored.requires.contains("taskNote"))
+        XCTAssertEqual(stored.blocks.dropFirst().map(\.text), ["Agent wrote this."])
+        XCTAssertEqual(tasks.subtasks(of: id).count, 2, "a body write never touches subtasks")
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == id }, "nor the association")
+    }
 }
