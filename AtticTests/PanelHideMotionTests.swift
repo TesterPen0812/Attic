@@ -535,13 +535,22 @@ final class PanelHideMotionShipTests: XCTestCase {
         defer { rig.close() }
         RunLoop.current.run(until: Date().addingTimeInterval(1.0))
         rig.content.layoutSubtreeIfNeeded()
-        let split = try XCTUnwrap(PanelGenieView.tierSplit(rig.host.layer, surfaceRect: rig.host.frame))
         func has(_ layers: [CALayer], _ test: (CALayer) -> Bool) -> Bool {
             layers.contains { test($0) || has($0.sublayers ?? [], test) }
         }
         let isBlur: (CALayer) -> Bool = { layer in
             (layer.filters ?? []).contains { (($0 as? NSObject)?.value(forKey: "name") as? String) == "variableBlur" }
         }
+        // Where the panel draws neither (CI's virtual GPU), there is nothing
+        // to tell apart and the snapshot renders whole.
+        let root = try XCTUnwrap(rig.host.layer)
+        let isControlGlass: (CALayer) -> Bool = { layer in
+            String(describing: type(of: layer)) == "CASDFLayer"
+                && root.convert(layer.bounds, from: layer).width < rig.host.frame.width - 3
+        }
+        try XCTSkipUnless(has([root], isBlur) || has([root], isControlGlass),
+                          "this Mac draws neither the edges' variable blur nor the controls' Liquid Glass")
+        let split = try XCTUnwrap(PanelGenieView.tierSplit(rig.host.layer, surfaceRect: rig.host.frame))
         // SwiftUI's page scroll view (the composer's field has one of its own).
         let isPage: (CALayer) -> Bool = { layer in
             layer.delegate.map { String(describing: type(of: $0)).contains("HostingScrollView") } ?? false
