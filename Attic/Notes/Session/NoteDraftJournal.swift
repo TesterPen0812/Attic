@@ -1074,6 +1074,15 @@ private final class NoteJournalSynchronousResult<T>: @unchecked Sendable {
     }
 }
 
+#if DEBUG
+/// Diagnostic seam: elapsed synchronous IO on the main thread only. It is
+/// disabled unless a focused measurement explicitly opts in.
+enum NoteJournalWaitMeasurement {
+    @MainActor static var enabled = false
+    @MainActor static var milliseconds: [Double] = []
+}
+#endif
+
 extension NoteDraftJournal {
     nonisolated func prepareOperationSynchronously(_ envelope: WorkspaceOperationEnvelope) throws -> WorkspaceOperationClaim {
         let io = self.io
@@ -1092,6 +1101,16 @@ extension NoteDraftJournal {
         let _: Bool = try Self.waitForIO { try await io.releaseOperation(claim); return true }
     }
     nonisolated private static func waitForIO<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
+        #if DEBUG
+        let measuring = Thread.isMainThread && MainActor.assumeIsolated { NoteJournalWaitMeasurement.enabled }
+        let began = measuring ? ProcessInfo.processInfo.systemUptime : 0
+        defer {
+            if measuring {
+                let elapsed = (ProcessInfo.processInfo.systemUptime - began) * 1_000
+                MainActor.assumeIsolated { NoteJournalWaitMeasurement.milliseconds.append(elapsed) }
+            }
+        }
+        #endif
         let box = NoteJournalSynchronousResult<T>()
         Task.detached(priority: .userInitiated) {
             let result: Result<T, Error>

@@ -19,6 +19,50 @@ final class TaskImageTests: XCTestCase {
         collection?.release()
     }
 
+    func testP3_2MeasureJournaledNotesAndTasksMainThreadWaitForIO() async throws {
+        let root = ownedTemporaryDirectory(prefix: "JournalWaitMeasurement")
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        try coordinator.adoptJournal(NoteDraftJournal(directory: root.appendingPathComponent("Journal")))
+        let notes = NoteStore(container: container)
+        let tasks = TaskStore(container: container, taskImageFiles: files)
+        let task = try XCTUnwrap(tasks.create(title: "Attach a file"))
+        let file = root.appendingPathComponent("typical.txt")
+        try Data(repeating: 65, count: 65_536).write(to: file)
+        for scenario in ["notes-typical", "notes-5000-lines-attachments", "tasks-attachment"] {
+            var totals: [Double] = [], calls: [Int] = []
+            for sample in 0..<10 {
+                let heavy = scenario == "notes-5000-lines-attachments"
+                let payload = Data(repeating: 66, count: heavy ? 1_048_576 : 65_536)
+                let staged = StagedNoteAttachment(id: UUID(), filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+                    byteCount: Int64(payload.count), digest: NotePayloadDigest.sha256(payload), data: payload)
+                var document = NoteDocument(blocks: [.text("Measurement \(sample)")] + (0..<(heavy ? 5_000 : 2)).map { .text("Line \($0): text in a journaled note with a file.") })
+                document.blocks.append(.file(attachmentID: staged.id, filename: staged.filename,
+                    contentTypeIdentifier: staged.contentTypeIdentifier, byteCount: staged.byteCount))
+                let prepared = try PreparedNoteDocument(document)
+                NoteJournalWaitMeasurement.milliseconds = []
+                NoteJournalWaitMeasurement.enabled = true
+                defer { NoteJournalWaitMeasurement.enabled = false }
+                if scenario == "tasks-attachment" {
+                    let saved = await tasks.attachFiles([file], to: task.id)
+                    XCTAssertTrue(saved)
+                } else {
+                    _ = try notes.createDocumentNote(id: UUID(), document: document, staged: [staged], prepared: prepared).get()
+                }
+                NoteJournalWaitMeasurement.enabled = false
+                if sample >= 2 {
+                    totals.append(NoteJournalWaitMeasurement.milliseconds.reduce(0, +))
+                    calls.append(NoteJournalWaitMeasurement.milliseconds.count)
+                }
+            }
+            let sorted = totals.sorted()
+            let median = (sorted[(sorted.count - 1) / 2] + sorted[sorted.count / 2]) / 2
+            XCTAssertTrue(calls.allSatisfy { $0 > 0 }, "must exercise the production journaled path")
+            print("P3_2_WAIT_FOR_IO scenario=\(scenario) samples=\(totals.count) median_ms=\(median) p95_ms=\(sorted.last!) calls=\(calls) all_ms=\(totals)")
+        }
+    }
+
     private func imageFile(in directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let context = try XCTUnwrap(CGContext(data: nil, width: 32, height: 32,
