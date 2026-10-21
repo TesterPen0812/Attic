@@ -290,7 +290,7 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(tasks.task(withID: ids[0])?.title, "after fault cleared")
     }
 
-    func testR5DisjointPlainUnknownRefusalRollsBackAndReloadsDurableTruth() throws {
+    func testR5DisjointAmbiguousSavesRetainAndResolveBothOwners() throws {
         let tasks = TaskStore(container: container, persist: { context in
             try context.save(); throw WorkspaceFoundationError.unknown
         })
@@ -299,11 +299,15 @@ final class WorkspaceCommitTests: XCTestCase {
         tasks.refresh()
         coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
         XCTAssertFalse(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "ambiguous durable"))
-        XCTAssertFalse(tasks.update(try XCTUnwrap(tasks.task(withID: disjointID)), title: "never saved"))
+        XCTAssertFalse(tasks.update(try XCTUnwrap(tasks.task(withID: disjointID)), title: "unrelated saved"))
         XCTAssertEqual(tasks.task(withID: taskID)?.title, "ambiguous durable")
-        XCTAssertEqual(tasks.task(withID: disjointID)?.title, "disjoint durable")
+        XCTAssertEqual(tasks.task(withID: disjointID)?.title, "unrelated saved")
         XCTAssertFalse(try XCTUnwrap(tasks.task(withID: disjointID)?.modelContext).hasChanges)
-        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>()).first { $0.id == disjointID }?.title, "disjoint durable")
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<TaskItem>()).first { $0.id == disjointID }?.title, "unrelated saved")
+        coordinator.beforeReconciliationRead = nil
+        XCTAssertTrue(coordinator.retryHeldWrites())
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "first resolved"))
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: disjointID)), title: "second resolved"))
     }
 
     func testR4RefusalReasonsHaveLocalizedDescriptions() {

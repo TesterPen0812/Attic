@@ -1338,11 +1338,9 @@ final class NoteStore: ObservableObject {
             registerSuccessfulLocalSave()
             return true
         } catch {
-            if error is WorkspaceLegacyBridge.CommitHeld {
-                lastErrorMessage = "The save outcome is still being checked. This note is held."
-                return false
-            }
-            let saveError = error.localizedDescription
+            let saveError = error is WorkspaceLegacyBridge.CommitHeld
+                ? "The save outcome is still being checked. This note is held."
+                : error.localizedDescription
             context.rollback()
             tagInventoryDidRefresh()
             do {

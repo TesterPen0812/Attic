@@ -5,6 +5,44 @@ import XCTest
 
 @MainActor
 final class Phase3RestartTests: XCTestCase {
+    func testP3_3HeldTaskAndNoteSavesLeaveUnrelatedEditsWritable() throws {
+        for notesCase in [false, true] {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+            let seed = ModelContext(container)
+            let first = TaskItem(title: "first"), second = TaskItem(title: "second")
+            let firstNote = NoteItem(), secondNote = NoteItem()
+            for (note, title) in [(firstNote, "first"), (secondNote, "second")] {
+                NoteStore.stageDocumentContent(try PreparedNoteDocument(NoteDocument(blocks: [.text(title)])),
+                    format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
+                seed.insert(note)
+            }
+            seed.insert(first); seed.insert(second)
+            try seed.save()
+            coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+            var fail = true
+            let persist: (ModelContext) throws -> Void = { context in
+                if fail { throw WorkspaceFoundationError.unknown }
+                try context.save()
+            }
+            if notesCase {
+                let store = NoteStore(container: container, persist: persist)
+                XCTAssertFalse(store.update(try XCTUnwrap(store.note(withID: firstNote.id)), title: "held"))
+                XCTAssertFalse(store.modelContext.hasChanges)
+                fail = false
+                XCTAssertTrue(store.update(try XCTUnwrap(store.note(withID: secondNote.id)), title: "unrelated"))
+                XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == secondNote.id }?.title, "unrelated")
+            } else {
+                let store = TaskStore(container: container, persist: persist)
+                XCTAssertFalse(store.update(try XCTUnwrap(store.task(withID: first.id)), title: "held"))
+                XCTAssertFalse(try XCTUnwrap(store.task(withID: first.id)?.modelContext).hasChanges)
+                fail = false
+                XCTAssertTrue(store.update(try XCTUnwrap(store.task(withID: second.id)), title: "unrelated"))
+                XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == second.id }?.title, "unrelated")
+            }
+        }
+    }
+
     func testBodyOnlyMarkdownAndNativeSelectionReplayKeepTheLiveTitle() throws {
         let document = try NoteDocument(blocks: [.text("Task title"), .text("body")]).taskSnapshot(title: "Task title")
         let route = UndoRoute()

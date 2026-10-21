@@ -107,7 +107,7 @@ final class WorkspaceOperationCoordinator {
     private var purgedMembers: Set<UUID>?
     private var tombstonesNeedReload = false
     private(set) var tombstoneLoads = 0
-    private var plainUnknown: ([WorkspaceModelToken], [WorkspaceModelToken], Set<WorkspaceOwner>, [WorkspaceOwner: Set<PersistentIdentifier>])?
+    private var plainUnknown: [UUID: ([WorkspaceModelToken], [WorkspaceModelToken], Set<WorkspaceOwner>, [WorkspaceOwner: Set<PersistentIdentifier>])] = [:]
     private(set) var startupReconciled = false
     private var launchWork: Task<Void, Error>?
     private var launchFinished = false
@@ -222,7 +222,9 @@ final class WorkspaceOperationCoordinator {
     /// due or overlapping entries, with at most four attempts per save.
     /// A nil scope is an explicit retry, retained for existing recovery callers.
     func retryHeldWrites(affecting affected: Set<WorkspaceOwner>? = nil) -> Bool {
-        if plainUnknown != nil, reconcilePlain() == .unknown { return false }
+        if !plainUnknown.isEmpty, reconcilePlain() == .unknown {
+            guard let affected, affected.isDisjoint(with: heldOwners) else { return false }
+        }
         if !compatibilityPending.isEmpty {
             let now = retryNow()
             let overlapping = Set(compatibilityPending.filter { id in
@@ -574,9 +576,10 @@ final class WorkspaceOperationCoordinator {
                 // These immutable compact guards already describe both sides.
                 // Hash/encode reconciliation proofs only for an ambiguous save,
                 // not every successful tick or prepared note commit.
-                plainUnknown = (previous, next, affected, physicalIDs)
+                let attempt = UUID()
+                plainUnknown[attempt] = (previous, next, affected, physicalIDs)
                 heldOwners.formUnion(affected)
-                return reconcilePlain()
+                return reconcilePlain(attempt)
             }
         } catch { return .notCommitted }
     }
@@ -650,9 +653,10 @@ final class WorkspaceOperationCoordinator {
                 return .committed
             } catch {
                 if previous == after { return .notCommitted }
-                plainUnknown = (previous, after, affected, physicalIDs)
+                let attempt = UUID()
+                plainUnknown[attempt] = (previous, after, affected, physicalIDs)
                 heldOwners.formUnion(affected)
-                let outcome = reconcilePlain()
+                let outcome = reconcilePlain(attempt)
                 if outcome == .committed {
                     confirmed(try WorkspaceModelToken.read(owners: writes, in: freshContext()))
                 }
@@ -747,7 +751,13 @@ final class WorkspaceOperationCoordinator {
         return true
     }
     func reconcilePlain() -> Outcome {
-        guard let (beforeTokens, afterTokens, affected, physicalIDs) = plainUnknown else { return .conflict }
+        guard !plainUnknown.isEmpty else { return .conflict }
+        let outcomes = Array(plainUnknown.keys).map { reconcilePlain($0) }
+        if outcomes.contains(.unknown) { return .unknown }
+        return outcomes.contains(.committed) ? .committed : .notCommitted
+    }
+    private func reconcilePlain(_ attempt: UUID) -> Outcome {
+        guard let (beforeTokens, afterTokens, affected, physicalIDs) = plainUnknown[attempt] else { return .conflict }
         do {
             let before = try states(tokens: beforeTokens, physical: true, baselineIDs: physicalIDs)
             let after = try states(tokens: afterTokens, physical: true, baselineIDs: physicalIDs)
@@ -757,7 +767,9 @@ final class WorkspaceOperationCoordinator {
             if current == after { outcome = .committed }
             else if current == before { outcome = .notCommitted }
             else { return .unknown }
-            plainUnknown = nil; heldOwners.subtract(affected); return outcome
+            plainUnknown.removeValue(forKey: attempt)
+            heldOwners.subtract(affected); heldOwners.formUnion(damagedOperationOwners)
+            return outcome
         } catch { return .unknown }
     }
 

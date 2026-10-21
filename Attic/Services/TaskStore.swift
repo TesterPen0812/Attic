@@ -3648,11 +3648,9 @@ final class TaskStore: ObservableObject {
             #endif
             return true
         } catch {
-            if error is WorkspaceLegacyBridge.CommitHeld {
-                report("The save outcome is still being checked. This item is held.", owner: owner)
-                return false
-            }
-            let saveError = error.localizedDescription
+            let saveError = error is WorkspaceLegacyBridge.CommitHeld
+                ? "The save outcome is still being checked. This item is held."
+                : error.localizedDescription
             context.rollback()
             tagInventoryDidRefresh()
             do {
