@@ -735,7 +735,8 @@ final class PanelGenieView: NSView {
             let controls = render(hiding: split.belowControls)
             lap("r_controls")
             if let content {
-                let made = Self.glassLook(content: content, scan: scan, scale: scale, dark: dark)
+                let made = Self.glassLook(content: content, scan: scan, scale: scale, dark: dark,
+                                          surfaceRect: surfaceRect, cornerRadius: cornerRadius)
                 lap("glass_look")
                 context.draw(made ?? content, in: view.bounds)
             }
@@ -822,7 +823,8 @@ final class PanelGenieView: NSView {
     /// The content with the edges' variable blurs and the controls' glass
     /// made from it (y up). Core Image works on those regions only, so a
     /// snapshot costs a few milliseconds more, not a full-size pass.
-    private static func glassLook(content: CGImage, scan: GlassScan, scale: CGFloat, dark: Bool) -> CGImage? {
+    private static func glassLook(content: CGImage, scan: GlassScan, scale: CGFloat, dark: Bool,
+                                  surfaceRect: CGRect, cornerRadius: CGFloat) -> CGImage? {
         let space = content.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
         guard let context = bitmap(width: content.width, height: content.height, space: space) else { return nil }
         let full = CGRect(x: 0, y: 0, width: content.width, height: content.height)
@@ -859,15 +861,28 @@ final class PanelGenieView: NSView {
         // again, under the glass's tint, with a hairline rim. The live
         // material shows through it as it does at rest.
         let radius = (dark ? PanelGenieGlassLook.darkBlur : PanelGenieGlassLook.lightBlur) * scale
-        let area = pixels(scan.pills.reduce(CGRect.null) { $0.union($1.rect.intersection($1.clip)) }.insetBy(dx: -2, dy: -2))
-        guard area.width > 0, area.height > 0, let banded = context.makeImage(),
-              let frosted = imageContext.createCGImage(
-                  CIImage(cgImage: banded).clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius]),
-                  from: area, format: .BGRA8, colorSpace: space
-              ) else { return context.makeImage() }
+        // The blur averages only what lies inside the panel (a normalised
+        // blur: the content's blur over the blur of the panel's own shape).
+        // A plain blur reaches past the panel's edge and pulls its
+        // transparency in, so Solid's add bar and corner buttons let the
+        // desktop through; keeping each pixel's own opacity instead brings
+        // the rows' text back as a ghost.
+        guard let banded = context.makeImage(),
+              let shape = coverage(width: content.width, height: content.height, scale: scale,
+                                   surfaceRect: surfaceRect, cornerRadius: cornerRadius) else { return context.makeImage() }
+        let blurredContent = CIImage(cgImage: banded).clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
+        let blurredShape = CIImage(cgImage: shape).clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
         context.scaleBy(x: scale, y: scale)
-        let areaPoints = CGRect(x: area.minX / scale, y: area.minY / scale, width: area.width / scale, height: area.height / scale)
         for pill in scan.pills {
+            let area = pixels(pill.rect.intersection(pill.clip).insetBy(dx: -2, dy: -2))
+            guard area.width > 0, area.height > 0, let frosted = normalisedBlur(
+                imageContext.createCGImage(blurredContent, from: area, format: .BGRA8, colorSpace: space),
+                over: imageContext.createCGImage(blurredShape, from: area, format: .BGRA8, colorSpace: space),
+                space: space
+            ) else { continue }
+            let areaPoints = CGRect(x: area.minX / scale, y: area.minY / scale, width: area.width / scale, height: area.height / scale)
             let capsule = Path(roundedRect: pill.rect, cornerRadius: min(pill.rect.width, pill.rect.height) / 2,
                                style: .circular).cgPath
             context.saveGState()
@@ -891,6 +906,40 @@ final class PanelGenieView: NSView {
             context.restoreGState()
         }
         return context.makeImage()
+    }
+
+    /// The panel's squircle, opaque white on clear, the snapshot's size.
+    private static func coverage(width: Int, height: Int, scale: CGFloat, surfaceRect: CGRect, cornerRadius: CGFloat) -> CGImage? {
+        guard let context = bitmap(width: width, height: height, space: CGColorSpace(name: CGColorSpace.sRGB)!) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        context.addPath(Squircle(cornerRadius: cornerRadius, exponent: AtticStyle.panelSquircleExponent).path(in: surfaceRect).cgPath)
+        context.setFillColor(NSColor.white.cgColor)
+        context.fillPath()
+        return context.makeImage()
+    }
+
+    /// `blurred` (premultiplied) divided by the blurred panel shape's
+    /// coverage: the average of what lies inside the panel.
+    static func normalisedBlur(_ blurred: CGImage?, over shape: CGImage?, space: CGColorSpace) -> CGImage? {
+        guard let blurred, let shape, blurred.width == shape.width, blurred.height == shape.height,
+              let out = bitmap(width: blurred.width, height: blurred.height, space: space),
+              let cover = bitmap(width: shape.width, height: shape.height, space: space) else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: blurred.width, height: blurred.height)
+        out.setBlendMode(.copy)
+        out.draw(blurred, in: rect)
+        cover.setBlendMode(.copy)
+        cover.draw(shape, in: rect)
+        guard let pixels = out.data?.assumingMemoryBound(to: UInt8.self),
+              let weights = cover.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        for index in 0..<(blurred.width * blurred.height) {
+            let weight = Int(weights[index * 4 + 3])
+            let base = index * 4
+            guard weight > 0 else { continue }
+            for channel in 0..<4 {
+                pixels[base + channel] = UInt8(min(255, Int(pixels[base + channel]) * 255 / weight))
+            }
+        }
+        return out.makeImage()
     }
 
 

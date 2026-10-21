@@ -601,6 +601,34 @@ final class PanelHideMotionShipTests: XCTestCase {
         XCTAssertFalse(Set(glass.hidden.map(ObjectIdentifier.init)).contains(ObjectIdentifier(darken)))
     }
 
+    /// The controls' glass averages only what lies inside the panel: where
+    /// the blur reaches past the edge, an opaque (Solid) panel stays opaque
+    /// and a translucent one keeps its own translucency.
+    func testTheControlsGlassBlurStaysInsideThePanel() throws {
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        func image(_ value: UInt8, alpha: UInt8) throws -> CGImage {
+            // Two pixels: as blurred near the edge, half the weight is outside.
+            let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 1, bitsPerComponent: 8, bytesPerRow: 8, space: space,
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
+            let data = try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self))
+            for pixel in 0..<2 { for channel in 0..<3 { data[pixel * 4 + channel] = value }; data[pixel * 4 + 3] = alpha }
+            return try XCTUnwrap(context.makeImage())
+        }
+        func alpha(_ image: CGImage?) throws -> UInt8 {
+            let image = try XCTUnwrap(image)
+            let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 1, bitsPerComponent: 8, bytesPerRow: 8, space: space,
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: 2, height: 1))
+            return try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self))[3]
+        }
+        // Solid: opaque content, blurred to half by the edge, over a half-covered shape.
+        let solid = PanelGenieView.normalisedBlur(try image(100, alpha: 128), over: try image(128, alpha: 128), space: space)
+        XCTAssertEqual(Int(try alpha(solid)), 255, accuracy: 2)
+        // Glass: 30% content, blurred to 15% by the edge: 30% again.
+        let glass = PanelGenieView.normalisedBlur(try image(30, alpha: 38), over: try image(128, alpha: 128), space: space)
+        XCTAssertEqual(Int(try alpha(glass)), 76, accuracy: 2)
+    }
+
     /// The hover monitor announces a timed reveal (pointer resting in the
     /// corner) and a timed hide (pointer gone), so Genie can prepare.
     func testTimedRevealsAndHidesAreAnnouncedAhead() throws {
