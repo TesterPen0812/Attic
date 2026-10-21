@@ -665,7 +665,8 @@ struct TaskNotePage: View {
     /// S10's Review (`p3-12` states): the oldest other note first.
     func reviewCommands() -> [AtticMenuCommand] {
         guard let alternate = model.alternateNotes.first else { return [] }
-        let title = noteStore.note(withID: alternate).map { NoteRowSummary(note: $0, attachments: []).title } ?? ""
+        // The other note's first words (its title line is the task's).
+        let title = noteStore.note(withID: alternate).map { NoteRowSummary(note: $0, attachments: []).preview } ?? ""
         var commands: [AtticMenuCommand] = []
         if !title.isEmpty { commands.append(AtticMenuCommand(verbatim: title, isDisabled: true) {}) }
         commands.append(AtticMenuCommand(verbatim: String(localized: "Merge into This Note"),
@@ -737,8 +738,9 @@ struct TaskNotePage: View {
             return subtasks + " " + String(localized: "to Recently Deleted for 30 days. Its note stays in All notes, and you can keep editing it.")
         case .deleteNote:
             return String(localized: "Its writing and files go to Recently Deleted for 30 days. “\(model.head.title)” and its subtasks stay in Tasks.")
-        case .richSubtasks:
-            return String(localized: "Those lines stay in the note unchanged; plain lines still move.")
+        case let .richSubtasks(analysis):
+            return analysis.richCount == 1 ? String(localized: "That line stays in the note unchanged; plain lines still move.")
+                : String(localized: "Those lines stay in the note unchanged; plain lines still move.")
         case .reopenForSubtasks, .reopenRequest:
             return String(localized: "An open subtask reopens “\(model.head.title)”.")
         }
