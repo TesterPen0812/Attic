@@ -694,6 +694,22 @@ final class PanelHideMotionShipTests: XCTestCase {
         }
     }
 
+    /// A snapshot prepared while the panel is idle stays good for as long
+    /// as nothing changes (a swipe then starts without one: at finger rest
+    /// it froze a swipe that moved within ~80 ms), and goes stale at once
+    /// when something may have changed.
+    func testAnIdleSnapshotLastsUntilSomethingChanges() throws {
+        try XCTSkipIf(PanelGenieRenderer.shared.device == nil, "no Metal device")
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
+        defer { rig.close() }
+        let solid = PanelGenieSurface(live: nil, translucent: false)
+        rig.content.prepareAlternateSnapshot(.genieLiveGlass, surface: solid, lifetime: 30)
+        RunLoop.current.run(until: Date().addingTimeInterval(PanelHideMotionTuning.geniePreparedLifetime + 0.3))
+        XCTAssertTrue(rig.content.hasPreparedSnapshot(.genieLiveGlass, surface: solid), "past the short lifetime")
+        rig.content.noteContentMayChange()
+        XCTAssertFalse(rig.content.hasPreparedSnapshot(.genieLiveGlass, surface: solid))
+    }
+
     /// The hover monitor announces a timed reveal (pointer resting in the
     /// corner) and a timed hide (pointer gone), so Genie can prepare.
     func testTimedRevealsAndHidesAreAnnouncedAhead() throws {

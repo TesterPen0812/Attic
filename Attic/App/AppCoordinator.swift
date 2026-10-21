@@ -932,6 +932,11 @@ final class AppCoordinator: ObservableObject {
                 ]
             }
             hideMotionBench?.acceptsInput = { [weak self] in self?.panelController.acceptsInputForProbe ?? false }
+            hideMotionBench?.progress = { [weak self] in self?.panelController.displayedProgressForProbe ?? 0 }
+            hideMotionBench?.swipeTrace = {
+                defer { PanelSwipeTrace.events = []; PanelSwipeTrace.release = [:] }
+                return ["updates": PanelSwipeTrace.events, "release": PanelSwipeTrace.release]
+            }
             hideMotionBench?.beginCost = { [weak self] in self?.panelController.alternateBeginCostForProbe ?? 0 }
             #endif
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {

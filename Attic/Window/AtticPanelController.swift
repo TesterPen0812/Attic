@@ -158,6 +158,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
     #if DEBUG
+    /// The motion bench: how far the panel is collapsed now (0 shown, 1
+    /// hidden), whichever animation draws it.
+    var displayedProgressForProbe: Double {
+        guard let container = contentContainer else { return 0 }
+        if container.alternateMode != nil { return container.alternateProgress }
+        return Double((1 - container.presentationTransform.m11) / (1 - PanelCollapseGeometry.collapsedScale))
+    }
     /// The motion bench: whether the panel takes clicks and keys right now.
     var acceptsInputForProbe: Bool { contentContainer?.allowsContentInteraction == true && panel.isKeyWindow }
     /// The motion bench: what starting the last hide animation cost (ms).
@@ -271,14 +278,18 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Saved data may change what the panel shows, hidden or not: a
         // snapshot taken before it is stale.
         NotificationCenter.default.publisher(for: ModelContext.didSave).receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.contentContainer?.noteContentMayChange() }
+            .sink { [weak self] _ in
+                self?.contentContainer?.noteContentMayChange()
+                self?.scheduleIdlePrepare()
+            }
             .store(in: &cancellables)
         // Genie's shader compiles off the main thread before its first use.
-        settings.$hideAnimation.sink { mode in
+        settings.$hideAnimation.sink { [weak self] mode in
             if mode.usesGenieMesh {
                 PanelGenieRenderer.shared.prewarm()
                 PanelGenieView.prewarmImageWork()
             }
+            DispatchQueue.main.async { self?.scheduleIdlePrepare() }
         }.store(in: &cancellables)
     }
 
@@ -493,6 +504,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 guard self.visibilityTransition.completeTransition(generation) else { return }
                 self.isShowing = false
+                self.scheduleIdlePrepare()
                 if self.needsResizeAfterShowing {
                     self.needsResizeAfterShowing = false
                     self.resizeAndReanchor()
@@ -601,12 +613,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         panel.onContentMayChange = { [weak self] in
             self?.contentContainer?.noteContentMayChange()
-        }
-        panel.onTrackpadSwipeMayBegin = { [weak self] in
-            guard let self, self.panel.isVisible, !self.isInteractiveDismissal,
-                  !AtticMotionPreference.reducesMotion, self.settings.hideAnimation.usesGenieMesh,
-                  let container = self.contentContainer, container.alternateMode == nil else { return }
-            container.prepareAlternateSnapshot(self.settings.hideAnimation, surface: self.genieSurface(for: self.settings.hideAnimation))
+            self?.scheduleIdlePrepare()
         }
         panel.onTrackpadDismissProgress = { [weak self] distance in
             self?.updateInteractiveDismissal(distance: distance)
@@ -1002,6 +1009,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func updateInteractiveDismissal(distance: CGFloat) {
         guard panel.isVisible else { return }
+        #if DEBUG
+        let traceBegan = CACurrentMediaTime()
+        var traced: CGFloat = -1
+        defer {
+            PanelSwipeTrace.events.append([traceBegan, panel.lastScrollEventTime, Double(distance), Double(traced),
+                                           (CACurrentMediaTime() - traceBegan) * 1000])
+        }
+        #endif
         if !isInteractiveDismissal {
             stopPanelMotion()
             isInteractiveDismissal = true
@@ -1029,9 +1044,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             forSwipeDistance: distance, panelWidth: panel.visibleContentFrame.width
         )
         let collapse = interactiveSwipeStartProgress + (1 - interactiveSwipeStartProgress) * progress
+        #if DEBUG
+        traced = collapse
+        #endif
         contentContainer?.allowsContentInteraction = false
         if let draft = swipeDraft, let container = contentContainer {
-            let now = CACurrentMediaTime()
+            // The fingers' speed is timed by the events' own times: after a
+            // stall the main thread gets to them bunched (g6: release speed
+            // 10% low after an 80 ms snapshot).
+            let now = panel.lastScrollEventTime > 0 ? panel.lastScrollEventTime : CACurrentMediaTime()
             swipeSamples.append((now, Double(collapse)))
             swipeSamples.removeAll { now - $0.time > PanelTrackpadDismissTracker.velocityWindow }
             container.dockedCornerForAlternate = currentCorner
@@ -1048,6 +1069,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// The fingers' speed at release, in progress per second (the swipe's
     /// own window of recent movement), for the animation's spring.
     private func captureSwipeRelease() {
+        #if DEBUG
+        defer {
+            PanelSwipeTrace.release = ["t": CACurrentMediaTime(), "velocity": pendingDraftRelease ?? -99,
+                                       "progress": swipeSamples.last?.progress ?? -1]
+        }
+        #endif
         guard swipeDraft != nil else { pendingDraftRelease = nil; return }
         let limit = PanelHideMotionTuning.swipeMaxVelocity
         guard let first = swipeSamples.first, let last = swipeSamples.last,
@@ -1058,6 +1085,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func clearInteractiveDismissal() {
         isInteractiveDismissal = false
+        scheduleIdlePrepare()
         swipeDraft = nil
         swipeSamples = []
         interactiveSwipeStartProgress = 0
@@ -1262,6 +1290,31 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private var expectedChangeWork: DispatchWorkItem?
+    private var idlePrepareWork: DispatchWorkItem?
+
+    /// Genie: once the panel has been idle `genieIdlePrepareDelay`, prepare
+    /// the snapshot a swipe or hide will start from, and keep it fresh
+    /// while the panel stays open and idle. Anything that may change the
+    /// panel calls this again.
+    func scheduleIdlePrepare() {
+        idlePrepareWork?.cancel()
+        idlePrepareWork = nil
+        let mode = settings.hideAnimation
+        guard mode.usesGenieMesh, !AtticMotionPreference.reducesMotion else { return }
+        let lifetime = PanelHideMotionTuning.genieIdlePreparedLifetime
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.panel.isVisible, !self.isPanelMotionActive, !self.isInteractiveDismissal,
+                  self.settings.hideAnimation == mode, let container = self.contentContainer,
+                  container.alternateMode == nil else { return }
+            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), lifetime: lifetime)
+            // Renewed before it lapses, while the panel stays open and idle.
+            let renew = DispatchWorkItem { [weak self] in self?.scheduleIdlePrepare() }
+            self.idlePrepareWork = renew
+            DispatchQueue.main.asyncAfter(deadline: .now() + lifetime - 2, execute: renew)
+        }
+        idlePrepareWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + PanelHideMotionTuning.genieIdlePrepareDelay, execute: work)
+    }
     private var expectedChange: (hiding: Bool, due: CFTimeInterval)?
 
     /// Before a reveal from hidden: the presentation collapsed the way the
@@ -1754,3 +1807,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isDisplayingResizeCursor = false
     }
 }
+
+#if DEBUG
+/// The motion bench's record of a swipe: each update (handled at, the
+/// event's own time, finger distance, collapse applied, ms to apply) and
+/// the release.
+@MainActor
+enum PanelSwipeTrace {
+    static var events: [[Double]] = []
+    static var release: [String: Double] = [:]
+}
+#endif

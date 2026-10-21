@@ -30,6 +30,11 @@ final class PanelHideMotionBench: NSObject {
     var acceptsInput: () -> Bool = { false }
     /// The last animation start's cost (snapshot and live-material set-up, ms).
     var beginCost: () -> Double = { 0 }
+    /// The panel's displayed collapse (0 shown, 1 hidden), sampled each frame.
+    var progress: () -> Double = { 0 }
+    /// A swipe's own record (`PanelSwipeTrace`), taken and cleared at its end.
+    var swipeTrace: () -> [String: Any] = { [:] }
+    private var samples: [Double] = []
     /// Anything else worth a line (the snapshot's own costs).
     var trace: () -> [String: Any] = { [:] }
     private var window: CFTimeInterval = 0.6
@@ -64,7 +69,8 @@ final class PanelHideMotionBench: NSObject {
                                          prepare: prepares ? prepare : nil)
         bench.listen(SIGUSR1) { bench.toggle(interrupt: false) }
         bench.listen(SIGUSR2) { bench.toggle(interrupt: true) }
-        bench.listen(SIGURG) { bench.begin(kind: "swipe", window: 1.4) }
+        let swipeWindow = Double(ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_SWIPE_S"] ?? "1.4") ?? 1.4
+        bench.listen(SIGURG) { bench.begin(kind: "swipe", window: swipeWindow) }
         return bench
     }
 
@@ -115,7 +121,9 @@ final class PanelHideMotionBench: NSObject {
         self.window = window
         started = CACurrentMediaTime()
         stamps = []
-        record = ["kind": kind, "mode": mode(), "wall": Date().timeIntervalSince1970]
+        samples = []
+        if kind == "swipe" { _ = swipeTrace() }
+        record = ["kind": kind, "mode": mode(), "wall": Date().timeIntervalSince1970, "t0": CACurrentMediaTime()]
         guard let screen = NSScreen.main else { return }
         let made = screen.displayLink(target: self, selector: #selector(tick(_:)))
         made.add(to: .main, forMode: .common)
@@ -128,6 +136,7 @@ final class PanelHideMotionBench: NSObject {
 
     @objc private func tick(_ link: CADisplayLink) {
         stamps.append(link.timestamp)
+        samples.append((progress() * 10_000).rounded() / 10_000)
         if CACurrentMediaTime() - started > window { finish() }
     }
 
@@ -137,6 +146,11 @@ final class PanelHideMotionBench: NSObject {
         self.link = nil
         let gaps = zip(stamps.dropFirst(), stamps).map { ($0 - $1) * 1000 }
         record["gaps_ms"] = gaps.map { ($0 * 100).rounded() / 100 }
+        if record["kind"] as? String == "swipe" {
+            record["ticks"] = stamps
+            record["prog"] = samples
+            for (key, value) in swipeTrace() { record[key] = value }
+        }
         record["visible_after"] = isVisible()
         record["begin_ms"] = beginCost()
         for (key, value) in trace() { record[key] = value }

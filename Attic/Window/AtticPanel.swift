@@ -44,8 +44,6 @@ final class AtticPanel: NSPanel {
         }
     }
     var canBeginTrackpadSwipe: ((NSEvent) -> Bool)?
-    /// Fingers rest where a swipe could close (Genie prepares its snapshot).
-    var onTrackpadSwipeMayBegin: (() -> Void)?
     /// Something may have changed what the panel shows (a key, a click, the
     /// pointer over it, content scrolling): a snapshot prepared before it is
     /// stale. The swipe's own scroll events, routed to the hide, are not.
@@ -301,8 +299,13 @@ final class AtticPanel: NSPanel {
         }
     }
 
+    /// The last scroll event's own time (a swipe's speed is measured on it,
+    /// not on when the main thread got to it).
+    private(set) var lastScrollEventTime: TimeInterval = 0
+
     override func sendEvent(_ event: NSEvent) {
         defer { if changesContent(event) { onContentMayChange?() } }
+        if event.type == .scrollWheel { lastScrollEventTime = event.timestamp }
         // One click both activates the panel and acts (owner, 2026-10-01):
         // the panel becomes key before AppKit sees the press, so the press
         // is never spent on activation, whatever view is under it (SwiftUI's
@@ -345,13 +348,6 @@ final class AtticPanel: NSPanel {
             return
         }
 
-        // Fingers resting on the trackpad over a place a swipe could close
-        // from. Genie snapshots now, while the
-        // panel is still, so a swipe that follows starts without a hitch.
-        if event.phase.contains(.mayBegin), event.hasPreciseScrollingDeltas, NSEvent.pressedMouseButtons == 0,
-           canBeginTrackpadSwipe?(event) ?? true, !contentOwnsHorizontalScrolling(at: event.locationInWindow) {
-            onTrackpadSwipeMayBegin?()
-        }
         let phase = trackpadSwipePhase(for: event.phase)
         guard event.hasPreciseScrollingDeltas, phase != .none else {
             cancelTrackpadSwipe()
@@ -1331,7 +1327,7 @@ final class AtticPanelContentContainer: NSView {
         var surface: PanelGenieSurface?
         var contentGeneration: Int
     }
-    private var prepared: (key: PreparedSnapshotKey, time: CFTimeInterval)?
+    private var prepared: (key: PreparedSnapshotKey, time: CFTimeInterval, expires: CFTimeInterval)?
     /// Bumped by anything that may change what the panel shows (a key, a
     /// click, scrolling content, the pointer over it): a snapshot taken
     /// before it is stale.
@@ -1353,24 +1349,29 @@ final class AtticPanelContentContainer: NSView {
     /// Whether a prepared snapshot of `mode` is still good now.
     func hasPreparedSnapshot(_ mode: PanelHideAnimation, surface: PanelGenieSurface?) -> Bool {
         guard let prepared, genieView.hasSnapshot else { return false }
-        return prepared.key == snapshotKey(mode, surface: surface)
-            && CACurrentMediaTime() - prepared.time < PanelHideMotionTuning.geniePreparedLifetime
+        return prepared.key == snapshotKey(mode, surface: surface) && CACurrentMediaTime() < prepared.expires
     }
 
-    /// Ahead of a likely Genie flight (a timed hide or reveal about to
-    /// happen, or fingers resting where a swipe could close): take the
-    /// snapshot (and lay out the live material) now, while nothing moves,
-    /// so the flight starts on its first frame. Nothing on screen changes.
-    func prepareAlternateSnapshot(_ mode: PanelHideAnimation, surface: PanelGenieSurface?) {
+    /// Ahead of a likely Genie flight (the panel idle, or a timed hide or
+    /// reveal about to happen): take the snapshot (and lay out the live
+    /// material) now, while nothing moves, so the flight starts on its
+    /// first frame. Nothing on screen changes. It stays good for
+    /// `lifetime` unless something that may change the panel happens.
+    func prepareAlternateSnapshot(_ mode: PanelHideAnimation, surface: PanelGenieSurface?,
+                                  lifetime: CFTimeInterval = PanelHideMotionTuning.geniePreparedLifetime) {
         let visible = window?.isVisible == true
         guard mode.usesGenieMesh, !visible || alternateMode == nil, !genieView.isAnimating else { return }
-        if !hasPreparedSnapshot(mode, surface: surface) {
+        let now = CACurrentMediaTime()
+        if hasPreparedSnapshot(mode, surface: surface), let current = prepared {
+            prepared?.expires = max(current.expires, now + lifetime)
+        } else {
             captureGenie(mode, surface: surface)
-            prepared = (snapshotKey(mode, surface: surface), CACurrentMediaTime())
+            prepared = (snapshotKey(mode, surface: surface), now, now + lifetime)
         }
         let time = prepared?.time
-        DispatchQueue.main.asyncAfter(deadline: .now() + PanelHideMotionTuning.geniePreparedLifetime + 0.05) { [weak self] in
-            guard let self, self.prepared?.time == time, !self.genieView.isAnimating,
+        let expires = prepared?.expires ?? now
+        DispatchQueue.main.asyncAfter(deadline: .now() + (expires - now) + 0.05) { [weak self] in
+            guard let self, self.prepared?.time == time, self.prepared?.expires == expires, !self.genieView.isAnimating,
                   self.alternateMode == nil || self.window?.isVisible != true else { return }
             self.prepared = nil
             self.genieView.stop()

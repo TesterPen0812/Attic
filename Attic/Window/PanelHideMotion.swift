@@ -131,6 +131,12 @@ enum PanelHideMotionTuning {
     static let genieRows = 14
     /// How long a snapshot taken ahead of a hide, reveal or swipe stays good.
     static let geniePreparedLifetime: CFTimeInterval = 1.5
+    /// The panel idle this long, Genie prepares its snapshot (so a swipe
+    /// starts without one, and a vertical scroll's touch-down never pays it:
+    /// at finger rest it froze a swipe that moved within ~80 ms, g6 gesture
+    /// checks), and keeps it this long while nothing changes.
+    static let genieIdlePrepareDelay: TimeInterval = 0.5
+    static let genieIdlePreparedLifetime: CFTimeInterval = 30
     /// A timed hide or reveal prepares its snapshot this long ahead.
     static let geniePrepareLead: TimeInterval = 0.25
 
