@@ -68,6 +68,7 @@ final class PanelUIState: ObservableObject {
     /// a no-op; another task replaces the route (its handoff can refuse).
     func openTaskNote(_ taskID: UUID, from origin: PanelPage, row: UUID? = nil, backTitle: String? = nil) {
         if openTaskNoteID == taskID, taskNoteOrigin == origin { return }
+        PerformanceSignposts.beginTaskPageOpen()
         taskNoteOrigin = origin
         taskNoteReturnRow = row
         let fallback = switch origin {

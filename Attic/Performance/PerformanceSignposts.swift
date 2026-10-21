@@ -90,6 +90,24 @@ enum PerformanceSignposts {
         pageStart = nil
     }
 
+    // MARK: Phase 3: a task's page, from the request to its first drawn frame
+
+    private static var taskPage: OSSignpostIntervalState?
+    private static var taskPageStart: UInt64?
+
+    static func beginTaskPageOpen() {
+        guard taskPage == nil, taskPageStart == nil else { return }
+        taskPageStart = started()
+        if signposter.isEnabled { taskPage = signposter.beginInterval("TaskPageOpenToDraw") }
+    }
+
+    static func taskPageDidDraw() {
+        if let taskPage { signposter.endInterval("TaskPageOpenToDraw", taskPage) }
+        taskPage = nil
+        record("TaskPageOpenToDraw", from: taskPageStart)
+        taskPageStart = nil
+    }
+
     static func cancelPageSwitch() {
         if let pageSwitch { signposter.endInterval("PageSwitch", pageSwitch) }
         pageSwitch = nil

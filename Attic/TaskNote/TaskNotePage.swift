@@ -512,6 +512,8 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         let engine = host.engine
         let textView = host.textView
         textView.escapeFallback = onEscape
+        // The page's first frame: the open request's interval ends there.
+        CATransaction.setCompletionBlock { MainActor.assumeIsolated { PerformanceSignposts.taskPageDidDraw() } }
         DispatchQueue.main.async {
             guard presenter.lease != nil, host.engine === engine, host.textView === textView else { return }
             presenter.restoreViewStateOnMount()
