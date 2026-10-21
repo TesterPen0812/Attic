@@ -96,7 +96,11 @@ final class WorkspaceSessionTests: XCTestCase {
         let context = coordinator.freshContext(), id = UUID()
         context.insert(TaskItem(id: id, title: "No note")); try context.save()
         let session = try coordinator.sessions.session(for: .task(id), notes: notes)
-        XCTAssertNil(session.note)
+        // Phase 3 lazy creation: the page's writing is a never-saved draft
+        // owned by the task; no note row exists until it holds writing.
+        let draft = try XCTUnwrap(session.note)
+        XCTAssertFalse(draft.isPersisted)
+        XCTAssertEqual(draft.pendingTaskID, id)
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<NoteItem>()), 1)
         let lazyID = UUID(), note = NoteItem(id: lazyID)
         note.taskID = id; context.insert(note); try context.save()

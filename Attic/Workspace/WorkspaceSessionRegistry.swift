@@ -102,7 +102,11 @@ final class WorkspaceSessionRegistry {
         // A note in Recently Deleted is not the task's live note: the page
         // opens without it and offers Restore Note (UX plan § 5.6).
         var own = Set(taskNotes.map(\.id)).union(taskLinks.map(\.noteID))
-        own = try own.filter { id in try notes(id: id).contains { $0.deletedAt == nil } }
+        own = try own.filter { id in
+            let rows = taskNotes.filter { $0.id == id }
+            // A linked note without a `taskID` row is checked on its own.
+            return try (rows.isEmpty ? notes(id: id) : rows).contains { $0.deletedAt == nil }
+        }
         guard own.count <= 1 else { throw WorkspaceFoundationError.conflict }
         if let noteID = own.first {
             let rows = try notes(id: noteID)
@@ -125,6 +129,9 @@ final class WorkspaceSessionRegistry {
             // live draft or merge a second cursor.
             if session.note == nil, let noteID { try session.attach(noteID: noteID) }
             if session.note == nil, noteID == nil, case let .task(taskID) = canonical { try session.attachDraft(taskID: taskID) }
+            // The task's note appeared elsewhere while this page only held an
+            // untouched draft: the page binds the real note instead.
+            if let noteID, session.note?.noteID != noteID { try session.replaceUntouchedDraft(with: noteID) }
             // The never-saved draft is the task's writing until its first save.
             let draft = session.note.map { !$0.isPersisted && $0.pendingTaskID != nil } ?? false
             guard session.note?.noteID == noteID || (draft && noteID == nil) else { throw WorkspaceFoundationError.conflict }
@@ -223,6 +230,19 @@ final class WorkspacePageSession {
     private static func storedTitle(_ taskID: UUID, in controller: NotesPageController) -> String {
         let context = ModelContext(controller.store.container)
         return (try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })))?.first?.title ?? ""
+    }
+
+    /// Only a never-saved, untouched draft on a page nobody shows may give
+    /// way to the task's real note; anything else is two notes for one task.
+    fileprivate func replaceUntouchedDraft(with noteID: UUID) throws {
+        guard let controller, let draft = note, !draft.isPersisted, draft.pendingTaskID != nil,
+              draft.isUntouchedDraft, activeLease == nil else { throw WorkspaceFoundationError.conflict }
+        draft.usesWorkspaceBinding = false
+        draft.workspacePage = nil
+        draft.engine.history.workspace = nil
+        controller.discardUntouchedTaskDraft(draft)
+        note = nil
+        try attach(noteID: noteID)
     }
 
     func acquire(surfaceID: UUID) throws -> Lease {
