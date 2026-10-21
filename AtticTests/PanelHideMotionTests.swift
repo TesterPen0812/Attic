@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -636,6 +637,61 @@ final class PanelHideMotionShipTests: XCTestCase {
         // Glass: 30% content, blurred to 15% by the edge: 30% again.
         let glass = PanelGenieView.normalisedBlur(try image(30, alpha: 38), over: try image(128, alpha: 128), space: space)
         XCTAssertEqual(Int(try alpha(glass)), 76, accuracy: 2)
+    }
+
+    /// Each control's glass in flight has the control's own shape at rest,
+    /// read from its glass element: the corner buttons are 32 pt squares at
+    /// 13.5 continuous, not circles (owner, 2026-10-21: "why do the controls
+    /// become round?"). A group of one control takes that control's shape.
+    func testInFlightControlGlassKeepsTheControlsOwnShape() {
+        let surface = CGRect(x: 28, y: 28, width: 320, height: 560)
+        let root = CALayer()
+        root.frame = CGRect(x: 0, y: 0, width: 376, height: 616)
+        var names: [ObjectIdentifier: String] = [:]
+        func add(_ name: String, _ frame: CGRect, to parent: CALayer, radius: CGFloat = 0, curve: CALayerCornerCurve = .circular) -> CALayer {
+            let made = CALayer()
+            made.frame = parent.convert(frame, from: root)
+            made.cornerRadius = radius
+            made.cornerCurve = curve
+            names[ObjectIdentifier(made)] = name
+            parent.addSublayer(made)
+            return made
+        }
+        // The corner buttons: one glass group, two 32 pt elements at 13.5 continuous.
+        let buttons = add("CASDFLayer", CGRect(x: 44, y: 540, width: 288, height: 32), to: root)
+        _ = add("CASDFElementLayer", CGRect(x: 44, y: 540, width: 32, height: 32), to: buttons, radius: 13.5, curve: .continuous)
+        _ = add("CASDFElementLayer", CGRect(x: 300, y: 540, width: 32, height: 32), to: buttons, radius: 13.5, curve: .continuous)
+        // The add bar: a group of one control, its element the same size.
+        let bar = add("CASDFLayer", CGRect(x: 44, y: 44, width: 288, height: 32), to: root)
+        _ = add("CASDFElementLayer", CGRect(x: 44, y: 44, width: 288, height: 32), to: bar, radius: 13.5, curve: .continuous)
+        let scan = PanelGenieView.scanGlass(in: root, surfaceRect: surface, hidesSurfaceMaterial: false) {
+            names[ObjectIdentifier($0)] ?? "CALayer"
+        }
+        XCTAssertEqual(scan.pills.count, 3)
+        for pill in scan.pills {
+            XCTAssertEqual(pill.cornerRadius ?? -1, 13.5, accuracy: 0.001, "the at-rest radius, \(pill.rect)")
+            XCTAssertTrue(pill.continuous)
+            let atRest = Path(roundedRect: pill.rect, cornerRadius: 13.5, style: .continuous).cgPath
+            XCTAssertEqual(pill.path(), atRest, "the at-rest outline")
+            XCTAssertNotEqual(pill.path(), Path(ellipseIn: pill.rect).cgPath)
+        }
+    }
+
+    /// On a real panel: the corner buttons' in-flight glass has the radius
+    /// they have at rest (13.5, the 42 % rule on 32 pt), continuous.
+    func testThePanelsCornerButtonsKeepTheirRadiusInFlight() throws {
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
+        defer { rig.close() }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        rig.content.layoutSubtreeIfNeeded()
+        let root = try XCTUnwrap(rig.content.subviews.first?.layer ?? rig.host.superview?.layer)
+        let scan = PanelGenieView.scanGlass(in: root, surfaceRect: rig.host.frame, hidesSurfaceMaterial: false)
+        let corner = scan.pills.filter { abs($0.rect.width - AtticControlSize.headerControl) < 0.5 && abs($0.rect.height - AtticControlSize.headerControl) < 0.5 }
+        try XCTSkipIf(corner.isEmpty, "this Mac draws no Liquid Glass controls")
+        for pill in corner {
+            XCTAssertEqual(pill.cornerRadius ?? -1, 13.5, accuracy: 0.3, "\(pill.rect)")
+            XCTAssertTrue(pill.continuous)
+        }
     }
 
     /// The hover monitor announces a timed reveal (pointer resting in the

@@ -857,7 +857,7 @@ final class PanelGenieView: NSView {
             context.setBlendMode(.normal)
         }
         guard !scan.pills.isEmpty else { return context.makeImage() }
-        // Each control's glass, in its capsule: what is under it, blurred
+        // Each control's glass, in its own shape: what is under it, blurred
         // again, under the glass's tint, with a hairline rim. The live
         // material shows through it as it does at rest.
         let radius = (dark ? PanelGenieGlassLook.darkBlur : PanelGenieGlassLook.lightBlur) * scale
@@ -883,11 +883,9 @@ final class PanelGenieView: NSView {
                 space: space
             ) else { continue }
             let areaPoints = CGRect(x: area.minX / scale, y: area.minY / scale, width: area.width / scale, height: area.height / scale)
-            let capsule = Path(roundedRect: pill.rect, cornerRadius: min(pill.rect.width, pill.rect.height) / 2,
-                               style: .circular).cgPath
             context.saveGState()
             context.clip(to: pill.clip)
-            context.addPath(capsule)
+            context.addPath(pill.path())
             context.clip()
             context.setBlendMode(.copy)
             context.draw(frosted, in: areaPoints)
@@ -898,8 +896,7 @@ final class PanelGenieView: NSView {
             context.restoreGState()
             context.saveGState()
             context.clip(to: pill.clip)
-            let rim = pill.rect.insetBy(dx: 0.5, dy: 0.5)
-            context.addPath(Path(roundedRect: rim, cornerRadius: min(rim.width, rim.height) / 2, style: .circular).cgPath)
+            context.addPath(pill.path(inset: 0.5))
             context.setStrokeColor(NSColor(white: 1, alpha: PanelGenieGlassLook.rim * (dark ? 0.5 : 1)).cgColor)
             context.setLineWidth(1)
             context.strokePath()
@@ -948,6 +945,26 @@ final class PanelGenieView: NSView {
     struct GlassPill: Equatable {
         var rect: CGRect
         var clip: CGRect
+        /// The control's own shape at rest, read from its glass element
+        /// (`cornerRadius` and `cornerCurve`): the corner buttons are 32 pt
+        /// squares at 13.5 continuous, not circles (owner, 2026-10-21). Nil
+        /// when the glass gave none: a capsule.
+        var cornerRadius: CGFloat?
+        var continuous = true
+
+        init(rect: CGRect, clip: CGRect, cornerRadius: CGFloat? = nil, continuous: Bool = true) {
+            self.rect = rect
+            self.clip = clip
+            self.cornerRadius = cornerRadius
+            self.continuous = continuous
+        }
+
+        /// The control's outline, `inset` points in from its edge.
+        func path(inset: CGFloat = 0) -> CGPath {
+            let shape = rect.insetBy(dx: inset, dy: inset)
+            let radius = max(0, min(cornerRadius ?? .greatestFiniteMagnitude, min(rect.width, rect.height) / 2) - inset)
+            return Path(roundedRect: shape, cornerRadius: radius, style: continuous ? .continuous : .circular).cgPath
+        }
     }
 
     /// One in-window variable blur (a page's top or bottom edge): its rect,
@@ -986,7 +1003,7 @@ final class PanelGenieView: NSView {
     ) -> GlassScan {
         var scan = GlassScan()
         var groups: [(rect: CGRect, clip: CGRect)] = []
-        var elements: [(rect: CGRect, clip: CGRect)] = []
+        var elements: [(rect: CGRect, clip: CGRect, radius: CGFloat, continuous: Bool)] = []
         var backdrops: [GlassBand] = []
         var materialParents: [CALayer] = []
         func surfaceSized(_ frame: CGRect) -> Bool {
@@ -1001,7 +1018,9 @@ final class PanelGenieView: NSView {
             // only bounds clipping narrows the clip; the surface bounds it all.
             if layer.masksToBounds { clip = clip.intersection(root.convert(layer.bounds, from: layer)) }
             let frame = root.convert(layer.bounds, from: layer)
-            if name == "CASDFElementLayer" { elements.append((frame, shown ? clip : .null)) }
+            if name == "CASDFElementLayer" {
+                elements.append((frame, shown ? clip : .null, layer.cornerRadius, layer.cornerCurve == .continuous))
+            }
             if hidesSurfaceMaterial, name == "CABackdropLayer", surfaceSized(frame), let parent = layer.superlayer {
                 materialParents.append(parent)
             }
@@ -1046,9 +1065,18 @@ final class PanelGenieView: NSView {
             let inside = elements.filter {
                 group.rect.insetBy(dx: -1, dy: -1).contains($0.rect) && $0.rect.width < group.rect.width - 1
             }
-            for pill in inside.isEmpty ? [group] : inside where pill.rect.width > 4 && pill.rect.height > 4 {
+            // A group of one control: that control's own element gives the shape.
+            let alone = elements.first {
+                abs($0.rect.minX - group.rect.minX) < 1 && abs($0.rect.minY - group.rect.minY) < 1
+                    && abs($0.rect.width - group.rect.width) < 1 && abs($0.rect.height - group.rect.height) < 1
+            }
+            let candidates = inside.isEmpty
+                ? [(rect: group.rect, clip: group.clip, radius: alone?.radius ?? -1, continuous: alone?.continuous ?? true)]
+                : inside
+            for pill in candidates where pill.rect.width > 4 && pill.rect.height > 4 {
                 if pill.clip.intersection(pill.rect).width > 0.5, pill.clip.intersection(pill.rect).height > 0.5 {
-                    scan.pills.append(GlassPill(rect: pill.rect, clip: pill.clip))
+                    scan.pills.append(GlassPill(rect: pill.rect, clip: pill.clip,
+                                                cornerRadius: pill.radius >= 0 ? pill.radius : nil, continuous: pill.continuous))
                 } else {
                     scan.leftOut.append(pill.rect)
                 }
