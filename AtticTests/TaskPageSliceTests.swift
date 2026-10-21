@@ -340,6 +340,27 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(host.engine.textStorage.string, before, "no new line was started below the writing")
     }
 
+    // MARK: The owner preview's store ("Attic Task Page")
+
+    /// The preview's fresh store opens on the heavy, boundary and no-note
+    /// task pages; the heavy note gets its two screenshots and two PDFs.
+    func testTheOwnerPreviewSeedsTaskPagesAndTheHeavyFiles() async throws {
+        try TaskNotePreviewSeed.seedOwnerPreview(in: container)
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tasks = TaskStore(container: container)
+        let heavy = try XCTUnwrap(TaskNotePreviewSeed.seeded[.heavy])
+        XCTAssertEqual(tasks.subtasks(of: heavy).count, 10)
+        XCTAssertNotNil(TaskNotePreviewSeed.seeded[.boundary])
+        let nonote = try XCTUnwrap(TaskNotePreviewSeed.seeded[.nonote])
+        XCTAssertTrue(store.notes.filter { $0.taskID == nonote }.isEmpty, "the no-note task has none")
+        await TaskNotePreviewSeed.attachHeavyFiles(to: store)
+        let note = try XCTUnwrap(store.notes.first { $0.taskID == heavy })
+        let document = try XCTUnwrap(store.loadDocument(noteID: note.id)?.content.document)
+        XCTAssertEqual(document.blocks.filter { $0.kind == .image }.count, 2)
+        XCTAssertEqual(document.blocks.filter { $0.kind == .file }.map(\.filename), ["hosting-quote.pdf", "redirect-map.pdf"])
+        XCTAssertEqual(store.attachments(for: note.id).count, 4)
+    }
+
     // MARK: All notes (`p3-22` row 3)
 
     func testAllNotesShowsATaskNoteWithItsCircleAndTaskNote() throws {
