@@ -841,6 +841,14 @@ final class NoteDraftJournal: NoteDraftJournaling {
     }
 }
 
+struct NoteOperationInventoryItem: Sendable {
+    let directory: URL
+    let envelope: WorkspaceOperationEnvelope?
+    let claim: WorkspaceOperationClaim?
+    let damaged: Bool
+    let quarantined: Bool
+}
+
 // MARK: Phase 3 operation ownership (same IO actor as checkpoint mutations)
 
 private extension NoteDraftJournalIO {
@@ -903,37 +911,72 @@ private extension NoteDraftJournalIO {
     }
 
 
-    func operationEnvelopes() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
-        let roots: [URL]
-        do { roots = try fileManager.contentsOfDirectory(at: operationsDirectory, includingPropertiesForKeys: nil) }
-        catch { if journalFileIsMissing(error) { return [] }; throw error }
-        if !roots.isEmpty { operationBarrier.setBlocked(true) }
-        return try roots
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }.map { root in
-                guard let id = UUID(uuidString: root.lastPathComponent) else { throw WorkspaceFoundationError.damagedEnvelope }
-                let data: Data
-                do { data = try Data(contentsOf: root.appendingPathComponent("envelope.json")) }
-                catch {
-                    guard journalFileIsMissing(error) else { throw error }
-                    data = try Data(contentsOf: root.appendingPathComponent("intent.json"))
-                }
-                var envelope = try JSONDecoder().decode(WorkspaceOperationEnvelope.self, from: data)
-                guard envelope.id == id else { throw WorkspaceFoundationError.damagedEnvelope }
-                for index in envelope.payloads.indices {
-                    let payload = envelope.payloads[index]
-                    let stored: Data
-                    do { stored = try Data(contentsOf: root.appendingPathComponent(payload.id.uuidString)) }
+    /// Classify independently: incomplete intent/payload publication must not
+    /// hide the remaining recovery inventory behind one thrown decode.
+    func operationInventory() throws -> [NoteOperationInventoryItem] {
+        var result: [NoteOperationInventoryItem] = []
+        for (parent, quarantined) in [(operationsDirectory, false),
+            (directory.appendingPathComponent("quarantined-operations"), true)] {
+            let roots: [URL]
+            do { roots = try fileManager.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil) }
+            catch { if journalFileIsMissing(error) { continue }; throw error }
+            if !quarantined && !roots.isEmpty { operationBarrier.setBlocked(true) }
+            for root in roots.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                var envelope: WorkspaceOperationEnvelope?
+                var claim: WorkspaceOperationClaim?
+                do {
+                    let data: Data
+                    do { data = try Data(contentsOf: root.appendingPathComponent("envelope.json")) }
                     catch {
                         guard journalFileIsMissing(error) else { throw error }
-                        stored = try Data(contentsOf: stagedDirectory.appendingPathComponent(payload.id.uuidString))
+                        data = try Data(contentsOf: root.appendingPathComponent("intent.json"))
                     }
-                    guard Int64(stored.count) == payload.byteCount, Self.digest(stored) == payload.digest else {
-                        throw WorkspaceFoundationError.damagedEnvelope
+                    var decoded = try JSONDecoder().decode(WorkspaceOperationEnvelope.self, from: data)
+                    envelope = decoded
+                    claim = WorkspaceOperationClaim(id: decoded.id, digest: Self.digest(data))
+                    guard UUID(uuidString: root.lastPathComponent) == decoded.id else { throw WorkspaceFoundationError.damagedEnvelope }
+                    for index in decoded.payloads.indices {
+                        let payload = decoded.payloads[index]
+                        let stored: Data
+                        do { stored = try Data(contentsOf: root.appendingPathComponent(payload.id.uuidString)) }
+                        catch {
+                            guard journalFileIsMissing(error) else { throw error }
+                            stored = try Data(contentsOf: stagedDirectory.appendingPathComponent(payload.id.uuidString))
+                        }
+                        guard Int64(stored.count) == payload.byteCount, Self.digest(stored) == payload.digest else {
+                            throw WorkspaceFoundationError.damagedEnvelope
+                        }
+                        decoded.payloads[index].bytes = stored
                     }
-                    envelope.payloads[index].bytes = stored
+                    result.append(.init(directory: root, envelope: decoded, claim: claim,
+                        damaged: quarantined, quarantined: quarantined))
+                } catch {
+                    result.append(.init(directory: root, envelope: envelope, claim: claim,
+                        damaged: true, quarantined: quarantined))
                 }
-                return (envelope, WorkspaceOperationClaim(id: id, digest: Self.digest(data)))
             }
+        }
+        return result
+    }
+
+    func quarantineOperation(at root: URL) throws {
+        let parent = directory.appendingPathComponent("quarantined-operations", isDirectory: true)
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        var destination = parent.appendingPathComponent(root.lastPathComponent, isDirectory: true)
+        if fileManager.fileExists(atPath: destination.path) {
+            destination = parent.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        }
+        try fileManager.moveItem(at: root, to: destination)
+        try journalSync(parent); try journalSync(operationsDirectory); try journalSync(directory)
+    }
+
+    func operationEnvelopes() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
+        try operationInventory().filter { !$0.quarantined }.map { item in
+            guard !item.damaged, let envelope = item.envelope, let claim = item.claim else {
+                throw WorkspaceFoundationError.damagedEnvelope
+            }
+            return (envelope, claim)
+        }
     }
 
     func releaseOperation(_ claim: WorkspaceOperationClaim) throws {
@@ -997,6 +1040,8 @@ extension NoteDraftJournal {
     func prepareOperation(_ envelope: WorkspaceOperationEnvelope) async throws -> WorkspaceOperationClaim {
         try await io.prepareOperation(envelope)
     }
+    func operationInventory() async throws -> [NoteOperationInventoryItem] { try await io.operationInventory() }
+    func quarantineOperation(at root: URL) async throws { try await io.quarantineOperation(at: root) }
     func operationEnvelopes() async throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
         try await io.operationEnvelopes()
     }

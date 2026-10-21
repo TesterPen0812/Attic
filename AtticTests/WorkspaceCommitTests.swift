@@ -77,6 +77,80 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertTrue(offers.isEmpty)
     }
 
+    func testP2_2TruncatedPayloadAndNonUUIDDirectoryAllowTwoLaunches() async throws {
+        let payload = StagedNoteAttachment(id: UUID(), filename: "owned.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: 5, digest: NotePayloadDigest.sha256(Data("bytes".utf8)), data: Data("bytes".utf8))
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        let envelope = try coordinator.newEnvelope(intent: "interrupted", reads: coordinator.capture([owner]), writes: [owner], staged: [payload])
+        _ = try await coordinator.journal.prepareOperation(envelope)
+        let operations = coordinator.journal.directory.appendingPathComponent("operations")
+        let raw = operations.appendingPathComponent(envelope.id.uuidString).appendingPathComponent(payload.id.uuidString)
+        try Data("b".utf8).write(to: raw)
+        let foreign = operations.appendingPathComponent("not-a-uuid")
+        try FileManager.default.createDirectory(at: foreign, withIntermediateDirectories: true)
+        try Data("unreadable intent".utf8).write(to: foreign.appendingPathComponent("intent.json"))
+        let independent = NoteDraftJournalEntry(noteID: UUID(), isPersisted: false, baseRevisionID: nil,
+            content: try PreparedNoteDocument(NoteDocument(blocks: [.text("independent offer")])).content,
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        _ = try await coordinator.journal.writeDurably(independent, staged: [])
+        for _ in 0..<2 {
+            coordinator = try WorkspaceOperationCoordinator(container: container,
+                journal: NoteDraftJournal(directory: root.appendingPathComponent("NoteDrafts")))
+            var offers = 0, swept = false
+            try await coordinator.finishLaunchOfferingRecovery(offers: {
+                offers = (try? coordinator.journal.recoveryEntries().count) ?? 0
+            }, sweep: { swept = true })
+            XCTAssertTrue(coordinator.startupReconciled)
+            // Read asynchronously too: the synchronous offer cache is populated
+            // by the app's offer reader, rather than launch maintenance itself.
+            let entries = try await coordinator.journal.readRecoveryEntries()
+            offers = entries.count
+            XCTAssertEqual(offers, 1); XCTAssertTrue(swept)
+            XCTAssertNil(coordinator.ownership.tryAcquire([payload.id], kind: .collection))
+            let collection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
+            XCTAssertNotNil(collection); collection?.release()
+            let source = coordinator.freshContext(), removable = TaskItem(title: "remove me")
+            source.insert(removable); try source.save()
+            let rowOwner = WorkspaceOwner(entity: .task, id: removable.id)
+            let removal = try coordinator.newEnvelope(intent: "hard delete", reads: coordinator.capture([rowOwner]), writes: [rowOwner])
+            let result = await coordinator.execute(removal) { context in
+                try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.id == removable.id }.forEach(context.delete)
+            }
+            XCTAssertEqual(result, .committed)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: raw.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: foreign.path))
+            let archive = coordinator.journal.directory.appendingPathComponent("quarantined-operations")
+            XCTAssertEqual(try Data(contentsOf: archive.appendingPathComponent(envelope.id.uuidString).appendingPathComponent(payload.id.uuidString)), Data("b".utf8))
+            XCTAssertEqual(try Data(contentsOf: archive.appendingPathComponent("not-a-uuid").appendingPathComponent("intent.json")), Data("unreadable intent".utf8))
+        }
+    }
+
+    func testP2_2DamagedIntentWithDisagreeingReceiptIsQuarantined() async throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        let payload = StagedNoteAttachment(id: UUID(), filename: "file.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: 4, digest: NotePayloadDigest.sha256(Data("good".utf8)), data: Data("good".utf8))
+        let envelope = try coordinator.newEnvelope(intent: "damaged unproved receipt", reads: coordinator.capture([owner]), writes: [owner], staged: [payload])
+        _ = try await coordinator.journal.prepareOperation(envelope)
+        let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(envelope.id.uuidString)
+        try Data("bad".utf8).write(to: operation.appendingPathComponent(payload.id.uuidString))
+        let fixture = coordinator.freshContext()
+        fixture.insert(OperationReceipt(id: envelope.id, envelopeDigest: "disagrees", affectedIDs: try WorkspaceModelFields.encode([owner]), resultingTokens: Data()))
+        try fixture.save()
+        for _ in 0..<2 {
+            coordinator = try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: coordinator.journal.directory))
+            try await coordinator.finishLaunch()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: operation.path))
+            XCTAssertNil(coordinator.ownership.tryAcquire([taskID], kind: .collection))
+            XCTAssertNil(coordinator.ownership.tryAcquire([payload.id], kind: .collection))
+            let unrelated = WorkspaceOwner(entity: .task, id: UUID())
+            let next = try coordinator.newEnvelope(intent: "unrelated", reads: [.init(owner: unrelated, replicas: [])], writes: [unrelated])
+            let outcome = await coordinator.execute(next) { $0.insert(TaskItem(id: unrelated.id, title: "unrelated")) }
+            XCTAssertEqual(outcome, .committed)
+            let offers = try await coordinator.journal.readRecoveryEntries()
+            XCTAssertTrue(offers.isEmpty)
+        }
+    }
+
     func testConfirmedTaskReplicasRetainTheWholeDurableFamily() throws {
         let seed = ModelContext(container)
         let duplicate = TaskItem(id: taskID, title: "Archived copy", status: .done)

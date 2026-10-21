@@ -112,6 +112,9 @@ final class WorkspaceOperationCoordinator {
     private var launchWork: Task<Void, Error>?
     private var launchFinished = false
     private var launchHold: WorkspaceOwnershipGate.Lease?
+    private var damagedOperationHold: WorkspaceOwnershipGate.Lease?
+    private var damagedOperationOwners = Set<WorkspaceOwner>()
+    private var damagedOperationBytes = Set<UUID>()
     private var damagedCollectionHold: WorkspaceOwnershipGate.Lease?
     private(set) var damagedCheckpointNotes = Set<UUID>()
     private var compatibilityPending = Set<UUID>()
@@ -120,7 +123,7 @@ final class WorkspaceOperationCoordinator {
     private var checkpointBytes = Set<UUID>()
     private var checkpointCollectionHold: WorkspaceOwnershipGate.Lease?
     var retainedRecoveryBytes: Set<UUID> {
-        checkpointBytes.union(pending.values.flatMap { $0.0.payloads.map(\.id) })
+        checkpointBytes.union(damagedOperationBytes).union(pending.values.flatMap { $0.0.payloads.map(\.id) })
             .union(abortedCompatibility.values.flatMap { $0.0.payloads.map(\.id) })
     }
     private(set) var launchPruneBatches: [Int] = []
@@ -244,6 +247,7 @@ final class WorkspaceOperationCoordinator {
         pending[envelope.id] = nil; publicationStep[envelope.id] = nil; compatibilityPending.remove(envelope.id)
         compatibilityRetries[envelope.id] = nil
         heldOwners.subtract(Set(envelope.tokens.map(\.owner)).union(envelope.writes))
+        heldOwners.formUnion(damagedOperationOwners)
         journal.suppressPendingOperationClaims(pending.values.compactMap { $0.0.checkpointClaim })
     }
     struct RecoveryCopy {
@@ -836,7 +840,52 @@ final class WorkspaceOperationCoordinator {
                 damagedCollectionHold = ownership.tryAcquire([ownership.unknownID], kind: .admission)
             }
         } else { damagedCollectionHold?.release(); damagedCollectionHold = nil }
-        let envelopes = try await journal.operationEnvelopes()
+        let inventory = try await journal.operationInventory()
+        var recorded = Set<UUID>()
+        var damagedOwners = Set<WorkspaceOwner>(), damagedBytes = Set<UUID>()
+        let receipts = try freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        for item in inventory where item.damaged {
+            let id = item.envelope?.id ?? UUID(uuidString: item.directory.lastPathComponent)
+            let family = receipts.filter { $0.id == id }
+            if let id { recorded.insert(id) }
+            if let envelope = item.envelope {
+                damagedOwners.formUnion(envelope.tokens.map(\.owner)); damagedOwners.formUnion(envelope.writes)
+                damagedBytes.formUnion(envelope.payloads.map(\.id))
+                damagedBytes.formUnion((Set(envelope.tokens.map(\.owner)).union(envelope.writes))
+                    .filter { $0.entity == .attachment }.map(\.id))
+                for content in envelope.afterDocuments.values {
+                    damagedBytes.formUnion(NoteContentCodec.decode(content).document?.attachmentIDs ?? [])
+                }
+                if let pre = envelope.preDraft {
+                    damagedOwners.insert(.init(entity: .note, id: pre.noteID))
+                    damagedBytes.formUnion(pre.staged.map(\.id))
+                    damagedBytes.formUnion(NoteContentCodec.decode(pre.content).document?.attachmentIDs ?? [])
+                    damagedBytes.formUnion(pre.pendingImport?.items.compactMap(\.stagedID) ?? [])
+                }
+            }
+            for receipt in family {
+                if let declared = try? JSONDecoder().decode([WorkspaceOwner].self, from: receipt.affectedIDs) {
+                    damagedOwners.formUnion(declared)
+                }
+            }
+            // An agreeing receipt still owns publication. Otherwise archive
+            // the raw damage while retaining every declared owner and byte;
+            // disagreement never grants permission to replay or delete rows.
+            let hasAgreeingReceipt = try !family.isEmpty && agreeing(family)
+                && family.allSatisfy { $0.envelopeDigest == item.claim?.digest }
+            if !hasAgreeingReceipt && !item.quarantined { try await journal.quarantineOperation(at: item.directory) }
+        }
+        damagedOwners.formUnion(damagedBytes.map { .init(entity: .attachment, id: $0) })
+        guard let hold = ownership.tryAcquire(damagedBytes.union(damagedOwners.map(\.id)), kind: .admission) else {
+            throw WorkspaceFoundationError.unknown
+        }
+        damagedOperationHold?.release(); damagedOperationHold = hold
+        heldOwners.subtract(damagedOperationOwners); damagedOperationOwners = damagedOwners
+        damagedOperationBytes = damagedBytes; heldOwners.formUnion(damagedOwners)
+        let envelopes = inventory.filter { !$0.damaged }.compactMap { item -> (WorkspaceOperationEnvelope, WorkspaceOperationClaim)? in
+            guard let envelope = item.envelope, let claim = item.claim else { return nil }
+            return (envelope, claim)
+        }
         for (envelope, claim) in envelopes {
             switch receiptTruth(envelope.id, digest: claim.digest) {
             case .committed:
@@ -871,7 +920,7 @@ final class WorkspaceOperationCoordinator {
         // The envelope may already have been durably released when death
         // interrupted its database bookkeeping. A durable completed handoff
         // remains authoritative across later revisions and session restart.
-        let recorded = Set(envelopes.map { $0.0.id })
+        recorded.formUnion(envelopes.map { $0.0.id })
         let context = freshContext()
         let receiptRows = try context.fetch(FetchDescriptor<OperationReceipt>())
         for (id, family) in Dictionary(grouping: receiptRows, by: \.id) where !recorded.contains(id) {
