@@ -684,4 +684,33 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(outcome, .refused("Give the note a title first"))
         XCTAssertTrue(try rows(untitled).allSatisfy { $0.taskID == nil })
     }
+
+    // MARK: Version History of a task's note (S4, § 2.10)
+
+    func testVersionHistoryRestoresTheNoteOnlyNeverTheTaskOrItsSubtasks() async throws {
+        let (id, presenter, session) = try makeSubtaskFixture()
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        guard case .made = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes) else { return XCTFail() }
+        XCTAssertEqual(tasks.subtasks(of: id).count, 3)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "Renamed launch checklist"))
+        let opened = await notes.openHistoryDurably(workspace: session)
+        XCTAssertTrue(opened)
+        let browser = try XCTUnwrap(notes.historyBrowser)
+        XCTAssertEqual(browser.noteID, session.noteID)
+        let index = try XCTUnwrap(browser.entries.firstIndex { $0.document.blocks.contains { $0.text.hasPrefix("Everything that has") } })
+        notes.selectHistoryVersion(index)
+        XCTAssertEqual(notes.historyBrowser?.preview?.engine.isBodyOnly, true, "the preview shows the body, never block 0")
+        let restored = await notes.restoreHistoryVersionDurably()
+        XCTAssertTrue(restored)
+        XCTAssertNil(notes.historyBrowser)
+        let stored = try storedDocument(session.noteID)
+        XCTAssertEqual(stored.blocks.dropFirst().first?.text, "Everything that has to be true before 1.0 goes out.", "the body returns")
+        XCTAssertEqual(stored.title, "Renamed launch checklist", "block 0 is today's title, never the old snapshot")
+        XCTAssertTrue(stored.requires.contains("taskNote"))
+        XCTAssertEqual(tasks.subtasks(of: id).count, 3, "the subtasks are never rewound")
+        XCTAssertEqual(tasks.task(withID: id)?.title, "Renamed launch checklist", "the task is never rewound")
+        XCTAssertTrue(try rows(session.noteID).allSatisfy { $0.taskID == id }, "the association stays")
+        XCTAssertTrue(presenter.host.textView.string.hasPrefix("Everything that has"), "the page shows the restored text")
+    }
 }

@@ -3032,12 +3032,15 @@ enum NoteSessionPolicy {
 // MARK: - Version history (Phase 2, slice 7)
 
 extension NotesPageController {
-    func openHistoryDurably() async -> Bool {
-        guard historyBrowser == nil, let session = active, session.isPersisted,
+    /// `workspace`: a task's page opens its note's history (Phase 3); nil
+    /// is the Notes page's note.
+    func openHistoryDurably(workspace: NoteSession? = nil) async -> Bool {
+        guard historyBrowser == nil, let session = workspace ?? active, session.isPersisted,
+              workspace == nil || session.usesWorkspaceBinding,
               !session.isReadOnly, !session.isImporting, !session.isConflict,
               canLeaveComposition(in: session) else { return false }
         captureViewState(session)
-        guard await preserveDurably(session), active === session, session.state == .clean,
+        guard await preserveDurably(session), workspace != nil || active === session, session.state == .clean,
               store.note(withID: session.noteID)?.revisionID == session.baseRevisionID else {
             session.showNotice(NoteNotice(kind: .saveFirst, detail: "The current note must be saved before opening version history. Your text is kept."))
             return false
@@ -3068,10 +3071,13 @@ extension NotesPageController {
         browser.preview?.engine.detachView()
         browser.updateComparison()
         let comparison = browser.comparison
-        let engine = makeEngine(noteID: browser.noteID, document: comparison.document, readOnly: true)
+        // A task's note previews its body only (§ 2.12): block 0 is the
+        // title snapshot, never shown.
+        let bodyOnly = comparison.document.requires.contains("taskNote")
+        let engine = makeEngine(noteID: browser.noteID, document: comparison.document, readOnly: true, bodyOnly: bodyOnly)
         var offset = 0
         let text = engine.textStorage.string as NSString
-        for (index, block) in comparison.document.blocks.enumerated() {
+        for (index, block) in comparison.document.blocks.enumerated() where !(bodyOnly && engine.isBodyOnly && index == 0) {
             let length = block.kind == .text ? block.text.utf16.count
                 : (block.kind == .checklist ? block.text.utf16.count + 1 : 1)
             if comparison.changedBlocks.contains(index) {
@@ -3116,13 +3122,18 @@ extension NotesPageController {
 
     func restoreHistoryVersionDurably() async -> Bool {
         guard let browser = historyBrowser, let selected = browser.selected, selected.canRestore,
-              !browser.isRestoring, !browser.showsCurrent, let session = active,
+              !browser.isRestoring, !browser.showsCurrent else { return false }
+        // A task's page restores its note's version through its own session
+        // (Phase 3): the note only; the task, its subtasks and the
+        // association are never rewound (§ 2.10, S4).
+        let workspace = cache[browser.noteID].flatMap { $0.usesWorkspaceBinding ? $0 : nil }
+        guard let session = workspace ?? active,
               session.noteID == browser.noteID, session.state == .clean, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
         let engine = session.engine, generation = session.editGeneration
         browser.isRestoring = true
         defer { browser.isRestoring = false }
-        guard await awaitRecoveryForUser(), historyBrowser === browser, active === session,
+        guard await awaitRecoveryForUser(), historyBrowser === browser, workspace != nil || active === session,
               session.engine === engine, canLeaveComposition(in: session),
               session.editGeneration == generation, session.state == .clean, !session.isImporting,
               browser.selected?.id == selected.id, browser.selected?.canRestore == true,
@@ -3135,6 +3146,15 @@ extension NotesPageController {
             return false
         case let .success(token):
             guard let revision = UUID(uuidString: token), let note = store.note(withID: browser.noteID) else { return false }
+            if let workspace {
+                // The page reloads its editor from the store; its history
+                // stops at this external change. The replaced text is a
+                // version of its own, restorable from Version History.
+                closeHistory()
+                store.historyRetainedVersionIDs.insert(preservationID)
+                workspace.workspacePage?.externalRefresh(origin: String(localized: "Version History"))
+                return true
+            }
             if let previous = versionRestoreUndo { store.historyRetainedVersionIDs.remove(previous.versionID) }
             versionRestoreUndo = VersionRestoreUndo(id: UUID(), noteID: browser.noteID, versionID: preservationID,
                 restoredRevisionID: revision, document: store.loadDocument(noteID: browser.noteID)?.content.document,

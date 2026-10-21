@@ -289,6 +289,10 @@ struct TaskNotePage: View {
     private var topInset: CGFloat { layout.headerBottom + AtticNoteMetrics.titleTopGap }
     private var bottomInset: CGFloat { layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s12 }
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
+    private var showsHistory: Bool {
+        guard let history = controller.historyBrowser else { return false }
+        return history.noteID == presenter.session?.noteID
+    }
     private var leaveTitle: String { placement == .window ? String(localized: "Move to Panel") : backTitle }
 
     var body: some View {
@@ -298,14 +302,26 @@ struct TaskNotePage: View {
                                       engineGeneration: presenter.engineGeneration, onEscape: onBack)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("task-note-page")
+                // Version History takes the page's place while it is open,
+                // as it takes the editor's on the Notes page.
+                .opacity(showsHistory ? 0 : 1)
+                .allowsHitTesting(!showsHistory)
+                .accessibilityHidden(showsHistory)
             // Content shows under the floating controls, blurred (owner,
             // 2026-10-17): the Notes page's own variable blur.
             AtticEdgeBlurBackdrops(AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls))
-            if placement == .panel { headerTitle }
-            bottomRow
-                .padding(.leading, layout.chromeInsets.leading)
-                .padding(.trailing, layout.chromeInsets.trailing)
-                .padding(.bottom, layout.chromeInsets.bottom)
+            if placement == .panel, !showsHistory { headerTitle }
+            if !showsHistory {
+                bottomRow
+                    .padding(.leading, layout.chromeInsets.leading)
+                    .padding(.trailing, layout.chromeInsets.trailing)
+                    .padding(.bottom, layout.chromeInsets.bottom)
+            }
+            // Version History over the page (the note's own history page).
+            if let history = controller.historyBrowser, history.noteID == presenter.session?.noteID {
+                NoteHistoryPage(controller: controller, browser: history, layout: layout)
+                    .accessibilityIdentifier("task-note-history")
+            }
         }
         .onChange(of: design) { _, newValue in presenter.update(design: newValue) }
         .onChange(of: chrome.formatRow.isOpen) { _, open in
@@ -495,6 +511,12 @@ struct TaskNotePage: View {
             commands.append(AtticMenuCommand("Print…", shortcut: KeyboardShortcut("p", modifiers: .command),
                                              identifier: "task-note-menu-print") {
                 Task { _ = await engine.printNote() }
+            })
+            // The note's versions (S4): the body only; restoring never
+            // rewinds the task, its subtasks or the association.
+            commands.append(AtticMenuCommand("Version History", isDisabled: session.isReadOnly,
+                                             identifier: "task-note-menu-history") {
+                Task { @MainActor in _ = await controller.openHistoryDurably(workspace: session) }
             })
         }
         if presenter.deletedNoteID != nil, model.deletedNote {

@@ -156,8 +156,15 @@ struct NoteHistoryPage: View {
     private func restore() {
         let timestamp = browser.selected?.createdAt.formatted(.dateTime.hour().minute()) ?? ""
         Task { @MainActor in
+            let undoBefore = controller.versionRestoreUndoID
             guard await controller.restoreHistoryVersionDurably() else { return }
             let ticket = controller.versionRestoreUndoID
+            // A task's page restores without the Notes page's Undo ticket:
+            // the replaced text stays a version in its history.
+            guard ticket != nil, ticket != undoBefore else {
+                toasts?.show("Restored the version from \(timestamp)", actionTitle: String(localized: "OK"), answersUndoKey: false) {}
+                return
+            }
             toasts?.show("Restored the version from \(timestamp)", answersUndoKey: false, performingAsync: {
                 await controller.undoVersionRestoreDurably(expectedID: ticket)
                     ? .applied : .failed(CommandFailure("The restore could not be undone. The note may have changed; your current text is kept."))
