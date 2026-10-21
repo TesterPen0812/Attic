@@ -579,8 +579,10 @@ enum PanelGenieGlassLook {
     static var lightTint: CGFloat = 0.6
     static var darkBlur: CGFloat = 24
     static var darkTint: CGFloat = 0.45
-    /// The rim's highlight.
+    /// The rim's highlight, Light and Dark (Dark's rim at rest is faint: a
+    /// brighter one read as a ring round the corner buttons in Solid Dark).
     static var rim: CGFloat = 0.45
+    static var darkRim: CGFloat = 0.08
 
     #if DEBUG
     /// The bench's calibration: `ATTIC_MOTION_BENCH_GLASS=blur,light,dark,rim` (one blur for both).
@@ -903,7 +905,7 @@ final class PanelGenieView: NSView {
             context.saveGState()
             context.clip(to: pill.clip)
             context.addPath(pill.path(inset: 0.5))
-            context.setStrokeColor(NSColor(white: 1, alpha: PanelGenieGlassLook.rim * (dark ? 0.5 : 1)).cgColor)
+            context.setStrokeColor(NSColor(white: 1, alpha: (dark ? PanelGenieGlassLook.darkRim : PanelGenieGlassLook.rim)).cgColor)
             context.setLineWidth(1)
             context.strokePath()
             context.restoreGState()
