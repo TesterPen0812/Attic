@@ -80,6 +80,8 @@ struct TasksListRow: Identifiable, Equatable {
             && lhs.model.state == rhs.model.state && lhs.model.priority == rhs.model.priority
             && lhs.model.due?.text == rhs.model.due?.text && lhs.model.tags == rhs.model.tags
             && lhs.model.attachments == rhs.model.attachments && lhs.model.titleMatch == rhs.model.titleMatch
+            // Phase 3: the note glyph (a list skips rows that compare equal).
+            && lhs.model.hasPage == rhs.model.hasPage
             && lhs.model.subtasks?.done == rhs.model.subtasks?.done
             && lhs.model.subtasks?.total == rhs.model.subtasks?.total
             && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)

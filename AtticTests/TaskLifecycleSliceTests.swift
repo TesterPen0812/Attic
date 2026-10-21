@@ -810,5 +810,10 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let model = state.model(for: tasks, toasts: nil)
         XCTAssertTrue(model.noteOwners.contains(id))
         XCTAssertEqual(model.rows(for: .now).first { $0.id == id }?.model.hasPage, true)
+        // A list skips rows that compare equal: the glyph must count.
+        let row = try XCTUnwrap(model.rows(for: .now).first { $0.id == id })
+        var without = row.model
+        without.hasPage = false
+        XCTAssertNotEqual(row, TasksListRow(id: row.id, model: without, status: row.status, subtasks: row.subtasks, files: row.files))
     }
 }
