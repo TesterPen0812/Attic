@@ -614,6 +614,9 @@ struct TaskNotePageContainer: View {
                              layout: layout, backTitle: backTitle, placement: placement,
                              onOpenInWindow: onOpenInWindow.map { open in { moveToWindow(open) } },
                              onReopen: reopen, onBack: back)
+                    // A reopened page is a new presenter with its own host:
+                    // its native views must be mounted, never the old ones.
+                    .id(ObjectIdentifier(presenter))
             } else if openFailed {
                 AtticText("This task's note can't be opened here.", style: .body, ink: .helper)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

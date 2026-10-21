@@ -234,6 +234,40 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertNil(reopened.deletedNoteID)
     }
 
+    /// Restore Note reopens the page on a new presenter; its own native
+    /// views are the ones on screen (the old host never stays mounted).
+    func testRestoreNoteReopensThePageWithItsOwnEditorOnScreen() async throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        XCTAssertTrue(deleted)
+        let hosting = NSHostingController(rootView: AnyView(
+            TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+                                  layout: PanelPageLayout(cornerSize: 52, panelSize: panel), onClose: {})))
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = hosting
+        windows.append(window)
+        func mounted(where condition: (TaskNotePresenter) -> Bool) async throws -> TaskNotePresenter {
+            for _ in 0..<200 {
+                hosting.view.layoutSubtreeIfNeeded()
+                if let current = notes.taskNotePresenter, condition(current), current.host.scrollView.window === window {
+                    return current
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            throw TaskNotePresenter.OpenError.unavailable
+        }
+        let first = try await mounted { $0.deletedNoteID == noteID }
+        presenters.append(first)
+        XCTAssertNil(first.session)
+        first.menus.restoreNote()
+        let reopened = try await mounted { $0 !== first && $0.session?.noteID == noteID }
+        presenters.append(reopened)
+        XCTAssertNil(first.host.scrollView.window, "the old page's editor left the window")
+        XCTAssertFalse(reopened.host.engine.isReadOnly)
+    }
+
     // MARK: All notes (`p3-22` row 3)
 
     func testAllNotesShowsATaskNoteWithItsCircleAndTaskNote() throws {
