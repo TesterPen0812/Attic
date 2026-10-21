@@ -538,6 +538,11 @@ final class AppCoordinator: ObservableObject {
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "tasknote" {
             try? TaskNotePreviewSeed.seedAll(in: container)
         }
+        // Phase 3 slice 1: "Attic Task Life"'s samples, for captures.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "tasklife" {
+            try? TaskNotePreviewSeed.seedOwnerPreview(in: container)
+            try? TaskNoteLifecyclePreviewSeed.seed(in: container)
+        }
         #endif
         // Preview builds only (owner, 2026-10-01): a fresh preview identity
         // opens on demo content, written into its own empty store once.
