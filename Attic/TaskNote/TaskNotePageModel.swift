@@ -182,7 +182,8 @@ final class TaskNotePageModel: ObservableObject {
 
     /// Re-reads the task and its subtasks. Publishes only what changed.
     func refresh(animated: Bool = false) {
-        let task = store.task(withID: taskID)
+        // A task moved to the Done log still has its page (`p3-22` row 3).
+        let task = store.listedTask(withID: taskID)
         let canonical = store.subtasks(of: taskID)
         let done = canonical.filter { $0.status == .done }.count
         var next = Head(title: task?.title ?? head.title,
@@ -193,6 +194,14 @@ final class TaskNotePageModel: ObservableObject {
         if let day = task?.dueDay {
             let today = DueDay(date: parser.now(), calendar: calendar)
             next.due = TaskRowPresentation.due(day, today: today, calendar: calendar, locale: locale)
+        }
+        // Task deleted (`p3-22` row 1): the block keeps the subtasks as they
+        // were, read only, until Restore brings the live head back.
+        if task == nil, head.exists || !rows.isEmpty {
+            let snapshot = head.subtasks
+            next.subtasks = rows.isEmpty ? snapshot : (rows.filter(\.isDone).count, rows.count)
+            if next != head { head = next; onGeometryChange?() }
+            return
         }
         var shown = canonical
         if var order = heldOrder {
@@ -225,9 +234,18 @@ final class TaskNotePageModel: ObservableObject {
     /// The block's height: the 28 pt header; unfolded, a 28 pt line per row,
     /// Add subtask and the bottom padding (`TaskNoteSubtasksBlock`).
     var blockHeight: CGFloat {
+        let notice = deletedNote ? TaskNoteMetrics.noticeHeight : 0
         let header = TaskNoteMetrics.blockHeader
-        guard !isFolded else { return header }
-        return header + CGFloat(rows.count + 1) * TaskNoteMetrics.rowHeight + TaskNoteMetrics.blockBottomPadding
+        guard !isFolded else { return header + notice }
+        // A deleted task's snapshot has no Add subtask line.
+        let lines = rows.count + (head.exists ? 1 : 0)
+        return header + CGFloat(lines) * TaskNoteMetrics.rowHeight + TaskNoteMetrics.blockBottomPadding + notice
+    }
+
+    /// The task's note is in Recently Deleted (§ 5.6): a line under the
+    /// block offers Restore Note; the writing below stays empty.
+    var deletedNote = false {
+        didSet { if deletedNote != oldValue { onGeometryChange?() } }
     }
 
     var countLabel: String {
@@ -414,6 +432,29 @@ final class TaskNotePageModel: ObservableObject {
             focusedRowID = index.flatMap { remaining.indices.contains($0) ? remaining[$0].id : remaining.last?.id }
         }
         return applied
+    }
+
+    // MARK: Lifecycle (`p3-22`: nothing cascades)
+
+    /// Delete Task…: the task and its subtasks go to Recently Deleted; its
+    /// note stays, editable (§ 2.7). One step in the page's history.
+    @discardableResult
+    func deleteTask() -> Bool {
+        guard store.task(withID: taskID) != nil else { return report(.taskGone) }
+        guard resolveFieldDrafts() else { return false }
+        return settle(library.deleteTasks([taskID], in: historyID)) { [weak self] in self?.deleteTask() }
+    }
+
+    /// "Task deleted · Restore": the live head comes back.
+    @discardableResult
+    func restoreTask() -> Bool {
+        guard store.task(withID: taskID) == nil else { return true }
+        guard library.restore(AtticItemRef(.task, taskID), in: historyID) else {
+            return report(CommandFailure(String(localized: "Couldn't restore the task")), retry: { [weak self] in self?.restoreTask() })
+        }
+        clearFailure()
+        refresh()
+        return true
     }
 
     /// The head's status circle: done, or back from done.

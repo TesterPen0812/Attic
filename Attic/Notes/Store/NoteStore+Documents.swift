@@ -494,7 +494,8 @@ extension NoteStore {
         staged: [StagedNoteAttachment] = [],
         prepared: PreparedNoteDocument? = nil,
         tags: [String]? = nil,
-        resolvingProposal: UUID? = nil
+        resolvingProposal: UUID? = nil,
+        taskOwner: UUID? = nil
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
@@ -538,6 +539,21 @@ extension NoteStore {
             family.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
         }
         context.insert(note)
+        if let taskOwner {
+            // Phase 3 lazy creation (UX plan § 2.1): the task's own note and
+            // its association commit together through the same gated save.
+            // A task that is gone, or already has an own note, refuses: the
+            // draft stays recoverable, never a second note for one task.
+            guard let generation = Self.taskOwnerGeneration(taskOwner, in: context) else {
+                context.rollback()
+                return .failure(.saveFailed(String(localized: "This task already has a note, or it was deleted.")))
+            }
+            note.taskID = taskOwner
+            let association = TaskNoteAssociation(taskID: taskOwner, noteID: id)
+            association.taskGeneration = generation
+            association.noteGeneration = note.associationGeneration
+            context.insert(association)
+        }
         try? WorkspaceLegacyBridge.coordinator(for: context.container).observePreparedDocument(projection)
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
@@ -553,6 +569,18 @@ extension NoteStore {
         }
         for item in attachmentPlan.new + attachmentPlan.repairs.map({ $0.1 }) { cacheVerifiedAttachment(item) }
         return .success((id, revisionID))
+    }
+
+    /// The task's association generation when it can take an own note now:
+    /// it exists and has no live own note or open association.
+    static func taskOwnerGeneration(_ taskID: UUID, in context: ModelContext) -> Int64? {
+        guard let tasks = try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })),
+              let task = tasks.first,
+              let owned = try? context.fetchCount(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID && $0.deletedAt == nil })),
+              owned == 0,
+              let links = try? context.fetchCount(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil })),
+              links == 0 else { return nil }
+        return tasks.map(\.associationGeneration).max() ?? task.associationGeneration
     }
 
     /// Saves an editor's document to every replica. When the presented copy

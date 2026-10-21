@@ -162,6 +162,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
                 }
                 try await Task.sleep(for: .milliseconds(10))
             }
+            XCTFail("the page for \(id == a ? "A" : "B") never mounted (presenter: \(String(describing: notes.taskNotePresenter?.taskID)))")
             throw TaskNotePresenter.OpenError.unavailable
         }
         let first = try await mounted(a)
@@ -998,7 +999,11 @@ final class TaskNoteComposedHostTests: XCTestCase {
     func testATaskWithNoNoteOpensFoldsTicksAndAddsWithoutCreatingOne() throws {
         let id = try seed(.nonote)
         let presenter = try open(id)
-        XCTAssertNil(presenter.session)
+        // Phase 3 lazy creation: the writing is a never-saved draft owned by
+        // the task; nothing is stored until it holds writing or a file.
+        let draft = try XCTUnwrap(presenter.session)
+        XCTAssertFalse(draft.isPersisted)
+        XCTAssertEqual(draft.pendingTaskID, id)
         let model = presenter.model
         model.toggleFold(); model.toggleFold()
         XCTAssertTrue(model.toggle(model.rows[0].id))
@@ -1007,6 +1012,8 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let context = ModelContext(container)
         let notesForTask = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.taskID == id }
         XCTAssertTrue(notesForTask.isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter { $0.taskID == id }.isEmpty)
+        XCTAssertFalse(draft.isPersisted, "folding, ticking and adding never save the draft")
         XCTAssertTrue(presenter.host.engine.isBodyOnly)
     }
 

@@ -214,11 +214,15 @@ struct AtticNoteRowModel: Identifiable, Equatable {
     var files = 0
     /// VoiceOver's reading ("Pricing page, edited 09:40, not saved, 1 of 3 checked, 1 image").
     var spoken: String
+    /// A task's own note (Phase 3): its task's circle before the title and
+    /// "Task note" before the preview (`p3-22` row 3). Nil: an ordinary note.
+    var taskState: AtticTaskState? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.title == rhs.title && lhs.time == rhs.time && lhs.needsAttention == rhs.needsAttention
             && lhs.hasProposal == rhs.hasProposal && lhs.preview == rhs.preview && lhs.checklist?.done == rhs.checklist?.done
             && lhs.checklist?.total == rhs.checklist?.total && lhs.images == rhs.images && lhs.files == rhs.files
+            && lhs.taskState == rhs.taskState
     }
 }
 
@@ -292,6 +296,8 @@ struct AtticNoteRow: View {
         .accessibilityIdentifier("notes-row-actions")
     }
 
+    /// The task circle before a task note's title (the header's 12 pt).
+    static let taskCircleSize: CGFloat = 12
     private static let actionsWidth: CGFloat = 26
     private static let actionsHeight: CGFloat = 20
 
@@ -307,8 +313,16 @@ struct AtticNoteRow: View {
                 }
                 VStack(alignment: .leading, spacing: AtticTaskRowMetrics.titleToDetails) {
                     HStack(spacing: AtticTaskRowMetrics.trailingMinGap) {
-                        AtticText(verbatim: model.title, style: .noteRowTitle, ink: .heading, truncates: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 6) {
+                            if let state = model.taskState {
+                                AtticStatusCircle(state: state)
+                                    .scaleEffect(Self.taskCircleSize / AtticControlSize.statusCircle)
+                                    .frame(width: Self.taskCircleSize, height: Self.taskCircleSize)
+                                    .accessibilityHidden(true)
+                            }
+                            AtticText(verbatim: model.title, style: .noteRowTitle, ink: .heading, truncates: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         HStack(spacing: m.countGap + 1) {
                             if model.needsAttention {
                                 AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize,

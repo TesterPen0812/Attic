@@ -47,6 +47,9 @@ struct TasksPageHost: View {
     let primaryInputFocusRequest: UInt64
     /// False while another page shows and this one is kept built behind it.
     var isCurrent = true
+    /// Phase 3: open task pages and fill task notes. Nil: Phase 1's rows
+    /// (⌘Return opens files, a drop attaches to the task).
+    var taskNotes: TaskNoteEntryServices?
 
     @State private var addBarFocused = false
     @State private var editHold: PanelEditHold
@@ -56,8 +59,9 @@ struct TasksPageHost: View {
 
     init(store: TaskStore, uiState: PanelUIState, settings: AppSettings, state: TasksPageState,
          layout: PanelPageLayout, chromeInteractionState: PanelChromeInteractionState,
-         primaryInputFocusRequest: UInt64, isCurrent: Bool = true,
+         primaryInputFocusRequest: UInt64, isCurrent: Bool = true, taskNotes: TaskNoteEntryServices? = nil,
          editHold: PanelEditHold? = nil, filesHold: PanelEditHold? = nil) {
+        self.taskNotes = taskNotes
         self.store = store
         self.uiState = uiState
         self.settings = settings
@@ -123,6 +127,11 @@ struct TasksPageHost: View {
         .onChange(of: isCurrent) { _, current in
             guard current else { return }
             model.pageDidReturn()
+            // Back from a task's page: the anchor row has the keyboard.
+            if let row = uiState.taskNoteReturnRow, uiState.openTaskNoteID == nil {
+                uiState.taskNoteReturnRow = nil
+                model.requestReturnFocus(row)
+            }
             handlePrimaryInputFocusRequest()
             chromeInteractionState.bottomControlsHeight = TasksPage.footerZone
             syncDraftLock(model)
@@ -137,6 +146,13 @@ struct TasksPageHost: View {
             // what observes the shell, and the first keystroke's frame is
             // the add bar's alone. A turn late changes nothing for hiding.
             DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
+        }
+        .onAppear { [taskNotes, weak model] in
+            guard let taskNotes else { return }
+            model?.services.openTaskNote = { [weak model] id in
+                taskNotes.open(id, String(localized: "Back to \(model?.tab.title ?? TasksTab.now.title)"))
+            }
+            model?.services.addFilesToTaskNote = taskNotes.addFiles
         }
         .onAppear {
             // "Attach file…" in a row's files list (A1): the picker, which

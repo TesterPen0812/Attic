@@ -17,6 +17,8 @@ enum TaskNoteMetrics {
     static let blockToWriting: CGFloat = 10
     static let blockHeader: CGFloat = 28
     static let blockBottomPadding: CGFloat = 10
+    /// "Its note is in Recently Deleted · Restore Note" under the block.
+    static let noticeHeight: CGFloat = 34
     static let rowHeight: CGFloat = AtticLayout.subtaskPitch
     static var blockRadius: CGFloat { AtticRadius.groupCard }
     static var blockPadding: CGFloat { AtticSpacing.s12 }
@@ -30,6 +32,8 @@ enum TaskNoteMetrics {
 struct TaskNoteHeadView: View {
     @ObservedObject var model: TaskNotePageModel
     var openNoteMenu: () -> Void = {}
+    /// The task's menu (right-click the head, ⇧⌘I): § 5.5.
+    var taskMenu: () -> [AtticMenuCommand] = { [] }
 
     @Environment(\.atticDesign) private var design
     @Environment(\.undoManager) private var undoManager
@@ -43,26 +47,39 @@ struct TaskNoteHeadView: View {
                     .padding(.leading, TaskNoteMetrics.titleIndent)
                     .padding(.trailing, TaskNoteMetrics.titleTrailing)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                AtticStatusButton(state: head.state, priority: head.priority,
-                                  subtasks: head.subtasks.total > 0 ? head.subtasks : nil,
-                                  isDisabled: !head.exists) {
-                    model.toggleTask()
+                if head.exists {
+                    AtticStatusButton(state: head.state, priority: head.priority,
+                                      subtasks: head.subtasks.total > 0 ? head.subtasks : nil,
+                                      isDisabled: !head.exists) {
+                        model.toggleTask()
+                    }
+                    // The circle's centre on the first line's centre.
+                    .offset(x: AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2,
+                            y: TaskNoteMetrics.titleLineHeight / 2 - AtticControlSize.minimumHitTarget / 2)
+                    .accessibilityIdentifier("task-note-status")
+                } else {
+                    // Task deleted (`p3-22` row 1): no circle, a quiet bin.
+                    AtticIcon(systemName: "trash", size: 13, weight: .medium, ink: .helper)
+                        .frame(width: AtticControlSize.statusCircle, height: TaskNoteMetrics.titleLineHeight)
+                        .accessibilityHidden(true)
                 }
-                // The circle's centre on the first line's centre.
-                .offset(x: AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2,
-                        y: TaskNoteMetrics.titleLineHeight / 2 - AtticControlSize.minimumHitTarget / 2)
-                .accessibilityIdentifier("task-note-status")
                 AtticNoteMenuButton { openNoteMenu() }
                     .frame(maxWidth: .infinity, alignment: .topTrailing)
                     .offset(x: 4, y: -1)
                     .accessibilityIdentifier("task-note-menu")
             }
-            if head.due != nil || !head.tags.isEmpty {
+            if !head.exists {
+                deletedLine
+                    .padding(.top, TaskNoteMetrics.detailsGap)
+                    .padding(.leading, TaskNoteMetrics.titleIndent)
+            } else if head.due != nil || !head.tags.isEmpty {
                 details(head)
                     .padding(.top, TaskNoteMetrics.detailsGap)
                     .padding(.leading, TaskNoteMetrics.titleIndent)
             }
         }
+        .contentShape(Rectangle())
+        .contextMenu { if head.exists { AtticMenuItems(commands: taskMenu()) } }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(spokenSummary(head))
         .accessibilityIdentifier("task-note-head")
@@ -90,13 +107,30 @@ struct TaskNoteHeadView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(minHeight: TaskNoteMetrics.titleLineHeight, alignment: .topLeading)
                 .contentShape(Rectangle())
-                .onTapGesture { model.beginEditingTitle(undoManager: undoManager) }
+                .onTapGesture { if head.exists { model.beginEditingTitle(undoManager: undoManager) } }
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityHeading(.h1)
                 .accessibilityLabel(head.title)
                 .accessibilityAction(named: Text("Edit Title")) { model.beginEditingTitle(undoManager: undoManager) }
                 .accessibilityIdentifier("task-note-title")
         }
+    }
+
+    /// "Task deleted · Restore" (`p3-22` row 1, column 4).
+    private var deletedLine: some View {
+        HStack(spacing: 6) {
+            AtticText("Task deleted", style: .rowMeta, ink: .helper)
+            AtticText(verbatim: "·", style: .rowMeta, ink: .helper)
+            Button(String(localized: "Restore")) { model.restoreTask() }
+                .buttonStyle(.plain)
+                .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
+                .foregroundStyle(design.tokens.color(.heading))
+                .accessibilityLabel(String(localized: "Restore Task"))
+                .accessibilityIdentifier("task-note-restore-task")
+        }
+        .frame(height: TaskNoteMetrics.detailsHeight, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("task-note-deleted")
     }
 
     private func priorityText(_ priority: AtticPriority) -> Text {
@@ -154,6 +188,7 @@ struct TaskNoteHeadView: View {
     /// "Finalize launch checklist, in progress, high priority, due today" (§ 8).
     private func spokenSummary(_ head: TaskNotePageModel.Head) -> String {
         var parts = [head.title]
+        guard head.exists else { return parts.joined() + ", " + String(localized: "task deleted") }
         parts.append(head.state.spokenName)
         if let priority = head.priority.spokenName { parts.append(priority) }
         if let due = head.due { parts.append(String(localized: "due \(due.text)")) }
@@ -175,6 +210,9 @@ struct TaskNoteHeadView: View {
 /// writing; → ← on the header unfold and fold.
 struct TaskNoteSubtasksBlock: View {
     @ObservedObject var model: TaskNotePageModel
+    /// Restore Note (§ 5.6), shown while the task's note is in Recently
+    /// Deleted.
+    var restoreNote: () -> Void = {}
 
     /// What has the keyboard inside the block.
     enum Field: Hashable { case row(UUID), add }
@@ -185,7 +223,10 @@ struct TaskNoteSubtasksBlock: View {
     @FocusState private var focus: Field?
 
     var body: some View {
-        blockShape
+        VStack(alignment: .leading, spacing: 0) {
+            blockShape
+            if model.deletedNote { deletedNoteLine }
+        }
             // The native host commits the arithmetic block height at once.
             // A SwiftUI fold transition would animate inside that final
             // frame, briefly centering/emptying the rows and header.
@@ -198,6 +239,23 @@ struct TaskNoteSubtasksBlock: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(spokenGroup)
             .accessibilityIdentifier("task-note-subtasks")
+    }
+
+    /// `p3-22` row 2, column 4: the note went to Recently Deleted; the
+    /// task works as before.
+    private var deletedNoteLine: some View {
+        HStack(spacing: 6) {
+            AtticText("Its note is in Recently Deleted", style: .rowMeta, ink: .helper)
+            AtticText(verbatim: "·", style: .rowMeta, ink: .helper)
+            Button(String(localized: "Restore Note"), action: restoreNote)
+                .buttonStyle(.plain)
+                .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
+                .foregroundStyle(design.tokens.color(.heading))
+                .accessibilityIdentifier("task-note-restore-note")
+        }
+        .frame(height: TaskNoteMetrics.noticeHeight, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("task-note-deleted-note")
     }
 
     /// The block's shape (`p3-19` column 2): radius 17, the recessed fill;
@@ -220,10 +278,14 @@ struct TaskNoteSubtasksBlock: View {
         }
     }
 
+    /// A deleted task's subtasks are a read-only snapshot "as it was".
+    private var isSnapshot: Bool { !model.head.exists }
+
     private var rowsAndAdd: some View {
         return VStack(alignment: .leading, spacing: 0) {
             list
-            addRow
+                .disabled(isSnapshot)
+            if !isSnapshot { addRow }
         }
         .padding(.bottom, TaskNoteMetrics.blockBottomPadding)
         .transition(.identity)
@@ -266,7 +328,8 @@ struct TaskNoteSubtasksBlock: View {
             HStack(spacing: AtticSpacing.s8) {
                 // p3-20/p3-21: the label is quiet secondary text, lighter
                 // than the rows.
-                AtticText(verbatim: model.countLabel, style: .rowMeta, ink: .helper)
+                AtticText(verbatim: isSnapshot ? model.countLabel + " · " + String(localized: "as it was") : model.countLabel,
+                          style: .rowMeta, ink: .helper)
                 Spacer(minLength: 0)
                 AtticIcon(systemName: model.isFolded ? "chevron.right" : "chevron.down", size: 10, weight: .medium, ink: .helper)
             }

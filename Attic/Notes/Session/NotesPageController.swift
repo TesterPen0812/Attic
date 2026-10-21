@@ -201,7 +201,22 @@ final class NoteSession: ObservableObject, Identifiable {
 
     /// Untouched: never saved, no text, no objects, no tags.
     var isUntouchedDraft: Bool {
-        !isPersisted && importBatch == nil && engine.tags.isEmpty && engine.document().isEmpty && engine.objectIDs().isEmpty
+        !isPersisted && importBatch == nil && engine.tags.isEmpty && Self.hasNoWriting(engine.document(), taskDraft: pendingTaskID != nil)
+            && engine.objectIDs().isEmpty
+    }
+
+    /// Phase 3 lazy creation (UX plan § 2.1): a task's page with no note
+    /// writes into this never-saved draft. Its first save creates the note,
+    /// owned by this task, and the association in one gated transaction.
+    var pendingTaskID: UUID?
+
+    /// A task draft's first block is the title snapshot (§ 2.12), not
+    /// writing: only the blocks after it count.
+    static func hasNoWriting(_ document: NoteDocument, taskDraft: Bool) -> Bool {
+        guard taskDraft else { return document.isEmpty }
+        return document.blocks.dropFirst().allSatisfy { block in
+            block.kind == .text && block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     /// The tags to write with the next save: only a change the person made.
@@ -1109,6 +1124,44 @@ final class NotesPageController: ObservableObject {
         if cache[noteID] == nil { wire(session); cache[noteID] = session }
         return session
     }
+    /// Phase 3 lazy creation: the engine-only draft a task's page writes
+    /// into while the task has no note. Nothing is stored until the first
+    /// save that has writing or a file (`save`, `createDocumentNote`).
+    func workspaceTaskDraft(taskID: UUID, title: String) -> NoteSession? {
+        guard let document = try? NoteDocument.blank.taskSnapshot(title: title) else { return nil }
+        let id = UUID()
+        let session = NoteSession(noteID: id, isPersisted: false, baseRevisionID: nil,
+                                  engine: makeEngine(noteID: id, document: document, readOnly: false, bodyOnly: true),
+                                  readOnlyReason: nil)
+        session.pendingTaskID = taskID
+        wire(session)
+        cache[id] = session
+        return session
+    }
+
+    /// A task draft nobody wrote in leaves nothing behind when its page
+    /// closes (§ 2.1: opening creates nothing).
+    func discardUntouchedTaskDraft(_ session: NoteSession) {
+        guard session.pendingTaskID != nil, session.isUntouchedDraft, !session.usesWorkspaceBinding,
+              cache[session.noteID] === session else { return }
+        session.saveTask?.cancel(); session.saveTask = nil
+        session.durabilityTask?.cancel(); session.durabilityTask = nil
+        session.pauseTask?.cancel(); session.pauseTask = nil
+        session.engine.detachView()
+        cache[session.noteID] = nil
+    }
+
+    /// Phase 3: a task note's task state for All notes, and opening a task's
+    /// page from the library (the host supplies both; nil in tests).
+    var taskStateLookup: ((UUID) -> AtticTaskState?)?
+    var openTaskPage: ((UUID) -> Bool)?
+
+    /// The cached session for `noteID`, if any (tests and diagnostics).
+    func workspaceSessionIfCached(_ noteID: UUID) -> NoteSession? { cache[noteID] }
+
+    /// Called after a task draft's first save created its note.
+    var taskNoteCreated: ((_ taskID: UUID, _ noteID: UUID) -> Void)?
+
     func refreshWorkspaceSession(_ session: NoteSession) -> NoteSession? {
         store.refresh()
         session.invalidateCallbacks()
@@ -1305,18 +1358,18 @@ final class NotesPageController: ObservableObject {
         }
         engine.onNotice = { [weak session] notice in session?.showNotice(notice) }
         engine.onFileBatchRequest = { [weak self, weak session] urls, text, range in
-            guard let self, let session, self.active === session else { return }
-            self.importFiles(urls, acceptedText: text, at: range)
+            guard let self, let session, self.active === session || session.usesWorkspaceBinding else { return }
+            self.importFiles(urls, acceptedText: text, at: range, into: session)
         }
         engine.onRawImageBatchRequest = { [weak self, weak session] data, ext, range in
-            guard let self, let session, self.active === session else { return }
+            guard let self, let session, self.active === session || session.usesWorkspaceBinding else { return }
             guard !data.isEmpty, Int64(data.count) <= AttachmentLimits.maxBytesPerAttachment else {
                 session.showNotice(NoteNotice(kind: .notAdded, detail: String(localized: "The clipboard image is empty or exceeds the attachment size limit.")))
                 return
             }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("AtticClipboard-\(UUID().uuidString).\(ext)")
-            self.importFiles([url], at: range, temporaryURLs: [url], clipboardData: data)
+            self.importFiles([url], at: range, temporaryURLs: [url], clipboardData: data, into: session)
         }
 
         engine.onImportAdmission = { [weak self, weak session] payload in
@@ -1625,6 +1678,7 @@ final class NotesPageController: ObservableObject {
             tagsChanged: session.isPersisted ? session.pendingTags != nil : !session.engine.tags.isEmpty
         )
         entry.pendingImport = inventory.pendingImport
+        entry.taskOwnerID = session.isPersisted ? nil : session.pendingTaskID
         return entry
     }
 
@@ -1742,14 +1796,20 @@ final class NotesPageController: ObservableObject {
         let retainingNewerEdits = retainingNewerEdits
             || document != liveDocument || tags != engine.tags
         if !session.isPersisted {
-            guard !document.isEmpty || !document.objectIDs.isEmpty || !tags.isEmpty else {
+            guard !NoteSession.hasNoWriting(document, taskDraft: session.pendingTaskID != nil)
+                    || !document.objectIDs.isEmpty || !tags.isEmpty else {
                 session.state = retainingNewerEdits ? .dirty : .untouched
                 return true
             }
             switch store.createDocumentNote(id: session.noteID, document: document, staged: staged,
-                                            prepared: prepared, tags: tags.isEmpty ? nil : tags) {
+                                            prepared: prepared, tags: tags.isEmpty ? nil : tags,
+                                            taskOwner: session.pendingTaskID) {
             case let .success((noteID, revisionID)):
                 session.isPersisted = true
+                if let owner = session.pendingTaskID {
+                    session.pendingTaskID = nil
+                    taskNoteCreated?(owner, noteID)
+                }
                 session.baseRevisionID = revisionID
                 session.baseTags = tags
                 didSave(session, staged: staged, retainingNewerEdits: retainingNewerEdits || generation != session.editGeneration)
@@ -2213,6 +2273,9 @@ final class NotesPageController: ObservableObject {
             // Unchanged tags stay the stored ones' business (nothing is written
             // over them), yet the draft keeps them, even if its note is gone.
             session.baseTags = entry.changedTags == nil ? (entry.tags ?? storedTags) : storedTags
+            // A never-saved task draft keeps its owner: its first save still
+            // creates the task's note (the store refuses a second one).
+            if !session.isPersisted { session.pendingTaskID = entry.taskOwnerID }
             retiredNoteIDs.remove(entry.noteID)
             session.recoveryClaim = claim
             wire(session)
@@ -2382,8 +2445,10 @@ final class NotesPageController: ObservableObject {
     /// away from the main actor, then inserted with the accepted text as one
     /// editor-history step. Its anchor belongs to the note, not the caret.
     func importFiles(_ urls: [URL], acceptedText: String = "", at selection: NSRange? = nil,
-                     temporaryURLs: [URL] = [], clipboardData: Data? = nil) {
-        guard let session = active, !session.isReadOnly, !urls.isEmpty else {
+                     temporaryURLs: [URL] = [], clipboardData: Data? = nil, into target: NoteSession? = nil) {
+        // A task's page imports into its workspace session (Phase 3); the
+        // Notes page into the active one.
+        guard let session = target ?? active, !session.isReadOnly, !urls.isEmpty else {
             temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
             return
         }

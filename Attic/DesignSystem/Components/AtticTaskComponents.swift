@@ -1189,6 +1189,10 @@ struct AtticTaskRow: View {
     /// A click on the row (Phase 1: selects; the page arrives in Phase 3).
     /// nil opens the page, as the spec's row does.
     var onSelect: (() -> Void)? = nil
+    /// A plain click on the title (Phase 3): opens the task's page, as a
+    /// card's title does (P1). ⌘- and ⇧-clicks on the title still select;
+    /// nil leaves the title to `onSelect`.
+    var onOpenTitle: (() -> Void)? = nil
     /// The list's focus for this row (↑ ↓ move it); nil keeps its own.
     var focus: AtticRowFocus? = nil
     /// Editing the title in place.
@@ -1296,6 +1300,8 @@ struct AtticTaskRow: View {
                             // title is the tooltip (and VoiceOver's label).
                             .layoutPriority(-1)
                             .help(model.title)
+                            .modifier(AtticTitleOpenTap(open: capture == nil && !disabled ? onOpenTitle : nil,
+                                                        select: { if !disabled { (onSelect ?? actions.openPage)() } }))
                             if !done {
                                 AtticPriorityMark(priority: model.priority, disabled: disabled)
                             }
@@ -2734,5 +2740,30 @@ final class AtticSubtaskFieldEditor: NSTextView {
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(undo(_:)) || menuItem.action == #selector(redo(_:)) { return editing != nil }
         return super.validateMenuItem(menuItem)
+    }
+}
+
+
+/// The row title's own click (Phase 3): a plain click opens the task's page;
+/// a ⌘- or ⇧-click, or a second click, selects as the rest of the row does.
+struct AtticTitleOpenTap: ViewModifier {
+    let open: (() -> Void)?
+    let select: () -> Void
+
+    func body(content: Content) -> some View {
+        if let open {
+            content
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    let flags = NSApp.currentEvent?.modifierFlags ?? []
+                    if flags.contains(.command) || flags.contains(.shift) {
+                        select()
+                    } else {
+                        open()
+                    }
+                }
+        } else {
+            content
+        }
     }
 }

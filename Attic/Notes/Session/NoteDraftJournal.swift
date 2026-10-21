@@ -54,6 +54,9 @@ struct NoteDraftJournalEntry: Codable, Equatable, Sendable {
     /// A batch still loading when this checkpoint was written. Its copied
     /// bytes are also in `staged`, digest-checked by the journal reader.
     var pendingImport: PendingImport? = nil
+    /// A never-saved task draft's task (Phase 3 lazy creation); nil for
+    /// ordinary notes and in files written before this field.
+    var taskOwnerID: UUID? = nil
 
     /// The tags to write over the stored ones, if any.
     var changedTags: [String]? {

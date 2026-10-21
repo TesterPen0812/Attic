@@ -183,16 +183,22 @@ struct AtticPanelView: View {
     private func pageHost(_ page: PanelPage) -> some View {
         switch page {
         case .tasks:
-            TasksPageHost(
-                store: store,
-                uiState: uiState,
-                settings: settings,
-                state: tasksPageState,
-                layout: pageLayout,
-                chromeInteractionState: chromeInteractionState,
-                primaryInputFocusRequest: uiState.primaryInputFocusRequest,
-                isCurrent: page == currentPage
-            )
+            // Phase 3: a task's page opens over the list, which stays built
+            // (covered) so Back returns to it exactly as it was.
+            TaskNoteRouteHost(page: .tasks, noteStore: noteStore, taskStore: store, noteDraft: noteDraft,
+                              uiState: uiState, layout: pageLayout, isReady: hasRestoredNoteSession) { covered in
+                TasksPageHost(
+                    store: store,
+                    uiState: uiState,
+                    settings: settings,
+                    state: tasksPageState,
+                    layout: pageLayout,
+                    chromeInteractionState: chromeInteractionState,
+                    primaryInputFocusRequest: uiState.primaryInputFocusRequest,
+                    isCurrent: page == currentPage && !covered,
+                    taskNotes: taskNoteEntryServices
+                )
+            }
             .transition(pageTransition(.tasks))
         case .canvas:
             CanvasPageHost(
@@ -215,6 +221,17 @@ struct AtticPanelView: View {
             )
             .transition(pageTransition(.notes))
         }
+    }
+
+    /// Open Task Note and a row's file drop (Phase 3).
+    private var taskNoteEntryServices: TaskNoteEntryServices {
+        TaskNoteEntryServices(
+            open: { [uiState] id, backTitle in uiState.openTaskNote(id, from: .tasks, row: id, backTitle: backTitle) },
+            addFiles: { [noteDraft, store, toasts, uiState] id, staging in
+                TaskNoteFiles.add(staging, to: id, tasks: store, controller: noteDraft.pages, toasts: toasts) {
+                    uiState.openTaskNote(id, from: .tasks, row: id, backTitle: nil)
+                }
+            })
     }
 
     /// The header controls' frames in panel coordinates (top-left origin).
@@ -452,7 +469,7 @@ extension EnvironmentValues {
     }
 }
 
-private struct PanelPageVisibility: ViewModifier {
+struct PanelPageVisibility: ViewModifier {
     let isCurrent: Bool
     /// Where the page rests while hidden (0 when it is current).
     let restingOffset: CGFloat

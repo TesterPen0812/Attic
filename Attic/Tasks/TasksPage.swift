@@ -375,6 +375,15 @@ struct TasksPage: View {
         }
         // Hidden behind another page, the search lets the keyboard go: its
         // pending focus is cancelled and nothing typed reaches it (R2).
+        // Back from a task's page: the anchor row has the keyboard again.
+        .onChange(of: model.returnFocusRequest) { _, _ in
+            guard let id = model.returnFocusRow else { return }
+            DispatchQueue.main.async {
+                guard model.isPageShown, model.rows(for: model.tab).contains(where: { $0.id == id }) else { return }
+                model.selectOnly(id)
+                setFocus(id)
+            }
+        }
         .onChange(of: model.isPageShown) { _, shown in
             if !shown {
                 cancelTransientState()
@@ -1582,10 +1591,12 @@ struct TasksPage: View {
                         isExpanded: isExpanded,
                         isFilesExpanded: isFilesExpanded,
                         onToggleFiles: { toggleFiles(id) },
-                        dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
+                        dropLabel: live.isDropTarget ? (model.services.addFilesToTaskNote != nil ? String(localized: "Add to task's note")
+                                                                                                    : String(localized: "Add to page")) : nil,
                         actions: actions(for: id, in: tab),
                         onToggleExpanded: { toggleExpanded(id) },
                         onSelect: { rowClicked(id, tab: tab) },
+                        onOpenTitle: opensTaskNotes && tab != .done ? { openTaskNote(id) } : nil,
                         focus: live.focus,
                         titleEditing: editing ? titleEditing(for: id) : nil,
                         // Every row, done ones too (round 10): a finished task shows
@@ -1942,7 +1953,7 @@ struct TasksPage: View {
                 let targets = model.targets(for: id)
                 model.report(model.toggleWorking(targets), on: id) { [weak model] in model?.toggleWorking(targets) ?? .failed(.taskGone) }
             },
-            openPage: { openFiles(id) },
+            openPage: { opensTaskNotes ? openTaskNote(id) : openFiles(id) },
             // ⌘B: to Later, or back to Now from Later, reported the same way.
             moveToBacklog: {
                 let targets = model.targets(for: id)
@@ -1966,7 +1977,7 @@ struct TasksPage: View {
             duplicate: { runCommand(on: id) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) } },
             changePriority: { showPriority(for: id) },
             showActions: { showActions(for: id, anchor: nil, tab: tab) },
-            names: .init(openPage: filesActionName(for: id))
+            names: .init(openPage: opensTaskNotes ? String(localized: "Open task note") : filesActionName(for: id))
         )
     }
 
@@ -1980,6 +1991,24 @@ struct TasksPage: View {
     /// key (PR prep, P2). The queued block does not wake a sleeping run
     /// loop by itself (`CFRunLoopPerformBlock`), so the loop is woken.
     private static let log = Logger(subsystem: "com.taha.Attic", category: "TaskFiles")
+
+    /// Phase 3: the host shows task pages (the shell does; the preview and
+    /// tests without the service keep the files command on ⌘Return).
+    private var opensTaskNotes: Bool { model.services.openTaskNote != nil }
+
+    /// Open Task Note: the task's page over the list (UX plan § 5.3). The
+    /// same deferral as Show Files: a menu's choice runs after AppKit has
+    /// finished tracking, and a typing field's key never opens it.
+    private func openTaskNote(_ id: UUID) {
+        guard !AtticTextInput.ownsCurrentKey else { return }
+        guard store.task(withID: id) != nil, let open = model.services.openTaskNote else { return }
+        pointer.endInvocation()
+        model.selectOnly(id)
+        RunLoop.main.perform(inModes: [.default]) {
+            MainActor.assumeIsolated { open(id) }
+        }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
 
     private func openFiles(_ id: UUID) {
         guard !AtticTextInput.ownsCurrentKey else {
@@ -2138,9 +2167,16 @@ struct TasksPage: View {
         list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
             menuCommand(key) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) }
         })
+        if single, tab != .done, opensTaskNotes {
+            // Phase 3: ⌘Return opens the task's page (`p3-22` row 5).
+            list.append(AtticMenuCommand(verbatim: String(localized: "Open Task Note"), shortcut: AtticTaskShortcut.openPage,
+                                         startsSection: true) {
+                openTaskNote(menuRowID(key))
+            })
+        }
         if single, tab != .done {
             var more = [AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files") : String(localized: "Show Files"),
-                                         shortcut: AtticTaskShortcut.openPage) {
+                                         shortcut: opensTaskNotes ? nil : AtticTaskShortcut.openPage) {
                 openFiles(menuRowID(key))
             }]
             // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
@@ -2954,6 +2990,15 @@ struct TasksPage: View {
     private func attachDroppedFiles(_ content: TaskDropContent, _ providers: [NSItemProvider], to id: UUID) {
         fileDropRow = nil
         guard let owner = store.attachmentOwnerID(for: id) else { return }
+        // Phase 3: dropped files go into the task's note, created by the
+        // drop when it has none (`p3-22` row 4). The row stays where it is.
+        if content == .files, let addToNote = model.services.addFilesToTaskNote {
+            Task { @MainActor in
+                guard let staging = try? await TaskDroppedFiles.stage(providers) else { return }
+                addToNote(owner, staging)
+            }
+            return
+        }
         // A file row dragged from another task's files list is copied (the
         // drag recorded its source when it began).
         let card = TaskAttachmentCardDrag.current

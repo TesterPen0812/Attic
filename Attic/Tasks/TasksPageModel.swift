@@ -48,6 +48,14 @@ struct TasksPageServices {
     /// The add bar's Attach (O17-06): the same picker, for the task being
     /// written. Nil where the page has none.
     var chooseComposerFiles: (() -> Void)?
+    /// Open Task Note (Phase 3: a title click, ⌘Return, the menu and
+    /// VoiceOver): the host shows the task's page over the list. Nil where
+    /// the page has none (the preview, tests): the row's files open instead.
+    var openTaskNote: ((UUID) -> Void)?
+    /// Files dropped on a row go into the task's note (Phase 3, `p3-22`
+    /// row 4). The receiver owns the staging and discards it once the
+    /// import is done. Nil: they attach to the task as before.
+    var addFilesToTaskNote: ((UUID, TaskAttachmentStaging) -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -814,6 +822,17 @@ final class TasksPageModel: ObservableObject {
     /// panel: it is where it was, on the tab it was left on (round 12, CU
     /// bug 3: it returned to Now). Only a reveal of the panel starts on Now
     /// (`resetForReveal`).
+    /// Back from a task's page: the anchor row takes the keyboard again
+    /// (UX plan § 5.3). The page observes the count.
+    @Published private(set) var returnFocusRequest: UInt64 = 0
+    private(set) var returnFocusRow: UUID?
+
+    func requestReturnFocus(_ id: UUID?) {
+        guard let id else { return }
+        returnFocusRow = id
+        returnFocusRequest &+= 1
+    }
+
     func pageDidReturn() {
         isHidden = false
         defer {

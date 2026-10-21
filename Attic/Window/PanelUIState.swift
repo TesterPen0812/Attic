@@ -52,8 +52,33 @@ final class PanelUIState: ObservableObject {
         get { renameDraft.title }
         set { renameDraft.title = newValue }
     }
-    /// Seeded task-page route; production entry points arrive in the next slice.
+    /// The task page shown over its origin (UX plan § 5.3–5.4): a Tasks row
+    /// (title click, ⌘Return, Open Task Note) or the Notes page. Nil: none.
     @Published var openTaskNoteID: UUID?
+    /// Where the open task page came from. It shows over that page only,
+    /// and Back returns there exactly as it was left.
+    @Published private(set) var taskNoteOrigin: PanelPage = .notes
+    /// The row Back gives the keyboard to (the anchor row on Tasks).
+    @Published var taskNoteReturnRow: UUID?
+    /// Back's destination, named in its tooltip, VoiceOver label and menu
+    /// item ("Back to Now").
+    private(set) var taskNoteBackTitle = String(localized: "Back to Notes")
+
+    /// Opens a task's page over `origin`. Opening the one already shown is
+    /// a no-op; another task replaces the route (its handoff can refuse).
+    func openTaskNote(_ taskID: UUID, from origin: PanelPage, row: UUID? = nil, backTitle: String? = nil) {
+        if openTaskNoteID == taskID, taskNoteOrigin == origin { return }
+        taskNoteOrigin = origin
+        taskNoteReturnRow = row
+        let fallback = switch origin {
+        case .tasks: String(localized: "Back to Tasks")
+        case .notes: String(localized: "Back to Notes")
+        case .canvas: String(localized: "Back to Canvas")
+        }
+        taskNoteBackTitle = backTitle ?? fallback
+        openTaskNoteID = taskID
+    }
+
     @Published var confirmingTaskDeletionID: UUID?
     @Published var confirmingTaskCompletionID: UUID?
     /// The owner whose Add attachment picker is up. Only

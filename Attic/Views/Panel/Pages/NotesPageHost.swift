@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The document editor is the only Notes page.
+/// The document editor is the only Notes page. A task's page opened from
+/// Notes replaces it until Back (`TaskNoteRouteHost`).
 struct NotesPageHost: View {
     @ObservedObject var noteStore: NoteStore
     let taskStore: TaskStore
@@ -9,42 +10,37 @@ struct NotesPageHost: View {
     let layout: PanelPageLayout
     let hasRestoredSession: Bool
 
-    @State private var presentedTaskID: UUID?
-    @State private var taskRouteGeneration = 0
-    // A remounted section still shows its retained owner during a handoff.
-    private var displayedTaskID: UUID? { presentedTaskID ?? noteDraft.pages.taskNotePresenter?.taskID }
-
     var body: some View {
-        Group {
-            if !hasRestoredSession {
-                ProgressView("Restoring draft…")
-            } else if let taskID = displayedTaskID {
-                TaskNotePageContainer(taskID: taskID, tasks: taskStore, controller: noteDraft.pages,
-                                      noteStore: noteStore, layout: layout) {
-                    closeTaskNoteRoute(taskID)
-                }
-                .id("\(taskID)-\(taskRouteGeneration)")
-            } else {
+        content.onAppear(perform: installTaskNoteHooks)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if !hasRestoredSession {
+            ProgressView("Restoring draft…")
+        } else {
+            TaskNoteRouteHost(page: .notes, noteStore: noteStore, taskStore: taskStore, noteDraft: noteDraft,
+                              uiState: uiState, layout: layout, isReady: hasRestoredSession) { _ in
                 NotesEditorPage(controller: noteDraft.pages, noteStore: noteStore, noteDraft: noteDraft,
                                 uiState: uiState, layout: layout)
             }
         }
-        .task(id: uiState.openTaskNoteID) {
-            let requested = uiState.openTaskNoteID
-            let previous = noteDraft.pages.taskNotePresenter
-            let previousID = displayedTaskID
-            guard await noteDraft.pages.prepareTaskNoteRoute(requested) else {
-                if !Task.isCancelled { uiState.openTaskNoteID = previousID }
-                return
-            }
-            guard !Task.isCancelled else { return }
-            if previous != nil, previous?.lease == nil { taskRouteGeneration &+= 1 }
-            presentedTaskID = requested
+    }
+
+    /// All notes shows a task note's circle and opens its task's page.
+    private func installTaskNoteHooks() {
+        let pages = noteDraft.pages
+        pages.taskStateLookup = { [taskStore] id in
+            taskStore.listedTask(withID: id).map { TaskRowPresentation.state($0.status) }
+        }
+        pages.openTaskPage = { [taskStore, uiState] taskID in
+            guard taskStore.task(withID: taskID) != nil else { return false }
+            uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to All notes"))
+            return true
         }
     }
 
     func closeTaskNoteRoute(_ taskID: UUID) {
-        guard uiState.openTaskNoteID == taskID else { return }
-        uiState.openTaskNoteID = nil
+        TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
     }
 }

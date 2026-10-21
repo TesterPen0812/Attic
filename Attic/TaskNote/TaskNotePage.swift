@@ -34,6 +34,17 @@ final class TaskNotePresenter: ObservableObject {
     var isClosing: Bool { closeWork != nil }
     /// Rings in the head and the block only while the keyboard drives.
     private static let focusTracker = AtticKeyboardFocusTracker()
+    /// The page's menus, filled by the mounted page (the head is built once).
+    let menus = TaskNoteMenuRelay()
+    /// The task's own note is in Recently Deleted (§ 5.6): Restore Note.
+    let deletedNoteID: UUID?
+    /// Every open task page, panel or window (one per task: OD-1).
+    private static var live: [UUID: WeakPresenter] = [:]
+    private struct WeakPresenter { weak var presenter: TaskNotePresenter? }
+    static func open(for taskID: UUID) -> TaskNotePresenter? {
+        guard let presenter = live[taskID]?.presenter, presenter.lease != nil else { return nil }
+        return presenter
+    }
 
     enum OpenError: Error { case unavailable }
 
@@ -50,6 +61,7 @@ final class TaskNotePresenter: ObservableObject {
         self.taskID = taskID
         self.design = design
         session = page.note
+        deletedNoteID = page.note == nil ? coordinator.sessions.deletedOwnNoteID(taskID) : nil
         let cached = session?.taskNotePresentation
         session?.taskNotePresentation = nil
         let canReuse = cached.map { $0.model.taskID == taskID && $0.model.store === tasks
@@ -68,8 +80,8 @@ final class TaskNotePresenter: ObservableObject {
             engine = NoteEditorEngine(noteID: UUID(), document: blank, readOnly: true, design: design, bodyOnly: true)
         }
         host = canReuse ? cached!.host : TaskNoteComposedHost(engine: engine,
-                                    head: Self.headView(model, design: design),
-                                    block: Self.blockView(model, design: design),
+                                    head: Self.headView(model, design: design, menus: menus),
+                                    block: Self.blockView(model, design: design, menus: menus),
                                     columnInset: columnInset,
                                     blockHeight: { [weak model] in model?.blockHeight ?? TaskNoteMetrics.blockHeader })
         engine.setCompatibilityTitle(model.head.title)
@@ -79,10 +91,11 @@ final class TaskNotePresenter: ObservableObject {
             self.host.setNeedsRestack()
         }
         model.onFocusWriting = { [weak self] atTop in self?.host.focusWriting(atTop: atTop) }
+        model.deletedNote = deletedNoteID != nil
+        Self.live[taskID] = WeakPresenter(presenter: self)
         if canReuse {
-            if cached?.design != design {
-                host.setRegions(head: Self.headView(model, design: design), block: Self.blockView(model, design: design))
-            }
+            // New regions every time: their menus belong to this presenter.
+            host.setRegions(head: Self.headView(model, design: design, menus: menus), block: Self.blockView(model, design: design, menus: menus))
             let canResumeViewport = cached?.draftGeneration == session?.callbackStamp.draft
                 && cached?.viewGeneration == engine.viewGeneration
                 && cached?.design == design && host.columnInset == columnInset && engine.textView == nil
@@ -99,12 +112,14 @@ final class TaskNotePresenter: ObservableObject {
         }
     }
 
-    private static func headView(_ model: TaskNotePageModel, design: AtticDesignContext) -> AnyView {
-        AnyView(TaskNoteHeadView(model: model).environment(\.atticDesign, design).atticKeyboardFocusTracking(focusTracker))
+    private static func headView(_ model: TaskNotePageModel, design: AtticDesignContext, menus: TaskNoteMenuRelay) -> AnyView {
+        return AnyView(TaskNoteHeadView(model: model, openNoteMenu: { menus.noteMenu() }, taskMenu: { menus.taskMenu() })
+            .environment(\.atticDesign, design).atticKeyboardFocusTracking(focusTracker))
     }
 
-    private static func blockView(_ model: TaskNotePageModel, design: AtticDesignContext) -> AnyView {
-        AnyView(TaskNoteSubtasksBlock(model: model).environment(\.atticDesign, design).atticKeyboardFocusTracking(focusTracker))
+    private static func blockView(_ model: TaskNotePageModel, design: AtticDesignContext, menus: TaskNoteMenuRelay) -> AnyView {
+        return AnyView(TaskNoteSubtasksBlock(model: model, restoreNote: { menus.restoreNote() })
+            .environment(\.atticDesign, design).atticKeyboardFocusTracking(focusTracker))
     }
 
     func update(design: AtticDesignContext) {
@@ -113,7 +128,7 @@ final class TaskNotePresenter: ObservableObject {
         notes?.update(design: design)
         host.engine.update(design: design)
         model.reduceMotion = design.reduceMotion
-        host.setRegions(head: Self.headView(model, design: design), block: Self.blockView(model, design: design))
+        host.setRegions(head: Self.headView(model, design: design, menus: menus), block: Self.blockView(model, design: design, menus: menus))
     }
 
     /// A section return remounts the same native page. Only a first open
@@ -169,30 +184,61 @@ extension TaskNoteComposedHost {
     }
 }
 
-// MARK: - The page
+/// The page's menus, filled by the mounted page. The head and the block are
+/// native regions made once per presenter, so they call through this.
+@MainActor
+final class TaskNoteMenuRelay {
+    var noteMenu: () -> Void = {}
+    var taskMenu: () -> [AtticMenuCommand] = { [] }
+    var restoreNote: () -> Void = {}
+}
 
-/// The task's note over the Notes page (§ 5.4): the composed scroll, then
-/// the bottom row with Back (bottom-left), the Notes status slot and Aa.
-/// The riding title (§ 2.2) is round 2b.
+/// Where a task's page lives (OD-1: one place at a time).
+enum TaskNotePlacement: Equatable {
+    case panel
+    /// Its own window: Back becomes Move to Panel.
+    case window
+}
+
+/// The task's note over its origin (§ 5.4): the composed scroll, then the
+/// bottom row with Back (bottom-left, its destination in the tooltip, VO and
+/// menus), the Notes status slot and Aa.
 struct TaskNotePage: View {
     @ObservedObject var presenter: TaskNotePresenter
     @ObservedObject var model: TaskNotePageModel
     @ObservedObject var controller: NotesPageController
     @ObservedObject var noteStore: NoteStore
     let layout: PanelPageLayout
+    var backTitle = String(localized: "Back to Notes")
+    var placement: TaskNotePlacement = .panel
+    var onOpenInWindow: (() -> Void)?
+    /// The page reopens on the same task (after Delete Note… or Restore Note).
+    var onReopen: () -> Void = {}
     let onBack: () -> Void
 
     @Environment(\.atticDesign) private var design
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var damaged: NoteDamagedRecoveryExit
+    @State private var confirming: Confirmation?
+
+    enum Confirmation: Identifiable {
+        case deleteTask, deleteNote
+        var id: Self { self }
+    }
 
     init(presenter: TaskNotePresenter, controller: NotesPageController, noteStore: NoteStore,
-         layout: PanelPageLayout, onBack: @escaping () -> Void) {
+         layout: PanelPageLayout, backTitle: String = String(localized: "Back to Notes"),
+         placement: TaskNotePlacement = .panel, onOpenInWindow: (() -> Void)? = nil,
+         onReopen: @escaping () -> Void = {}, onBack: @escaping () -> Void) {
         self.presenter = presenter
         self.model = presenter.model
         self.controller = controller
         self.noteStore = noteStore
         self.layout = layout
+        self.backTitle = backTitle
+        self.placement = placement
+        self.onOpenInWindow = onOpenInWindow
+        self.onReopen = onReopen
         self.onBack = onBack
         _damaged = StateObject(wrappedValue: NoteDamagedRecoveryExit(perform: { [controller] command in
             await controller.perform(command)
@@ -204,12 +250,13 @@ struct TaskNotePage: View {
     private var topInset: CGFloat { layout.headerBottom + AtticNoteMetrics.titleTopGap }
     private var bottomInset: CGFloat { layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s12 }
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
+    private var leaveTitle: String { placement == .window ? String(localized: "Move to Panel") : backTitle }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             TaskNoteHostRepresentable(presenter: presenter, chrome: chrome, columnInset: columnInset,
                                       topInset: topInset, bottomInset: bottomInset, design: design,
-                                      engineGeneration: presenter.engineGeneration)
+                                      engineGeneration: presenter.engineGeneration, onEscape: onBack)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("task-note-page")
             bottomRow
@@ -227,6 +274,25 @@ struct TaskNotePage: View {
                 }
             }
         }
+        .onAppear(perform: installMenus)
+        // Esc from the head or the block goes Back (§ 7: after inner layers).
+        .onKeyPress(.escape) {
+            guard !model.isEditingTitle, model.renamingID == nil else { return .ignored }
+            onBack()
+            return .handled
+        }
+        .confirmationDialog(confirmationTitle, isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+                            titleVisibility: .visible, presenting: confirming) { kind in
+            switch kind {
+            case .deleteTask:
+                Button(String(localized: "Delete Task"), role: .destructive) { model.deleteTask() }
+            case .deleteNote:
+                Button(String(localized: "Delete Note"), role: .destructive) { deleteNote() }
+            }
+            Button(String(localized: "Cancel"), role: .cancel) {}
+        } message: { kind in
+            Text(verbatim: confirmationMessage(kind))
+        }
         .accessibilityElement(children: .contain)
     }
 
@@ -234,10 +300,12 @@ struct TaskNotePage: View {
         AtticControlGroup {
             NoteFormatRowSwitch(state: chrome.formatRow, model: { [weak chrome] in chrome?.controls?.formatModel }) {
             HStack(spacing: 0) {
-                AtticRaisedButton(systemName: "chevron.left", label: "Back", help: String(localized: "Back to Notes")) {
+                AtticRaisedButton(systemName: placement == .window ? "rectangle.portrait.and.arrow.right" : "chevron.left",
+                                  label: placement == .window ? "Move to Panel" : "Back",
+                                  help: leaveTitle + "  (Esc)") {
                     onBack()
                 }
-                .accessibilityLabel(String(localized: "Back to Notes"))
+                .accessibilityLabel(leaveTitle)
                 .accessibilityIdentifier("task-note-back")
                 Spacer(minLength: AtticSpacing.s12)
                 if let session = presenter.session {
@@ -271,6 +339,139 @@ struct TaskNotePage: View {
                                 tone: .caution,
                                 actions: failure.canRetry ? [.init(title: String(localized: "Retry"), handler: { model.retryFailure() })] : [])]
     }
+
+    // MARK: Menus (§ 5.5)
+
+    private func installMenus() {
+        presenter.menus.noteMenu = { presentNoteMenu() }
+        presenter.menus.taskMenu = { taskCommands() }
+        presenter.menus.restoreNote = { restoreNote() }
+    }
+
+    /// The note's ⋯: Insert and Format, then the note's own commands.
+    /// Delete Note… names what goes (P5's scope rule: inside a task's note
+    /// the task and its note could be confused).
+    func noteCommands() -> [AtticMenuCommand] {
+        var commands: [AtticMenuCommand] = []
+        let session = presenter.session
+        let persisted = session?.isPersisted == true && presenter.deletedNoteID == nil
+        if let session, !session.isReadOnly {
+            let router = chrome.controls?.router ?? NoteCommandRouter(engine: session.engine)
+            commands += router.menuCommands(from: .noteMenu)
+        }
+        if let session, persisted {
+            let id = session.noteID
+            let pinned = noteStore.note(withID: id)?.isPinned ?? false
+            commands.append(AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", startsSection: !commands.isEmpty,
+                                             identifier: "task-note-menu-pin") {
+                controller.setPinned(!pinned, noteID: id)
+            })
+            commands.append(AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
+                                             identifier: "task-note-menu-copy-markdown") {
+                controller.copyMarkdown(noteID: id)
+            })
+            let engine = session.engine
+            commands.append(AtticMenuCommand("Print…", shortcut: KeyboardShortcut("p", modifiers: .command),
+                                             identifier: "task-note-menu-print") {
+                Task { _ = await engine.printNote() }
+            })
+        }
+        commands.append(contentsOf: placementCommands(startsSection: !commands.isEmpty))
+        if persisted {
+            commands.append(AtticMenuCommand("Delete Note…", isDestructive: true, startsSection: true,
+                                             identifier: "task-note-menu-delete-note") { confirming = .deleteNote })
+        }
+        return commands
+    }
+
+    /// The task's menu: right-click the head (§ 5.5). Delete Task… names
+    /// what goes and what stays (`p3-22` row 1).
+    func taskCommands() -> [AtticMenuCommand] {
+        guard model.head.exists else { return [] }
+        let done = model.head.state == .done
+        var commands: [AtticMenuCommand] = [
+            AtticMenuCommand(verbatim: done ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
+                             shortcut: AtticTaskShortcut.complete) { model.toggleTask() }.identified("task-note-task-complete"),
+            AtticMenuCommand(verbatim: String(localized: "Edit Title")) {
+                model.requestFocus(.title)
+            }.identified("task-note-task-edit-title"),
+        ]
+        if !done {
+            commands.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask")) {
+                if model.isFolded { model.setFolded(false) }
+                model.requestFocus(.add)
+            }.identified("task-note-task-add-subtask"))
+        }
+        commands.append(contentsOf: placementCommands(startsSection: true))
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Delete Task…"), isDestructive: true, startsSection: true) {
+            confirming = .deleteTask
+        }.identified("task-note-task-delete"))
+        return commands
+    }
+
+    private func placementCommands(startsSection: Bool) -> [AtticMenuCommand] {
+        var commands: [AtticMenuCommand] = []
+        if let onOpenInWindow, placement == .panel {
+            commands.append(AtticMenuCommand(verbatim: String(localized: "Open in Window"), startsSection: startsSection) {
+                onOpenInWindow()
+            }.identified("task-note-open-window"))
+        }
+        commands.append(AtticMenuCommand(verbatim: leaveTitle, startsSection: startsSection && commands.isEmpty) {
+            onBack()
+        }.identified("task-note-menu-back"))
+        return commands
+    }
+
+    private func presentNoteMenu() {
+        let commands = noteCommands()
+        let head = presenter.host.headView
+        let width = head.bounds.width - columnInset + 4
+        let anchor = NSRect(x: max(0, width - 30), y: 0, width: 28, height: TaskNoteMetrics.titleLineHeight + 4)
+        AtticNativeMenu.popUpContextMenu(commands, below: anchor, in: head)
+    }
+
+    private var confirmationTitle: String {
+        switch confirming {
+        case .deleteTask: String(localized: "Delete “\(model.head.title)”?")
+        case .deleteNote: String(localized: "Delete this note?")
+        case nil: ""
+        }
+    }
+
+    private func confirmationMessage(_ kind: Confirmation) -> String {
+        switch kind {
+        case .deleteTask:
+            let count = model.head.subtasks.total
+            let subtasks = count == 0 ? String(localized: "The task goes")
+                : String(localized: "The task and its \(count) subtasks go")
+            return subtasks + " " + String(localized: "to Recently Deleted for 30 days. Its note stays in All notes, and you can keep editing it.")
+        case .deleteNote:
+            return String(localized: "Its writing and files go to Recently Deleted for 30 days. “\(model.head.title)” and its subtasks stay in Tasks.")
+        }
+    }
+
+    // MARK: Lifecycle (`p3-22`: nothing cascades)
+
+    private func deleteNote() {
+        guard let session = presenter.session else { return }
+        let id = session.noteID
+        Task { @MainActor in
+            // Leave the page durably first (its draft is saved), then delete
+            // the note itself; the page comes back with Restore Note.
+            guard await presenter.close() else { return }
+            guard await controller.deleteNoteDurably(noteID: id) else { onReopen(); return }
+            onReopen()
+        }
+    }
+
+    private func restoreNote() {
+        guard let id = presenter.deletedNoteID else { return }
+        Task { @MainActor in
+            guard controller.restoreDeletedNote(noteID: id, reopen: false) else { return }
+            guard await presenter.close() else { return }
+            onReopen()
+        }
+    }
 }
 
 /// The composed host inside SwiftUI. The host (and so the text view) belongs
@@ -283,6 +484,8 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
     let bottomInset: CGFloat
     let design: AtticDesignContext
     let engineGeneration: UInt64
+    /// Esc with nothing left to close in the writing goes Back (§ 7).
+    var onEscape: (() -> Void)?
 
     @MainActor
     final class Coordinator {
@@ -308,6 +511,7 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         configureControls(context.coordinator)
         let engine = host.engine
         let textView = host.textView
+        textView.escapeFallback = onEscape
         DispatchQueue.main.async {
             guard presenter.lease != nil, host.engine === engine, host.textView === textView else { return }
             presenter.restoreViewStateOnMount()
@@ -347,6 +551,7 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard presenter.lease != nil else { return }
         configureControls(context.coordinator)
+        presenter.host.textView.escapeFallback = onEscape
         presenter.host.setContentInsets(top: topInset, bottom: bottomInset)
         presenter.host.columnInset = columnInset
         context.coordinator.controls?.update(design: design)
@@ -365,6 +570,9 @@ struct TaskNotePageContainer: View {
     @ObservedObject var controller: NotesPageController
     let noteStore: NoteStore
     let layout: PanelPageLayout
+    var backTitle = String(localized: "Back to Notes")
+    var placement: TaskNotePlacement = .panel
+    var onOpenInWindow: (() -> Void)?
     let onClose: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -376,7 +584,9 @@ struct TaskNotePageContainer: View {
         Group {
             if let presenter {
                 TaskNotePage(presenter: presenter, controller: controller, noteStore: noteStore,
-                             layout: layout, onBack: back)
+                             layout: layout, backTitle: backTitle, placement: placement,
+                             onOpenInWindow: onOpenInWindow.map { open in { moveToWindow(open) } },
+                             onReopen: reopen, onBack: back)
             } else if openFailed {
                 AtticText("This task's note can't be opened here.", style: .body, ink: .helper)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -389,10 +599,23 @@ struct TaskNotePageContainer: View {
 
     private func open() {
         guard presenter == nil, !openFailed else { return }
+        // OD-1: one live page per task. Open in a window already, it comes
+        // forward there instead of opening a second editor here.
+        if placement == .panel, TaskNoteWindows.shared.bringForward(taskID) {
+            onClose()
+            return
+        }
         guard let library = tasks.commandLibrary else { openFailed = true; return }
+        let inset = layout.chromeInsets.leading + AtticNoteMetrics.columnInset
         do {
-            presenter = try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
-                design: design, columnInset: layout.chromeInsets.leading + AtticNoteMetrics.columnInset)
+            switch placement {
+            case .panel:
+                presenter = try controller.openTaskNote(taskID: taskID, tasks: tasks, library: library,
+                                                        design: design, columnInset: inset)
+            case .window:
+                presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: controller,
+                                                  design: design, columnInset: inset)
+            }
         } catch {
             openFailed = true
         }
@@ -411,6 +634,31 @@ struct TaskNotePageContainer: View {
             let closed = await presenter.close()
             closing = false
             if closed { onClose() }
+        }
+    }
+
+    /// OD-1: the panel's page lets go durably, then the window takes the
+    /// same task (the warm editor moves with it).
+    private func moveToWindow(_ open: @escaping () -> Void) {
+        guard !closing, let presenter else { return }
+        closing = true
+        Task { @MainActor in
+            let closed = await presenter.close()
+            closing = false
+            guard closed else { return }
+            open()
+            onClose()
+        }
+    }
+
+    /// Delete Note… or Restore Note changed what the task's page holds: it
+    /// opens again on the same task.
+    private func reopen() {
+        Task { @MainActor in
+            if let presenter, presenter.lease != nil { guard await presenter.close() else { return } }
+            presenter = nil
+            openFailed = false
+            open()
         }
     }
 }
@@ -439,5 +687,14 @@ extension NotesPageController {
             design: design, columnInset: columnInset, defaults: defaults)
         taskNotePresenter = presenter
         return presenter
+    }
+}
+
+extension AtticMenuCommand {
+    /// The same command with an identifier (UI tests, key routing).
+    func identified(_ identifier: String) -> AtticMenuCommand {
+        var copy = self
+        copy.identifier = identifier
+        return copy
     }
 }

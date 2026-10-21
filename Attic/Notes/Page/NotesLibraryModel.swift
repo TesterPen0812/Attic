@@ -94,10 +94,16 @@ final class NotesLibraryModel: ObservableObject {
         let prepareSummaries: Bool
     }
 
+    /// A task note's task state (the row's circle); nil leaves an open one.
+    var taskState: ((UUID) -> AtticTaskState?)?
+
     init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, now: @escaping () -> Date = Date.init,
          calendar: Calendar = .autoupdatingCurrent) {
         self.search = search
-        if let controller { summaries = controller.librarySummaries }
+        if let controller {
+            summaries = controller.librarySummaries
+            taskState = { [weak controller] id in controller?.taskStateLookup?(id) }
+        }
         self.now = now
         self.calendar = calendar
         dateEnvironmentSubscription = Publishers.MergeMany(DatePresentationEnvironment.notifications.map {
@@ -423,10 +429,16 @@ final class NotesLibraryModel: ObservableObject {
         let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
+        // A task's own note (Phase 3): its task's circle and "Task note".
+        let taskState = note.taskID.map { taskState?($0) ?? .todo }
+        let taskNote = String(localized: "Task note")
+        let preview = taskState == nil ? summary.preview
+            : (summary.preview.isEmpty ? taskNote : taskNote + " · " + summary.preview)
+        let spoken = summary.spoken(time: time, needsAttention: attention.contains(note.id)) + (hasProposal ? ", proposal waiting" : "")
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,
-            preview: summary.preview, checklist: summary.checklist, images: summary.images, files: summary.files,
-            spoken: summary.spoken(time: time, needsAttention: attention.contains(note.id)) + (hasProposal ? ", proposal waiting" : "")
+            preview: preview, checklist: summary.checklist, images: summary.images, files: summary.files,
+            spoken: taskState == nil ? spoken : taskNote + ", " + spoken, taskState: taskState
         )
     }
 

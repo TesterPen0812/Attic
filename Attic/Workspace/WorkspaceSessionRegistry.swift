@@ -99,7 +99,10 @@ final class WorkspaceSessionRegistry {
         let taskNotes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID }))
         let taskLinks = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil }))
         noteRows += taskNotes.count; associationRows += taskLinks.count
-        let own = Set(taskNotes.map(\.id)).union(taskLinks.map(\.noteID))
+        // A note in Recently Deleted is not the task's live note: the page
+        // opens without it and offers Restore Note (UX plan § 5.6).
+        var own = Set(taskNotes.map(\.id)).union(taskLinks.map(\.noteID))
+        own = try own.filter { id in try notes(id: id).contains { $0.deletedAt == nil } }
         guard own.count <= 1 else { throw WorkspaceFoundationError.conflict }
         if let noteID = own.first {
             let rows = try notes(id: noteID)
@@ -121,11 +124,17 @@ final class WorkspaceSessionRegistry {
             // Lazy note creation may add an alias later, but never replace a
             // live draft or merge a second cursor.
             if session.note == nil, let noteID { try session.attach(noteID: noteID) }
-            guard session.note?.noteID == noteID else { throw WorkspaceFoundationError.conflict }
+            if session.note == nil, noteID == nil, case let .task(taskID) = canonical { try session.attachDraft(taskID: taskID) }
+            // The never-saved draft is the task's writing until its first save.
+            let draft = session.note.map { !$0.isPersisted && $0.pendingTaskID != nil } ?? false
+            guard session.note?.noteID == noteID || (draft && noteID == nil) else { throw WorkspaceFoundationError.conflict }
             return session
         }
         let key = Key(domain: domain, workspace: canonical)
         let session = try WorkspacePageSession(key: key, controller: notes, coordinator: coordinator, noteID: noteID)
+        if noteID == nil, case let .task(taskID) = canonical, !hasDeletedOwnNote(taskID) {
+            try session.attachDraft(taskID: taskID)
+        }
         session.onRelease = { [weak self] page in
             guard self?.sessions[canonical] === page else { return }
             self?.sessions[canonical] = nil
@@ -133,6 +142,20 @@ final class WorkspaceSessionRegistry {
         sessions[canonical] = session
         return session
     }
+}
+
+extension WorkspaceSessionRegistry {
+    /// The task's own note is in Recently Deleted (and no live one exists):
+    /// the page offers Restore Note instead of a new draft (§ 5.6).
+    func hasDeletedOwnNote(_ taskID: UUID) -> Bool { deletedOwnNoteID(taskID) != nil }
+
+    func deletedOwnNoteID(_ taskID: UUID) -> UUID? {
+        guard let context = coordinator?.freshContext(),
+              let rows = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })) else { return nil }
+        guard !rows.contains(where: { $0.deletedAt == nil }) else { return nil }
+        return rows.max { ($0.deletedAt ?? .distantPast) < ($1.deletedAt ?? .distantPast) }?.id
+    }
+
 }
 
 @MainActor
@@ -179,6 +202,27 @@ final class WorkspacePageSession {
         session.usesWorkspaceBinding = true
         session.workspacePage = self
         note = session
+    }
+
+    /// Phase 3 lazy creation: a task with no note gets the controller's
+    /// never-saved task draft as its writing. Nothing is stored until it
+    /// holds writing or a file.
+    fileprivate func attachDraft(taskID: UUID) throws {
+        guard let controller, note == nil,
+              let session = controller.workspaceTaskDraft(taskID: taskID, title: Self.storedTitle(taskID, in: controller)) else {
+            throw WorkspaceFoundationError.conflict
+        }
+        let adapter = session.engine.history
+        guard adapter.workspace == nil, history.bind(noteID: session.noteID) else { throw WorkspaceFoundationError.conflict }
+        history.attach(adapter)
+        session.usesWorkspaceBinding = true
+        session.workspacePage = self
+        note = session
+    }
+
+    private static func storedTitle(_ taskID: UUID, in controller: NotesPageController) -> String {
+        let context = ModelContext(controller.store.container)
+        return (try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })))?.first?.title ?? ""
     }
 
     func acquire(surfaceID: UUID) throws -> Lease {
@@ -257,7 +301,11 @@ final class WorkspacePageSession {
         bindingGeneration &+= 1
         note?.invalidateCallbacks()
         activeLease = nil
-        if let note { controller.releaseWorkspace(note) }
+        if let note {
+            controller.releaseWorkspace(note)
+            // An untouched task draft leaves nothing behind (§ 2.1).
+            controller.discardUntouchedTaskDraft(note)
+        }
         released = true
         onRelease?(self)
         onRelease = nil
