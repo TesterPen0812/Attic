@@ -266,7 +266,7 @@ enum AtticAddBarMetrics {
     /// titles' line (47 = 16 + 8 + 15 + 8). Spacing B (owner, 2026-10-20)
     /// moved both lines; the bar's contents follow them (they were 36 and
     /// 56, with a 24 pt slot).
-    static let leadingPadding: CGFloat = AtticLayout.tasksContentFromChrome
+    static let leadingPadding: CGFloat = AtticLayout.contentFromChrome
     static let iconSlot: CGFloat = AtticControlSize.statusCircle
     static let gap: CGFloat = AtticLayout.circleToTitle
     static let plusSize: CGFloat = 12.5
@@ -783,8 +783,9 @@ enum AtticNoteTableMetrics {
 }
 
 enum AtticNoteMetrics {
-    /// The note's text column: 12 inside the chrome's 16 pt line (28 from
-    /// the panel's edge, the Tasks circles' line), moving inward with it.
+    /// The note's text column (title and body): 8 inside the chrome's 16 pt
+    /// line (24 from the panel's edge, the Tasks circles' line), moving
+    /// inward with it. It insets both sides, so the right edge mirrors it.
     static let columnInset: CGFloat = AtticLayout.contentFromChrome
     /// The title's first line sits 16 under the header (y = 76 in a
     /// 320 × 520 panel).
@@ -830,14 +831,14 @@ enum AtticNoteMetrics {
     static let detailsPadding: CGFloat = 16
     static let detailsItemGap: CGFloat = 14
     /// All notes: the rows' text on the note column (16 inside the list's
-    /// 12 pt page edge). Its search field uses Tasks' columns (S-06).
+    /// 8 pt page edge). Its search field uses Tasks' columns (S-06).
     static let rowTextX: CGFloat = 16
     /// All notes sits on the shared content column (design review D-07): the
-    /// page's edge is Tasks' (the text, 16 into it, lands 12 inside the
-    /// controls' line: 28 at the default corner), the rows' highlights and
+    /// page's edge is Tasks' (the text, 16 into it, lands 8 inside the
+    /// controls' line: 24 at the default corner), the rows' highlights and
     /// the search field's edges are on the controls' own line (16 at the
-    /// default corner, 12 clear of the text), and the right-hand edges
-    /// mirror the left.
+    /// default corner, 8 clear of the text, like a task row's pill), and
+    /// the right-hand edges mirror the left.
     static func libraryPageEdge(chromeInset: CGFloat) -> CGFloat {
         max(0, chromeInset + AtticLayout.contentFromChrome - AtticLayout.circleX)
     }

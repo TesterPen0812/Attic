@@ -41,15 +41,15 @@ final class NotesV2ChromeTests: XCTestCase {
 
     // MARK: Lines
 
-    /// The controls sit 16 in; the note's column stays at 28, Tasks'
-    /// content line (circles and tabs) is at 24 (spacing B, owner
-    /// 2026-10-20; it was 28), and the add bar's plus on the circles'
-    /// centre line (31.5; it was 36).
-    func testContentLineStaysAt28AndTheAddBarPlusOnTheCircles() {
+    /// The controls sit 16 in; the note's column and Tasks' content line
+    /// (circles and tabs) are both at 24 (spacing B, owner 2026-10-20 for
+    /// Tasks and 2026-10-21 for Notes; both were 28), and the add bar's plus
+    /// on the circles' centre line (31.5; it was 36).
+    func testContentLineStaysAt24AndTheAddBarPlusOnTheCircles() {
         let layout = PanelPageLayout(cornerSize: defaultCorner, panelSize: CGSize(width: 320, height: 520))
         XCTAssertEqual(layout.chromeInsets.leading, 16)
         XCTAssertEqual(layout.headerBottom, 46)
-        XCTAssertEqual(layout.chromeInsets.leading + AtticNoteMetrics.columnInset, 28, "the note's column")
+        XCTAssertEqual(layout.chromeInsets.leading + AtticNoteMetrics.columnInset, 24, "the note's column")
         let tasksPageEdge = AtticLayout.tasksPageEdge(chromeInset: layout.chromeInsets.leading)
         XCTAssertEqual(tasksPageEdge + AtticLayout.circleX, 24, "the Tasks circles")
         let plusCentre = layout.chromeInsets.leading + AtticAddBarMetrics.leadingPadding + AtticAddBarMetrics.iconSlot / 2

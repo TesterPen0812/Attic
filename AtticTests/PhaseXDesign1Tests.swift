@@ -222,14 +222,14 @@ final class PhaseXDesign1Tests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: corner, panelSize: CGSize(width: 320, height: 520))
             let chrome = layout.chromeInsets.leading
             let edge = AtticNoteMetrics.libraryPageEdge(chromeInset: chrome)
-            // The column: the controls' line plus 12, as Tasks' circles and the note's text.
+            // The column: the controls' line plus 8, as Tasks' circles and the note's text.
             let column = chrome + AtticLayout.contentFromChrome
             XCTAssertEqual(edge + AtticNoteMetrics.rowTextX, column, "row text, corner \(corner)")
             XCTAssertEqual(edge + AtticLayout.pageTabsX, column, "heading and labels, corner \(corner)")
             XCTAssertEqual(edge + AtticLayout.circleX, column, "Tasks' circles, corner \(corner)")
-            // The highlight is on the controls' line, 12 clear of the text.
+            // The highlight is on the controls' line, 8 clear of the text.
             XCTAssertEqual(edge + AtticNoteMetrics.libraryHighlightInset, chrome, "highlight, corner \(corner)")
-            XCTAssertEqual(column - (edge + AtticNoteMetrics.libraryHighlightInset), 12)
+            XCTAssertEqual(column - (edge + AtticNoteMetrics.libraryHighlightInset), 8)
             // Right edges mirror the left: the row text and the magnifier's glyph.
             XCTAssertEqual(edge + AtticNoteMetrics.rowTextX, column, "right text edge, corner \(corner)")
             let magnifierTrailing = max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
@@ -237,8 +237,8 @@ final class PhaseXDesign1Tests: XCTestCase {
             let glyphRight = edge + magnifierTrailing + (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2
             XCTAssertEqual(glyphRight, column, accuracy: 0.001, "magnifier, corner \(corner)")
         }
-        // The default corner: text at 28, highlight at 16 (320 pt panel).
-        XCTAssertEqual(AtticNoteMetrics.libraryPageEdge(chromeInset: 16) + AtticNoteMetrics.rowTextX, 28)
+        // The default corner: text at 24, highlight at 16 (320 pt panel).
+        XCTAssertEqual(AtticNoteMetrics.libraryPageEdge(chromeInset: 16) + AtticNoteMetrics.rowTextX, 24)
         XCTAssertEqual(AtticNoteMetrics.libraryPageEdge(chromeInset: 16) + AtticNoteMetrics.libraryHighlightInset, 16)
     }
 

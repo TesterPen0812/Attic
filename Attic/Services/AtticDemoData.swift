@@ -13,7 +13,9 @@ import SwiftData
 /// empty, or through the menu's preview-only Load Demo Data. Never under
 /// `com.taha.Attic`, never into an in-memory, UI-test, performance or
 /// gallery store. Every item has a fixed id, so loading twice adds nothing
-/// twice (a demo item already there is left as it is).
+/// twice (a demo item already there is left as it is, except an untouched
+/// raw-Markdown copy of a formatted demo note from an older seed, which
+/// Load Demo Data replaces with the formatted document).
 @MainActor
 enum AtticDemoData {
     static let officialBundleIdentifier = "com.taha.Attic"
@@ -121,20 +123,61 @@ enum AtticDemoData {
             task(title, .done, priority, completed: completed, logged: true)
         }
 
-        // Notes.
-        func note(_ index: Int, _ title: String, _ body: String, age: TimeInterval) {
+        // Notes: real documents, formatted as the editor would save them
+        // (headings, lists, checklists, bold and italic), never raw Markdown.
+        let existingNoteItems = try context.fetch(FetchDescriptor<NoteItem>())
+        var upgraded = false
+        func note(_ index: Int, _ title: String, _ body: String, markdown: Bool = false, age: TimeInterval) throws {
             let id = Self.id(1_000 + index)
-            guard !existingNotes.contains(id) else { return }
+            let document = try Self.document(title: title, body: body, markdown: markdown)
+            guard !existingNotes.contains(id) else {
+                // A preview store seeded before the notes were formatted
+                // still holds the raw-Markdown copy. Replace it only where
+                // it is exactly that untouched seed (never saved since, not
+                // deleted), on every replica; anything edited is left alone.
+                guard markdown else { return }
+                let legacy = NoteTextExport.plainText(Self.plainDocument(title: title, body: body))
+                for item in existingNoteItems where item.id == id && item.deletedAt == nil
+                    && item.revisionID == nil && item.contentFormat == NoteDocument.currentFormat
+                    && item.plainText == legacy {
+                    try Self.apply(document, to: item)
+                    upgraded = true
+                }
+                return
+            }
             let created = now.addingTimeInterval(-age)
-            context.insert(NoteItem(id: id, title: title, body: body, createdAt: created, updatedAt: created))
+            let item = NoteItem(id: id, title: title, body: body, createdAt: created, updatedAt: created)
+            try Self.apply(document, to: item)
+            context.insert(item)
             added += 1
         }
-        note(1, "Pricing page", Self.pricingNote, age: 3_600)
-        note(2, "Moodboard", Self.moodboardNote, age: 86_400)
-        note(3, "Weekend", "Farmers' market on Saturday morning.\nBike the river path if it's dry.\nCall Mum on Sunday.", age: 86_400 * 2)
+        try note(1, "Pricing page", Self.pricingNote, markdown: true, age: 3_600)
+        try note(2, "Moodboard", Self.moodboardNote, age: 86_400)
+        try note(3, "Weekend", "Farmers' market on Saturday morning.\nBike the river path if it's dry.\nCall Mum on Sunday.", age: 86_400 * 2)
 
-        if added > 0 { try context.save() }
+        if added > 0 || upgraded { try context.save() }
         return added
+    }
+
+    /// A demo note's document: the title, then the body, converted through
+    /// the app's own Markdown import when it is written in Markdown, else
+    /// one paragraph per line (as a typed note).
+    static func document(title: String, body: String, markdown: Bool) throws -> NoteDocument {
+        guard markdown else { return plainDocument(title: title, body: body) }
+        return NoteDocument(blocks: [.text(title)] + (try NoteMarkdownImport.document(body)).blocks)
+    }
+
+    private static func plainDocument(title: String, body: String) -> NoteDocument {
+        NoteDocument(blocks: [.text(title)] + body.components(separatedBy: "\n").map { .text($0) })
+    }
+
+    /// Stores `document` as the note's content, with the columns derived
+    /// from it (as a save would).
+    private static func apply(_ document: NoteDocument, to item: NoteItem) throws {
+        item.content = try NoteContentCodec.encode(document)
+        item.contentFormat = NoteDocument.currentFormat
+        item.body = NoteTextExport.plainBody(document)
+        item.plainText = NoteTextExport.plainText(document)
     }
 
     /// The note that carries the demo image and file.

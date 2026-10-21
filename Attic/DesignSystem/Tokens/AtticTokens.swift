@@ -171,20 +171,19 @@ enum AtticLayout {
     /// inner padding.
     static let circleToTitle: CGFloat = 8
     static let textX: CGFloat = circleX + AtticControlSize.statusCircle + circleToTitle
-    /// The content line (the Tasks circles, the note's text column) sits
-    /// 12 inside the corner controls' line: 28 from the panel's edge at the
-    /// chrome's 16 pt inset (chrome B, Notes v2), moving inward with it.
-    static let contentFromChrome: CGFloat = 12
-    /// Tasks' content line (spacing B, owner 2026-10-20): the circles and
-    /// the tabs' "Now" sit 8 inside the controls' line (24 at the default
-    /// corner), so the row pill's edge is on the controls' line itself.
-    /// Notes keeps its text column on `contentFromChrome`.
-    static let tasksContentFromChrome: CGFloat = 8
+    /// The content line, shared by both pages: the Tasks circles and the
+    /// tabs' "Now", the note's title and body, and All notes' row text sit
+    /// 8 inside the corner controls' line (24 from the panel's edge at the
+    /// chrome's 16 pt inset), moving inward with it. Spacing B (owner,
+    /// 2026-10-20) moved Tasks from 12 to 8, so the row pill's edge is on
+    /// the controls' line itself; Notes followed (owner, 2026-10-21) so the
+    /// pages line up when switching.
+    static let contentFromChrome: CGFloat = 8
     /// The Tasks page's edge in the panel at a chrome inset (8 at the
     /// default corner): the circles (16 in the page) land on the content
     /// line. The live page and the Appearance preview share it.
     static func tasksPageEdge(chromeInset: CGFloat) -> CGFloat {
-        max(0, chromeInset + tasksContentFromChrome - circleX)
+        max(0, chromeInset + contentFromChrome - circleX)
     }
     /// Settings' sidebar keeps its own highlight inset.
     static let sidebarHighlightInset: CGFloat = 8
