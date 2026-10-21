@@ -1,3 +1,5 @@
+import AppKit
+import CoreText
 import Foundation
 import SwiftData
 
@@ -22,6 +24,11 @@ enum TaskNotePreviewSeed {
         case nonote
     }
 
+    /// The owner's preview of the task page ("Attic Task Page"): its fresh
+    /// store opens on these task pages beside the ordinary demo content.
+    static let ownerPreviewBundleIdentifier = "com.taha.Attic.preview.taskpage"
+    static let ownerPreviewScenarios: [Scenario] = [.heavy, .boundary, .nonote]
+
     /// The seeded task of each scenario (this process).
     nonisolated(unsafe) private(set) static var seeded: [Scenario: UUID] = [:]
 
@@ -36,6 +43,65 @@ enum TaskNotePreviewSeed {
     /// like.
     static func longProse(lines: Int = 5_000) -> [NoteBlock] {
         (0..<lines).map { .text("Line \($0) with some ordinary words to wrap a little in a narrow panel.") }
+    }
+
+    /// The owner preview's task pages, written once into its empty store.
+    @MainActor
+    static func seedOwnerPreview(in container: ModelContainer, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) throws {
+        for scenario in ownerPreviewScenarios { seeded[scenario] = try seed(scenario, in: container, now: now, calendar: calendar) }
+    }
+
+    /// `p3-21`: the heavy task's note gets two screenshots and two PDFs
+    /// after its research paragraph, through the note store's own save (the
+    /// gated, journaled path every note write takes).
+    @MainActor
+    static func attachHeavyFiles(to notes: NoteStore) async {
+        guard let taskID = seeded[.heavy],
+              let note = notes.notes.first(where: { $0.taskID == taskID }),
+              notes.attachments(for: note.id).isEmpty else { return }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("AtticTaskPage-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var staged: [StagedNoteAttachment] = []
+            var blocks: [NoteBlock] = []
+            for name in ["homepage-v3.png", "blog-index.png"] {
+                let url = folder.appendingPathComponent(name)
+                try AtticDemoData.demoImage().write(to: url, options: .atomic)
+                guard let bytes = await NotesPageController.loadFile(url, type: "public.png").staged else { return }
+                staged.append(bytes)
+                blocks.append(.image(attachmentID: bytes.id))
+            }
+            for (name, text) in [("hosting-quote.pdf", "Static hosting: €9 a month"), ("redirect-map.pdf", "212 redirects")] {
+                let url = folder.appendingPathComponent(name)
+                try pdf(text).write(to: url, options: .atomic)
+                guard let bytes = await NotesPageController.loadFile(url, type: "com.adobe.pdf").staged else { return }
+                staged.append(bytes)
+                blocks.append(.file(attachmentID: bytes.id, filename: bytes.filename,
+                                    contentTypeIdentifier: bytes.contentTypeIdentifier, byteCount: bytes.byteCount))
+            }
+            guard let loaded = notes.loadDocument(noteID: note.id), var document = loaded.content.document else { return }
+            document.blocks += blocks
+            _ = try notes.saveDocument(noteID: note.id, document: document, baseRevisionID: loaded.revisionID, staged: staged).get()
+        } catch {
+            NSLog("Attic task page preview: %@", error.localizedDescription)
+        }
+    }
+
+    /// A one-page PDF with a line of text (the preview's sample files).
+    private static func pdf(_ text: String) throws -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 420, height: 297)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { throw CocoaError(.fileWriteUnknown) }
+        context.beginPDFPage(nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [
+            .font: CTFontCreateWithName("Helvetica" as CFString, 18, nil)]))
+        context.textPosition = CGPoint(x: 32, y: 240)
+        CTLineDraw(line, context)
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
     }
 
     @MainActor

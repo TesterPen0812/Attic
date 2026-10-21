@@ -550,6 +550,10 @@ final class AppCoordinator: ObservableObject {
             if !defaults.bool(forKey: AtticDemoData.seededKey), AtticDemoData.storeIsEmpty(container) {
                 do {
                     demoSeeded = try AtticDemoData.seed(into: container, bundleIdentifier: runtime.bundleIdentifier) > 0
+                    // "Attic Task Page" (Phase 3): its task pages too.
+                    if runtime.bundleIdentifier == TaskNotePreviewSeed.ownerPreviewBundleIdentifier {
+                        try TaskNotePreviewSeed.seedOwnerPreview(in: container)
+                    }
                 } catch {
                     NSLog("Attic demo data: %@", error.localizedDescription)
                 }
@@ -562,6 +566,11 @@ final class AppCoordinator: ObservableObject {
         if demoSeeded {
             let bundleIdentifier = runtime.bundleIdentifier
             Task { @MainActor in await AtticDemoData.attachFiles(to: noteStore, bundleIdentifier: bundleIdentifier) }
+        }
+        // The heavy task's screenshots and PDFs (`p3-21`): the owner preview's
+        // fresh store, and the in-memory UI-test seed used for captures.
+        if demoSeeded || (inMemoryStore && isUITesting && environment["ATTIC_UI_TEST_SEED"] == "tasknote") {
+            Task { @MainActor in await TaskNotePreviewSeed.attachHeavyFiles(to: noteStore) }
         }
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
