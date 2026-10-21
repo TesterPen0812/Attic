@@ -102,7 +102,7 @@ class RequiredChecksTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         workflow = (root / '.github/workflows/macos-ci.yml').read_text()
         job = workflow.split('  round-trips:', 1)[1].split('\n  macos:', 1)[0]
-        self.assertIn('timeout-minutes: 35', job)
+        self.assertIn('timeout-minutes: 50', job)
         self.assertNotIn('continue-on-error', job)
         self.assertNotIn('-skip-testing:', job)
         self.assertIn('-only-testing:AtticRoundTripTests', job)

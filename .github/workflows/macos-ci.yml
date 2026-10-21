@@ -165,7 +165,9 @@ jobs:
     if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
     name: Generated models, matrices, stress, and Notes round trips
     runs-on: macos-26
-    timeout-minutes: 35
+    # The complete successful generated suite plus compilation exceeded the
+    # former 35-minute job watchdog; retain every seed and result assertion.
+    timeout-minutes: 50
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
