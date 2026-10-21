@@ -44,6 +44,9 @@ final class TaskNotePresenter: ObservableObject {
     /// Every open task page, panel or window (one per task: OD-1).
     private static var live: [UUID: WeakPresenter] = [:]
     private struct WeakPresenter { weak var presenter: TaskNotePresenter? }
+    /// The most recently opened page's host (click diagnostics only).
+    static var diagnosticsHost: TaskNoteComposedHost? { live.values.compactMap(\.presenter).last { $0.lease != nil }?.host }
+
     static func open(for taskID: UUID) -> TaskNotePresenter? {
         guard let presenter = live[taskID]?.presenter, presenter.lease != nil else { return nil }
         return presenter
@@ -485,17 +488,19 @@ struct TaskNotePage: View {
 
     private static let log = Logger(subsystem: "com.taha.Attic", category: "TaskPage")
 
-    /// `ATTIC_TASKPAGE_DIAG=1` (UI-testing launches): where each click on the
-    /// page lands, for on-screen diagnosis.
+    /// `ATTIC_TASKPAGE_DIAG=1` (UI-testing launches): where every click in
+    /// the app lands, for on-screen diagnosis. One monitor per process.
+    private static var clickDiagnostics: Any?
+
     private func installClickDiagnostics() {
-        guard ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
+        guard Self.clickDiagnostics == nil, ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1",
               ProcessInfo.processInfo.environment["ATTIC_TASKPAGE_DIAG"] == "1" else { return }
-        let host = presenter.host
-        _ = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak host] event in
-            guard let host, let window = host.scrollView.window, event.window === window else { return event }
-            let hit = window.contentView?.superview?.hitTest(event.locationInWindow)
-            let point = host.documentView.convert(event.locationInWindow, from: nil)
-            Self.log.notice("TASKPAGE-DIAG click doc \(point.debugDescription, privacy: .public) hit \(String(describing: hit.map { Swift.type(of: $0) }), privacy: .public) head \(host.headView.frame.debugDescription, privacy: .public) block \(host.blockView.frame.debugDescription, privacy: .public) text \(host.textView.frame.debugDescription, privacy: .public) first \(String(describing: window.firstResponder.map { Swift.type(of: $0) }), privacy: .public)")
+        Self.clickDiagnostics = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            let window = event.window
+            let hit = window?.contentView?.superview?.hitTest(event.locationInWindow)
+            let page = TaskNotePresenter.diagnosticsHost
+            let point = page.flatMap { host in host.scrollView.window === window ? host.documentView.convert(event.locationInWindow, from: nil) : nil }
+            Self.log.notice("TASKPAGE-DIAG click window \(String(describing: window.map { Swift.type(of: $0) }), privacy: .public) key \(window?.isKeyWindow == true, privacy: .public) at \(event.locationInWindow.debugDescription, privacy: .public) doc \(String(describing: point), privacy: .public) hit \(String(describing: hit.map { Swift.type(of: $0) }), privacy: .public) count \(event.clickCount, privacy: .public)")
             return event
         }
     }
