@@ -1046,6 +1046,9 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     private var showsPlaceholder: Bool {
         guard let engine else { return false }
+        // A task page whose note is in Recently Deleted invites nothing:
+        // its writing is read only until Restore Note.
+        if engine.isBodyOnly, engine.isReadOnly { return false }
         return engine.textStorage.length == 0 && !hasMarkedText()
     }
 

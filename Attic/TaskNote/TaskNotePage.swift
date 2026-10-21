@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import os
 
 @MainActor
 struct TaskNoteWarmPresentation {
@@ -401,6 +402,10 @@ struct TaskNotePage: View {
                 Task { _ = await engine.printNote() }
             })
         }
+        if presenter.deletedNoteID != nil {
+            commands.append(AtticMenuCommand("Restore Note", startsSection: !commands.isEmpty,
+                                             identifier: "task-note-menu-restore-note") { restoreNote() })
+        }
         commands.append(contentsOf: placementCommands(startsSection: !commands.isEmpty))
         if persisted {
             commands.append(AtticMenuCommand("Delete Note…", isDestructive: true, startsSection: true,
@@ -477,23 +482,41 @@ struct TaskNotePage: View {
 
     // MARK: Lifecycle (`p3-22`: nothing cascades)
 
+    private static let log = Logger(subsystem: "com.taha.Attic", category: "TaskPage")
+
     private func deleteNote() {
         guard let session = presenter.session else { return }
         let id = session.noteID
         Task { @MainActor in
             // Leave the page durably first (its draft is saved), then delete
             // the note itself; the page comes back with Restore Note.
-            guard await presenter.close() else { return }
-            guard await controller.deleteNoteDurably(noteID: id) else { onReopen(); return }
+            guard await presenter.close() else {
+                Self.log.notice("Delete Note: the page kept its note (close refused)")
+                return
+            }
+            guard await controller.deleteNoteDurably(noteID: id) else {
+                Self.log.notice("Delete Note refused by the store")
+                onReopen()
+                return
+            }
             onReopen()
         }
     }
 
     private func restoreNote() {
-        guard let id = presenter.deletedNoteID else { return }
+        guard let id = presenter.deletedNoteID else {
+            Self.log.notice("Restore Note: no deleted note on this page")
+            return
+        }
         Task { @MainActor in
-            guard controller.restoreDeletedNote(noteID: id, reopen: false) else { return }
-            guard await presenter.close() else { return }
+            guard controller.restoreDeletedNote(noteID: id, reopen: false) else {
+                Self.log.notice("Restore Note refused by the store")
+                return
+            }
+            guard await presenter.close() else {
+                Self.log.notice("Restore Note: the page could not close to reopen")
+                return
+            }
             onReopen()
         }
     }
