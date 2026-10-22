@@ -34,11 +34,14 @@ import SwiftUI
 ///   opaque surface under the controls and a short fade past them (U-02),
 ///   so content never shows sharp behind a control.
 enum AtticEdgeBlurMetrics {
-    /// The strongest blur, at the panel's edge (points).
-    static let radius: CGFloat = 1.5
+    /// The strongest blur, at the panel's edge (points). Slight (owner,
+    /// 2026-10-22, with the top controls on glass: "keep it slightly"); it
+    /// was 1.5 (2026-10-12).
+    static let radius: CGFloat = 0.5
     /// How far past the controls the blur reaches, where content is sharp
-    /// again (points).
-    static let reach: CGFloat = 28
+    /// again (points): none, it ends with the controls (owner, 2026-10-22;
+    /// it was 28).
+    static let reach: CGFloat = 0
     /// With no blur (Reduce Transparency): the panel's surface is solid
     /// under the controls, out to their inner edge, then fades out over
     /// this much (U-02: no text ever shows sharp behind a control, and the
@@ -147,7 +150,11 @@ struct AtticEdgeBlurBackdrop: View {
     }
 
     var body: some View {
-        let height = max(0, extent + CGFloat(lab.reach))
+        // The blur reaches the lab's `reach` past the controls; the solid
+        // surface (U-02) always keeps room for its own fade, whatever the
+        // reach (2026-10-22: the slight top blur reaches 0).
+        let reach = Self.blurs(design) ? CGFloat(lab.reach) : max(CGFloat(lab.reach), AtticEdgeBlurMetrics.solidFade)
+        let height = max(0, extent + reach)
         let alignment: Alignment = edge == .top ? .top : .bottom
         ZStack(alignment: alignment) {
             if Self.blurs(design) {

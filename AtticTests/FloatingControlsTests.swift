@@ -9,8 +9,8 @@ import XCTest
 @MainActor
 final class FloatingControlsTests: XCTestCase {
     func testTheApprovedBlurIsTheDefault() {
-        XCTAssertEqual(AtticEdgeBlurMetrics.radius, 1.5, "the owner's strength, 2026-10-12")
-        XCTAssertEqual(AtticEdgeBlurMetrics.reach, 28, "the owner's reach, 2026-10-12")
+        XCTAssertEqual(AtticEdgeBlurMetrics.radius, 0.5, "the owner's slight strength, 2026-10-22")
+        XCTAssertEqual(AtticEdgeBlurMetrics.reach, 0, "the owner's reach, 2026-10-22: it ends with the controls")
     }
 
     func testOnlyAPreviewTunesTheBlurAndOnlyThereIsItKept() throws {
@@ -22,8 +22,8 @@ final class FloatingControlsTests: XCTestCase {
 
         let product = AtticEdgeBlurLab(defaults: defaults, isPreview: false, blurAvailable: true)
         XCTAssertFalse(product.offersTuning)
-        XCTAssertEqual(product.radius, 1.5, "a product identity ignores a stored value")
-        XCTAssertEqual(product.reach, 28)
+        XCTAssertEqual(product.radius, 0.5, "a product identity ignores a stored value")
+        XCTAssertEqual(product.reach, 0)
         product.radius = 4
         XCTAssertEqual(defaults.double(forKey: AtticEdgeBlurLab.radiusKey), 9, "and keeps nothing")
 
@@ -147,7 +147,9 @@ final class FloatingControlsTests: XCTestCase {
     /// text shows sharp behind a control and the title's rest (16 below
     /// the header) is untouched.
     func testWithoutTheBlurTheSurfaceIsSolidUnderTheControls() {
-        let extent: CGFloat = 52, height = extent + AtticEdgeBlurMetrics.reach
+        // The solid surface keeps room for its fade even when the blur's
+        // reach is 0 (the slight top blur, 2026-10-22).
+        let extent: CGFloat = 52, height = extent + max(AtticEdgeBlurMetrics.reach, AtticEdgeBlurMetrics.solidFade)
         let stops = AtticEdgeBlurBackdrop.solidStops(height: height, extent: extent)
         XCTAssertEqual(stops.solid * height, extent, accuracy: 0.01)
         XCTAssertEqual(stops.clear * height, extent + AtticEdgeBlurMetrics.solidFade, accuracy: 0.01)
