@@ -104,6 +104,105 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertTrue(offers.isEmpty)
     }
 
+    func testP3S2R2PreIntentDirectoriesNeverHoldOrdinarySavesAcrossLaunches() async throws {
+        let pre = try WorkspaceModelFields.encode(recoveryDraft("Keep this pre-intent recovery copy"))
+        let names = [UUID().uuidString, "preparing-\(UUID().uuidString)"]
+        for name in names {
+            let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
+            try pre.write(to: operation.appendingPathComponent("pre-draft.json"))
+        }
+        for launch in 0..<2 {
+            coordinator = try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: coordinator.journal.directory))
+            try await coordinator.finishLaunch()
+            XCTAssertTrue(coordinator.retryHeldWrites(), "pre-intent abort has no committed write: launch \(launch)")
+            let collection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
+            XCTAssertNotNil(collection, "no payload was prepared before intent publication"); collection?.release()
+            let tasks = TaskStore(container: container), notes = NoteStore(container: container,
+                attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+            await notes.waitForAttachmentReconciliation()
+            XCTAssertNotNil(tasks.create(title: "Ordinary task \(launch)"))
+            XCTAssertNotNil(notes.create(title: "Ordinary note \(launch)", body: "Durable writing"))
+            for name in names {
+                let kept = coordinator.journal.directory.appendingPathComponent("quarantined-operations").appendingPathComponent(name)
+                XCTAssertEqual(try Data(contentsOf: kept.appendingPathComponent("pre-draft.json")), pre)
+            }
+        }
+    }
+
+    func testP3S2R2CorruptIntentHoldsKnownOwnersButNotUnrelatedSaves() async throws {
+        let operationID = UUID(), owner = WorkspaceOwner(entity: .task, id: taskID)
+        let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(operationID.uuidString)
+        try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
+        let damaged = Data("corrupt intent must remain available for Review".utf8)
+        try damaged.write(to: operation.appendingPathComponent("intent.json"))
+        let context = coordinator.freshContext()
+        context.insert(OperationReceipt(id: operationID, envelopeDigest: "unknown", affectedIDs: try WorkspaceModelFields.encode([owner]), resultingTokens: Data()))
+        try context.save()
+        for launch in 0..<2 {
+            coordinator = try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: coordinator.journal.directory))
+            try await coordinator.finishLaunch()
+            XCTAssertFalse(coordinator.retryHeldWrites(affecting: [owner]))
+            XCTAssertTrue(coordinator.retryHeldWrites(affecting: [.init(entity: .note, id: UUID())]))
+            XCTAssertNil(coordinator.ownership.tryAcquire([UUID()], kind: .collection), "unknown bytes stay protected")
+            let tasks = TaskStore(container: container), notes = NoteStore(container: container,
+                attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+            await notes.waitForAttachmentReconciliation()
+            XCTAssertNotNil(tasks.create(title: "Unrelated task \(launch)"))
+            XCTAssertNotNil(notes.create(title: "Unrelated note \(launch)", body: "Still writable"))
+            XCTAssertFalse(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "Known held owner"))
+            let kept = coordinator.journal.directory.appendingPathComponent("quarantined-operations").appendingPathComponent(operationID.uuidString)
+            XCTAssertEqual(try Data(contentsOf: kept.appendingPathComponent("intent.json")), damaged)
+        }
+    }
+
+    func testP3S2R2ReadableIntentSurvivesCorruptEnvelopeAsScopedEvidence() async throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID)
+        let envelope = try coordinator.newEnvelope(intent: "interrupted", reads: coordinator.capture([owner]), writes: [owner])
+        _ = try await coordinator.journal.prepareOperation(envelope)
+        let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(envelope.id.uuidString)
+        try Data([0]).write(to: operation.appendingPathComponent("envelope.json"))
+        try await coordinator.finishLaunch()
+        XCTAssertFalse(coordinator.retryHeldWrites(affecting: [owner]), "the intact intent declares this owner")
+        XCTAssertTrue(coordinator.retryHeldWrites(affecting: [.init(entity: .note, id: UUID())]))
+        let collection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
+        XCTAssertNotNil(collection, "a readable complete intent has bounded byte ownership"); collection?.release()
+    }
+
+    func testP3S2R2SurvivingEnvelopeRetainsBytesWhenIntentWasLost() async throws {
+        let owner = WorkspaceOwner(entity: .task, id: taskID), id = UUID(), bytes = Data("keep me".utf8)
+        let staged = StagedNoteAttachment(id: id, filename: "kept.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        let envelope = try coordinator.newEnvelope(intent: "damaged committed operation", reads: coordinator.capture([owner]), writes: [owner], staged: [staged])
+        _ = try await coordinator.journal.prepareOperation(envelope)
+        let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(envelope.id.uuidString)
+        try FileManager.default.removeItem(at: operation.appendingPathComponent("intent.json"))
+        let context = coordinator.freshContext()
+        context.insert(OperationReceipt(id: envelope.id, envelopeDigest: "disagrees", affectedIDs: try WorkspaceModelFields.encode([owner]), resultingTokens: Data()))
+        try context.save()
+        try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(id))
+        XCTAssertNil(coordinator.ownership.tryAcquire([id], kind: .collection))
+        XCTAssertTrue(coordinator.retryHeldWrites(affecting: [.init(entity: .note, id: UUID())]))
+    }
+
+    func testP3S2R2PreIntentRecoveryRetainsItsExistingStagedBytesWithoutWriteHolds() async throws {
+        let id = UUID(), bytes = Data("pre-existing staged recovery bytes".utf8)
+        var pre = try recoveryDraft("pre-intent writing")
+        pre.staged = [.init(id: id, filename: "kept.txt", contentTypeIdentifier: "public.plain-text", byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes))]
+        let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(UUID().uuidString)
+        let staged = coordinator.journal.directory.appendingPathComponent("staged")
+        try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
+        try bytes.write(to: staged.appendingPathComponent(id.uuidString))
+        try WorkspaceModelFields.encode(pre).write(to: operation.appendingPathComponent("pre-draft.json"))
+        try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(id))
+        XCTAssertTrue(coordinator.retryHeldWrites(affecting: [.init(entity: .note, id: pre.noteID)]))
+        _ = try await coordinator.journal.readRecoveryEntries()
+        XCTAssertEqual(try? Data(contentsOf: staged.appendingPathComponent(id.uuidString)), bytes)
+    }
+
     func testP2_2TruncatedPayloadAndNonUUIDDirectoryAllowTwoLaunches() async throws {
         let payload = StagedNoteAttachment(id: UUID(), filename: "owned.txt", contentTypeIdentifier: "public.plain-text",
             byteCount: 5, digest: NotePayloadDigest.sha256(Data("bytes".utf8)), data: Data("bytes".utf8))

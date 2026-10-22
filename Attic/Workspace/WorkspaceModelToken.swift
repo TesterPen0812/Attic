@@ -583,8 +583,21 @@ enum WorkspaceModelFields {
 /// Counts actual external-payload getters, including callers outside the bridge.
 /// Focused tests reset this only after ingestion/reconciliation is complete.
 enum WorkspacePayloadAccess {
+    #if DEBUG
+    final class AllThreads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String: Int] = [:]
+        func reset() { lock.withLock { values = [:] } }
+        func count(_ kind: String) -> Int { lock.withLock { values[kind, default: 0] } }
+        func record(_ kind: String) { lock.withLock { values[kind, default: 0] += 1 } }
+    }
+    static let allThreads = AllThreads()
+    #endif
     @MainActor static var counts: [String: Int] = [:]
     static func note(_ kind: String, model: any PersistentModel) {
+        #if DEBUG
+        allThreads.record(kind)
+        #endif
         guard Thread.isMainThread else { return }
         MainActor.assumeIsolated {
             // Ingestion values are already in memory. Count persisted faults,

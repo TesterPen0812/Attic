@@ -1,4 +1,5 @@
 import SwiftData
+import SwiftData
 import XCTest
 @testable import Attic
 
@@ -58,6 +59,37 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         ]))
         XCTAssertNotNil(properties("create_task")["state"])
         XCTAssertNotNil(properties("update_task")["state"])
+    }
+
+    func testP3S2R2NoteListsKeepTheInMemoryBaselineUntilTokensAreRequested() async throws {
+        let context = ModelContext(store.container)
+        for index in 0..<400 {
+            let row = NoteItem(title: "Note \(index)", body: "Stored writing \(index)")
+            if index >= 200 { row.deletedAt = clock.value; row.deletedAttachmentIDsRaw = "" }
+            context.insert(row)
+        }
+        try context.save()
+        let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        await notes.waitForAttachmentReconciliation()
+        library = AtticLibrary(tasks: store, notes: notes)
+        tools = AgentTaskTools(store: store, noteStore: notes, library: library)
+        AgentWorkspaceReadSet.captureCount = 0
+        let listed = try XCTUnwrap(call("list_notes")["notes"] as? [[String: Any]])
+        let deleted = try XCTUnwrap(call("list_deleted")["items"] as? [[String: Any]])
+        XCTAssertEqual(listed.count, 200); XCTAssertEqual(deleted.count, 200)
+        XCTAssertTrue(listed.allSatisfy { $0["workspace_token"] == nil })
+        XCTAssertTrue(deleted.allSatisfy { $0["workspace_token"] == nil })
+        XCTAssertEqual(AgentWorkspaceReadSet.captureCount, 0, "main serializes the already loaded notes; default lists must do no workspace captures")
+        for tool in ["list_notes", "list_deleted"] {
+            let payload = try call(tool, ["include_workspace_token": true])
+            let rows = try XCTUnwrap(payload[tool == "list_notes" ? "notes" : "items"] as? [[String: Any]])
+            for row in rows {
+                let token = try XCTUnwrap(row["workspace_token"] as? String)
+                let readSet = try JSONDecoder().decode(AgentWorkspaceReadSet.self, from: XCTUnwrap(Data(base64Encoded: token)))
+                XCTAssertTrue(try readSet.isCurrent(in: context))
+            }
+            XCTAssertTrue(error(tool, ["include_workspace_token": "yes"]).contains("true or false"))
+        }
     }
 
     func testCreateAndUpdateTakeStateIncludingBacklog() throws {

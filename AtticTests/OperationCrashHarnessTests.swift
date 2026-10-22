@@ -97,7 +97,7 @@ final class OperationCrashHarnessTests: XCTestCase {
     /// boundary leaves "not migrated" or "migrated", never a mix; launch
     /// recovery plus the launch run then finish it exactly once.
     func testM1MigrationCrashMatrixRecoversToOldOrNewAndFinishesOnce() async throws {
-        let points = ["M0-inventory", "M1-validation", "M2-bytes", "K0", "K1", "K2", "K3-validation", "M3-note", "M4-record",
+        let points = ["M0-inventory", "M1-validation", "M2-bytes", "K-pre-intent", "K-intent-synced", "K0", "K1", "K2", "K3-validation", "M3-note", "M4-record",
                       "K4", "K5", "K6-1", "M5-publication", "save-then-throw"]
         let committedPoints: Set<String> = ["K5", "K6-1", "M5-publication", "save-then-throw"]
         for point in points {

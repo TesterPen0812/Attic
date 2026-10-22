@@ -4,12 +4,18 @@ import SwiftData
 /// A single snapshot carries all task, note and association tokens, including
 /// membership/absence. Packing them prevents callers combining different reads.
 struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
+    #if DEBUG
+    @MainActor static var captureCount = 0
+    #endif
     let taskID: UUID?
     let noteID: UUID?
     let tokens: [WorkspaceModelToken]
     let scopes: [WorkspaceScopeToken]
 
     @MainActor static func capture(taskID: UUID?, noteID: UUID?, in context: ModelContext) throws -> Self {
+        #if DEBUG
+        captureCount += 1
+        #endif
         var scopes: Set<WorkspaceScope> = []
         var owners: Set<WorkspaceOwner> = []
         var noteIDs = Set<UUID>()

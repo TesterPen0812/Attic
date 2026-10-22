@@ -109,6 +109,20 @@ final class TaskFileMigrationTests: XCTestCase {
 
     // MARK: Removed and child-held files, into a new note
 
+    func testP3S2R2UnchangedLaunchReadsNoAttachmentPayloads() async throws {
+        for family in 0..<8 {
+            let references = try await legacyFiles(["\(family)-one.txt", "\(family)-two.txt", "\(family)-three.txt"])
+            let id = try insertTask(shown: references)
+            guard case .migrated = await migrate(id) else { return XCTFail("seed migration") }
+        }
+        try reopen()
+        try await coordinator.finishLaunch()
+        WorkspacePayloadAccess.allThreads.reset()
+        let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: files)
+        XCTAssertTrue(report.migrated.isEmpty)
+        XCTAssertEqual(WorkspacePayloadAccess.allThreads.count("attachment"), 0, "unchanged launch must not fault or hash stored payload bytes")
+    }
+
     func testShownRemovedAndChildHeldFilesMoveIntoANewOwnNoteWithDeterministicPlacements() async throws {
         let refs = try await legacyFiles(["shot.png", "Spec.pdf", "gone.txt", "child.txt"])
         let removedAt = Date(timeIntervalSince1970: 1_800_000_000)
