@@ -43,6 +43,6 @@ struct NotesPageHost: View {
     }
 
     func closeTaskNoteRoute(_ taskID: UUID) {
-        TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
+        TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState, controller: noteDraft.pages)
     }
 }

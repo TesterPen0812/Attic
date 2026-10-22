@@ -1496,3 +1496,24 @@ private final class TaskNoteCheckpointJournal: NoteDraftJournaling {
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
     func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
 }
+
+@MainActor
+extension TaskNoteComposedHostTests {
+    func testP3S2BackCallbackClosesDurablyEvenWithoutARouteObserver() async throws {
+        let id = try seed(.boundary), draft = NoteDraftController(noteStore: notes.store)
+        notes = draft.pages
+        notes.attachUndoRoute(library.undo)
+        let presenter = try await mountTaskPage(id, in: sectionHosting())
+        let uiState = PanelUIState()
+        uiState.loadPageContent(); uiState.selectSection(.notes); uiState.openTaskNoteID = id
+        // No mounted route observer: Back must itself release durably rather
+        // than depend on SwiftUI delivering another same-frame route update.
+        let page = NotesPageHost(noteStore: notes.store, taskStore: tasks, noteDraft: draft,
+            uiState: uiState, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), hasRestoredSession: true)
+        page.closeTaskNoteRoute(id)
+        for _ in 0..<100 where presenter.lease != nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNil(notes.taskNotePresenter)
+        XCTAssertNil(presenter.lease)
+        XCTAssertNil(uiState.openTaskNoteID)
+    }
+}

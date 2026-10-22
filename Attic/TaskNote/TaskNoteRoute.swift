@@ -45,7 +45,7 @@ struct TaskNoteRouteHost<Origin: View>: View {
                                       noteStore: noteStore, layout: layout,
                                       backTitle: uiState.taskNoteBackTitle,
                                       onOpenInWindow: { openInWindow(taskID) }) {
-                    Self.closeRoute(taskID, uiState: uiState)
+                    Self.closeRoute(taskID, uiState: uiState, controller: noteDraft.pages)
                 }
                 .id("\(taskID)-\(taskRouteGeneration)")
             }
@@ -69,9 +69,20 @@ struct TaskNoteRouteHost<Origin: View>: View {
     }
 
     /// Back's (and a late close's) end of the route. A newer route stays.
-    static func closeRoute(_ taskID: UUID, uiState: PanelUIState) {
+    static func closeRoute(_ taskID: UUID, uiState: PanelUIState, controller: NotesPageController? = nil) {
         guard uiState.openTaskNoteID == taskID else { return }
-        uiState.openTaskNoteID = nil
+        // Already-closed callers keep their synchronous route dismissal.
+        guard TaskNotePresenter.open(for: taskID) != nil else { uiState.openTaskNoteID = nil; return }
+        guard let controller else { return }
+        // Back owns the durable handoff. SwiftUI may coalesce/suppress a
+        // same-frame route change after refused navigation; releasing a lease
+        // cannot depend on the next observer notification being delivered.
+        Task { @MainActor in
+            guard uiState.openTaskNoteID == taskID, controller.taskNotePresenter?.taskID == taskID,
+                  await controller.prepareTaskNoteRoute(nil),
+                  uiState.openTaskNoteID == taskID else { return }
+            uiState.openTaskNoteID = nil
+        }
     }
 
     /// OD-1: Open in window **moves** the page. The panel's surface lets go

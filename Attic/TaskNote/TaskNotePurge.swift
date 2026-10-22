@@ -120,7 +120,7 @@ enum TaskNotePurgePresentation {
         let wasShown = uiState.openTaskNoteID == patch.taskID
         if let presenter = TaskNotePresenter.open(for: patch.taskID), !(await presenter.close()) { return }
         notes.evictRetiredTaskNote(patch.noteID)
-        TaskNoteRouteHost<EmptyView>.closeRoute(patch.taskID, uiState: uiState)
+        TaskNoteRouteHost<EmptyView>.closeRoute(patch.taskID, uiState: uiState, controller: notes)
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return }
         let history = notes.undoRoute.workspace(for: .taskWorkspace(patch.taskID))
         guard (try? patch.record(operationID: operationID, in: history, coordinator: coordinator, notes: notes)) != nil else { return }

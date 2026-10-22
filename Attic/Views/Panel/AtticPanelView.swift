@@ -243,9 +243,9 @@ struct AtticPanelView: View {
     /// and, if it was showing, the note opens in Notes.
     private func installTaskNotePurgePresentation() {
         let pages = noteDraft.pages
-        pages.taskNoteBecameOrdinary = { [weak uiState] taskID, _ in
-            guard let uiState else { return }
-            TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
+        pages.taskNoteBecameOrdinary = { [weak uiState, weak pages] taskID, _ in
+            guard let uiState, let pages else { return }
+            TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState, controller: pages)
             uiState.switchPage(to: .notes, motion: .instant)
         }
         // Make Task from Note: the same document opens as the task's page.
