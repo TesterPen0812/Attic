@@ -701,7 +701,9 @@ final class NoteStore: ObservableObject {
                     }
                     continue
                 }
-                let normalized = try WorkspaceRestoreNormalization.document(document, noteID: noteID, in: context)
+                let materialized = try WorkspaceRestoreNormalization.materialization(document, noteID: noteID, in: context)
+                let normalized = try materialized?.document ?? WorkspaceRestoreNormalization.document(document, noteID: noteID, in: context)
+                if let materialized { replica.tags = materialized.tags }
                 if normalized != document {
                     Self.stageDocumentContent(try PreparedNoteDocument(normalized), format: normalized.format,
                         on: [replica], timestamp: currentDate, revision: replica.revision, revisionID: UUID())
@@ -747,18 +749,18 @@ final class NoteStore: ObservableObject {
         let others = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID && $0.deletedAt == nil }))
             .filter { $0.id != noteID }
         guard !others.isEmpty else { return false }
-        let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
-        let task = TaskStore.canonicalReplicas(from: tasks).first
+        let preservation = try WorkspaceTaskNoteMaterializer.preservation(taskID: taskID, in: context)
         let now = currentDate
         for replica in replicas {
             guard let bytes = replica.content, case let .editable(document) = NoteContentCodec.decode(bytes) else {
                 // Unreadable or newer-format bytes are never rewritten.
                 throw NoteDocumentStoreError.readOnly
             }
-            let ordinary = try document.ordinarySnapshot(title: task?.title ?? document.title)
+            let materialized = try WorkspaceTaskNoteMaterializer.materialize(document, taskID: taskID, preservation: preservation)
+            let ordinary = materialized.document
             Self.stageDocumentContent(try PreparedNoteDocument(ordinary), format: ordinary.format,
                 on: [replica], timestamp: now, revision: replica.revision, revisionID: UUID())
-            if let task, replica.tags.isEmpty, !task.tags.isEmpty { replica.tags = task.tags }
+            replica.tags = materialized.tags
             replica.taskID = nil
             replica.associationGeneration += 1
         }

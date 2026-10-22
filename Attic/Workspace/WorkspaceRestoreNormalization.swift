@@ -5,6 +5,18 @@ import SwiftData
 /// compatibility head comes from today's task or its immutable preservation.
 @MainActor
 enum WorkspaceRestoreNormalization {
+    static func materialization(_ document: NoteDocument, noteID: UUID, in context: ModelContext) throws -> WorkspaceTaskNoteMaterializer.Value? {
+        let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == noteID }))
+            .filter { $0.detachedPreservationID != nil }
+        guard !links.isEmpty else { return nil }
+        let ids = Set(links.compactMap(\.detachedPreservationID)), tasks = Set(links.map(\.taskID))
+        guard ids.count == 1, tasks.count == 1, let id = ids.first, let taskID = tasks.first,
+              links.allSatisfy({ $0.detachedAt != nil }) else { throw WorkspaceFoundationError.conflict }
+        let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.id == id }))
+        guard let record = records.first, records.allSatisfy({ $0.snapshot == record.snapshot && $0.purgedAt != nil }) else { throw WorkspaceFoundationError.conflict }
+        let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+        return try WorkspaceTaskNoteMaterializer.materialize(document, taskID: taskID, preservation: snapshot)
+    }
     static func document(_ document: NoteDocument, noteID: UUID, in context: ModelContext) throws -> NoteDocument {
         let schema = Set(context.container.schema.entities.map(\.name))
         let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
@@ -38,8 +50,71 @@ enum WorkspaceRestoreNormalization {
             let preservation = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
             let taskIDs = Set(associations.map(\.taskID))
             guard taskIDs.count == 1, let taskID = taskIDs.first else { throw WorkspaceFoundationError.conflict }
-            return try document.ordinarySnapshot(title: preservation.title(for: taskID))
+            return try WorkspaceTaskNoteMaterializer.materialize(document, taskID: taskID, preservation: preservation).document
         }
         return document.requires.contains("taskNote") ? try document.ordinarySnapshot(title: document.title) : document
+    }
+}
+
+/// One materializer for purge, separate-note restore and historical versions.
+/// Its head and checkboxes come from the deletion preservation, never from
+/// a later reconstruction of the task after it has been removed.
+@MainActor
+enum WorkspaceTaskNoteMaterializer {
+    struct Value { let document: NoteDocument; let tags: [String] }
+
+    static func materialize(_ document: NoteDocument, taskID: UUID,
+                            preservation: WorkspacePurge.Preservation) throws -> Value {
+        guard let head = preservation.members.first(where: { $0.id == taskID }) else { throw WorkspaceFoundationError.conflict }
+        func value<T: Decodable>(_ name: String, in member: WorkspacePurge.Preservation.Member, as: T.Type) throws -> T {
+            guard let data = member.fields[name] else { throw WorkspaceFoundationError.unknown }
+            return try JSONDecoder().decode(T.self, from: data)
+        }
+        let title = try value("title", in: head, as: String.self)
+        let tags = AtticTag.decode(try value("tagsRaw", in: head, as: String.self))
+        let children = try preservation.members.filter { try value("parentID", in: $0, as: UUID?.self) == taskID }
+            .sorted { left, right in
+                let leftDone = try value("statusRaw", in: left, as: String.self) == TaskStatus.done.rawValue
+                let rightDone = try value("statusRaw", in: right, as: String.self) == TaskStatus.done.rawValue
+                if leftDone != rightDone { return !leftDone }
+                let l = try value("manualOrder", in: left, as: Int64?.self) ?? 0
+                let r = try value("manualOrder", in: right, as: Int64?.self) ?? 0
+                return l == r ? left.id.uuidString < right.id.uuidString : l > r
+            }
+        let done = try children.filter { try value("statusRaw", in: $0, as: String.self) == TaskStatus.done.rawValue }.count
+        let status = try value("statusRaw", in: head, as: String.self)
+        var detail = TaskStatus(rawValue: status)?.title ?? status
+        if status == TaskStatus.done.rawValue, let at = try value("completedAt", in: head, as: Date?.self) {
+            detail += " " + at.formatted(.dateTime.weekday(.abbreviated))
+        }
+        var ordinary = try document.ordinarySnapshot(title: title)
+        let summary = "Was a task · \(detail) · \(done)/\(children.count)"
+        if ordinary.blocks.dropFirst().first?.text.hasPrefix("Was a task · ") != true {
+            let boxes = try children.map { child in
+                NoteBlock.checklist(try value("title", in: child, as: String.self),
+                                    checked: try value("statusRaw", in: child, as: String.self) == TaskStatus.done.rawValue)
+            }
+            ordinary.blocks.insert(contentsOf: [.text(summary)] + boxes, at: min(1, ordinary.blocks.count))
+        }
+        return Value(document: ordinary, tags: tags)
+    }
+
+    static func preservation(taskID: UUID, in context: ModelContext) throws -> WorkspacePurge.Preservation {
+        let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID || $0.parentID == taskID }))
+        if tasks.isEmpty || tasks.filter({ $0.id == taskID }).allSatisfy({ $0.deletedAt != nil }) {
+            let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).sorted { $0.capturedAt > $1.capturedAt }
+            for record in records {
+                let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+                if snapshot.members.contains(where: { $0.id == taskID }) { return snapshot }
+            }
+        }
+        var members: [WorkspacePurge.Preservation.Member] = []
+        for (id, rows) in Dictionary(grouping: tasks, by: \.id) {
+            let fields = try WorkspaceModelFields.read(rows[0])
+            guard try rows.allSatisfy({ try WorkspaceModelFields.read($0) == fields }) else { throw WorkspaceFoundationError.conflict }
+            members.append(.init(id: id, fields: fields))
+        }
+        guard let title = tasks.first(where: { $0.id == taskID })?.title else { throw WorkspaceFoundationError.conflict }
+        return .init(rootID: taskID, title: title, members: members, originals: [])
     }
 }

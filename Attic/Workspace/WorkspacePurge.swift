@@ -192,7 +192,13 @@ enum WorkspacePurge {
             let notes = allNotes.filter { ownIDs.contains($0.id) }
             guard ownIDs == Set(notes.map(\.id)), notes.allSatisfy({ $0.taskID.map(ids.contains) == true }) else { return refused() }
             guard notes.allSatisfy({ $0.associationGeneration < Int64.max }) else { return refused() }
-            let associations = allAssociations.filter { ownIDs.contains($0.noteID) || ids.contains($0.taskID) }
+            // Detached rows preserve historical context. Only active logical
+            // families participate; include all replicas of each active UUID
+            // so a detached/active divergence still refuses destructive work.
+            let activeAssociationIDs = Set(allAssociations.filter {
+                $0.detachedAt == nil && (ownIDs.contains($0.noteID) || ids.contains($0.taskID))
+            }.map(\.id))
+            let associations = allAssociations.filter { activeAssociationIDs.contains($0.id) }
             // These owners have not explicitly transferred their replay/base
             // rights to ordinary-note content. Retain the family rather than
             // treating a known surviving row owner as permission to detach it.
@@ -293,13 +299,16 @@ enum WorkspacePurge {
                 } else if record.snapshot != snapshotBytes { return refused() }
             }
             var documents: [UUID: NoteDocument] = [:]
+            var materializedTags: [UUID: [String]] = [:]
             var patches: [WorkspaceMaterializationPatch] = []
             for (id, replicas) in Dictionary(grouping: notes, by: \.id) {
                 guard let first = replicas.first, replicas.allSatisfy({ $0.content == first.content && $0.contentFormat == first.contentFormat && $0.deletedAt == first.deletedAt && $0.taskID == first.taskID && $0.associationGeneration == first.associationGeneration }) else { return refused() }
                 if first.deletedAt != nil { continue }
                 guard let data = first.content, case let .editable(stored) = NoteContentCodec.decode(data) else { continue }
                 let before = ownership.drafts[id] ?? stored
-                let after = try before.ordinarySnapshot(title: snapshot.title(for: first.taskID ?? rootID))
+                let materialized = try WorkspaceTaskNoteMaterializer.materialize(before, taskID: first.taskID ?? rootID, preservation: snapshot)
+                let after = materialized.document
+                materializedTags[id] = materialized.tags
                 documents[id] = after
                 patches.append(.init(noteID: id, taskID: rootID, preservationID: preservationID, before: before, after: after))
             }
@@ -356,7 +365,7 @@ enum WorkspacePurge {
                 for (id, document) in documents {
                     try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared[id]!,
                         revisionID: UUID(), versionIDs: versionIDs, staged: ownership.staged[id] ?? [],
-                        tags: ownership.tags[id], timestamp: Date())
+                        tags: materializedTags[id], timestamp: Date())
                 }
                 for note in try commit.fetch(FetchDescriptor<NoteItem>()) where ownIDs.contains(note.id) {
                     note.taskID = nil; note.associationGeneration += 1

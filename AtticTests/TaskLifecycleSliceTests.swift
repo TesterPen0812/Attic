@@ -124,6 +124,43 @@ final class TaskLifecycleSliceTests: XCTestCase {
     }
 
 
+    func testP3F8HistoricalDetachedAssociationDoesNotBlockPurge() async throws {
+        let id = try XCTUnwrap(TaskNoteLifecyclePreviewSeed.seed(in: container)[.alternateNote])
+        makeStores()
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(notes.store.keepAsSeparateNote(noteID: noteID))
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id))
+        XCTAssertNotNil(notes.store.note(withID: noteID), "separate note survives")
+    }
+
+    func testP3F14PurgeMaterializesTagsAndReadablePreservedSubtasks() async throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["launch"]))
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id))
+        let document = try storedDocument(noteID)
+        XCTAssertTrue(document.blocks.contains { $0.text.hasPrefix("Was a task") })
+        XCTAssertEqual(document.blocks.filter { $0.kind == .checklist }.map(\.text), ["Write release notes", "Freeze strings"])
+        XCTAssertEqual(try rows(noteID).first?.tags, ["launch"])
+    }
+
+    func testP3F14DeletedNoteRestoredAfterTaskPurgeGetsPreservedTagsAndSummary() async throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["launch"]))
+        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        XCTAssertTrue(deleted)
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(notes.store.restoreDeleted(noteID: noteID))
+        XCTAssertEqual(try rows(noteID).first?.tags, ["launch"])
+        XCTAssertTrue(try storedDocument(noteID).blocks.contains { $0.text.hasPrefix("Was a task") })
+    }
+
     @discardableResult
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)
@@ -626,7 +663,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let document = try storedDocument(noteID)
         XCTAssertFalse(document.requires.contains("taskNote"))
         XCTAssertEqual(document.title, "Finalize launch checklist")
-        XCTAssertEqual(document.blocks.dropFirst().first?.text, "Everything that has to be true before 1.0 goes out.")
+        XCTAssertEqual(document.blocks[4].text, "Everything that has to be true before 1.0 goes out.", "body follows the preserved task summary and two subtasks")
     }
 
     func testPurgeWhileTheTasksPageIsOpenMergesItsUnsavedWritingAndTheNoteBecomesOrdinary() async throws {
