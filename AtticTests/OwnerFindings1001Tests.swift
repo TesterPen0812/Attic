@@ -69,6 +69,28 @@ final class OwnerFindings1001Tests: XCTestCase {
 /// `AtticPanel.sendEvent`, which makes the panel key before the press.)
 @MainActor
 final class O14FirstMouseTests: XCTestCase {
+    private final class RefusingScrollView: NSScrollView {
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+    }
+
+    func testNativeScrollFirstMousePolicyFollowsItsWindow() {
+        let scroll = RefusingScrollView()
+        let panel = AtticPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let ordinary = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        ordinary.isReleasedWhenClosed = false
+        defer { panel.close(); ordinary.close() }
+        ordinary.contentView = scroll
+        XCTAssertFalse(scroll.acceptsFirstMouse(for: nil))
+        AtticPanelFirstMouseHooks.install(on: scroll)
+        XCTAssertFalse(scroll.acceptsFirstMouse(for: nil), "ordinary windows keep the native policy")
+        panel.contentView = scroll
+        XCTAssertTrue(scroll.acceptsFirstMouse(for: nil), "a panel's first press is accepted")
+        AtticPanelFirstMouseHooks.install(on: scroll)
+        ordinary.contentView = scroll
+        XCTAssertFalse(scroll.acceptsFirstMouse(for: nil), "moving out restores the native answer, even after repeated hits")
+    }
+
     func testEveryViewUnderAPressOnThePanelAcceptsTheFirstMouse() throws {
         let suite = "O14FirstMouse.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -388,7 +410,10 @@ final class OwnerFindingsDemoDataTests: XCTestCase {
         XCTAssertTrue(tasks.allSatisfy { AtticDemoData.isDemo($0.id) })
         let notes = try context.fetch(FetchDescriptor<NoteItem>())
         XCTAssertGreaterThanOrEqual(notes.count, 3)
-        XCTAssertTrue(notes.contains { $0.body.contains("- [ ]") && $0.body.contains("**") }, "formatting and a checklist")
+        XCTAssertTrue(notes.contains { note in
+            let blocks = note.content.flatMap { NoteContentCodec.decode($0).document }?.blocks ?? []
+            return blocks.contains { $0.kind == .checklist } && blocks.contains { $0.marks.contains { $0.kind == .bold } }
+        }, "formatting and a checklist")
     }
 
     func testTheDemoNoteGetsAnImageAndAFile() async throws {
@@ -402,6 +427,77 @@ final class OwnerFindingsDemoDataTests: XCTestCase {
         XCTAssertEqual(names, ["Palette.png", "Type specimen.txt"])
         await AtticDemoData.attachFiles(to: notes, bundleIdentifier: "com.taha.Attic.preview.main")
         XCTAssertEqual(notes.attachments(for: AtticDemoData.attachmentsNoteID).count, 2, "never twice")
+    }
+
+    /// The sample notes are real formatted documents (owner, 2026-10-21:
+    /// the preview showed `# Before launch`, `- [x] …`, `**FAQ**` as text).
+    func testTheDemoNotesAreFormattedDocumentsWithoutMarkdownMarkers() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try AtticDemoData.seed(into: container, bundleIdentifier: "com.taha.Attic.preview.main")
+        let notes = try ModelContext(container).fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(notes.count, 3)
+        for note in notes {
+            let document = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document }, note.title)
+            for block in document.blocks {
+                for marker in ["# ", "- [", "[x]", "[ ]", "**", "*two", "- ", "1. ", "2. "] {
+                    XCTAssertFalse(block.text.hasPrefix(marker) || (marker.count > 2 && block.text.contains(marker)),
+                                   "\(note.title): literal \(marker) in \(block.text)")
+                }
+            }
+            XCTAssertFalse(note.plainText.contains("**"), note.title)
+        }
+        let pricing = try XCTUnwrap(notes.first { $0.id == AtticDemoData.id(1_001) })
+        let blocks = try XCTUnwrap(pricing.content.flatMap { NoteContentCodec.decode($0).document }).blocks
+        XCTAssertEqual(blocks.first?.text, "Pricing page", "the title block")
+        func block(_ text: String) throws -> NoteBlock { try XCTUnwrap(blocks.first { $0.text == text }, text) }
+        XCTAssertEqual(try block("Before launch").style, "heading")
+        XCTAssertEqual(try block("Before launch").level, 1)
+        XCTAssertEqual(try block("Open questions").level, 2)
+        XCTAssertEqual(try block("Final copy from Sam").kind, .checklist)
+        XCTAssertTrue(try block("Final copy from Sam").checked)
+        XCTAssertEqual(try block("One screenshot per plan").kind, .checklist)
+        XCTAssertFalse(try block("One screenshot per plan").checked)
+        XCTAssertEqual(try block("Talk to three customers").style, "number")
+        let faq = try block("Draft the FAQ")
+        XCTAssertEqual(faq.style, "number")
+        XCTAssertEqual(faq.marks.map(\.kind), [.bold])
+        XCTAssertEqual(faq.marks.first.map { (faq.text as NSString).substring(with: NSRange(location: $0.offset, length: $0.length)) }, "FAQ")
+        let annual = try block("Annual plan: two months free?")
+        XCTAssertEqual(annual.style, "bullet")
+        XCTAssertEqual(annual.marks.map(\.kind), [.italic])
+        XCTAssertEqual(annual.marks.first.map { (annual.text as NSString).substring(with: NSRange(location: $0.offset, length: $0.length)) }, "two months")
+        XCTAssertEqual(try block("Student pricing").style, "bullet")
+        XCTAssertEqual(try block("price = base * seats").style, "mono")
+        XCTAssertNil(try block("Simple beats clever.").style, "a body paragraph")
+        // The plain notes keep one paragraph per line, as typed.
+        let weekend = try XCTUnwrap(notes.first { $0.id == AtticDemoData.id(1_003) })
+        let weekendBlocks = try XCTUnwrap(weekend.content.flatMap { NoteContentCodec.decode($0).document }).blocks
+        XCTAssertEqual(weekendBlocks.map(\.text), ["Weekend", "Farmers' market on Saturday morning.",
+                                                   "Bike the river path if it's dry.", "Call Mum on Sunday."])
+    }
+
+    /// Load Demo Data replaces an older seed's untouched raw-Markdown copy
+    /// with the formatted note, and leaves an edited one alone.
+    func testLoadDemoDataFormatsOnlyAnUntouchedRawMarkdownSeed() throws {
+        for edited in [false, true] {
+            let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+            let context = ModelContext(container)
+            let legacy = NoteItem(id: AtticDemoData.id(1_001), title: "Pricing page", body: AtticDemoData.pricingNote)
+            if edited { legacy.revisionID = UUID(); legacy.revision = 1 }
+            context.insert(legacy)
+            try context.save()
+            let before = legacy.content
+            try AtticDemoData.seed(into: container, bundleIdentifier: "com.taha.Attic.preview.main")
+            let note = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>())
+                .first { $0.id == AtticDemoData.id(1_001) })
+            if edited {
+                XCTAssertEqual(note.content, before, "an edited note is never replaced")
+            } else {
+                XCTAssertFalse(note.plainText.contains("**"), "formatted")
+                let blocks = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document }).blocks
+                XCTAssertTrue(blocks.contains { $0.style == "heading" && $0.text == "Before launch" })
+            }
+        }
     }
 
     func testOnlyAPreviewBuildsMenuOffersLoadDemoData() {

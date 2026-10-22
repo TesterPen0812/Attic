@@ -927,6 +927,12 @@ enum AtticPageArrows {
     }
 }
 
+extension EnvironmentValues {
+    /// Set by `atticTopLineCapsule()`: the tabs sit on the top line's glass,
+    /// so the selected page shows no underline.
+    @Entry var atticPageTabsOnGlass = false
+}
+
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
 /// place of a page title and the page pill. Phase 0's qualities
 /// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
@@ -962,6 +968,7 @@ struct AtticPageTabs<Page: Hashable>: View {
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticForcedState) private var forced
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticPageTabsOnGlass) private var onGlass
     @FocusState private var focused: Bool
     @State private var hoveredPage: Page?
     @Namespace private var underline
@@ -1002,8 +1009,10 @@ struct AtticPageTabs<Page: Hashable>: View {
                 .focusable(false)
                 // L1: the active page's underline, which travels to the
                 // next label as the tab changes (a swipe's live tab too).
+                // On the top line's glass capsule there is none (owner,
+                // 2026-10-22): the semibold strong ink marks the page.
                 .overlay(alignment: .bottom) {
-                    if isSelected {
+                    if isSelected && !onGlass {
                         Rectangle()
                             .fill(design.tokens.color(.heading))
                             .frame(height: m.underlineHeight)
@@ -1255,8 +1264,8 @@ struct AtticTaskRow: View {
             .padding(.horizontal, AtticLayout.rowHighlightInset)
             .animation(.linear(duration: isSelected ? 0.08 : 0.06), value: isSelected)
 
-            // The circle, centred on the title line (row top + 17), its
-            // 28 pt hit area around the 14 pt drawing.
+            // The circle, centred on the title line (row top + 16, or 14),
+            // its 28 pt hit area around the 15 pt drawing.
             AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false,
                               isEmphasised: showsFocusRing, onToggle: actions.toggleDone)
                 .atticForcedState(nil)
@@ -1333,7 +1342,7 @@ struct AtticTaskRow: View {
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
                                      })
-                        .frame(height: m.detailsLineHeight)
+                        .frame(height: m.rowDetailsLineHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1793,7 +1802,7 @@ private struct AtticDetailsCountButton: View {
         .disabled(disabled)
         .onHover { hovered = $0 }
         .padding(.horizontal, -m.horizontalPadding)
-        .frame(height: AtticTaskRowMetrics.detailsLineHeight)
+        .frame(height: AtticTaskRowMetrics.rowDetailsLineHeight)
         .atticRowControl()
         .help(isExpanded ? help.open : help.closed)
         .accessibilityLabel(spokenLabel)
@@ -1854,6 +1863,9 @@ struct AtticCompletedLine: View {
 /// appearance check judges.
 struct AtticSubtaskCheckbox: View {
     let isDone: Bool
+    /// Tasks' subtask box (13, control size Medium); Notes' checklists keep
+    /// their own 14 (`NoteChecklistAttachment.boxSize`).
+    var size: CGFloat = AtticControlSize.subtaskCheckbox
 
     @Environment(\.atticDesign) private var design
     @State private var checkProbeID = UUID()
@@ -1862,7 +1874,6 @@ struct AtticSubtaskCheckbox: View {
     var body: some View {
         let tokens = design.tokens
         let m = AtticSubtaskMetrics.self
-        let size = AtticControlSize.subtaskCheckbox
         // A true squircle (superellipse, n = 4): the owner's choice, 2026-09-26.
         let shape = Squircle(cornerRadius: size / 2, exponent: AtticRadius.subtaskCheckboxExponent)
         let lineWidth = design.increaseContrast ? m.lineWidthIncreased : m.lineWidth

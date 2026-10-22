@@ -2,11 +2,24 @@
 name: Attic CI
 
 on:
+  # Changes that touch only top-level Markdown, Docs/, Media/ or LICENSE don't
+  # run CI: nothing they change is built or tested (owner, 2026-10-21). A file
+  # a test reads, such as AtticTests/Fixtures/Compatibility/README.md, is not
+  # covered by these patterns, so changing it still runs CI.
   pull_request:
+    paths-ignore:
+      - '*.md'
+      - 'Docs/**'
+      - 'Media/**'
+      - 'LICENSE'
   push:
     branches:
       - main
-      - feature/canvas-ink
+    paths-ignore:
+      - '*.md'
+      - 'Docs/**'
+      - 'Media/**'
+      - 'LICENSE'
   workflow_dispatch:
     inputs:
       lane:

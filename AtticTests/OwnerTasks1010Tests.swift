@@ -624,8 +624,9 @@ final class OwnerTasks1010Tests: XCTestCase {
     /// Run the real list modifier over coloured rows, rather than merely
     /// asserting a constant that the rendered list might never use. The
     /// owner's 10-17 decision: rows stay visible beneath the composer's
-    /// plain strip (Date / Tag / Priority) and under the tabs, blurred by
-    /// the page's backdrop, never faded out (was o16: invisible there).
+    /// strip (Date / Tag / Priority glass pills; sharp, no bottom blur since
+    /// 10-22) and under the tabs (blurred by the page's backdrop), never
+    /// faded out (was o16: invisible there).
     func testComposerStripAndTabsKeepTheRowsBehindThemVisible() throws {
         let stack = TasksBottomStackHeight()
         stack.height = TasksViewport.reservedStack
@@ -642,7 +643,7 @@ final class OwnerTasks1010Tests: XCTestCase {
         let scale = CGFloat(rep.pixelsHigh) / height
         let reference = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int(260 * scale))?.usingColorSpace(.sRGB))
         XCTAssertLessThan(reference.greenComponent, 0.5, "the rows' own colour, not the white behind them")
-        let stripCentre = height - inset - stack.height + AtticControlSize.smallHeight / 2
+        let stripCentre = height - inset - stack.height + AtticPickerMetrics.stripHeight / 2
         for (y, place) in [(stripCentre, "beneath Date / Tag / Priority"), (height - inset - 4, "beneath the add bar"),
                            (CGFloat(88), "behind the tabs line"), (CGFloat(20), "under the header")] {
             let pixel = try XCTUnwrap(rep.colorAt(x: Int(170 * scale), y: Int(y * scale))?.usingColorSpace(.sRGB))

@@ -486,34 +486,46 @@ struct AtticNoteLibraryLine: View {
     @Environment(\.atticTagColouring) private var colouring
     @State private var moreHovered = false
 
+    /// The line's height: the floating controls' (top glass, 2026-10-22).
+    static let height = AtticTopGlassMetrics.height
+
     var body: some View {
-        let height = AtticControlSize.smallHeight
         ZStack(alignment: .trailing) {
             if searchShown {
                 // Exactly the Tasks search's motion (A4 M-01, the owner).
                 field
                     .transition(AtticSearchMotion.field(reduceMotion: design.reduceMotion))
             } else {
-                HStack(spacing: 0) {
-                    if tags.isEmpty {
-                        AtticText(verbatim: title, style: .pageTabSelected, ink: .heading)
-                            .padding(.leading, AtticLayout.pageTabsX)
-                            .accessibilityAddTraits(.isHeader)
-                            .accessibilityIdentifier("notes-library-label")
-                    } else {
-                        tagLine
-                            .padding(.leading, AtticLayout.pageTabsX)
+                // Top glass (2026-10-22), as Tasks' tabs line: the title and
+                // its tags in one glass capsule (alone, the title keeps the
+                // same capsule, so the line does not change when the first
+                // tag arrives), the magnifier on its glass circle.
+                AtticControlGroup {
+                    HStack(spacing: 0) {
+                        Group {
+                            if tags.isEmpty {
+                                AtticText(verbatim: title, style: .pageTabSelected, ink: .heading)
+                                    .accessibilityAddTraits(.isHeader)
+                                    .accessibilityIdentifier("notes-library-label")
+                            } else {
+                                tagLine
+                            }
+                        }
+                        .atticTopLineCapsule()
+                        // The labels on the content line, the capsule's edge
+                        // on the controls' line.
+                        .padding(.leading, AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding)
+                        Spacer(minLength: AtticTopGlassMetrics.spacing)
+                        AtticSmallButton(systemName: "magnifyingglass", label: "Search notes (⌘F)", quietIcon: true, floating: true,
+                                         action: onBeginSearch)
+                            .accessibilityIdentifier("notes-library-search-button")
+                            .padding(.trailing, AtticTopGlassMetrics.lineEndInset)
                     }
-                    Spacer(minLength: 0)
-                    AtticSmallButton(systemName: "magnifyingglass", label: "Search notes (⌘F)", quietIcon: true, action: onBeginSearch)
-                        .accessibilityIdentifier("notes-library-search-button")
-                        .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
-                            - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))
                 }
                 .transition(AtticSearchMotion.labels(reduceMotion: design.reduceMotion))
             }
         }
-        .frame(height: height)
+        .frame(height: Self.height)
         .animation(AtticSearchMotion.animation(shown: searchShown, reduceMotion: design.reduceMotion), value: searchShown)
     }
 
@@ -575,7 +587,7 @@ struct AtticNoteLibraryLine: View {
 
     private var field: some View {
         let tokens = design.tokens
-        let height = AtticControlSize.smallHeight
+        let height = Self.height
         return HStack(spacing: 0) {
             // Tasks' search field's columns exactly (spacing audit S-06): the
             // magnifier on the circles' line, the text on the titles' line.
@@ -606,8 +618,8 @@ struct AtticNoteLibraryLine: View {
             .accessibilityLabel(String(localized: "End search"))
         }
         .frame(height: height)
-        .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
-            .fill(tokens.recessed.color))
+        // Top glass: on the raised material, as Tasks' search field.
+        .modifier(AtticSearchFieldBacking(floating: true, height: height))
         .contentShape(Rectangle())
         .onTapGesture { fieldFocused.wrappedValue = true }
         .padding(.horizontal, AtticLayout.rowHighlightInset)

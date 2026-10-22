@@ -52,7 +52,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.control(height: 36), 15)
         XCTAssertEqual(AtticRadius.control(height: 28), 12)
         XCTAssertEqual(AtticRadius.control(height: 18), 7.5)
-        XCTAssertEqual(AtticRadius.nestedChip, 9.5, "Nested chips: outer radius minus the inset (13.5 − 4, visual A)")
+        XCTAssertEqual(AtticRadius.nestedChip, 8.5, "Nested chips: outer radius minus the inset (12.5 − 4, Medium; visual A had 13.5 − 4)")
         XCTAssertEqual(AtticRadius.nested(outer: 13.5, gap: 4), 9.5)
         XCTAssertNil(AtticRadius.nested(outer: 20, gap: 12), "Nesting only applies to gaps of 6 pt or less")
         XCTAssertEqual(AtticRadius.ring(around: 10, offset: 4), 14)
@@ -65,22 +65,22 @@ final class AtticDesignSystemTests: XCTestCase {
     /// highlights 2 shorter, text blocks centred; circles 16 at 28, titles
     /// at 56 (12 apart).
     func testControlSizesFollowPhase0Room() {
-        // Chrome B (Notes v2, owner 2026-10-08): 32 pt, radius 13.5.
-        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
-        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 13.5)
+        // Control size Medium (owner, 2026-10-20; chrome B was 32 pt, radius 13.5): 30 pt, radius 12.5.
+        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 30, height: 30))
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 12.5)
         XCTAssertEqual(AtticControlSize.settingsHeaderHeight, 34)
-        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 32)
-        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 84)
-        // Compact round (owner): rows 36 / 50, highlights 30 / 44.
-        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [34, 30, 48, 44])
+        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 30)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 78)
+        // Spacing B (owner, 2026-10-20): rows 32 / 48, highlights 28 / 44.
+        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [32, 28, 48, 44])
         XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 2)
-        XCTAssertEqual(AtticControlSize.statusCircle, 16)
-        XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 12)
+        XCTAssertEqual(AtticControlSize.statusCircle, 15)
+        XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 8)
         let m = AtticTaskRowMetrics.self
-        XCTAssertEqual(m.titleTop(twoLine: false), 8, "18 pt title centred in 34")
-        XCTAssertEqual(m.titleTop(twoLine: true), 8, "D-13: the title line where a one-line row has it")
-        XCTAssertEqual(m.circleCentreY(twoLine: false), 17)
-        XCTAssertEqual(m.circleCentreY(twoLine: true), 17)
+        XCTAssertEqual(m.titleTop(twoLine: false), 7, "18 pt title centred in 32")
+        XCTAssertEqual(m.titleTop(twoLine: true), 5, "spacing B: 3 into the 44 pt pill (D-13 had 8)")
+        XCTAssertEqual(m.circleCentreY(twoLine: false), 16)
+        XCTAssertEqual(m.circleCentreY(twoLine: true), 14)
     }
 
     /// Round 9 (owner item 26): springy by default, pages firm (never a
@@ -490,9 +490,9 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testSendButtonNestsInsideTheAddBar() {
         let send = AtticControlSize.sendButton
-        XCTAssertEqual(send, CGSize(width: 24, height: 24), "Chrome B: 32 − 2 × 4 inside the bar")
+        XCTAssertEqual(send, CGSize(width: 22, height: 22), "Medium: 30 − 2 × 4 inside the bar")
         XCTAssertEqual(send.height, AtticControlSize.addBarHeight - 2 * AtticControlSize.sendInset)
-        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 9.5)
+        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 8.5)
     }
 
     /// Astra 19: one definition of what a row can do. VoiceOver offers
