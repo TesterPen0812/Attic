@@ -1438,10 +1438,11 @@ extension PhaseXHunt5Tests {
                 try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
             })
         }
-        XCTAssertTrue(coordinator.noteDraft.pages.newNote())
+        let pages = coordinator.noteDraft.pages
+        await pages.startAndWait()
+        XCTAssertTrue(pages.newNote())
         // Phase 3 F17: history must not retain controllers through a
         // conversion or the task page's retained presentation relays.
-        let pages = coordinator.noteDraft.pages
         let convertedID = UUID()
         _ = try coordinator.noteStore.createDocumentNote(id: convertedID,
             document: NoteDocument(blocks: [.text("Release conversion"), .text("Body")])).get()
@@ -1452,15 +1453,18 @@ extension PhaseXHunt5Tests {
         }
         let taskPage = try TaskNotePresenter(taskID: taskID, tasks: coordinator.library.tasks,
             library: coordinator.library, notes: pages, design: .default, columnInset: 28, defaults: nil)
+        let taskProbes = [WeakProbe<AnyObject>(taskPage), WeakProbe<AnyObject>(taskPage.session),
+                          WeakProbe<AnyObject>(taskPage.session?.engine)]
         let closed = await taskPage.close()
         XCTAssertTrue(closed)
+        XCTAssertTrue(pages.newNote(), "Keep the existing active-session and engine lifetime checks")
         let panel: AtticPanelController = try field("panelController", in: coordinator)
         let settings: SettingsWindowController = try field("settingsWindowController", in: coordinator)
         let probes = [WeakProbe<AnyObject>(coordinator), WeakProbe<AnyObject>(panel), WeakProbe<AnyObject>(settings),
             WeakProbe<AnyObject>(coordinator.noteDraft), WeakProbe<AnyObject>(coordinator.noteDraft.pages),
             WeakProbe<AnyObject>(coordinator.noteDraft.pages.active), WeakProbe<AnyObject>(coordinator.noteDraft.pages.active?.engine),
             WeakProbe<AnyObject>(coordinator.canvasSession),
-            WeakProbe<AnyObject>(coordinator.canvasEditFocus)]
+            WeakProbe<AnyObject>(coordinator.canvasEditFocus)] + taskProbes
         await coordinator.noteStore.waitForAttachmentReconciliation()
         await coordinator.noteDraft.pages.waitForRecoveryWork()
         coordinator.stop()
