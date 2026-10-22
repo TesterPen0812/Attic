@@ -115,7 +115,12 @@ final class OperationCrashHarnessTests: XCTestCase {
                 let note = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first)
                 XCTAssertNil(note.taskID); XCTAssertEqual(note.title, "Parent")
                 let doc = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document })
-                XCTAssertFalse(doc.requires.contains("taskNote")); XCTAssertEqual(doc.blocks[1].text, "Retain body")
+                XCTAssertFalse(doc.requires.contains("taskNote"))
+                XCTAssertTrue(doc.blocks[1].text.hasPrefix("Was a task · "))
+                XCTAssertEqual(doc.blocks[2].kind, .checklist)
+                XCTAssertEqual(doc.blocks[2].text, "Child")
+                XCTAssertFalse(doc.blocks[2].checked)
+                XCTAssertEqual(doc.blocks[3].text, "Retain body", "body follows the preserved summary and child checkbox")
                 let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
                 var remaining = 0
                 for reference in references { if try await files.verifiedURL(for: reference) != nil { remaining += 1 } }
