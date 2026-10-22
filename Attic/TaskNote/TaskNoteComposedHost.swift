@@ -186,6 +186,7 @@ final class TaskNoteComposedHost: NSObject {
         let length = replacement.textStorage.length
         let location = min(selected.location, length)
         textView.setSelectedRange(NSRange(location: location, length: min(selected.length, length - location)))
+        replacement.history.workspace?.inputClientDidAttach()
         restack()
         if focused { textView.window?.makeFirstResponder(textView) }
     }

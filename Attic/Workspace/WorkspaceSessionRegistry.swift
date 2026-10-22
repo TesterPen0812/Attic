@@ -359,7 +359,8 @@ final class WorkspacePageSession {
         .init(steps: [{ [weak self] _ in _ = self?.install(stamp, apply) }])
     }
     func close(_ lease: Lease, resolvingFields: () -> Bool = { true }) async -> Bool {
-        guard let controller, !closing, activeLease == lease, history.pendingCommandID == nil, history.pendingReplayID == nil else {
+        guard let controller, !closing, activeLease == lease,
+              !history.hasPendingPublication || history.permitsUnsavedDraft else {
             Self.log.notice("Page close refused: closing \(self.closing, privacy: .public) lease \(self.activeLease == lease, privacy: .public) command \(self.history.pendingCommandID != nil, privacy: .public) replay \(self.history.pendingReplayID != nil, privacy: .public)")
             return false
         }

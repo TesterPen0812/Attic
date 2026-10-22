@@ -2089,6 +2089,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Guard
 
+    /// A testable native announcement boundary; nil uses AppKit accessibility.
+    var announceWorkspaceInputRefusal: ((String) -> Void)?
+
     private func refuse(_ reason: String, kind: NoteNotice.Kind = .didntWork) -> Bool {
         refusals.append(reason)
         onNotice?(NoteNotice(kind: kind, detail: reason))
@@ -2100,8 +2103,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// the editor's own commands may remove an object.
     @discardableResult
     func refusesReservedWorkspaceInput() -> Bool {
-        guard history.workspace?.isInputReserved == true, !history.isReplaying else { return false }
-        _ = refuse(String(localized: "Finish the workspace operation before editing"), kind: .notAvailable)
+        guard let workspace = history.workspace, workspace.isInputReserved, !history.isReplaying else { return false }
+        let reason = String(localized: "Finish the workspace operation before editing")
+        _ = refuse(reason, kind: .notAvailable)
+        if workspace.shouldAnnounceInputRefusal() {
+            if let announceWorkspaceInputRefusal { announceWorkspaceInputRefusal(reason) }
+            else { AccessibilityNotification.Announcement(reason).post() }
+        }
         return true
     }
 

@@ -876,7 +876,7 @@ struct NoteStatusSlot: View {
         ZStack {
             if let primary = items.first {
                 AtticStatusPill(item: primary, more: items.count - 1,
-                                inlineAction: items.count == 1 ? inlineAction(for: primary) : nil,
+                                inlineAction: items.count == 1 || primary.id == "workspaceSave" ? inlineAction(for: primary) : nil,
                                 onCancel: items.count == 1 ? cancel(for: primary) : nil, maxWidth: maxWidth) {
                     showingDetails = true
                 }
@@ -911,7 +911,7 @@ struct NoteStatusSlot: View {
     }
 
     private func inlineAction(for item: AtticStatusItem) -> AtticStatusItem.Action? {
-        item.id == "notSaved" || item.id == "taskFailure" ? item.actions.first : nil
+        ["notSaved", "taskFailure", "workspaceSave"].contains(item.id) ? item.actions.first : nil
     }
 
     private func cancel(for item: AtticStatusItem) -> (() -> Void)? {
@@ -958,10 +958,16 @@ struct NoteStatusSlot: View {
     private func item(_ status: NoteStatusItem) -> AtticStatusItem? {
         let details = { (action: @escaping () -> Void) in { showingDetails = false; action() } }
         switch status {
+        case .couldntFinishSaving:
+            return AtticStatusItem(id: "workspaceSave", systemName: "exclamationmark.circle", title: status.label,
+                explanation: status.explanation, tone: .error, actions: [
+                    .init(title: String(localized: "Retry"), identifier: "notes-retry-workspace",
+                          handler: details { controller.retry(session) })
+                ])
         case .onlyInMemory:
             return AtticStatusItem(id: "onlyInMemory", systemName: "exclamationmark.circle", title: status.label,
                                    explanation: status.explanation, tone: .error, actions: [
-                                       .init(title: String(localized: "Retry"), handler: details(controller.retry)),
+                                       .init(title: String(localized: "Retry"), handler: details { controller.retry(session) }),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
                                              handler: details(controller.copyActiveText)),
                                        saveRecoveryCopyAction(details)
@@ -970,7 +976,7 @@ struct NoteStatusSlot: View {
             return AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: status.label,
                                    explanation: status.explanation, tone: .error, actions: [
                                        .init(title: String(localized: "Retry"), identifier: "notes-retry",
-                                             handler: details(controller.retry)),
+                                             handler: details { controller.retry(session) }),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
                                              handler: details(controller.copyActiveText)),
                                        saveRecoveryCopyAction(details)

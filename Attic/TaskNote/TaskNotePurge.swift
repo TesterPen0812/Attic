@@ -23,6 +23,11 @@ enum TaskNotePurge {
         var deferredRootIDs: Set<UUID> = []
     }
 
+    @MainActor private final class PublicationState {
+        var installed = false
+        var keepDrafts: Set<UUID> = []
+    }
+
     static func run(tasks: TaskStore, notes: NotesPageController, before cutoff: Date,
                     confirmed: [UUID: Date]? = nil) async -> Report {
         var report = Report()
@@ -44,25 +49,48 @@ enum TaskNotePurge {
                 report.deferredRootIDs.insert(root)
                 continue
             }
+            let published = PublicationState()
             let result = await WorkspacePurge.purge(rootID: root, before: cutoff, confirmed: confirmed?[root],
-                                                     coordinator: coordinator, files: tasks.taskImageFiles,
-                                                     inventory: { notes.taskNotePurgeInventory(ownNotes: own) })
+                coordinator: coordinator, files: tasks.taskImageFiles,
+                inventory: { notes.taskNotePurgeInventory(ownNotes: own) },
+                materialize: { [weak notes, weak tasks, weak coordinator] operation, patches in
+                    guard let notes, let tasks, let coordinator else { return }
+                    for patch in patches {
+                        let history = notes.undoRoute.workspace(for: .taskWorkspace(patch.taskID))
+                        if history.hasNewerPublicationDraft { published.keepDrafts.insert(patch.noteID) }
+                        else {
+                            if let session = notes.workspaceSessionIfCached(patch.noteID) {
+                                guard session.engine.history.canPrepareWorkspaceCommand, !session.isImporting else {
+                                    throw WorkspaceFoundationError.conflict
+                                }
+                            }
+                            notes.retireMaterializedTaskNote(patch.noteID)
+                            history.didPublishExternalForm()
+                        }
+                        try patch.record(operationID: operation, in: history, coordinator: coordinator, notes: notes)
+                    }
+                    published.installed = true
+                    tasks.refresh(); notes.store.refresh()
+                })
+            let present: () async -> Void = { [weak notes] in
+                guard let notes, let operation = result.operationID else { return }
+                for patch in result.materialization where !published.keepDrafts.contains(patch.noteID) {
+                    notes.taskNoteMaterialized?(patch, operation)
+                }
+            }
+            if [.unknown, .publicationPending].contains(result.outcome), let operation = result.operationID {
+                let leader = reservations.first ?? notes.undoRoute.workspace(for: .taskWorkspace(root))
+                leader.trackExternalOperation(operation, using: coordinator, peers: reservations,
+                    installed: published.installed, completion: present)
+            } else { reservations.forEach { $0.releaseInput() } }
             guard result.outcome == .committed || result.outcome == .publicationPending else {
-                reservations.forEach { $0.releaseInput() }
                 report.deferredRootIDs.insert(root)
                 continue
             }
             report.removedTaskIDs.formUnion(result.removedIDs)
-            for patch in result.materialization {
-                report.materializedNoteIDs.insert(patch.noteID)
-                notes.retireMaterializedTaskNote(patch.noteID)
-                if let operationID = result.operationID {
-                    let history = notes.undoRoute.workspace(for: .taskWorkspace(patch.taskID))
-                    try? patch.record(operationID: operationID, in: history, coordinator: coordinator, notes: notes)
-                    notes.taskNoteMaterialized?(patch, operationID)
-                }
-            }
-            reservations.forEach { $0.releaseInput() }
+            report.materializedNoteIDs.formUnion(result.materialization.map(\.noteID))
+            if result.outcome == .committed { await present() }
+
         }
         if !report.removedTaskIDs.isEmpty {
             tasks.refresh()

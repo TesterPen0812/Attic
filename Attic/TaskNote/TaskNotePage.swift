@@ -160,6 +160,7 @@ final class TaskNotePresenter: ObservableObject {
             let selection = session.selection
             host.textView.setSelectedRange(NSRange(location: min(selection.location, length),
                 length: min(selection.length, max(0, length - selection.location))))
+            session.engine.history.workspace?.inputClientDidAttach()
         }
     }
 

@@ -165,7 +165,8 @@ enum WorkspacePurge {
     static func purge(rootID: UUID, before cutoff: Date, confirmed: Date? = nil,
                       coordinator: WorkspaceOperationCoordinator, files: TaskImageFiles,
                       inventory: () throws -> Inventory?,
-                      publication: WorkspaceOperationCoordinator.Publication = .init()) async -> Result {
+                      publication: WorkspaceOperationCoordinator.Publication = .init(),
+                      materialize: ((UUID, [WorkspaceMaterializationPatch]) throws -> Void)? = nil) async -> Result {
         var checkpoint: (UUID, NoteRecoveryClaim)?
         func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict) -> Result {
             Result(outcome: outcome, operationID: nil, removedIDs: [], preservationID: nil, checkpoint: checkpoint)
@@ -344,6 +345,9 @@ enum WorkspacePurge {
             let envelope = try coordinator.newEnvelope(intent: "Remove task permanently", reads: tokens, writes: owners, scopes: scopes,
                 preDraft: preDraft, afterDocuments: prepared.mapValues(\.content), checkpointClaim: checkpoint?.1,
                 staged: ownership.staged.values.flatMap { $0 })
+            let materializationSteps: [@MainActor (UUID) throws -> Void] = materialize.map { handler in
+                [{ operation in try handler(operation, patches) }]
+            } ?? []
             let outcome = await coordinator.execute(envelope, sessionValid: {
                 guard let current = try? inventory() else { return false }
                 return current.generation == ownership.generation && files.files.validatesCollection(collection, ids: leasedIDs)
@@ -384,14 +388,14 @@ enum WorkspacePurge {
                 }
                 guard try LinkStore.stagePurge(touching: touching, in: commit) == affectedLinkIDs.count else { throw WorkspaceFoundationError.conflict }
                 _ = try TaskStore.stagePermanentRemoval(in: commit, rootID: rootID, before: cutoff, confirmed: confirmed)
-            }, publication: publication)
+            }, publication: .init(steps: materializationSteps + publication.steps))
             if outcome == .committed {
                 WorkspaceCrashHook.reach("K8-before-unlink")
                 await files.remove(references, collection: collection)
             }
             return Result(outcome: outcome, operationID: envelope.id,
                 removedIDs: outcome == .committed || outcome == .publicationPending ? ids : [], preservationID: preservationID,
-                materialization: outcome == .committed || outcome == .publicationPending ? patches : [], checkpoint: checkpoint)
+                materialization: [.committed, .publicationPending, .unknown].contains(outcome) ? patches : [], checkpoint: checkpoint)
         } catch { return refused(.unknown) }
     }
     static func legacyReferences(_ task: TaskItem) throws -> [TaskImageReference] {

@@ -443,6 +443,8 @@ struct TaskNoteTextEdit {
         let adapter = engine.history
         let revision = UUID()
         let associationID = UUID()
+        let binding = session.callbackStamp
+        let noteID = noteID, parentID = parentID, selectionBefore = selectionBefore, caretAfter = caretAfter, createsNote = createsNote
         var group: WorkspaceHistory.TextGroup?
         let edit = self
         return await history.performCommand(using: coordinator) {
@@ -468,14 +470,21 @@ struct TaskNoteTextEdit {
                     try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared,
                         revisionID: revision, versionIDs: versions, timestamp: Date())
                 }
-            }, record: { operation, entry in
-                guard let group else { return }
-                edit.record(operation: operation, entry: entry, name: name, group: group, taskOwners: forwardWrites.filter { $0.entity == .task || $0.entity == .note }, inverse: inverse)
-            }, publication: .init(steps: [{ _ in
+            }, record: { [weak notes, weak session, weak engine, weak tasks, weak coordinator, weak history] operation, entry in
+                guard let group, let notes, let session, let engine, let tasks, let coordinator, let history else { return }
+                let recording = TaskNoteTextEdit(engine: engine, session: session, notes: notes, tasks: tasks,
+                    coordinator: coordinator, history: history, noteID: noteID, parentID: parentID,
+                    selectionBefore: selectionBefore, caretAfter: caretAfter, createsNote: createsNote)
+                recording.record(operation: operation, entry: entry, name: name, group: group,
+                    taskOwners: forwardWrites.filter { $0.entity == .task || $0.entity == .note }, inverse: inverse)
+            }, publication: .init(steps: [{ [weak notes, weak session, weak engine, weak tasks, weak history, weak adapter] _ in
+                defer { tasks?.refresh() }
+                guard let notes, let session, let engine, let history, let adapter,
+                      session.hasSameBinding(binding), session.engine === engine,
+                      !history.hasNewerPublicationDraft else { return }
                 guard adapter.installCommand(command) else { throw WorkspaceFoundationError.conflict }
-                edit.engine.textView?.setSelectedRange(NSRange(location: min(edit.caretAfter, edit.engine.textStorage.length), length: 0))
-                edit.notes.adoptWorkspaceCommit(edit.session, revisionID: revision, created: edit.createsNote)
-                edit.tasks.refresh()
+                engine.textView?.setSelectedRange(NSRange(location: min(caretAfter, engine.textStorage.length), length: 0))
+                notes.adoptWorkspaceCommit(session, revisionID: revision, created: createsNote)
             }]))
         }
     }
@@ -502,8 +511,9 @@ struct TaskNoteTextEdit {
         var expected = try? coordinator.capture(taskOwners)
         let scopes = Set(taskOwners.filter { $0.entity == .task }.flatMap { [WorkspaceScope.children($0.id), .taskAssociations($0.id)] })
         var expectedScopes = try? WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
-        history.recordOperation(id: operation, entryID: entry, name: name, coordinator: coordinator, textGroup: group) { [weak session, weak notes, weak tasks, weak coordinator] redo, effect in
-            guard let notes, let tasks, let coordinator,
+        let history = history
+        history.recordOperation(id: operation, entryID: entry, name: name, coordinator: coordinator, textGroup: group) { [weak session, weak notes, weak tasks, weak coordinator, weak history] redo, effect in
+            guard let notes, let tasks, let coordinator, let history,
                   let session = notes.workspaceSessionIfCached(noteID) ?? session,
                   let guards = expected, let scopeGuards = expectedScopes,
                   try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext()) == scopeGuards else {
@@ -547,22 +557,28 @@ struct TaskNoteTextEdit {
                 reads: coordinator.capture(writes.union([.init(entity: .task, id: parentID)])), writes: writes, inverseGuards: current, scopes: Array(scopeGuards.values),
                 afterDocuments: [id: prepared.content], historyEffect: WorkspaceModelFields.encode(effect), replayOf: operation)
             let revision = UUID()
+            let binding = session.callbackStamp
             return .init(envelope: envelope, text: (adapter, text), textDocument: (id, prepared.content), stage: { commit in
                 try step.stage(commit, step.preservations)
                 try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared,
                     revisionID: revision, versionIDs: versions, timestamp: Date())
-            }, publication: .init(steps: [{ _ in
+            }, publication: .init(steps: [{ [weak notes, weak session, weak engine, weak tasks, weak coordinator, weak history] _ in
                 // Undo puts the selection back as it was; Redo leaves the
                 // caret where the text was.
-                let length = engine.textStorage.length
-                let selection = redo ? NSRange(location: min(caretAfter, length), length: 0)
-                    : NSRange(location: min(selectionBefore.location, length),
-                              length: max(0, min(selectionBefore.length, length - min(selectionBefore.location, length))))
-                engine.textView?.setSelectedRange(selection)
-                notes.adoptWorkspaceCommit(session, revisionID: revision)
-                tasks.refresh()
-                expected = try coordinator.capture(taskOwners)
-                expectedScopes = try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
+                if let notes, let session, let engine, let history,
+                   session.hasSameBinding(binding), session.engine === engine, !history.hasNewerPublicationDraft {
+                    let length = engine.textStorage.length
+                    let selection = redo ? NSRange(location: min(caretAfter, length), length: 0)
+                        : NSRange(location: min(selectionBefore.location, length),
+                                  length: max(0, min(selectionBefore.length, length - min(selectionBefore.location, length))))
+                    engine.textView?.setSelectedRange(selection)
+                    notes.adoptWorkspaceCommit(session, revisionID: revision)
+                }
+                tasks?.refresh()
+                if let coordinator {
+                    expected = try coordinator.capture(taskOwners)
+                    expectedScopes = try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
+                }
             }]))
         }
     }

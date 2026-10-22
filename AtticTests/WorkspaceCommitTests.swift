@@ -35,6 +35,33 @@ final class WorkspaceCommitTests: XCTestCase {
         try FileManager.default.removeItem(at: root)
     }
 
+    func testOpusR3PublicationLeavesAReplacementCheckpointOwned() async throws {
+        let pre = try recoveryDraft("Before the operation")
+        let claim = try await coordinator.journal.writeDurably(pre, staged: [])
+        var replacementClaim: NoteRecoveryClaim?
+        var newer = try recoveryDraft("Newer unsaved writing")
+        newer.savedAt = Date(timeIntervalSince1970: 456)
+        var blocked = true
+        let (outcome, operation) = try await conversion(preDraft: pre, checkpointClaim: claim,
+            publication: .init(steps: [{ _ in
+                if blocked { throw WorkspaceFoundationError.preparationFailed }
+            }]))
+        XCTAssertEqual(outcome, .publicationPending)
+        replacementClaim = try await coordinator.journal.writeDurably(newer, staged: [], replacing: claim)
+        blocked = false
+        let retried = await coordinator.retryPublication(operation)
+        XCTAssertEqual(retried, .committed)
+        // Relaunch must retain that replacement and its ownership as well.
+        let next = try WorkspaceOperationCoordinator(container: container, journal: coordinator.journal)
+        try await next.finishLaunch()
+        let receipts = try next.freshContext().fetch(FetchDescriptor<OperationReceipt>()).filter { $0.id == operation }
+        XCTAssertTrue(receipts.allSatisfy(\.envelopeReleased), "a replacement checkpoint cannot strand old publication")
+        let entries = try await next.journal.readRecoveryEntries()
+        guard case let .valid(entry, _, owner) = try XCTUnwrap(entries.first) else { return XCTFail("newer checkpoint lost") }
+        XCTAssertEqual(entry, newer)
+        XCTAssertEqual(owner, replacementClaim)
+    }
+
     func testP2_1AbortedEnvelopeReleasesBeforeMoreTypingAndRelaunch() async throws {
         let pre = try recoveryDraft("before")
         _ = try await coordinator.journal.writeDurably(pre, staged: [])

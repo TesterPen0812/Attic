@@ -5,11 +5,13 @@ import SwiftData
 import UniformTypeIdentifiers
 
 enum NoteStatusItem: Equatable {
+    case couldntFinishSaving
     case onlyInMemory(String), notSaved(String), changedElsewhere, deletedElsewhere
     case proposal(String), deletionProposal(String), editedBy(String, Date), importing, notice(NoteNotice), readOnly(String)
 
     var label: String {
         switch self {
+        case .couldntFinishSaving: String(localized: "Couldn't finish saving")
         case .onlyInMemory: String(localized: "Only in memory")
         case .notSaved: String(localized: "Not saved")
         case .changedElsewhere: String(localized: "Changed elsewhere")
@@ -25,6 +27,7 @@ enum NoteStatusItem: Equatable {
 
     var explanation: String? {
         switch self {
+        case .couldntFinishSaving: String(localized: "Your writing is kept here. Retry to finish saving the workspace change; you can keep writing in the unsaved draft.")
         case let .onlyInMemory(reason), let .notSaved(reason), let .readOnly(reason): reason
         case let .notice(notice): notice.detail
         case .changedElsewhere: String(localized: "This note changed outside this editor. Your text is kept in recovery.")
@@ -100,6 +103,7 @@ final class NoteSession: ObservableObject, Identifiable {
     /// save writes the engine's tags only when they differ.
     fileprivate(set) var baseTags: [String] = []
     @Published private(set) var engine: NoteEditorEngine
+    @Published fileprivate(set) var workspacePublicationPending = false
     fileprivate(set) var readOnlyReason: NoteReadOnlyReason?
     /// A readable checkpoint with unavailable placements. Its display ID is
     /// separate from the original owner; it can never replace that saved note.
@@ -382,6 +386,7 @@ final class NotesPageController: ObservableObject {
         return durable
     }
     func preserveAllDurably() async -> Bool {
+        guard !undoRoute.hasQueuedWorkspaceTyping else { return false }
         if let active { captureViewState(active) }
         var ok = true
         for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
@@ -818,6 +823,7 @@ final class NotesPageController: ObservableObject {
 
     func statusItems(for session: NoteSession) -> [NoteStatusItem] {
         var items: [NoteStatusItem] = []
+        if session.workspacePublicationPending { items.append(.couldntFinishSaving) }
         switch session.state {
         case let .onlyInMemory(reason): items.append(.onlyInMemory(reason))
         case let .notSaved(reason): items.append(.notSaved(reason))
@@ -1252,7 +1258,8 @@ final class NotesPageController: ObservableObject {
         }
     }
     func workspaceIsDurable(_ session: NoteSession) -> Bool {
-        hasDurableCheckpoint(session)
+        guard session.engine.history.workspace?.hasQueuedTyping != true else { return false }
+        return hasDurableCheckpoint(session)
             || (!session.isImporting && !NoteSessionPolicy.hasPendingWork(session.state))
     }
     func suspendWorkspace(_ session: NoteSession) {
@@ -1397,6 +1404,27 @@ final class NotesPageController: ObservableObject {
 
     private func wire(_ session: NoteSession) {
         let engine = session.engine
+        engine.history.onWorkspaceRecoveryChanged = { [weak self, weak session] pending, permitsDraft, conflict in
+            guard let self, let session else { return }
+            session.workspacePublicationPending = pending
+            if pending && permitsDraft {
+                session.saveTask?.cancel(); session.saveTask = nil
+                session.state = .notSaved(String(localized: "Couldn't finish saving the workspace change."))
+                _ = self.checkpoint(session, silent: true, allowQueued: true)
+            } else if !pending {
+                self.store.refresh()
+                if conflict {
+                    session.state = .conflict(.changed)
+                    _ = self.checkpoint(session, silent: true, allowQueued: true)
+                } else if session.engine.matchesContentIgnoringFolds(self.store.loadDocument(noteID: session.noteID)?.content.document),
+                          session.engine.tags == session.baseTags,
+                          session.baseTags == self.store.note(withID: session.noteID)?.tags,
+                          session.baseRevisionID == self.store.note(withID: session.noteID)?.revisionID {
+                    session.state = .clean
+                } else if NoteSessionPolicy.hasPendingWork(session.state) { self.scheduleSave(session) }
+            }
+        }
+        session.workspacePublicationPending = engine.history.workspace?.hasPendingPublication == true
         engine.canUndoVersionRestore = { [weak self, weak session] in
             guard let self, let session, self.active === session else { return false }
             return self.canReplayVersionRestore(undo: true)
@@ -1625,6 +1653,7 @@ final class NotesPageController: ObservableObject {
     /// in memory alone.
     @discardableResult
     func preserveAll(allowQueued: Bool = false, verifiedCheckpointsOnly: Bool = false) -> Bool {
+        guard !undoRoute.hasQueuedWorkspaceTyping else { return false }
         if let active { captureViewState(active) }
         if let session = taskNotePresenter?.session { captureViewState(session) }
         var ok = true
@@ -1637,6 +1666,10 @@ final class NotesPageController: ObservableObject {
     /// Save, else checkpoint, else keep in memory and say so.
     @discardableResult
     func preserve(_ session: NoteSession, allowQueued: Bool = false, verifiedCheckpointsOnly: Bool = false) -> Bool {
+        guard session.engine.history.workspace?.hasQueuedTyping != true else {
+            session.showNotice(NoteNotice(kind: .finishFirst, detail: String(localized: "Your typing is waiting for the editor to finish opening.")))
+            return false
+        }
         // This session already has a durable checkpoint, owned by its source.
         // Navigation must neither overwrite it nor adopt its missing payloads.
         if session.recoverySourceNoteID != nil { return hasDurableCheckpoint(session) }
@@ -1849,6 +1882,10 @@ final class NotesPageController: ObservableObject {
     func save(_ session: NoteSession, snapshot: NoteDocument? = nil,
               stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil,
               tagsSnapshot: [String]? = nil, retainingNewerEdits: Bool = false) -> Bool {
+        if session.engine.history.workspace?.hasPendingPublication == true {
+            session.state = .notSaved(String(localized: "Couldn't finish saving the workspace change."))
+            return false
+        }
         guard !session.isImporting else { return checkpoint(session, silent: true) }
         guard canCommit(session) else { return false }
         guard NoteSessionPolicy.hasPendingWork(session.state) else { return true }
@@ -2102,8 +2139,16 @@ final class NotesPageController: ObservableObject {
     /// Retry from the slot.
     func retry() {
         guard let active else { return }
-        if case .conflict = active.state { return }
-        _ = preserve(active)
+        retry(active)
+    }
+    func retry(_ session: NoteSession) {
+        if let history = session.engine.history.workspace, history.hasPendingPublication {
+            history.requestPublicationRetry()
+            if history.permitsUnsavedDraft { _ = preserve(session) }
+            return
+        }
+        if case .conflict = session.state { return }
+        _ = preserve(session)
     }
 
     /// Copy Text from the slot: the draft as plain text.
@@ -3817,12 +3862,18 @@ extension NotesPageController {
     }
 
     /// Hold every cached writer until the committed materialization has
-    /// been adopted. Native input refuses visibly throughout journal IO.
+    /// been adopted. Plain typing queues; other mutations refuse visibly.
     func reserveTaskNoteInput(_ noteIDs: Set<UUID>) -> [WorkspaceHistory]? {
         var reserved: [WorkspaceHistory] = []
         for session in cache.values where noteIDs.contains(session.noteID) {
             let adapter = session.engine.history
-            let history = adapter.workspace ?? undoRoute.workspace(for: .note(session.noteID))
+            let taskID = store.note(withID: session.noteID)?.taskID
+            let history = adapter.workspace
+                ?? taskID.flatMap { undoRoute.existingWorkspace(for: .taskWorkspace($0)) }
+                ?? undoRoute.workspace(for: .note(session.noteID))
+            if let taskID, !undoRoute.alias(.taskWorkspace(taskID), to: history.historyID) {
+                reserved.forEach { $0.releaseInput() }; return nil
+            }
             guard adapter.workspace != nil || adapter.redoOps.isEmpty else {
                 reserved.forEach { $0.releaseInput() }; return nil
             }
@@ -3899,18 +3950,20 @@ extension NotesPageController {
     /// Make Task from Note (or its Undo) rewrote `noteID` in the other
     /// form: the editor built for the old form leaves (an ordinary one
     /// can't show a task's note, nor the reverse); the store is re-read.
-    func retireConvertedNote(_ noteID: UUID) async {
+    func retireConvertedNote(_ noteID: UUID, installingCommittedForm: Bool = true) async {
         store.refresh()
         guard let session = cache[noteID] else { return }
         let owner: UUID? = if case let .task(id) = session.workspacePage?.key.workspace { id } else { nil }
         if session.usesWorkspaceBinding {
-            installCommittedTaskNoteForm(session)
+            if installingCommittedForm { installCommittedTaskNoteForm(session) }
             if let owner, let presenter = TaskNotePresenter.open(for: owner) {
                 guard await presenter.close() else { return }
             } else if let page = session.workspacePage, let lease = page.activeLease {
                 guard await page.close(lease) else { return }
             }
         }
+        if NoteSessionPolicy.hasPendingWork(session.state), !(await preserveDurably(session)) { return }
+        guard cache[noteID] === session, session.noteID == noteID else { return }
         session.saveTask?.cancel(); session.durabilityTask?.cancel(); session.pauseTask?.cancel()
         let wasActive = active === session
         session.engine.detachView()

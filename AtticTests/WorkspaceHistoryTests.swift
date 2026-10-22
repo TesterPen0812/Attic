@@ -116,6 +116,101 @@ final class WorkspaceHistoryTests: XCTestCase {
         XCTAssertEqual(replacement.storage.string, "")
     }
 
+    func testOpusR3UnknownAbortAutomaticallyReleasesTheReservation() async throws {
+        coordinator.save = { _ in throw WorkspaceFoundationError.preparationFailed }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in try forwardRenamePlan() }, .unknown)
+        XCTAssertTrue(workspace.isInputReserved)
+        coordinator.beforeReconciliationRead = nil
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertNil(workspace.pendingCommandID)
+        XCTAssertFalse(workspace.isInputReserved)
+        expectEqual(try title(), "Before")
+    }
+
+    func testOpusR3PersistentPublicationFailureAllowsADraftWithoutMovingTheOldCursor() async throws {
+        var broken = true
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in
+            if broken { throw WorkspaceFoundationError.preparationFailed }
+        }])
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in try forwardRenamePlan(publication: publication) }, .publicationPending)
+        try await Task.sleep(for: .milliseconds(800))
+        guard !workspace.isInputReserved else { return XCTFail("publication failure must permit unsaved typing") }
+        let cursor = route.undoStepID(in: workspace.historyID)
+        type("newer draft")
+        expectEqual(route.undoStepID(in: workspace.historyID), cursor, "keep new payloads outside an unresolved cursor")
+        XCTAssertNotNil(workspace.pendingCommandID)
+        broken = false
+        expectTrue(await workspace.retryPublication(using: coordinator))
+        expectEqual(adapter.storage.string, "newer draft")
+        XCTAssertTrue(adapter.undo())
+        expectEqual(adapter.storage.string, "")
+    }
+
+    func testOpusR3RetryIsSerializedAndKeepsTypingAfterAnInstalledReplay() async throws {
+        var broken = true, conflicted = false
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in
+            if broken { throw WorkspaceFoundationError.preparationFailed }
+        }])
+        type("draft"); try await recordRename(from: "Before", to: "After", mixed: true, publish: publication)
+        expectEqual(await workspace.replay(redo: false), .applied)
+        try await Task.sleep(for: .milliseconds(800))
+        guard !workspace.isInputReserved else { return XCTFail("failed handoff blocks typing") }
+        adapter.onWorkspaceRecoveryChanged = { _, _, conflict in conflicted = conflict }
+        type(" newer")
+        broken = false
+        async let first = workspace.retryPublication(using: coordinator)
+        async let second = workspace.retryPublication(using: coordinator)
+        let results = await [first, second]
+        XCTAssertEqual(results.filter { $0 }.count, 1)
+        XCTAssertFalse(conflicted, "writing after the installed result keeps its valid base")
+        expectEqual(adapter.storage.string, "draft newer")
+        XCTAssertTrue(adapter.undo())
+        expectEqual(adapter.storage.string, "draft")
+    }
+
+    func testOpusR3RetryRetainsItsRouteOnlyUntilDeferredTypingIsPublished() async throws {
+        var broken = true
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ [self] _ in
+            if broken { throw WorkspaceFoundationError.preparationFailed }
+            route = nil; workspace = nil
+        }])
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in try forwardRenamePlan(publication: publication) }, .publicationPending)
+        try await Task.sleep(for: .milliseconds(800))
+        guard !workspace.isInputReserved else { return XCTFail("failed handoff blocks typing") }
+        type("retained draft")
+        weak var routeProbe = route
+        var retryOwner: WorkspaceHistory? = workspace
+        broken = false
+        let completed = await retryOwner!.retryPublication(using: coordinator)
+        XCTAssertTrue(completed)
+        XCTAssertEqual(adapter.storage.string, "retained draft")
+        retryOwner = nil
+        XCTAssertNil(routeProbe)
+    }
+
+    func testOpusR3TypingDuringTerminalPresentationKeepsItsChronologicalOrder() async throws {
+        var broken = true
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in
+            if broken { throw WorkspaceFoundationError.preparationFailed }
+        }])
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in
+            let plan = try forwardRenamePlan(publication: publication)
+            return .init(entryID: plan.entryID, envelope: plan.envelope, stage: plan.stage, record: plan.record,
+                publication: plan.publication, completion: { [self] in
+                    await Task.yield()
+                    type(" later")
+                })
+        }, .publicationPending)
+        try await Task.sleep(for: .milliseconds(800))
+        type("earlier"); workspace.closeGroup()
+        broken = false
+        expectTrue(await workspace.retryPublication(using: coordinator))
+        expectEqual(adapter.storage.string, "earlier later")
+        XCTAssertTrue(adapter.undo())
+        expectEqual(adapter.storage.string, "earlier")
+    }
+
     func testH1ForwardMakeSubtaskReservesTypingAndReplaysRealChildAndFullDraftAtomically() async throws {
         let tasks = TaskStore(container: coordinator.container), library = AtticLibrary(tasks: tasks, undo: route)
         let tickID = try XCTUnwrap(tasks.create(title: "Tick child", parentID: taskID)).id

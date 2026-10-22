@@ -773,7 +773,10 @@ final class WorkspaceOperationCoordinator {
         } catch { return .unknown }
     }
 
+    private var publicationRetries: Set<UUID> = []
     func retryPublication(_ id: UUID) async -> Outcome {
+        guard publicationRetries.insert(id).inserted else { return .publicationPending }
+        defer { publicationRetries.remove(id) }
         guard let (envelope, claim, publication) = pending[id] else { return .conflict }
         switch receiptTruth(id, digest: claim.digest) {
         case .notCommitted:
@@ -821,7 +824,7 @@ final class WorkspaceOperationCoordinator {
                         digest: meta.digest, bytes: payload)
                 }
                 try bookkeeping(id) { $0.handoffProof = proof }
-                try await journal.retireDurably(noteID: pre.noteID, claim: checkpointClaim,
+                try await journal.retireOperationCheckpoint(noteID: pre.noteID, claim: checkpointClaim,
                     saved: NoteRecoverySavedState(document: document, tags: notes[0].tags, attachments: bytes))
             }
             if envelope.preDraft == nil || envelope.checkpointClaim == nil {
@@ -833,6 +836,18 @@ final class WorkspaceOperationCoordinator {
             releasePending(envelope)
             return .committed
         } catch { return .publicationPending }
+    }
+    /// Launch reconciliation can finish a registered operation before its
+    /// surface's retry wakes. Recognize only the durable terminal proof.
+    func settledPublication(_ id: UUID) -> Outcome {
+        do {
+            try beforeReconciliationRead?()
+            let rows = try freshContext().fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id }))
+            guard !rows.isEmpty else { return .notCommitted }
+            guard try agreeing(rows), rows.allSatisfy({ $0.publicationComplete && $0.envelopeReleased
+                && $0.handoffProof == $0.resultingTokens }) else { return .unknown }
+            return .committed
+        } catch { return .unknown }
     }
 
     /// Receipts are reconciled before independent checkpoints can be offered.

@@ -281,6 +281,7 @@ final class UndoRoute: ObservableObject {
     }
 
     func existingWorkspace(for key: UndoHistoryID) -> WorkspaceHistory? { workspaces[resolved(key)] }
+    var hasQueuedWorkspaceTyping: Bool { workspaces.values.contains { $0.hasQueuedTyping } }
 
     /// Aliasing never merges independently ordered histories. A note created
     /// lazily and later detached keeps the existing sequence and step identities.
@@ -342,9 +343,10 @@ final class UndoRoute: ObservableObject {
     }
     var referencedOperationIDs: Set<UUID> {
         Set(histories.values.flatMap { ($0.undo + $0.redo).compactMap(\.operationID) })
+            .union(workspaces.values.flatMap { [$0.pendingReplayID, $0.pendingCommandID].compactMap { $0 } })
     }
     var referencedAttachmentIDs: Set<UUID> {
-        histories.values.reduce(into: Set<UUID>()) { ids, history in
+        histories.values.reduce(into: workspaces.values.reduce(into: Set<UUID>()) { $0.formUnion($1.deferredAttachmentIDs) }) { ids, history in
             for step in history.undo + history.redo {
                 ids.formUnion(step.attachmentIDs)
                 if let payload = step.workspacePayload { ids.formUnion(payload.attachmentIDs) }

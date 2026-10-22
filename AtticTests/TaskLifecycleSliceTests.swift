@@ -193,9 +193,329 @@ final class TaskLifecycleSliceTests: XCTestCase {
         withExtendedLifetime(subscription) {}
     }
 
+    func testOpusR4QueuedTypingUsesThePostOperationCaretAndOneUndoGroup() async throws {
+        let (_, presenter, session) = try makeSubtaskFixture()
+        let view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: 60, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        coordinator.afterPreparation = {
+            view.insertText(" queued", replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.insertNewline(nil)
+            view.insertText("tail", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        guard case .made = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes) else { return XCTFail() }
+        coordinator.afterPreparation = nil
+        XCTAssertEqual(view.string, "Everything that has to be true before 1.0 goes out. queued\ntail")
+        XCTAssertEqual(session.state, .dirty)
+        view.insertText(" continued", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let undone = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertEqual(view.string, "Everything that has to be true before 1.0 goes out.")
+        XCTAssertEqual(presenter.page.history.undoName, "Make Subtask")
+    }
+
+    func testOpusR4ReservationAllowsNavigationAndAnnouncesRefusedMutations() throws {
+        let (_, presenter, session) = try makeSubtaskFixture(), view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+        var announcements: [String] = [], escaped = false
+        session.engine.announceWorkspaceInputRefusal = { announcements.append($0) }
+        view.escapeFallback = { escaped = true }
+        XCTAssertTrue(presenter.page.history.reserveInput())
+        defer { presenter.page.history.releaseInput() }
+        view.doCommand(by: #selector(NSResponder.moveRight(_:)))
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 4, length: 0))
+        view.doCommand(by: #selector(NSResponder.selectWord(_:)))
+        XCTAssertGreaterThan(view.selectedRange().length, 0)
+        XCTAssertTrue(announcements.isEmpty, "Selection commands are non-mutating navigation")
+        view.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertTrue(escaped)
+        let before = view.string
+        view.deleteBackward(nil)
+        view.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(view.string, before)
+        XCTAssertFalse(view.hasMarkedText())
+        XCTAssertFalse(announcements.isEmpty, "VoiceOver must hear the visible refusal")
+    }
+
+    func testOpusR4QueuedTypingSurvivesEditorReplacement() throws {
+        let (_, presenter, session) = try makeSubtaskFixture(), oldView = presenter.host.textView
+        let oldEngine = session.engine
+        let before = oldView.string
+        XCTAssertTrue(presenter.page.history.reserveInput())
+        oldView.insertText(" queued", replacementRange: NSRange(location: NSNotFound, length: 0))
+        notes.installCommittedTaskNote(session.noteID)
+        presenter.host.replaceEngine(session.engine)
+        let replacement = presenter.host.textView
+        XCTAssertFalse(replacement === oldView)
+        replacement.setSelectedRange(NSRange(location: replacement.string.utf16.count, length: 0))
+        presenter.page.history.releaseInput()
+        XCTAssertEqual(replacement.string, before + " queued")
+        XCTAssertEqual(oldEngine.textStorage.string, before)
+        XCTAssertFalse(oldView.isEditable)
+    }
+
+    func testOpusR4ReleasedTypingWaitsForTheReplacementHostsSelection() throws {
+        let (_, presenter, session) = try makeSubtaskFixture(), oldView = presenter.host.textView
+        let before = oldView.string
+        XCTAssertTrue(presenter.page.history.reserveInput())
+        oldView.insertText("queued", replacementRange: NSRange(location: NSNotFound, length: 0))
+        notes.installCommittedTaskNote(session.noteID)
+        session.engine.detachView()
+        XCTAssertNil(session.engine.textView)
+        presenter.page.history.releaseInput()
+        let (scroll, view) = session.engine.makeView()
+        defer { withExtendedLifetime(scroll) {} }
+        XCTAssertEqual(view.string, before, "creation precedes the host restoring its selection")
+        view.setSelectedRange(NSRange(location: 5, length: 0))
+        presenter.page.history.inputClientDidAttach()
+        let expected = (before as NSString).replacingCharacters(in: NSRange(location: 5, length: 0), with: "queued")
+        XCTAssertEqual(view.string, expected)
+    }
+
+    func testOpusR3DelayedCommitKeepsNewerTypingAsAConflictAndAllowsDurableClose() async throws {
+        let (_, presenter, session) = try makeSubtaskFixture(), view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: 60, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        _ = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        XCTAssertNotNil(presenter.page.history.pendingCommandID)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(presenter.page.history.isInputReserved)
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        view.insertText(" newer unsaved writing", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let newer = view.string
+        XCTAssertTrue(notes.statusItems(for: session).contains { $0.label == "Couldn't finish saving" })
+        coordinator.save = { try $0.save() }; coordinator.beforeReconciliationRead = nil
+        notes.retry(session)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertNil(presenter.page.history.pendingCommandID)
+        XCTAssertEqual(view.string, newer)
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertFalse(try storedDocument(session.noteID).blocks.dropFirst().map(\.text).joined(separator: "\n").contains("newer unsaved writing"))
+        let closed = await presenter.close()
+        XCTAssertTrue(closed, "the existing unsaved-checkpoint path can close the page")
+        XCTAssertTrue(notes.workspaceIsDurable(session))
+    }
+
+    func testOpusR3RefusedInputRetriesPublicationBeforeTheTimer() async throws {
+        let (_, presenter, _) = try makeSubtaskFixture(), view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: 60, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        _ = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        XCTAssertNotNil(presenter.page.history.pendingCommandID)
+        coordinator.beforeReconciliationRead = nil
+        view.deleteBackward(nil)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(presenter.page.history.pendingCommandID)
+        XCTAssertFalse(presenter.page.history.isInputReserved)
+    }
+
+    func testOpusR3PendingCloseUsesTheFailedSavePathAndKeepsTheNewestDraft() async throws {
+        let (_, presenter, session) = try makeSubtaskFixture(), view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: 60, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        _ = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        try await Task.sleep(for: .milliseconds(800))
+        await notes.waitForRecoveryWork()
+        let directory = coordinator.journal.directory
+        XCTAssertTrue(directory.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+        let permissions = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions])
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: directory.path) }
+        view.insertText(" newest draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let newest = session.engine.document()
+        let refused = await presenter.close()
+        XCTAssertFalse(refused)
+        guard case .onlyInMemory = session.state else { return XCTFail("failed checkpoint must stay visible") }
+        XCTAssertEqual(session.engine.document(), newest)
+        try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: directory.path)
+        notes.retry(session)
+        await notes.waitForRecoveryWork()
+        XCTAssertTrue(notes.workspaceIsDurable(session), "Retry also checkpoints the unsaved draft while publication remains unknown")
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+        XCTAssertTrue(notes.workspaceIsDurable(session))
+        let entries = try await coordinator.journal.inventoryCheckpoints()
+        XCTAssertTrue(entries.contains {
+            if case let .valid(entry, _, _) = $0 { return NoteContentCodec.decode(entry.content).document == newest }
+            return false
+        })
+        XCTAssertNotNil(presenter.page.history.pendingCommandID, "closing retains the unresolved operation")
+    }
+
+    func testOpusR3InstalledPublicationKeepsTagOnlyDraftDirtyUntilSaved() async throws {
+        let (_, presenter, session) = try makeSubtaskFixture(), view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: 60, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        var broken = true
+        coordinator.save = { context in
+            if broken, try context.fetch(FetchDescriptor<OperationReceipt>()).contains(where: \.publicationComplete) {
+                throw WorkspaceFoundationError.preparationFailed
+            }
+            try context.save()
+        }
+        _ = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes)
+        try await Task.sleep(for: .milliseconds(800))
+        session.engine.setTagsFromPicker(["unsaved-tag"])
+        XCTAssertEqual(session.engine.tags, ["unsaved-tag"])
+        broken = false
+        notes.retry(session)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertNil(presenter.page.history.pendingCommandID)
+        XCTAssertNotEqual(session.state, .clean, "matching body bytes do not prove a tag-only draft saved")
+        XCTAssertTrue(notes.save(session))
+        XCTAssertEqual(notes.store.note(withID: session.noteID)?.tags, ["unsaved-tag"])
+    }
+
+    func testOpusR3ConversionAutomaticallyPublishesAnUnknownCommit() async throws {
+        makeStores()
+        let id = UUID()
+        _ = try notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Convert"), .text("Body")])).get()
+        XCTAssertTrue(notes.open(noteID: id))
+        let session = try XCTUnwrap(notes.active)
+        coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        _ = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks)
+        let history = try XCTUnwrap(session.engine.history.workspace)
+        XCTAssertTrue(history.hasPendingPublication)
+        coordinator.save = { try $0.save() }; coordinator.beforeReconciliationRead = nil
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(history.hasPendingPublication)
+        tasks.refresh(); notes.store.refresh()
+        let taskID = try XCTUnwrap(notes.store.note(withID: id)?.taskID)
+        XCTAssertNotNil(tasks.task(withID: taskID))
+        XCTAssertEqual(history.undoName, "Make Task from Note")
+    }
+
+    func testOpusR4UndeliveredTypingCannotPassTheQuitDurabilityBoundary() async throws {
+        let (_, presenter, session) = try makeSubtaskFixture(), view = presenter.host.textView
+        XCTAssertTrue(presenter.page.history.reserveInput())
+        view.insertText("queued", replacementRange: NSRange(location: NSNotFound, length: 0))
+        session.engine.detachView()
+        presenter.page.history.releaseInput()
+        let durable = await notes.preserveAllDurably()
+        XCTAssertFalse(durable, "accepted typing must reach a draft before quit is durable")
+        presenter.host.replaceEngine(session.engine)
+        presenter.page.history.inputClientDidAttach()
+    }
+
+    func testOpusR3UnknownPurgeRecoversEveryOpenFamilyNoteOnce() async throws {
+        let id = try seed(.boundary)
+        let child = try XCTUnwrap(tasks.subtasks(of: id).first)
+        let childNote = UUID()
+        _ = try notes.store.createDocumentNote(id: childNote,
+            document: try NoteDocument(blocks: [.text("Child"), .text("Child body")]).taskSnapshot(title: child.title),
+            taskOwner: child.id).get()
+        let parentPage = try open(id), childPage = try open(child.id)
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        var installed: Set<UUID> = []
+        notes.taskNoteMaterialized = { patch, _ in installed.insert(patch.noteID) }
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(parentPage.page.history.hasPendingPublication)
+        XCTAssertTrue(childPage.page.history.hasPendingPublication)
+        coordinator.save = { try $0.save() }; coordinator.beforeReconciliationRead = nil
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(parentPage.page.history.hasPendingPublication)
+        XCTAssertFalse(childPage.page.history.hasPendingPublication)
+        XCTAssertEqual(installed, [parentPage.session!.noteID, childNote])
+        XCTAssertFalse(parentPage.session!.engine.isBodyOnly)
+        XCTAssertFalse(childPage.session!.engine.isBodyOnly)
+    }
+
+    func testOpusR4TypingQueuedDuringConversionSurvivesOpeningTheTaskPage() async throws {
+        makeStores()
+        let id = UUID(), document = NoteDocument(blocks: [.text("Convert queue"), .text("Body")])
+        _ = try notes.store.createDocumentNote(id: id, document: document).get()
+        XCTAssertTrue(notes.open(noteID: id))
+        let session = try XCTUnwrap(notes.active), view = session.engine.makeView()
+        defer { withExtendedLifetime(view.0) {} }
+        view.1.setSelectedRange(NSRange(location: view.1.string.utf16.count, length: 0))
+        coordinator.afterPreparation = {
+            view.1.insertText(" queued", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        coordinator.afterPreparation = nil
+        let presenter = try open(taskID)
+        presenter.restoreViewStateOnMount()
+        XCTAssertTrue(presenter.host.textView.string.contains("queued"))
+        XCTAssertTrue(notes.save(try XCTUnwrap(presenter.session)))
+        await close(presenter)
+        let reopened = try open(taskID)
+        XCTAssertTrue(reopened.host.textView.string.contains("queued"))
+    }
+
+    func testOpusR3PurgeReusesTheCachedNotesHistoryWithoutATaskPresenter() async throws {
+        let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(notes.open(noteID: noteID))
+        let session = try XCTUnwrap(notes.active), view = session.engine.makeView()
+        defer { withExtendedLifetime(view.0) {} }
+        XCTAssertNil(session.engine.history.workspace)
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        let history = try XCTUnwrap(session.engine.history.workspace)
+        XCTAssertFalse(history.hasPendingPublication)
+        XCTAssertEqual(history.historyID, .note(noteID))
+        XCTAssertTrue(notes.undoRoute.workspace(for: .taskWorkspace(id)) === history)
+        XCTAssertEqual(history.undoName, "Task removed permanently")
+    }
+
+    func testOpusR3PendingConversionUndoRetainsItsReceiptThroughLaunchPruning() async throws {
+        makeStores(); await notes.startAndWait()
+        let noteID = UUID()
+        _ = try notes.store.createDocumentNote(id: noteID, document: NoteDocument(blocks: [.text("Convert receipt"), .text("Body")])).get()
+        XCTAssertTrue(notes.open(noteID: noteID))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks) else { return XCTFail() }
+        let presenter = try open(taskID), history = presenter.page.history
+        coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        _ = await history.replay(redo: false)
+        let pending = try XCTUnwrap(history.pendingReplayID)
+        coordinator.save = { try $0.save() }; coordinator.beforeReconciliationRead = nil
+        try await coordinator.reconcileStartup()
+        _ = try coordinator.prunePublishedReceipts()
+        let retained = try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>()).map(\.id)
+        XCTAssertTrue(retained.contains(pending), "a pending replay owns its inverse receipt until the editor consumes publication")
+        let completed = await history.retryPublication(using: coordinator)
+        XCTAssertTrue(completed)
+        XCTAssertNil(presenter.lease, "the committed conversion Undo must finish its ordinary-note presentation")
+        XCTAssertTrue(notes.open(noteID: noteID))
+        XCTAssertFalse(try XCTUnwrap(notes.active).engine.isBodyOnly)
+    }
+
+    func testOpusR3CachedPurgeKeepsNewerDraftDuringAnUnknownReceipt() async throws {
+        let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(notes.open(noteID: noteID))
+        let session = try XCTUnwrap(notes.active), view = session.engine.makeView()
+        defer { withExtendedLifetime(view.0) {} }
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        try await Task.sleep(for: .milliseconds(800))
+        view.1.insertText(" newest cached draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let draft = session.engine.document()
+        coordinator.save = { try $0.save() }; coordinator.beforeReconciliationRead = nil
+        notes.retry(session)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(session.engine.document(), draft)
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertFalse(try XCTUnwrap(session.engine.history.workspace).hasPendingPublication)
+        XCTAssertFalse(try storedDocument(noteID).requires.contains("taskNote"))
+        let kept = await notes.preserveAllDurably()
+        XCTAssertTrue(kept)
+    }
+
     // MARK: Fixtures
 
-    // Phase 3 reservations refuse native input visibly before storage changes.
+    // Mutations other than the owner's newly approved plain-typing queue
+    // still refuse visibly before storage changes. R4 covers queued typing.
     private func checkReservedInput(_ session: NoteSession, file: StaticString = #filePath, line: UInt = #line) {
         let view = session.engine.textView!
         let before = view.string
@@ -210,7 +530,6 @@ final class TaskLifecycleSliceTests: XCTestCase {
             return XCTFail("Formatting admitted during workspace reservation", file: file, line: line)
         }
         XCTAssertFalse(session.engine.perform(.mark(.bold)), file: file, line: line)
-        view.insertText("typing", replacementRange: NSRange(location: NSNotFound, length: 0))
         let board = NSPasteboard.withUniqueName()
         defer { board.releaseGlobally() }
         board.setString("pasted", forType: .string)
@@ -222,7 +541,6 @@ final class TaskLifecycleSliceTests: XCTestCase {
                            replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertFalse(view.hasMarkedText(), "IME is refused before composition begins", file: file, line: line)
         view.deleteBackward(nil)
-        view.insertNewline(nil)
         XCTAssertEqual(view.string, before, file: file, line: line)
         XCTAssertGreaterThan(notices, 0, "The refusal is visible", file: file, line: line)
     }

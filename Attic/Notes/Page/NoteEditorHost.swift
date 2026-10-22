@@ -896,6 +896,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         let length = engine.textStorage.length
         textView.setSelectedRange(NSRange(location: min(selection.location, length),
                                           length: min(selection.length, max(0, length - selection.location))))
+        engine.history.workspace?.inputClientDidAttach()
         textView.presentWhenAttachedToWindow { [weak textView, weak scrollView, weak engine, weak session,
                                                weak chrome, weak coordinator = context.coordinator] in
             // A note switch can leave the old session's view attached for

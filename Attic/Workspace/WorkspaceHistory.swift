@@ -32,13 +32,15 @@ final class WorkspaceHistory {
         let textDocument: (noteID: UUID, content: Data)?
         let stage: (ModelContext) throws -> Void
         let publication: WorkspaceOperationCoordinator.Publication
+        let completion: () async -> Void
         init(envelope: WorkspaceOperationEnvelope,
              text: (NoteUndoHistory, NoteUndoHistory.PreparedReplay)? = nil,
              textDocument: (noteID: UUID, content: Data)? = nil,
              stage: @escaping (ModelContext) throws -> Void,
-             publication: WorkspaceOperationCoordinator.Publication = .init()) {
+             publication: WorkspaceOperationCoordinator.Publication = .init(), completion: @escaping () async -> Void = {}) {
             self.envelope = envelope; self.text = text; self.textDocument = textDocument
             self.stage = stage; self.publication = publication
+            self.completion = completion
         }
     }
 
@@ -48,8 +50,33 @@ final class WorkspaceHistory {
     private(set) var pendingReplayID: UUID?
     private(set) var pendingCommandID: UUID?
     private var inputReserved = false
-    var isInputReserved: Bool { inputReserved || pendingReplayID != nil || pendingCommandID != nil }
+    var isInputReserved: Bool { inputReserved }
+    var hasPendingPublication: Bool { pendingReplayID != nil || pendingCommandID != nil }
+    private(set) var permitsUnsavedDraft = false
+    var hasNewerPublicationDraft: Bool { !deferredText.isEmpty }
+    var deferredAttachmentIDs: Set<UUID> {
+        deferredText.reduce(into: []) { $0.formUnion($1.0.attachmentIDs(in: [$1.1])) }
+    }
+    private var deferredText: [(NoteUndoHistory, NoteUndoHistory.Op)] = []
+    private var resolvingDeferredInput = false
+    private weak var pendingCoordinator: WorkspaceOperationCoordinator?
+    private var retryTask: Task<Void, Never>?
+    private var retryInFlight = false
+    private var publicationInstalled = false
+    private var fallbackBranchesStoredResult = false
+    private var pendingCompletion: (() async -> Void)?
+    private var completingPublication = false
+    private final class WeakHistory {
+        weak var value: WorkspaceHistory?
+        init(_ value: WorkspaceHistory) { self.value = value }
+    }
+    private var recoveryPeers: [WeakHistory] = []
+    private weak var recoveryLeader: WorkspaceHistory?
     private var queuedInput: [() -> Void] = []
+    enum TypedInput { case text(String), newline }
+    private var queuedTyping: [TypedInput] = []
+    var hasQueuedTyping: Bool { !queuedTyping.isEmpty }
+    private var announcedInputRefusal = false
     private final class WeakAdapter {
         weak var value: NoteUndoHistory?
         init(_ value: NoteUndoHistory) { self.value = value }
@@ -61,8 +88,9 @@ final class WorkspaceHistory {
     init(route: UndoRoute, historyID: UndoHistoryID) {
         self.route = route; self.historyID = historyID
     }
-    var canUndo: Bool { pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canUndo(in: historyID) }
-    var canRedo: Bool { pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canRedo(in: historyID) }
+    deinit { retryTask?.cancel() }
+    var canUndo: Bool { !completingPublication && pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canUndo(in: historyID) }
+    var canRedo: Bool { !completingPublication && pendingReplayID == nil && pendingCommandID == nil && !inputReserved && route.canRedo(in: historyID) }
     var undoName: String { route.undoName(in: historyID) ?? "" }
     var redoName: String { route.redoName(in: historyID) ?? "" }
 
@@ -118,10 +146,19 @@ final class WorkspaceHistory {
         step.workspacePayload = group
         route.record(step, in: historyID)
     }
+    /// A failed publication owns the old cursor until it resolves. New
+    /// writing is kept in the draft without invalidating that cursor.
+    func recordInput(_ op: NoteUndoHistory.Op, from adapter: NoteUndoHistory) {
+        if (permitsUnsavedDraft && hasPendingPublication) || resolvingDeferredInput {
+            deferredText.append((adapter, op))
+            route.onOwnershipChanged?()
+        } else { capture(op, from: adapter) }
+    }
     func payloads(for adapter: NoteUndoHistory, redo: Bool) -> [NoteUndoHistory.Op] {
         let steps = route.steps(in: historyID, redo: redo)
         let ordered = redo ? steps.reversed().map { $0 } : steps
         return ordered.compactMap(\.workspacePayload).filter { $0.adapter === adapter }.flatMap(\.payloads)
+            + (redo ? [] : deferredText.filter { $0.0 === adapter }.map(\.1))
     }
     func checkpoint() -> UndoRoute.Checkpoint { closeGroup(); return route.checkpoint(in: historyID) }
     func rewind(to checkpoint: UndoRoute.Checkpoint) { route.rewind(to: checkpoint); closeGroup() }
@@ -130,12 +167,45 @@ final class WorkspaceHistory {
     /// Reserve before capturing a command candidate. Input arriving while
     /// journal IO runs is delivered exactly once after installation or abort.
     func reserveInput() -> Bool {
-        guard !inputReserved, pendingReplayID == nil, pendingCommandID == nil,
+        guard !completingPublication, !inputReserved, pendingReplayID == nil, pendingCommandID == nil,
               currentAdapter?.canPrepareWorkspaceCommand != false else { return false }
-        closeGroup(); inputReserved = true; return true
+        closeGroup(); announcedInputRefusal = false; publicationInstalled = false
+        fallbackBranchesStoredResult = false; inputReserved = true; return true
+    }
+    /// Values, never an old selection or a retained native view. The new
+    /// editor receives these at the selection installed by the operation.
+    func queueTyping(_ input: TypedInput) -> Bool {
+        guard isInputReserved else { return false }
+        queuedTyping.append(input)
+        requestPublicationRetry()
+        return true
+    }
+    func shouldAnnounceInputRefusal() -> Bool {
+        requestPublicationRetry()
+        guard !announcedInputRefusal else { return false }
+        announcedInputRefusal = true
+        return true
+    }
+    func inputClientDidAttach() {
+        guard !isInputReserved, !queuedTyping.isEmpty,
+              let adapter = currentAdapter, let view = adapter.textView as? NoteEditorTextView,
+              view.engine?.isReadOnly == false, !view.isSuspended else { return }
+        let input = queuedTyping; queuedTyping.removeAll()
+        let range = view.selectedRange(), length = adapter.storage.length
+        if range.location == NSNotFound || NSMaxRange(range) > length {
+            view.setSelectedRange(NSRange(location: length, length: 0))
+        }
+        adapter.beginGroup()
+        defer { adapter.endTypingGroup() }
+        for event in input {
+            switch event {
+            case let .text(text): view.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            case .newline: view.insertNewline(nil)
+            }
+        }
     }
     func submitInput(_ edit: @escaping () -> Void) {
-        if inputReserved || pendingReplayID != nil { queuedInput.append(edit) }
+        if isInputReserved { queuedInput.append(edit); requestPublicationRetry() }
         else { edit() }
     }
     func releaseInput() {
@@ -143,6 +213,7 @@ final class WorkspaceHistory {
         inputReserved = false
         let input = queuedInput; queuedInput.removeAll()
         for edit in input { edit() }
+        inputClientDidAttach()
     }
 
     /// Called after the forward operation has been proven committed. Replay
@@ -175,10 +246,15 @@ final class WorkspaceHistory {
                     }
                 }
             } catch { return .failed }
-            let install: @MainActor (UUID) throws -> Void = { _ in
-                if let (adapter, text) = plan.text, !adapter.installReplay(text) { throw WorkspaceFoundationError.conflict }
+            let preparedText = plan.text
+            let noPresentation = plan.publication.steps.isEmpty
+            let install: @MainActor (UUID) throws -> Void = { [weak self] _ in
+                guard let self else { return }
+                if !self.hasNewerPublicationDraft, let (adapter, text) = preparedText,
+                   !adapter.installReplay(text) { throw WorkspaceFoundationError.conflict }
+                if !self.hasNewerPublicationDraft, preparedText != nil || noPresentation { self.didPublishExternalForm() }
             }
-            let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in try commitCursor() }, install] + plan.publication.steps)
+            let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in try commitCursor() }, install] + self.trackedPublicationSteps(plan.publication.steps))
             let outcome = await coordinator.execute(plan.envelope, sessionValid: {
                 plan.text.map { $0.0.canInstallReplay($0.1) } ?? true
             }, stage: { context in
@@ -197,9 +273,13 @@ final class WorkspaceHistory {
                 }
             }, publication: publication)
             switch outcome {
-            case .committed: return .applied
+            case .committed:
+                await self.finishPresentation(plan.completion)
+                return .applied
             case .publicationPending, .unknown:
                 self.pendingReplayID = plan.envelope.id
+                self.pendingCompletion = plan.completion
+                self.beginPublicationRecovery(using: coordinator)
                 return .failed
             case .notCommitted, .conflict: return .failed
             }
@@ -214,11 +294,13 @@ final class WorkspaceHistory {
         let stage: (ModelContext) throws -> Void
         let record: (UUID, UUID) -> Void
         let publication: WorkspaceOperationCoordinator.Publication
+        let completion: () async -> Void
         init(entryID: UUID, envelope: WorkspaceOperationEnvelope, sessionValid: @escaping () -> Bool = { true },
              stage: @escaping (ModelContext) throws -> Void, record: @escaping (UUID, UUID) -> Void,
-             publication: WorkspaceOperationCoordinator.Publication = .init()) {
+             publication: WorkspaceOperationCoordinator.Publication = .init(), completion: @escaping () async -> Void = {}) {
             self.entryID = entryID; self.envelope = envelope; self.sessionValid = sessionValid
             self.stage = stage; self.record = record; self.publication = publication
+            self.completion = completion
         }
     }
 
@@ -235,19 +317,127 @@ final class WorkspaceHistory {
             guard plan.envelope.historyEffect == (try WorkspaceModelFields.encode(ForwardEffect(workspaceID: id, entryID: plan.entryID))) else { return .conflict }
         } catch { return .notCommitted }
         guard !Task.isCancelled else { return .notCommitted }
-        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ operation in
-            plan.record(operation, plan.entryID)
-        }] + plan.publication.steps)
+        let record = plan.record, entry = plan.entryID, noPresentation = plan.publication.steps.isEmpty
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ [weak self] operation in
+            record(operation, entry)
+            if noPresentation { self?.didPublishExternalForm() }
+        }] + trackedPublicationSteps(plan.publication.steps))
         let outcome = await coordinator.execute(plan.envelope, sessionValid: plan.sessionValid,
             stage: plan.stage, publication: publication)
-        if outcome == .publicationPending || outcome == .unknown { pendingCommandID = plan.envelope.id }
+        if outcome == .publicationPending || outcome == .unknown {
+            pendingCommandID = plan.envelope.id
+            pendingCompletion = plan.completion
+            beginPublicationRecovery(using: coordinator)
+        } else if outcome == .committed {
+            await finishPresentation(plan.completion)
+        }
         return outcome
     }
 
     func retryPublication(using coordinator: WorkspaceOperationCoordinator) async -> Bool {
-        guard let operation = pendingReplayID ?? pendingCommandID else { return false }
-        guard await coordinator.retryPublication(operation) == .committed else { return false }
-        pendingReplayID = nil; pendingCommandID = nil; releaseInput(); return true
+        guard !retryInFlight, let operation = pendingReplayID ?? pendingCommandID else { return false }
+        // The sleeping timer is weak; an in-flight retry keeps its cursor's
+        // owner alive until post-await publication and draft history finish.
+        let routeOwner = route
+        defer { withExtendedLifetime(routeOwner) {} }
+        retryInFlight = true
+        defer { retryInFlight = false }
+        var outcome = await coordinator.retryPublication(operation)
+        if outcome == .conflict { outcome = coordinator.settledPublication(operation) }
+        guard outcome == .committed || outcome == .notCommitted else { return false }
+        let peers = recoveryPeers.compactMap(\.value); recoveryPeers.removeAll()
+        for peer in peers { await peer.completeRecovery(outcome) }
+        await completeRecovery(outcome)
+        return true
+    }
+    private func completeRecovery(_ outcome: WorkspaceOperationCoordinator.Outcome) async {
+        resolvingDeferredInput = true
+        let branched = hasNewerPublicationDraft
+        let conflict = branched && fallbackBranchesStoredResult && outcome == .committed
+        pendingReplayID = nil; pendingCommandID = nil
+        retryTask?.cancel(); retryTask = nil; pendingCoordinator = nil
+        recoveryLeader = nil
+        permitsUnsavedDraft = false; inputReserved = false
+        let completion = pendingCompletion; pendingCompletion = nil
+        if outcome == .committed, let completion { await finishPresentation(completion) }
+        if conflict { recordExternalBarrier(origin: "the saved workspace operation") }
+        let text = deferredText
+        for (adapter, op) in text { capture(op, from: adapter) }
+        deferredText.removeAll()
+        resolvingDeferredInput = false
+        route.onOwnershipChanged?()
+        currentAdapter?.onWorkspaceRecoveryChanged?(false, false, conflict)
+        releaseInput()
+    }
+    /// A family purge has one coordinator operation and one retry owner,
+    /// even when several open note workspaces share its reservation.
+    func trackExternalOperation(_ operation: UUID, using coordinator: WorkspaceOperationCoordinator,
+                                peers: [WorkspaceHistory], installed: Bool,
+                                completion: @escaping () async -> Void) {
+        pendingCommandID = operation; pendingCompletion = completion
+        publicationInstalled = installed
+        recoveryPeers = peers.filter { $0 !== self }.map(WeakHistory.init)
+        for peer in recoveryPeers.compactMap(\.value) {
+            peer.pendingCommandID = operation; peer.pendingCoordinator = coordinator
+            peer.publicationInstalled = installed; peer.recoveryLeader = self
+            peer.currentAdapter?.onWorkspaceRecoveryChanged?(true, false, false)
+        }
+        beginPublicationRecovery(using: coordinator)
+    }
+    func didPublishExternalForm() {
+        publicationInstalled = true
+        if !hasNewerPublicationDraft { fallbackBranchesStoredResult = false }
+    }
+    private func finishPresentation(_ completion: () async -> Void) async {
+        completingPublication = true
+        defer { completingPublication = false }
+        releaseInput()
+        await completion()
+    }
+    private func trackedPublicationSteps(_ steps: [@MainActor (UUID) throws -> Void]) -> [@MainActor (UUID) throws -> Void] {
+        let last = steps.count - 1
+        return steps.enumerated().map { index, step in
+            { [weak self] operation in
+                try step(operation)
+                if index == last { self?.didPublishExternalForm() }
+            }
+        }
+    }
+    private func beginPublicationRecovery(using coordinator: WorkspaceOperationCoordinator) {
+        pendingCoordinator = coordinator
+        currentAdapter?.onWorkspaceRecoveryChanged?(true, false, false)
+        schedulePublicationRetry(after: .milliseconds(250))
+    }
+    func requestPublicationRetry() {
+        if let recoveryLeader { recoveryLeader.requestPublicationRetry(); return }
+        guard hasPendingPublication, !retryInFlight else { return }
+        retryTask?.cancel(); retryTask = nil
+        schedulePublicationRetry(after: .zero)
+    }
+    private func schedulePublicationRetry(after delay: Duration) {
+        guard retryTask == nil, hasPendingPublication else { return }
+        retryTask = Task { [weak self, weak pendingCoordinator] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self, let pendingCoordinator, !Task.isCancelled else { return }
+            self.retryTask = nil
+            if await self.retryPublication(using: pendingCoordinator) { return }
+            guard self.hasPendingPublication else { return }
+            // Keep the operation envelope and owner holds, but stop blocking
+            // the person's draft when storage cannot finish publication.
+            self.permitUnsavedDraft()
+            self.recoveryPeers.compactMap(\.value).forEach { $0.permitUnsavedDraft() }
+            self.schedulePublicationRetry(after: .seconds(1))
+        }
+    }
+    private func permitUnsavedDraft() {
+        guard !permitsUnsavedDraft else { return }
+        permitsUnsavedDraft = true
+        fallbackBranchesStoredResult = !publicationInstalled
+        inputReserved = false
+        currentAdapter?.onWorkspaceRecoveryChanged?(true, true, false)
+        let input = queuedInput; queuedInput.removeAll()
+        for edit in input { edit() }
+        inputClientDidAttach()
     }
     /// Applied changes from another surface have one originating history.
     /// This history names that origin and stops without running an inverse.

@@ -124,6 +124,7 @@ final class NoteUndoHistory {
 
     var canPrepareWorkspaceCommand: Bool { !isChangeInFlight && composition == nil && (canReplay?() ?? true) }
     weak var workspace: WorkspaceHistory?
+    var onWorkspaceRecoveryChanged: ((_ pending: Bool, _ permitsDraft: Bool, _ conflict: Bool) -> Void)?
     private var localUndoOps: [Op] = []
     private var localRedoOps: [Op] = []
     var undoOps: [Op] { workspace?.payloads(for: self, redo: false) ?? localUndoOps }
@@ -220,6 +221,16 @@ final class NoteUndoHistory {
         if groupDepth == 0 {
             groupID = nil
             open = nil
+        }
+    }
+
+    /// A replayed typing batch is one group and remains open for ordinary
+    /// typing at its final caret, until the usual navigation/edit boundary.
+    func endTypingGroup() {
+        let last = undoOps.last
+        endGroup()
+        if groupDepth == 0, let last, last.name == "Typing", !last.isSnapshot, !last.isInert {
+            open = last
         }
     }
 
@@ -399,7 +410,7 @@ final class NoteUndoHistory {
         recordingGeneration &+= 1
         if op.selectionBefore == nil { op.selectionBefore = textView?.selectedRange() }
         op.selectionAfter = textView?.selectedRange()
-        if let workspace { workspace.capture(op, from: self); return }
+        if let workspace { workspace.recordInput(op, from: self); return }
         localUndoOps.append(op)
         localRedoOps.removeAll()
         if localUndoOps.count > limit { localUndoOps.removeFirst(localUndoOps.count - limit) }

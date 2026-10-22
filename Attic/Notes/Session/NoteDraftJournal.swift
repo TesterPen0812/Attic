@@ -483,12 +483,23 @@ private actor NoteDraftJournalIO {
 
     /// If the file cannot be unlinked, an empty retired marker replaces it,
     /// so it can never come back as unsaved work.
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?, live: NoteLiveReferenceSnapshot) throws {
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?, live: NoteLiveReferenceSnapshot,
+                preservingReplacement: Bool = false) throws {
         AttachmentRecoveryEpoch.shared.beginWrite(); defer { AttachmentRecoveryEpoch.shared.endWrite() }
         path.transaction.lock(); defer { path.transaction.unlock() }
         let file = url(for: noteID)
         let state = ownership(of: file)
         if case .absent = state { return }
+        if preservingReplacement, let claim, saved != nil {
+            switch state {
+            case let .valid(_, _, current), let .pending(_, _, current):
+                // A later owned checkpoint replaced the operation's pre-copy.
+                // Leave its row, bytes and live lease intact. This permits
+                // only the old operation's proven handoff to finish.
+                if current != claim { return }
+            default: break
+            }
+        }
         guard state.mayRelease(claim: claim, saved: { saved }) else { throw NoteDraftJournalError.unknownOwnership }
         path.releaseLease(live, note: noteID)
         try unlinkReleasedCheckpoint(noteID: noteID)
@@ -827,6 +838,13 @@ final class NoteDraftJournal: NoteDraftJournaling {
     func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
         let snapshot = try liveSnapshot()
         try await io.retire(noteID: noteID, claim: claim, saved: saved, live: snapshot)
+        publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
+    }
+    /// The coordinator already proved its complete saved result and payloads.
+    /// A replacement checkpoint is independent work, never retired by it.
+    func retireOperationCheckpoint(noteID: UUID, claim: NoteRecoveryClaim, saved: NoteRecoverySavedState) async throws {
+        let snapshot = try liveSnapshot()
+        try await io.retire(noteID: noteID, claim: claim, saved: saved, live: snapshot, preservingReplacement: true)
         publish(try await io.recoveryEntries(collectRetired: false, offering: false, live: snapshot), for: snapshot)
     }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {

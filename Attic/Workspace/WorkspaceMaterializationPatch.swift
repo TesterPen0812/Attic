@@ -54,7 +54,10 @@ struct WorkspaceMaterializationPatch {
             return .init(envelope: envelope, stage: { commit in
                 try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared,
                     revisionID: UUID(), versionIDs: versions, timestamp: Date())
-            }, publication: .init(steps: [{ [weak notes] _ in notes?.installCommittedTaskNote(id) }]))
+            }, publication: .init(steps: [{ [weak notes, weak workspace] _ in
+                guard workspace?.hasNewerPublicationDraft != true else { return }
+                notes?.installCommittedTaskNote(id)
+            }]))
         }
     }
 }

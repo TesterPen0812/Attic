@@ -904,7 +904,6 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var workspaceMenuItems: (() -> [NSMenuItem])?
 
     override func keyDown(with event: NSEvent) {
-        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if !hasMarkedText(), workspaceShortcut?(event) == true { return }
         handleHiddenForTyping = true
         hideBlockHandle()
@@ -1146,6 +1145,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        if !hasMarkedText(), replacementRange.location == NSNotFound, let text = string as? String,
+           engine?.history.workspace?.queueTyping(.text(text)) == true { return }
         guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if refusesUnexpectedCalloutInput() { return }
         let generation = engine?.history.recordingGeneration
@@ -1196,7 +1197,21 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var suggestionCommand: ((Selector) -> Bool)?
 
     override func doCommand(by selector: Selector) {
-        guard engine?.refusesReservedWorkspaceInput() != true else { return }
+        if engine?.history.workspace?.isInputReserved == true {
+            if selector == #selector(insertNewline(_:)) || NSStringFromSelector(selector) == "insertNewlineIgnoringFieldEditor:" {
+                insertNewline(nil); return
+            }
+            if selector == #selector(insertTab(_:)) { window?.selectNextKeyView(self); return }
+            if selector == #selector(insertBacktab(_:)) { window?.selectPreviousKeyView(self); return }
+            let name = NSStringFromSelector(selector)
+            if name.hasPrefix("move") || name.hasPrefix("scroll") || name.hasPrefix("select")
+                || ["copy:", "cancelOperation:", "pageUp:", "pageDown:", "pageUpAndModifySelection:", "pageDownAndModifySelection:",
+                    "centerSelectionInVisibleArea:", "setMark:", "swapWithMark:", "noop:"].contains(name) {
+                super.doCommand(by: selector); return
+            }
+            _ = engine?.refusesReservedWorkspaceInput()
+            return
+        }
         if !hasMarkedText(), suggestionCommand?(selector) == true { return }
         if !hasMarkedText(), let engine {
             // OD-7: in the title Tab moves to the body; in the body it
@@ -1220,6 +1235,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertNewline(_ sender: Any?) {
+        if !hasMarkedText(), engine?.history.workspace?.queueTyping(.newline) == true { return }
         guard engine?.refusesReservedWorkspaceInput() != true else { return }
         // Return on a selected table goes into its first cell.
         if let engine, !hasMarkedText(), selectedRange().length == 1,
