@@ -340,8 +340,10 @@ jobs:
         id: unit_tests
         continue-on-error: true
         # CIT moves broad generated/model/matrix/stress coverage to the required
-        # parallel round-trips job; keep the existing watchdog as headroom.
-        timeout-minutes: 35
+        # parallel round-trips job; the watchdog is headroom against a hang.
+        # Run 39819662022: Phase 3's suites brought 3,422 tests to 35:00 and the
+        # step was cut 0.5 s after TEST EXECUTE SUCCEEDED, so 45 minutes.
+        timeout-minutes: 45
         env:
           # The runner has no person at it: unit tests may make a window key
           # and let AppKit resolve targetless menu actions for real.
