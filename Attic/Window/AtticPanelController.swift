@@ -1255,6 +1255,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isPanelMotionActive = true
         isReleaseMotionActive = nextMotionIsRelease
         nextMotionIsRelease = false
+        contentContainer?.catchesSwipeStarts = isReleaseMotionActive && !AtticMotionPreference.reducesMotion
         slideMotionRun = nil
         contentContainer?.allowsContentInteraction = false
         let reduceMotion = AtticMotionPreference.reducesMotion
@@ -1308,6 +1309,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                     guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                     self.isPanelMotionActive = false
                     self.isReleaseMotionActive = false
+                    self.contentContainer?.catchesSwipeStarts = false
                     self.contentContainer?.allowsContentInteraction = collapseProgress == 0
                     completion()
                 }
@@ -1333,6 +1335,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.isPanelMotionActive = false
                 self.isReleaseMotionActive = false
+                self.contentContainer?.catchesSwipeStarts = false
                 self.slideMotionRun = nil
                 self.contentContainer?.allowsContentInteraction = collapseProgress == 0
                 completion()
@@ -1479,6 +1482,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isShowing = false
         isPanelMotionActive = false
         isReleaseMotionActive = false
+        contentContainer?.catchesSwipeStarts = false
         slideMotionRun = nil
         needsResizeAfterShowing = false
     }

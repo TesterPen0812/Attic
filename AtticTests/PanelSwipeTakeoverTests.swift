@@ -231,6 +231,28 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         }
     }
 
+    /// The window server sends events through a window's clear pixels, and
+    /// Slide's close leaves the fingers' point within about 50 ms: while a
+    /// release motion runs (only then) the panel's whole area takes a new
+    /// swipe's first event.
+    func testTheWholePanelTakesASwipeStartOnlyWhileAReleaseRuns() throws {
+        let rig = try makeRig(.slide)
+        defer { close(rig) }
+        let content = try XCTUnwrap(rig.panel.contentView as? AtticPanelContentContainer)
+        XCTAssertFalse(content.catchesSwipeStarts, "at rest")
+        try swipe(-8, steps: 12, on: rig.panel)
+        XCTAssertTrue(content.catchesSwipeStarts, "while the release closes it")
+        let deadline = Date().addingTimeInterval(3)
+        while rig.panel.isVisible, Date() < deadline { spin(0.02) }
+        XCTAssertFalse(content.catchesSwipeStarts, "once hidden")
+        let screen = try XCTUnwrap(rig.controller.currentScreen ?? NSScreen.main)
+        XCTAssertTrue(rig.controller.show(on: screen, corner: .topRight))
+        XCTAssertFalse(content.catchesSwipeStarts, "a reveal is no release")
+        spin(0.5)
+        _ = rig.controller.requestHide { _ in }
+        XCTAssertFalse(content.catchesSwipeStarts, "nor is a timed hide")
+    }
+
     /// Escape or the shortcut hides on a timed motion: a swipe never takes
     /// that over.
     func testATimedHideIsNeverTakenOver() throws {

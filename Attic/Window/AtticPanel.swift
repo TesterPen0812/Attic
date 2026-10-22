@@ -1073,6 +1073,29 @@ final class AtticPanelContentContainer: NSView {
     private let motionView = NSView()
     private static let collapseAnimationKey = "attic.panel.collapse"
     var allowsContentInteraction = true
+    /// While a swipe's close or spring-back runs, the panel's whole area
+    /// takes the first event of a new swipe (a takeover), also where the
+    /// shrinking panel no longer draws: the window server sends events
+    /// through a window's clear pixels, and Slide's close leaves the
+    /// fingers' point within about 50 ms (g7, Air). A near-clear fill
+    /// (2/255 black, not visible) over the surface's rectangle.
+    var catchesSwipeStarts = false {
+        didSet {
+            guard catchesSwipeStarts != oldValue else { return }
+            if catchesSwipeStarts {
+                if swipeCatcher.superview == nil { addSubview(swipeCatcher, positioned: .below, relativeTo: motionView) }
+                swipeCatcher.frame = hostingView.frame
+            }
+            swipeCatcher.isHidden = !catchesSwipeStarts
+        }
+    }
+    private lazy var swipeCatcher: NSView = {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = CGColor(gray: 0, alpha: 2.0 / 255)
+        view.isHidden = true
+        return view
+    }()
 
     init(hostingView: AtticPanelHostingView, visibleSize: CGSize, perimeter: CGFloat) {
         self.hostingView = hostingView
