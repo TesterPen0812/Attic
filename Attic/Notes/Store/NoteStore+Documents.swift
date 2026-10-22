@@ -1208,7 +1208,8 @@ extension NoteStore {
         baseRevisionToken: String,
         document: NoteDocument,
         agentName: String,
-        disposition: NoteAgentWriteDisposition
+        disposition: NoteAgentWriteDisposition,
+        requiresReview: Bool = false
     ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
         if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
         let preflight: NoteMutationPreflight
@@ -1248,6 +1249,7 @@ extension NoteStore {
             let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
                                        proposedContent: data, agentName: agentName, createdAt: timestamp,
                                        baseVersionID: baseVersionID)
+            edit.needsReview = requiresReview
             modelContext.insert(edit)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The edit could not be kept."))

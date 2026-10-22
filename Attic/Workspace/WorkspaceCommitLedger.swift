@@ -267,6 +267,7 @@ final class WorkspaceCommitLedger {
         }
         switch owner.entity {
         case .task: return try id("parentID").map { [.children($0)] } ?? []
+        case .note: return try id("taskID").map { [.taskNotes($0)] } ?? []
         case .attachment: return try id("noteID").map { [.attachments($0)] } ?? []
         case .version: return try id("noteID").map { [.versions($0)] } ?? []
         case .proposal: return try id("noteID").map { [.proposals($0)] } ?? []
@@ -282,6 +283,7 @@ final class WorkspaceCommitLedger {
     static func membership(_ row: any PersistentModel) -> Set<WorkspaceScope> {
         switch row {
         case let row as TaskItem: row.parentID.map { [.children($0)] } ?? []
+        case let row as NoteItem: row.taskID.map { [.taskNotes($0)] } ?? []
         case let row as NoteAttachment: [.attachments(row.noteID)]
         case let row as NoteVersion: [.versions(row.noteID)]
         case let row as NotePendingEdit: [.proposals(row.noteID)]

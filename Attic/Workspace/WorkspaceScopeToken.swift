@@ -6,11 +6,12 @@ import SwiftData
 enum WorkspaceScope: Codable, Hashable, Sendable {
     case all(WorkspaceOwner.Entity)
     case children(UUID), attachments(UUID), versions(UUID), proposals(UUID)
-    case taskAssociations(UUID), noteAssociations(UUID), preservations(UUID)
+    case taskAssociations(UUID), noteAssociations(UUID), preservations(UUID), taskNotes(UUID)
     var entity: WorkspaceOwner.Entity {
         switch self {
         case let .all(entity): entity
         case .children: .task
+        case .taskNotes: .note
         case .attachments: .attachment
         case .versions: .version
         case .proposals: .proposal
@@ -53,6 +54,7 @@ struct WorkspaceScopeIndex {
             }
             switch token.owner.entity {
             case .task: if let value = try id("parentID") { scopes.insert(.children(value)) }
+            case .note: if let value = try id("taskID") { scopes.insert(.taskNotes(value)) }
             case .attachment: if let value = try id("noteID") { scopes.insert(.attachments(value)) }
             case .version: if let value = try id("noteID") { scopes.insert(.versions(value)) }
             case .proposal: if let value = try id("noteID") { scopes.insert(.proposals(value)) }
@@ -84,6 +86,7 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
         var membership = Dictionary(uniqueKeysWithValues: scopes.map { ($0, Set<WorkspaceOwner>()) })
         var result: [WorkspaceScope: Self] = [:]
         var children: [UUID?] = [], attachments: [UUID] = [], versions: [UUID] = [], proposals: [UUID] = []
+        var taskNotes: [UUID] = []
         var taskAssociations: [UUID] = [], noteAssociations: [UUID] = [], preservations: [UUID] = []
         for scope in scopes {
             switch scope {
@@ -92,6 +95,7 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
             case let .attachments(id): attachments.append(id)
             case let .versions(id): versions.append(id)
             case let .proposals(id): proposals.append(id)
+            case let .taskNotes(id): taskNotes.append(id)
             case let .taskAssociations(id): taskAssociations.append(id)
             case let .noteAssociations(id): noteAssociations.append(id)
             case let .preservations(id): preservations.append(id)
@@ -105,6 +109,12 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
         if !children.isEmpty {
             for row in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { children.contains($0.parentID) })) {
                 if let parent = row.parentID { try add(row, to: .children(parent)) }
+            }
+        }
+        if !taskNotes.isEmpty {
+            let owners = taskNotes.map(Optional.some)
+            for row in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { owners.contains($0.taskID) })) {
+                if let taskID = row.taskID { try add(row, to: .taskNotes(taskID)) }
             }
         }
         if !attachments.isEmpty {
@@ -143,6 +153,7 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
         case let .all(entity):
             return Self(scope: scope, members: try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: true, entities: [entity]).values.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
         case let .children(id): try collect(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == id })))
+        case let .taskNotes(id): try collect(context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == id })))
         case let .attachments(id): try collect(context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id })))
         case let .versions(id): try collect(context.fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { $0.noteID == id })))
         case let .proposals(id): try collect(context.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.noteID == id })))
@@ -175,6 +186,7 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
         case let .all(value):
             return Self(scope: scope, members: baseline.values.filter { $0.owner.entity == value && !$0.replicas.isEmpty }.sorted { $0.owner.id.uuidString < $1.owner.id.uuidString })
         case let .children(value): entity = .task; field = "parentID"; id = value
+        case let .taskNotes(value): entity = .note; field = "taskID"; id = value
         case let .attachments(value): entity = .attachment; field = "noteID"; id = value
         case let .versions(value): entity = .version; field = "noteID"; id = value
         case let .proposals(value): entity = .proposal; field = "noteID"; id = value

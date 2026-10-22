@@ -184,6 +184,10 @@ describes its arguments in `tools/list`. A few rules:
 - Writes to a note pass the `revision` from `list_notes` as `base_revision`.
   A change to a note that is open on screen waits as a proposal the person
   reviews; the reply has `status: "pending"`.
+- Task-note writes also pass `note_token` and `association_token` from
+  `get_task_workspace` as `base_note_token` and `base_association_token`.
+  These cover every physical replica and expected absence. A stale workspace
+  write is kept as a proposal requiring review.
 - Deleting moves items to Recently Deleted. Agents can't delete anything
   permanently. Deleting a task takes its subtasks with it.
 

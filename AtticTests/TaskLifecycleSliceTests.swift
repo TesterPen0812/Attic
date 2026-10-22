@@ -76,6 +76,54 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(undone, .applied)
     }
 
+    func testP3F12WorkspaceReadReturnsReplicaAndExpectedAbsenceTokens() throws {
+        let id = try seed(.boundary)
+        let tools = AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
+        let payload = try json(tools.call(name: "get_task_workspace", arguments: ["id": id.uuidString]))
+        XCTAssertNotNil(payload["note_token"] as? String)
+        XCTAssertNotNil(payload["association_token"] as? String)
+        let empty = try XCTUnwrap(tasks.create(title: "No note"))
+        let absent = try json(tools.call(name: "get_task_workspace", arguments: ["id": empty.id.uuidString]))
+        XCTAssertNotNil(absent["note_token"] as? String, "expected absence is a token too")
+        XCTAssertNotNil(absent["association_token"] as? String)
+    }
+
+
+    func testP3F12SecondaryReplicaAndAssociationChangesMakeTheWholeWriteAReviewedProposal() throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let agentNotes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let tools = AgentTaskTools(store: tasks, noteStore: agentNotes, library: library)
+        for associationChange in [false, true] {
+            let expected = try workspaceTokens(id, tools: tools)
+            let context = ModelContext(container)
+            if associationChange {
+                let row = try XCTUnwrap(context.fetch(FetchDescriptor<TaskNoteAssociation>()).first { $0.noteID == noteID })
+                let other = TaskNoteAssociation(id: row.id, taskID: id, noteID: noteID)
+                other.noteGeneration = row.noteGeneration + 1
+                context.insert(other)
+            } else {
+                let row = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first { $0.id == noteID })
+                let other = NoteItem(id: noteID)
+                try WorkspaceModelFields.apply(WorkspaceModelFields.read(row), to: other)
+                other.pinnedAt = Date()
+                context.insert(other)
+            }
+            try context.save()
+            agentNotes.refresh()
+            let before = try storedDocument(noteID)
+            let revision = try XCTUnwrap(agentNotes.note(withID: noteID)?.revisionToken)
+            let reply = try json(tools.call(name: "update_note", arguments: expected.merging([
+                "id": noteID.uuidString, "body": "Stale request", "base_revision": revision
+            ]) { _, new in new }))
+            XCTAssertEqual(reply["status"] as? String, "pending")
+            XCTAssertEqual(try storedDocument(noteID), before)
+            XCTAssertTrue(agentNotes.pendingEdits(noteID: noteID).allSatisfy(\.needsReview))
+            XCTAssertEqual(agentNotes.applyPendingEdits(noteID: noteID), 0)
+        }
+    }
+
+
     @discardableResult
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)
@@ -763,6 +811,13 @@ final class TaskLifecycleSliceTests: XCTestCase {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
+    private func workspaceTokens(_ id: UUID, tools: AgentTaskTools) throws -> [String: Any] {
+        let payload = try json(tools.call(name: "get_task_workspace", arguments: ["id": id.uuidString]))
+        return ["base_note_token": try XCTUnwrap(payload["note_token"] as? String),
+                "base_association_token": try XCTUnwrap(payload["association_token"] as? String)]
+    }
+
+
     func testGetTaskWorkspaceReadsTheTaskItsSubtasksAndItsBodyWithoutTheTitleInOneSnapshot() throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
@@ -796,8 +851,8 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertThrowsError(try tools.call(name: "update_note", arguments: ["id": noteID.uuidString, "title": "Hijack",
                                                                              "base_revision": revision]),
                              "a task's note has no title of its own")
-        _ = try tools.call(name: "update_note", arguments: ["id": noteID.uuidString, "body": "Agent wrote this.",
-                                                            "base_revision": revision])
+        _ = try tools.call(name: "update_note", arguments: workspaceTokens(id, tools: tools).merging(["id": noteID.uuidString, "body": "Agent wrote this.",
+                                                            "base_revision": revision]) { _, new in new })
         let stored = try storedDocument(noteID)
         XCTAssertEqual(stored.title, "Finalize launch checklist", "block 0 stays the live title snapshot")
         XCTAssertTrue(stored.requires.contains("taskNote"))

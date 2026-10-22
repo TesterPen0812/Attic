@@ -50,6 +50,8 @@ enum WorkspaceLegacyBridge {
         let coordinator: WorkspaceOperationCoordinator
         var baseline: [WorkspaceOwner: WorkspaceModelToken]
         var scopes: [WorkspaceScope: WorkspaceScopeToken] = [:]
+        var declaredTokens: [WorkspaceModelToken] = []
+        var declaredScopes: [WorkspaceScopeToken] = []
         var captureFailed = false
         let includeCanvas: Bool
         var plainCommit = false
@@ -175,6 +177,17 @@ enum WorkspaceLegacyBridge {
         guard let rows = state.rootFamilies[owner] else { return nil }
         return try WorkspaceModelToken.capture(owners: [owner], models: rows.map { $0.model ?? source.model(for: $0.physicalID) })[owner]
     }
+    /// Additional read owners supplied by a combined agent workspace read.
+    /// They reach the same commit-time declared-set validation as all writers.
+    static func withDeclaredReadSet<T>(tokens: [WorkspaceModelToken], scopes: [WorkspaceScopeToken],
+                                       in source: ModelContext, _ body: () throws -> T) throws -> T {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
+        let oldTokens = state.declaredTokens, oldScopes = state.declaredScopes
+        state.declaredTokens = tokens; state.declaredScopes = scopes
+        defer { state.declaredTokens = oldTokens; state.declaredScopes = oldScopes }
+        return try body()
+    }
+
     /// Mutation sites prepare the owner's dependency guards once, before
     /// staging. The capture-only API below itself performs no SQL/scope reads.
     static func prepareMutation(_ row: any PersistentModel, in source: ModelContext) {
@@ -414,10 +427,15 @@ enum WorkspaceLegacyBridge {
                 }
             }
         }
+        for token in state.declaredTokens {
+            if let existing = before[token.owner], existing != token { throw WorkspaceFoundationError.conflict }
+            before[token.owner] = token
+        }
+        for scope in state.declaredScopes { state.scopes[scope.scope] = scope }
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
         let plain = try state.coordinator.mayUsePlainSave(
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
-        let requiredScopes = WorkspaceScopeToken.scopes(for: reads)
+        let requiredScopes = WorkspaceScopeToken.scopes(for: reads).union(state.declaredScopes.map(\.scope))
         if plain {
             var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
             var writeError: Error?

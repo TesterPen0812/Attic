@@ -338,6 +338,8 @@ final class AgentTaskTools {
                         "type": "string",
                         "description": "Note id returned by list_notes or create_note."
                     ],
+                    "base_note_token": ["type": "string", "description": "Task notes: note_token from get_task_workspace."],
+                    "base_association_token": ["type": "string", "description": "Task notes: association_token from get_task_workspace."],
                     "base_revision": [
                         "type": "string",
                         "description": "The note's `revision` from list_notes or create_note."
@@ -364,6 +366,8 @@ final class AgentTaskTools {
                 "properties": [
                     "agent_name": ["type": "string", "description": "Client or outside editor name for attribution; defaults to Agent."],
                     "id": ["type": "string", "description": "Note id returned by list_notes."],
+                    "base_note_token": ["type": "string", "description": "Task notes: note_token from get_task_workspace."],
+                    "base_association_token": ["type": "string", "description": "Task notes: association_token from get_task_workspace."],
                     "base_revision": ["type": "string", "description": "The note's `revision` from list_notes."],
                     "table_id": ["type": "string", "description": "The table's `table_id` from list_notes."],
                     "operations": [
@@ -390,6 +394,8 @@ final class AgentTaskTools {
                 "type": "object",
                 "properties": [
                     "agent_name": ["type": "string", "description": "Client or outside editor name for attribution; defaults to Agent."],
+                    "base_note_token": ["type": "string", "description": "Task notes: note_token from get_task_workspace."],
+                    "base_association_token": ["type": "string", "description": "Task notes: association_token from get_task_workspace."],
                     "base_revision": ["type": "string", "description": "Required for a note: its revision from list_notes. On-screen deletion waits for review."],
                     "id": [
                         "type": "string",
@@ -435,6 +441,8 @@ final class AgentTaskTools {
                 "type": "object",
                 "properties": [
                     "agent_name": ["type": "string", "description": "Client or outside editor name for attribution; defaults to Agent."],
+                    "base_note_token": ["type": "string", "description": "Task notes: note_token from get_task_workspace."],
+                    "base_association_token": ["type": "string", "description": "Task notes: association_token from get_task_workspace."],
                     "base_revision": ["type": "string", "description": "Required for a note: its revision from list_notes. On-screen deletion waits for review."],
                     "kind": ["type": "string", "enum": AtticItemKind.allCases.map(\.rawValue)],
                     "id": ["type": "string", "description": "The item's UUID."]
@@ -911,6 +919,33 @@ final class AgentTaskTools {
         }
     }
 
+    private struct WorkspaceWriteReadSet {
+        let tokens: [WorkspaceModelToken]
+        let scopes: [WorkspaceScopeToken]
+        let stale: Bool
+    }
+
+    private func workspaceReadSet(_ arguments: [String: Any], note: NoteItem) throws -> WorkspaceWriteReadSet? {
+        guard let taskID = note.taskID else { return nil }
+        func decode(_ key: String) throws -> WorkspaceScopeToken {
+            guard let raw = arguments[key] as? String, let data = Data(base64Encoded: raw),
+                  let token = try? JSONDecoder().decode(WorkspaceScopeToken.self, from: data) else {
+                throw AgentToolError.invalidArguments("Task notes require base_note_token and base_association_token from get_task_workspace.")
+            }
+            return token
+        }
+        let expectedNotes = try decode("base_note_token"), expectedAssociations = try decode("base_association_token")
+        guard expectedNotes.scope == .taskNotes(taskID), expectedAssociations.scope == .taskAssociations(taskID) else {
+            throw AgentToolError.invalidArguments("The workspace tokens belong to a different task.")
+        }
+        let context = ModelContext(store.container)
+        let notes = try WorkspaceScopeToken.read(.taskNotes(taskID), in: context)
+        let associations = try WorkspaceScopeToken.read(.taskAssociations(taskID), in: context)
+        let task = try WorkspaceModelToken.read(.init(entity: .task, id: taskID), in: context)
+        return WorkspaceWriteReadSet(tokens: notes.members + associations.members + [task], scopes: [notes, associations],
+                                     stale: expectedNotes != notes || expectedAssociations != associations)
+    }
+
     private func updateNote(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("update_note") }
         let note = try findNote(arguments)
@@ -935,17 +970,18 @@ final class AgentTaskTools {
         guard let baseRevision = arguments["base_revision"] as? String, !baseRevision.isEmpty else {
             throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
         }
-        guard baseRevision == note.revisionToken else {
+        let readSet = try workspaceReadSet(arguments, note: note)
+        guard readSet != nil || baseRevision == note.revisionToken else {
             throw AgentToolError.notPerformed(
                 "The note changed since revision \(baseRevision) (now \(note.revisionToken)). Read it again with list_notes and retry."
             )
         }
         return try updateDocumentNote(note, title: newTitle, body: newBody, baseRevision: baseRevision,
-            noteStore: noteStore, agentName: agentName(arguments))
+            noteStore: noteStore, agentName: agentName(arguments), readSet: readSet)
     }
 
     private func updateDocumentNote(_ note: NoteItem, title: String?, body: String?, baseRevision: String,
-                                    noteStore: NoteStore, agentName: String) throws -> String {
+                                    noteStore: NoteStore, agentName: String, readSet: WorkspaceWriteReadSet? = nil) throws -> String {
         guard let load = noteStore.loadDocument(noteID: note.id), case let .editable(current) = load.content else {
             throw AgentToolError.notPerformed("This note was saved by a newer version of Attic and is read-only here.")
         }
@@ -973,9 +1009,16 @@ final class AgentTaskTools {
         guard !document.isEmpty || !document.objectIDs.isEmpty else {
             throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
         }
-        let disposition = noteStore.agentWriteDisposition(note.id)
-        switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
-                                    agentName: agentName, disposition: disposition) {
+        let stale = readSet?.stale == true || baseRevision != note.revisionToken
+        let disposition = stale ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(note.id)
+        let write = {
+            noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
+                                document: document, agentName: agentName, disposition: disposition, requiresReview: stale)
+        }
+        let result = try readSet.map { set in
+            try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
+        } ?? write()
+        switch result {
         case .success(.applied):
             let updated = noteStore.note(withID: note.id) ?? note
             return try encode(["status": "applied", "note": serializeNote(updated)])
@@ -999,7 +1042,8 @@ final class AgentTaskTools {
         guard let baseRevision = arguments["base_revision"] as? String, !baseRevision.isEmpty else {
             throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
         }
-        guard baseRevision == note.revisionToken else {
+        let readSet = try workspaceReadSet(arguments, note: note)
+        guard readSet != nil || baseRevision == note.revisionToken else {
             throw AgentToolError.notPerformed(
                 "The note changed since revision \(baseRevision) (now \(note.revisionToken)). Read it again with list_notes and retry."
             )
@@ -1027,9 +1071,16 @@ final class AgentTaskTools {
         var document = current
         document.blocks[index].table = edited
         document.refreshRequiredCapabilities()
-        let disposition = noteStore.agentWriteDisposition(note.id)
-        switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
-                                    agentName: agentName(arguments), disposition: disposition) {
+        let stale = readSet?.stale == true || baseRevision != note.revisionToken
+        let disposition = stale ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(note.id)
+        let write = {
+            noteStore.agentWrite(noteID: note.id, baseRevisionToken: stale ? note.revisionToken : baseRevision,
+                document: document, agentName: self.agentName(arguments), disposition: disposition, requiresReview: stale)
+        }
+        let result = try readSet.map { set in
+            try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
+        } ?? write()
+        switch result {
         case .success(.applied):
             let updated = noteStore.note(withID: note.id) ?? note
             var block = document.blocks[index]
@@ -1058,8 +1109,17 @@ final class AgentTaskTools {
         guard let base = arguments["base_revision"] as? String, !base.isEmpty else {
             throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
         }
-        switch noteStore.agentDelete(noteID: note.id, baseRevisionToken: base, agentName: agentName(arguments),
-                                    disposition: noteStore.agentWriteDisposition(note.id)) {
+        let readSet = try workspaceReadSet(arguments, note: note)
+        let stale = readSet?.stale == true || base != note.revisionToken
+        let disposition = stale && readSet != nil ? NoteAgentWriteDisposition.proposal : noteStore.agentWriteDisposition(note.id)
+        let write = {
+            noteStore.agentDelete(noteID: note.id, baseRevisionToken: readSet != nil && stale ? note.revisionToken : base,
+                                  agentName: self.agentName(arguments), disposition: disposition)
+        }
+        let result = try readSet.map { set in
+            try WorkspaceLegacyBridge.withDeclaredReadSet(tokens: set.tokens, scopes: set.scopes, in: noteStore.modelContext, write)
+        } ?? write()
+        switch result {
         case .success(.applied):
             library.recordCommittedDeletion(AtticItemRef(.note, note.id))
             return try encode(["deleted": note.id.uuidString, "kind": "note", "status": "applied",
@@ -1122,6 +1182,8 @@ final class AgentTaskTools {
         } else {
             payload["own_note_id"] = NSNull()
         }
+        payload["note_token"] = try WorkspaceModelFields.encode(WorkspaceScopeToken.read(.taskNotes(id), in: context)).base64EncodedString()
+        payload["association_token"] = try WorkspaceModelFields.encode(WorkspaceScopeToken.read(.taskAssociations(id), in: context)).base64EncodedString()
         let tokens = try tokenOwners.map { try WorkspaceModelToken.read($0, in: context) }
         payload["task_token"] = WorkspaceModelFields.digest(try WorkspaceModelFields.encode(Array(tokens.prefix(1 + children.count))))
         return try encode(payload)
