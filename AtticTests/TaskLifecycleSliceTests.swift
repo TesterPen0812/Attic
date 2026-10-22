@@ -32,6 +32,28 @@ final class TaskLifecycleSliceTests: XCTestCase {
         notes = nil; library = nil; tasks = nil; coordinator = nil; container = nil
     }
 
+    func testOpusR1OrdinaryNoteRestoreAndSecondRestoreDoNotRematerialize() async throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["task-tag"]))
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        let mine = NoteDocument(blocks: [.text("My ordinary title"), .text("My ordinary body")])
+        _ = try notes.store.saveDocument(noteID: noteID, document: mine,
+            baseRevisionID: notes.store.note(withID: noteID)?.revisionID, tags: ["mine"]).get()
+        XCTAssertTrue(notes.store.recordVersion(noteID: noteID, reason: .pause))
+        let version = try XCTUnwrap(notes.store.versions(noteID: noteID).first { $0.content.flatMap { NoteContentCodec.decode($0).document } == mine })
+        for _ in 0..<2 {
+            XCTAssertTrue(notes.store.delete(try XCTUnwrap(notes.store.note(withID: noteID))))
+            XCTAssertTrue(notes.store.restoreDeleted(noteID: noteID))
+            XCTAssertEqual(try storedDocument(noteID), mine)
+            XCTAssertEqual(notes.store.note(withID: noteID)?.tags, ["mine"])
+        }
+        _ = try notes.store.restoreVersion(version.id, noteID: noteID).get()
+        XCTAssertEqual(try storedDocument(noteID), mine)
+        XCTAssertEqual(notes.store.note(withID: noteID)?.tags, ["mine"])
+    }
+
     // MARK: Fixtures
 
     // Phase 3 reservations refuse native input visibly before storage changes.

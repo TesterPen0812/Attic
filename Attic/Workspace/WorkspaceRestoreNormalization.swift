@@ -6,6 +6,7 @@ import SwiftData
 @MainActor
 enum WorkspaceRestoreNormalization {
     static func materialization(_ document: NoteDocument, noteID: UUID, in context: ModelContext) throws -> WorkspaceTaskNoteMaterializer.Value? {
+        guard document.requires.contains("taskNote") else { return nil }
         let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == noteID }))
             .filter { $0.detachedPreservationID != nil }
         guard !links.isEmpty else { return nil }
@@ -35,6 +36,9 @@ enum WorkspaceRestoreNormalization {
             guard let task = tasks.first, tasks.allSatisfy({ $0.title == task.title && $0.deletedAt == task.deletedAt }) else { throw WorkspaceFoundationError.conflict }
             return try document.taskSnapshot(title: task.title)
         }
+        // Detached ordinary content belongs to the person, including saved
+        // ordinary versions. Historical links cannot materialize it again.
+        guard document.requires.contains("taskNote") else { return document }
         // A note restored as a separate note (§ 2.7.2: the task had a newer
         // one) keeps its detached links without a preservation: it is
         // ordinary already, and nothing about the task is re-applied.
