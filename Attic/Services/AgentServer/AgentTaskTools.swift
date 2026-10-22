@@ -1375,7 +1375,11 @@ final class AgentTaskTools {
 
     private func listDeleted(_ arguments: [String: Any]) throws -> String {
         let items = library.recentlyDeleted()
-        let context = try bool(arguments, "include_workspace_token") ? ModelContext(store.container) : nil
+        let includeToken = try bool(arguments, "include_workspace_token")
+        let context = ModelContext(store.container)
+        let noteIDs = items.filter { $0.ref.kind == .note }.map { $0.ref.id }
+        let fresh = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { noteIDs.contains($0.id) }))
+        let byID = Dictionary(NoteStore.canonicalReplicas(from: fresh).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return try encode([
             "count": items.count,
             "items": items.map { item -> [String: Any] in
@@ -1390,9 +1394,10 @@ final class AgentTaskTools {
                         .map { Self.dateFormatter.string(from: $0) as Any } ?? NSNull(),
                     "included": item.includedCount
                 ]
-                if item.ref.kind == .note, let context {
+                if item.ref.kind == .note, let row = byID[item.ref.id] {
+                    payload["title"] = row.title
                     let id = item.ref.id
-                    if let row = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first,
+                    if includeToken,
                        let readSet = try? AgentWorkspaceReadSet.capture(taskID: row.taskID, noteID: id, in: context),
                        let data = try? WorkspaceModelFields.encode(readSet) { payload["workspace_token"] = data.base64EncodedString(); payload["title"] = row.title }
                 }

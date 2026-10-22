@@ -1,5 +1,4 @@
 import SwiftData
-import SwiftData
 import XCTest
 @testable import Attic
 
