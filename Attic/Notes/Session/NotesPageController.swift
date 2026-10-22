@@ -449,11 +449,54 @@ final class NotesPageController: ObservableObject {
     func recoverAtLaunchAndWait() async { recoverAtLaunch(); await waitForRecoveryWork() }
 
     func discardWorkspaceRecovery(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) async throws {
-        throw WorkspaceFoundationError.preparationFailed
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        try await coordinator.discardOperationRecovery(issue)
+        workspaceRecoveryIssues = coordinator.operationRecoveryIssues
     }
 
     func restoreWorkspaceRecoveryAsNewNote(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) async throws -> UUID {
-        throw WorkspaceFoundationError.preparationFailed
+        guard let pre = issue.draft, let source = NoteContentCodec.decode(pre.content).document,
+              source.isWritableByThisBuild else { throw WorkspaceFoundationError.damagedEnvelope }
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        var bytes = try await coordinator.journal.operationRecoveryPayloads(issue)
+        let wanted = Set(source.attachmentIDs).union(pre.pendingImport?.items.compactMap(\.stagedID) ?? [])
+        let admission = try await coordinator.ownership.admit(wanted.union(pre.staged.map(\.id)))
+        defer { admission.release() }
+        for id in wanted where !bytes.contains(where: { $0.id == id }) {
+            guard let payload = await store.verifiedAttachmentBytes(id) else { throw WorkspaceFoundationError.preparationFailed }
+            bytes.append(payload)
+        }
+        var document = source
+        if let pending = pre.pendingImport {
+            let engine = makeEngine(noteID: UUID(), document: document, readOnly: false, staged: bytes,
+                bodyOnly: source.requires.contains("taskNote"))
+            engine.restoreImageImport(anchor: pending.anchor, replacementLength: pending.replacementLength ?? 0,
+                isBoundary: pending.isBoundary ?? false)
+            var items = pending.items.map { item -> NoteImportedObject in
+                if let id = item.stagedID, let payload = bytes.first(where: { $0.id == id }) {
+                    let size = item.pixelWidth.flatMap { width in item.pixelHeight.map { CGSize(width: width, height: $0) } }
+                    return NoteImportedObject(staged: payload, pixelSize: size)
+                }
+                return NoteImportedObject(filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                    byteCount: item.byteCount, failure: item.failure ?? String(localized: "Import interrupted. Retry this file."))
+            }
+            items += pending.remainingNames.map { NoteImportedObject(filename: $0, contentTypeIdentifier: UTType.data.identifier,
+                byteCount: 0, failure: String(localized: "Import interrupted. Retry this file.")) }
+            guard engine.insertImportedObjects(items, acceptedText: pending.acceptedText) else {
+                throw WorkspaceFoundationError.preparationFailed
+            }
+            document = engine.document()
+        }
+        document = try document.ordinarySnapshot(title: document.title)
+        guard let (copy, payloads) = replacementForDeletedNote(document, oldID: pre.noteID, staged: bytes) else {
+            throw WorkspaceFoundationError.preparationFailed
+        }
+        let needed = Set(copy.attachmentIDs)
+        let result = try store.createDocumentNote(id: UUID(), document: copy,
+            staged: payloads.filter { needed.contains($0.id) }, tags: pre.tags).get()
+        do { try await discardWorkspaceRecovery(issue) }
+        catch { recoveryWarnings.append("The new note was saved, but its interrupted recovery copy is still kept for Review.") }
+        return result.noteID
     }
     /// Library navigation prepares only document bytes. Full byte ownership
     /// hydration remains part of the existing explicit durable-open API.

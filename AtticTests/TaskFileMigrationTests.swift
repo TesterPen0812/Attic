@@ -1010,3 +1010,134 @@ extension TaskFileMigrationTests {
         XCTAssertTrue(originalKept)
     }
 }
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2R3RestoreIgnoresAnUnusedPayloadThatNeverReachedDisk() async throws {
+        let folder = try interruptedCopy(NoteDocument(blocks: [.text("Readable before writing")]), noteID: UUID())
+        let file = folder.appendingPathComponent("pre-draft.json")
+        var pre = try JSONDecoder().decode(NoteDraftJournalEntry.self, from: Data(contentsOf: file))
+        pre.staged = [.init(id: UUID(), filename: "not-in-the-before-document.txt", contentTypeIdentifier: "public.plain-text", byteCount: 4, digest: "unwritten")]
+        try WorkspaceModelFields.encode(pre).write(to: file)
+        try reopen(); try await coordinator.finishLaunch()
+        let pages = await recoveryPages()
+        let restored = try await pages.restoreWorkspaceRecoveryAsNewNote(XCTUnwrap(pages.workspaceRecoveryIssues.first))
+        XCTAssertEqual(try document(restored).title, "Readable before writing")
+        XCTAssertTrue(try document(restored).attachmentIDs.isEmpty)
+        XCTAssertTrue(pages.workspaceRecoveryIssues.isEmpty)
+    }
+
+    func testP3S2R3ConcurrentResolutionCannotReinstallAnArchivedRecoveryHold() async throws {
+        let refs = try await legacyFiles(["concurrent.txt"]), id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail("seed migration") }
+        var draft = try document(noteID); draft.blocks.append(.text("Different interrupted writing"))
+        _ = try interruptedCopy(draft, noteID: noteID)
+        _ = try interruptedCopy(draft, noteID: noteID)
+        try reopen(); try await coordinator.finishLaunch()
+        let pages = await recoveryPages(), issues = pages.workspaceRecoveryIssues
+        XCTAssertEqual(issues.count, 2)
+        let entered = expectation(description: "first resolution comparing remaining copy")
+        var resume: CheckedContinuation<Void, Never>?
+        var paused = false
+        coordinator.beforeRecoveryComparison = {
+            guard !paused else { return }; paused = true
+            entered.fulfill()
+            await withCheckedContinuation { resume = $0 }
+        }
+        let first = Task { try await pages.discardWorkspaceRecovery(issues[0]) }
+        await fulfillment(of: [entered], timeout: 2)
+        var reconciliationRefused = false
+        do { try await coordinator.reconcileStartup() } catch { reconciliationRefused = true }
+        var secondRefused = false
+        do { try await pages.discardWorkspaceRecovery(issues[1]) } catch { secondRefused = true }
+        resume?.resume(); resume = nil
+        try await first.value
+        coordinator.beforeRecoveryComparison = nil
+        XCTAssertTrue(reconciliationRefused, "runtime reconciliation shares the same transaction guard")
+        XCTAssertTrue(secondRefused, "resolution transactions must serialize")
+        XCTAssertEqual(pages.workspaceRecoveryIssues.count, 1)
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(refs[0].id))
+        try await pages.discardWorkspaceRecovery(issues[1])
+        XCTAssertTrue(pages.workspaceRecoveryIssues.isEmpty)
+        XCTAssertFalse(coordinator.retainedRecoveryBytes.contains(refs[0].id))
+        let reversed = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator)
+        XCTAssertEqual(reversed, .reversed)
+    }
+}
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2R3RestorePlacesPendingTaskTextInTheBodyOfTheOrdinaryCopy() async throws {
+        let source = try NoteDocument(blocks: [.text("Heading"), .text("Existing body")]).taskSnapshot(title: "Heading")
+        let folder = try interruptedCopy(source, noteID: UUID())
+        let file = folder.appendingPathComponent("pre-draft.json")
+        var pre = try JSONDecoder().decode(NoteDraftJournalEntry.self, from: Data(contentsOf: file))
+        pre.pendingImport = .init(anchor: 0, acceptedText: "Pasted before body\n", items: [], remainingNames: [])
+        try WorkspaceModelFields.encode(pre).write(to: file)
+        try reopen(); try await coordinator.finishLaunch()
+        let pages = await recoveryPages()
+        XCTAssertTrue(pages.workspaceRecoveryIssues.first?.previewText?.contains("Pasted before body") == true)
+        let restored = try await pages.restoreWorkspaceRecoveryAsNewNote(XCTUnwrap(pages.workspaceRecoveryIssues.first))
+        let copy = try document(restored)
+        XCTAssertEqual(copy.title, "Heading")
+        XCTAssertTrue(NoteTextExport.plainBody(copy).hasPrefix("Pasted before body"))
+        XCTAssertTrue(NoteTextExport.plainBody(copy).contains("Existing body"))
+        XCTAssertFalse(copy.requires.contains("taskNote"))
+    }
+}
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2R3RestorePreservesPendingPasteIntoAnOrdinaryTitle() async throws {
+        let source = try NoteDocument(blocks: [.text("Heading"), .text("Existing body")])
+        let folder = try interruptedCopy(source, noteID: UUID())
+        let file = folder.appendingPathComponent("pre-draft.json")
+        var pre = try JSONDecoder().decode(NoteDraftJournalEntry.self, from: Data(contentsOf: file))
+        pre.pendingImport = .init(anchor: 0, acceptedText: "Pasted ", items: [], remainingNames: [])
+        try WorkspaceModelFields.encode(pre).write(to: file)
+        try reopen(); try await coordinator.finishLaunch()
+        let pages = await recoveryPages()
+        let restored = try await pages.restoreWorkspaceRecoveryAsNewNote(XCTUnwrap(pages.workspaceRecoveryIssues.first))
+        XCTAssertEqual(try document(restored).title, "Pasted Heading")
+        XCTAssertTrue(NoteTextExport.plainBody(try document(restored)).contains("Existing body"))
+    }
+
+    func testP3S2R3DiscardCanRetryAfterTheArchiveRenameButBeforeSync() async throws {
+        let refs = try await legacyFiles(["retry.txt"]), id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail("seed migration") }
+        var draft = try document(noteID); draft.blocks.append(.text("Interrupted writing"))
+        _ = try interruptedCopy(draft, noteID: noteID)
+        try reopen(); try await coordinator.finishLaunch()
+        let pages = await recoveryPages(), issue = try XCTUnwrap(pages.workspaceRecoveryIssues.first)
+        await coordinator.journal.failNextRecoveryArchiveAfterRename()
+        do { try await pages.discardWorkspaceRecovery(issue); XCTFail("injected sync failure") }
+        catch { XCTAssertEqual(error as? WorkspaceFoundationError, .preparationFailed) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: issue.directory.path), "failure occurred after the rename")
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(refs[0].id), "unacknowledged archival keeps retention")
+        var retried = false
+        do { try await pages.discardWorkspaceRecovery(issue); retried = true } catch {}
+        XCTAssertTrue(retried, "the same confirmation must finish its durable rename on retry")
+        XCTAssertTrue(pages.workspaceRecoveryIssues.isEmpty)
+        XCTAssertFalse(coordinator.retainedRecoveryBytes.contains(refs[0].id))
+        let reversed = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator)
+        XCTAssertEqual(reversed, .reversed)
+    }
+
+    func testP3S2R3DiscardChecksBothReceiptIdentitiesOfADamagedFolder() async throws {
+        let owner = WorkspaceOwner(entity: .note, id: UUID()), receiptOwner = WorkspaceOwner(entity: .task, id: UUID())
+        let envelope = try coordinator.newEnvelope(intent: "Damaged identity", reads: coordinator.capture([owner]), writes: [owner])
+        let rootID = UUID()
+        let folder = try interruptedCopy(NoteDocument(blocks: [.text("Recovery writing")]), noteID: owner.id, name: rootID.uuidString)
+        try WorkspaceModelFields.encode(envelope).write(to: folder.appendingPathComponent("intent.json"))
+        let context = coordinator.freshContext()
+        context.insert(OperationReceipt(id: rootID, envelopeDigest: "uncertain", affectedIDs: try WorkspaceModelFields.encode([receiptOwner]), resultingTokens: Data()))
+        try context.save()
+        do { try await coordinator.finishLaunch() } catch {}
+        let issue = try XCTUnwrap(coordinator.operationRecoveryIssues.first)
+        var refused = false
+        do { try await coordinator.discardOperationRecovery(issue) } catch { refused = true }
+        XCTAssertTrue(refused, "a receipt at either identity still owns recovery")
+        XCTAssertFalse(coordinator.retryHeldWrites(affecting: [receiptOwner]))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: issue.directory.path))
+    }
+}

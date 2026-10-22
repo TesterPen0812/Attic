@@ -356,6 +356,9 @@ private final class NoteDraftPathAuthority: @unchecked Sendable {
 }
 
 private actor NoteDraftJournalIO {
+    #if DEBUG
+    private var failRecoveryArchiveAfterRename = false
+    #endif
     nonisolated let operationBarrier = NoteOperationRecoveryBarrier()
     private var operationReconciled = false
     let directory: URL
@@ -890,6 +893,7 @@ struct NoteOperationInventoryItem: Sendable {
     /// No published intent can have returned to a model writer.
     var preIntentAbort = false
     var recoveryDraft: NoteDraftJournalEntry? = nil
+    var artifactIdentity = ""
 }
 
 struct NoteVerifiedOperationAbort: Codable, Sendable {
@@ -1048,6 +1052,9 @@ private extension NoteDraftJournalIO {
                 }
             }
         }
+        for index in result.indices {
+            result[index].artifactIdentity = try operationArtifactIdentity(result[index].directory)
+        }
         return result
     }
 
@@ -1079,6 +1086,84 @@ private extension NoteDraftJournalIO {
         }
         try fileManager.moveItem(at: root, to: destination)
         try journalSync(parent); try journalSync(operationsDirectory); try journalSync(directory)
+    }
+
+    private func operationArtifactIdentity(_ root: URL) throws -> String {
+        let attributes = try fileManager.attributesOfItem(atPath: root.path)
+        guard let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber else { throw WorkspaceFoundationError.unknown }
+        return "\(device):\(inode)"
+    }
+
+    private func reviewedOperation(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) throws -> NoteOperationInventoryItem {
+        guard let item = try operationInventory().first(where: { $0.directory == issue.directory }),
+              item.damaged, item.preIntentAbort == issue.preIntentAbort, item.claim == issue.claim,
+              item.artifactIdentity == issue.artifactIdentity,
+              (item.recoveryDraft ?? item.envelope?.preDraft) == issue.draft else {
+            throw WorkspaceFoundationError.conflict
+        }
+        return item
+    }
+
+    /// A terminal, durable rename. Trash is outside the recovery inventory;
+    /// no shared staged file, stored row, or original is removed here.
+    func archiveOperationRecovery(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) throws {
+        let source = issue.directory.deletingLastPathComponent().standardizedFileURL
+        guard source == operationsDirectory.standardizedFileURL
+            || source == directory.appendingPathComponent("quarantined-operations").standardizedFileURL else {
+            throw WorkspaceFoundationError.invalidIdentity
+        }
+        let confirmation = try WorkspaceModelFields.encode(issue)
+        let key = Self.digest(confirmation)
+        let trash = directory.appendingPathComponent("quarantine-trash", isDirectory: true)
+        let destination = trash.appendingPathComponent("review-" + key, isDirectory: true)
+        let markerName = ".attic-review-" + key + ".json"
+        if fileManager.fileExists(atPath: issue.directory.path) {
+            _ = try reviewedOperation(issue)
+            guard !fileManager.fileExists(atPath: destination.path) else { throw WorkspaceFoundationError.conflict }
+            try fileManager.createDirectory(at: trash, withIntermediateDirectories: true)
+            let marker = issue.directory.appendingPathComponent(markerName)
+            if fileManager.fileExists(atPath: marker.path) {
+                guard try Data(contentsOf: marker) == confirmation else { throw WorkspaceFoundationError.conflict }
+            } else { try journalWriteSynced(confirmation, to: marker) }
+            try fileManager.moveItem(at: issue.directory, to: destination)
+        } else {
+            // A previous attempt may have moved successfully before its sync
+            // or ownership refresh failed. Only the exact archived artifact
+            // can complete that attempt; generic missing paths never resolve.
+            guard try operationArtifactIdentity(destination) == issue.artifactIdentity,
+                  try Data(contentsOf: destination.appendingPathComponent(markerName)) == confirmation else {
+                throw WorkspaceFoundationError.conflict
+            }
+        }
+        #if DEBUG
+        if failRecoveryArchiveAfterRename {
+            failRecoveryArchiveAfterRename = false
+            throw WorkspaceFoundationError.preparationFailed
+        }
+        #endif
+        try journalSync(destination); try journalSync(source); try journalSync(trash); try journalSync(directory)
+    }
+
+    #if DEBUG
+    func failNextRecoveryArchiveAfterRename() { failRecoveryArchiveAfterRename = true }
+    #endif
+
+    func operationRecoveryPayloads(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) throws -> [StagedNoteAttachment] {
+        _ = try reviewedOperation(issue)
+        let needed = Set(issue.draft.flatMap { NoteContentCodec.decode($0.content).document }?.attachmentIDs ?? [])
+            .union(issue.draft?.pendingImport?.items.compactMap(\.stagedID) ?? [])
+        return try (issue.draft?.staged ?? []).filter { needed.contains($0.id) }.map { meta in
+            let local = issue.directory.appendingPathComponent(meta.id.uuidString)
+            let bytes: Data
+            do { bytes = try Data(contentsOf: local) }
+            catch {
+                guard journalFileIsMissing(error) else { throw error }
+                bytes = try Data(contentsOf: stagedDirectory.appendingPathComponent(meta.id.uuidString))
+            }
+            return try verifyAttachment(id: meta.id, filename: meta.filename, contentType: meta.contentTypeIdentifier,
+                byteCount: meta.byteCount, digest: meta.digest, bytes: bytes)
+        }
     }
 
     func operationEnvelopes() throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
@@ -1152,6 +1237,12 @@ extension NoteDraftJournal {
         try await io.prepareOperation(envelope)
     }
     func operationInventory() async throws -> [NoteOperationInventoryItem] { try await io.operationInventory() }
+    func operationRecoveryPayloads(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) async throws -> [StagedNoteAttachment] {
+        try await io.operationRecoveryPayloads(issue)
+    }
+    #if DEBUG
+    func failNextRecoveryArchiveAfterRename() async { await io.failNextRecoveryArchiveAfterRename() }
+    #endif
     func quarantineOperation(at root: URL) async throws { try await io.quarantineOperation(at: root) }
     func operationEnvelopes() async throws -> [(WorkspaceOperationEnvelope, WorkspaceOperationClaim)] {
         try await io.operationEnvelopes()
@@ -1195,6 +1286,9 @@ enum NoteJournalWaitMeasurement {
 #endif
 
 extension NoteDraftJournal {
+    nonisolated func archiveOperationRecoverySynchronously(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) throws {
+        let _: Bool = try Self.waitForIO { try await self.io.archiveOperationRecovery(issue); return true }
+    }
     nonisolated func recordVerifiedAbortSynchronously(at root: URL, claim: WorkspaceOperationClaim) throws {
         let _: Bool = try Self.waitForIO { try await self.io.recordVerifiedAbort(at: root, claim: claim); return true }
     }

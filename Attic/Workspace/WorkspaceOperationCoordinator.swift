@@ -117,6 +117,10 @@ final class WorkspaceOperationCoordinator {
     private var damagedOperationBytes = Set<UUID>()
     private var abortedRecoveryBytes = Set<UUID>()
     private var unclassifiedRecoveryBytes = false
+    private var operationRecoveryInProgress = false
+    #if DEBUG
+    var beforeRecoveryComparison: (@MainActor () async -> Void)?
+    #endif
     /// Nil means byte collection is unknown, never that ordinary writes fail.
     var collectionProtectedRecoveryBytes: Set<UUID>? {
         unclassifiedRecoveryBytes ? nil : retainedRecoveryBytes
@@ -272,14 +276,21 @@ final class WorkspaceOperationCoordinator {
         let payloads: [WorkspaceOperationEnvelope.Payload]
     }
     private(set) var preOperationRecoveryCopies: [RecoveryCopy] = []
-    struct RecoveryIssue: Identifiable, Equatable, Sendable {
+    struct RecoveryIssue: Identifiable, Equatable, Codable, Sendable {
         let directory: URL
         let preIntentAbort: Bool
         var draft: NoteDraftJournalEntry? = nil
         var claim: WorkspaceOperationClaim? = nil
+        var artifactIdentity = ""
         var id: String { directory.path }
         var previewText: String? {
-            draft.flatMap { NoteContentCodec.decode($0.content).document }.map(NoteTextExport.plainText)
+            guard let draft, let document = NoteContentCodec.decode(draft.content).document else { return nil }
+            var text = NoteTextExport.plainText(document)
+            if let pending = draft.pendingImport {
+                text += "\n" + pending.acceptedText
+                text += "\n" + (pending.items.map(\.filename) + pending.remainingNames).joined(separator: "\n")
+            }
+            return text
         }
     }
     private(set) var operationRecoveryIssues: [RecoveryIssue] = []
@@ -875,44 +886,71 @@ final class WorkspaceOperationCoordinator {
         } catch { return .unknown }
     }
 
-    /// Receipts are reconciled before independent checkpoints can be offered.
-    /// Recovery never executes the recorded intent; an absent receipt is a
-    /// recoverable pre-draft, an agreeing receipt is publication/handoff work.
-    func reconcileStartup() async throws {
-        startupReconciled = false
-        preOperationRecoveryCopies.removeAll()
-        operationRecoveryIssues.removeAll()
-        let checkpoints = try await journal.inventoryCheckpoints()
-        let valid = checkpoints.filter { if case .valid = $0 { return true }; return false }
-        var startupIDs = Set<UUID>()
-        for item in valid {
-            if case let .valid(entry, _, _) = item {
-                startupIDs.insert(entry.noteID)
-                startupIDs.formUnion(NoteContentCodec.decode(entry.content).document?.attachmentIDs ?? [])
-                startupIDs.formUnion(entry.staged.map(\.id))
-                startupIDs.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
-            }
+    private func recoveryIssue(_ item: NoteOperationInventoryItem) -> RecoveryIssue {
+        RecoveryIssue(directory: item.directory, preIntentAbort: item.preIntentAbort,
+            draft: item.recoveryDraft ?? item.envelope?.preDraft, claim: item.claim, artifactIdentity: item.artifactIdentity)
+    }
+
+    private func requireAbsentRecoveryReceipt(_ issue: RecoveryIssue) throws {
+        let ids = Set([issue.claim?.id, UUID(uuidString: issue.directory.lastPathComponent)].compactMap { $0 })
+        for id in ids {
+            guard try freshContext().fetchCount(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id })) == 0,
+                  pending[id] == nil else { throw WorkspaceFoundationError.pendingPublication }
         }
-        // A standalone store may already be collecting its old cache. Wait
-        // without holding a context; its temporary exclusive lease is not a
-        // damaged checkpoint or an ambiguous save outcome.
-        let startupAdmission = try await ownership.admit(startupIDs)
-        defer { startupAdmission.release() }
-        try registerCheckpointInventory(valid)
-        damagedCheckpointNotes = try await journal.damagedCheckpointNoteIDs()
-        if checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) {
-            // Raw damage can name arbitrary bytes. Its note publication hold
-            // is bounded by the filename; byte collection stays conservative
-            // until explicit archive/repair proves the complete inventory.
-            if damagedCollectionHold == nil {
-                damagedCollectionHold = ownership.tryAcquire([ownership.unknownID], kind: .admission)
-            }
-        } else { damagedCollectionHold?.release(); damagedCollectionHold = nil }
+    }
+
+    /// Resolving Review must never reconcile or release a healthy operation
+    /// that another caller is currently preparing.
+    func discardOperationRecovery(_ issue: RecoveryIssue) async throws {
+        guard !operationRecoveryInProgress else { throw WorkspaceFoundationError.pendingPublication }
+        operationRecoveryInProgress = true
+        defer { operationRecoveryInProgress = false }
+        guard operationRecoveryIssues.contains(issue) else { throw WorkspaceFoundationError.conflict }
+        try requireAbsentRecoveryReceipt(issue)
+        try journal.archiveOperationRecoverySynchronously(issue)
         let inventory = try await journal.operationInventory()
+        _ = try await refreshOperationRecovery(inventory)
+    }
+
+    private func preDraftMatchesStored(_ pre: NoteDraftJournalEntry) async -> Bool {
+        guard pre.pendingImport == nil, let document = NoteContentCodec.decode(pre.content).document else { return false }
+        #if DEBUG
+        await beforeRecoveryComparison?()
+        #endif
+        do {
+            let id = pre.noteID
+            let ids = Set(document.attachmentIDs).union(pre.staged.map(\.id))
+            let owners = Set(ids.map { WorkspaceOwner(entity: .attachment, id: $0) }).union([.init(entity: .note, id: id)])
+            let tokens = try capture(owners)
+            let context = freshContext()
+            let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+            guard !notes.isEmpty, notes.allSatisfy({
+                $0.content.flatMap { NoteContentCodec.decode($0).document } == document
+                    && (pre.changedTags == nil || pre.changedTags == $0.tags)
+            }) else { return false }
+            let wanted = Array(ids), container = self.container
+            let verified = await Task.detached(priority: .utility) {
+                let context = ModelContext(container)
+                guard let rows = try? context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { wanted.contains($0.id) })),
+                      ids.isSubset(of: Set(rows.map(\.id))), rows.allSatisfy({ $0.noteID == id }),
+                      pre.staged.allSatisfy({ meta in rows.filter { $0.id == meta.id }.allSatisfy {
+                          $0.byteCount == meta.byteCount && $0.contentDigest == meta.digest
+                      } }) else { return false }
+                return rows.allSatisfy { row in
+                    guard let bytes = row.payload else { return false }
+                    return row.byteCount == Int64(bytes.count) && NotePayloadDigest.sha256(bytes) == row.contentDigest
+                }
+            }.value
+            guard verified else { return false }
+            return try capture(owners) == tokens
+        } catch { return false }
+    }
+
+    private func refreshOperationRecovery(_ inventory: [NoteOperationInventoryItem]) async throws -> Set<UUID> {
+        let receipts = try freshContext().fetch(FetchDescriptor<OperationReceipt>())
         var recorded = Set<UUID>()
         var damagedOwners = Set<WorkspaceOwner>(), damagedBytes = Set<UUID>()
         var preIntentBytes = Set<UUID>()
-        let receipts = try freshContext().fetch(FetchDescriptor<OperationReceipt>())
         // Only UUID-named roots can be an operation produced by this journal.
         // Foreign folders remain archived for Review, but cannot claim a
         // receipt or freeze unrelated owners. An unreadable published intent
@@ -921,10 +959,21 @@ final class WorkspaceOperationCoordinator {
             $0.damaged && !$0.preIntentAbort && $0.envelope == nil && UUID(uuidString: $0.directory.lastPathComponent) != nil
         }
         for item in inventory where item.damaged {
-            let id = item.envelope?.id ?? UUID(uuidString: item.directory.lastPathComponent)
-            let family = receipts.filter { $0.id == id }
-            if let id { recorded.insert(id) }
+            let ids = Set([item.envelope?.id, item.claim?.id, UUID(uuidString: item.directory.lastPathComponent)].compactMap { $0 })
+            let family = receipts.filter { ids.contains($0.id) }
+            recorded.formUnion(ids)
             if item.preIntentAbort && family.isEmpty {
+                let issue = recoveryIssue(item)
+                let redundant: Bool
+                if let pre = item.recoveryDraft { redundant = await preDraftMatchesStored(pre) }
+                else { redundant = true }
+                if redundant {
+                    // Validation and rename are synchronous on the main actor:
+                    // no model writer can change the proved handoff between them.
+                    try requireAbsentRecoveryReceipt(issue)
+                    try journal.archiveOperationRecoverySynchronously(issue)
+                    continue
+                }
                 if let pre = item.recoveryDraft {
                     preIntentBytes.formUnion(pre.staged.map(\.id))
                     preIntentBytes.formUnion(NoteContentCodec.decode(pre.content).document?.attachmentIDs ?? [])
@@ -978,9 +1027,48 @@ final class WorkspaceOperationCoordinator {
         damagedOperationBytes = damagedBytes; heldOwners.formUnion(damagedOwners)
         abortedRecoveryBytes = preIntentBytes
         unclassifiedRecoveryBytes = unknownDamage
-        operationRecoveryIssues = try await journal.operationInventory().filter(\.damaged).map {
-            RecoveryIssue(directory: $0.directory, preIntentAbort: $0.preIntentAbort)
+        operationRecoveryIssues = try await journal.operationInventory().filter(\.damaged).map(recoveryIssue)
+        return recorded
+    }
+
+    /// Receipts are reconciled before independent checkpoints can be offered.
+    /// Recovery never executes the recorded intent; an absent receipt is a
+    /// recoverable pre-draft, an agreeing receipt is publication/handoff work.
+    func reconcileStartup() async throws {
+        guard !operationRecoveryInProgress else { throw WorkspaceFoundationError.pendingPublication }
+        operationRecoveryInProgress = true
+        defer { operationRecoveryInProgress = false }
+        startupReconciled = false
+        preOperationRecoveryCopies.removeAll()
+        operationRecoveryIssues.removeAll()
+        let checkpoints = try await journal.inventoryCheckpoints()
+        let valid = checkpoints.filter { if case .valid = $0 { return true }; return false }
+        var startupIDs = Set<UUID>()
+        for item in valid {
+            if case let .valid(entry, _, _) = item {
+                startupIDs.insert(entry.noteID)
+                startupIDs.formUnion(NoteContentCodec.decode(entry.content).document?.attachmentIDs ?? [])
+                startupIDs.formUnion(entry.staged.map(\.id))
+                startupIDs.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            }
         }
+        // A standalone store may already be collecting its old cache. Wait
+        // without holding a context; its temporary exclusive lease is not a
+        // damaged checkpoint or an ambiguous save outcome.
+        let startupAdmission = try await ownership.admit(startupIDs)
+        defer { startupAdmission.release() }
+        try registerCheckpointInventory(valid)
+        damagedCheckpointNotes = try await journal.damagedCheckpointNoteIDs()
+        if checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) {
+            // Raw damage can name arbitrary bytes. Its note publication hold
+            // is bounded by the filename; byte collection stays conservative
+            // until explicit archive/repair proves the complete inventory.
+            if damagedCollectionHold == nil {
+                damagedCollectionHold = ownership.tryAcquire([ownership.unknownID], kind: .admission)
+            }
+        } else { damagedCollectionHold?.release(); damagedCollectionHold = nil }
+        let inventory = try await journal.operationInventory()
+        var recorded = try await refreshOperationRecovery(inventory)
         let envelopes = inventory.filter { !$0.damaged }.compactMap { item -> (WorkspaceOperationEnvelope, WorkspaceOperationClaim)? in
             guard let envelope = item.envelope, let claim = item.claim else { return nil }
             return (envelope, claim)
