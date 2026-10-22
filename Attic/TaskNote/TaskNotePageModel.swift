@@ -332,7 +332,7 @@ final class TaskNotePageModel: ObservableObject {
 
     @discardableResult
     func toggle(_ id: UUID) -> Bool {
-        guard let task = store.task(withID: id) else { return report(.taskGone) }
+        guard let task = store.listedTask(withID: id) else { return report(.taskGone) }
         // § 2.6: unticking under a Done task asks Reopen Task and Continue.
         if needsReopen(toggling: id) {
             pendingReopen = .toggle(id)
@@ -372,7 +372,7 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func beginRename(_ id: UUID, undoManager: UndoManager? = nil) {
-        guard rows.contains(where: { $0.id == id }), let task = store.task(withID: id) else { return }
+        guard rows.contains(where: { $0.id == id }), let task = store.listedTask(withID: id) else { return }
         if renamingID != nil, renamingID != id { cancelRename() }
         guard renamingID != id else { return }
         renameBase = task.title
@@ -406,7 +406,7 @@ final class TaskNotePageModel: ObservableObject {
     func commitRename() -> Bool {
         guard let id = renamingID else { return true }
         let title = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let task = store.task(withID: id), !title.isEmpty, title != task.title, title != renameBase else {
+        guard let task = store.listedTask(withID: id), !title.isEmpty, title != task.title, title != renameBase else {
             cancelRename()
             return true
         }
@@ -416,7 +416,7 @@ final class TaskNotePageModel: ObservableObject {
             return false
         }
         let outcome = fieldCommit(renameField) { [library, historyID] in
-            library.updateTask(id, title: title, in: historyID)
+            library.updateListedTasks([id], title: title, in: historyID)
         }
         // Refused: the field, its text and its draft Undo stay.
         guard outcome.isApplied else {
@@ -443,7 +443,7 @@ final class TaskNotePageModel: ObservableObject {
     /// ⌘↑ ⌘↓: one place within the row's state group, as one step.
     @discardableResult
     func move(_ id: UUID, by offset: Int) -> Bool {
-        guard let task = store.task(withID: id), task.parentID == taskID else { return report(.taskGone) }
+        guard let task = store.listedTask(withID: id), task.parentID == taskID else { return report(.taskGone) }
         let group = store.subtasks(of: taskID).filter { ($0.status == .done) == (task.status == .done) }
         // A tick holds the visible row still, even though its new state
         // group is already sorted differently in the store. Move relative
@@ -464,7 +464,7 @@ final class TaskNotePageModel: ObservableObject {
     @discardableResult
     func delete(_ id: UUID) -> Bool {
         let index = rows.firstIndex(where: { $0.id == id })
-        let applied = settle(library.deleteTasks([id], in: historyID)) { [weak self] in self?.delete(id) }
+        let applied = settle(library.deleteListedTasks([id], in: historyID)) { [weak self] in self?.delete(id) }
         if applied, focusedRowID == id {
             let remaining = rows.filter { $0.id != id }
             focusedRowID = index.flatMap { remaining.indices.contains($0) ? remaining[$0].id : remaining.last?.id }
@@ -478,15 +478,15 @@ final class TaskNotePageModel: ObservableObject {
     /// note stays, editable (§ 2.7). One step in the page's history.
     @discardableResult
     func deleteTask() -> Bool {
-        guard store.task(withID: taskID) != nil else { return report(.taskGone) }
+        guard store.listedTask(withID: taskID) != nil else { return report(.taskGone) }
         guard resolveFieldDrafts() else { return false }
-        return settle(library.deleteTasks([taskID], in: historyID)) { [weak self] in self?.deleteTask() }
+        return settle(library.deleteListedTasks([taskID], in: historyID)) { [weak self] in self?.deleteTask() }
     }
 
     /// "Task deleted · Restore": the live head comes back.
     @discardableResult
     func restoreTask() -> Bool {
-        guard store.task(withID: taskID) == nil else { return true }
+        guard store.listedTask(withID: taskID) == nil else { return true }
         guard library.restore(AtticItemRef(.task, taskID), in: historyID) else {
             return report(CommandFailure(String(localized: "Couldn't restore the task")), retry: { [weak self] in self?.restoreTask() })
         }
@@ -512,7 +512,7 @@ final class TaskNotePageModel: ObservableObject {
     // MARK: The head's title (Tasks' title editor and its shorthand)
 
     func beginEditingTitle(undoManager: UndoManager? = nil) {
-        guard let task = store.task(withID: taskID), !isEditingTitle else { return }
+        guard let task = store.listedTask(withID: taskID), !isEditingTitle else { return }
         titleBase = (task.title, task.priority, task.dueDay)
         titleHistory.reset()
         titleField = WorkspaceFieldUndo(manager: undoManager ?? UndoManager())
@@ -566,7 +566,7 @@ final class TaskNotePageModel: ObservableObject {
     @discardableResult
     func commitTitle() -> Bool {
         guard isEditingTitle else { return true }
-        guard let task = store.task(withID: taskID) else { return report(.taskGone) }
+        guard let task = store.listedTask(withID: taskID) else { return report(.taskGone) }
         let parts = titleEdit.parts(parser: parser)
         let title = TaskDraftBuilder.collapsed(parts.title)
         let tags = AtticTag.normalizedSet(task.tags + parts.tags)
@@ -588,7 +588,7 @@ final class TaskNotePageModel: ObservableObject {
             return true
         }
         let outcome = fieldCommit(titleField) { [library, taskID, historyID] in
-            library.updateTask(taskID, title: newTitle, priority: newPriority, tags: newTags, dueDay: newDay, in: historyID)
+            library.updateListedTasks([taskID], title: newTitle, priority: newPriority, tags: newTags, dueDay: newDay, in: historyID)
         }
         // Refused: the editor, its text and its draft Undo stay.
         guard outcome.isApplied else {
@@ -706,7 +706,7 @@ final class TaskNotePageModel: ObservableObject {
 
     func needsReopen(toggling id: UUID) -> Bool {
         guard head.exists, head.state == .done else { return false }
-        return rows.first { $0.id == id }?.isDone ?? (store.task(withID: id)?.status == .done)
+        return rows.first { $0.id == id }?.isDone ?? (store.listedTask(withID: id)?.status == .done)
     }
 
     /// The person chose Reopen Task and Continue: the task reopens, then

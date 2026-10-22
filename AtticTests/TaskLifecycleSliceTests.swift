@@ -228,6 +228,38 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertNil(probe)
     }
 
+    func testP3F13DoneLogTaskPageCanRenameAndDelete() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        XCTAssertTrue(presenter.model.toggleTask())
+        XCTAssertEqual(tasks.moveCompletedToDoneLog(before: Date().addingTimeInterval(60)), 3)
+        presenter.model.refresh()
+        presenter.model.beginEditingTitle()
+        XCTAssertTrue(presenter.model.isEditingTitle)
+        presenter.model.titleEdited(NSRange(location: 0, length: presenter.model.head.title.utf16.count), replacement: "Renamed in log")
+        presenter.model.titleEdit.text = "Renamed in log" // the field binding follows its edit callback
+        XCTAssertTrue(presenter.model.commitTitle())
+        XCTAssertEqual(tasks.listedTask(withID: id)?.title, "Renamed in log")
+        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertNotNil(tasks.deletedFamily(rootID: id))
+    }
+
+    func testP3F15AllNotesResolvesLiveTaskTitleAndTagsWithoutRewritingTheNote() throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let before = try rows(noteID).first?.content
+        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes)
+        _ = model.groups(store: notes.store, drafts: [])
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "Live task name", tags: ["live-tag"]))
+        let row = try XCTUnwrap(model.groups(store: notes.store, drafts: []).flatMap(\.rows).first { $0.id == noteID })
+        XCTAssertEqual(row.title, "Live task name")
+        XCTAssertTrue(row.spoken.contains("Live task name"))
+        XCTAssertFalse(row.spoken.contains("Finalize launch checklist"), "VoiceOver must not read the stale title snapshot")
+        model.tagFilter = "live-tag"
+        XCTAssertTrue(model.groups(store: notes.store, drafts: []).flatMap(\.rows).contains { $0.id == noteID })
+        XCTAssertEqual(try rows(noteID).first?.content, before)
+    }
+
     @discardableResult
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)

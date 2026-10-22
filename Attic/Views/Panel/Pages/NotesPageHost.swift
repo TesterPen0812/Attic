@@ -4,7 +4,7 @@ import SwiftUI
 /// Notes replaces it until Back (`TaskNoteRouteHost`).
 struct NotesPageHost: View {
     @ObservedObject var noteStore: NoteStore
-    let taskStore: TaskStore
+    @ObservedObject var taskStore: TaskStore
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
@@ -36,7 +36,7 @@ struct NotesPageHost: View {
         pages.openTaskPage = { [taskStore, uiState] taskID in
             // A deleted task's note opens its page too, in the quiet
             // "Task deleted · Restore" state (§ 2.7.2), not as a plain note.
-            guard taskStore.task(withID: taskID) != nil || taskStore.deletedFamily(rootID: taskID) != nil else { return false }
+            guard taskStore.listedTask(withID: taskID) != nil || taskStore.deletedFamily(rootID: taskID) != nil else { return false }
             uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to All notes"))
             return true
         }

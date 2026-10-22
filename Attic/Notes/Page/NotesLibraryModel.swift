@@ -81,9 +81,30 @@ final class NotesLibraryModel: ObservableObject {
     /// after one save decodes that note only).
     private(set) var bodyDecodeCount = 0
     /// Every tag, most recently edited first, for the store revision it was read at.
-    private var recentTagsCache: (revision: UInt64, tags: [String])?
+    private var recentTagsCache: (revision: UInt64, taskMetadata: [UUID: TaskMetadata], tags: [String])?
+
+    private struct TaskMetadata: Equatable {
+        let title: String
+        let tags: [String]
+        let state: AtticTaskState
+    }
+    private var taskMetadata: [UUID: TaskMetadata] = [:]
+
+    private func readTaskMetadata(_ store: NoteStore) -> [UUID: TaskMetadata] {
+        let ids = Array(Set(store.notes.compactMap(\.taskID)))
+        guard !ids.isEmpty else { return [:] }
+        let context = ModelContext(store.container)
+        let rows = (try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))) ?? []
+        return Dictionary(uniqueKeysWithValues: TaskStore.canonicalReplicas(from: rows).map {
+            ($0.id, TaskMetadata(title: $0.title, tags: $0.tags, state: TaskRowPresentation.state($0.status)))
+        })
+    }
+    private func tags(of note: NoteItem) -> [String] {
+        note.taskID.flatMap { taskMetadata[$0]?.tags } ?? note.tags
+    }
 
     private struct RowsKey: Equatable {
+        let taskMetadata: [UUID: TaskMetadata]
         let revision: UInt64
         let matches: Set<UUID>?
         let attention: Set<UUID>
@@ -229,7 +250,8 @@ final class NotesLibraryModel: ObservableObject {
         let attention = Set(drafts.map(\.noteID))
         var unsaved = drafts.filter { store.note(withID: $0.noteID) == nil }
         let searching = isSearching
-        let key = RowsKey(revision: store.revision, matches: searching ? matches : nil, attention: attention,
+        taskMetadata = readTaskMetadata(store)
+        let key = RowsKey(taskMetadata: taskMetadata, revision: store.revision, matches: searching ? matches : nil, attention: attention,
                           drafts: unsaved.map(\.noteID), day: calendar.ordinality(of: .day, in: .era, for: now()) ?? 0,
                           dateEnvironment: DatePresentationEnvironment(calendar: calendar),
                           tag: tagFilter, prepareSummaries: prepareSummaries)
@@ -250,14 +272,17 @@ final class NotesLibraryModel: ObservableObject {
         }
         let allNotes = notes
         if let tag = tagFilter {
-            notes = notes.filter { $0.tags.contains(tag) }
+            notes = notes.filter { tags(of: $0).contains(tag) }
             unsaved = unsaved.filter { $0.engine.tags.contains(tag) }
         }
         if searching {
             // The earlier rows stay while a search runs, but only rows of
             // this filter (review S4-R2).
             guard let matches else { return cache.flatMap { $0.key.tag == tagFilter ? $0.groups : nil } ?? [] }
-            notes = notes.filter { matches.contains($0.id) }
+            notes = notes.filter { note in
+                guard let owner = note.taskID, let task = taskMetadata[owner] else { return matches.contains(note.id) }
+                return task.title.localizedStandardContains(matchedQuery) || note.body.localizedStandardContains(matchedQuery)
+            }
         }
         let draftRows = unsaved.map { draftRow($0) }
         let result: [Group]
@@ -303,9 +328,11 @@ final class NotesLibraryModel: ObservableObject {
     /// name). Read once per store revision.
     func recentTags(store: NoteStore) -> [String] {
         observeStore(store)
-        if let recentTagsCache, recentTagsCache.revision == store.revision { return recentTagsCache.tags }
-        let tags = Self.recentTags(store.notes.lazy.filter { $0.deletedAt == nil }.map { ($0.tagsRaw, $0.updatedAt) })
-        recentTagsCache = (store.revision, tags)
+        let latest = readTaskMetadata(store)
+        if let recentTagsCache, recentTagsCache.revision == store.revision, latest == recentTagsCache.taskMetadata { return recentTagsCache.tags }
+        taskMetadata = latest
+        let tags = Self.recentTags(store.notes.lazy.filter { $0.deletedAt == nil }.map { (AtticTag.encode(self.tags(of: $0)), $0.updatedAt) })
+        recentTagsCache = (store.revision, taskMetadata, tags)
         return tags
     }
 
@@ -340,9 +367,10 @@ final class NotesLibraryModel: ObservableObject {
     /// the note you came from (and still has a note); otherwise every note.
     func reconcileFilter(store: NoteStore, selected: UUID?) {
         guard let tag = tagFilter else { return }
-        let carriers = store.notes.filter { $0.deletedAt == nil && $0.tags.contains(tag) }
+        taskMetadata = readTaskMetadata(store)
+        let carriers = store.notes.filter { $0.deletedAt == nil && tags(of: $0).contains(tag) }
         if carriers.isEmpty { tagFilter = nil; return }
-        if let selected, let note = store.note(withID: selected), !note.tags.contains(tag) { tagFilter = nil }
+        if let selected, let note = store.note(withID: selected), !tags(of: note).contains(tag) { tagFilter = nil }
     }
 
     // MARK: Words
@@ -423,14 +451,16 @@ final class NotesLibraryModel: ObservableObject {
     }
 
     private func row(_ note: NoteItem, store: NoteStore, attention: Set<UUID>, prepareSummary: Bool = true) -> AtticNoteRowModel {
+        let title = note.taskID.flatMap { taskMetadata[$0]?.title } ?? note.title
         if !prepareSummary {
-            return AtticNoteRowModel(id: note.id, title: note.title, time: Self.time(note.updatedAt, now: now(), calendar: calendar), needsAttention: attention.contains(note.id), hasProposal: proposalIDs?.ids.contains(note.id) == true, preview: "", spoken: "")
+            return AtticNoteRowModel(id: note.id, title: title, time: Self.time(note.updatedAt, now: now(), calendar: calendar), needsAttention: attention.contains(note.id), hasProposal: proposalIDs?.ids.contains(note.id) == true, preview: "", spoken: "")
         }
-        let summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
+        var summary = NoteRowSummary(note: note, attachments: store.attachments(for: note.id), body: body(of: note))
+        if note.taskID.flatMap({ taskMetadata[$0] }) != nil { summary.title = title }
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
         // A task's own note (Phase 3): its task's circle and "Task note".
-        let rowTaskState: AtticTaskState? = note.taskID.map { self.taskState?($0) ?? AtticTaskState.todo }
+        let rowTaskState: AtticTaskState? = note.taskID.map { taskMetadata[$0]?.state ?? self.taskState?($0) ?? AtticTaskState.todo }
         let taskNote = String(localized: "Task note")
         let preview = rowTaskState == nil ? summary.preview
             : (summary.preview.isEmpty ? taskNote : taskNote + " · " + summary.preview)
