@@ -161,6 +161,28 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(try storedDocument(noteID).blocks.contains { $0.text.hasPrefix("Was a task") })
     }
 
+    func testP3F7AgentWriteToLeasedTaskEditorIsAProposal() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        await notes.recoverAtLaunchAndWait()
+        let tools = AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
+        let before = try storedDocument(session.noteID)
+        let revision = try XCTUnwrap(notes.store.note(withID: session.noteID)?.revisionToken)
+        _ = try tools.call(name: "update_note", arguments: workspaceTokens(id, tools: tools).merging(["id": session.noteID.uuidString, "body": "External", "base_revision": revision]) { _, new in new })
+        XCTAssertEqual(try storedDocument(session.noteID), before)
+        XCTAssertEqual(notes.store.pendingEdits(noteID: session.noteID).count, 1)
+        XCTAssertEqual(session.engine.document(), before)
+        let edit = try XCTUnwrap(notes.store.pendingEdits(noteID: session.noteID).first)
+        let reviewed = await notes.beginProposalReview(id: edit.id)
+        XCTAssertTrue(reviewed)
+        let accepted = await notes.acceptProposal()
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(session.engine.document().blocks.last?.text, "External")
+        XCTAssertTrue(session.engine.history.workspace === presenter.page.history)
+        XCTAssertEqual(presenter.page.history.undoName, "Edited by Agent: can't undo past this")
+    }
+
     @discardableResult
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)

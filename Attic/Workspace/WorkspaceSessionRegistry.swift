@@ -338,6 +338,7 @@ final class WorkspacePageSession {
         if let current = note, let refreshed = controller?.refreshWorkspaceSession(current) {
             history.attach(refreshed.engine.history)
             refreshed.usesWorkspaceBinding = true
+            refreshed.workspacePage = self
             note = refreshed
         }
         history.recordExternalBarrier(origin: origin)

@@ -837,17 +837,26 @@ final class NotesPageController: ObservableObject {
         return items
     }
 
+    private func reviewSession(proposalID: UUID? = nil) -> NoteSession? {
+        if let proposalID, let noteID = (try? store.pendingEditRows(proposalID))?.first?.noteID,
+           let session = cache[noteID], isReviewSessionCurrent(session) { return session }
+        return taskNotePresenter?.session ?? active
+    }
+    private func isReviewSessionCurrent(_ session: NoteSession) -> Bool {
+        active === session || session.workspacePage?.activeLease != nil
+    }
+
     var reviewProposals: [NotePendingEdit] {
-        guard let session = active else { return [] }
+        guard let session = reviewSession() else { return [] }
         return store.pendingEdits(noteID: session.noteID)
     }
 
     @discardableResult
     func beginProposalReview(id: UUID? = nil) async -> Bool {
-        guard await awaitRecoveryForUser(), let session = active, !session.isImporting,
+        guard await awaitRecoveryForUser(), let session = reviewSession(proposalID: id), !session.isImporting,
               canLeaveComposition(in: session) else { return false }
         return await performAfterRecovery {
-            guard self.active === session, !session.isImporting, self.canLeaveComposition(in: session),
+            guard self.isReviewSessionCurrent(session), !session.isImporting, self.canLeaveComposition(in: session),
                   self.preserve(session),
                   let edit = self.store.pendingEdits(noteID: session.noteID).first(where: { id == nil || $0.id == id }),
                   let family = try? self.store.pendingEditRows(edit.id),
@@ -901,7 +910,7 @@ final class NotesPageController: ObservableObject {
 
     @discardableResult
     func acceptProposal() async -> Bool {
-        guard await awaitRecoveryForUser(), let review = proposalReview, let session = active,
+        guard await awaitRecoveryForUser(), let review = proposalReview, let session = cache[review.noteID], isReviewSessionCurrent(session),
               session.id == review.sessionID, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
         guard !session.isConflict else {
@@ -914,13 +923,13 @@ final class NotesPageController: ObservableObject {
             // Save the whole draft before replacing its engine or retiring
             // recovery, then require review of that saved state.
             _ = await preserveDurably(session)
-            guard active === session, proposalReview == review, session.engine === engine else { return false }
+            guard isReviewSessionCurrent(session), proposalReview == review, session.engine === engine else { return false }
             _ = refreshProposalReview(id: review.id, session: session)
             proposalReviewNotice = "Your draft changed. Review the refreshed comparison before replacing."
             return false
         }
         return await performAfterRecovery {
-            guard self.proposalReview == review, self.active === session, !session.isImporting,
+            guard self.proposalReview == review, self.isReviewSessionCurrent(session), !session.isImporting,
                   self.canLeaveComposition(in: session) else { return false }
             guard let note = self.store.note(withID: review.noteID), note.revisionToken == review.revision,
                   note.content == review.savedContent, session.engine === engine,
@@ -953,11 +962,15 @@ final class NotesPageController: ObservableObject {
                     self.active = nil
                     self.isLibraryPresented = true
                 } else {
-                    session.replaceEngine(self.makeEngine(noteID: review.noteID, document: review.proposed,
-                        readOnly: false, tags: session.engine.tags))
-                    session.baseRevisionID = UUID(uuidString: token)
-                    self.wire(session)
-                    self.didSave(session, staged: [])
+                    if let page = session.workspacePage {
+                        page.externalRefresh(origin: review.agent)
+                    } else {
+                        session.replaceEngine(self.makeEngine(noteID: review.noteID, document: review.proposed,
+                            readOnly: false, tags: session.engine.tags))
+                        session.baseRevisionID = UUID(uuidString: token)
+                        self.wire(session)
+                        self.didSave(session, staged: [])
+                    }
                 }
                 return true
             }
@@ -1351,6 +1364,7 @@ final class NotesPageController: ObservableObject {
                 readOnly: reason != nil, tags: note.tags, bodyOnly: note.taskID != nil))
             session.readOnlyReason = reason
             session.baseRevisionID = load.revisionID
+            session.baseContent = note.content
             session.baseTags = note.tags
             session.state = reason == nil ? .clean : .readOnly
             wire(session)
@@ -1501,7 +1515,7 @@ final class NotesPageController: ObservableObject {
     private func agentDisposition(for noteID: UUID) -> NoteAgentWriteDisposition {
         if journal?.requiresAsyncIO == true && !didRecoverAtLaunch { return .refuse("Recovery is still being checked. Retry after it completes.") }
         guard let session = cache[noteID] else { return .direct }
-        let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
+        let presence: NoteSessionPolicy.Presence = session.workspacePage?.activeLease != nil || (isPageVisible && !isLibraryPresented && active === session)
             ? .onScreen : .background
         switch NoteSessionPolicy.agentDisposition(presence, state: session.state, hasBatch: session.isImporting) {
         case .proposal: return .proposal
