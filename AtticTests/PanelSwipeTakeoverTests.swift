@@ -145,7 +145,15 @@ final class PanelSwipeTakeoverTests: XCTestCase {
             .first { !existing.contains(ObjectIdentifier($0)) })
         let screen = try XCTUnwrap(controller.currentScreen ?? NSScreen.main)
         XCTAssertTrue(controller.show(on: screen, corner: .topRight))
-        spin(0.5)
+        // The reveal is a timed motion, which no swipe takes over: let it
+        // end (CI's runners are slower than 0.5 s).
+        let probe = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                   context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 0))
+        let deadline = Date().addingTimeInterval(5)
+        spin(0.3)
+        while panel.canBeginTrackpadSwipe?(probe) != true, Date() < deadline { spin(0.05) }
+        XCTAssertEqual(panel.canBeginTrackpadSwipe?(probe), true, "the reveal has ended")
+        spin(0.2)
         return Rig(controller: controller, panel: panel, settings: settings, defaults: defaults, suite: suite)
     }
 
@@ -256,7 +264,7 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         let screen = try XCTUnwrap(rig.controller.currentScreen ?? NSScreen.main)
         XCTAssertTrue(rig.controller.show(on: screen, corner: .topRight))
         XCTAssertFalse(content.catchesSwipeStarts, "a reveal is no release")
-        spin(0.5)
+        spin(0.8)
         _ = rig.controller.requestHide { _ in }
         XCTAssertFalse(content.catchesSwipeStarts, "nor is a timed hide")
     }
