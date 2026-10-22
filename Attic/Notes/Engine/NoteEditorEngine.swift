@@ -1625,6 +1625,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     @discardableResult
     func performEdit(_ range: NSRange, with replacement: NSAttributedString, name: String,
                      selection: NSRange? = nil) -> Bool {
+        guard !refusesReservedWorkspaceInput() else { return false }
         guard !isReadOnly, rangeIsInStorage(range) else { return false }
         guard activity == .idle else {
             return refuse(String(localized: "Finish Writing Tools or composing text before editing this note."), kind: .finishFirst)
@@ -2096,8 +2097,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Decides whether a change may happen. Only a person's own editing and
     /// the editor's own commands may remove an object.
+    @discardableResult
+    func refusesReservedWorkspaceInput() -> Bool {
+        guard history.workspace?.isInputReserved == true, !history.isReplaying else { return false }
+        _ = refuse(String(localized: "Finish the workspace operation before editing"), kind: .notAvailable)
+        return true
+    }
+
     func allowsChange(ranges: [NSRange]) -> Bool {
         if history.isReplaying || engineEditDepth > 0 { return true }
+        guard !refusesReservedWorkspaceInput() else { return false }
         if writingToolsBeganInView, writingToolsBlocked,
            textView?.isWritingToolsActive == false { writingToolsDidEnd() }
         if writingToolsBlocked, isWritingToolsSessionActive || (textView?.isWritingToolsActive ?? false) {
@@ -3159,7 +3168,7 @@ extension NoteEditorEngine {
     /// The tag picker joins the editor history; store refreshes keep using
     /// `setTags` so an external update is not an accidental Undo step.
     func setTagsFromPicker(_ newTags: [String]) {
-        guard !isReadOnly, activity == .idle else { return }
+        guard !isReadOnly, activity == .idle, !refusesReservedWorkspaceInput() else { return }
         let normalized = AtticTag.normalizedSet(newTags)
         guard normalized != tags else { return }
         history.recordTagChange(before: tags, after: normalized)
@@ -3632,7 +3641,7 @@ extension NoteEditorEngine {
 
     func validate(_ command: NoteFormatCommand, selection: NSRange? = nil) -> NoteCommandValidation {
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
-        guard !isReadOnly, activity == .idle, rangeIsInStorage(selection) else {
+        guard !isReadOnly, history.workspace?.isInputReserved != true, activity == .idle, rangeIsInStorage(selection) else {
             return NoteCommandValidation(enabled: false, state: .off)
         }
         let lines = formattableParagraphs(in: selection)
@@ -3682,6 +3691,7 @@ extension NoteEditorEngine {
 
     @discardableResult
     func perform(_ command: NoteFormatCommand, selection: NSRange? = nil) -> Bool {
+        guard !refusesReservedWorkspaceInput() else { return false }
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         guard validate(command, selection: selection).enabled else { return false }
         textView?.cancelCalloutIconSession(reason: "format command")

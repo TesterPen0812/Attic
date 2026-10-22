@@ -129,7 +129,7 @@ extension NoteEditorEngine {
         return true
     }
 
-    var allowsTableCellEdit: Bool { !isReadOnly && activity != .writingToolsRefused }
+    var allowsTableCellEdit: Bool { !isReadOnly && activity != .writingToolsRefused && !refusesReservedWorkspaceInput() }
 
     var isWritingToolsAvailableForCells: Bool { textView?.writingToolsBehavior != NSWritingToolsBehavior.none }
 

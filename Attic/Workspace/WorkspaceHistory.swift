@@ -47,6 +47,7 @@ final class WorkspaceHistory {
     private(set) var pendingReplayID: UUID?
     private(set) var pendingCommandID: UUID?
     private var inputReserved = false
+    var isInputReserved: Bool { inputReserved || pendingReplayID != nil || pendingCommandID != nil }
     private var queuedInput: [() -> Void] = []
     private final class WeakAdapter {
         weak var value: NoteUndoHistory?

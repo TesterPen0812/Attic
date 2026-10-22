@@ -34,6 +34,48 @@ final class TaskLifecycleSliceTests: XCTestCase {
 
     // MARK: Fixtures
 
+    private func checkReservedInput(_ session: NoteSession, file: StaticString = #filePath, line: UInt = #line) {
+        let view = session.engine.textView!
+        let before = view.string
+        var notices = 0
+        let oldNotice = session.engine.onNotice
+        session.engine.onNotice = { _ in notices += 1 }
+        defer { session.engine.onNotice = oldNotice }
+        guard !view.shouldChangeText(in: view.selectedRange(), replacementString: "x") else {
+            return XCTFail("Native input admitted during awaited workspace operation", file: file, line: line)
+        }
+        guard !session.engine.validate(.mark(.bold)).enabled else {
+            return XCTFail("Formatting admitted during workspace reservation", file: file, line: line)
+        }
+        XCTAssertFalse(session.engine.perform(.mark(.bold)), file: file, line: line)
+        view.insertText("typing", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        board.setString("pasted", forType: .string)
+        XCTAssertFalse(view.readSelection(from: board, type: .string), file: file, line: line)
+        let drag = ReservedDrag(board: board)
+        XCTAssertFalse(view.prepareForDragOperation(drag), file: file, line: line)
+        XCTAssertFalse(view.performDragOperation(drag), file: file, line: line)
+        view.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertFalse(view.hasMarkedText(), "IME is refused before composition begins", file: file, line: line)
+        view.deleteBackward(nil)
+        view.insertNewline(nil)
+        XCTAssertEqual(view.string, before, file: file, line: line)
+        XCTAssertGreaterThan(notices, 0, "The refusal is visible", file: file, line: line)
+    }
+
+    func testP3F1NativeInputIncludingIMEIsRefusedDuringMakeSubtaskAndReplay() async throws {
+        let (_, presenter, session) = try makeSubtaskFixture()
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let analysis = try XCTUnwrap(presenter.subtaskSelection())
+        coordinator.afterPreparation = { [self] in checkReservedInput(session) }
+        defer { coordinator.afterPreparation = nil }
+        guard case .made = await presenter.makeSubtasks(analysis, tasks: tasks, notes: notes) else { return XCTFail() }
+        let undone = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+    }
+
     @discardableResult
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)
@@ -830,4 +872,26 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertNil(presenter.page.history.pendingReplayID)
         await close(presenter)
     }
+}
+
+@MainActor
+private final class ReservedDrag: NSObject, NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    init(board: NSPasteboard) { draggingPasteboard = board }
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingLocation: NSPoint { .zero }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    var draggingFormation: NSDraggingFormation = .none
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options: NSDraggingItemEnumerationOptions, for view: NSView?, classes: [AnyClass],
+                                searchOptions: [NSPasteboard.ReadingOptionKey: Any],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }

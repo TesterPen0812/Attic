@@ -335,6 +335,7 @@ final class NoteTableCellEditor: NSTextView, NSTextViewDelegate {
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard table?.engine?.refusesReservedWorkspaceInput() != true else { return }
         if !hasMarkedText() { selectionBeforeEdit = self.selectedRange() }
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
         // The row grows with a composition; the model waits for its commit.

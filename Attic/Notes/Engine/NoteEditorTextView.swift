@@ -137,11 +137,11 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var isSuspended = false
 
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        !isSuspended && super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        !isSuspended && engine?.refusesReservedWorkspaceInput() != true && super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
     }
 
     override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
-        !isSuspended && super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
+        !isSuspended && engine?.refusesReservedWorkspaceInput() != true && super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
     }
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
     /// After each layout pass: the page keeps the title's accessories (the
@@ -904,6 +904,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var workspaceMenuItems: (() -> [NSMenuItem])?
 
     override func keyDown(with event: NSEvent) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if !hasMarkedText(), workspaceShortcut?(event) == true { return }
         handleHiddenForTyping = true
         hideBlockHandle()
@@ -1145,6 +1146,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if refusesUnexpectedCalloutInput() { return }
         let generation = engine?.history.recordingGeneration
         defer { engine?.history.completeSelection(since: generation) }
@@ -1178,6 +1180,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if refusesUnexpectedCalloutInput() { return }
         guard !isSuspended else { return }
         if !hasMarkedText() {
@@ -1193,6 +1196,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     var suggestionCommand: ((Selector) -> Bool)?
 
     override func doCommand(by selector: Selector) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if !hasMarkedText(), suggestionCommand?(selector) == true { return }
         if !hasMarkedText(), let engine {
             // OD-7: in the title Tab moves to the body; in the body it
@@ -1216,6 +1220,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func insertNewline(_ sender: Any?) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         // Return on a selected table goes into its first cell.
         if let engine, !hasMarkedText(), selectedRange().length == 1,
            let table = engine.tableAttachment(at: selectedRange().location) {
@@ -1229,6 +1234,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func deleteBackward(_ sender: Any?) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if marquee?.isEmpty == false { _ = marquee?.delete(); return }
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
@@ -1241,6 +1247,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func deleteForward(_ sender: Any?) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if marquee?.isEmpty == false { _ = marquee?.delete(); return }
         if engine?.handleDeleteForward() == true { return }
         asUserEdit { super.deleteForward(sender) }
@@ -1286,6 +1293,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func cut(_ sender: Any?) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if marquee?.isEmpty == false {
             if isEditable, marquee?.copy(to: .general) == true { _ = marquee?.delete() }
             return
@@ -1293,6 +1301,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         asUserEdit { super.cut(sender) }
     }
     override func delete(_ sender: Any?) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if marquee?.isEmpty == false { _ = marquee?.delete(); return }
         if let engine, selectedRange().length == 1,
            let object = engine.object(at: selectedRange().location),
@@ -1329,11 +1338,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
         printNote(sender)
     }
     override func paste(_ sender: Any?) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if refusesUnexpectedCalloutInput() { return }
         if engine?.handlePaste(.general) == true { return }
         asUserEdit { super.paste(sender) }
     }
     override func pasteAsPlainText(_ sender: Any?) {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return }
         if refusesUnexpectedCalloutInput() { return }
         engine?.isPastingAsPlainText = true
         defer { engine?.isPastingAsPlainText = false }
@@ -1367,11 +1378,13 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return false }
         if objectInteraction?.isFileDrag(sender) == true { return true }
         return super.prepareForDragOperation(sender)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return false }
         if let handled = objectInteraction?.performFileDrop(sender) { return handled }
         let isSelfMove = (sender.draggingSource as AnyObject?) === self
             && sender.draggingSourceOperationMask.contains(.move)
@@ -1403,6 +1416,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard engine?.refusesReservedWorkspaceInput() != true else { return false }
         guard !isSuspended else { return false }
         // A detached note view must not fall back to AppKit's unrestricted
         // clipboard importer while its engine is being replaced.
