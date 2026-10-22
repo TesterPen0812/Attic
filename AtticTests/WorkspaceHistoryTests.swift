@@ -107,6 +107,15 @@ final class WorkspaceHistoryTests: XCTestCase {
             }, publication: publish)
         }
     }
+    func testOpusR9RebindingReadsEachHistoricalStorageOnce() throws {
+        for _ in 0..<12 { type("body"); workspace.closeGroup() }
+        let replacement = NoteUndoHistory(storage: NSTextStorage(string: adapter.storage.string))
+        workspace.attach(replacement)
+        XCTAssertEqual(workspace.rebindSourceReadCount, 1, "opening an editor must not copy the document once per Undo step")
+        for _ in 0..<12 { XCTAssertTrue(replacement.undo()) }
+        XCTAssertEqual(replacement.storage.string, "")
+    }
+
     func testH1ForwardMakeSubtaskReservesTypingAndReplaysRealChildAndFullDraftAtomically() async throws {
         let tasks = TaskStore(container: coordinator.container), library = AtticLibrary(tasks: tasks, undo: route)
         let tickID = try XCTUnwrap(tasks.create(title: "Tick child", parentID: taskID)).id

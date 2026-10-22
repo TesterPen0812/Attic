@@ -55,6 +55,7 @@ final class WorkspaceHistory {
         init(_ value: NoteUndoHistory) { self.value = value }
     }
     private var adapters: [WeakAdapter] = []
+    private(set) var rebindSourceReadCount = 0
     private(set) weak var currentAdapter: NoteUndoHistory?
 
     init(route: UndoRoute, historyID: UndoHistoryID) {
@@ -76,13 +77,22 @@ final class WorkspaceHistory {
         // Groups outside the shared suffix stay dormant until their form
         // returns (e.g. the ordinary title before Make Task from Note).
         let target = Array(adapter.storage.string.utf16)
+        var sources: [ObjectIdentifier: (minimum: Int, delta: Int, matches: Bool)] = [:]
         for step in route.steps(in: historyID, redo: false) + route.steps(in: historyID, redo: true) {
             guard let group = step.workspacePayload, group.adapter !== adapter, group.adapter.noteID == adapter.noteID else { continue }
-            let source = Array(group.adapter.storage.string.utf16)
-            var shared = 0
-            while shared < min(source.count, target.count), source[source.count - shared - 1] == target[target.count - shared - 1] { shared += 1 }
-            guard shared > 0 || source == target else { continue }
-            if NoteUndoHistory.transfer(group.payloads, from: source.count - shared, by: target.count - source.count) { group.adapter = adapter }
+            let key = ObjectIdentifier(group.adapter)
+            let source: (minimum: Int, delta: Int, matches: Bool)
+            if let cached = sources[key] { source = cached }
+            else {
+                rebindSourceReadCount += 1
+                let text = Array(group.adapter.storage.string.utf16)
+                var shared = 0
+                while shared < min(text.count, target.count), text[text.count - shared - 1] == target[target.count - shared - 1] { shared += 1 }
+                source = (text.count - shared, target.count - text.count, shared > 0 || text == target)
+                sources[key] = source
+            }
+            guard source.matches else { continue }
+            if NoteUndoHistory.transfer(group.payloads, from: source.minimum, by: source.delta) { group.adapter = adapter }
         }
         currentAdapter = adapter
         adapters.removeAll { $0.value == nil }
