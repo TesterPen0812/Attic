@@ -529,8 +529,10 @@ final class NoteStore: ObservableObject {
                       attachmentRetentionSource.recoveryGeneration == recoveryGeneration else { continue }
                 guard !context.hasChanges else { return nil }
                 let retained = ids
-                return AttachmentByteOwnership(ids: retained) { [weak self] in
-                    guard let self, self.context === context, !context.hasChanges,
+                // The provider may be this facade's last owner. Keep it alive
+                // until every awaited inventory is validated together.
+                return AttachmentByteOwnership(ids: retained) { [self] in
+                    guard self.context === context, !context.hasChanges,
                           self.revision == generation,
                           self.attachmentRetentionSource.recoveryGeneration == recoveryGeneration,
                           let current = try? self.recoveryReferencedAttachmentIDs() else { return false }

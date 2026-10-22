@@ -1936,6 +1936,28 @@ extension PhaseXHunt6Tests {
 @MainActor
 extension PhaseXHunt6Tests {
     #if !ATTIC_GENERATED_TESTS
+    func testH8_01CollectionProofSurvivesFacadeReleaseDuringInventory() async throws {
+        let files = makeTestAttachmentFileStore()
+        var store: NoteStore? = try makeTestNoteStore(attachmentFileStore: files)
+        weak var released = store
+        await store?.waitForAttachmentReconciliation()
+        let ref = reference()
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(ref))
+        var readRecovery = false
+        store?.recoveryReferencedAttachmentIDsDurably = {
+            readRecovery = true
+            // The provider is the facade's last owner. Its proof must remain
+            // usable until the collector validates every awaited inventory.
+            store = nil
+            return []
+        }
+        try await files.removeMaterializations([ref])
+        XCTAssertTrue(readRecovery)
+        XCTAssertNil(store)
+        XCTAssertNil(released, "A completed collection must not leak its facade")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "No owner remains")
+    }
+
     func testH8_01EveryEarlierStoreIsRevalidatedAfterLaterProvidersAwait() async throws {
         let files = makeTestAttachmentFileStore()
         let a = try makeTestNoteStore(attachmentFileStore: files)
