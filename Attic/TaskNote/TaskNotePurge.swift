@@ -99,7 +99,7 @@ enum TaskNotePurgePresentation {
         let stepID = history.route.steps(in: history.historyID, redo: false).last { $0.operationID == operationID }?.id
         if wasShown, notes.open(noteID: patch.noteID) { showNotes() }
         toasts?.show(String(localized: "Task removed permanently"), answersUndoKey: false, performingAsync: { [weak notes, weak history] in
-            guard let notes, let history, let stepID else { return .applied }
+            guard let notes, let history, let stepID else { return .obsolete }
             guard await history.undoLatest(stepID: stepID) == .applied else {
                 return .failed(CommandFailure(String(localized: "Couldn't undo: the note changed since")))
             }

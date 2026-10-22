@@ -9,6 +9,8 @@ import Foundation
 enum CommandOutcome: Equatable {
     /// The store saved the change (or nothing needed to change).
     case applied
+    /// The action's owner or target has gone; nothing ran.
+    case obsolete
     /// Nothing changed: the store is exactly as it was before the command.
     case failed(CommandFailure)
 

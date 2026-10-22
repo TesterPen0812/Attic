@@ -91,7 +91,7 @@ final class PanelToastCenter: ObservableObject {
         // failure of a toast the page took down is still said.
         guard current == nil || current?.id == pressed.id else { return outcome }
         switch outcome {
-        case .applied:
+        case .applied, .obsolete:
             if current?.id == pressed.id { dismiss() }
         case let .failed(failure):
             let toast = Toast(id: pressed.id, message: failure.message,
@@ -119,7 +119,7 @@ final class PanelToastCenter: ObservableObject {
         }
         let outcome = action()
         switch outcome {
-        case .applied:
+        case .applied, .obsolete:
             dismiss()
         case let .failed(failure):
             // The same toast, now saying what went wrong. A problem is never

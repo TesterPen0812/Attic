@@ -125,6 +125,25 @@ final class TaskLifecycleSliceTests: XCTestCase {
         }
     }
 
+    func testOpusR10PurgeToastIsObsoleteAfterItsControllerLeaves() async throws {
+        let id = try seed(.boundary)
+        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        var captured: (WorkspaceMaterializationPatch, UUID)?
+        notes.taskNoteMaterialized = { captured = ($0, $1) }
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        let patch = try XCTUnwrap(captured), toasts = PanelToastCenter()
+        await TaskNotePurgePresentation.finish(patch.0, operationID: patch.1, tasks: tasks, notes: notes,
+            uiState: PanelUIState(), toasts: toasts, showNotes: {})
+        await notes.waitForRecoveryWork()
+        await notes.store.waitForAttachmentReconciliation()
+        weak var owner = notes
+        notes = nil
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(owner)
+        let outcome = await toasts.performActionAsync()
+        XCTAssertEqual(outcome, .obsolete)
+    }
+
     // MARK: Fixtures
 
     // Phase 3 reservations refuse native input visibly before storage changes.

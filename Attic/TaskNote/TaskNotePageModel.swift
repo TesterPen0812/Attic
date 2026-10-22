@@ -735,6 +735,8 @@ final class TaskNotePageModel: ObservableObject {
     @discardableResult
     private func settle(_ outcome: CommandOutcome, retry: @escaping () -> Void) -> Bool {
         switch outcome {
+        case .obsolete:
+            return false
         case .applied:
             clearFailure()
             // The control shows the store's truth at once (a refused tick
