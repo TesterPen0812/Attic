@@ -280,6 +280,7 @@ final class NotesPageController: ObservableObject {
     @Published var isLibraryPresented = false
     @Published private(set) var design: AtticDesignContext = .default
     @Published private(set) var recoveryWarnings: [String] = []
+    @Published private(set) var workspaceRecoveryIssues: [WorkspaceOperationCoordinator.RecoveryIssue] = []
     private var damagedRecoveryWarnings = Set<String>()
     /// Moves on each `present()`: the page puts the keyboard back in the
     /// note (Notes reopens where you left it, caret included).
@@ -2416,6 +2417,7 @@ final class NotesPageController: ObservableObject {
                         let coordinator = try WorkspaceLegacyBridge.coordinator(for: self.store.container)
                         if coordinator.journal !== diskJournal { try coordinator.adoptJournal(diskJournal) }
                         try await coordinator.finishLaunch()
+                        self.workspaceRecoveryIssues = coordinator.operationRecoveryIssues
                     }
                     _ = try await journal.readRecoveryEntries()
                     // A faster guarded save can now reach missing-row repair

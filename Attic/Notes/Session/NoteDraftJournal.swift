@@ -731,6 +731,23 @@ private actor NoteDraftJournalIO {
             guard let owned = ownership(of: file).retainedIDs else { return }
             retained.formUnion(owned)
         }
+        // Quarantined pre-copies remain recovery owners even though a
+        // pre-intent abort has no model write hold. Read descriptors only.
+        for parent in [operationsDirectory, directory.appendingPathComponent("quarantined-operations")] {
+            let roots: [URL]
+            do { roots = try fileManager.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil) }
+            catch { if journalFileIsMissing(error) { continue }; return }
+            for root in roots {
+                let data: Data
+                do { data = try Data(contentsOf: root.appendingPathComponent("pre-draft.json")) }
+                catch { if journalFileIsMissing(error) { continue }; return }
+                guard let pre = try? JSONDecoder().decode(NoteDraftJournalEntry.self, from: data),
+                      let document = NoteContentCodec.decode(pre.content).document else { return }
+                retained.formUnion(pre.staged.map(\.id))
+                retained.formUnion(document.attachmentIDs)
+                retained.formUnion(pre.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            }
+        }
         for file in files {
             guard let id = UUID(uuidString: file.lastPathComponent), !retained.contains(id) else { continue }
             try? fileManager.removeItem(at: file)
@@ -870,6 +887,9 @@ struct NoteOperationInventoryItem: Sendable {
     let quarantined: Bool
     var intactIntent = false
     var verifiedAbort: WorkspaceOperationClaim? = nil
+    /// No published intent can have returned to a model writer.
+    var preIntentAbort = false
+    var recoveryDraft: NoteDraftJournalEntry? = nil
 }
 
 struct NoteVerifiedOperationAbort: Codable, Sendable {
@@ -896,30 +916,39 @@ private extension NoteDraftJournalIO {
     func prepareOperation(_ envelope: WorkspaceOperationEnvelope) throws -> WorkspaceOperationClaim {
         let bytes = try WorkspaceModelFields.encode(envelope)
         let claim = WorkspaceOperationClaim(id: envelope.id, digest: Self.digest(bytes))
-        let root = operationDirectory(envelope.id)
-        let createdHere = !fileManager.fileExists(atPath: root.path)
+        let published = operationDirectory(envelope.id)
+        if fileManager.fileExists(atPath: published.path) {
+            guard try Data(contentsOf: published.appendingPathComponent("envelope.json")) == bytes else {
+                throw WorkspaceFoundationError.invalidIdentity
+            }
+            return claim
+        }
+        var root = operationsDirectory.appendingPathComponent("preparing-\(UUID().uuidString)", isDirectory: true)
         var prepared = false
         defer {
-            if createdHere && !prepared { try? releaseOperationDirectory(root, id: envelope.id) }
+            if !prepared { try? releaseOperationDirectory(root, id: envelope.id) }
         }
         operationBarrier.setBlocked(true)
         operationReconciled = false
-        let record = root.appendingPathComponent("envelope.json")
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: record.path) {
-            guard try Data(contentsOf: record) == bytes else { throw WorkspaceFoundationError.invalidIdentity }
-            return claim
-        }
         // The operation's own pre-copy does not replace a foreign checkpoint.
         if let pre = envelope.preDraft {
             try journalWriteSynced(WorkspaceModelFields.encode(pre), to: root.appendingPathComponent("pre-draft.json"))
         }
+        WorkspaceCrashHook.reach("K-pre-intent")
         // A synced immutable intent inventory precedes payload preparation.
         // Death before the final envelope rename can therefore be classified
         // as absent-receipt recovery without guessing which owners existed.
         try journalWriteSynced(bytes, to: root.appendingPathComponent("intent.json"))
+        try journalSync(root)
         try journalSync(operationsDirectory)
         try journalSync(directory)
+        WorkspaceCrashHook.reach("K-intent-synced")
+        // Same-parent rename publishes the UUID only after the immutable
+        // intent is durable. Temporary directories can never own a commit.
+        try fileManager.moveItem(at: root, to: published)
+        root = published
+        try journalSync(operationsDirectory)
         for payload in envelope.payloads {
             guard !payload.bytes.isEmpty, Self.digest(payload.bytes) == payload.digest else {
                 throw WorkspaceFoundationError.damagedEnvelope
@@ -930,7 +959,7 @@ private extension NoteDraftJournalIO {
             try journalSync(path)
         }
         WorkspaceCrashHook.reach("K1")
-        try journalWriteSynced(bytes, to: record)
+        try journalWriteSynced(bytes, to: root.appendingPathComponent("envelope.json"))
         try journalSync(root)
         try journalSync(operationsDirectory)
         try journalSync(directory)
@@ -951,10 +980,33 @@ private extension NoteDraftJournalIO {
             catch { if journalFileIsMissing(error) { continue }; throw error }
             if !quarantined && !roots.isEmpty { operationBarrier.setBlocked(true) }
             for root in roots.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                let preparing = root.lastPathComponent.hasPrefix("preparing-")
+                    && UUID(uuidString: String(root.lastPathComponent.dropFirst("preparing-".count).prefix(36))) != nil
+                let recoveryDraft = (try? Data(contentsOf: root.appendingPathComponent("pre-draft.json")))
+                    .flatMap { try? JSONDecoder().decode(NoteDraftJournalEntry.self, from: $0) }
+                let intentMissing: Bool
+                do { _ = try root.appendingPathComponent("intent.json").checkResourceIsReachable(); intentMissing = false }
+                catch { intentMissing = journalFileIsMissing(error) }
+                let envelopeMissing: Bool
+                do { _ = try root.appendingPathComponent("envelope.json").checkResourceIsReachable(); envelopeMissing = false }
+                catch { envelopeMissing = journalFileIsMissing(error) }
+                if preparing || (intentMissing && envelopeMissing) {
+                    result.append(.init(directory: root, envelope: nil, claim: nil,
+                        damaged: true, quarantined: quarantined, preIntentAbort: true, recoveryDraft: recoveryDraft))
+                    continue
+                }
                 var envelope: WorkspaceOperationEnvelope?
                 var claim: WorkspaceOperationClaim?
                 var intactIntent = false
                 var verifiedAbort: WorkspaceOperationClaim?
+                // The two inventories are independent evidence. A corrupt
+                // final envelope must not hide owners named by intact intent.
+                if let intent = try? Data(contentsOf: root.appendingPathComponent("intent.json")),
+                   let decoded = try? JSONDecoder().decode(WorkspaceOperationEnvelope.self, from: intent) {
+                    envelope = decoded
+                    claim = WorkspaceOperationClaim(id: decoded.id, digest: Self.digest(intent))
+                    intactIntent = UUID(uuidString: root.lastPathComponent) == decoded.id
+                }
                 do {
                     let data: Data
                     do { data = try Data(contentsOf: root.appendingPathComponent("envelope.json")) }
@@ -992,7 +1044,7 @@ private extension NoteDraftJournalIO {
                         damaged: quarantined, quarantined: quarantined, intactIntent: intactIntent, verifiedAbort: verifiedAbort))
                 } catch {
                     result.append(.init(directory: root, envelope: envelope, claim: claim,
-                        damaged: true, quarantined: quarantined, intactIntent: intactIntent, verifiedAbort: verifiedAbort))
+                        damaged: true, quarantined: quarantined, intactIntent: intactIntent, verifiedAbort: verifiedAbort, recoveryDraft: recoveryDraft))
                 }
             }
         }

@@ -114,8 +114,13 @@ final class WorkspaceOperationCoordinator {
     private var launchHold: WorkspaceOwnershipGate.Lease?
     private var damagedOperationHold: WorkspaceOwnershipGate.Lease?
     private var damagedOperationOwners = Set<WorkspaceOwner>()
-    private var unclassifiedOperationDamage = false
     private var damagedOperationBytes = Set<UUID>()
+    private var abortedRecoveryBytes = Set<UUID>()
+    private var unclassifiedRecoveryBytes = false
+    /// Nil means byte collection is unknown, never that ordinary writes fail.
+    var collectionProtectedRecoveryBytes: Set<UUID>? {
+        unclassifiedRecoveryBytes ? nil : retainedRecoveryBytes
+    }
     private var damagedCollectionHold: WorkspaceOwnershipGate.Lease?
     private(set) var damagedCheckpointNotes = Set<UUID>()
     private var compatibilityPending = Set<UUID>()
@@ -124,7 +129,7 @@ final class WorkspaceOperationCoordinator {
     private var checkpointBytes = Set<UUID>()
     private var checkpointCollectionHold: WorkspaceOwnershipGate.Lease?
     var retainedRecoveryBytes: Set<UUID> {
-        checkpointBytes.union(damagedOperationBytes).union(pending.values.flatMap { $0.0.payloads.map(\.id) })
+        checkpointBytes.union(damagedOperationBytes).union(abortedRecoveryBytes).union(pending.values.flatMap { $0.0.payloads.map(\.id) })
             .union(abortedCompatibility.values.flatMap { $0.0.payloads.map(\.id) })
     }
     func recoveryDependsOnNote(_ id: UUID) -> Bool {
@@ -230,7 +235,6 @@ final class WorkspaceOperationCoordinator {
     /// due or overlapping entries, with at most four attempts per save.
     /// A nil scope is an explicit retry, retained for existing recovery callers.
     func retryHeldWrites(affecting affected: Set<WorkspaceOwner>? = nil) -> Bool {
-        guard !unclassifiedOperationDamage else { return false }
         if !plainUnknown.isEmpty, reconcilePlain() == .unknown {
             guard let affected, affected.isDisjoint(with: heldOwners) else { return false }
         }
@@ -268,6 +272,12 @@ final class WorkspaceOperationCoordinator {
         let payloads: [WorkspaceOperationEnvelope.Payload]
     }
     private(set) var preOperationRecoveryCopies: [RecoveryCopy] = []
+    struct RecoveryIssue: Identifiable, Equatable {
+        let directory: URL
+        let preIntentAbort: Bool
+        var id: String { directory.path }
+    }
+    private(set) var operationRecoveryIssues: [RecoveryIssue] = []
     private final class WeakHistory {
         weak var value: UndoRoute?
         init(_ value: UndoRoute) { self.value = value }
@@ -386,6 +396,7 @@ final class WorkspaceOperationCoordinator {
         for row in context.deletedModelsArray {
             guard launchHold == nil || startupReconciled,
                   damagedCollectionHold == nil,
+                  (row as? NoteAttachment).map({ !unclassifiedRecoveryBytes && !abortedRecoveryBytes.contains($0.id) }) ?? true,
                   Self.owner(row).map({ !checkpointOwners.contains($0) && !heldOwners.contains($0) }) == true else {
                 throw WorkspaceFoundationError.protectedOwner
             }
@@ -441,7 +452,7 @@ final class WorkspaceOperationCoordinator {
         guard allocatedIDs.remove(envelope.id) != nil else { return .conflict }
         let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
         guard !Task.isCancelled else { return .notCommitted }
-        guard !unclassifiedOperationDamage, affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
+        guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
         let admission: WorkspaceOwnershipGate.Lease
         do {
             admission = try await ownership.admit(admissionIDs(envelope), excluding: collection?.lease(for: ownership))
@@ -458,7 +469,7 @@ final class WorkspaceOperationCoordinator {
         }
         // Concurrent preparation may have completed another writer; revalidate
         // its complete envelope here, never against warm presentation objects.
-        guard !unclassifiedOperationDamage, affected.isDisjoint(with: heldOwners), sessionValid() else {
+        guard affected.isDisjoint(with: heldOwners), sessionValid() else {
             retainAbortedCompatibility(envelope, claim: claim); return .conflict
         }
         let result = commitPrepared(envelope, claim: claim, collection: collection, stage: stage, publication: publication)
@@ -865,6 +876,7 @@ final class WorkspaceOperationCoordinator {
     func reconcileStartup() async throws {
         startupReconciled = false
         preOperationRecoveryCopies.removeAll()
+        operationRecoveryIssues.removeAll()
         let checkpoints = try await journal.inventoryCheckpoints()
         let valid = checkpoints.filter { if case .valid = $0 { return true }; return false }
         var startupIDs = Set<UUID>()
@@ -894,21 +906,37 @@ final class WorkspaceOperationCoordinator {
         let inventory = try await journal.operationInventory()
         var recorded = Set<UUID>()
         var damagedOwners = Set<WorkspaceOwner>(), damagedBytes = Set<UUID>()
+        var preIntentBytes = Set<UUID>()
         let receipts = try freshContext().fetch(FetchDescriptor<OperationReceipt>())
         // Only UUID-named roots can be an operation produced by this journal.
         // Foreign folders remain archived for Review, but cannot claim a
-        // receipt or freeze unrelated owners. An unreadable real operation
-        // has unbounded ownership until its intent is recovered.
+        // receipt or freeze unrelated owners. An unreadable published intent
+        // retains unknown bytes, but only known owners have a write hold.
         let unknownDamage = inventory.contains {
-            $0.damaged && $0.envelope == nil && UUID(uuidString: $0.directory.lastPathComponent) != nil
+            $0.damaged && !$0.preIntentAbort && $0.envelope == nil && UUID(uuidString: $0.directory.lastPathComponent) != nil
         }
         for item in inventory where item.damaged {
             let id = item.envelope?.id ?? UUID(uuidString: item.directory.lastPathComponent)
             let family = receipts.filter { $0.id == id }
             if let id { recorded.insert(id) }
+            if item.preIntentAbort && family.isEmpty {
+                if let pre = item.recoveryDraft {
+                    preIntentBytes.formUnion(pre.staged.map(\.id))
+                    preIntentBytes.formUnion(NoteContentCodec.decode(pre.content).document?.attachmentIDs ?? [])
+                    preIntentBytes.formUnion(pre.pendingImport?.items.compactMap(\.stagedID) ?? [])
+                }
+                if !item.quarantined { try await journal.quarantineOperation(at: item.directory) }
+                continue
+            }
             // A verified abort is terminal only while receipt absence remains
             // proven. The raw quarantine directory stays available for Review.
             if item.intactIntent, item.verifiedAbort == item.claim, item.verifiedAbort != nil, family.isEmpty { continue }
+            if let pre = item.recoveryDraft {
+                damagedOwners.insert(.init(entity: .note, id: pre.noteID))
+                damagedBytes.formUnion(pre.staged.map(\.id))
+                damagedBytes.formUnion(NoteContentCodec.decode(pre.content).document?.attachmentIDs ?? [])
+                damagedBytes.formUnion(pre.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            }
             if let envelope = item.envelope {
                 damagedOwners.formUnion(envelope.tokens.map(\.owner)); damagedOwners.formUnion(envelope.writes)
                 damagedBytes.formUnion(envelope.payloads.map(\.id))
@@ -937,13 +965,17 @@ final class WorkspaceOperationCoordinator {
             if !hasAgreeingReceipt && !item.quarantined { try await journal.quarantineOperation(at: item.directory) }
         }
         damagedOwners.formUnion(damagedBytes.map { .init(entity: .attachment, id: $0) })
-        guard let hold = ownership.tryAcquire(damagedBytes.union(damagedOwners.map(\.id)).union(unknownDamage ? [ownership.unknownID] : []), kind: .admission) else {
+        guard let hold = ownership.tryAcquire(damagedBytes.union(preIntentBytes).union(damagedOwners.map(\.id)).union(unknownDamage ? [ownership.unknownID] : []), kind: .admission) else {
             throw WorkspaceFoundationError.unknown
         }
         damagedOperationHold?.release(); damagedOperationHold = hold
-        unclassifiedOperationDamage = unknownDamage
         heldOwners.subtract(damagedOperationOwners); damagedOperationOwners = damagedOwners
         damagedOperationBytes = damagedBytes; heldOwners.formUnion(damagedOwners)
+        abortedRecoveryBytes = preIntentBytes
+        unclassifiedRecoveryBytes = unknownDamage
+        operationRecoveryIssues = try await journal.operationInventory().filter(\.damaged).map {
+            RecoveryIssue(directory: $0.directory, preIntentAbort: $0.preIntentAbort)
+        }
         let envelopes = inventory.filter { !$0.damaged }.compactMap { item -> (WorkspaceOperationEnvelope, WorkspaceOperationClaim)? in
             guard let envelope = item.envelope, let claim = item.claim else { return nil }
             return (envelope, claim)
@@ -1362,7 +1394,7 @@ extension WorkspaceOperationCoordinator {
             preDraft: preDraft, afterDocuments: afterDocuments, staged: staged)
         allocatedIDs.remove(envelope.id)
         let affected = Set(tokens.map(\.owner)).union(writes)
-        guard !unclassifiedOperationDamage, affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }
+        guard affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }
         let claim = try journal.prepareOperationSynchronously(envelope)
         let result = commitPrepared(envelope, claim: claim, stage: stage, publication: Publication())
         if result == .unknown { compatibilityPending.insert(envelope.id); deferCompatibilityRetry(envelope.id) }

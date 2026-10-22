@@ -856,7 +856,7 @@ extension TaskFileMigrationTests {
         guard case .refused = outcome else { return XCTFail("a note recovery dependency matters even when it references no file bytes") }
     }
 
-    func testP3S2UnreadableIntentStaysHeldForReview() async throws {
+    func testP3S2UnreadableIntentKeepsBytesAndReviewWithoutFreezingWrites() async throws {
         let refs = try await legacyFiles(["unknown.txt"])
         let rootID = try insertTask(shown: refs)
         let owner = WorkspaceOwner(entity: .migration, id: rootID)
@@ -868,6 +868,8 @@ extension TaskFileMigrationTests {
         try Data([0]).write(to: item.directory.appendingPathComponent("envelope.json"))
         try await coordinator.reconcileStartup()
         let outcome = await migrate(rootID)
-        XCTAssertEqual(outcome, .deferred, "unknown ownership stays held, rather than granting a fresh migration")
+        guard case .migrated = outcome else { return XCTFail("no readable owner evidence may freeze this write") }
+        XCTAssertNil(coordinator.ownership.tryAcquire([UUID()], kind: .collection), "unclassified byte damage still retains collection")
+        XCTAssertFalse(coordinator.operationRecoveryIssues.isEmpty)
     }
 }

@@ -39,6 +39,7 @@ struct NotesLibraryView: View {
     @State private var anchors = AtticNoteRowAnchors()
     /// More tags…'s card is open (its keys are its own).
     @State private var moreTagsShown = false
+    @State private var recoveryReview: WorkspaceOperationCoordinator.RecoveryIssue?
 
     /// The most tags the top line tries to fit after "All notes".
     static let tagTabLimit = 4
@@ -119,6 +120,19 @@ struct NotesLibraryView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-library")
+        .sheet(item: $recoveryReview) { issue in
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Recovery copy kept").font(.headline)
+                Text(issue.preIntentAbort
+                     ? "An interrupted change stopped before it could save. Its recovery files are kept. Your notes and tasks can still save."
+                     : "An interrupted change has damaged recovery data. Its files are kept, and changes to known affected items wait for recovery. Other notes and tasks can still save.")
+                HStack {
+                    Button("Show Recovery Files") { NSWorkspace.shared.activateFileViewerSelecting([issue.directory]) }
+                    Spacer()
+                    Button("Done") { recoveryReview = nil }.keyboardShortcut(.defaultAction)
+                }
+            }.padding(24).frame(width: 420)
+        }
     }
 
     // MARK: Search
@@ -345,6 +359,13 @@ struct NotesLibraryView: View {
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     status(groups)
+                    ForEach(controller.workspaceRecoveryIssues) { issue in
+                        Button("Review interrupted change") { recoveryReview = issue }
+                            .font(Font(AtticTextStyle.rowMeta.nsFont))
+                            .padding(.vertical, 8)
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("notes-workspace-recovery-\(issue.directory.lastPathComponent)")
+                    }
                     ForEach(controller.workspaceProposals, id: \.id) { proposal in
                         Button {
                             Task { @MainActor in _ = await controller.beginProposalReview(id: proposal.id) }

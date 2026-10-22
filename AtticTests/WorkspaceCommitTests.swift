@@ -123,6 +123,9 @@ final class WorkspaceCommitTests: XCTestCase {
             await notes.waitForAttachmentReconciliation()
             XCTAssertNotNil(tasks.create(title: "Ordinary task \(launch)"))
             XCTAssertNotNil(notes.create(title: "Ordinary note \(launch)", body: "Durable writing"))
+            let pages = NotesPageController(store: notes, journal: coordinator.journal)
+            await pages.recoverAtLaunchAndWait()
+            XCTAssertEqual(pages.workspaceRecoveryIssues.count, names.count, "every kept artifact has a Review entry")
             for name in names {
                 let kept = coordinator.journal.directory.appendingPathComponent("quarantined-operations").appendingPathComponent(name)
                 XCTAssertEqual(try Data(contentsOf: kept.appendingPathComponent("pre-draft.json")), pre)
@@ -201,6 +204,45 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertTrue(coordinator.retryHeldWrites(affecting: [.init(entity: .note, id: pre.noteID)]))
         _ = try await coordinator.journal.readRecoveryEntries()
         XCTAssertEqual(try? Data(contentsOf: staged.appendingPathComponent(id.uuidString)), bytes)
+    }
+
+    func testP3S2R2PreIntentRecoveryPreventsStoredAttachmentPurge() async throws {
+        let id = UUID(), bytes = Data("only durable recovery payload".utf8)
+        let context = coordinator.freshContext()
+        let row = NoteAttachment(id: id, noteID: noteID, originalFilename: "kept.txt", byteCount: Int64(bytes.count),
+            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes)
+        row.deletedAt = .distantPast
+        context.insert(row); try context.save()
+        var pre = try recoveryDraft("Recovered draft")
+        pre.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Recovered draft"),
+            .file(id: UUID(), attachmentID: id, filename: "kept.txt", contentTypeIdentifier: "public.data", byteCount: Int64(bytes.count))]))
+        let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
+        try WorkspaceModelFields.encode(pre).write(to: operation.appendingPathComponent("pre-draft.json"))
+        try await coordinator.finishLaunch()
+        let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+        await notes.waitForAttachmentReconciliation()
+        XCTAssertEqual(notes.purgeRemovedAttachments(before: .distantFuture), 0)
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id })).first?.payload, bytes)
+    }
+
+    func testP3S2R2UnknownIntentProtectsStoredBytesButStillAllowsOrdinaryWrites() async throws {
+        let id = UUID(), bytes = Data("unknown recovery may need these bytes".utf8)
+        let context = coordinator.freshContext()
+        let row = NoteAttachment(id: id, noteID: noteID, originalFilename: "kept.txt", byteCount: Int64(bytes.count),
+            sortIndex: 0, contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes)
+        row.deletedAt = .distantPast
+        context.insert(row); try context.save()
+        let operation = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
+        try Data([0]).write(to: operation.appendingPathComponent("intent.json"))
+        try await coordinator.finishLaunch()
+        let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("Files")))
+        await notes.waitForAttachmentReconciliation()
+        XCTAssertNotNil(notes.create(title: "Ordinary note still saves"))
+        XCTAssertNotNil(TaskStore(container: container).create(title: "Ordinary task still saves"))
+        XCTAssertEqual(notes.purgeRemovedAttachments(before: .distantFuture), 0, "unknown ownership stops byte collection only")
+        XCTAssertEqual(try coordinator.freshContext().fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id })).first?.payload, bytes)
     }
 
     func testP2_2TruncatedPayloadAndNonUUIDDirectoryAllowTwoLaunches() async throws {

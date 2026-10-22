@@ -1514,6 +1514,13 @@ extension NoteStore {
     /// bytes rather than treating existing rows as a complete inventory.
     func documentReferencedAttachmentIDs(excludingNoteID excluded: UUID? = nil) throws -> Set<UUID> {
         var ids = try recoveryReferencedAttachmentIDs()
+        #if os(macOS)
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        guard let operationRecovery = coordinator.collectionProtectedRecoveryBytes else {
+            throw WorkspaceFoundationError.protectedOwner
+        }
+        ids.formUnion(operationRecovery)
+        #endif
         ids.formUnion(try documentRetentionSnapshot(excludingNoteID: excluded).attachmentIDs())
         return ids
     }
