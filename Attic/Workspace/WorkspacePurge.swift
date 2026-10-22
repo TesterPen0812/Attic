@@ -310,7 +310,7 @@ enum WorkspacePurge {
                 let after = materialized.document
                 materializedTags[id] = materialized.tags
                 documents[id] = after
-                patches.append(.init(noteID: id, taskID: rootID, preservationID: preservationID, before: before, after: after))
+                patches.append(.init(noteID: id, taskID: first.taskID ?? rootID, preservationRootID: rootID, preservationID: preservationID, before: before, after: after))
             }
             guard Set(ownership.drafts.keys).isSubset(of: Set(documents.keys)) else { return refused() }
             let draftVersionIDs = Dictionary(uniqueKeysWithValues: ownership.drafts.keys.map { ($0, UUID()) })

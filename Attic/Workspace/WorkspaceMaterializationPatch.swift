@@ -7,6 +7,7 @@ import SwiftData
 struct WorkspaceMaterializationPatch {
     let noteID: UUID
     let taskID: UUID
+    let preservationRootID: UUID
     let preservationID: UUID
     let before: NoteDocument
     let after: NoteDocument
@@ -19,8 +20,9 @@ struct WorkspaceMaterializationPatch {
         guard workspace.materialize(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
         workspace.recordOperation(id: operationID, name: "Task removed permanently", coordinator: coordinator,
             attachmentIDs: Set(old.attachmentIDs + new.attachmentIDs)) { [weak notes] redo, effect in
-            let context = coordinator.freshContext(), id = noteID, root = taskID
-            guard try context.fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == root })) == 0 else {
+            let context = coordinator.freshContext(), id = noteID, root = preservationRootID
+            let ownerID = taskID
+            guard try context.fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == root || $0.id == ownerID })) == 0 else {
                 throw WorkspaceFoundationError.conflict
             }
             let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
@@ -44,7 +46,8 @@ struct WorkspaceMaterializationPatch {
             let writes = Set<WorkspaceOwner>([.init(entity: .note, id: id)])
                 .union(versions.values.map { .init(entity: .version, id: $0) })
                 .union(attachments.map { .init(entity: .attachment, id: $0.id) })
-            let guards = writes.union([.init(entity: .task, id: root), .init(entity: .preservation, id: preservationID)])
+            let guards = writes.union([.init(entity: .task, id: root), .init(entity: .task, id: ownerID),
+                                       .init(entity: .preservation, id: preservationID)])
                 .union(associations.map { .init(entity: .association, id: $0.id) })
             let envelope = try coordinator.newEnvelope(intent: "Replay materialization", reads: coordinator.capture(guards), writes: writes,
                 afterDocuments: [id: prepared.content], historyEffect: WorkspaceModelFields.encode(effect), replayOf: operationID)

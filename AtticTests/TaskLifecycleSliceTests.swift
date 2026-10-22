@@ -467,6 +467,41 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(try storedDocument(session.noteID), before)
     }
 
+    func testP3F2FamilyPurgeKeepsEachOwningTasksHistoryAndPresentation() async throws {
+        let id = try seed(.boundary)
+        let parent = try open(id)
+        let childID = try XCTUnwrap(tasks.subtasks(of: id).first?.id)
+        let child = try open(childID)
+        let childSession = try XCTUnwrap(child.session)
+        type("Child's own writing", into: child.host.textView)
+        XCTAssertTrue(notes.save(childSession))
+        let parentNote = try XCTUnwrap(parent.session?.noteID), childNote = childSession.noteID
+        let parentHistory = parent.page.history, childHistory = child.page.history
+        var patches: [(WorkspaceMaterializationPatch, UUID)] = []
+        notes.taskNoteMaterialized = { patches.append(($0, $1)) }
+        XCTAssertTrue(parent.model.deleteTask())
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.materializedNoteIDs.isSuperset(of: [parentNote, childNote]))
+        XCTAssertTrue(notes.undoRoute.workspace(for: .note(parentNote)) === parentHistory)
+        XCTAssertTrue(notes.undoRoute.workspace(for: .note(childNote)) === childHistory)
+        XCTAssertEqual(parentHistory.undoName, "Task removed permanently")
+        XCTAssertEqual(childHistory.undoName, "Task removed permanently")
+        let patch = try XCTUnwrap(patches.first { $0.0.noteID == childNote })
+        let uiState = PanelUIState()
+        uiState.openTaskNote(childID, from: .tasks, backTitle: "Back")
+        await TaskNotePurgePresentation.finish(patch.0, operationID: patch.1, tasks: tasks, notes: notes,
+                                               uiState: uiState, toasts: nil, showNotes: {})
+        XCTAssertNil(child.lease, "close the owner of this note, not the deletion root")
+        XCTAssertNotNil(parent.lease)
+        let childUndo = await childHistory.replay(redo: false)
+        XCTAssertEqual(childUndo, .applied)
+        XCTAssertFalse(try storedDocument(childNote).blocks.contains { $0.text.hasPrefix("Was a task") })
+        XCTAssertTrue(try storedDocument(parentNote).blocks.contains { $0.text.hasPrefix("Was a task") })
+        let parentUndo = await parentHistory.replay(redo: false)
+        XCTAssertEqual(parentUndo, .applied)
+        XCTAssertFalse(try storedDocument(parentNote).blocks.contains { $0.text.hasPrefix("Was a task") })
+    }
+
     @discardableResult
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)
