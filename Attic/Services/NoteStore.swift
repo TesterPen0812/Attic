@@ -682,7 +682,7 @@ final class NoteStore: ObservableObject {
     /// Brings a note back with its attachments, on every replica, in one
     /// save. Its place in the list is where it was (its `updatedAt` is kept).
     @discardableResult
-    func restoreDeleted(noteID: UUID) -> Bool {
+    func restoreDeleted(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> Bool {
         lastRestoreWasSeparate = false
         do {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
@@ -714,6 +714,7 @@ final class NoteStore: ObservableObject {
                 replica.deletedAt = nil
                 replica.deletedAttachmentIDsRaw = nil
             }
+            try staging?(context)
             lastRestoreWasSeparate = separated
         } catch {
             context.rollback()
@@ -1467,7 +1468,7 @@ final class NoteStore: ObservableObject {
         // A deleted note's attachments stay stored (and their files stay
         // reconciled below) but are not presented.
         let deletedNoteIDs = Set(uniqueNotes.filter { $0.deletedAt != nil }.map(\.id))
-        attachmentsByNoteID = visibleUniqueAttachments(from: presentation.attachments)
+        attachmentsByNoteID = Self.visibleUniqueAttachments(from: presentation.attachments)
             .filter { !deletedNoteIDs.contains($0.key) }
         let availableIDs = Set(attachmentsByNoteID.values.flatMap { $0.map(\.id) })
         attachmentFailures = attachmentFailures.filter { availableIDs.contains($0.key) }
@@ -1646,7 +1647,7 @@ final class NoteStore: ObservableObject {
         return rows
     }
 
-    private func visibleUniqueAttachments(
+    static func visibleUniqueAttachments(
         from fetched: [NoteAttachment]
     ) -> [UUID: [NoteAttachment]] {
         var newestByID: [UUID: NoteAttachment] = [:]

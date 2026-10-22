@@ -99,6 +99,9 @@ final class NotePendingEdit {
     var createdAt: Date = Date()
     var needsReview: Bool = false
     var isDeletion: Bool = false
+    var workspaceOperationData: Data? = nil
+    var workspaceReadSetData: Data? = nil
+    var workspaceTaskID: UUID? = nil
 
     init(id: UUID = UUID(), noteID: UUID, baseRevisionToken: String, proposedContent: Data,
          agentName: String, createdAt: Date, baseVersionID: UUID? = nil) {
@@ -122,6 +125,9 @@ struct NoteProposalSignature: Equatable {
     let agent: String
     let createdAt: Date
     let isDeletion: Bool
+    let workspaceOperation: Data?
+    let workspaceReadSet: Data?
+    let workspaceTaskID: UUID?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.noteID == rhs.noteID
@@ -129,11 +135,14 @@ struct NoteProposalSignature: Equatable {
             && lhs.baseVersionID == rhs.baseVersionID && lhs.content == rhs.content
             && NoteTextReplacement.utf16Equal(lhs.agent, rhs.agent)
             && lhs.createdAt == rhs.createdAt && lhs.isDeletion == rhs.isDeletion
+            && lhs.workspaceOperation == rhs.workspaceOperation && lhs.workspaceReadSet == rhs.workspaceReadSet
+            && lhs.workspaceTaskID == rhs.workspaceTaskID
     }
 
     @MainActor init(_ edit: NotePendingEdit) {
         id = edit.id; noteID = edit.noteID; baseRevisionToken = edit.baseRevisionToken
         baseVersionID = edit.baseVersionID; content = edit.proposedContent
         agent = edit.agentName; createdAt = edit.createdAt; isDeletion = edit.isDeletion
+        workspaceOperation = edit.workspaceOperationData; workspaceReadSet = edit.workspaceReadSetData; workspaceTaskID = edit.workspaceTaskID
     }
 }

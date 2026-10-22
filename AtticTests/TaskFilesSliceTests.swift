@@ -25,10 +25,14 @@ final class TaskFilesSliceTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        AgentWorkspaceCall.beforePreparing = nil
+        TaskAttachmentMigration.interruption = nil
         for presenter in presenters where presenter.lease != nil { _ = await presenter.close() }
         presenters.removeAll()
         windows.forEach { $0.close() }
         windows.removeAll()
+        await notes?.waitForRecoveryWork()
+        await notes?.store.waitForAttachmentReconciliation()
         notes = nil; library = nil; tasks = nil; coordinator = nil; container = nil
         // Materialized originals are read-only by design; make them
         // removable, then remove only this test's own folder.
@@ -46,6 +50,7 @@ final class TaskFilesSliceTests: XCTestCase {
                                     journal: coordinator.journal, defaults: nil,
                                     saveDelay: .seconds(600), durabilityDelay: .seconds(600))
         notes.attachUndoRoute(library.undo)
+        notes.workspaceTaskStore = tasks
         tasks.fileMigration.onNotesChanged = { [weak notes] in notes?.store.refresh() }
     }
 
@@ -329,6 +334,15 @@ final class TaskFilesSliceTests: XCTestCase {
     }
 
     private func call(_ handler: MCPRequestHandler, _ name: String, _ arguments: [String: Any]) async throws -> (String, Bool) {
+        var arguments = arguments
+        if AgentTaskTools.asyncToolNames.contains(name), arguments["base_workspace_token"] == nil,
+           !arguments.keys.contains(where: { $0.hasPrefix("base_") }) {
+            let tools = AgentTaskTools(store: tasks, noteStore: notes.store)
+            if let intent = try? tools.workspaceIntent(name: name, arguments: arguments) {
+                let snapshot = try AgentWorkspaceReadSet.capture(taskID: intent.taskID, noteID: intent.noteID, in: ModelContext(container))
+                arguments["base_workspace_token"] = try WorkspaceModelFields.encode(snapshot).base64EncodedString()
+            }
+        }
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                                                "params": ["name": name, "arguments": arguments]])
         let result = await handler.handleAsync(body: body, protocolVersion: "2025-06-18")
@@ -356,10 +370,19 @@ final class TaskFilesSliceTests: XCTestCase {
         _ = notes.save(try XCTUnwrap(presenter.session))
         let (made, madeError) = try await call(handler, "make_subtask", ["task_id": id.uuidString, "lines": ["Book the room", "Send invites"]])
         XCTAssertFalse(madeError, made)
+        XCTAssertTrue(made.contains("pending"), made)
+        XCTAssertTrue(tasks.subtasks(of: id).isEmpty)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        let began = await notes.beginProposalReview(id: proposal.id)
+        XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal()
+        XCTAssertTrue(accepted)
         XCTAssertEqual(Set(tasks.subtasks(of: id).map(\.title)), ["Book the room", "Send invites"])
         XCTAssertFalse(presenter.host.textView.string.contains("Send invites"), "the lines left the writing in the same operation")
         XCTAssertNotNil(presenter.page.history.route.undoStepID(in: presenter.page.history.historyID), "it entered the workspace history")
-        // Refusals as for people.
+        // Refusals as for people, after the editor leaves.
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
         let (missing, missingError) = try await call(handler, "make_subtask", ["task_id": id.uuidString, "lines": ["Not in the note"]])
         XCTAssertTrue(missingError, missing)
         let (gone, goneError) = try await call(handler, "make_note_checkbox", ["subtask_id": UUID().uuidString])
@@ -400,7 +423,8 @@ final class TaskFilesSliceTests: XCTestCase {
         let presenter = try open(id)
         _ = presenter
         let (open, openError) = try await call(handler, "move_files_into_note", ["task_id": id.uuidString])
-        XCTAssertTrue(openError, open)
+        XCTAssertFalse(openError, open)
+        XCTAssertTrue(open.contains("pending"), open)
     }
 }
 
@@ -413,8 +437,10 @@ extension TaskFilesSliceTests {
         text.insertText("\nFresh human line", replacementRange: NSRange(location: (text.string as NSString).length, length: 0))
         let before = text.string
         let (result, error) = try await call(agent(), "make_subtask", ["task_id": id.uuidString, "lines": ["Fresh human line"],
-            "base_note_token": "stale", "base_association_token": "stale", "base_task_token": "stale"])
-        XCTAssertTrue(error || result.contains("pending"), "an agent must not consume a live human draft without review")
+            "base_workspace_token": try WorkspaceModelFields.encode(AgentWorkspaceReadSet.capture(taskID: id, noteID: nil, in: ModelContext(container))).base64EncodedString()])
+        XCTAssertFalse(error, result)
+        XCTAssertTrue(result.contains("pending"), "an agent must not consume a live human draft without review")
+        XCTAssertEqual(notes.workspaceProposals.count, 1)
         XCTAssertEqual(text.string, before)
         XCTAssertTrue(tasks.subtasks(of: id).isEmpty)
     }
@@ -458,6 +484,7 @@ extension TaskFilesSliceTests {
             TaskFilesState.noteIsOpen(root, notes: notes!, coordinator: coordinator!)
         })
         TaskAttachmentMigration.interruption = nil
+        AgentWorkspaceCall.beforePreparing = nil
         XCTAssertNotNil(presenter)
         XCTAssertTrue(tasks.fileMigration.deferred.contains(id), "opening during file IO must defer migration")
         XCTAssertNil(try ownNote(id))
@@ -508,15 +535,168 @@ extension TaskFilesSliceTests {
             await Task.yield()
             resume?.resume(); resume = nil
         }
-        await tasks.fileMigration.runAtLaunch(tasks: tasks, recovering: recovery,
-            isBusy: { root in TaskFilesState.noteIsOpen(root, notes: recovery, coordinator: self.coordinator) })
+        var visited = false
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, recovering: recovery, isBusy: { root in
+            visited = true
+            XCTAssertTrue(recovery.launchRecoveryCompleted, "migration admission follows Notes recovery")
+            let repaired = try? ModelContext(self.container).fetch(FetchDescriptor<NoteAttachment>()).first { $0.id == item.id }
+            XCTAssertEqual(repaired?.payload, bytes, "the repair is committed before any family's migration admission")
+            return TaskFilesState.noteIsOpen(root, notes: recovery, coordinator: self.coordinator)
+        })
         await release.value
         await recovery.startAndWait()
-        XCTAssertTrue(tasks.fileMigration.deferred.contains(id))
+        XCTAssertTrue(visited)
         let stored = await noteStore.verifiedAttachmentBytes(item.id)
         XCTAssertEqual(stored?.data, bytes, "launch must finish a matching missing-byte repair before migration advances its revision")
         let checkpoint = try await coordinator.journal.entriesDurably()
         XCTAssertTrue(stored?.data == bytes || checkpoint.flatMap { $0.1 }.contains { $0.id == item.id && $0.data == bytes })
         await noteStore.waitForAttachmentReconciliation()
     }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2AgentStaleWholeOperationAndAbsentNoteProposalSurviveReopen() async throws {
+        let id = try XCTUnwrap(tasks.create(title: "Absent")?.id)
+        let child = try XCTUnwrap(tasks.create(title: "Work", parentID: id)?.id)
+        let snapshot = try AgentWorkspaceReadSet.capture(taskID: id, noteID: nil, in: ModelContext(container))
+        XCTAssertTrue(tasks.rename(try XCTUnwrap(tasks.task(withID: id)), to: "Changed"))
+        let (result, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": child.uuidString,
+            "base_workspace_token": try WorkspaceModelFields.encode(snapshot).base64EncodedString()])
+        XCTAssertFalse(error, result)
+        XCTAssertTrue(result.contains("pending"))
+        XCTAssertNil(try ownNote(id))
+        XCTAssertNotNil(tasks.task(withID: child))
+        let proposalID = try XCTUnwrap(notes.workspaceProposals.first?.id)
+        await notes.waitForRecoveryWork()
+        await notes.store.waitForAttachmentReconciliation()
+        makeStores()
+        XCTAssertEqual(notes.workspaceProposals.map(\.id), [proposalID], "whole operation survives controller replacement")
+        let presenter = try open(id)
+        XCTAssertNotNil(notes.proposalAgent(for: try XCTUnwrap(presenter.session)))
+        let began = await notes.beginProposalReview(id: proposalID)
+        XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal()
+        XCTAssertTrue(accepted, notes.proposalReviewNotice ?? "")
+        XCTAssertNotNil(try ownNote(id))
+        XCTAssertNil(tasks.task(withID: child))
+        XCTAssertTrue(notes.workspaceProposals.isEmpty)
+    }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2AgentAssociationChangesStillBecomeWholeProposals() async throws {
+        let source = try XCTUnwrap(tasks.create(title: "Source")?.id)
+        let destination = try XCTUnwrap(tasks.create(title: "Destination")?.id)
+        let child = try XCTUnwrap(tasks.create(title: "Child", parentID: source)?.id)
+        let snapshot = try AgentWorkspaceReadSet.capture(taskID: source, noteID: nil, in: ModelContext(container))
+        let edit = ModelContext(container)
+        for row in try edit.fetch(FetchDescriptor<TaskItem>()) where row.id == child { row.parentID = destination }
+        try edit.save(); tasks.refresh()
+        let (result, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": child.uuidString,
+            "base_workspace_token": try WorkspaceModelFields.encode(snapshot).base64EncodedString()])
+        XCTAssertFalse(error, result)
+        XCTAssertTrue(result.contains("pending"), result)
+        XCTAssertNotNil(tasks.task(withID: child))
+        XCTAssertNil(try ownNote(destination))
+    }
+
+    func testP3S2AgentLateOpenBecomesProposal() async throws {
+        let id = try XCTUnwrap(tasks.create(title: "Late")?.id)
+        let child = try XCTUnwrap(tasks.create(title: "Child", parentID: id)?.id)
+        AgentWorkspaceCall.beforePreparing = { [self] in
+            AgentWorkspaceCall.beforePreparing = nil
+            _ = try? open(id)
+        }
+        let (result, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": child.uuidString])
+        XCTAssertFalse(error, result)
+        XCTAssertTrue(result.contains("pending"), result)
+        XCTAssertNotNil(tasks.task(withID: child))
+        XCTAssertNil(try ownNote(id))
+    }
+
+    func testP3S2ProposalSnapshotSizeRemainsBounded() async throws {
+        let (id, _) = try await taskWithOwnNote()
+        let child = try XCTUnwrap(tasks.create(title: "Child", parentID: id)?.id)
+        var first = 0, last = 0
+        for index in 0..<6 {
+            let snapshot = try AgentWorkspaceReadSet.capture(taskID: id, noteID: nil, in: ModelContext(container))
+            last = try WorkspaceModelFields.encode(snapshot).count
+            if index == 0 { first = last }
+            XCTAssertTrue(tasks.rename(try XCTUnwrap(tasks.task(withID: id)), to: "Size \(index)"))
+            let (_, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": child.uuidString,
+                "base_workspace_token": try WorkspaceModelFields.encode(snapshot).base64EncodedString()])
+            XCTAssertFalse(error)
+        }
+        XCTAssertLessThan(last, first + 80_000, "proposal snapshots must fingerprint stored read sets instead of recursively embedding them")
+    }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2AsyncRestoreWaitsForCollectionAdmission() async throws {
+        let (rootID, noteID) = try await taskWithOwnNote()
+        notes.store.refresh()
+        XCTAssertTrue(notes.store.delete(try XCTUnwrap(notes.store.note(withID: noteID))))
+        let collection = try XCTUnwrap(coordinator.ownership.tryAcquire([noteID], kind: .collection))
+        let release = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            collection.release()
+        }
+        let (result, error) = try await call(agent(), "restore", ["id": noteID.uuidString])
+        await release.value
+        XCTAssertFalse(error, result)
+        XCTAssertEqual(try ownNote(rootID), noteID)
+    }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2ReviewedOperationSaveFailureKeepsProposalAndAllSources() async throws {
+        let rootID = try XCTUnwrap(tasks.create(title: "Atomic")?.id)
+        let childID = try XCTUnwrap(tasks.create(title: "Keep me", parentID: rootID)?.id)
+        _ = try open(rootID)
+        let (_, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": childID.uuidString])
+        XCTAssertFalse(error)
+        let proposalID = try XCTUnwrap(notes.workspaceProposals.first?.id)
+        let began = await notes.beginProposalReview(id: proposalID); XCTAssertTrue(began)
+        let save = coordinator.save
+        coordinator.save = { _ in throw WorkspaceFoundationError.preparationFailed }
+        let failed = await notes.acceptProposal(); XCTAssertFalse(failed)
+        XCTAssertNotNil(tasks.task(withID: childID))
+        XCTAssertNil(try ownNote(rootID))
+        XCTAssertEqual(notes.workspaceProposals.map(\.id), [proposalID])
+        coordinator.save = save
+        let refreshed = await notes.beginProposalReview(id: proposalID); XCTAssertTrue(refreshed)
+        let applied = await notes.acceptProposal(); XCTAssertTrue(applied, notes.proposalReviewNotice ?? "")
+        XCTAssertNil(tasks.task(withID: childID))
+        XCTAssertNotNil(try ownNote(rootID))
+        XCTAssertTrue(notes.workspaceProposals.isEmpty)
+    }
+
+    func testP3S2ReviewedCheckboxCannotFollowSubtaskToAnotherWorkspace() async throws {
+        let rootID = try XCTUnwrap(tasks.create(title: "Reviewed root")?.id)
+        let otherID = try XCTUnwrap(tasks.create(title: "Other root")?.id)
+        let childID = try XCTUnwrap(tasks.create(title: "Child", parentID: rootID)?.id)
+        _ = try open(rootID)
+        let (_, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": childID.uuidString])
+        XCTAssertFalse(error)
+        let proposalID = try XCTUnwrap(notes.workspaceProposals.first?.id)
+        let began = await notes.beginProposalReview(id: proposalID); XCTAssertTrue(began)
+        AgentWorkspaceCall.beforePreparing = { [self] in
+            AgentWorkspaceCall.beforePreparing = nil
+            let edit = ModelContext(container)
+            for row in try! edit.fetch(FetchDescriptor<TaskItem>()) where row.id == childID { row.parentID = otherID }
+            try! edit.save(); tasks.refresh()
+        }
+        let applied = await notes.acceptProposal(); XCTAssertFalse(applied)
+        XCTAssertNotNil(tasks.task(withID: childID))
+        XCTAssertNil(try ownNote(otherID))
+        XCTAssertEqual(notes.workspaceProposals.map(\.id), [proposalID])
+    }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
 }

@@ -57,8 +57,8 @@ final class TaskFilesState: ObservableObject {
     /// migration never writes under an open session.
     static func noteIsOpen(_ rootID: UUID, notes: NotesPageController, coordinator: WorkspaceOperationCoordinator) -> Bool {
         if TaskNotePresenter.open(for: rootID) != nil { return true }
-        guard let noteID = try? coordinator.sessions.resolve(.task(rootID)).1 else { return false }
-        return notes.workspaceSessionIfCached(noteID) != nil
+        return coordinator.sessions.hasActiveTaskPage(rootID)
+            || notes.hasAgentWorkspaceEditor(taskID: rootID, noteID: nil, allowing: nil, session: nil)
     }
 
     /// The background launch run (§ 13 "Safe running"): every family, one

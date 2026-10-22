@@ -345,6 +345,17 @@ struct NotesLibraryView: View {
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     status(groups)
+                    ForEach(controller.workspaceProposals, id: \.id) { proposal in
+                        Button {
+                            Task { @MainActor in _ = await controller.beginProposalReview(id: proposal.id) }
+                        } label: {
+                            Text("Review proposed workspace change")
+                                .font(Font(AtticTextStyle.rowMeta.nsFont))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                        }.buttonStyle(.plain)
+                        .accessibilityIdentifier("notes-workspace-proposal-\(proposal.id)")
+                    }
                     ForEach(groups) { group in
                         AtticNoteGroupHeading(title: group.title)
                         ForEach(group.rows) { row in

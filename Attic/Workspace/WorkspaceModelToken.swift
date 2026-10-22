@@ -355,7 +355,10 @@ enum WorkspaceModelFields {
                 WorkspaceField("agentName", \NotePendingEdit.agentName),
                 WorkspaceField("createdAt", \NotePendingEdit.createdAt),
                 WorkspaceField("needsReview", \NotePendingEdit.needsReview),
-                WorkspaceField("isDeletion", \NotePendingEdit.isDeletion)
+                WorkspaceField("isDeletion", \NotePendingEdit.isDeletion),
+                WorkspaceField("workspaceOperationData", \NotePendingEdit.workspaceOperationData),
+                WorkspaceField("workspaceReadSetData", \NotePendingEdit.workspaceReadSetData),
+                WorkspaceField("workspaceTaskID", \NotePendingEdit.workspaceTaskID)
             ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as ItemLink:
             return try record(row, fieldTable(for: row) { [
@@ -533,7 +536,7 @@ enum WorkspaceModelFields {
                 bytes = WorkspaceModelFields.textFingerprint(text)
             } else {
                 let encoded = try WorkspaceModelFields.scalarFingerprint(value)
-                bytes = ["snapshot", "pointsData", "payloadData", "encodedData", "payload"].contains(name)
+                bytes = ["snapshot", "pointsData", "payloadData", "encodedData", "payload", "workspaceOperationData", "workspaceReadSetData"].contains(name)
                     ? Data(SHA256.hash(data: encoded)) : encoded
             }
             // Large document/text/blob values have their own bounded digest

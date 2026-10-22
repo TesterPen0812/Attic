@@ -1188,6 +1188,7 @@ final class AgentTaskTools {
         } else {
             payload["own_note_id"] = NSNull()
         }
+        payload["workspace_token"] = try WorkspaceModelFields.encode(AgentWorkspaceReadSet.capture(taskID: id, noteID: nil, in: context)).base64EncodedString()
         payload["note_token"] = try WorkspaceModelFields.encode(WorkspaceScopeToken.read(.taskNotes(id), in: context)).base64EncodedString()
         payload["association_token"] = try WorkspaceModelFields.encode(WorkspaceScopeToken.read(.taskAssociations(id), in: context)).base64EncodedString()
         let tokens = try tokenOwners.map { try WorkspaceModelToken.read($0, in: context) }
@@ -1206,7 +1207,10 @@ final class AgentTaskTools {
     }
 
 
-    private func serializeNote(_ note: NoteItem) -> [String: Any] {
+    private func serializeNote(_ candidate: NoteItem) -> [String: Any] {
+        let context = ModelContext(store.container), id = candidate.id
+        let fresh = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+        let note = fresh.flatMap { NoteStore.canonicalReplicas(from: $0).first } ?? candidate
         var payload: [String: Any] = [
             "id": note.id.uuidString,
             "title": note.title,
@@ -1216,13 +1220,16 @@ final class AgentTaskTools {
             "tags": note.tags,
             "revision": note.revisionToken
         ]
+        if fresh != nil, let readSet = try? AgentWorkspaceReadSet.capture(taskID: note.taskID, noteID: note.id, in: context),
+           let bytes = try? WorkspaceModelFields.encode(readSet) { payload["workspace_token"] = bytes.base64EncodedString() }
         // Pinned to the top of All notes (the person's choice; read-only here).
         if note.isPinned { payload["pinned"] = true }
         if note.usesDocumentFormat, let data = note.content {
             switch NoteContentCodec.decode(data) {
             case let .editable(document):
                 payload["body"] = NoteTextExport.agentBody(document)
-                let rows = Dictionary((noteStore?.attachments(for: note.id) ?? []).map { ($0.id, $0) },
+                let freshAttachments = (try? context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))) ?? []
+                let rows = Dictionary((NoteStore.visibleUniqueAttachments(from: freshAttachments)[id] ?? []).map { ($0.id, $0) },
                     uniquingKeysWith: { first, _ in first })
                 payload["images"] = document.blocks.filter { $0.kind == .image }.map { block -> [String: Any] in
                     let row = block.attachmentID.flatMap { rows[$0] }
@@ -1362,7 +1369,7 @@ final class AgentTaskTools {
         return try encode([
             "count": items.count,
             "items": items.map { item -> [String: Any] in
-                [
+                var payload: [String: Any] = [
                     "kind": item.ref.kind.rawValue,
                     "id": item.ref.id.uuidString,
                     "title": item.title,
@@ -1373,6 +1380,13 @@ final class AgentTaskTools {
                         .map { Self.dateFormatter.string(from: $0) as Any } ?? NSNull(),
                     "included": item.includedCount
                 ]
+                if item.ref.kind == .note {
+                    let context = ModelContext(store.container), id = item.ref.id
+                    if let row = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first,
+                       let readSet = try? AgentWorkspaceReadSet.capture(taskID: row.taskID, noteID: id, in: context),
+                       let data = try? WorkspaceModelFields.encode(readSet) { payload["workspace_token"] = data.base64EncodedString(); payload["title"] = row.title }
+                }
+                return payload
             }
         ])
     }

@@ -1097,7 +1097,7 @@ private struct NoteConflictComparison: View {
 }
 
 /// Panel-sized review uses the shipping read-only engine, including tables and Mono.
-private struct NoteProposalComparison: View {
+struct NoteProposalComparison: View {
     @ObservedObject var controller: NotesPageController
     @ObservedObject var store: NoteStore
     let review: NoteProposalReview
@@ -1146,7 +1146,7 @@ private struct NoteProposalComparison: View {
                     Button("Restore") { _ = controller.discardReviewedProposal() }
                         .accessibilityIdentifier("notes-proposal-restore")
                 } else {
-                    Button("Replace with proposal") { run { await controller.acceptProposal() } }
+                    Button(review.workspaceIntent == nil ? "Replace with proposal" : "Apply Workspace Operation") { run { await controller.acceptProposal() } }
                         .accessibilityIdentifier("notes-proposal-replace")
                 }
                 HStack {
@@ -1156,7 +1156,7 @@ private struct NoteProposalComparison: View {
                     Menu {
                         Button(review.isDeletion ? "Save as New Note" : "Save Proposal as New Note") {
                             run { await controller.saveReviewedProposalAsNew() }
-                        }.accessibilityIdentifier("notes-proposal-save-new")
+                        }.accessibilityIdentifier("notes-proposal-save-new").disabled(review.workspaceIntent != nil)
                         Button("Discard Proposal") { _ = controller.discardReviewedProposal() }
                             .accessibilityIdentifier("notes-proposal-discard")
                         if review.isDeletion {

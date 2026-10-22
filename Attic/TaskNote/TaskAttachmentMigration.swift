@@ -548,10 +548,12 @@ enum TaskAttachmentMigration {
             let revived = destination.revived
             let shownStaged = staged.filter { id in entries.contains { $0.reference.id == id.id && $0.isShown } }
             let removedNeeded = needed.filter { !$0.isShown }
+            let agent = AgentWorkspaceCall.current
             let entryID = UUID()
             let effect = try history.map { try WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: $0.id, entryID: entryID)) }
-            let envelope = try coordinator.newEnvelope(intent: "Move Files into Note", reads: expected,
+            let baseEnvelope = try coordinator.newEnvelope(intent: "Move Files into Note", reads: expected,
                 writes: writes, scopes: expectedScopes, afterDocuments: [noteID: prepared.content], staged: staged, historyEffect: effect)
+            let envelope = try agent?.guarded(baseEnvelope, coordinator: coordinator) ?? baseEnvelope
             let stage: (ModelContext) throws -> Void = { commit in
                 let now = Date()
                 if created {
@@ -595,13 +597,14 @@ enum TaskAttachmentMigration {
                 }
                 try stageRecord(rootID: rootID, noteID: noteID, created: created || revived, manifest: manifest,
                                 before: before, after: recordedAfter, state: migratedState, in: commit, at: now)
+                try agent?.stageResolution(in: commit)
                 try boundary("M4-record")
             }
             let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in
                 try boundary("M5-publication")
                 publish()
             }])
-            let valid = { !isBusy() && !coordinator.sessions.hasActiveTaskPage(rootID) }
+            let valid = { !isBusy() && !coordinator.sessions.hasActiveTaskPage(rootID) && (agent?.valid() ?? true) }
             let outcome: WorkspaceOperationCoordinator.Outcome
             if let history {
                 outcome = await history.performCommand(using: coordinator) {
@@ -615,6 +618,7 @@ enum TaskAttachmentMigration {
             } else {
                 outcome = await coordinator.execute(envelope, sessionValid: valid, stage: stage, publication: publication)
             }
+            agent?.observe(outcome)
             switch outcome {
             case .committed, .publicationPending:
                 return previous == nil ? .migrated(noteID: noteID, created: created) : .reconciled
@@ -682,7 +686,6 @@ enum TaskAttachmentMigration {
             })
         }
     }
-
     /// Writes the record's changed fields to every physical replica (S10),
     /// or inserts it.
     private static func stageRecord(rootID: UUID, noteID: UUID, created: Bool, manifest: Manifest,

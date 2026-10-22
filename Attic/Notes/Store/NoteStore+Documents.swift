@@ -63,6 +63,8 @@ enum NotePhysicalFamilyRetention {
                   row.proposedContent == first.proposedContent, NoteTextReplacement.utf16Equal(row.agentName, first.agentName),
                   row.createdAt == first.createdAt, row.needsReview == first.needsReview,
                   row.isDeletion == first.isDeletion,
+                  row.workspaceOperationData == first.workspaceOperationData,
+                  row.workspaceReadSetData == first.workspaceReadSetData, row.workspaceTaskID == first.workspaceTaskID,
                   row.proposedContent.map({ NoteContentCodec.decode($0).isEditable }) == true
             else { return .unknown }
             return .eligible
@@ -1314,20 +1316,23 @@ extension NoteStore {
     }
 
     /// Oldest first, one per id.
-    func pendingEdits(noteID: UUID) -> [NotePendingEdit] {
-        do { return try readPendingEdits(noteID: noteID) }
+    func pendingEdits(noteID: UUID, taskID: UUID? = nil) -> [NotePendingEdit] {
+        do { return try readPendingEdits(noteID: noteID, taskID: taskID) }
         catch {
             reportProposalReadFailure(error)
             return []
         }
     }
 
-    func readPendingEdits(noteID: UUID) throws -> [NotePendingEdit] {
+    func readPendingEdits(noteID: UUID, taskID: UUID? = nil) throws -> [NotePendingEdit] {
         pendingEditFetchCount += 1
         let targetID = noteID
-        let rows = try fetchAuxiliary(FetchDescriptor<NotePendingEdit>(
-            predicate: #Predicate { $0.noteID == targetID }
-        ))
+        let rows: [NotePendingEdit]
+        if let taskID {
+            rows = try fetchAuxiliary(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.noteID == targetID || $0.workspaceTaskID == taskID }))
+        } else {
+            rows = try fetchAuxiliary(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.noteID == targetID }))
+        }
         var seen = Set<UUID>()
         return rows.sorted { lhs, rhs in
             lhs.createdAt != rhs.createdAt ? lhs.createdAt < rhs.createdAt : lhs.id.uuidString < rhs.id.uuidString
@@ -1347,7 +1352,7 @@ extension NoteStore {
             let current = preflight.canonical
             guard let editRows = try? pendingEditRows(edit.id),
                   NotePhysicalFamilyRetention.proposalEligible(editRows, noteIDs: [noteID]),
-                  !edit.needsReview, !edit.isDeletion else { continue }
+                  !edit.needsReview, !edit.isDeletion, edit.workspaceOperationData == nil else { continue }
             guard current.revisionToken == edit.baseRevisionToken,
                   let data = edit.proposedContent,
                   case let .editable(document) = NoteContentCodec.decode(data),
@@ -1457,6 +1462,7 @@ extension NoteStore {
     func replaceWithProposal(_ id: UUID, noteID: UUID, expectedRevision: String,
                              expectedSavedContent: Data?, expectedProposal: NoteProposalSignature,
                              preserving current: NoteDocument) -> Result<String, NoteDocumentStoreError> {
+        guard expectedProposal.workspaceOperation == nil else { return .failure(.saveFailed("Review and apply the whole workspace operation.")) }
         do {
             let preflight = try noteMutationPreflight(noteID, format: .editable)
             let note = preflight.canonical

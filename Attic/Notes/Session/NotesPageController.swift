@@ -56,7 +56,11 @@ struct NoteProposalReview: Identifiable, Equatable {
     let savedContent: Data?
     let signature: NoteProposalSignature
 
+    var workspaceIntent: AgentWorkspaceIntent? = nil
+    var workspaceReadSet: AgentWorkspaceReadSet? = nil
+
     var summary: String {
+        if let workspaceIntent { return workspaceIntent.summary }
         if isDeletion { return "The whole note would move to Recently Deleted." }
         let changed = zip(current.blocks, proposed.blocks).filter { $0 != $1 }.count
         let removed = max(0, current.blocks.count - proposed.blocks.count)
@@ -787,6 +791,91 @@ final class NotesPageController: ObservableObject {
         recency.reversed().compactMap { cache[$0] }.filter { NoteSessionPolicy.needsAttention($0.state) }
     }
 
+    weak var workspaceTaskStore: TaskStore?
+    private var operationReviewSession: NoteSession?
+
+    /// Presence is read without flushing a draft. The producing call may own
+    /// one engine-only session; every other live editor keeps proposal authority.
+    func hasAgentWorkspaceEditor(taskID: UUID?, noteID: UUID?, allowing presenter: TaskNotePresenter?, session allowed: NoteSession?, reviewed: Bool = false) -> Bool {
+        if let taskID, let open = TaskNotePresenter.open(for: taskID), open !== presenter || (!reviewed && open.isMounted) { return true }
+        for session in cache.values {
+            let matches = session.noteID == noteID || (taskID != nil && (session.pendingTaskID == taskID || store.note(withID: session.noteID)?.taskID == taskID))
+            guard matches else { continue }
+            let visible = isPageVisible && !isLibraryPresented && active === session
+            if session === allowed || session === presenter?.session {
+                if !reviewed && visible { return true }
+                continue
+            }
+            if session.workspacePage?.activeLease != nil || (isPageVisible && !isLibraryPresented && active === session) { return true }
+            if NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting { return true }
+        }
+        return false
+    }
+
+    var workspaceProposals: [NotePendingEdit] {
+        let rows = (try? store.modelContext.fetch(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.workspaceOperationData != nil }))) ?? []
+        var seen = Set<UUID>()
+        return rows.sorted { $0.createdAt < $1.createdAt }.filter { seen.insert($0.id).inserted }
+    }
+
+    private func pendingWorkspaceEdits(_ session: NoteSession) -> [NotePendingEdit] {
+        store.pendingEdits(noteID: session.noteID, taskID: session.pendingTaskID ?? store.note(withID: session.noteID)?.taskID)
+    }
+
+    private func beginWorkspaceProposalReview(_ id: UUID) async -> Bool {
+        guard let family = try? store.pendingEditRows(id), let edit = family.first,
+              NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [edit.noteID]),
+              let data = edit.workspaceOperationData, let intent = try? JSONDecoder().decode(AgentWorkspaceIntent.self, from: data) else { return false }
+        let session = intent.taskID.flatMap { TaskNotePresenter.open(for: $0)?.session }
+            ?? cache[edit.noteID]
+        if let session, session !== operationReviewSession {
+            guard canLeaveComposition(in: session), await preserveDurably(session) else { return false }
+        }
+        let current = session?.engine.document() ?? (try? store.replicasIncludingDeleted(of: edit.noteID))?.first?.content.flatMap { NoteContentCodec.decode($0).document } ?? .blank
+        let preview = (try? NoteDocument(blocks: [.text("Proposed workspace change"), .text(intent.summary)])) ?? .blank
+        let ticketSession = session ?? NoteSession(noteID: edit.noteID, isPersisted: false, baseRevisionID: nil,
+            engine: makeEngine(noteID: edit.noteID, document: current, readOnly: true), readOnlyReason: nil)
+        operationReviewSession = ticketSession
+        guard let readSet = try? AgentWorkspaceReadSet.capture(taskID: intent.taskID, noteID: intent.noteID, in: ModelContext(store.container)) else { return false }
+        proposalReview = NoteProposalReview(id: edit.id, sessionID: ticketSession.id, noteID: ticketSession.noteID,
+            agent: edit.agentName, createdAt: edit.createdAt, isDeletion: false, current: current, currentTags: ticketSession.engine.tags,
+            proposed: preview, proposedPreview: preview, revision: "workspace", savedContent: nil, signature: NoteProposalSignature(edit),
+            workspaceIntent: intent, workspaceReadSet: readSet)
+        isLibraryPresented = false
+        return true
+    }
+
+    private func acceptWorkspaceProposal(_ review: NoteProposalReview) async -> Bool {
+        guard let intent = review.workspaceIntent, let readSet = review.workspaceReadSet,
+              let session = operationReviewSession, session.id == review.sessionID,
+              let family = try? store.pendingEditRows(review.id), let edit = family.first,
+              NotePhysicalFamilyRetention.proposalEligible(family, noteIDs: [edit.noteID]),
+              NoteProposalSignature(edit) == review.signature,
+              let tasks = workspaceTaskStore else { return false }
+        guard session.engine.document() == review.current, session.engine.tags == review.currentTags,
+              !session.isImporting, canLeaveComposition(in: session),
+              (try? readSet.isCurrent(in: ModelContext(store.container))) == true else {
+            _ = await beginWorkspaceProposalReview(review.id)
+            proposalReviewNotice = "The workspace changed. Review the refreshed operation before applying."
+            return false
+        }
+        let tools = AgentTaskTools(store: tasks, noteStore: store)
+        tools.notesController = { [weak self] in self }
+        let call = AgentWorkspaceCall(readSet: readSet, intent: intent, notes: self, resolving: review.signature)
+        call.presenter = intent.taskID.flatMap { TaskNotePresenter.open(for: $0) }
+        call.session = session
+        do {
+            _ = try await AgentWorkspaceCall.$current.withValue(call) { try await tools.executeWorkspaceIntent(intent, notes: self) }
+            endProposalReview()
+            store.refresh()
+            return true
+        } catch {
+            if call.conflicted { _ = await beginWorkspaceProposalReview(review.id) }
+            proposalReviewNotice = "The operation couldn't be applied: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     func proposalComparison(for session: NoteSession) -> (agent: String, current: String, proposed: String)? {
         guard session.isPersisted,
               let edit = store.pendingEdits(noteID: session.noteID).first,
@@ -798,6 +887,10 @@ final class NotesPageController: ObservableObject {
 
     /// A store revision can change this answer; typing alone cannot.
     func proposalAgent(for session: NoteSession) -> String? {
+        if let edit = pendingWorkspaceEdits(session).first(where: { $0.workspaceOperationData != nil }) {
+            proposalStatusCache[session.noteID] = ProposalStatus(revision: store.revision, agent: edit.agentName, deletionAgent: nil, editID: edit.id, deletionID: nil)
+            return edit.agentName
+        }
         guard session.isPersisted else { return nil }
         if let cached = proposalStatusCache[session.noteID], cached.revision == store.revision { return cached.agent }
         let edits: [NotePendingEdit]
@@ -860,6 +953,10 @@ final class NotesPageController: ObservableObject {
 
     @discardableResult
     func beginProposalReview(id: UUID? = nil) async -> Bool {
+        if let id, (try? store.pendingEditRows(id))?.first?.workspaceOperationData != nil {
+            guard await awaitRecoveryForUser() else { return false }
+            return await beginWorkspaceProposalReview(id)
+        }
         guard await awaitRecoveryForUser(), let session = reviewSession(proposalID: id), !session.isImporting,
               canLeaveComposition(in: session) else { return false }
         return await performAfterRecovery {
@@ -913,10 +1010,12 @@ final class NotesPageController: ObservableObject {
     func endProposalReview() {
         proposalReview = nil
         proposalReviewNotice = nil
+        operationReviewSession = nil
     }
 
     @discardableResult
     func acceptProposal() async -> Bool {
+        if let review = proposalReview, review.workspaceIntent != nil { return await acceptWorkspaceProposal(review) }
         guard await awaitRecoveryForUser(), let review = proposalReview, let session = cache[review.noteID], isReviewSessionCurrent(session),
               session.id == review.sessionID, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
@@ -986,7 +1085,7 @@ final class NotesPageController: ObservableObject {
 
     @discardableResult
     func discardReviewedProposal() -> Bool {
-        guard let review = proposalReview, store.discardProposal(review.id, noteID: review.noteID) else {
+        guard let review = proposalReview, store.discardProposal(review.id, noteID: review.signature.noteID) else {
             proposalReviewNotice = store.lastErrorMessage ?? "The proposal could not be discarded."
             return false
         }
@@ -996,6 +1095,7 @@ final class NotesPageController: ObservableObject {
 
     @discardableResult
     func saveReviewedProposalAsNew() async -> Bool {
+        guard proposalReview?.workspaceIntent == nil else { proposalReviewNotice = "Apply or discard the whole workspace operation."; return false }
         guard await awaitRecoveryForUser(), let review = proposalReview, let session = active,
               session.id == review.sessionID, !session.isImporting,
               canLeaveComposition(in: session) else { return false }
@@ -3529,10 +3629,10 @@ extension NotesPageController {
     /// Returns nil when the store refused; else whether it came back as a
     /// separate, ordinary note (the task had a newer own note) and the
     /// step's id (the toast's Undo targets exactly that step).
-    func restoreTaskNote(noteID: UUID) -> (separate: Bool, stepID: UUID?)? {
+    func restoreTaskNote(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> (separate: Bool, stepID: UUID?)? {
         let owner = (try? store.replicasIncludingDeleted(of: noteID))?.first?.taskID
         let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
-        guard store.restoreDeleted(noteID: noteID) else { return nil }
+        guard store.restoreDeleted(noteID: noteID, staging: staging) else { return nil }
         let separate = store.lastRestoreWasSeparate
         undoRoute.record(UndoStep(
             name: String(localized: "Restore Note"),

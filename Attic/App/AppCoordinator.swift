@@ -630,6 +630,7 @@ final class AppCoordinator: ObservableObject {
         // The Notes page records its library actions (pin, duplicate,
         // delete) on the app's one undo route.
         noteDraft.pages.attachUndoRoute(library.undo)
+        noteDraft.pages.workspaceTaskStore = store
         let shellTools = AgentShellTools()
         let agentTools = AgentTaskTools(
             store: store, noteStore: noteStore, library: library,

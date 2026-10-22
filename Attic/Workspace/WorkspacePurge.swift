@@ -252,7 +252,11 @@ enum WorkspacePurge {
                 survivingBytes.formUnion(document.attachmentIDs)
             }
             for proposal in try context.fetch(FetchDescriptor<NotePendingEdit>()) {
-                guard !ownIDs.contains(proposal.noteID) else { return refused() }
+                guard !ownIDs.contains(proposal.noteID), proposal.workspaceTaskID.map({ !ids.contains($0) }) ?? true else { return refused() }
+                if let data = proposal.workspaceOperationData {
+                    guard let intent = try? JSONDecoder().decode(AgentWorkspaceIntent.self, from: data) else { return refused(.unknown) }
+                    if intent.taskID.map(ids.contains) == true || intent.subtaskID.map(ids.contains) == true { return refused() }
+                }
                 guard let data = proposal.proposedContent, case let .editable(document) = NoteContentCodec.decode(data) else { return refused(.unknown) }
                 survivingBytes.formUnion(document.attachmentIDs)
             }

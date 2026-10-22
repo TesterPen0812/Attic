@@ -428,8 +428,13 @@ enum WorkspaceLegacyBridge {
             }
         }
         for token in state.declaredTokens {
-            if let existing = before[token.owner], existing != token { throw WorkspaceFoundationError.conflict }
-            before[token.owner] = token
+            if let existing = before[token.owner] {
+                guard existing == token else { throw WorkspaceFoundationError.conflict }
+                // Keep native physical IDs for staging. A Codable round trip
+                // can change SwiftData's identifier backing/hash even when
+                // equality still holds; mixing the two in sets can invent a
+                // replica removal. The declared token remains an exact guard.
+            } else { before[token.owner] = token }
         }
         for scope in state.declaredScopes { state.scopes[scope.scope] = scope }
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }

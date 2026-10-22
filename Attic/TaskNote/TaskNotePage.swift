@@ -36,6 +36,7 @@ final class TaskNotePresenter: ObservableObject {
     private var hasMounted = false
     private var closeWork: Task<Bool, Never>?
     var isClosing: Bool { closeWork != nil }
+    var isMounted: Bool { hasMounted }
     /// Rings in the head and the block only while the keyboard drives.
     private static let focusTracker = AtticKeyboardFocusTracker()
     /// The page's menus, filled by the mounted page (the head is built once).
@@ -306,6 +307,7 @@ struct TaskNotePage: View {
     private var bottomInset: CGFloat { layout.chromeInsets.bottom + buttonHeight + AtticSpacing.s12 }
     private var bottomControls: CGFloat { layout.chromeInsets.bottom + buttonHeight }
     private var showsHistory: Bool {
+        if controller.proposalReview?.sessionID == presenter.session?.id { return true }
         guard let history = controller.historyBrowser else { return false }
         return history.noteID == presenter.session?.noteID
     }
@@ -332,6 +334,11 @@ struct TaskNotePage: View {
                     .padding(.leading, layout.chromeInsets.leading)
                     .padding(.trailing, layout.chromeInsets.trailing)
                     .padding(.bottom, layout.chromeInsets.bottom)
+            }
+            if let review = controller.proposalReview, review.sessionID == presenter.session?.id {
+                NoteProposalComparison(controller: controller, store: noteStore, review: review,
+                    columnInset: columnInset, topInset: layout.headerBottom + 8,
+                    bottomInset: layout.chromeInsets.bottom, design: design)
             }
             // Version History over the page (the note's own history page).
             if let history = controller.historyBrowser, history.noteID == presenter.session?.noteID {

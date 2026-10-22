@@ -472,6 +472,7 @@ struct TaskNoteTextEdit {
                  forwardWrites: Set<WorkspaceOwner>,
                  forward: @escaping (ModelContext) throws -> Void,
                  inverse: @escaping (_ redo: Bool) throws -> TaskStep) async -> WorkspaceOperationCoordinator.Outcome {
+        let agent = AgentWorkspaceCall.current
         let adapter = engine.history
         let revision = UUID()
         let associationID = UUID()
@@ -479,7 +480,7 @@ struct TaskNoteTextEdit {
         let noteID = noteID, parentID = parentID, selectionBefore = selectionBefore, caretAfter = caretAfter, createsNote = createsNote
         var group: WorkspaceHistory.TextGroup?
         let edit = self
-        return await history.performCommand(using: coordinator) {
+        let outcome = await history.performCommand(using: coordinator) {
             guard let command = adapter.prepareCommand(candidate, name: name) else { throw WorkspaceFoundationError.conflict }
             group = WorkspaceHistory.TextGroup(adapter: adapter, payload: command.payload)
             let document = edit.engine.document(forCommand: command.candidate)
@@ -491,10 +492,11 @@ struct TaskNoteTextEdit {
             let versions = Dictionary(uniqueKeysWithValues: rows.map { ($0.persistentModelID, UUID()) })
             var writes = forwardWrites.union([.init(entity: .note, id: id)]).union(versions.values.map { .init(entity: .version, id: $0) })
             if edit.createsNote { writes.formUnion([.init(entity: .association, id: associationID), .init(entity: .task, id: edit.parentID)]) }
-            let envelope = try edit.coordinator.newEnvelope(intent: name, reads: edit.coordinator.capture(writes.union([.init(entity: .task, id: edit.parentID)])),
+            let baseEnvelope = try edit.coordinator.newEnvelope(intent: name, reads: edit.coordinator.capture(writes.union([.init(entity: .task, id: edit.parentID)])),
                 writes: writes, afterDocuments: [id: prepared.content],
                 historyEffect: WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: edit.history.id, entryID: entryID)))
-            return .init(entryID: entryID, envelope: envelope, sessionValid: { adapter.canInstallCommand(command) }, stage: { commit in
+            let envelope = try agent?.guarded(baseEnvelope, coordinator: edit.coordinator) ?? baseEnvelope
+            return .init(entryID: entryID, envelope: envelope, sessionValid: { adapter.canInstallCommand(command) && (agent?.valid() ?? true) }, stage: { commit in
                 try forward(commit)
                 if edit.createsNote {
                     try edit.stageNoteCreation(in: commit, prepared: prepared, document: document, revision: revision, associationID: associationID)
@@ -502,6 +504,7 @@ struct TaskNoteTextEdit {
                     try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared,
                         revisionID: revision, versionIDs: versions, timestamp: Date())
                 }
+                try agent?.stageResolution(in: commit)
             }, record: { [weak notes, weak session, weak engine, weak tasks, weak coordinator, weak history] operation, entry in
                 guard let group, let notes, let session, let engine, let tasks, let coordinator, let history else { return }
                 let recording = TaskNoteTextEdit(engine: engine, session: session, notes: notes, tasks: tasks,
@@ -519,6 +522,8 @@ struct TaskNoteTextEdit {
                 notes.adoptWorkspaceCommit(session, revisionID: revision, created: createsNote)
             }]))
         }
+        agent?.observe(outcome)
+        return outcome
     }
 
     /// A new own note from the page's draft, with its association, in the

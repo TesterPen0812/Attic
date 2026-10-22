@@ -59,8 +59,9 @@ enum TaskNoteConversion {
         var wasPending = false
     }
 
-    static func makeTask(fromNote noteID: UUID, notes: NotesPageController, tasks: TaskStore) async -> Outcome {
-        guard let session = notes.active, session.noteID == noteID, !session.isReadOnly else {
+    static func makeTask(fromNote noteID: UUID, notes: NotesPageController, tasks: TaskStore, workspaceSession: NoteSession? = nil) async -> Outcome {
+        let agent = AgentWorkspaceCall.current
+        guard let session = workspaceSession ?? notes.active, session.noteID == noteID, !session.isReadOnly else {
             return .refused(String(localized: "This note can't become a task here"))
         }
         guard notes.settleForWorkspaceOperation(session) else { return .refused(String(localized: "Couldn't save the note first")) }
@@ -87,7 +88,7 @@ enum TaskNoteConversion {
                 historyEffect: WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: history.id, entryID: entryID)))
             return .init(entryID: entryID, envelope: change.envelope, sessionValid: { [weak notes, weak session] in
                 guard let notes, let session else { return false }
-                return notes.active === session && session.accepts(stamp)
+                return (notes.active === session || agent?.session === session) && session.accepts(stamp) && (agent?.valid() ?? true)
             }, stage: change.stage, record: { [weak notes, weak tasks, weak coordinator, weak history] operation, entry in
                 guard let notes, let tasks, let coordinator, let history else { return }
                 guard notes.undoRoute.alias(.taskWorkspace(taskID), to: history.historyID) else {
@@ -115,6 +116,7 @@ enum TaskNoteConversion {
                 if result.wasPending { _ = notes.openTaskPage?(taskID) }
             })
         }
+        agent?.observe(outcome)
         result.wasPending = outcome == .unknown || outcome == .publicationPending
         switch outcome {
         case .committed, .publicationPending: return .made(taskID: taskID)
@@ -183,8 +185,10 @@ enum TaskNoteConversion {
             writes.formUnion(try context.fetch(FetchDescriptor<TaskDeletionPreservation>())
                 .filter { $0.rootID == taskID && $0.retiredAt == nil }.map { .init(entity: .preservation, id: $0.id) })
         }
-        let envelope = try coordinator.newEnvelope(intent: "Make Task from Note", reads: coordinator.capture(writes),
+        let agent = replayOf == nil ? AgentWorkspaceCall.current : nil
+        let baseEnvelope = try coordinator.newEnvelope(intent: "Make Task from Note", reads: coordinator.capture(writes),
                                                    writes: writes, inverseGuards: expected?.tokens, scopes: expected?.scopes, afterDocuments: [noteID: prepared.content], historyEffect: historyEffect, replayOf: replayOf)
+        let envelope = try agent?.guarded(baseEnvelope, coordinator: coordinator) ?? baseEnvelope
         return Change(envelope: envelope, stage: { commit in
             if let draft {
                 _ = try TaskStore.stageCreation(in: commit, drafts: [draft], ids: [taskID], timestamp: Date())
@@ -202,6 +206,7 @@ enum TaskNoteConversion {
             association.taskGeneration = task.map(\.associationGeneration).max() ?? 1
             association.noteGeneration = notes.map(\.associationGeneration).max() ?? 1
             commit.insert(association)
+            try agent?.stageResolution(in: commit)
         })
     }
 
