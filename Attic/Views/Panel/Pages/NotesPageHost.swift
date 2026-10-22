@@ -4,7 +4,7 @@ import SwiftUI
 /// Notes replaces it until Back (`TaskNoteRouteHost`).
 struct NotesPageHost: View {
     @ObservedObject var noteStore: NoteStore
-    @ObservedObject var taskStore: TaskStore
+    let taskStore: TaskStore
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
@@ -22,7 +22,7 @@ struct NotesPageHost: View {
             TaskNoteRouteHost(page: .notes, noteStore: noteStore, taskStore: taskStore, noteDraft: noteDraft,
                               uiState: uiState, layout: layout, isReady: hasRestoredSession) { _ in
                 NotesEditorPage(controller: noteDraft.pages, noteStore: noteStore, noteDraft: noteDraft,
-                                uiState: uiState, layout: layout)
+                                uiState: uiState, layout: layout, taskStore: taskStore)
             }
         }
     }

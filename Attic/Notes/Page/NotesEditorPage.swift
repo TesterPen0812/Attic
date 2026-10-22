@@ -55,7 +55,7 @@ struct NotesEditorPage: View {
     @State private var postedToastStep: UUID?
 
     init(controller: NotesPageController, noteStore: NoteStore, noteDraft: NoteDraftController,
-         uiState: PanelUIState, layout: PanelPageLayout,
+         uiState: PanelUIState, layout: PanelPageLayout, taskStore: TaskStore? = nil,
          librarySearch: ((String) async throws -> Set<UUID>)? = nil) {
         self.controller = controller
         self.noteStore = noteStore
@@ -68,7 +68,7 @@ struct NotesEditorPage: View {
         }))
         _library = StateObject(wrappedValue: NotesLibraryModel(search: librarySearch ?? { query in
             try await store.searchNoteIDs(matching: query)
-        }, store: store, controller: controller))
+        }, store: store, controller: controller, taskStore: taskStore))
     }
 
     // MARK: Direction

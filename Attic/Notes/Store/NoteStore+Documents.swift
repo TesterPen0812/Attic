@@ -447,13 +447,28 @@ extension NoteStore {
         return try await Task.detached(priority: .userInitiated) {
             let context = ModelContext(container)
             let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { note in
-                note.deletedAt == nil && (note.title.localizedStandardContains(text)
+                note.deletedAt == nil && ((note.taskID == nil && (note.title.localizedStandardContains(text)
                     || note.plainText.localizedStandardContains(text)
+                    || (!tagText.isEmpty && note.tagsRaw.localizedStandardContains(tagText))))
                     || note.body.localizedStandardContains(text)
-                    || (!tagText.isEmpty && note.tagsRaw.localizedStandardContains(tagText))
                     || (!dayText.isEmpty && note.plainText.contains(dayText)))
             }))
             var ids = Set(notes.map(\.id))
+            if context.container.schema.entities.contains(where: { $0.name == "TaskItem" }) {
+                // Resolve live task heads in the same background search, so
+                // stale compatibility titles never override index matches.
+                let linked = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate {
+                    $0.deletedAt == nil && $0.taskID != nil
+                }))
+                let owners = Array(Set(linked.compactMap(\.taskID)))
+                if !owners.isEmpty {
+                    let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { owners.contains($0.id) }))
+                    let matching = Set(TaskStore.canonicalReplicas(from: rows).filter {
+                        $0.title.localizedStandardContains(text) || (!tagText.isEmpty && $0.tagsRaw.localizedStandardContains(tagText))
+                    }.map(\.id))
+                    ids.formUnion(linked.filter { $0.taskID.map(matching.contains) == true }.map(\.id))
+                }
+            }
             let files = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { attachment in
                 attachment.deletedAt == nil && attachment.originalFilename.localizedStandardContains(text)
             }))

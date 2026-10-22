@@ -144,6 +144,55 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(outcome, .obsolete)
     }
 
+    func testOpusR7TaskMetadataIsReadOnceForRepeatedRowsAndTags() throws {
+        let id = try seed(.boundary)
+        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes, taskStore: tasks)
+        for _ in 0..<8 {
+            _ = model.groups(store: notes.store, drafts: [])
+            _ = model.recentTags(store: notes.store)
+        }
+        XCTAssertEqual(model.taskMetadataFetchCount, 1)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "Fresh head"))
+        XCTAssertTrue(model.groups(store: notes.store, drafts: []).flatMap(\.rows).contains { $0.title == "Fresh head" })
+        _ = model.recentTags(store: notes.store)
+        XCTAssertEqual(model.taskMetadataFetchCount, 2)
+    }
+
+    func testOpusR7TaskNoteSearchKeepsSearchIndexMatches() async throws {
+        let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        // The index can match a filename or date chip absent from title/body.
+        let model = NotesLibraryModel(search: { _ in [noteID] }, store: notes.store, controller: notes, taskStore: tasks)
+        model.query = "attachment-index-match"
+        await model.waitForSearch()
+        XCTAssertEqual(model.groups(store: notes.store, drafts: []).flatMap(\.rows).map(\.id), [noteID])
+        let context = ModelContext(container)
+        context.insert(NoteAttachment(noteID: noteID, originalFilename: "attachment-index-match.pdf",
+            byteCount: 1, sortIndex: 0, contentDigest: ""))
+        try context.save()
+        let staleTitle = try XCTUnwrap(tasks.task(withID: id)?.title)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "New live head", tags: ["fresh-tag"]))
+        for query in ["attachment-index-match", "New live head", "#fresh-tag"] {
+            let found = try await notes.store.searchNoteIDs(matching: query)
+            XCTAssertTrue(found.contains(noteID), query)
+        }
+        let stale = try await notes.store.searchNoteIDs(matching: staleTitle)
+        XCTAssertFalse(stale.contains(noteID), "the compatibility title cannot match after a rename")
+    }
+
+    func testOpusR7OrdinaryNotesDoNotPublishForUnrelatedTaskChanges() throws {
+        makeStores()
+        _ = try notes.store.createDocumentNote(id: UUID(), document: .blank).get()
+        let task = try XCTUnwrap(tasks.create(title: "Unrelated"))
+        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, taskStore: tasks)
+        _ = model.groups(store: notes.store, drafts: [])
+        var publications = 0
+        let subscription = model.objectWillChange.sink { publications += 1 }
+        XCTAssertTrue(tasks.update(task, title: "Changed"))
+        XCTAssertEqual(publications, 0)
+        XCTAssertEqual(model.taskMetadataFetchCount, 0)
+        withExtendedLifetime(subscription) {}
+    }
+
     // MARK: Fixtures
 
     // Phase 3 reservations refuse native input visibly before storage changes.
@@ -359,7 +408,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         let before = try rows(noteID).first?.content
-        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes)
+        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes, taskStore: tasks)
         _ = model.groups(store: notes.store, drafts: [])
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "Live task name", tags: ["live-tag"]))
         let row = try XCTUnwrap(model.groups(store: notes.store, drafts: []).flatMap(\.rows).first { $0.id == noteID })

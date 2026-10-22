@@ -3732,7 +3732,7 @@ final class TaskStore: ObservableObject {
     /// is answered from this replica, after all of the id's replicas were
     /// read: filtering rows first would let an older copy answer for a newer
     /// one.
-    static func canonicalReplicas(from fetched: [TaskItem]) -> [TaskItem] {
+    nonisolated static func canonicalReplicas(from fetched: [TaskItem]) -> [TaskItem] {
         var newestByID: [UUID: TaskItem] = [:]
 
         for task in fetched {
@@ -4068,7 +4068,7 @@ final class TaskStore: ObservableObject {
             .joined(separator: " ")
     }
 
-    private static func tieBreakKey(for task: TaskItem) -> String {
+    nonisolated private static func tieBreakKey(for task: TaskItem) -> String {
         // Built as separately typed statements: one 16-part literal was too
         // slow for some compilers to type-check. Same parts, same order.
         func bits(_ date: Date?) -> String {

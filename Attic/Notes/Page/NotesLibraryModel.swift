@@ -89,10 +89,20 @@ final class NotesLibraryModel: ObservableObject {
         let state: AtticTaskState
     }
     private var taskMetadata: [UUID: TaskMetadata] = [:]
+    private(set) var taskMetadataFetchCount = 0
+    private weak var taskStore: TaskStore?
+    private var taskSubscription: AnyCancellable?
+    private var taskRevision: UInt64 = 0
+    private var taskMetadataKey: (revision: UInt64, owners: Set<UUID>)?
 
     private func readTaskMetadata(_ store: NoteStore) -> [UUID: TaskMetadata] {
-        let ids = Array(Set(store.notes.compactMap(\.taskID)))
+        let owners = Set(store.notes.compactMap(\.taskID))
+        let revision = taskStore == nil ? store.revision : taskRevision
+        if let key = taskMetadataKey, key.revision == revision, key.owners == owners { return taskMetadata }
+        taskMetadataKey = (revision, owners)
+        let ids = Array(owners)
         guard !ids.isEmpty else { return [:] }
+        taskMetadataFetchCount += 1
         let context = ModelContext(store.container)
         let rows = (try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))) ?? []
         return Dictionary(uniqueKeysWithValues: TaskStore.canonicalReplicas(from: rows).map {
@@ -118,7 +128,7 @@ final class NotesLibraryModel: ObservableObject {
     /// A task note's task state (the row's circle); nil leaves an open one.
     var taskState: ((UUID) -> AtticTaskState?)?
 
-    init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, now: @escaping () -> Date = Date.init,
+    init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, taskStore: TaskStore? = nil, now: @escaping () -> Date = Date.init,
          calendar: Calendar = .autoupdatingCurrent) {
         self.search = search
         if let controller {
@@ -138,6 +148,19 @@ final class NotesLibraryModel: ObservableObject {
             }
         }
         if let store { observeStore(store) }
+        self.taskStore = taskStore
+        taskRevision = taskStore?.revision ?? 0
+        taskSubscription = taskStore?.$revision.sink { [weak self] revision in
+            guard let self, revision != self.taskRevision else { return }
+            self.taskRevision = revision
+            guard let store = self.observedStore else { return }
+            let previous = self.taskMetadata
+            self.taskMetadata = self.readTaskMetadata(store)
+            guard self.taskMetadata != previous else { return }
+            self.cache = nil
+            self.objectWillChange.send()
+            if self.isSearching { self.scheduleSearch() }
+        }
         // Every exit route publishes here, including corner New Note and
         // Duplicate. Clear synchronously before hidden-editor autosaves.
         if let controller {
@@ -279,10 +302,7 @@ final class NotesLibraryModel: ObservableObject {
             // The earlier rows stay while a search runs, but only rows of
             // this filter (review S4-R2).
             guard let matches else { return cache.flatMap { $0.key.tag == tagFilter ? $0.groups : nil } ?? [] }
-            notes = notes.filter { note in
-                guard let owner = note.taskID, let task = taskMetadata[owner] else { return matches.contains(note.id) }
-                return task.title.localizedStandardContains(matchedQuery) || note.body.localizedStandardContains(matchedQuery)
-            }
+            notes = notes.filter { matches.contains($0.id) }
         }
         let draftRows = unsaved.map { draftRow($0) }
         let result: [Group]
