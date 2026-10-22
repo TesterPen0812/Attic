@@ -182,6 +182,53 @@ final class NoteDocumentStoreTests: XCTestCase {
 
     // MARK: Saves and replicas
 
+    func testP3F6BodySavePreservesEveryReplicasUnchangedMetadata() throws {
+        try checkP3ReplicaMetadata(restoring: false)
+    }
+
+    func testP3F6VersionRestorePreservesEveryReplicasUnchangedMetadata() throws {
+        try checkP3ReplicaMetadata(restoring: true)
+    }
+
+    private func checkP3ReplicaMetadata(restoring: Bool) throws {
+        let original = document("Title", ["Original body"])
+        let (id, revision) = try create(original)
+        let canonical = try XCTUnwrap(store.note(withID: id))
+        let other = NoteItem(id: id, title: canonical.title, body: canonical.body,
+                             createdAt: Date(timeIntervalSince1970: 100), updatedAt: .distantPast)
+        other.content = canonical.content
+        other.contentFormat = canonical.contentFormat
+        other.revisionID = revision
+        other.tags = ["replica"]
+        other.taskID = UUID()
+        other.pinnedAt = Date(timeIntervalSince1970: 200)
+        other.externalEditorName = "Other editor"
+        other.externalEditedAt = Date(timeIntervalSince1970: 300)
+        other.associationGeneration = 42
+        let expected = [other.createdAt, other.pinnedAt!, other.externalEditedAt!]
+        let owner = other.taskID
+        store.modelContext.insert(other)
+        try store.modelContext.save()
+        if restoring {
+            let version = NoteVersion(noteID: id, createdAt: Date(), reason: .pause,
+                content: try NoteContentCodec.encode(document("Title", ["Earlier body"])),
+                contentFormat: 1, title: "Title", body: "Earlier body", attachmentIDs: [], sourceRevisionID: revision)
+            store.modelContext.insert(version)
+            try store.modelContext.save()
+            guard case .success = store.restoreVersion(version.id, noteID: id) else { return XCTFail("restore") }
+        } else {
+            guard case .success = store.saveDocument(noteID: id, document: document("Title", ["New body"]),
+                                                      baseRevisionID: revision) else { return XCTFail("save") }
+        }
+        XCTAssertEqual(other.createdAt, expected[0])
+        XCTAssertEqual(other.pinnedAt, expected[1])
+        XCTAssertEqual(other.externalEditedAt, expected[2])
+        XCTAssertEqual(other.tags, ["replica"])
+        XCTAssertEqual(other.taskID, owner)
+        XCTAssertEqual(other.externalEditorName, "Other editor")
+        XCTAssertEqual(other.associationGeneration, 42)
+    }
+
     func testS5ReviewedProposalNeverAppliesAutomatically() throws {
         let (id, token) = try create(document("Current"))
         guard case .success = store.agentWrite(noteID: id, baseRevisionToken: token.uuidString,

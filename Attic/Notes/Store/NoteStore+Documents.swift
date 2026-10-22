@@ -712,19 +712,10 @@ extension NoteStore {
     private func stageValidated(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
                                 projection: PreparedNoteDocument, tags: String? = nil) -> UUID {
         let revisionID = UUID()
-        let canonical = canonical(replicas)
         Self.stageDocumentContent(projection, format: document.format, on: replicas,
                                   timestamp: timestamp, revision: revision, revisionID: revisionID, tags: tags)
         for replica in replicas {
             documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true, projection.attachmentBlocks, projection.hasTaskNote)
-            if let canonical, canonical !== replica {
-                replica.createdAt = canonical.createdAt
-                replica.tagsRaw = canonical.tagsRaw
-                replica.taskID = canonical.taskID
-                replica.pinnedAt = canonical.pinnedAt
-                replica.externalEditorName = canonical.externalEditorName
-                replica.externalEditedAt = canonical.externalEditedAt
-            }
             if let tags { replica.tagsRaw = tags }
         }
         return revisionID
@@ -1119,14 +1110,6 @@ extension NoteStore {
             replica.updatedAt = timestamp
             replica.deletedAt = nil
             replica.deletedAttachmentIDsRaw = nil
-            if replica !== preflight.canonical {
-                replica.createdAt = preflight.canonical.createdAt
-                replica.tagsRaw = preflight.canonical.tagsRaw
-                replica.taskID = preflight.canonical.taskID
-                replica.pinnedAt = preflight.canonical.pinnedAt
-                replica.externalEditorName = preflight.canonical.externalEditorName
-                replica.externalEditedAt = preflight.canonical.externalEditedAt
-            }
         }
         if let data = restoredContent, let restored = NoteContentCodec.decode(data).document {
             do {
