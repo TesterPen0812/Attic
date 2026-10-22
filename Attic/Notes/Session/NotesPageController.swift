@@ -1558,8 +1558,14 @@ final class NotesPageController: ObservableObject {
             session.workspacePublicationPending = pending
             if pending && permitsDraft {
                 session.saveTask?.cancel(); session.saveTask = nil
-                session.state = .notSaved(String(localized: "Couldn't finish saving the workspace change."))
-                _ = self.checkpoint(session, silent: true, allowQueued: true)
+                // Permission to edit is not itself an edit. A checkpoint of
+                // the unchanged replay source can outlive its deleted/draft
+                // identity and prevent the awaited retirement from finishing.
+                if session.engine.history.workspace?.hasNewerPublicationDraft == true
+                    || NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
+                    session.state = .notSaved(String(localized: "Couldn't finish saving the workspace change."))
+                    _ = self.checkpoint(session, silent: true, allowQueued: true)
+                }
             } else if !pending {
                 self.store.refresh()
                 if conflict {

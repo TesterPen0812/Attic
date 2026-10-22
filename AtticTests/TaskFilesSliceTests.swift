@@ -3,6 +3,30 @@ import SwiftData
 import XCTest
 @testable import Attic
 
+@MainActor
+private final class FileHistoryRetirementJournal: NoteDraftJournaling {
+    struct CacheUnavailable: Error {}
+    let base: NoteDraftJournal
+    var workspaceJournal: NoteDraftJournal? { base }
+    var requiresAsyncIO: Bool { true }
+    var beforeRetire: (() async -> Void)?
+    private(set) var writes = 0
+    init(base: NoteDraftJournal) { self.base = base }
+    func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
+        writes += 1
+        return try await base.writeDurably(entry, staged: staged, replacing: claim)
+    }
+    func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
+        await beforeRetire?()
+        try await base.retireDurably(noteID: noteID, claim: claim, saved: saved)
+    }
+    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] {
+        if beforeRetire != nil { throw CacheUnavailable() }
+        return try base.recoveryEntries()
+    }
+    func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
+}
+
 /// Phase 3 slice 2, "files and migration" (UX plan § 2.4, § 5.6, § 13; S9,
 /// S10, S11): rows, the task's page, block file cards, Merge into This Note
 /// with files, and the asynchronous agent path, on in-memory stores.
@@ -556,6 +580,53 @@ extension TaskFilesSliceTests {
 
 @MainActor
 extension TaskFilesSliceTests {
+    func testP3S2R2SlowRetirementDoesNotCheckpointAnUneditedReplaySource() async throws {
+        await notes.waitForRecoveryWork()
+        let journal = FileHistoryRetirementJournal(base: coordinator.journal)
+        notes = NotesPageController(store: notes.store, journal: journal, defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        notes.attachUndoRoute(library.undo)
+        notes.workspaceTaskStore = tasks
+        tasks.fileMigration.onNotesChanged = { [weak notes] in notes?.store.refresh() }
+        await notes.recoverAtLaunchAndWait()
+        let refs = try await legacyFiles(["slow-history.txt"])
+        let id = try legacyTask("History", shown: refs)
+        guard case let .migrated(noteID, _) = await tasks.fileMigration.moveIntoNote(id, tasks: tasks, notes: notes) else { return XCTFail("seed move") }
+        let presenter = try open(id), history = presenter.page.history
+        await notes.waitForRecoveryWork()
+        for redo in [false, true] {
+            let entered = expectation(description: "retirement suspended before \(redo ? "Redo" : "Undo") publication")
+            var resume: CheckedContinuation<Void, Never>?
+            journal.beforeRetire = {
+                entered.fulfill()
+                await withCheckedContinuation { resume = $0 }
+            }
+            let result = await history.replay(redo: redo)
+            XCTAssertEqual(result, .applied)
+            await fulfillment(of: [entered], timeout: 2)
+            let session = try XCTUnwrap(presenter.session), originalState = session.state
+            let writes = journal.writes
+            XCTAssertFalse(history.hasNewerPublicationDraft)
+            // The same callback as the timed recovery fallback, while IO is
+            // deterministically paused. Permission to type is not an edit.
+            session.engine.history.onWorkspaceRecoveryChanged?(true, true, false)
+            XCTAssertEqual(session.state, originalState)
+            journal.beforeRetire = nil
+            resume?.resume(); resume = nil
+            await notes.waitForRecoveryWork()
+            XCTAssertEqual(journal.writes, writes, "no obsolete source checkpoint may be manufactured")
+            for _ in 0..<20 where history.hasPendingPublication {
+                _ = await history.retryPublication(using: coordinator)
+                await notes.waitForRecoveryWork()
+            }
+            XCTAssertFalse(history.hasPendingPublication)
+            guard !history.hasPendingPublication else { return }
+            XCTAssertEqual(try ownNote(id), redo ? noteID : nil)
+            XCTAssertEqual(try XCTUnwrap(presenter.session).isPersisted, redo)
+        }
+        XCTAssertTrue(try XCTUnwrap(presenter.session).engine.document().attachmentIDs.contains(refs[0].id))
+    }
+
     func testP3S2MoveUndoRedoRebindsCreatedAndRevivedOpenNotes() async throws {
         for revived in [false, true] {
             let refs = try await legacyFiles(["history.txt"])
