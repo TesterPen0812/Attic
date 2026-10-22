@@ -114,6 +114,7 @@ final class WorkspaceOperationCoordinator {
     private var launchHold: WorkspaceOwnershipGate.Lease?
     private var damagedOperationHold: WorkspaceOwnershipGate.Lease?
     private var damagedOperationOwners = Set<WorkspaceOwner>()
+    private var unclassifiedOperationDamage = false
     private var damagedOperationBytes = Set<UUID>()
     private var damagedCollectionHold: WorkspaceOwnershipGate.Lease?
     private(set) var damagedCheckpointNotes = Set<UUID>()
@@ -126,6 +127,13 @@ final class WorkspaceOperationCoordinator {
         checkpointBytes.union(damagedOperationBytes).union(pending.values.flatMap { $0.0.payloads.map(\.id) })
             .union(abortedCompatibility.values.flatMap { $0.0.payloads.map(\.id) })
     }
+    func recoveryDependsOnNote(_ id: UUID) -> Bool {
+        checkpointOwners.contains(.init(entity: .note, id: id)) || damagedCheckpointNotes.contains(id)
+            || damagedOperationOwners.contains(.init(entity: .note, id: id))
+            || preOperationRecoveryCopies.contains { $0.draft.noteID == id }
+            || pending.values.contains { $0.0.preDraft?.noteID == id }
+    }
+
     private(set) var launchPruneBatches: [Int] = []
     private(set) var launchPruningError: String?
 
@@ -222,6 +230,7 @@ final class WorkspaceOperationCoordinator {
     /// due or overlapping entries, with at most four attempts per save.
     /// A nil scope is an explicit retry, retained for existing recovery callers.
     func retryHeldWrites(affecting affected: Set<WorkspaceOwner>? = nil) -> Bool {
+        guard !unclassifiedOperationDamage else { return false }
         if !plainUnknown.isEmpty, reconcilePlain() == .unknown {
             guard let affected, affected.isDisjoint(with: heldOwners) else { return false }
         }
@@ -432,7 +441,7 @@ final class WorkspaceOperationCoordinator {
         guard allocatedIDs.remove(envelope.id) != nil else { return .conflict }
         let affected = Set(envelope.tokens.map(\.owner)).union(envelope.writes)
         guard !Task.isCancelled else { return .notCommitted }
-        guard affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
+        guard !unclassifiedOperationDamage, affected.isDisjoint(with: heldOwners), sessionValid() else { return .conflict }
         let admission: WorkspaceOwnershipGate.Lease
         do {
             admission = try await ownership.admit(admissionIDs(envelope), excluding: collection?.lease(for: ownership))
@@ -449,7 +458,7 @@ final class WorkspaceOperationCoordinator {
         }
         // Concurrent preparation may have completed another writer; revalidate
         // its complete envelope here, never against warm presentation objects.
-        guard affected.isDisjoint(with: heldOwners), sessionValid() else {
+        guard !unclassifiedOperationDamage, affected.isDisjoint(with: heldOwners), sessionValid() else {
             retainAbortedCompatibility(envelope, claim: claim); return .conflict
         }
         let result = commitPrepared(envelope, claim: claim, collection: collection, stage: stage, publication: publication)
@@ -886,6 +895,7 @@ final class WorkspaceOperationCoordinator {
         var recorded = Set<UUID>()
         var damagedOwners = Set<WorkspaceOwner>(), damagedBytes = Set<UUID>()
         let receipts = try freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        let unknownDamage = inventory.contains { $0.damaged && $0.envelope == nil }
         for item in inventory where item.damaged {
             let id = item.envelope?.id ?? UUID(uuidString: item.directory.lastPathComponent)
             let family = receipts.filter { $0.id == id }
@@ -921,10 +931,11 @@ final class WorkspaceOperationCoordinator {
             if !hasAgreeingReceipt && !item.quarantined { try await journal.quarantineOperation(at: item.directory) }
         }
         damagedOwners.formUnion(damagedBytes.map { .init(entity: .attachment, id: $0) })
-        guard let hold = ownership.tryAcquire(damagedBytes.union(damagedOwners.map(\.id)), kind: .admission) else {
+        guard let hold = ownership.tryAcquire(damagedBytes.union(damagedOwners.map(\.id)).union(unknownDamage ? [ownership.unknownID] : []), kind: .admission) else {
             throw WorkspaceFoundationError.unknown
         }
         damagedOperationHold?.release(); damagedOperationHold = hold
+        unclassifiedOperationDamage = unknownDamage
         heldOwners.subtract(damagedOperationOwners); damagedOperationOwners = damagedOwners
         damagedOperationBytes = damagedBytes; heldOwners.formUnion(damagedOwners)
         let envelopes = inventory.filter { !$0.damaged }.compactMap { item -> (WorkspaceOperationEnvelope, WorkspaceOperationClaim)? in
@@ -1345,7 +1356,7 @@ extension WorkspaceOperationCoordinator {
             preDraft: preDraft, afterDocuments: afterDocuments, staged: staged)
         allocatedIDs.remove(envelope.id)
         let affected = Set(tokens.map(\.owner)).union(writes)
-        guard affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }
+        guard !unclassifiedOperationDamage, affected.isDisjoint(with: heldOwners) else { throw WorkspaceFoundationError.unknown }
         let claim = try journal.prepareOperationSynchronously(envelope)
         let result = commitPrepared(envelope, claim: claim, stage: stage, publication: Publication())
         if result == .unknown { compatibilityPending.insert(envelope.id); deferCompatibilityRetry(envelope.id) }

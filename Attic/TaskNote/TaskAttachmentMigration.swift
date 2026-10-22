@@ -765,7 +765,8 @@ enum TaskAttachmentMigration {
             let pending = try context.fetchCount(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.noteID == noteID }))
             guard pending == 0 else { return cant(String(localized: "an agent's edit to the note is waiting for review")) }
             let migratedIDs = Set(manifest.entries.map(\.reference.id))
-            guard !coordinator.sessions.hasActiveTaskPage(rootID),
+            guard !coordinator.recoveryDependsOnNote(noteID),
+                  !coordinator.sessions.hasActiveTaskPage(rootID),
                   !coordinator.sessions.hasActiveNotePage(noteID),
                   migratedIDs.isDisjoint(with: coordinator.retainedRecoveryBytes) else {
                 return cant(String(localized: "an open page or recovery draft still uses the files"))
@@ -818,7 +819,8 @@ enum TaskAttachmentMigration {
             let envelope = try coordinator.newEnvelope(intent: "Move Files Back", reads: coordinator.capture(reads),
                 writes: writes, afterDocuments: [noteID: prepared.content])
             let outcome = await coordinator.execute(envelope, sessionValid: {
-                !coordinator.sessions.hasActiveTaskPage(rootID) && !coordinator.sessions.hasActiveNotePage(noteID)
+                !coordinator.recoveryDependsOnNote(noteID)
+                    && !coordinator.sessions.hasActiveTaskPage(rootID) && !coordinator.sessions.hasActiveNotePage(noteID)
                     && migratedIDs.isDisjoint(with: coordinator.retainedRecoveryBytes)
                     && migratedIDs.isDisjoint(with: coordinator.retainedHistoryBytes)
             }, stage: { commit in

@@ -826,3 +826,34 @@ private extension Array where Element: Sendable {
         return result
     }
 }
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2ReversalRefusesTextOnlyRecoveryForTheNote() async throws {
+        let refs = try await legacyFiles(["recovery.txt"])
+        let id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail() }
+        let row = try XCTUnwrap(all(NoteItem.self).first { $0.id == noteID })
+        let draft = NoteDocument(blocks: [.text("Task"), .text("New writing after removing the files")])
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: row.revisionID,
+            content: try NoteContentCodec.encode(draft), selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        _ = try await coordinator.journal.writeDurably(entry, staged: [])
+        let outcome = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator)
+        guard case .refused = outcome else { return XCTFail("a note recovery dependency matters even when it references no file bytes") }
+    }
+
+    func testP3S2UnreadableIntentStaysHeldForReview() async throws {
+        let refs = try await legacyFiles(["unknown.txt"])
+        let rootID = try insertTask(shown: refs)
+        let owner = WorkspaceOwner(entity: .migration, id: rootID)
+        let envelope = try coordinator.newEnvelope(intent: "Move Files into Note", reads: coordinator.capture([owner]), writes: [owner])
+        _ = try await coordinator.journal.prepareOperation(envelope)
+        let inventory = try await coordinator.journal.operationInventory()
+        let item = try XCTUnwrap(inventory.first { $0.envelope?.id == envelope.id })
+        try Data([0]).write(to: item.directory.appendingPathComponent("intent.json"))
+        try Data([0]).write(to: item.directory.appendingPathComponent("envelope.json"))
+        try await coordinator.reconcileStartup()
+        let outcome = await migrate(rootID)
+        XCTAssertEqual(outcome, .deferred, "unknown ownership stays held, rather than granting a fresh migration")
+    }
+}
