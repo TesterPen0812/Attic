@@ -890,6 +890,9 @@ final class WorkspaceOperationCoordinator {
             let id = item.envelope?.id ?? UUID(uuidString: item.directory.lastPathComponent)
             let family = receipts.filter { $0.id == id }
             if let id { recorded.insert(id) }
+            // A verified abort is terminal only while receipt absence remains
+            // proven. The raw quarantine directory stays available for Review.
+            if item.intactIntent, item.verifiedAbort == item.claim, item.verifiedAbort != nil, family.isEmpty { continue }
             if let envelope = item.envelope {
                 damagedOwners.formUnion(envelope.tokens.map(\.owner)); damagedOwners.formUnion(envelope.writes)
                 damagedBytes.formUnion(envelope.payloads.map(\.id))
@@ -975,6 +978,35 @@ final class WorkspaceOperationCoordinator {
         }
         await journal.finishOperationReconciliation(suppressing: pending.values.compactMap { $0.0.checkpointClaim })
         startupReconciled = true
+    }
+
+    /// Caller has independently verified every legacy original under byte
+    /// admission. Source/receipt validation and the durable abort are one
+    /// synchronous main-actor boundary; no writer can slip between them.
+    func abortUncommittedMigration(_ item: NoteOperationInventoryItem, rootID: UUID,
+                                   verified: [StagedNoteAttachment]) throws {
+        guard item.damaged, item.quarantined, item.intactIntent,
+              let envelope = item.envelope, let claim = item.claim,
+              envelope.intent == "Move Files into Note", envelope.preDraft == nil,
+              envelope.writes.contains(.init(entity: .migration, id: rootID)),
+              !envelope.payloads.isEmpty,
+              Set(verified.map(\.id)) == Set(envelope.payloads.map(\.id)),
+              envelope.payloads.allSatisfy({ payload in verified.contains { $0.id == payload.id && $0.payloadIsVerified
+                  && $0.digest == payload.digest && $0.byteCount == payload.byteCount
+                  && $0.filename == payload.filename && $0.contentTypeIdentifier == payload.contentType } }) else {
+            throw WorkspaceFoundationError.protectedOwner
+        }
+        let context = freshContext(), id = envelope.id
+        guard try context.fetchCount(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id })) == 0 else {
+            throw WorkspaceFoundationError.unknown
+        }
+        for expected in envelope.tokens + envelope.inverseGuards {
+            guard try WorkspaceModelToken.read(expected.owner, in: context) == expected else { throw WorkspaceFoundationError.conflict }
+        }
+        for expected in envelope.scopes {
+            guard try WorkspaceScopeToken.read(expected.scope, in: context) == expected else { throw WorkspaceFoundationError.conflict }
+        }
+        try journal.recordVerifiedAbortSynchronously(at: item.directory, claim: claim)
     }
 
     func prunePublishedReceipts(limit: Int = 64) throws -> Int {

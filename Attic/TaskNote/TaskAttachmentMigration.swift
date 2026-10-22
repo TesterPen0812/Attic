@@ -387,6 +387,32 @@ enum TaskAttachmentMigration {
         WorkspaceModelFields.digest(try NoteContentCodec.encode(NoteDocument(blocks: [.text(""), block])))
     }
 
+    private static func releaseVerifiedQuarantines(rootID: UUID, coordinator: WorkspaceOperationCoordinator, files: TaskImageFiles) async {
+        guard let inventory = try? await coordinator.journal.operationInventory() else { return }
+        for item in inventory where item.damaged && item.quarantined && item.intactIntent && item.verifiedAbort == nil {
+            guard let envelope = item.envelope, envelope.intent == "Move Files into Note",
+                  envelope.writes.contains(.init(entity: .migration, id: rootID)),
+                  case let .family(family) = try? Self.inventory(rootID: rootID, in: coordinator.freshContext()), !family.isDeleted else { continue }
+            var sources: [Entry] = []
+            for payload in envelope.payloads {
+                guard let entry = family.manifest.entries.first(where: {
+                    $0.reference.id == payload.id && $0.reference.digest.lowercased() == payload.digest
+                        && $0.reference.byteCount == payload.byteCount && $0.reference.filename == payload.filename
+                        && $0.reference.contentTypeIdentifier == payload.contentType
+                }) else { break }
+                guard envelope.tokens.contains(where: { $0.owner == .init(entity: .task, id: entry.holderID) }) else { break }
+                sources.append(entry)
+            }
+            guard sources.count == envelope.payloads.count, !sources.isEmpty else { continue }
+            guard case let .success((bytes, leases)) = await readOriginals(sources, files: files) else { continue }
+            defer { leases.forEach { $0.release() } }
+            do {
+                try coordinator.abortUncommittedMigration(item, rootID: rootID, verified: bytes)
+                try await coordinator.reconcileStartup()
+            } catch { /* Any uncertainty keeps the hold and its artifact. */ }
+        }
+    }
+
     // MARK: Migrate (and reconcile an older writer's changes)
 
     /// Moves one family's legacy files into its own note, as one S1
@@ -396,6 +422,7 @@ enum TaskAttachmentMigration {
                         force: Bool = false, history: WorkspaceHistory? = nil, isBusy: @escaping () -> Bool = { false }, publish: @escaping () -> Void = {}) async -> Outcome {
         do {
             guard !isBusy(), !coordinator.sessions.hasActiveTaskPage(rootID) else { return .deferred }
+            await releaseVerifiedQuarantines(rootID: rootID, coordinator: coordinator, files: files)
             let context = coordinator.freshContext()
             let records = try context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>(predicate: #Predicate { $0.id == rootID }))
             if let record = records.first {

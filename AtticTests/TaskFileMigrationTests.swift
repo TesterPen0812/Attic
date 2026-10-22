@@ -776,3 +776,53 @@ extension TaskFileMigrationTests {
         XCTAssertNotNil(status.refusal)
     }
 }
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2QuarantineReleaseRequiresIndependentOriginalsAndUnchangedSource() async throws {
+        for unsafe in [false, true] {
+            let references = try await legacyFiles(["interrupted.txt", "second.txt"])
+            let rootID = try insertTask(shown: references)
+            let noteID = UUID()
+            let writes: Set<WorkspaceOwner> = [.init(entity: .note, id: noteID), .init(entity: .migration, id: rootID)]
+            let reads = writes.union([.init(entity: .task, id: rootID)])
+            let staged = try await references.asyncMapForMigrationTest { reference in
+                let url = try await self.files.files.materializedURL(for: reference.fileReference)
+                return StagedNoteAttachment(id: reference.id, filename: reference.filename, contentTypeIdentifier: reference.contentTypeIdentifier,
+                    byteCount: reference.byteCount, digest: reference.digest, data: try Data(contentsOf: url))
+            }
+            let envelope = try coordinator.newEnvelope(intent: "Move Files into Note", reads: coordinator.capture(reads), writes: writes, staged: staged)
+            _ = try await coordinator.journal.prepareOperation(envelope)
+            let inventory = try await coordinator.journal.operationInventory()
+            let item = try XCTUnwrap(inventory.first { $0.envelope?.id == envelope.id })
+            try Data([0]).write(to: item.directory.appendingPathComponent(references[1].id.uuidString))
+            try await coordinator.reconcileStartup()
+            if unsafe {
+                let edit = coordinator.freshContext()
+                for row in try edit.fetch(FetchDescriptor<TaskItem>()) where row.id == rootID { row.title += " changed" }
+                try edit.save()
+            }
+            let result = await migrate(rootID)
+            if unsafe {
+                XCTAssertEqual(result, .deferred, "a changed source stays held for Review")
+            } else {
+                guard case .migrated = result else { XCTFail("independent bytes and unchanged intent permit a fresh retry: \(result)"); continue }
+                let artifacts = try await coordinator.journal.operationInventory().filter { $0.envelope?.id == envelope.id }
+                XCTAssertEqual(artifacts.count, 1, "keep the quarantine artifact")
+                XCTAssertTrue(artifacts[0].quarantined)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: artifacts[0].directory.appendingPathComponent("verified-abort.json").path))
+                try await coordinator.reconcileStartup()
+                let retry = await migrate(rootID)
+                XCTAssertEqual(retry, .unchanged)
+            }
+        }
+    }
+}
+
+private extension Array where Element: Sendable {
+    func asyncMapForMigrationTest<T: Sendable>(_ transform: (Element) async throws -> T) async rethrows -> [T] {
+        var result: [T] = []
+        for element in self { result.append(try await transform(element)) }
+        return result
+    }
+}

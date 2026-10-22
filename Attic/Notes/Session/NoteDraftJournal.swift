@@ -868,6 +868,14 @@ struct NoteOperationInventoryItem: Sendable {
     let claim: WorkspaceOperationClaim?
     let damaged: Bool
     let quarantined: Bool
+    var intactIntent = false
+    var verifiedAbort: WorkspaceOperationClaim? = nil
+}
+
+struct NoteVerifiedOperationAbort: Codable, Sendable {
+    let claim: WorkspaceOperationClaim
+    let payloads: [WorkspaceOperationEnvelope.Payload]
+    let abortedAt: Date
 }
 
 // MARK: Phase 3 operation ownership (same IO actor as checkpoint mutations)
@@ -945,6 +953,8 @@ private extension NoteDraftJournalIO {
             for root in roots.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 var envelope: WorkspaceOperationEnvelope?
                 var claim: WorkspaceOperationClaim?
+                var intactIntent = false
+                var verifiedAbort: WorkspaceOperationClaim?
                 do {
                     let data: Data
                     do { data = try Data(contentsOf: root.appendingPathComponent("envelope.json")) }
@@ -956,6 +966,15 @@ private extension NoteDraftJournalIO {
                     envelope = decoded
                     claim = WorkspaceOperationClaim(id: decoded.id, digest: Self.digest(data))
                     guard UUID(uuidString: root.lastPathComponent) == decoded.id else { throw WorkspaceFoundationError.damagedEnvelope }
+                    let intent = try Data(contentsOf: root.appendingPathComponent("intent.json"))
+                    intactIntent = Self.digest(intent) == claim?.digest
+                        && (try? JSONDecoder().decode(WorkspaceOperationEnvelope.self, from: intent)) == envelope
+                    if intactIntent,
+                       let bytes = try? Data(contentsOf: root.appendingPathComponent("verified-abort.json")),
+                       let abort = try? JSONDecoder().decode(NoteVerifiedOperationAbort.self, from: bytes),
+                       abort.claim == claim, abort.payloads == envelope?.payloads {
+                        verifiedAbort = abort.claim
+                    }
                     for index in decoded.payloads.indices {
                         let payload = decoded.payloads[index]
                         let stored: Data
@@ -970,14 +989,28 @@ private extension NoteDraftJournalIO {
                         decoded.payloads[index].bytes = stored
                     }
                     result.append(.init(directory: root, envelope: decoded, claim: claim,
-                        damaged: quarantined, quarantined: quarantined))
+                        damaged: quarantined, quarantined: quarantined, intactIntent: intactIntent, verifiedAbort: verifiedAbort))
                 } catch {
                     result.append(.init(directory: root, envelope: envelope, claim: claim,
-                        damaged: true, quarantined: quarantined))
+                        damaged: true, quarantined: quarantined, intactIntent: intactIntent, verifiedAbort: verifiedAbort))
                 }
             }
         }
         return result
+    }
+
+    func recordVerifiedAbort(at root: URL, claim: WorkspaceOperationClaim) throws {
+        let intent = try Data(contentsOf: root.appendingPathComponent("intent.json"))
+        guard Self.digest(intent) == claim.digest,
+              let envelope = try? JSONDecoder().decode(WorkspaceOperationEnvelope.self, from: intent),
+              envelope.id == claim.id, UUID(uuidString: root.lastPathComponent) == claim.id else {
+            throw WorkspaceFoundationError.damagedEnvelope
+        }
+        let marker = NoteVerifiedOperationAbort(claim: claim, payloads: envelope.payloads, abortedAt: Date())
+        try journalWriteSynced(WorkspaceModelFields.encode(marker), to: root.appendingPathComponent("verified-abort.json"))
+        try journalSync(root)
+        try journalSync(root.deletingLastPathComponent())
+        try journalSync(directory)
     }
 
     func quarantineOperation(at root: URL) throws {
@@ -1105,6 +1138,10 @@ enum NoteJournalWaitMeasurement {
 #endif
 
 extension NoteDraftJournal {
+    nonisolated func recordVerifiedAbortSynchronously(at root: URL, claim: WorkspaceOperationClaim) throws {
+        let _: Bool = try Self.waitForIO { try await self.io.recordVerifiedAbort(at: root, claim: claim); return true }
+    }
+
     nonisolated func prepareOperationSynchronously(_ envelope: WorkspaceOperationEnvelope) throws -> WorkspaceOperationClaim {
         let io = self.io
         return try Self.waitForIO { try await io.prepareOperation(envelope) }

@@ -132,18 +132,8 @@ final class OperationCrashHarnessTests: XCTestCase {
                     let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
                     let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: files)
                     let done = coordinator.freshContext()
-                    // A death inside the journal's payload write (K0–K2)
-                    // leaves a damaged operation: S1 quarantines it and holds
-                    // its owners, so the family stays on the legacy path
-                    // (old state, its files in Earlier files) instead of
-                    // migrating in this launch. Never a mix either way.
-                    if !committed, report.deferred.contains(WorkspaceCrashFixture.taskID) {
-                        XCTAssertTrue(["K0", "K1", "K2"].contains(point), "only a damaged journal write may hold the family: \(point)")
-                        XCTAssertEqual(try done.fetchCount(FetchDescriptor<TaskAttachmentMigrationRecord>()), 0, point)
-                        XCTAssertEqual(try done.fetchCount(FetchDescriptor<NoteAttachment>()), 0, point)
-                        XCTAssertEqual(try legacyRows(done), legacy, point)
-                        continue
-                    }
+                    // K0–K2 release only after a durable, verified abort of
+                    // the old intent. A new operation then finishes migration.
                     XCTAssertEqual(report.migrated, committed ? [] : [WorkspaceCrashFixture.taskID], point)
                     XCTAssertEqual(try done.fetchCount(FetchDescriptor<TaskAttachmentMigrationRecord>()), 1, point)
                     guard let note = try done.fetch(FetchDescriptor<NoteItem>()).first,
