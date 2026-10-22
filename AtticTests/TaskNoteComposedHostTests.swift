@@ -1511,7 +1511,9 @@ extension TaskNoteComposedHostTests {
         let page = NotesPageHost(noteStore: notes.store, taskStore: tasks, noteDraft: draft,
             uiState: uiState, layout: PanelPageLayout(cornerSize: 52, panelSize: panel), hasRestoredSession: true)
         page.closeTaskNoteRoute(id)
-        for _ in 0..<100 where presenter.lease != nil { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<100 where notes.taskNotePresenter != nil || presenter.lease != nil || uiState.openTaskNoteID != nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         XCTAssertNil(notes.taskNotePresenter)
         XCTAssertNil(presenter.lease)
         XCTAssertNil(uiState.openTaskNoteID)
