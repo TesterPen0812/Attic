@@ -691,15 +691,16 @@ struct TasksPage: View {
             // line shows: Find takes the line, and the button and its own
             // anchor with it (GPT-6.1's review: the key did nothing then).
             AtticMenuAnchor(holder: viewOptionsAnchor)
-                .frame(width: AtticControlSize.smallMinWidth, height: AtticControlSize.smallHeight)
+                .frame(width: AtticTopGlassMetrics.height, height: AtticTopGlassMetrics.height)
                 .padding(.trailing, lineEndInset)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.top, tabsTop + (AtticLayout.pageTabsHeight - AtticControlSize.smallHeight) / 2)
+                .padding(.top, tabsTop + (AtticLayout.pageTabsHeight - AtticTopGlassMetrics.height) / 2)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             let _ = searchRedraw
             if drawnSearchShown {
                 Group {
+                    // Top glass: the field floats on the raised material.
                     if model.tab == .done {
                         TasksDoneSearchField(model: model, input: model.doneSearchInput,
                                              isFocused: $searchFocused, onEscape: endSearch)
@@ -707,53 +708,61 @@ struct TasksPage: View {
                         AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
                                              text: Binding(get: { model.searchQuery(for: model.tab) },
                                                            set: { model.setSearchQuery($0, for: model.tab) }),
-                                             isFocused: $searchFocused, onEscape: endSearch)
+                                             isFocused: $searchFocused, floating: true, onEscape: endSearch)
                     }
                 }
                     .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
                     .id(model.tab)
                     // Centred on the tabs' line.
-                    .padding(.top, tabsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
+                    .padding(.top, tabsTop - (AtticTopGlassMetrics.height - AtticLayout.pageTabsHeight) / 2)
                     // It comes in from the magnifier's end, the tabs leave
                     // toward the other (round 9: springy, a fade when
                     // motion is reduced).
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: .trailing))
             } else {
-                HStack(spacing: 0) {
-                    AtticPageTabs(
-                        items: TasksTab.allCases.map { tab in
-                            AtticPageTabs.Item(page: tab, title: tab.title, accessibilityIdentifier: "tasks-page-\(tab.identifier)")
-                        },
-                        selection: Binding(get: { model.tab }, set: { model.select(tab: $0) })
-                    )
-                    .accessibilityIdentifier("tasks-page-tabs")
-                    .padding(.leading, AtticLayout.pageTabsX)
-                    Spacer(minLength: 0)
-                    // Find (⌘F) on every page: Done's magnifier.
-                    // Quiet icons (D-10): the labels' own grey, primary only when on.
-                    AtticSmallButton(systemName: "magnifyingglass",
-                                     label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
-                                     quietIcon: true, action: beginSearch)
-                        .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
-                    if model.tab == .done {
-                        // Fixed slots (D-20): Done keeps View Options' place
-                        // empty, so the magnifier never moves.
-                        Color.clear
-                            .frame(width: AtticControlSize.smallMinWidth, height: AtticControlSize.smallHeight)
-                            .padding(.trailing, lineEndInset)
-                            .accessibilityHidden(true)
-                    } else {
-                        // View Options (⌥⌘V): a second quiet icon, its dot
-                        // while a filter hides tasks.
-                        let view = model.viewOptions(for: model.tab)
-                        AtticMenuButton(systemName: "line.3.horizontal.decrease", label: "View Options (⌥⌘V)",
-                                        commands: { viewCommands(for: model.tab) },
-                                        showsDot: view.filters, value: view.spokenValue,
-                                        quietIcon: !view.filters)
-                            .accessibilityIdentifier("tasks-view-options")
-                            .padding(.trailing, lineEndInset)
-                            // It pops in where it sits (a fade in Calm).
-                            .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
+                // Top glass (2026-10-22): the tabs in one glass capsule, the
+                // icons each on a glass circle, one glass container.
+                AtticControlGroup {
+                    HStack(spacing: 0) {
+                        AtticPageTabs(
+                            items: TasksTab.allCases.map { tab in
+                                AtticPageTabs.Item(page: tab, title: tab.title, accessibilityIdentifier: "tasks-page-\(tab.identifier)")
+                            },
+                            selection: Binding(get: { model.tab }, set: { model.select(tab: $0) })
+                        )
+                        .accessibilityIdentifier("tasks-page-tabs")
+                        .atticTopLineCapsule()
+                        // The labels stay on the content line, the capsule's
+                        // edge on the controls' line.
+                        .padding(.leading, AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding)
+                        Spacer(minLength: AtticTopGlassMetrics.spacing)
+                        // Find (⌘F) on every page: Done's magnifier.
+                        // Quiet icons (D-10): the labels' own grey, primary only when on.
+                        AtticSmallButton(systemName: "magnifyingglass",
+                                         label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
+                                         quietIcon: true, floating: true, action: beginSearch)
+                            .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
+                            .padding(.trailing, AtticTopGlassMetrics.spacing)
+                        if model.tab == .done {
+                            // Fixed slots (D-20): Done keeps View Options' place
+                            // empty, so the magnifier never moves.
+                            Color.clear
+                                .frame(width: AtticTopGlassMetrics.height, height: AtticTopGlassMetrics.height)
+                                .padding(.trailing, lineEndInset)
+                                .accessibilityHidden(true)
+                        } else {
+                            // View Options (⌥⌘V): a second quiet icon, its dot
+                            // while a filter hides tasks.
+                            let view = model.viewOptions(for: model.tab)
+                            AtticMenuButton(systemName: "line.3.horizontal.decrease", label: "View Options (⌥⌘V)",
+                                            commands: { viewCommands(for: model.tab) },
+                                            showsDot: view.filters, value: view.spokenValue,
+                                            quietIcon: !view.filters, floating: true)
+                                .accessibilityIdentifier("tasks-view-options")
+                                .padding(.trailing, lineEndInset)
+                                // It pops in where it sits (a fade in Calm).
+                                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
+                        }
                     }
                 }
                 .frame(height: AtticLayout.pageTabsHeight)
@@ -772,11 +781,10 @@ struct TasksPage: View {
         .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
     }
 
-    /// The last icon's glyph ends where the rows' dates end.
-    private var lineEndInset: CGFloat {
-        max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
-            - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2)
-    }
+    /// The last icon's glass circle ends on the controls' line, under the
+    /// corner button above it (top glass; its glyph within half a point of
+    /// where it was).
+    private var lineEndInset: CGFloat { AtticTopGlassMetrics.lineEndInset }
 
     /// The search is on the tabs' line while it has the keyboard or a
     /// query (owner item 17; every page since item 6); Esc, or clearing and
