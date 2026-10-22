@@ -760,7 +760,7 @@ final class NoteStore: ObservableObject {
             let ordinary = materialized.document
             Self.stageDocumentContent(try PreparedNoteDocument(ordinary), format: ordinary.format,
                 on: [replica], timestamp: now, revision: replica.revision, revisionID: UUID())
-            replica.tags = materialized.tags
+            if replica.tags.isEmpty { replica.tags = materialized.tags }
             replica.taskID = nil
             replica.associationGeneration += 1
         }

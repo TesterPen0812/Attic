@@ -95,6 +95,36 @@ final class TaskLifecycleSliceTests: XCTestCase {
         }
     }
 
+    func testOpusR8SeparateRestoreKeepsTheNotesOwnTags() async throws {
+        let id = try seed(.boundary)
+        let oldID = try XCTUnwrap(try ownNotes(id).first?.id)
+        XCTAssertTrue(notes.store.setTags(["mine"], for: try XCTUnwrap(notes.store.note(withID: oldID))))
+        XCTAssertTrue(notes.store.delete(try XCTUnwrap(notes.store.note(withID: oldID))))
+        let presenter = try open(id)
+        type("New own note", into: presenter.host.textView)
+        XCTAssertTrue(notes.save(try XCTUnwrap(presenter.session)))
+        await close(presenter)
+        XCTAssertTrue(notes.store.restoreDeleted(noteID: oldID))
+        XCTAssertEqual(notes.store.note(withID: oldID)?.tags, ["mine"])
+    }
+
+    func testOpusR8PreservationSummaryUsesSentenceCaseAndFullOlderDates() throws {
+        let id = try seed(.boundary), context = ModelContext(container)
+        let task = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        task.status = .done
+        for date in [Date(), Date().addingTimeInterval(-30 * 86_400)] {
+            task.completedAt = date; try context.save()
+            let snapshot = try WorkspaceTaskNoteMaterializer.preservation(taskID: id, in: context)
+            let document = try WorkspaceTaskNoteMaterializer.materialize(
+                NoteDocument(blocks: [.text("Task"), .text("Body")], requires: ["taskNote"]),
+                taskID: id, preservation: snapshot).document
+            let dateText = Calendar.autoupdatingCurrent.isDate(date, equalTo: Date(), toGranularity: .weekOfYear)
+                ? date.formatted(.dateTime.weekday(.abbreviated))
+                : date.formatted(.dateTime.day().month(.wide).year())
+            XCTAssertEqual(document.blocks[1].text, "Was a task · done \(dateText) · 1/2")
+        }
+    }
+
     // MARK: Fixtures
 
     // Phase 3 reservations refuse native input visibly before storage changes.

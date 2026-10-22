@@ -87,9 +87,12 @@ enum WorkspaceTaskNoteMaterializer {
             }
         let done = try children.filter { try value("statusRaw", in: $0, as: String.self) == TaskStatus.done.rawValue }.count
         let status = try value("statusRaw", in: head, as: String.self)
-        var detail = TaskStatus(rawValue: status)?.title ?? status
+        var detail = TaskStatus(rawValue: status)?.title.lowercased() ?? status
         if status == TaskStatus.done.rawValue, let at = try value("completedAt", in: head, as: Date?.self) {
-            detail += " " + at.formatted(.dateTime.weekday(.abbreviated))
+            let thisWeek = Calendar.autoupdatingCurrent.dateInterval(of: .weekOfYear, for: Date())
+            detail += " " + (thisWeek?.contains(at) == true
+                ? at.formatted(.dateTime.weekday(.abbreviated))
+                : at.formatted(.dateTime.day().month(.wide).year()))
         }
         var ordinary = try document.ordinarySnapshot(title: title)
         let summary = "Was a task · \(detail) · \(done)/\(children.count)"
