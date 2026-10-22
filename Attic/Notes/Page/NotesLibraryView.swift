@@ -99,7 +99,7 @@ struct NotesLibraryView: View {
                                  onSelectTag: { tag in selectTag(tag) },
                                  moreTagsShown: $moreTagsShown, moreTagsCard: { AnyView(moreTagsCard) })
                 // Centred on the tabs' line, as on Tasks.
-                .padding(.top, labelsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
+                .padding(.top, labelsTop - (AtticNoteLibraryLine.height - AtticLayout.pageTabsHeight) / 2)
                 // Read before the rows, as when it stood above them.
                 .accessibilitySortPriority(1)
         }
