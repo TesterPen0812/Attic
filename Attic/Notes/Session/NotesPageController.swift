@@ -1335,6 +1335,54 @@ final class NotesPageController: ObservableObject {
     /// library takes it back on Back (slice 1).
     var libraryQueryAcrossTaskPage: String?
 
+    func installFileHistoryState(_ session: NoteSession, rootID: UUID, noteID: UUID, history: WorkspaceHistory) throws {
+        guard !session.isImporting,
+              session.engine.textView?.hasMarkedText() != true else { throw WorkspaceFoundationError.conflict }
+        // The stored replay is authoritative, but a fallback draft now owns
+        // the editor. Finish publication without replacing it; history's
+        // recovery path installs the external barrier and retains that draft.
+        if history.hasNewerPublicationDraft { return }
+        store.refresh()
+        let stored = store.note(withID: noteID)
+        guard retireRecoveryCopy(noteID: session.noteID, session: session) else { throw WorkspaceFoundationError.conflict }
+        session.saveTask?.cancel(); session.saveTask = nil
+        session.durabilityTask?.cancel(); session.durabilityTask = nil
+        session.pauseTask?.cancel(); session.pauseTask = nil
+        cache[session.noteID] = nil
+        session.invalidateCallbacks()
+        session.verifiedDocumentAttachments = [:]
+        if let stored {
+            session.adopt(noteID: noteID)
+            session.pendingTaskID = nil
+            session.isPersisted = true
+            session.baseRevisionID = stored.revisionID
+            session.baseContent = stored.content
+            session.baseTags = stored.tags
+            guard let document = stored.content.flatMap({ NoteContentCodec.decode($0).document }) else { throw WorkspaceFoundationError.conflict }
+            session.replaceEngine(makeEngine(noteID: noteID, document: document, readOnly: false, tags: stored.tags, bodyOnly: true))
+            session.state = .clean
+        } else {
+            let id = UUID()
+            let task = (try? ModelContext(store.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == rootID })))?.first
+            let blank = try NoteDocument.blank.taskSnapshot(title: task?.title ?? "")
+            session.adopt(noteID: id)
+            session.pendingTaskID = rootID
+            session.isPersisted = false
+            session.baseRevisionID = nil; session.baseContent = nil; session.baseTags = []
+            session.replaceEngine(makeEngine(noteID: id, document: blank, readOnly: false, bodyOnly: true))
+            session.state = .untouched
+        }
+        session.readOnlyReason = nil
+        session.recoveryClaim = nil
+        session.selection = NSRange(location: 0, length: 0)
+        session.scrollOffset = 0
+        guard history.bind(noteID: session.noteID) else { throw WorkspaceFoundationError.conflict }
+        history.attach(session.engine.history)
+        cache[session.noteID] = session
+        wire(session)
+        TaskNotePresenter.open(for: rootID)?.refreshDeletedNote(stored == nil ? noteID : nil)
+    }
+
     func refreshWorkspaceSession(_ session: NoteSession) -> NoteSession? {
         store.refresh()
         session.invalidateCallbacks()

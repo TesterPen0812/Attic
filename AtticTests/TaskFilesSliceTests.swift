@@ -556,6 +556,43 @@ extension TaskFilesSliceTests {
 
 @MainActor
 extension TaskFilesSliceTests {
+    func testP3S2MoveUndoRedoRebindsCreatedAndRevivedOpenNotes() async throws {
+        for revived in [false, true] {
+            let refs = try await legacyFiles(["history.txt"])
+            let id = try legacyTask("History", shown: refs)
+            if revived {
+                await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+                let reversed = await tasks.fileMigration.reverse(id, tasks: tasks)
+                XCTAssertEqual(reversed, .reversed)
+            }
+            let moved = await tasks.fileMigration.moveIntoNote(id, tasks: tasks, notes: notes)
+            guard case let .migrated(noteID, _) = moved else { XCTFail("\(moved)"); continue }
+            let presenter = try open(id)
+            let history = presenter.page.history
+            let undone = await history.replay(redo: false)
+            XCTAssertEqual(undone, .applied)
+            for _ in 0..<200 where history.hasPendingPublication {
+                try await Task.sleep(for: .milliseconds(10))
+                _ = await history.retryPublication(using: coordinator)
+            }
+            XCTAssertFalse(history.hasPendingPublication)
+            XCTAssertNil(try ownNote(id))
+            XCTAssertFalse(try XCTUnwrap(presenter.session).isPersisted)
+            XCTAssertFalse(presenter.host.textView.string.contains("history.txt"))
+            let redone = await history.replay(redo: true)
+            XCTAssertEqual(redone, .applied)
+            for _ in 0..<200 where history.hasPendingPublication {
+                try await Task.sleep(for: .milliseconds(10))
+                _ = await history.retryPublication(using: coordinator)
+            }
+            XCTAssertFalse(history.hasPendingPublication)
+            XCTAssertEqual(try ownNote(id), noteID)
+            XCTAssertTrue(try XCTUnwrap(presenter.session).isPersisted)
+            let closed = await presenter.close()
+            XCTAssertTrue(closed)
+        }
+    }
+
     func testP3S2AgentStaleWholeOperationAndAbsentNoteProposalSurviveReopen() async throws {
         let id = try XCTUnwrap(tasks.create(title: "Absent")?.id)
         let child = try XCTUnwrap(tasks.create(title: "Work", parentID: id)?.id)
@@ -699,4 +736,56 @@ extension TaskFilesSliceTests {
 
 @MainActor
 extension TaskFilesSliceTests {
+    func testP3S2FileHistoryPublicationFinishesWithoutReplacingNewerTyping() async throws {
+        let (rootID, noteID) = try await taskWithOwnNote()
+        let presenter = try open(rootID)
+        let session = try XCTUnwrap(presenter.session), history = presenter.page.history
+        var blocked = true
+        let result = await history.performCommand(using: coordinator) { [self] in
+            let entryID = UUID(), owner = WorkspaceOwner(entity: .note, id: noteID)
+            let effect = WorkspaceHistory.ForwardEffect(workspaceID: history.id, entryID: entryID)
+            let envelope = try coordinator.newEnvelope(intent: "File publication fixture", reads: coordinator.capture([owner]), writes: [owner],
+                historyEffect: WorkspaceModelFields.encode(effect))
+            return .init(entryID: entryID, envelope: envelope, stage: { context in
+                for row in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) { row.externalEditedAt = Date() }
+            }, record: { _, _ in }, publication: .init(steps: [{ [self] _ in
+                if blocked { throw WorkspaceFoundationError.preparationFailed }
+                try notes.installFileHistoryState(session, rootID: rootID, noteID: noteID, history: history)
+            }]))
+        }
+        XCTAssertEqual(result, .publicationPending)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(history.isInputReserved)
+        let text = presenter.host.textView
+        text.insertText("\nNewer draft", replacementRange: NSRange(location: (text.string as NSString).length, length: 0))
+        let draft = text.string
+        XCTAssertTrue(history.hasNewerPublicationDraft)
+        blocked = false
+        let completed = await history.retryPublication(using: coordinator)
+        XCTAssertTrue(completed)
+        XCTAssertFalse(history.hasPendingPublication)
+        XCTAssertEqual(presenter.host.textView.string, draft)
+    }
+
+    func testP3S2MoveUndoAfterSavedTypingWasUndone() async throws {
+        let refs = try await legacyFiles(["chronology.txt"])
+        let rootID = try legacyTask("Chronology", shown: refs)
+        guard case let .migrated(noteID, _) = await tasks.fileMigration.moveIntoNote(rootID, tasks: tasks, notes: notes) else { return XCTFail("move") }
+        let presenter = try open(rootID)
+        let session = try XCTUnwrap(presenter.session), history = presenter.page.history
+        let text = presenter.host.textView
+        text.insertText("\nLater typing", replacementRange: NSRange(location: (text.string as NSString).length, length: 0))
+        let saved = await notes.preserveDurably(session); XCTAssertTrue(saved)
+        XCTAssertTrue(history.undo())
+        let savedUndo = await notes.preserveDurably(session); XCTAssertTrue(savedUndo)
+        let undone = await history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        for _ in 0..<200 where history.hasPendingPublication {
+            try await Task.sleep(for: .milliseconds(10))
+            _ = await history.retryPublication(using: coordinator)
+        }
+        XCTAssertFalse(history.hasPendingPublication)
+        XCTAssertNil(try ownNote(rootID))
+        XCTAssertFalse(try document(noteID).attachmentIDs.contains(refs[0].id))
+    }
 }

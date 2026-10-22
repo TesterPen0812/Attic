@@ -610,7 +610,8 @@ enum TaskAttachmentMigration {
                 outcome = await history.performCommand(using: coordinator) {
                     .init(entryID: entryID, envelope: envelope, sessionValid: valid, stage: stage, record: { operation, entry in
                         recordMove(operation: operation, entry: entry, rootID: rootID, noteID: noteID,
-                            beforeDocument: destination.document, afterDocument: document, created: created,
+                            beforeDocument: destination.document, afterDocument: document, created: created || revived,
+                            attachmentIDs: Set(destination.noteRows.map(\.id)), stateBefore: records.first?.stateRaw ?? reversedState,
                             manifest: manifest, previous: previous, beforeState: destination.before, afterState: recordedAfter,
                             history: history, coordinator: coordinator, publish: publish)
                     }, publication: publication)
@@ -634,10 +635,11 @@ enum TaskAttachmentMigration {
     /// row or payload, and guards the complete result before preparing its save.
     private static func recordMove(operation: UUID, entry: UUID, rootID: UUID, noteID: UUID,
                                    beforeDocument: NoteDocument, afterDocument: NoteDocument, created: Bool,
+                                   attachmentIDs allAttachmentIDs: Set<UUID>, stateBefore: String,
                                    manifest: Manifest, previous: Manifest?, beforeState: NoteState, afterState: NoteState,
                                    history: WorkspaceHistory, coordinator: WorkspaceOperationCoordinator,
                                    publish: @escaping () -> Void) {
-        let attachmentIDs = Set(manifest.entries.map(\.reference.id)).union(beforeDocument.attachmentIDs)
+        let attachmentIDs = Set(manifest.entries.map(\.reference.id)).union(beforeDocument.attachmentIDs).union(allAttachmentIDs)
         let owners = Set<WorkspaceOwner>([.init(entity: .task, id: rootID), .init(entity: .note, id: noteID), .init(entity: .migration, id: rootID)])
             .union(attachmentIDs.map { .init(entity: .attachment, id: $0) })
         var expected = try? coordinator.capture(owners)
@@ -646,10 +648,26 @@ enum TaskAttachmentMigration {
         history.recordOperation(id: operation, entryID: entry, name: "Move Files into Note", coordinator: coordinator,
                                 attachmentIDs: attachmentIDs) { [weak coordinator] redo, cursor in
             guard let coordinator, let guards = expected, let scopeGuards = expectedScopes,
-                  try coordinator.capture(owners) == guards,
-                  try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext()) == scopeGuards else {
+                  !guards.isEmpty else {
                 throw WorkspaceFoundationError.conflict
             }
+            func semantic(_ token: WorkspaceModelToken) -> WorkspaceModelToken {
+                .init(owner: token.owner, replicas: token.replicas.map { replica in
+                    var fields = replica.fields
+                    if token.owner.entity == .task { fields.removeValue(forKey: "updatedAt") }
+                    if token.owner.entity == .note {
+                        for key in ["updatedAt", "revision", "revisionID"] { fields.removeValue(forKey: key) }
+                    }
+                    return .init(physicalID: replica.physicalID, fields: fields)
+                })
+            }
+            let current = try coordinator.capture(owners)
+            let currentScopes = try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
+            guard current.map(semantic) == guards.map(semantic),
+                  currentScopes.allSatisfy({ scope, value in
+                      guard let expected = scopeGuards[scope] else { return false }
+                      return value.members.map(semantic) == expected.members.map(semantic)
+                  }) else { throw WorkspaceFoundationError.conflict }
             // A visible draft is another dependency, even before its next save.
             try coordinator.sessions.checkFileHistoryReplay(rootID: rootID)
             let context = coordinator.freshContext()
@@ -660,7 +678,7 @@ enum TaskAttachmentMigration {
             let writes = owners.subtracting([.init(entity: .task, id: rootID)])
                 .union(versions.values.map { .init(entity: .version, id: $0) })
             let envelope = try coordinator.newEnvelope(intent: "Replay Move Files into Note", reads: coordinator.capture(writes.union(owners)),
-                writes: writes, inverseGuards: guards, scopes: Array(scopeGuards.values), afterDocuments: [noteID: prepared.content],
+                writes: writes, inverseGuards: current, scopes: Array(currentScopes.values), afterDocuments: [noteID: prepared.content],
                 historyEffect: WorkspaceModelFields.encode(cursor), replayOf: operation)
             return .init(envelope: envelope, stage: { commit in
                 try coordinator.sessions.checkFileHistoryReplay(rootID: rootID)
@@ -673,11 +691,11 @@ enum TaskAttachmentMigration {
                 }
                 try stageRecord(rootID: rootID, noteID: noteID, created: created,
                     manifest: redo ? manifest : (previous ?? manifest), before: nil,
-                    after: redo ? afterState : beforeState, state: redo || previous != nil ? migratedState : reversedState,
+                    after: redo ? afterState : beforeState, state: redo ? migratedState : stateBefore,
                     in: commit, at: now)
             }, publication: .init(steps: [{ _ in
                 publish()
-                coordinator.sessions.refreshFileHistory(rootID: rootID)
+                try coordinator.sessions.refreshFileHistory(rootID: rootID, noteID: noteID)
                 expectedScopes = try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
                 // Use the result of this replay as the next inverse guard.
                 // The assignment refers to the captured variable, not this ticket.
@@ -686,6 +704,7 @@ enum TaskAttachmentMigration {
             })
         }
     }
+
     /// Writes the record's changed fields to every physical replica (S10),
     /// or inserts it.
     private static func stageRecord(rootID: UUID, noteID: UUID, created: Bool, manifest: Manifest,

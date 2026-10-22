@@ -79,12 +79,14 @@ final class WorkspaceSessionRegistry {
 
     func checkFileHistoryReplay(rootID: UUID) throws {
         guard let note = sessions[.task(rootID)]?.note else { return }
-        guard !note.isImporting, note.engine.textView?.hasMarkedText() != true,
-              note.engine.matchesContentIgnoringFolds(sessions[.task(rootID)]?.controller?.store.loadDocument(noteID: note.noteID)?.content.document),
+        guard !note.isImporting, note.engine.textView?.hasMarkedText() != true else { throw WorkspaceFoundationError.conflict }
+        if !note.isPersisted, note.isUntouchedDraft { return }
+        guard note.engine.matchesContentIgnoringFolds(sessions[.task(rootID)]?.controller?.store.loadDocument(noteID: note.noteID)?.content.document),
               note.engine.tags == sessions[.task(rootID)]?.controller?.store.note(withID: note.noteID)?.tags else { throw WorkspaceFoundationError.conflict }
     }
-    func refreshFileHistory(rootID: UUID) {
-        sessions[.task(rootID)]?.externalRefresh(origin: "Move Files into Note", recordBarrier: false)
+    func refreshFileHistory(rootID: UUID, noteID: UUID) throws {
+        guard let page = sessions[.task(rootID)], let note = page.note, let controller = page.controller else { return }
+        try controller.installFileHistoryState(note, rootID: rootID, noteID: noteID, history: page.history)
     }
 
     /// Optional diagnostic of rows actually materialized by alias resolution.

@@ -42,7 +42,7 @@ final class TaskNotePresenter: ObservableObject {
     /// The page's menus, filled by the mounted page (the head is built once).
     let menus = TaskNoteMenuRelay()
     /// The task's own note is in Recently Deleted (§ 5.6): Restore Note.
-    let deletedNoteID: UUID?
+    @Published private(set) var deletedNoteID: UUID?
     /// Every open task page, panel or window (one per task: OD-1).
     private static var live: [UUID: WeakPresenter] = [:]
     private struct WeakPresenter { weak var presenter: TaskNotePresenter? }
@@ -52,6 +52,11 @@ final class TaskNotePresenter: ObservableObject {
     static func open(for taskID: UUID) -> TaskNotePresenter? {
         guard let presenter = live[taskID]?.presenter, presenter.lease != nil else { return nil }
         return presenter
+    }
+
+    func refreshDeletedNote(_ id: UUID?) {
+        deletedNoteID = id
+        model.deletedNote = id != nil
     }
 
     enum OpenError: Error { case unavailable }
