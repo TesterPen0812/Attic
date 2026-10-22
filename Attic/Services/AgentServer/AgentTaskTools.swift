@@ -291,7 +291,7 @@ final class AgentTaskTools {
             ],
             "inputSchema": [
                 "type": "object",
-                "properties": [:] as [String: Any],
+                "properties": ["include_workspace_token": ["type": "boolean", "description": "Include a workspace_token for guarded async workspace tools. Default false; ordinary listing reads loaded notes."]],
                 "additionalProperties": false
             ]
         ],
@@ -514,7 +514,7 @@ final class AgentTaskTools {
             ],
             "inputSchema": [
                 "type": "object",
-                "properties": [:] as [String: Any],
+                "properties": ["include_workspace_token": ["type": "boolean", "description": "Include workspace_token for note restore. Default false."]],
                 "additionalProperties": false
             ]
         ],
@@ -896,7 +896,8 @@ final class AgentTaskTools {
     private func listNotes(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("list_notes") }
         let notes = noteStore.orderedNotes()
-        return try encode(["count": notes.count, "notes": notes.map(serializeNote)])
+        let context = try bool(arguments, "include_workspace_token") ? ModelContext(store.container) : nil
+        return try encode(["count": notes.count, "notes": notes.map { serializeNote($0, in: context) }])
     }
 
     private func createNote(_ arguments: [String: Any]) throws -> String {
@@ -1208,8 +1209,12 @@ final class AgentTaskTools {
 
 
     private func serializeNote(_ candidate: NoteItem) -> [String: Any] {
-        let context = ModelContext(store.container), id = candidate.id
-        let fresh = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+        serializeNote(candidate, in: ModelContext(store.container))
+    }
+
+    private func serializeNote(_ candidate: NoteItem, in context: ModelContext?) -> [String: Any] {
+        let id = candidate.id
+        let fresh = context.flatMap { try? $0.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })) }
         let note = fresh.flatMap { NoteStore.canonicalReplicas(from: $0).first } ?? candidate
         var payload: [String: Any] = [
             "id": note.id.uuidString,
@@ -1220,7 +1225,7 @@ final class AgentTaskTools {
             "tags": note.tags,
             "revision": note.revisionToken
         ]
-        if fresh != nil, let readSet = try? AgentWorkspaceReadSet.capture(taskID: note.taskID, noteID: note.id, in: context),
+        if let context, fresh != nil, let readSet = try? AgentWorkspaceReadSet.capture(taskID: note.taskID, noteID: note.id, in: context),
            let bytes = try? WorkspaceModelFields.encode(readSet) { payload["workspace_token"] = bytes.base64EncodedString() }
         // Pinned to the top of All notes (the person's choice; read-only here).
         if note.isPinned { payload["pinned"] = true }
@@ -1228,8 +1233,12 @@ final class AgentTaskTools {
             switch NoteContentCodec.decode(data) {
             case let .editable(document):
                 payload["body"] = NoteTextExport.agentBody(document)
-                let freshAttachments = (try? context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))) ?? []
-                let rows = Dictionary((NoteStore.visibleUniqueAttachments(from: freshAttachments)[id] ?? []).map { ($0.id, $0) },
+                let attachments: [NoteAttachment]
+                if let context {
+                    let freshAttachments = (try? context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))) ?? []
+                    attachments = NoteStore.visibleUniqueAttachments(from: freshAttachments)[id] ?? []
+                } else { attachments = noteStore?.attachments(for: id) ?? [] }
+                let rows = Dictionary(attachments.map { ($0.id, $0) },
                     uniquingKeysWith: { first, _ in first })
                 payload["images"] = document.blocks.filter { $0.kind == .image }.map { block -> [String: Any] in
                     let row = block.attachmentID.flatMap { rows[$0] }
@@ -1366,6 +1375,7 @@ final class AgentTaskTools {
 
     private func listDeleted(_ arguments: [String: Any]) throws -> String {
         let items = library.recentlyDeleted()
+        let context = try bool(arguments, "include_workspace_token") ? ModelContext(store.container) : nil
         return try encode([
             "count": items.count,
             "items": items.map { item -> [String: Any] in
@@ -1380,8 +1390,8 @@ final class AgentTaskTools {
                         .map { Self.dateFormatter.string(from: $0) as Any } ?? NSNull(),
                     "included": item.includedCount
                 ]
-                if item.ref.kind == .note {
-                    let context = ModelContext(store.container), id = item.ref.id
+                if item.ref.kind == .note, let context {
+                    let id = item.ref.id
                     if let row = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })).first,
                        let readSet = try? AgentWorkspaceReadSet.capture(taskID: row.taskID, noteID: id, in: context),
                        let data = try? WorkspaceModelFields.encode(readSet) { payload["workspace_token"] = data.base64EncodedString(); payload["title"] = row.title }

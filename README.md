@@ -188,6 +188,12 @@ describes its arguments in `tools/list`. A few rules:
   `get_task_workspace` as `base_note_token` and `base_association_token`.
   These cover every physical replica and expected absence. A stale workspace
   write is kept as a proposal requiring review.
+- The async workspace tools `make_subtask`, `make_note_checkbox`,
+  `make_task_from_note`, `restore` (notes), and `move_files_into_note` require
+  `base_workspace_token`: pass the combined `workspace_token` returned by
+  `get_task_workspace`, or request it with `include_workspace_token: true`
+  in `list_notes` or `list_deleted`. This token covers the complete read set
+  from one snapshot. Open-editor or stale writes wait as proposals for Review.
 - Deleting moves items to Recently Deleted. Agents can't delete anything
   permanently. Deleting a task takes its subtasks with it.
 

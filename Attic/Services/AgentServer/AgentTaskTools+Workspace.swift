@@ -160,7 +160,7 @@ extension AgentTaskTools {
     private static func definition(_ name: String, title: String, description: String, properties: [String: Any],
                                    required: [String], destructive: Bool) -> [String: Any] {
         var properties = properties
-        properties["base_workspace_token"] = ["type": "string", "description": "The workspace_token from the item's get_task_workspace, list_notes or list_deleted snapshot; includes task, note and association tokens."]
+        properties["base_workspace_token"] = ["type": "string", "description": "The workspace_token from get_task_workspace, or list_notes/list_deleted with include_workspace_token: true; includes task, note and association tokens from the same snapshot."]
         return ["name": name, "title": title, "description": description,
          "annotations": ["readOnlyHint": false, "destructiveHint": destructive, "idempotentHint": false, "openWorldHint": false],
          "inputSchema": ["type": "object", "properties": properties, "required": required + ["base_workspace_token"], "additionalProperties": false]]
@@ -173,7 +173,7 @@ extension AgentTaskTools {
         guard let raw = arguments["base_workspace_token"] as? String, let bytes = Data(base64Encoded: raw),
               let readSet = try? JSONDecoder().decode(AgentWorkspaceReadSet.self, from: bytes),
               readSet.noteID == intent.noteID else {
-            throw AgentToolError.invalidArguments("base_workspace_token is required: pass workspace_token from get_task_workspace, list_notes or list_deleted for this item.")
+            throw AgentToolError.invalidArguments("base_workspace_token is required: pass workspace_token from get_task_workspace, or list_notes/list_deleted with include_workspace_token: true for this item.")
         }
         let historicalChild = intent.subtaskID.map { id in readSet.tokens.contains { $0.owner == .init(entity: .task, id: id) } } ?? false
         guard readSet.taskID == intent.taskID || intent.noteID != nil || historicalChild else {
