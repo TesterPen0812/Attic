@@ -680,6 +680,47 @@ final class PanelHideMotionShipTests: XCTestCase {
 
     /// On a real panel: the corner buttons' in-flight glass has the radius
     /// they have at rest (13.5, the 42 % rule on 32 pt), continuous.
+    /// The controls' glass in flight fills as the live glass does at rest,
+    /// on every surface in Light and Dark (owner: in Solid Dark the corner
+    /// buttons were darker in flight). Fixtures, measured on the Air (g7,
+    /// 2026-10-22): the blurred content under a control (sRGB levels) and
+    /// the live glass over it at rest, for the corner buttons over the
+    /// header and the add bar over the list. Drawn through the snapshot's
+    /// own fill.
+    func testInFlightControlFillMatchesRestOnEverySurface() throws {
+        typealias Look = PanelGenieGlassLook
+        let measured: [(Look.Surface, Bool, under: [Int], rest: [Int])] = [
+            (.glass, false, [220, 225, 222], [244, 246, 243]), (.glass, false, [242, 222, 180], [253, 246, 218]),
+            (.glass, true, [15, 16, 16], [21, 23, 22]), (.glass, true, [125, 116, 96], [79, 72, 59]),
+            (.frosted, false, [218, 218, 218], [244, 245, 245]), (.frosted, false, [182, 180, 158], [233, 232, 216]),
+            (.frosted, true, [13, 13, 13], [21, 21, 21]), (.frosted, true, [95, 93, 78], [45, 44, 35]),
+            (.solid, false, [225, 225, 225], [247, 247, 247]), (.solid, false, [242, 242, 242], [252, 252, 252]),
+            (.solid, true, [5, 5, 5], [19, 19, 19]), (.solid, true, [51, 51, 51], [29, 29, 29])
+        ]
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        func drawn(_ tint: Look.Tint, over under: [Int]) throws -> [Int] {
+            let context = try XCTUnwrap(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: space,
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(CGColor(colorSpace: space, components: under.map { CGFloat($0) / 255 } + [1])!)
+            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+            tint.fill(CGRect(x: 0, y: 0, width: 1, height: 1), in: context)
+            let pixel = try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self))
+            return (0..<3).map { Int(pixel[$0]) }
+        }
+        for (surface, dark, under, rest) in measured {
+            let fill = try drawn(Look.tint(for: surface, dark: dark), over: under)
+            for channel in 0..<3 {
+                XCTAssertEqual(fill[channel], rest[channel], accuracy: 5, "\(surface) \(dark ? "Dark" : "Light") over \(under): \(fill) vs \(rest)")
+                XCTAssertEqual(CGFloat(fill[channel]) / 255,
+                               Look.tint(for: surface, dark: dark).composite(over: CGFloat(under[channel]) / 255), accuracy: 0.01)
+            }
+        }
+        // The g6 tint (black 0.45 in Dark) left Solid Dark's corner buttons
+        // near-black over a header the live glass lifts to 19.
+        let old = try drawn(Look.Tint(white: 0, alpha: 0.45), over: [5, 5, 5])
+        XCTAssertGreaterThan(19 - old[0], 10)
+    }
+
     func testThePanelsCornerButtonsKeepTheirRadiusInFlight() throws {
         let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
         defer { rig.close() }

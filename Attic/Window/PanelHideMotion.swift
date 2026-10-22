@@ -571,26 +571,76 @@ enum PanelHideMotionTrace {
 /// content under each control, blurred, under a tint and a rim, with the
 /// control's own glyphs on top (measured against the panel at rest).
 enum PanelGenieGlassLook {
-    /// The blur of what is under a control's glass (points), and the
-    /// glass's tint over it: it lightens in Light (white) and darkens in
-    /// Dark (black). Measured against the panel at rest (Air, g6 calibration:
-    /// the add bar and corner buttons within a few levels of rest).
+    /// The blur of what is under a control's glass (points).
     static var lightBlur: CGFloat = 16
-    static var lightTint: CGFloat = 0.6
     static var darkBlur: CGFloat = 24
-    static var darkTint: CGFloat = 0.45
     /// The rim's highlight, Light and Dark (Dark's rim at rest is faint: a
     /// brighter one read as a ring round the corner buttons in Solid Dark).
     static var rim: CGFloat = 0.45
     static var darkRim: CGFloat = 0.08
 
+    /// The panel's surface, whose controls' glass differs at rest.
+    enum Surface: CaseIterable {
+        case glass, frosted, solid
+    }
+
+    /// The glass's fill over the blurred content under it: grey `white` at
+    /// `alpha`, so a pixel ends at blur·(1 − alpha) + white·alpha. A `white`
+    /// above 1 (Light's glass and Frosted brighten a little past a white
+    /// fill) adds the rest on top.
+    struct Tint: Equatable {
+        var white: CGFloat
+        var alpha: CGFloat
+
+        /// One channel (0–1) of what `fill` draws over `under`.
+        func composite(over under: CGFloat) -> CGFloat {
+            min(1, max(0, under * (1 - alpha) + white * alpha))
+        }
+
+        /// Fills `rect` (its clip) with the tint over what is drawn there.
+        func fill(_ rect: CGRect, in context: CGContext) {
+            context.saveGState()
+            context.setBlendMode(.normal)
+            context.setFillColor(NSColor(white: min(1, white), alpha: alpha).cgColor)
+            context.fill(rect)
+            if white > 1 {
+                context.setBlendMode(.plusLighter)
+                context.setFillColor(NSColor(white: min(1, (white - 1) * alpha), alpha: 1).cgColor)
+                context.fill(rect)
+            }
+            context.restoreGState()
+        }
+    }
+
+    /// Fitted, per surface and appearance, to the live glass at rest on the
+    /// Air (g7, 2026-10-22: the corner buttons over the header and the add
+    /// bar over the list, the hide's first frame against rest). Dark's glass
+    /// lightens what is under it (the corner buttons sit at about 20 over a
+    /// near-black header), so a black tint left them near-black in flight:
+    /// Solid Dark's corner buttons read darker than at rest (owner).
+    static func tint(for surface: Surface, dark: Bool) -> Tint {
+        if let benchOverride { return dark ? benchOverride.dark : benchOverride.light }
+        switch (surface, dark) {
+        case (.glass, false): return Tint(white: 1.074, alpha: 0.420)
+        case (.glass, true): return Tint(white: 0.110, alpha: 0.501)
+        case (.frosted, false): return Tint(white: 1.042, alpha: 0.573)
+        case (.frosted, true): return Tint(white: 0.097, alpha: 0.734)
+        case (.solid, false): return Tint(white: 1.003, alpha: 0.714)
+        case (.solid, true): return Tint(white: 0.089, alpha: 0.780)
+        }
+    }
+
+    private static var benchOverride: (light: Tint, dark: Tint)?
+
     #if DEBUG
-    /// The bench's calibration: `ATTIC_MOTION_BENCH_GLASS=blur,light,dark,rim` (one blur for both).
+    /// The bench's calibration: `ATTIC_MOTION_BENCH_GLASS=blur,light,dark,rim` (one blur for both; a white
+    /// tint at `light` and a black one at `dark`, on every surface).
     static func applyBenchOverride() {
         guard let spec = ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_GLASS"] else { return }
         let values = spec.split(separator: ",").compactMap { Double($0) }.map { CGFloat($0) }
         guard values.count == 4 else { return }
-        (lightBlur, lightTint, darkTint, rim) = (values[0], values[1], values[2], values[3])
+        (lightBlur, rim) = (values[0], values[3])
+        benchOverride = (Tint(white: 1, alpha: values[1]), Tint(white: 0, alpha: values[2]))
         darkBlur = lightBlur
     }
     #endif
@@ -744,6 +794,7 @@ final class PanelGenieView: NSView {
             lap("r_controls")
             if let content {
                 let made = Self.glassLook(content: content, scan: scan, scale: scale, dark: dark,
+                                          surface: !translucent ? .solid : hidesSurfaceMaterial ? .frosted : .glass,
                                           surfaceRect: surfaceRect, cornerRadius: cornerRadius)
                 lap("glass_look")
                 context.draw(made ?? content, in: view.bounds)
@@ -832,6 +883,7 @@ final class PanelGenieView: NSView {
     /// made from it (y up). Core Image works on those regions only, so a
     /// snapshot costs a few milliseconds more, not a full-size pass.
     private static func glassLook(content: CGImage, scan: GlassScan, scale: CGFloat, dark: Bool,
+                                  surface: PanelGenieGlassLook.Surface,
                                   surfaceRect: CGRect, cornerRadius: CGFloat) -> CGImage? {
         let space = content.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
         guard let context = bitmap(width: content.width, height: content.height, space: space) else { return nil }
@@ -898,9 +950,7 @@ final class PanelGenieView: NSView {
             context.setBlendMode(.copy)
             context.draw(frosted, in: areaPoints)
             context.setBlendMode(.normal)
-            context.setFillColor(dark ? NSColor(white: 0, alpha: PanelGenieGlassLook.darkTint).cgColor
-                : NSColor(white: 1, alpha: PanelGenieGlassLook.lightTint).cgColor)
-            context.fill(pill.rect)
+            PanelGenieGlassLook.tint(for: surface, dark: dark).fill(pill.rect, in: context)
             context.restoreGState()
             context.saveGState()
             context.clip(to: pill.clip)
