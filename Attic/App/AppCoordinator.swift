@@ -744,7 +744,10 @@ final class AppCoordinator: ObservableObject {
 
         if isUITesting {
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }
-            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SEED"] == "taskfiles" { runTaskFileMigration() }
+            // Capture seam: `ATTIC_UI_TEST_SKIP_FILE_MIGRATION=1` shows the
+            // seeded rows as they were before the migration.
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SEED"] == "taskfiles",
+               ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SKIP_FILE_MIGRATION"] != "1" { runTaskFileMigration() }
             // Phase 3 slice 0b's seeded entry point: a task's note over Notes.
             if let scenario = TaskNotePreviewSeed.requested(), let taskID = TaskNotePreviewSeed.seeded[scenario] {
                 uiState.selectSection(.notes)
