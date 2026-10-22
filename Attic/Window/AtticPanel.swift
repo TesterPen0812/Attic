@@ -44,6 +44,12 @@ final class AtticPanel: NSPanel {
         }
     }
     var canBeginTrackpadSwipe: ((NSEvent) -> Bool)?
+    /// A swipe's release motion (its close or spring-back) still running,
+    /// which a new horizontal swipe takes over: where it has the panel and
+    /// how fast it goes. nil: none is running.
+    var trackpadSwipeTakeover: (() -> PanelSwipeTakeover?)?
+    /// The release motion the current swipe took over (read as it starts).
+    private(set) var swipeTakeover: PanelSwipeTakeover?
     /// Something may have changed what the panel shows: a key, a click or
     /// content scrolling (`hoverOnly` false), or the pointer moving over it,
     /// which changes hover highlights only (true). A snapshot prepared
@@ -411,6 +417,11 @@ final class AtticPanel: NSPanel {
             )
             if !swipeIntent.isHorizontal {
                 swipeRoute = .content
+            } else if let takeover = trackpadSwipeTakeover?() {
+                // A swipe's close or spring-back is still running: this
+                // swipe picks the panel up from there, whichever way it goes.
+                swipeTakeover = takeover
+                swipeRoute = .hide
             } else if swipeStartedInNotes && (towardEdge == swipeStartedInLibrary) {
                 swipeRoute = .notes
             } else {
@@ -439,7 +450,8 @@ final class AtticPanel: NSPanel {
                 time: event.timestamp
             ),
             dockedCorner: trackpadDismissCorner,
-            towardDockedSide: route == .hide || swipeStartedInLibrary
+            towardDockedSide: route == .hide || swipeStartedInLibrary,
+            takeover: route == .hide ? swipeTakeover : nil
         )
         let navigationTarget = swipeNotesTarget
         let beganInLibrary = swipeStartedInLibrary
@@ -475,6 +487,7 @@ final class AtticPanel: NSPanel {
         hasInteractiveDismissal = false
         trackpadDismissTracker.cancel()
         swipeRoute = nil
+        swipeTakeover = nil
         swipeSequenceActive = false
         swipeIntent = PanelTrackpadSwipeIntent()
         swipeStartedInNotes = false
@@ -1236,6 +1249,15 @@ final class AtticPanelContentContainer: NSView {
         switch alternateMode {
         case .genieLiveGlass?: genieView.currentProgress
         case .swoop?: swoopRun?.progress(at: CACurrentMediaTime()) ?? swoopProgress
+        default: 0
+        }
+    }
+
+    /// How fast the animation goes now (progress per second).
+    var alternateVelocity: Double {
+        switch alternateMode {
+        case .genieLiveGlass?: genieView.currentVelocity
+        case .swoop?: swoopRun?.velocity(at: CACurrentMediaTime()) ?? 0
         default: 0
         }
     }

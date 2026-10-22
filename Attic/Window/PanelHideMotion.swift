@@ -266,6 +266,13 @@ struct PanelHideMotionRun {
 
     func isFinished(at time: CFTimeInterval) -> Bool { time - start >= duration }
 
+    /// How fast the run goes at `time` (progress per second; over the last
+    /// 1/240 s, so 0 once it has finished and before it starts).
+    func velocity(at time: CFTimeInterval) -> Double {
+        let step = 1.0 / 240
+        return (progress(at: time) - progress(at: time - step)) / step
+    }
+
     /// The progress `count + 1` evenly spaced samples (Swoop's keyframes).
     func samples(_ count: Int) -> [Double] {
         (0...count).map { progress(at: start + duration * Double($0) / Double(count)) }
@@ -708,6 +715,8 @@ final class PanelGenieView: NSView {
     var isAnimating: Bool { run != nil }
     /// Where the motion is now, read between display frames.
     var currentProgress: Double { run?.progress(at: CACurrentMediaTime()) ?? progress }
+    /// How fast the motion goes now (progress per second; 0 when none runs).
+    var currentVelocity: Double { run?.velocity(at: CACurrentMediaTime()) ?? 0 }
 
     // MARK: Snapshot
 
