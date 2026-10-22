@@ -664,8 +664,11 @@ final class AppCoordinator: ObservableObject {
         self.panelController = panelController
         // Phase 3: deleted tasks that own notes are purged through the
         // coordinated path, through any open task page (§ 2.7.2).
-        library.taskNotePurge = { [store, noteDraft] cutoff, confirmed in
-            await TaskNotePurge.run(tasks: store, notes: noteDraft.pages, before: cutoff, confirmed: confirmed).removedTaskIDs
+        // Weak: the library must never keep an unshown coordinator's stores
+        // and editors alive.
+        library.taskNotePurge = { [weak store, weak noteDraft] cutoff, confirmed in
+            guard let store, let noteDraft else { return [] }
+            return await TaskNotePurge.run(tasks: store, notes: noteDraft.pages, before: cutoff, confirmed: confirmed).removedTaskIDs
         }
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController

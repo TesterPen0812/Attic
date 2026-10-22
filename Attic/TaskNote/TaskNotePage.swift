@@ -181,6 +181,14 @@ final class TaskNotePresenter: ObservableObject {
         guard await page.close(lease, resolvingFields: { self.model.resolveFieldDrafts() }) else { return false }
         self.lease = nil
         engineObservation = nil
+        persistedObservation = nil
+        // The warm model and text view outlive this page: drop the hooks
+        // that hold it (the next page installs its own on mount).
+        model.onCompleted = nil
+        host.textView.workspaceShortcut = nil
+        host.textView.workspaceMenuItems = nil
+        menus.subtaskMenu = { _ in [] }
+        menus.reviewAlternate = { [] }
         model.suspend()
         host.invalidate()
         if let session {
@@ -464,9 +472,9 @@ struct TaskNotePage: View {
     }
 
     private func installCompletionToast() {
-        let presenter = presenter, toasts = toasts
-        model.onCompleted = { subtasks, stepID in
-            guard let stepID else { return }
+        let toasts = toasts
+        model.onCompleted = { [weak presenter] subtasks, stepID in
+            guard let stepID, let presenter else { return }
             toasts?.show(Self.completionMessage(subtasks: subtasks), performingAsync: {
                 guard presenter.lease != nil else { return .applied }
                 let history = presenter.page.history

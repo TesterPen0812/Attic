@@ -86,7 +86,7 @@ final class TasksFollowup2Tests: XCTestCase {
         let commands = hosted.page.taskCommands(row.id, tab: .now)
         let top = commands.map(\.title)
         XCTAssertEqual(top, ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
-                             "Add Subtask", "Copy", "Duplicate", "More", "Delete"])
+                             "Add Subtask", "Copy", "Duplicate", "More", "Delete Task"])
         let more = try XCTUnwrap(commands.first { $0.title == "More" })
         XCTAssertEqual(more.children.map(\.title), ["Show Files", "Move Up", "Move Down"])
         XCTAssertEqual(more.children.map(\.shortcut), [AtticTaskShortcut.openPage, AtticTaskShortcut.moveUp, AtticTaskShortcut.moveDown])

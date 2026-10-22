@@ -244,7 +244,10 @@ struct AtticPanelView: View {
     private func installTaskNotePurgePresentation() {
         let pages = noteDraft.pages
         // Make Task from Note: the same document opens as the task's page.
-        pages.makeTaskFromNote = { [store, uiState, toasts] noteID in
+        // Weak: these live on the Notes controller and must not keep it
+        // (or the panel's state) alive.
+        pages.makeTaskFromNote = { [weak pages, weak store, weak uiState, weak toasts] noteID in
+            guard let pages, let store, let uiState, let toasts else { return }
             Task { @MainActor in
                 switch await TaskNoteConversion.makeTask(fromNote: noteID, notes: pages, tasks: store) {
                 case let .made(taskID):
@@ -262,7 +265,8 @@ struct AtticPanelView: View {
                 }
             }
         }
-        pages.taskNoteMaterialized = { [store, uiState, toasts] patch, operationID in
+        pages.taskNoteMaterialized = { [weak pages, weak store, weak uiState, weak toasts] patch, operationID in
+            guard let pages, let store, let uiState else { return }
             Task { @MainActor in
                 await TaskNotePurgePresentation.finish(patch, operationID: operationID, tasks: store, notes: pages,
                                                        uiState: uiState, toasts: toasts) {
