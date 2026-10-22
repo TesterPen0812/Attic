@@ -40,6 +40,9 @@ enum TaskAttachmentMigration {
     struct Manifest: Codable, Equatable, Sendable {
         var replicas: [ReplicaList]
         var entries: [Entry]
+        /// Append-only byte provenance; source lists may later remove entries.
+        /// Optional for records written before cumulative retention shipped.
+        var coveredOriginals: [Entry]? = nil
         var shown: [Entry] { entries.filter(\.isShown) }
     }
 
@@ -537,7 +540,19 @@ enum TaskAttachmentMigration {
                                     before: NoteState?, after: NoteState, state: String,
                                     in commit: ModelContext, at now: Date) throws {
         let rows = try commit.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>(predicate: #Predicate { $0.id == rootID }))
-        let manifestData = try WorkspaceModelFields.encode(manifest)
+        var retained = manifest
+        var covered: [Entry] = []
+        for row in rows {
+            let previous = try JSONDecoder().decode(Manifest.self, from: row.manifestData)
+            for entry in previous.coveredOriginals ?? previous.entries where !covered.contains(where: {
+                $0.holderID == entry.holderID && $0.reference == entry.reference
+            }) { covered.append(entry) }
+        }
+        for entry in manifest.coveredOriginals ?? manifest.entries where !covered.contains(where: {
+            $0.holderID == entry.holderID && $0.reference == entry.reference
+        }) { covered.append(entry) }
+        retained.coveredOriginals = covered
+        let manifestData = try WorkspaceModelFields.encode(retained)
         let afterData = try WorkspaceModelFields.encode(after)
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
             + " (" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") + ")"
@@ -748,7 +763,7 @@ enum TaskAttachmentMigration {
         var ids = Set<UUID>()
         for record in try context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>()) {
             let manifest = try JSONDecoder().decode(Manifest.self, from: record.manifestData)
-            ids.formUnion(manifest.entries.map(\.reference.id))
+            ids.formUnion((manifest.coveredOriginals ?? manifest.entries).map(\.reference.id))
         }
         return ids
     }
