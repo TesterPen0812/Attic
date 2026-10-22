@@ -592,9 +592,7 @@ enum PanelGenieGlassLook {
     }
 
     /// The glass's fill over the blurred content under it: grey `white` at
-    /// `alpha`, so a pixel ends at blur·(1 − alpha) + white·alpha. A `white`
-    /// above 1 (Light's glass and Frosted brighten a little past a white
-    /// fill) adds the rest on top.
+    /// `alpha`, so a pixel ends at blur·(1 − alpha) + white·alpha.
     struct Tint: Equatable {
         var white: CGFloat
         var alpha: CGFloat
@@ -608,13 +606,8 @@ enum PanelGenieGlassLook {
         func fill(_ rect: CGRect, in context: CGContext) {
             context.saveGState()
             context.setBlendMode(.normal)
-            context.setFillColor(NSColor(white: min(1, white), alpha: alpha).cgColor)
+            context.setFillColor(NSColor(white: white, alpha: alpha).cgColor)
             context.fill(rect)
-            if white > 1 {
-                context.setBlendMode(.plusLighter)
-                context.setFillColor(NSColor(white: min(1, (white - 1) * alpha), alpha: 1).cgColor)
-                context.fill(rect)
-            }
             context.restoreGState()
         }
     }
@@ -624,15 +617,17 @@ enum PanelGenieGlassLook {
     /// bar over the list, the hide's first frame against rest). Dark's glass
     /// lightens what is under it (the corner buttons sit at about 20 over a
     /// near-black header), so a black tint left them near-black in flight:
-    /// Solid Dark's corner buttons read darker than at rest (owner).
+    /// Solid Dark's corner buttons read darker than at rest (owner). Light's
+    /// is white; its live glass also saturates the add bar a little (up to
+    /// about 8 levels in one channel), which a grey fill cannot.
     static func tint(for surface: Surface, dark: Bool) -> Tint {
         if let benchOverride { return dark ? benchOverride.dark : benchOverride.light }
         switch (surface, dark) {
-        case (.glass, false): return Tint(white: 1.074, alpha: 0.420)
+        case (.glass, false): return Tint(white: 1, alpha: 0.607)
         case (.glass, true): return Tint(white: 0.110, alpha: 0.501)
-        case (.frosted, false): return Tint(white: 1.042, alpha: 0.573)
+        case (.frosted, false): return Tint(white: 1, alpha: 0.672)
         case (.frosted, true): return Tint(white: 0.097, alpha: 0.734)
-        case (.solid, false): return Tint(white: 1.003, alpha: 0.714)
+        case (.solid, false): return Tint(white: 1, alpha: 0.735)
         case (.solid, true): return Tint(white: 0.089, alpha: 0.780)
         }
     }

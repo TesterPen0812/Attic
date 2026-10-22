@@ -707,10 +707,13 @@ final class PanelHideMotionShipTests: XCTestCase {
             let pixel = try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self))
             return (0..<3).map { Int(pixel[$0]) }
         }
-        for (surface, dark, under, rest) in measured {
+        for (index, (surface, dark, under, rest)) in measured.enumerated() {
             let fill = try drawn(Look.tint(for: surface, dark: dark), over: under)
+            // Corner buttons (neutral) within 4 levels; Light's add bar keeps
+            // the live glass's slight saturation (up to 8).
+            let tolerance = index.isMultiple(of: 2) || dark ? 4 : 8
             for channel in 0..<3 {
-                XCTAssertEqual(fill[channel], rest[channel], accuracy: 5, "\(surface) \(dark ? "Dark" : "Light") over \(under): \(fill) vs \(rest)")
+                XCTAssertEqual(fill[channel], rest[channel], accuracy: tolerance, "\(surface) \(dark ? "Dark" : "Light") over \(under): \(fill) vs \(rest)")
                 XCTAssertEqual(CGFloat(fill[channel]) / 255,
                                Look.tint(for: surface, dark: dark).composite(over: CGFloat(under[channel]) / 255), accuracy: 0.01)
             }
