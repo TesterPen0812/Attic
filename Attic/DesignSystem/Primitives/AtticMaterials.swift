@@ -361,13 +361,15 @@ extension View {
     /// notes and its tags) on one floating glass capsule (top glass,
     /// 2026-10-22): the raised material at the Medium height, reaching
     /// `AtticTopGlassMetrics.capsulePadding` past the labels, which keep
-    /// their own hover, selection, underline and focus ring. It is not a
+    /// their own hover, selection and focus ring; page tabs on it drop
+    /// their underline (owner, 2026-10-22). It is not a
     /// button itself, so its glass does not answer the pointer. Under
     /// Reduce Transparency, Craft or a capture it is the opaque raised
     /// surface; under Increase Contrast it has the controls' edge.
     func atticTopLineCapsule() -> some View {
         let height = AtticTopGlassMetrics.height
-        return padding(.horizontal, AtticTopGlassMetrics.capsulePadding)
+        return environment(\.atticPageTabsOnGlass, true)
+            .padding(.horizontal, AtticTopGlassMetrics.capsulePadding)
             .frame(height: height)
             .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
     }

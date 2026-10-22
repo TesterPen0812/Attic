@@ -927,6 +927,12 @@ enum AtticPageArrows {
     }
 }
 
+extension EnvironmentValues {
+    /// Set by `atticTopLineCapsule()`: the tabs sit on the top line's glass,
+    /// so the selected page shows no underline.
+    @Entry var atticPageTabsOnGlass = false
+}
+
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
 /// place of a page title and the page pill. Phase 0's qualities
 /// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
@@ -962,6 +968,7 @@ struct AtticPageTabs<Page: Hashable>: View {
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticForcedState) private var forced
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticPageTabsOnGlass) private var onGlass
     @FocusState private var focused: Bool
     @State private var hoveredPage: Page?
     @Namespace private var underline
@@ -1002,8 +1009,10 @@ struct AtticPageTabs<Page: Hashable>: View {
                 .focusable(false)
                 // L1: the active page's underline, which travels to the
                 // next label as the tab changes (a swipe's live tab too).
+                // On the top line's glass capsule there is none (owner,
+                // 2026-10-22): the semibold strong ink marks the page.
                 .overlay(alignment: .bottom) {
-                    if isSelected {
+                    if isSelected && !onGlass {
                         Rectangle()
                             .fill(design.tokens.color(.heading))
                             .frame(height: m.underlineHeight)
