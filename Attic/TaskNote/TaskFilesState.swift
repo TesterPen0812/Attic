@@ -86,10 +86,10 @@ final class TaskFilesState: ObservableObject {
 
     /// Earlier files' **Move into Note** (and the launch retry for a
     /// family that waited): one family, one operation.
-    func moveIntoNote(_ rootID: UUID, tasks: TaskStore) async -> TaskAttachmentMigration.Outcome {
+    func moveIntoNote(_ rootID: UUID, tasks: TaskStore, notes: NotesPageController) async -> TaskAttachmentMigration.Outcome {
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return .deferred }
         let outcome = await TaskAttachmentMigration.migrate(rootID: rootID, coordinator: coordinator, files: tasks.taskImageFiles,
-                                                            force: true, publish: { [weak tasks] in tasks?.refresh() })
+                                                            force: true, history: notes.undoRoute.workspace(for: .taskWorkspace(rootID)), publish: { [weak tasks] in tasks?.refresh() })
         if case let .refused(refusal) = outcome { refusals[rootID] = refusal } else { refusals[rootID] = nil }
         deferred.remove(rootID)
         onNotesChanged?()

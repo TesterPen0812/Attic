@@ -77,6 +77,16 @@ final class WorkspaceSessionRegistry {
         sessions.values.contains { $0.activeLease != nil && $0.note?.noteID == noteID }
     }
 
+    func checkFileHistoryReplay(rootID: UUID) throws {
+        guard let note = sessions[.task(rootID)]?.note else { return }
+        guard !note.isImporting, note.engine.textView?.hasMarkedText() != true,
+              note.engine.matchesContentIgnoringFolds(sessions[.task(rootID)]?.controller?.store.loadDocument(noteID: note.noteID)?.content.document),
+              note.engine.tags == sessions[.task(rootID)]?.controller?.store.note(withID: note.noteID)?.tags else { throw WorkspaceFoundationError.conflict }
+    }
+    func refreshFileHistory(rootID: UUID) {
+        sessions[.task(rootID)]?.externalRefresh(origin: "Move Files into Note", recordBarrier: false)
+    }
+
     /// Optional diagnostic of rows actually materialized by alias resolution.
     var didFetchResolutionRows: ((Int, Int) -> Void)?
     private init(coordinator: WorkspaceOperationCoordinator, domain: WorkspacePersistenceDomain) {
@@ -341,7 +351,7 @@ final class WorkspacePageSession {
     }
     /// Event-driven invalidation; an external refresh is a named history
     /// barrier and cannot publish an older prepared editor snapshot.
-    func externalRefresh(origin: String) {
+    func externalRefresh(origin: String, recordBarrier: Bool = true) {
         guard !released else { return }
         if let current = note, let refreshed = controller?.refreshWorkspaceSession(current) {
             history.attach(refreshed.engine.history)
@@ -349,7 +359,7 @@ final class WorkspacePageSession {
             refreshed.workspacePage = self
             note = refreshed
         }
-        history.recordExternalBarrier(origin: origin)
+        if recordBarrier { history.recordExternalBarrier(origin: origin) }
     }
     func captureCallback(for lease: Lease) -> CallbackStamp? {
         guard !closing, controller != nil, activeLease == lease else { return nil }

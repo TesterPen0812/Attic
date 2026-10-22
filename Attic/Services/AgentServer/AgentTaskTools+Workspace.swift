@@ -192,7 +192,7 @@ extension AgentTaskTools {
               !TaskFilesState.noteIsOpen(taskID, notes: notes, coordinator: coordinator) else {
             throw AgentToolError.notPerformed("The task's note is open; use Earlier files › Move into Note there.")
         }
-        switch await store.fileMigration.moveIntoNote(taskID, tasks: store) {
+        switch await store.fileMigration.moveIntoNote(taskID, tasks: store, notes: notes) {
         case let .migrated(noteID, created):
             return try encodeJSON(["ok": true, "note_id": noteID.uuidString, "created_note": created])
         case .reconciled, .unchanged: return try encodeJSON(["ok": true])

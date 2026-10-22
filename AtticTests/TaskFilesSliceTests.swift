@@ -184,7 +184,7 @@ final class TaskFilesSliceTests: XCTestCase {
         XCTAssertTrue(presenter.model.deletedNote, "the reversal sent the note it made to Recently Deleted")
         XCTAssertEqual(presenter.model.noticeCount, 2, "Restore Note and Earlier files")
         await close(presenter)
-        let moved = await tasks.fileMigration.moveIntoNote(id, tasks: tasks)
+        let moved = await tasks.fileMigration.moveIntoNote(id, tasks: tasks, notes: notes)
         guard case .migrated = moved else { return XCTFail("\(moved)") }
         let again = try open(id)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))

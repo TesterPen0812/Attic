@@ -393,7 +393,7 @@ enum TaskAttachmentMigration {
     /// operation. A family already migrated is reconciled with its current
     /// lists (an older build may have added or removed files since).
     static func migrate(rootID: UUID, coordinator: WorkspaceOperationCoordinator, files: TaskImageFiles,
-                        force: Bool = false, isBusy: () -> Bool = { false }, publish: @escaping () -> Void = {}) async -> Outcome {
+                        force: Bool = false, history: WorkspaceHistory? = nil, isBusy: @escaping () -> Bool = { false }, publish: @escaping () -> Void = {}) async -> Outcome {
         do {
             guard !isBusy(), !coordinator.sessions.hasActiveTaskPage(rootID) else { return .deferred }
             let context = coordinator.freshContext()
@@ -521,11 +521,11 @@ enum TaskAttachmentMigration {
             let revived = destination.revived
             let shownStaged = staged.filter { id in entries.contains { $0.reference.id == id.id && $0.isShown } }
             let removedNeeded = needed.filter { !$0.isShown }
+            let entryID = UUID()
+            let effect = try history.map { try WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: $0.id, entryID: entryID)) }
             let envelope = try coordinator.newEnvelope(intent: "Move Files into Note", reads: expected,
-                writes: writes, scopes: expectedScopes, afterDocuments: [noteID: prepared.content], staged: staged)
-            let outcome = await coordinator.execute(envelope, sessionValid: {
-                !isBusy() && !coordinator.sessions.hasActiveTaskPage(rootID)
-            }, stage: { commit in
+                writes: writes, scopes: expectedScopes, afterDocuments: [noteID: prepared.content], staged: staged, historyEffect: effect)
+            let stage: (ModelContext) throws -> Void = { commit in
                 let now = Date()
                 if created {
                     guard let generation = NoteStore.taskOwnerGeneration(rootID, in: commit) else { throw WorkspaceFoundationError.conflict }
@@ -569,10 +569,25 @@ enum TaskAttachmentMigration {
                 try stageRecord(rootID: rootID, noteID: noteID, created: created || revived, manifest: manifest,
                                 before: before, after: recordedAfter, state: migratedState, in: commit, at: now)
                 try boundary("M4-record")
-            }, publication: .init(steps: [{ _ in
+            }
+            let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in
                 try boundary("M5-publication")
                 publish()
-            }]))
+            }])
+            let valid = { !isBusy() && !coordinator.sessions.hasActiveTaskPage(rootID) }
+            let outcome: WorkspaceOperationCoordinator.Outcome
+            if let history {
+                outcome = await history.performCommand(using: coordinator) {
+                    .init(entryID: entryID, envelope: envelope, sessionValid: valid, stage: stage, record: { operation, entry in
+                        recordMove(operation: operation, entry: entry, rootID: rootID, noteID: noteID,
+                            beforeDocument: destination.document, afterDocument: document, created: created,
+                            manifest: manifest, previous: previous, beforeState: destination.before, afterState: recordedAfter,
+                            history: history, coordinator: coordinator, publish: publish)
+                    }, publication: publication)
+                }
+            } else {
+                outcome = await coordinator.execute(envelope, sessionValid: valid, stage: stage, publication: publication)
+            }
             switch outcome {
             case .committed, .publicationPending:
                 return previous == nil ? .migrated(noteID: noteID, created: created) : .reconciled
@@ -581,6 +596,63 @@ enum TaskAttachmentMigration {
             }
         } catch {
             return .deferred
+        }
+    }
+
+    /// Explicit moves share the task workspace cursor. Replay never deletes a
+    /// row or payload, and guards the complete result before preparing its save.
+    private static func recordMove(operation: UUID, entry: UUID, rootID: UUID, noteID: UUID,
+                                   beforeDocument: NoteDocument, afterDocument: NoteDocument, created: Bool,
+                                   manifest: Manifest, previous: Manifest?, beforeState: NoteState, afterState: NoteState,
+                                   history: WorkspaceHistory, coordinator: WorkspaceOperationCoordinator,
+                                   publish: @escaping () -> Void) {
+        let attachmentIDs = Set(manifest.entries.map(\.reference.id)).union(beforeDocument.attachmentIDs)
+        let owners = Set<WorkspaceOwner>([.init(entity: .task, id: rootID), .init(entity: .note, id: noteID), .init(entity: .migration, id: rootID)])
+            .union(attachmentIDs.map { .init(entity: .attachment, id: $0) })
+        var expected = try? coordinator.capture(owners)
+        let scopes: Set<WorkspaceScope> = [.taskNotes(rootID), .taskAssociations(rootID), .attachments(noteID), .proposals(noteID)]
+        var expectedScopes = try? WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
+        history.recordOperation(id: operation, entryID: entry, name: "Move Files into Note", coordinator: coordinator,
+                                attachmentIDs: attachmentIDs) { [weak coordinator] redo, cursor in
+            guard let coordinator, let guards = expected, let scopeGuards = expectedScopes,
+                  try coordinator.capture(owners) == guards,
+                  try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext()) == scopeGuards else {
+                throw WorkspaceFoundationError.conflict
+            }
+            // A visible draft is another dependency, even before its next save.
+            try coordinator.sessions.checkFileHistoryReplay(rootID: rootID)
+            let context = coordinator.freshContext()
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+            let versions = Dictionary(uniqueKeysWithValues: rows.map { ($0.persistentModelID, UUID()) })
+            let document = redo ? afterDocument : beforeDocument
+            let prepared = try PreparedNoteDocument(document)
+            let writes = owners.subtracting([.init(entity: .task, id: rootID)])
+                .union(versions.values.map { .init(entity: .version, id: $0) })
+            let envelope = try coordinator.newEnvelope(intent: "Replay Move Files into Note", reads: coordinator.capture(writes.union(owners)),
+                writes: writes, inverseGuards: guards, scopes: Array(scopeGuards.values), afterDocuments: [noteID: prepared.content],
+                historyEffect: WorkspaceModelFields.encode(cursor), replayOf: operation)
+            return .init(envelope: envelope, stage: { commit in
+                try coordinator.sessions.checkFileHistoryReplay(rootID: rootID)
+                let now = Date()
+                for row in try commit.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) { row.deletedAt = nil }
+                try NoteStore.stageDocument(in: commit, noteID: noteID, document: document, prepared: prepared,
+                    revisionID: UUID(), versionIDs: versions, timestamp: now)
+                if !redo && created {
+                    for row in try commit.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) { row.deletedAt = now }
+                }
+                try stageRecord(rootID: rootID, noteID: noteID, created: created,
+                    manifest: redo ? manifest : (previous ?? manifest), before: nil,
+                    after: redo ? afterState : beforeState, state: redo || previous != nil ? migratedState : reversedState,
+                    in: commit, at: now)
+            }, publication: .init(steps: [{ _ in
+                publish()
+                coordinator.sessions.refreshFileHistory(rootID: rootID)
+                expectedScopes = try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
+                // Use the result of this replay as the next inverse guard.
+                // The assignment refers to the captured variable, not this ticket.
+            }]), completion: {
+                expected = try? coordinator.capture(owners)
+            })
         }
     }
 
@@ -840,7 +912,7 @@ enum TaskAttachmentMigration {
     /// The background launch run: every family with legacy lists, one
     /// operation each. `isBusy` defers a family whose note is open.
     static func runAll(coordinator: WorkspaceOperationCoordinator, files: TaskImageFiles,
-                       isBusy: (UUID) -> Bool = { _ in false }, publish: @escaping () -> Void = {}) async -> LaunchReport {
+                       isBusy: @escaping (UUID) -> Bool = { _ in false }, publish: @escaping () -> Void = {}) async -> LaunchReport {
         var report = LaunchReport()
         guard let roots = try? candidateRoots(in: coordinator.freshContext()) else { return report }
         for root in roots {

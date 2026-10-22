@@ -743,7 +743,7 @@ struct TaskNotePage: View {
                 model.reportUnavailable(String(localized: "Couldn't move the files: the note is in use"))
                 return
             }
-            let outcome = await store.fileMigration.moveIntoNote(taskID, tasks: store)
+            let outcome = await store.fileMigration.moveIntoNote(taskID, tasks: store, notes: controller)
             reopen()
             // Success shows in the note itself; a refusal says why in the
             // status slot (Earlier files keeps the files).
