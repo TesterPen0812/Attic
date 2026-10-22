@@ -895,7 +895,13 @@ final class WorkspaceOperationCoordinator {
         var recorded = Set<UUID>()
         var damagedOwners = Set<WorkspaceOwner>(), damagedBytes = Set<UUID>()
         let receipts = try freshContext().fetch(FetchDescriptor<OperationReceipt>())
-        let unknownDamage = inventory.contains { $0.damaged && $0.envelope == nil }
+        // Only UUID-named roots can be an operation produced by this journal.
+        // Foreign folders remain archived for Review, but cannot claim a
+        // receipt or freeze unrelated owners. An unreadable real operation
+        // has unbounded ownership until its intent is recovered.
+        let unknownDamage = inventory.contains {
+            $0.damaged && $0.envelope == nil && UUID(uuidString: $0.directory.lastPathComponent) != nil
+        }
         for item in inventory where item.damaged {
             let id = item.envelope?.id ?? UUID(uuidString: item.directory.lastPathComponent)
             let family = receipts.filter { $0.id == id }
