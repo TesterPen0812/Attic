@@ -440,6 +440,7 @@ final class NotesPageController: ObservableObject {
     func newNoteDurably() async -> Bool {
         await performAfterRecovery(finishAfterWrite: { self.newNote(verifiedCheckpointsOnly: true) }) { newNote() }
     }
+    var launchRecoveryCompleted: Bool { didRecoverAtLaunch }
     func recoverAtLaunchAndWait() async { recoverAtLaunch(); await waitForRecoveryWork() }
     /// Library navigation prepares only document bytes. Full byte ownership
     /// hydration remains part of the existing explicit durable-open API.
@@ -2285,9 +2286,10 @@ final class NotesPageController: ObservableObject {
                     }
                     self.recoverFromCachedJournal(savedProofs: savedProofs)
                 } catch { self.recoveryWarnings.append("Recovery could not be checked: \(error.localizedDescription)") }
-                self.didRecoverAtLaunch = true
                 self.recoveryLoading = false
-                if self.startRequested { self.start() }
+                // A transient read/admission failure remains explicitly
+                // retryable. Do not recursively retry a persistent failure.
+                if self.startRequested && self.didRecoverAtLaunch { self.start() }
             }
             return
         }
@@ -2295,14 +2297,14 @@ final class NotesPageController: ObservableObject {
     }
 
     private func recoverFromCachedJournal(savedProofs: [UUID: [UUID: StagedNoteAttachment]] = [:]) {
-        didRecoverAtLaunch = true
-        guard let journal else { return }
+        guard let journal else { didRecoverAtLaunch = true; return }
         let entries: [NoteDraftRecoveryEntry]
         do { entries = try journal.recoveryEntries() }
         catch {
             recoveryWarnings.append("Recovery copies could not be listed: \(error.localizedDescription)")
             return
         }
+        didRecoverAtLaunch = true
         for item in entries {
             guard case let .valid(entry, staged, claim) = item else {
                 if case let .damaged(message) = item { recoveryWarnings.append(message); damagedRecoveryWarnings.insert(message) }

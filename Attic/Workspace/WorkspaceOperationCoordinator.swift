@@ -857,7 +857,22 @@ final class WorkspaceOperationCoordinator {
         startupReconciled = false
         preOperationRecoveryCopies.removeAll()
         let checkpoints = try await journal.inventoryCheckpoints()
-        try registerCheckpointInventory(checkpoints.filter { if case .valid = $0 { return true }; return false })
+        let valid = checkpoints.filter { if case .valid = $0 { return true }; return false }
+        var startupIDs = Set<UUID>()
+        for item in valid {
+            if case let .valid(entry, _, _) = item {
+                startupIDs.insert(entry.noteID)
+                startupIDs.formUnion(NoteContentCodec.decode(entry.content).document?.attachmentIDs ?? [])
+                startupIDs.formUnion(entry.staged.map(\.id))
+                startupIDs.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            }
+        }
+        // A standalone store may already be collecting its old cache. Wait
+        // without holding a context; its temporary exclusive lease is not a
+        // damaged checkpoint or an ambiguous save outcome.
+        let startupAdmission = try await ownership.admit(startupIDs)
+        defer { startupAdmission.release() }
+        try registerCheckpointInventory(valid)
         damagedCheckpointNotes = try await journal.damagedCheckpointNoteIDs()
         if checkpoints.contains(where: { if case .damaged = $0 { return true }; return false }) {
             // Raw damage can name arbitrary bytes. Its note publication hold
