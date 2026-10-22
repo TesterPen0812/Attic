@@ -97,6 +97,7 @@ final class NoteUndoHistory {
     }
 
     let storage: NSTextStorage
+    var noteID: UUID?
     /// Replays through the text view when one is attached, so its delegate,
     /// selection and layout see the change; nil edits the storage directly.
     weak var textView: NSTextView?
@@ -168,6 +169,19 @@ final class NoteUndoHistory {
             }
         }
         return ids
+    }
+
+    /// A projection replacement preserves the same body suffix. Move its
+    /// historical coordinates once, including selection and paragraph state.
+    static func transfer(_ payloads: [Op], from minimum: Int, by delta: Int) -> Bool {
+        guard payloads.allSatisfy({ $0.range.location >= minimum && $0.range.location + delta >= 0 }) else { return false }
+        for op in payloads {
+            op.range.location += delta
+            if var selection = op.selectionBefore { selection.location = max(0, selection.location + delta); op.selectionBefore = selection }
+            if var selection = op.selectionAfter { selection.location = max(0, selection.location + delta); op.selectionAfter = selection }
+            if var paragraph = op.paragraphStyleSnapshot { paragraph.location = max(0, paragraph.location + delta); op.paragraphStyleSnapshot = paragraph }
+        }
+        return true
     }
 
     func reset() {

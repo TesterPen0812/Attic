@@ -40,10 +40,15 @@ enum TaskNotePurge {
             let ids = Set(deleted.filter { ($0.deletionRootID ?? $0.id) == root }.map(\.id))
             guard (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == true else { continue }
             let own = ownNotes(of: ids, in: coordinator.freshContext())
+            guard let reservations = notes.reserveTaskNoteInput(own) else {
+                report.deferredRootIDs.insert(root)
+                continue
+            }
             let result = await WorkspacePurge.purge(rootID: root, before: cutoff, confirmed: confirmed?[root],
                                                      coordinator: coordinator, files: tasks.taskImageFiles,
                                                      inventory: { notes.taskNotePurgeInventory(ownNotes: own) })
             guard result.outcome == .committed || result.outcome == .publicationPending else {
+                reservations.forEach { $0.releaseInput() }
                 report.deferredRootIDs.insert(root)
                 continue
             }
@@ -52,9 +57,12 @@ enum TaskNotePurge {
                 report.materializedNoteIDs.insert(patch.noteID)
                 notes.retireMaterializedTaskNote(patch.noteID)
                 if let operationID = result.operationID {
+                    let history = notes.undoRoute.workspace(for: .taskWorkspace(patch.taskID))
+                    try? patch.record(operationID: operationID, in: history, coordinator: coordinator, notes: notes)
                     notes.taskNoteMaterialized?(patch, operationID)
                 }
             }
+            reservations.forEach { $0.releaseInput() }
         }
         if !report.removedTaskIDs.isEmpty {
             tasks.refresh()
@@ -82,17 +90,17 @@ enum TaskNotePurgePresentation {
                        notes: NotesPageController, uiState: PanelUIState, toasts: PanelToastCenter?,
                        showNotes: () -> Void) async {
         let wasShown = uiState.openTaskNoteID == patch.taskID
-        if let presenter = TaskNotePresenter.open(for: patch.taskID) { _ = await presenter.close() }
+        if let presenter = TaskNotePresenter.open(for: patch.taskID), !(await presenter.close()) { return }
         notes.evictRetiredTaskNote(patch.noteID)
         TaskNoteRouteHost<EmptyView>.closeRoute(patch.taskID, uiState: uiState)
         guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return }
-        // Its own history: one entry, reachable from the toast.
-        let route = UndoRoute()
-        let history = route.workspace(for: .taskWorkspace(patch.taskID))
-        guard (try? patch.record(operationID: operationID, in: history, coordinator: coordinator)) != nil else { return }
+        let history = notes.undoRoute.workspace(for: .taskWorkspace(patch.taskID))
+        guard (try? patch.record(operationID: operationID, in: history, coordinator: coordinator, notes: notes)) != nil else { return }
+        let stepID = history.route.steps(in: history.historyID, redo: false).last { $0.operationID == operationID }?.id
         if wasShown, notes.open(noteID: patch.noteID) { showNotes() }
-        toasts?.show(String(localized: "Task removed permanently"), answersUndoKey: false, performingAsync: {
-            guard await history.replay(redo: false) == .applied else {
+        toasts?.show(String(localized: "Task removed permanently"), answersUndoKey: false, performingAsync: { [weak notes, weak history] in
+            guard let notes, let history, let stepID else { return .applied }
+            guard await history.undoLatest(stepID: stepID) == .applied else {
                 return .failed(CommandFailure(String(localized: "Couldn't undo: the note changed since")))
             }
             notes.reloadAfterExternalChange(patch.noteID)

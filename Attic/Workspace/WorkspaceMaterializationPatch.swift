@@ -12,19 +12,23 @@ struct WorkspaceMaterializationPatch {
     let after: NoteDocument
 
     func record(operationID: UUID, in workspace: WorkspaceHistory,
-                coordinator: WorkspaceOperationCoordinator) throws {
+                coordinator: WorkspaceOperationCoordinator, notes: NotesPageController? = nil) throws {
         let old = try before.ordinarySnapshot(title: before.title)
         let new = try after.ordinarySnapshot(title: after.title)
         let oldPrepared = try PreparedNoteDocument(old), newPrepared = try PreparedNoteDocument(new)
         guard workspace.materialize(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
         workspace.recordOperation(id: operationID, name: "Task removed permanently", coordinator: coordinator,
-            attachmentIDs: Set(old.attachmentIDs + new.attachmentIDs)) { redo, effect in
+            attachmentIDs: Set(old.attachmentIDs + new.attachmentIDs)) { [weak notes] redo, effect in
             let context = coordinator.freshContext(), id = noteID, root = taskID
             guard try context.fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == root })) == 0 else {
                 throw WorkspaceFoundationError.conflict
             }
             let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
             let expected = redo ? oldPrepared.content : newPrepared.content
+            if let session = notes?.workspaceSessionIfCached(id) {
+                guard !session.isImporting, session.engine.textView?.hasMarkedText() != true,
+                      session.engine.document() == (redo ? old : new) else { throw WorkspaceFoundationError.conflict }
+            }
             guard !rows.isEmpty, rows.allSatisfy({ $0.taskID == nil && $0.deletedAt == nil && $0.content == expected }) else {
                 throw WorkspaceFoundationError.conflict
             }
@@ -33,7 +37,9 @@ struct WorkspaceMaterializationPatch {
             let attachments = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.noteID == id }))
             let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.id == preservationID }
             guard !records.isEmpty, records.allSatisfy({ $0.rootID == root && $0.purgedAt != nil }) else { throw WorkspaceFoundationError.protectedOwner }
-            let associations = try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter { $0.noteID == id }
+            let allAssociations = try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter { $0.noteID == id }
+            let relevantIDs = Set(allAssociations.filter { $0.detachedPreservationID == preservationID }.map(\.id))
+            let associations = allAssociations.filter { relevantIDs.contains($0.id) }
             guard !associations.isEmpty, associations.allSatisfy({ $0.detachedAt != nil && $0.detachedPreservationID == preservationID }) else { throw WorkspaceFoundationError.protectedOwner }
             let writes = Set<WorkspaceOwner>([.init(entity: .note, id: id)])
                 .union(versions.values.map { .init(entity: .version, id: $0) })
@@ -45,7 +51,7 @@ struct WorkspaceMaterializationPatch {
             return .init(envelope: envelope, stage: { commit in
                 try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared,
                     revisionID: UUID(), versionIDs: versions, timestamp: Date())
-            })
+            }, publication: .init(steps: [{ [weak notes] _ in notes?.installCommittedTaskNote(id) }]))
         }
     }
 }

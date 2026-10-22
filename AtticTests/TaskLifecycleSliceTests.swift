@@ -34,6 +34,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
 
     // MARK: Fixtures
 
+    // Phase 3 reservations refuse native input visibly before storage changes.
     private func checkReservedInput(_ session: NoteSession, file: StaticString = #filePath, line: UInt = #line) {
         let view = session.engine.textView!
         let before = view.string
@@ -88,7 +89,6 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertNotNil(absent["association_token"] as? String)
     }
 
-
     func testP3F12SecondaryReplicaAndAssociationChangesMakeTheWholeWriteAReviewedProposal() throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
@@ -122,7 +122,6 @@ final class TaskLifecycleSliceTests: XCTestCase {
             XCTAssertEqual(agentNotes.applyPendingEdits(noteID: noteID), 0)
         }
     }
-
 
     func testP3F8HistoricalDetachedAssociationDoesNotBlockPurge() async throws {
         let id = try XCTUnwrap(TaskNoteLifecyclePreviewSeed.seed(in: container)[.alternateNote])
@@ -258,6 +257,214 @@ final class TaskLifecycleSliceTests: XCTestCase {
         model.tagFilter = "live-tag"
         XCTAssertTrue(model.groups(store: notes.store, drafts: []).flatMap(\.rows).contains { $0.id == noteID })
         XCTAssertEqual(try rows(noteID).first?.content, before)
+    }
+
+    func testP3F3ConversionReservesNativeInputIncludingIME() async throws {
+        makeStores()
+        let id = UUID()
+        guard case .success = notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Convert"), .text("Keep body")])) else { return XCTFail() }
+        XCTAssertTrue(notes.open(noteID: id))
+        let session = try XCTUnwrap(notes.active)
+        let viewport = session.engine.makeView()
+        defer { withExtendedLifetime(viewport) {} }
+        coordinator.afterPreparation = { [self] in checkReservedInput(session) }
+        defer { coordinator.afterPreparation = nil }
+        guard case .made = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        XCTAssertEqual(try storedDocument(id).blocks.last?.text, "Keep body")
+    }
+
+    func testP3F5PurgeReservesNativeInputThroughRetirement() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(presenter.model.deleteTask())
+        coordinator.afterPreparation = { [self] in checkReservedInput(session) }
+        defer { coordinator.afterPreparation = nil }
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id))
+        XCTAssertEqual(session.state, .clean)
+    }
+
+    func testP3F5TypingBeforePurgePresentationClosesKeepsMaterializedContext() async throws {
+        let id = try seed(.boundary)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["launch"]))
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(presenter.model.deleteTask())
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertFalse(session.engine.isBodyOnly)
+        let view = presenter.host.textView
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        type(" Late writing", into: view)
+        XCTAssertTrue(notes.save(session))
+        let stored = try storedDocument(session.noteID)
+        XCTAssertTrue(stored.blocks.contains { $0.text.hasPrefix("Was a task") })
+        XCTAssertEqual(stored.blocks.filter { $0.kind == .checklist }.count, 2)
+        XCTAssertTrue(stored.blocks.last?.text.hasSuffix(" Late writing") == true)
+        XCTAssertEqual(try rows(session.noteID).first?.tags, ["launch"])
+        XCTAssertNotEqual(presenter.page.history.undoName, "Task removed permanently", "later typing is after purge in the chronology")
+        let undone = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertFalse(session.engine.document().blocks.last?.text.hasSuffix(" Late writing") == true)
+        XCTAssertEqual(presenter.page.history.undoName, "Task removed permanently")
+    }
+
+    func testP3F2PurgeUsesTheControllersRetainedWorkspaceHistory() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let history = presenter.page.history
+        let noteID = try XCTUnwrap(presenter.session?.noteID)
+        XCTAssertTrue(presenter.model.deleteTask())
+        var captured: (WorkspaceMaterializationPatch, UUID)?
+        notes.taskNoteMaterialized = { captured = ($0, $1) }
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        let patch = try XCTUnwrap(captured)
+        await TaskNotePurgePresentation.finish(patch.0, operationID: patch.1, tasks: tasks, notes: notes,
+                                               uiState: PanelUIState(), toasts: nil, showNotes: {})
+        XCTAssertTrue(notes.undoRoute.workspace(for: .note(noteID)) === history)
+        XCTAssertEqual(history.undoName, "Task removed permanently")
+        XCTAssertTrue(notes.open(noteID: noteID))
+        let reopened = try XCTUnwrap(notes.active)
+        XCTAssertTrue(reopened.engine.history.workspace === history)
+        XCTAssertTrue(reopened.engine.undoCommand(), "native editor Undo uses the retained workspace")
+        for _ in 0..<200 where history.undoName == "Task removed permanently" { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotEqual(history.undoName, "Task removed permanently")
+        XCTAssertEqual(try storedDocument(noteID), reopened.engine.document())
+        XCTAssertFalse(reopened.engine.document().blocks.contains { $0.text.hasPrefix("Was a task") })
+    }
+
+    func testP3F4ConversionUndoRefusesLaterSavedWriting() async throws {
+        makeStores()
+        let id = UUID()
+        guard case .success = notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Convert"), .text("Before")])) else { return XCTFail() }
+        XCTAssertTrue(notes.open(noteID: id))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        let document = try NoteDocument(blocks: [.text("Convert"), .text("Later writing")]).taskSnapshot(title: "Convert")
+        guard case .success = notes.store.saveDocument(noteID: id, document: document,
+            baseRevisionID: notes.store.note(withID: id)?.revisionID) else { return XCTFail() }
+        let workspace = notes.undoRoute.workspace(for: .taskWorkspace(taskID))
+        // Exercise the old library route too on the unfixed build.
+        let outcome = await notes.undoRoute.replay(in: workspace.canUndo ? workspace.historyID : .notesLibrary, redo: false)
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(try storedDocument(id), document)
+        XCTAssertNotNil(tasks.task(withID: taskID))
+    }
+
+    func testP3F4ConversionUndoInstallsTheOrdinaryEditorWhileItsTaskPageIsOpen() async throws {
+        makeStores()
+        let id = UUID(), original = NoteDocument(blocks: [.text("Convert mounted"), .text("Body")])
+        _ = try notes.store.createDocumentNote(id: id, document: original).get()
+        XCTAssertTrue(notes.open(noteID: id))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        let presenter = try open(taskID)
+        let history = presenter.page.history
+        let undone = await history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertNil(presenter.lease)
+        XCTAssertTrue(notes.open(noteID: id))
+        let current = try XCTUnwrap(notes.active)
+        XCTAssertFalse(current.engine.isBodyOnly)
+        XCTAssertEqual(current.engine.document(), original)
+        XCTAssertTrue(current.engine.history.workspace === history)
+        let view = current.engine.makeView()
+        defer { withExtendedLifetime(view) {} }
+        type("More", into: view.1)
+        XCTAssertTrue(notes.save(current))
+    }
+
+    func testP3F10ConversionKeepsEarlierTitleHistoryAndAllowsUndoAfterAFieldUndo() async throws {
+        makeStores()
+        let id = UUID()
+        _ = try notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Original"), .text("Body")])).get()
+        XCTAssertTrue(notes.open(noteID: id))
+        let view = try XCTUnwrap(notes.active).engine.makeView()
+        view.1.setSelectedRange(NSRange(location: 0, length: 8))
+        type("Retitled", into: view.1)
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        let presenter = try open(taskID), history = presenter.page.history
+        XCTAssertTrue(library.updateTask(taskID, title: "Temporary", in: history.historyID).isApplied)
+        XCTAssertTrue(history.undo())
+        let replayed = await history.replay(redo: false)
+        XCTAssertEqual(replayed, .applied)
+        let current = try XCTUnwrap(notes.active)
+        XCTAssertEqual(current.engine.document().title, "Retitled")
+        XCTAssertTrue(current.engine.history.workspace === history)
+        let earlier = await history.replay(redo: false)
+        XCTAssertEqual(earlier, .applied)
+        XCTAssertEqual(current.engine.document().title, "Original")
+        withExtendedLifetime(view) {}
+    }
+
+    func testP3F2PurgeToastRefusesInsteadOfUndoingLaterTyping() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let noteID = try XCTUnwrap(presenter.session?.noteID)
+        XCTAssertTrue(presenter.model.deleteTask())
+        var captured: (WorkspaceMaterializationPatch, UUID)?
+        notes.taskNoteMaterialized = { captured = ($0, $1) }
+        _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        let patch = try XCTUnwrap(captured), ui = PanelUIState(), toasts = PanelToastCenter()
+        ui.openTaskNote(id, from: .tasks)
+        await TaskNotePurgePresentation.finish(patch.0, operationID: patch.1, tasks: tasks, notes: notes,
+                                               uiState: ui, toasts: toasts, showNotes: {})
+        XCTAssertTrue(notes.open(noteID: noteID))
+        let session = try XCTUnwrap(notes.active), view = session.engine.makeView()
+        view.1.setSelectedRange(NSRange(location: view.1.string.utf16.count, length: 0))
+        type(" Later", into: view.1)
+        let before = session.engine.document()
+        let outcome = await toasts.performActionAsync()
+        if case .failed = outcome {} else { XCTFail("a stale toast must refuse") }
+        XCTAssertEqual(session.engine.document(), before)
+        toasts.dismiss()
+        withExtendedLifetime(view) {}
+    }
+
+    func testP3F17MixedReplayRebindsAfterTheOriginalSessionIsEvicted() async throws {
+        let id = try seed(.boundary)
+        do {
+            let presenter = try open(id)
+            presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+            guard case .made = await presenter.makeSubtasks(try XCTUnwrap(presenter.subtaskSelection()), tasks: tasks, notes: notes) else { return XCTFail() }
+            await close(presenter)
+        }
+        for i in 0..<12 {
+            let noteID = UUID()
+            _ = try notes.store.createDocumentNote(id: noteID, document: NoteDocument(blocks: [.text("Other \(i)")])).get()
+            XCTAssertTrue(notes.open(noteID: noteID))
+        }
+        let reopened = try open(id)
+        let undone = await reopened.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertTrue(reopened.host.textView.string.hasPrefix("Everything that has"))
+    }
+
+    func testP3F10RestoreNoteIsInTheReopenedWorkspaceHistory() async throws {
+        let id = try seed(.boundary)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        XCTAssertTrue(deleted)
+        XCTAssertNotNil(notes.restoreTaskNote(noteID: noteID))
+        let presenter = try open(id)
+        XCTAssertEqual(presenter.page.history.undoName, "Restore Note")
+        let outcome = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(outcome, .applied)
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.deletedAt != nil })
+    }
+
+    func testP3F10VersionRestoreIsUndoableInTheSameChronology() async throws {
+        let (_, presenter, session) = try makeSubtaskFixture()
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        guard case .made = await presenter.makeSubtasks(try XCTUnwrap(presenter.subtaskSelection()), tasks: tasks, notes: notes) else { return XCTFail() }
+        let before = session.engine.document()
+        let opened = await notes.openHistoryDurably(workspace: session)
+        XCTAssertTrue(opened)
+        let browser = try XCTUnwrap(notes.historyBrowser)
+        notes.selectHistoryVersion(try XCTUnwrap(browser.entries.firstIndex { $0.document.blocks.contains { $0.text.hasPrefix("Everything that has") } }))
+        let restored = await notes.restoreHistoryVersionDurably()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(presenter.page.history.undoName, "Restore Version")
+        let undone = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertEqual(session.engine.document(), before)
+        XCTAssertEqual(try storedDocument(session.noteID), before)
     }
 
     @discardableResult
@@ -431,12 +638,12 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(deleted)
         let restored = try XCTUnwrap(notes.restoreTaskNote(noteID: noteID))
         XCTAssertFalse(restored.separate, "the slot was free: it returns as the own note")
-        XCTAssertEqual(restored.stepID, notes.undoRoute.undoStepID(in: .notesLibrary))
-        XCTAssertEqual(notes.undoRoute.undoName(in: .notesLibrary), "Restore Note")
+        XCTAssertEqual(restored.stepID, notes.undoRoute.undoStepID(in: .taskWorkspace(id)))
+        XCTAssertEqual(notes.undoRoute.undoName(in: .taskWorkspace(id)), "Restore Note")
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.deletedAt == nil && $0.taskID == id })
-        XCTAssertTrue(notes.undoRoute.undo(in: .notesLibrary), "Undo sends it back to Recently Deleted")
+        XCTAssertTrue(notes.undoRoute.undo(in: .taskWorkspace(id)), "Undo sends it back to Recently Deleted")
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.deletedAt != nil })
-        XCTAssertTrue(notes.undoRoute.redo(in: .notesLibrary))
+        XCTAssertTrue(notes.undoRoute.redo(in: .taskWorkspace(id)))
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.deletedAt == nil && $0.taskID == id })
     }
 
@@ -887,12 +1094,12 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let presenter = try open(taskID)
         XCTAssertEqual(presenter.session?.noteID, noteID, "the same document is the task's page")
         await close(presenter)
-        let undone = await notes.undoRoute.replay(in: .notesLibrary, redo: false)
+        let undone = await notes.undoRoute.replay(in: .taskWorkspace(taskID), redo: false)
         XCTAssertEqual(undone, .applied)
         XCTAssertNil(tasks.task(withID: taskID), "Undo: the task goes to Recently Deleted")
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == nil && $0.tags == ["team"] })
         XCTAssertEqual(try storedDocument(noteID), original, "the note returns exactly as it was")
-        let redone = await notes.undoRoute.replay(in: .notesLibrary, redo: true)
+        let redone = await notes.undoRoute.replay(in: .taskWorkspace(taskID), redo: true)
         XCTAssertEqual(redone, .applied)
         XCTAssertNotNil(tasks.task(withID: taskID), "Redo brings the same task back")
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == taskID })
@@ -952,7 +1159,6 @@ final class TaskLifecycleSliceTests: XCTestCase {
         return ["base_note_token": try XCTUnwrap(payload["note_token"] as? String),
                 "base_association_token": try XCTUnwrap(payload["association_token"] as? String)]
     }
-
 
     func testGetTaskWorkspaceReadsTheTaskItsSubtasksAndItsBodyWithoutTheTitleInOneSnapshot() throws {
         let id = try seed(.boundary)

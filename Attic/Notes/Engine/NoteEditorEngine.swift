@@ -107,7 +107,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
     /// The note's id; a new note's reserved id may be replaced on its first save.
     var noteID: UUID {
-        didSet { if noteID != oldValue { textView?.cancelCalloutIconSession(reason: "note identity changed") } }
+        didSet { history.noteID = noteID; if noteID != oldValue { textView?.cancelCalloutIconSession(reason: "note identity changed") } }
     }
     private(set) var documentEditGeneration = 0
     let contentStorage: NSTextContentStorage
@@ -517,6 +517,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage = contentStorage.textStorage ?? NSTextStorage()
         history = NoteUndoHistory(storage: textStorage)
         super.init()
+        history.noteID = noteID
         // Live editors, history and comparisons all share this rendering
         // lifetime; refreshing dates never edits the document or its history.
         dateEnvironmentSubscription = Publishers.MergeMany(DatePresentationEnvironment.notifications.map {

@@ -820,14 +820,16 @@ struct TaskNotePage: View {
             reopen()
             let message = restored.separate ? String(localized: "Note restored as a separate note")
                 : String(localized: "Note restored")
-            toasts?.show(message, answersUndoKey: false, performingAsync: {
+            toasts?.show(message, answersUndoKey: false, performingAsync: { [weak controller] in
+                guard let controller else { return .applied }
                 // Only the step the toast named: anything newer makes it stale.
-                guard let step = restored.stepID, controller.undoRoute.undoStepID(in: .notesLibrary) == step else { return .applied }
+                let historyID = UndoHistoryID.taskWorkspace(taskID)
+                guard let step = restored.stepID, controller.undoRoute.undoStepID(in: historyID) == step else { return .applied }
                 // The page lets go of the note before it leaves again.
                 if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
                     return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
                 }
-                let undone = controller.undoRoute.undo(in: .notesLibrary)
+                let undone = controller.undoRoute.undo(in: historyID)
                 reopen()
                 return undone ? .applied : .failed(CommandFailure(String(localized: "Couldn't undo the restore")))
             })

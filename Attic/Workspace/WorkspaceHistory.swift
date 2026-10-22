@@ -8,13 +8,14 @@ import SwiftData
 final class WorkspaceHistory {
     @MainActor
     final class TextGroup {
-        let adapter: NoteUndoHistory
+        var adapter: NoteUndoHistory
         var payloads: [NoteUndoHistory.Op]
         init(adapter: NoteUndoHistory, payload: NoteUndoHistory.Op) {
             self.adapter = adapter; payloads = [payload]
         }
         var attachmentIDs: Set<UUID> { adapter.attachmentIDs(in: payloads) }
         func replay(redo: Bool) -> UndoOutcome {
+            guard adapter.workspace?.currentAdapter === adapter else { return .failed }
             let order = redo ? payloads : payloads.reversed().map { $0 }
             guard let prepared = adapter.prepareReplay(order), adapter.installReplay(prepared) else { return .failed }
             return .applied
@@ -54,6 +55,7 @@ final class WorkspaceHistory {
         init(_ value: NoteUndoHistory) { self.value = value }
     }
     private var adapters: [WeakAdapter] = []
+    private(set) weak var currentAdapter: NoteUndoHistory?
 
     init(route: UndoRoute, historyID: UndoHistoryID) {
         self.route = route; self.historyID = historyID
@@ -70,6 +72,19 @@ final class WorkspaceHistory {
         precondition(adapter.redoOps.isEmpty, "Attach before editing or replay")
         adapter.reset()
         adapter.workspace = self
+        // Preserve text entries through an editor/projection replacement.
+        // Groups outside the shared suffix stay dormant until their form
+        // returns (e.g. the ordinary title before Make Task from Note).
+        let target = Array(adapter.storage.string.utf16)
+        for step in route.steps(in: historyID, redo: false) + route.steps(in: historyID, redo: true) {
+            guard let group = step.workspacePayload, group.adapter !== adapter, group.adapter.noteID == adapter.noteID else { continue }
+            let source = Array(group.adapter.storage.string.utf16)
+            var shared = 0
+            while shared < min(source.count, target.count), source[source.count - shared - 1] == target[target.count - shared - 1] { shared += 1 }
+            guard shared > 0 || source == target else { continue }
+            if NoteUndoHistory.transfer(group.payloads, from: source.count - shared, by: target.count - source.count) { group.adapter = adapter }
+        }
+        currentAdapter = adapter
         adapters.removeAll { $0.value == nil }
         adapters.append(WeakAdapter(adapter))
         for op in existing { capture(op, from: adapter) }
@@ -106,7 +121,7 @@ final class WorkspaceHistory {
     /// journal IO runs is delivered exactly once after installation or abort.
     func reserveInput() -> Bool {
         guard !inputReserved, pendingReplayID == nil, pendingCommandID == nil,
-              adapters.compactMap(\.value).allSatisfy(\.canPrepareWorkspaceCommand) else { return false }
+              currentAdapter?.canPrepareWorkspaceCommand != false else { return false }
         closeGroup(); inputReserved = true; return true
     }
     func submitInput(_ edit: @escaping () -> Void) {

@@ -280,6 +280,8 @@ final class UndoRoute: ObservableObject {
         return workspace
     }
 
+    func existingWorkspace(for key: UndoHistoryID) -> WorkspaceHistory? { workspaces[resolved(key)] }
+
     /// Aliasing never merges independently ordered histories. A note created
     /// lazily and later detached keeps the existing sequence and step identities.
     @discardableResult

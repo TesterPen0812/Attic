@@ -243,6 +243,11 @@ struct AtticPanelView: View {
     /// and, if it was showing, the note opens in Notes.
     private func installTaskNotePurgePresentation() {
         let pages = noteDraft.pages
+        pages.taskNoteBecameOrdinary = { [weak uiState] taskID, _ in
+            guard let uiState else { return }
+            TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
+            uiState.switchPage(to: .notes, motion: .instant)
+        }
         // Make Task from Note: the same document opens as the task's page.
         // Weak: these live on the Notes controller and must not keep it
         // (or the panel's state) alive.
@@ -251,13 +256,17 @@ struct AtticPanelView: View {
             Task { @MainActor in
                 switch await TaskNoteConversion.makeTask(fromNote: noteID, notes: pages, tasks: store) {
                 case let .made(taskID):
+                    let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
+                    let stepID = pages.undoRoute.undoStepID(in: history.historyID)
                     uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
-                    toasts.show(String(localized: "Made a task from the note"), answersUndoKey: false, performingAsync: {
+                    toasts.show(String(localized: "Made a task from the note"), answersUndoKey: false, performingAsync: { [weak pages, weak uiState, weak history] in
+                        guard let pages, let uiState, let history, let stepID,
+                              history.route.undoStepID(in: history.historyID) == stepID else { return .applied }
                         if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
                             return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
                         }
                         TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
-                        return await pages.undoRoute.replay(in: .notesLibrary, redo: false) == .applied ? .applied
+                        return await history.undoLatest(stepID: stepID) == .applied ? .applied
                             : .failed(CommandFailure(String(localized: "Couldn't undo")))
                     })
                 case let .refused(reason):

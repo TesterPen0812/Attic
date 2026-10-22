@@ -1174,6 +1174,7 @@ final class NotesPageController: ObservableObject {
 
     /// Called after a task draft's first save created its note.
     var taskNoteCreated: ((_ taskID: UUID, _ noteID: UUID) -> Void)?
+    var taskNoteBecameOrdinary: ((_ taskID: UUID, _ noteID: UUID) -> Void)?
     /// A workspace operation (Make Subtask, Make Note Checkbox, their Undo)
     /// committed this note's document at `revisionID` through the write
     /// gate, and its editor already shows that text: the session takes the
@@ -1295,6 +1296,7 @@ final class NotesPageController: ObservableObject {
                                   readOnlyReason: readOnlyReason)
         session.baseTags = note.tags
         session.baseContent = note.content
+        if let history = undoRoute.existingWorkspace(for: .note(note.id)) { history.attach(session.engine.history) }
         if let state = defaults?.dictionary(forKey: Self.viewStateKey(note.id)) {
             session.selection = NSRange(location: state["location"] as? Int ?? 0,
                                         length: state["length"] as? Int ?? 0)
@@ -3152,6 +3154,26 @@ extension NotesPageController {
               session.editGeneration == generation, session.state == .clean, !session.isImporting,
               browser.selected?.id == selected.id, browser.selected?.canRestore == true,
               !browser.showsCurrent else { return false }
+        if let workspace, let owner = store.note(withID: browser.noteID)?.taskID,
+           let presenter = TaskNotePresenter.open(for: owner),
+           let coordinator = try? WorkspaceLegacyBridge.coordinator(for: store.container) {
+            let normalized: NoteDocument
+            do { normalized = try WorkspaceRestoreNormalization.document(selected.document, noteID: browser.noteID, in: coordinator.freshContext()) }
+            catch { return false }
+            workspace.engine.setCompatibilityTitle(normalized.title)
+            let candidate = workspace.engine.bodyText(for: Array(normalized.blocks.dropFirst()))
+            let selection = workspace.engine.textView?.selectedRange() ?? NSRange(location: 0, length: 0)
+            let edit = TaskNoteTextEdit(engine: workspace.engine, session: workspace, notes: self, tasks: presenter.model.store,
+                coordinator: coordinator, history: presenter.page.history, noteID: workspace.noteID,
+                parentID: owner, selectionBefore: selection, caretAfter: selection.location)
+            let outcome = await edit.perform(name: String(localized: "Restore Version"), candidate: candidate, entryID: UUID(),
+                forwardWrites: [], forward: { _ in }, inverse: { _ in
+                    .init(writes: [], check: { _ in }, preservations: [:], stage: { _, _ in })
+                })
+            guard outcome == .committed || outcome == .publicationPending else { return false }
+            closeHistory()
+            return true
+        }
         let preservationID = UUID()
         switch store.restoreVersion(selected.id, noteID: browser.noteID,
                                     expectedRevisionID: browser.currentRevision, preservationID: preservationID) {
@@ -3461,6 +3483,8 @@ extension NotesPageController {
     /// separate, ordinary note (the task had a newer own note) and the
     /// step's id (the toast's Undo targets exactly that step).
     func restoreTaskNote(noteID: UUID) -> (separate: Bool, stepID: UUID?)? {
+        let owner = (try? store.replicasIncludingDeleted(of: noteID))?.first?.taskID
+        let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
         guard store.restoreDeleted(noteID: noteID) else { return nil }
         let separate = store.lastRestoreWasSeparate
         undoRoute.record(UndoStep(
@@ -3475,8 +3499,8 @@ extension NotesPageController {
                 guard let self else { return .obsolete }
                 if self.store.restoreDeleted(noteID: noteID) { return .applied }
                 return self.store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete
-            }), in: .notesLibrary)
-        return (separate, undoRoute.undoStepID(in: .notesLibrary))
+            }), in: historyID)
+        return (separate, undoRoute.undoStepID(in: historyID))
     }
 
     /// Duplicate (⌘D): a new note with this note's current text, copies of
@@ -3792,6 +3816,25 @@ extension NotesPageController {
                                         sessions: sessions, claims: claims, staged: staged, tags: tags, selections: selections)
     }
 
+    /// Hold every cached writer until the committed materialization has
+    /// been adopted. Native input refuses visibly throughout journal IO.
+    func reserveTaskNoteInput(_ noteIDs: Set<UUID>) -> [WorkspaceHistory]? {
+        var reserved: [WorkspaceHistory] = []
+        for session in cache.values where noteIDs.contains(session.noteID) {
+            let adapter = session.engine.history
+            let history = adapter.workspace ?? undoRoute.workspace(for: .note(session.noteID))
+            guard adapter.workspace != nil || adapter.redoOps.isEmpty else {
+                reserved.forEach { $0.releaseInput() }; return nil
+            }
+            history.attach(adapter)
+            guard history.reserveInput() else {
+                reserved.forEach { $0.releaseInput() }; return nil
+            }
+            reserved.append(history)
+        }
+        return reserved
+    }
+
     /// After a committed purge materialized `noteID` (now an ordinary
     /// note): an editor that was open on it as a task's note took the
     /// stored text as its base (its draft is what the purge saved) and
@@ -3799,20 +3842,32 @@ extension NotesPageController {
     /// task-note editor is dropped.
     func retireMaterializedTaskNote(_ noteID: UUID) {
         store.refresh()
-        guard let session = cache[noteID], session.engine.isBodyOnly else { return }
+        guard let session = cache[noteID] else { return }
+        installCommittedTaskNoteForm(session)
+    }
+
+    /// Install the committed form synchronously while input is reserved.
+    /// A later asynchronous close can never save the old projection over it.
+    private func installCommittedTaskNoteForm(_ session: NoteSession) {
+        guard let note = store.note(withID: session.noteID),
+              let document = store.loadDocument(noteID: session.noteID)?.content.document else { return }
+        let history = session.engine.history.workspace
         session.saveTask?.cancel(); session.saveTask = nil
         session.durabilityTask?.cancel(); session.durabilityTask = nil
         session.pauseTask?.cancel(); session.pauseTask = nil
-        if let note = store.note(withID: noteID) {
-            session.baseRevisionID = note.revisionID
-            session.baseContent = note.content
-            session.baseTags = note.tags
-        }
+        session.baseRevisionID = note.revisionID
+        session.baseContent = note.content
+        session.baseTags = note.tags
+        session.replaceEngine(makeEngine(noteID: note.id, document: document, readOnly: false,
+                                         tags: note.tags, bodyOnly: note.taskID != nil))
+        if let history { history.attach(session.engine.history) }
+        wire(session)
         session.state = .clean
-        if !session.usesWorkspaceBinding {
-            session.engine.detachView()
-            cache[noteID] = nil
-        }
+    }
+
+    func installCommittedTaskNote(_ noteID: UUID) {
+        store.refresh()
+        if let session = cache[noteID] { installCommittedTaskNoteForm(session) }
     }
 
     /// A change written by another owner (a purge's Undo): a clean editor
@@ -3834,18 +3889,26 @@ extension NotesPageController {
     /// Make Task from Note (or its Undo) rewrote `noteID` in the other
     /// form: the editor built for the old form leaves (an ordinary one
     /// can't show a task's note, nor the reverse); the store is re-read.
-    func retireConvertedNote(_ noteID: UUID) {
+    func retireConvertedNote(_ noteID: UUID) async {
         store.refresh()
-        guard let session = cache[noteID], !session.usesWorkspaceBinding else { return }
-        session.saveTask?.cancel(); session.saveTask = nil
-        session.durabilityTask?.cancel(); session.durabilityTask = nil
-        session.pauseTask?.cancel(); session.pauseTask = nil
+        guard let session = cache[noteID] else { return }
+        let owner: UUID? = if case let .task(id) = session.workspacePage?.key.workspace { id } else { nil }
+        if session.usesWorkspaceBinding {
+            installCommittedTaskNoteForm(session)
+            if let owner, let presenter = TaskNotePresenter.open(for: owner) {
+                guard await presenter.close() else { return }
+            } else if let page = session.workspacePage, let lease = page.activeLease {
+                guard await page.close(lease) else { return }
+            }
+        }
+        session.saveTask?.cancel(); session.durabilityTask?.cancel(); session.pauseTask?.cancel()
         let wasActive = active === session
         session.engine.detachView()
         cache[noteID] = nil
-        if wasActive {
-            active = nil
-            if store.note(withID: noteID)?.taskID == nil { _ = open(noteID: noteID) }
+        if wasActive { active = nil }
+        if store.note(withID: noteID)?.taskID == nil {
+            _ = open(noteID: noteID)
+            if let owner { taskNoteBecameOrdinary?(owner, noteID) }
         }
     }
 
