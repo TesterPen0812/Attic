@@ -187,6 +187,9 @@ final class TaskNotePresenter: ObservableObject {
         model.onCompleted = nil
         host.textView.workspaceShortcut = nil
         host.textView.workspaceMenuItems = nil
+        menus.noteMenu = {}
+        menus.taskMenu = { [] }
+        menus.restoreNote = {}
         menus.subtaskMenu = { _ in [] }
         menus.reviewAlternate = { [] }
         model.suspend()
@@ -649,8 +652,8 @@ struct TaskNotePage: View {
     /// The operation's toast: its Undo targets exactly its own entry (S11);
     /// anything newer makes it stale.
     static func showUndoToast(_ message: String, entryID: UUID, presenter: TaskNotePresenter, toasts: PanelToastCenter?) {
-        toasts?.show(message, performingAsync: {
-            guard presenter.lease != nil, let outcome = await presenter.page.history.undoLatest(stepID: entryID) else { return .applied }
+        toasts?.show(message, performingAsync: { [weak presenter] in
+            guard let presenter, presenter.lease != nil, let outcome = await presenter.page.history.undoLatest(stepID: entryID) else { return .applied }
             return outcome == .applied ? .applied
                 : .failed(CommandFailure(String(localized: "Can't undo: the line was edited since")))
         })

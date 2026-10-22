@@ -202,6 +202,7 @@ extension TaskNotePresenter {
         let drafts = analysis.pieces.map { TaskDraft(title: $0.title, status: $0.isDone ? .done : .todo, parentID: taskID) }
         let ids = drafts.map { _ in UUID() }
         let titles = Dictionary(uniqueKeysWithValues: zip(ids, drafts.map(\.title)))
+        let parent = taskID
         let before = analysis.selection
         let edit = TaskNoteTextEdit(engine: engine, session: session, notes: notes, tasks: tasks,
                                     coordinator: coordinator, history: page.history, noteID: session.noteID,
@@ -219,7 +220,7 @@ extension TaskNotePresenter {
                     check: { context in
                         for id in ids {
                             let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-                            guard !rows.isEmpty, rows.allSatisfy({ ($0.deletedAt != nil) == redo && $0.parentID == edit.parentID
+                            guard !rows.isEmpty, rows.allSatisfy({ ($0.deletedAt != nil) == redo && $0.parentID == parent
                                 && $0.title == titles[id] }) else { throw WorkspaceFoundationError.conflict }
                         }
                     },
@@ -469,7 +470,7 @@ struct TaskNoteTextEdit {
                 }
             }, record: { operation, entry in
                 guard let group else { return }
-                edit.record(operation: operation, entry: entry, name: name, group: group, inverse: inverse)
+                edit.record(operation: operation, entry: entry, name: name, group: group, taskOwners: forwardWrites.filter { $0.entity == .task || $0.entity == .note }, inverse: inverse)
             }, publication: .init(steps: [{ _ in
                 guard adapter.installCommand(command) else { throw WorkspaceFoundationError.conflict }
                 edit.engine.textView?.setSelectedRange(NSRange(location: min(edit.caretAfter, edit.engine.textStorage.length), length: 0))
@@ -495,20 +496,43 @@ struct TaskNoteTextEdit {
         commit.insert(association)
     }
 
-    private func record(operation: UUID, entry: UUID, name: String, group: WorkspaceHistory.TextGroup,
+    private func record(operation: UUID, entry: UUID, name: String, group: WorkspaceHistory.TextGroup, taskOwners: Set<WorkspaceOwner>,
                         inverse: @escaping (Bool) throws -> TaskStep) {
-        let edit = self
-        let adapter = engine.history
-        history.recordOperation(id: operation, entryID: entry, name: name, coordinator: coordinator, textGroup: group) { redo, effect in
+        let noteID = noteID, parentID = parentID, caretAfter = caretAfter, selectionBefore = selectionBefore
+        var expected = try? coordinator.capture(taskOwners)
+        let scopes = Set(taskOwners.filter { $0.entity == .task }.flatMap { [WorkspaceScope.children($0.id), .taskAssociations($0.id)] })
+        var expectedScopes = try? WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
+        history.recordOperation(id: operation, entryID: entry, name: name, coordinator: coordinator, textGroup: group) { [weak session, weak notes, weak tasks, weak coordinator] redo, effect in
+            guard let notes, let tasks, let coordinator,
+                  let session = notes.workspaceSessionIfCached(noteID) ?? session,
+                  let guards = expected, let scopeGuards = expectedScopes,
+                  try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext()) == scopeGuards else {
+                throw WorkspaceFoundationError.conflict
+            }
+            let engine = session.engine
+            let current = try coordinator.capture(taskOwners)
+            // Task timestamps are refreshed by normal field Undo. Every
+            // semantic field and every physical identity must still agree.
+            func semantic(_ tokens: [WorkspaceModelToken]) -> [WorkspaceModelToken] {
+                tokens.map { token in
+                    .init(owner: token.owner, replicas: token.replicas.map { replica in
+                        var fields = replica.fields
+                        if token.owner.entity == .task { fields.removeValue(forKey: "updatedAt") }
+                        return .init(physicalID: replica.physicalID, fields: fields)
+                    })
+                }
+            }
+            guard semantic(current) == semantic(guards) else { throw WorkspaceFoundationError.conflict }
+            let adapter = group.adapter
             let step = try inverse(redo)
-            let context = edit.coordinator.freshContext()
+            let context = coordinator.freshContext()
             try step.check(context)
             guard let text = adapter.prepareReplay(redo ? group.payloads : group.payloads.reversed().map { $0 }) else {
                 throw WorkspaceFoundationError.conflict
             }
-            let document = text.document ?? edit.engine.document(forCommand: text.candidate)
+            let document = text.document ?? engine.document(forCommand: text.candidate)
             let prepared = try PreparedNoteDocument(document)
-            let id = edit.noteID
+            let id = noteID
             let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
             guard !rows.isEmpty else { throw WorkspaceFoundationError.conflict }
             let versions = Dictionary(uniqueKeysWithValues: rows.map { ($0.persistentModelID, UUID()) })
@@ -519,8 +543,8 @@ struct TaskNoteTextEdit {
                     .filter { step.restores.contains($0.rootID) && $0.retiredAt == nil }
                     .map { .init(entity: .preservation, id: $0.id) })
             }
-            let envelope = try edit.coordinator.newEnvelope(intent: "Replay " + name,
-                reads: edit.coordinator.capture(writes.union([.init(entity: .task, id: edit.parentID)])), writes: writes,
+            let envelope = try coordinator.newEnvelope(intent: "Replay " + name,
+                reads: coordinator.capture(writes.union([.init(entity: .task, id: parentID)])), writes: writes, inverseGuards: current, scopes: Array(scopeGuards.values),
                 afterDocuments: [id: prepared.content], historyEffect: WorkspaceModelFields.encode(effect), replayOf: operation)
             let revision = UUID()
             return .init(envelope: envelope, text: (adapter, text), textDocument: (id, prepared.content), stage: { commit in
@@ -530,13 +554,15 @@ struct TaskNoteTextEdit {
             }, publication: .init(steps: [{ _ in
                 // Undo puts the selection back as it was; Redo leaves the
                 // caret where the text was.
-                let length = edit.engine.textStorage.length
-                let selection = redo ? NSRange(location: min(edit.caretAfter, length), length: 0)
-                    : NSRange(location: min(edit.selectionBefore.location, length),
-                              length: max(0, min(edit.selectionBefore.length, length - min(edit.selectionBefore.location, length))))
-                edit.engine.textView?.setSelectedRange(selection)
-                edit.notes.adoptWorkspaceCommit(edit.session, revisionID: revision)
-                edit.tasks.refresh()
+                let length = engine.textStorage.length
+                let selection = redo ? NSRange(location: min(caretAfter, length), length: 0)
+                    : NSRange(location: min(selectionBefore.location, length),
+                              length: max(0, min(selectionBefore.length, length - min(selectionBefore.location, length))))
+                engine.textView?.setSelectedRange(selection)
+                notes.adoptWorkspaceCommit(session, revisionID: revision)
+                tasks.refresh()
+                expected = try coordinator.capture(taskOwners)
+                expectedScopes = try WorkspaceScopeToken.read(scopes: scopes, in: coordinator.freshContext())
             }]))
         }
     }

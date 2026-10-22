@@ -183,6 +183,51 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(presenter.page.history.undoName, "Edited by Agent: can't undo past this")
     }
 
+    func testP3F9MakeSubtaskUndoRefusesAChangedSecondaryReplica() async throws {
+        let (id, presenter, _) = try makeSubtaskFixture()
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        guard case .made = await presenter.makeSubtasks(try XCTUnwrap(presenter.subtaskSelection()), tasks: tasks, notes: notes) else { return XCTFail() }
+        let made = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title.hasPrefix("Everything") })
+        let context = ModelContext(container)
+        let other = TaskItem(id: made.id, title: made.title, status: .done, createdAt: made.createdAt,
+                             completedAt: Date(), manualOrder: made.manualOrder, parentID: id)
+        other.tags = ["later work"]
+        context.insert(other)
+        try context.save()
+        let undone = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .failed)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.id == made.id }.allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testP3F9SameWorkspaceEditUndoThenMakeSubtaskUndoStaysChronological() async throws {
+        let (id, presenter, _) = try makeSubtaskFixture()
+        presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        guard case .made = await presenter.makeSubtasks(try XCTUnwrap(presenter.subtaskSelection()), tasks: tasks, notes: notes) else { return XCTFail() }
+        let made = try XCTUnwrap(tasks.subtasks(of: id).first { $0.title.hasPrefix("Everything") })
+        presenter.model.beginRename(made.id)
+        // Use the same workspace route as a committed field edit.
+        XCTAssertTrue(library.updateTask(made.id, title: "Temporarily renamed", in: presenter.page.history.historyID).isApplied)
+        XCTAssertTrue(presenter.page.history.undo())
+        let undone = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertNil(tasks.task(withID: made.id))
+    }
+
+    func testP3F17CloseClearsEveryRetainedMenuRelay() async throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        var owner: NSObject? = NSObject()
+        weak var probe = owner
+        presenter.menus.noteMenu = { [owner] in _ = owner }
+        presenter.menus.taskMenu = { [owner] in _ = owner; return [] }
+        presenter.menus.restoreNote = { [owner] in _ = owner }
+        presenter.menus.subtaskMenu = { [owner] _ in _ = owner; return [] }
+        presenter.menus.reviewAlternate = { [owner] in _ = owner; return [] }
+        owner = nil
+        await close(presenter)
+        XCTAssertNil(probe)
+    }
+
     @discardableResult
     private func seed(_ scenario: TaskNotePreviewSeed.Scenario) throws -> UUID {
         let id = try TaskNotePreviewSeed.seed(scenario, in: container)
