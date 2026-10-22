@@ -283,7 +283,7 @@ final class TaskNotePageModel: ObservableObject {
     /// Never hidden while they exist. A region of its own, apart from the
     /// writing (S8).
     @Published private(set) var earlierFiles: TaskFilesState.Status = .none {
-        didSet { if earlierFiles.earlier.isEmpty != oldValue.earlier.isEmpty { onGeometryChange?() } }
+        didSet { if (earlierFiles.earlier.isEmpty && earlierFiles.refusal == nil) != (oldValue.earlier.isEmpty && oldValue.refusal == nil) { onGeometryChange?() } }
     }
 
     func refreshEarlierFiles() {
@@ -293,7 +293,7 @@ final class TaskNotePageModel: ObservableObject {
 
     /// How many quiet lines sit under the block.
     var noticeCount: Int {
-        (deletedNote ? 1 : 0) + (alternateNotes.isEmpty ? 0 : 1) + (earlierFiles.earlier.isEmpty ? 0 : 1)
+        (deletedNote ? 1 : 0) + (alternateNotes.isEmpty ? 0 : 1) + (earlierFiles.earlier.isEmpty && earlierFiles.refusal == nil ? 0 : 1)
     }
 
     var countLabel: String {

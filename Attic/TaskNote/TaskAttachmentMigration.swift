@@ -193,8 +193,10 @@ enum TaskAttachmentMigration {
         var created: [UUID: Date] = [:]
         for child in children { created[child.id] = min(created[child.id] ?? .distantFuture, child.createdAt) }
         let childIDs = created.keys.sorted { (created[$0]!, $0.uuidString) < (created[$1]!, $1.uuidString) }
-        var lenient = roots[0].attachments
-        for id in childIDs { lenient += children.first { $0.id == id }?.attachments ?? [] }
+        var lenient: [TaskImageReference] = []
+        for row in roots + children {
+            for reference in row.attachments where !lenient.contains(reference) { lenient.append(reference) }
+        }
         let title = roots.max { $0.updatedAt < $1.updatedAt }?.title ?? roots[0].title
         var replicas: [ReplicaList] = []
         var entries: [Entry] = []
@@ -664,6 +666,11 @@ enum TaskAttachmentMigration {
             let pending = try context.fetchCount(FetchDescriptor<NotePendingEdit>(predicate: #Predicate { $0.noteID == noteID }))
             guard pending == 0 else { return cant(String(localized: "an agent's edit to the note is waiting for review")) }
             let migratedIDs = Set(manifest.entries.map(\.reference.id))
+            guard !coordinator.sessions.hasActiveTaskPage(rootID),
+                  !coordinator.sessions.hasActiveNotePage(noteID),
+                  migratedIDs.isDisjoint(with: coordinator.retainedRecoveryBytes) else {
+                return cant(String(localized: "an open page or recovery draft still uses the files"))
+            }
             guard migratedIDs.isDisjoint(with: coordinator.retainedHistoryBytes) else {
                 return cant(String(localized: "an Undo step still uses the files"))
             }
@@ -711,7 +718,11 @@ enum TaskAttachmentMigration {
             let revision = UUID()
             let envelope = try coordinator.newEnvelope(intent: "Move Files Back", reads: coordinator.capture(reads),
                 writes: writes, afterDocuments: [noteID: prepared.content])
-            let outcome = await coordinator.execute(envelope, stage: { commit in
+            let outcome = await coordinator.execute(envelope, sessionValid: {
+                !coordinator.sessions.hasActiveTaskPage(rootID) && !coordinator.sessions.hasActiveNotePage(noteID)
+                    && migratedIDs.isDisjoint(with: coordinator.retainedRecoveryBytes)
+                    && migratedIDs.isDisjoint(with: coordinator.retainedHistoryBytes)
+            }, stage: { commit in
                 let now = Date()
                 try NoteStore.stageDocument(in: commit, noteID: noteID, document: reversed, prepared: prepared,
                     revisionID: revision, versionIDs: versions, timestamp: now)
@@ -772,8 +783,9 @@ enum TaskAttachmentMigration {
             return Status(kind: .reversed, earlier: shown, refusal: .reversed, noteID: record.noteID)
         }
         let migrated = Set((try? JSONDecoder().decode(NoteState.self, from: record.afterData))?.attachmentIDs ?? [])
-        let earlier = shown.filter { !migrated.contains($0.id) }
-        return Status(kind: .migrated, earlier: earlier, refusal: earlier.isEmpty ? nil : known, noteID: record.noteID)
+        let covered = (try? JSONDecoder().decode(Manifest.self, from: record.manifestData))?.entries.map(\.reference) ?? []
+        let earlier = shown.filter { !migrated.contains($0.id) || !covered.contains($0) }
+        return Status(kind: .migrated, earlier: earlier, refusal: known, noteID: record.noteID)
     }
 
     /// The legacy resolver: an attachment ID from an old drag payload, a

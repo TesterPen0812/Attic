@@ -73,6 +73,10 @@ final class WorkspaceSessionRegistry {
         sessions[.task(taskID)]?.activeLease != nil
     }
 
+    func hasActiveNotePage(_ noteID: UUID) -> Bool {
+        sessions.values.contains { $0.activeLease != nil && $0.note?.noteID == noteID }
+    }
+
     /// Optional diagnostic of rows actually materialized by alias resolution.
     var didFetchResolutionRows: ((Int, Int) -> Void)?
     private init(coordinator: WorkspaceOperationCoordinator, domain: WorkspacePersistenceDomain) {

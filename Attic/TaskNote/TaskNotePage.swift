@@ -704,7 +704,7 @@ struct TaskNotePage: View {
     /// Finder, Export Copy… and Remove, as on the old files list.
     func earlierFileCommands() -> [AtticMenuCommand] {
         let status = model.earlierFiles
-        guard !status.earlier.isEmpty else { return [] }
+        guard !status.earlier.isEmpty || status.refusal != nil else { return [] }
         let store = model.store, taskID = model.taskID, library = model.library
         var commands: [AtticMenuCommand] = []
         if let reason = status.refusal?.reason {

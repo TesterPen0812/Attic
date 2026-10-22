@@ -233,7 +233,7 @@ struct TaskNoteSubtasksBlock: View {
             blockShape
             if model.deletedNote { deletedNoteLine }
             if !model.alternateNotes.isEmpty { alternateNoteLine }
-            if !model.earlierFiles.earlier.isEmpty { earlierFilesLine }
+            if !model.earlierFiles.earlier.isEmpty || model.earlierFiles.refusal != nil { earlierFilesLine }
         }
             // The native host commits the arithmetic block height at once.
             // A SwiftUI fold transition would animate inside that final
