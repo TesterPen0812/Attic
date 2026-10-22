@@ -27,6 +27,16 @@ final class NoteAttachment {
     }
     var payloadFingerprint: String? = nil
 
+    /// Query storage presence without touching the external payload getter.
+    @MainActor static func missingPayloadIDs(among ids: Set<UUID>, in context: ModelContext) throws -> Set<UUID> {
+        let ids = Array(ids)
+        var request = FetchDescriptor<NoteAttachment>(predicate: #Predicate {
+            ids.contains($0.id) && $0.payloadStorage == nil
+        })
+        request.propertiesToFetch = [\.id]
+        return Set(try context.fetch(request).map(\.id))
+    }
+
     init(
         id: UUID = UUID(),
         noteID: UUID,

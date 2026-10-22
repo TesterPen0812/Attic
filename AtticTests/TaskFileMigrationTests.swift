@@ -123,6 +123,31 @@ final class TaskFileMigrationTests: XCTestCase {
         XCTAssertEqual(WorkspacePayloadAccess.allThreads.count("attachment"), 0, "unchanged launch must not fault or hash stored payload bytes")
     }
 
+    func testP3S2R2PresenceQueryRepairsMissingReplicaWithoutFaultingPresentLegacyPayload() async throws {
+        let refs = try await legacyFiles(["repair.txt"])
+        let rootID = try insertTask(shown: refs)
+        guard case .migrated = await migrate(rootID) else { return XCTFail("seed migration") }
+        let context = coordinator.freshContext(), id = refs[0].id
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<NoteAttachment>()).first)
+        row.payloadFingerprint = nil // A present legacy payload has no scalar proof.
+        let replica = NoteAttachment(id: id, noteID: row.noteID, originalFilename: row.originalFilename,
+            contentTypeIdentifier: row.contentTypeIdentifier, byteCount: row.byteCount, sortIndex: row.sortIndex,
+            contentDigest: row.contentDigest, payload: nil)
+        context.insert(replica); try context.save()
+        WorkspacePayloadAccess.allThreads.reset()
+        XCTAssertEqual(try NoteAttachment.missingPayloadIDs(among: [id], in: coordinator.freshContext()), [id])
+        XCTAssertEqual(WorkspacePayloadAccess.allThreads.count("attachment"), 0)
+        let repaired = await migrate(rootID)
+        XCTAssertEqual(repaired, .reconciled, "an already migrated family's missing replica is repaired by reconciliation")
+        let rows = try all(NoteAttachment.self)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.payload.map(NotePayloadDigest.sha256) == refs[0].digest })
+        WorkspacePayloadAccess.allThreads.reset()
+        let unchanged = await migrate(rootID)
+        XCTAssertEqual(unchanged, .unchanged)
+        XCTAssertEqual(WorkspacePayloadAccess.allThreads.count("attachment"), 0)
+    }
+
     func testShownRemovedAndChildHeldFilesMoveIntoANewOwnNoteWithDeterministicPlacements() async throws {
         let refs = try await legacyFiles(["shot.png", "Spec.pdf", "gone.txt", "child.txt"])
         let removedAt = Date(timeIntervalSince1970: 1_800_000_000)

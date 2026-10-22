@@ -477,6 +477,13 @@ enum TaskAttachmentMigration {
             case let .success(value): needed = value
             case let .failure(refusal): return .refused(refusal)
             }
+            let missingPayloadIDs = try NoteAttachment.missingPayloadIDs(among: Set(entries.map(\.reference.id)), in: context)
+            if let previous, previous.entries == family.manifest.entries, needed.isEmpty, missingPayloadIDs.isEmpty {
+                return .unchanged
+            }
+            // The prior receipt already verified unchanged entries. Verify
+            // additions and missing-byte repairs, never all migrated bytes.
+            let verifying = entries.filter { previous?.entries.contains($0) != true || missingPayloadIDs.contains($0.reference.id) }
             let revision = UUID()
             let noteID = destination.noteID
             let associationID = UUID()
@@ -493,10 +500,9 @@ enum TaskAttachmentMigration {
             let expectedScopes = try WorkspaceScopeToken.scopes(for: expected).map { try WorkspaceScopeToken.read($0, in: context) }
             try boundary("M1-validation")
             do {
-                let repairs = try await payloadRepairs(entries, container: coordinator.container)
+                let repairs = try await payloadRepairs(verifying, container: coordinator.container)
                 needed += repairs.filter { repair in !needed.contains { $0.reference.id == repair.reference.id } }
             } catch let refusal as Refusal { return .refused(refusal) }
-            if let previous, previous.entries == family.manifest.entries, needed.isEmpty { return .unchanged }
             let staged: [StagedNoteAttachment]
             let leases: [WorkspaceOwnershipGate.Lease]
             switch await readOriginals(needed, files: files) {
