@@ -76,6 +76,25 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(notes.reviewProposals.allSatisfy { $0.noteID == ordinary })
     }
 
+    func testOpusR6CommittedReloadProtectsUnreadableContentAndCancelsPendingSaves() async throws {
+        for bytes in [Data("not a document".utf8), Data("{\"format\":1,\"requires\":[\"future\"],\"blocks\":[{\"kind\":\"text\",\"text\":\"Future\"}]}".utf8)] {
+            let id = try seed(.boundary)
+            await notes.startAndWait()
+            let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+            type(" pending", into: presenter.host.textView)
+            let job = try XCTUnwrap(Mirror(reflecting: session).children.first { $0.label == "saveTask" }?.value as? Task<Void, Never>)
+            let context = ModelContext(container), noteID = session.noteID
+            let row = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first)
+            row.content = bytes; try context.save()
+            notes.installCommittedTaskNote(noteID)
+            XCTAssertTrue(session.isReadOnly)
+            XCTAssertTrue(session.engine.isReadOnly)
+            XCTAssertEqual(session.state, .readOnly)
+            XCTAssertTrue(job.isCancelled, "failed and read-only loads cannot leave old autosaves scheduled")
+            XCTAssertEqual(notes.store.note(withID: noteID)?.content, bytes)
+        }
+    }
+
     // MARK: Fixtures
 
     // Phase 3 reservations refuse native input visibly before storage changes.

@@ -3849,20 +3849,30 @@ extension NotesPageController {
     /// Install the committed form synchronously while input is reserved.
     /// A later asynchronous close can never save the old projection over it.
     private func installCommittedTaskNoteForm(_ session: NoteSession) {
-        guard let note = store.note(withID: session.noteID),
-              let document = store.loadDocument(noteID: session.noteID)?.content.document else { return }
-        let history = session.engine.history.workspace
         session.saveTask?.cancel(); session.saveTask = nil
         session.durabilityTask?.cancel(); session.durabilityTask = nil
         session.pauseTask?.cancel(); session.pauseTask = nil
+        let load = store.loadDocument(noteID: session.noteID)
+        let reason: NoteReadOnlyReason? = if let load {
+            if case let .readOnly(_, reason, _) = load.content { reason } else { nil }
+        } else { .unreadable("missing document bytes") }
+        guard let note = store.note(withID: session.noteID) else {
+            session.readOnlyReason = reason
+            session.replaceEngine(makeEngine(noteID: session.noteID, document: .blank, readOnly: true))
+            session.state = .readOnly
+            return
+        }
+        let history = session.engine.history.workspace
+        let document = load?.content.document ?? .blank
         session.baseRevisionID = note.revisionID
         session.baseContent = note.content
         session.baseTags = note.tags
-        session.replaceEngine(makeEngine(noteID: note.id, document: document, readOnly: false,
+        session.readOnlyReason = reason
+        session.replaceEngine(makeEngine(noteID: note.id, document: document, readOnly: reason != nil,
                                          tags: note.tags, bodyOnly: note.taskID != nil))
         if let history { history.attach(session.engine.history) }
         wire(session)
-        session.state = .clean
+        session.state = reason == nil ? .clean : .readOnly
     }
 
     func installCommittedTaskNote(_ noteID: UUID) {
