@@ -65,6 +65,8 @@ extension AgentTaskTools {
     /// The task's page: the open one, or an engine-only one for this call.
     private func withPage<T>(_ taskID: UUID, notes: NotesPageController,
                              _ body: (TaskNotePresenter) async throws -> T) async throws -> T {
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        await coordinator.sessions.retryHeadlessClosures()
         if let open = TaskNotePresenter.open(for: taskID) { return try await body(open) }
         let presenter: TaskNotePresenter
         do {
@@ -75,10 +77,14 @@ extension AgentTaskTools {
         }
         do {
             let result = try await body(presenter)
-            _ = await presenter.close()
+            if !(await presenter.close()), let lease = presenter.lease {
+                _ = await coordinator.sessions.closeHeadless(presenter.page, lease: lease)
+            }
             return result
         } catch {
-            _ = await presenter.close()
+            if !(await presenter.close()), let lease = presenter.lease {
+                _ = await coordinator.sessions.closeHeadless(presenter.page, lease: lease)
+            }
             throw error
         }
     }

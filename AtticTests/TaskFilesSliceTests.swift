@@ -441,7 +441,8 @@ extension TaskFilesSliceTests {
         coordinator.save = { try $0.save() }
         let page = try coordinator.sessions.session(for: .task(id), notes: notes)
         for _ in 0..<100 where page.history.hasPendingPublication { try await Task.sleep(for: .milliseconds(20)) }
-        XCTAssertNil(page.activeLease, "an engine-only call must close or retain a recoverable headless lease")
+        await coordinator.sessions.retryHeadlessClosures()
+        XCTAssertNil(page.activeLease, "a retained engine-only lease must close after storage recovers")
         if let presenter = TaskNotePresenter.open(for: id) { _ = await presenter.close() }
         else if let lease = page.activeLease { _ = await page.close(lease) }
     }
