@@ -131,11 +131,25 @@ final class OperationCrashHarnessTests: XCTestCase {
                 if reopen == 1 {
                     let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
                     let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: files)
-                    XCTAssertEqual(report.migrated, committed ? [] : [WorkspaceCrashFixture.taskID], point)
                     let done = coordinator.freshContext()
+                    // A death inside the journal's payload write (K0–K2)
+                    // leaves a damaged operation: S1 quarantines it and holds
+                    // its owners, so the family stays on the legacy path
+                    // (old state, its files in Earlier files) instead of
+                    // migrating in this launch. Never a mix either way.
+                    if !committed, report.deferred.contains(WorkspaceCrashFixture.taskID) {
+                        XCTAssertTrue(["K0", "K1", "K2"].contains(point), "only a damaged journal write may hold the family: \(point)")
+                        XCTAssertEqual(try done.fetchCount(FetchDescriptor<TaskAttachmentMigrationRecord>()), 0, point)
+                        XCTAssertEqual(try done.fetchCount(FetchDescriptor<NoteAttachment>()), 0, point)
+                        XCTAssertEqual(try legacyRows(done), legacy, point)
+                        continue
+                    }
+                    XCTAssertEqual(report.migrated, committed ? [] : [WorkspaceCrashFixture.taskID], point)
                     XCTAssertEqual(try done.fetchCount(FetchDescriptor<TaskAttachmentMigrationRecord>()), 1, point)
-                    let note = try XCTUnwrap(done.fetch(FetchDescriptor<NoteItem>()).first, point)
-                    let doc = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document }, point)
+                    guard let note = try done.fetch(FetchDescriptor<NoteItem>()).first,
+                          let doc = note.content.flatMap({ NoteContentCodec.decode($0).document }) else {
+                        XCTFail("no migrated note: \(point)"); continue
+                    }
                     XCTAssertEqual(doc.attachmentIDs, [references[0].id, references[1].id, references[2].id], point)
                     let attachments = try done.fetch(FetchDescriptor<NoteAttachment>())
                     XCTAssertEqual(Set(attachments.map(\.id)), Set(references.map(\.id)), point)
