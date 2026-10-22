@@ -503,11 +503,15 @@ extension TaskFilesSliceTests {
         // The launch's offers callback starts this work but does not await
         // it. Let its startup task reach the attachment drain.
         for _ in 0..<20 { await Task.yield() }
-        let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: tasks.taskImageFiles,
+        let release = Task { @MainActor in
+            await Task.yield()
+            resume?.resume(); resume = nil
+        }
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, recovering: recovery,
             isBusy: { root in TaskFilesState.noteIsOpen(root, notes: recovery, coordinator: self.coordinator) })
-        noteStore.refresh()
-        resume?.resume(); resume = nil
+        await release.value
         await recovery.startAndWait()
+        XCTAssertTrue(tasks.fileMigration.deferred.contains(id))
         let stored = await noteStore.verifiedAttachmentBytes(item.id)
         XCTAssertEqual(stored?.data, bytes, "launch must finish a matching missing-byte repair before migration advances its revision")
         let checkpoint = try await coordinator.journal.entriesDurably()

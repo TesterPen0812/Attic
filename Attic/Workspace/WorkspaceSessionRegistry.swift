@@ -69,6 +69,10 @@ final class WorkspaceSessionRegistry {
             if await pending.0.close(pending.1) { headlessClosures[id] = nil }
         }
     }
+    func hasActiveTaskPage(_ taskID: UUID) -> Bool {
+        sessions[.task(taskID)]?.activeLease != nil
+    }
+
     /// Optional diagnostic of rows actually materialized by alias resolution.
     var didFetchResolutionRows: ((Int, Int) -> Void)?
     private init(coordinator: WorkspaceOperationCoordinator, domain: WorkspacePersistenceDomain) {

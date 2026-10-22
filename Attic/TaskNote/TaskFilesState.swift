@@ -63,10 +63,18 @@ final class TaskFilesState: ObservableObject {
 
     /// The background launch run (§ 13 "Safe running"): every family, one
     /// operation each, skipping families whose note is open.
-    func runAtLaunch(tasks: TaskStore, isBusy: @escaping (UUID) -> Bool) async {
+    func runAtLaunch(tasks: TaskStore, recovering notes: NotesPageController? = nil, isBusy: @escaping (UUID) -> Bool) async {
         guard !running, let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return }
         running = true
         defer { running = false }
+        if let notes {
+            await notes.recoverAtLaunchAndWait()
+            guard notes.launchRecoveryCompleted else {
+                deferred = Set((try? TaskAttachmentMigration.candidateRoots(in: coordinator.freshContext())) ?? [])
+                refresh(coordinator: coordinator)
+                return
+            }
+        }
         refresh(coordinator: coordinator)
         let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: tasks.taskImageFiles,
                                                           isBusy: isBusy, publish: { [weak tasks] in tasks?.refresh() })

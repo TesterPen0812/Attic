@@ -360,8 +360,9 @@ enum TaskAttachmentMigration {
     /// operation. A family already migrated is reconciled with its current
     /// lists (an older build may have added or removed files since).
     static func migrate(rootID: UUID, coordinator: WorkspaceOperationCoordinator, files: TaskImageFiles,
-                        force: Bool = false, publish: @escaping () -> Void = {}) async -> Outcome {
+                        force: Bool = false, isBusy: () -> Bool = { false }, publish: @escaping () -> Void = {}) async -> Outcome {
         do {
+            guard !isBusy(), !coordinator.sessions.hasActiveTaskPage(rootID) else { return .deferred }
             let context = coordinator.freshContext()
             let records = try context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>(predicate: #Predicate { $0.id == rootID }))
             if let record = records.first {
@@ -415,6 +416,20 @@ enum TaskAttachmentMigration {
             case let .success(value): needed = value
             case let .failure(refusal): return .refused(refusal)
             }
+            let revision = UUID()
+            let noteID = destination.noteID
+            let associationID = UUID()
+            let noteReplicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+            let versions = Dictionary(uniqueKeysWithValues: noteReplicas.map { ($0.persistentModelID, UUID()) })
+            var writes: Set<WorkspaceOwner> = [.init(entity: .note, id: noteID), .init(entity: .migration, id: rootID)]
+            writes.formUnion(ids.map { .init(entity: .attachment, id: $0) })
+            writes.formUnion(versions.values.map { .init(entity: .version, id: $0) })
+            if !destination.exists {
+                writes.formUnion([.init(entity: .association, id: associationID), .init(entity: .task, id: rootID)])
+            }
+            let reads = writes.union(([rootID] + family.memberIDs).map { .init(entity: .task, id: $0) })
+            let expected = try coordinator.capture(reads)
+            let expectedScopes = try WorkspaceScopeToken.scopes(for: expected).map { try WorkspaceScopeToken.read($0, in: context) }
             try boundary("M1-validation")
             let staged: [StagedNoteAttachment]
             let leases: [WorkspaceOwnershipGate.Lease]
@@ -449,18 +464,6 @@ enum TaskAttachmentMigration {
             }
             document.refreshRequiredCapabilities()
             let prepared = try PreparedNoteDocument(document)
-            let revision = UUID()
-            let noteID = destination.noteID
-            let associationID = UUID()
-            let noteReplicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
-            let versions = Dictionary(uniqueKeysWithValues: noteReplicas.map { ($0.persistentModelID, UUID()) })
-            var writes: Set<WorkspaceOwner> = [.init(entity: .note, id: noteID), .init(entity: .migration, id: rootID)]
-            writes.formUnion(ids.map { .init(entity: .attachment, id: $0) })
-            writes.formUnion(versions.values.map { .init(entity: .version, id: $0) })
-            if !destination.exists {
-                writes.formUnion([.init(entity: .association, id: associationID), .init(entity: .task, id: rootID)])
-            }
-            let reads = writes.union(([rootID] + family.memberIDs).map { .init(entity: .task, id: $0) })
             let manifest = family.manifest
             let after = NoteState(absent: false, revisionID: revision, documentDigest: WorkspaceModelFields.digest(prepared.content),
                                   placementIDs: placements,
@@ -470,9 +473,11 @@ enum TaskAttachmentMigration {
             let revived = destination.revived
             let shownStaged = staged.filter { id in entries.contains { $0.reference.id == id.id && $0.isShown } }
             let removedNeeded = needed.filter { !$0.isShown }
-            let envelope = try coordinator.newEnvelope(intent: "Move Files into Note", reads: coordinator.capture(reads),
-                writes: writes, afterDocuments: [noteID: prepared.content], staged: staged)
-            let outcome = await coordinator.execute(envelope, stage: { commit in
+            let envelope = try coordinator.newEnvelope(intent: "Move Files into Note", reads: expected,
+                writes: writes, scopes: expectedScopes, afterDocuments: [noteID: prepared.content], staged: staged)
+            let outcome = await coordinator.execute(envelope, sessionValid: {
+                !isBusy() && !coordinator.sessions.hasActiveTaskPage(rootID)
+            }, stage: { commit in
                 let now = Date()
                 if created {
                     guard let generation = NoteStore.taskOwnerGeneration(rootID, in: commit) else { throw WorkspaceFoundationError.conflict }
@@ -766,7 +771,7 @@ enum TaskAttachmentMigration {
         for root in roots {
             guard !Task.isCancelled else { break }
             if isBusy(root) { report.deferred.insert(root); continue }
-            switch await migrate(rootID: root, coordinator: coordinator, files: files, publish: publish) {
+            switch await migrate(rootID: root, coordinator: coordinator, files: files, isBusy: { isBusy(root) }, publish: publish) {
             case .migrated: report.migrated.insert(root)
             case .reconciled: report.reconciled.insert(root)
             case .unchanged: break

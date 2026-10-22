@@ -1131,7 +1131,7 @@ final class AppCoordinator: ObservableObject {
             let pages = self.noteDraft.pages
             self.store.fileMigration.onNotesChanged = { [weak pages] in pages?.store.refresh() }
             guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: self.store.container) else { return }
-            await self.store.fileMigration.runAtLaunch(tasks: self.store, isBusy: { [weak pages] root in
+            await self.store.fileMigration.runAtLaunch(tasks: self.store, recovering: pages, isBusy: { [weak pages] root in
                 guard let pages else { return true }
                 return TaskFilesState.noteIsOpen(root, notes: pages, coordinator: coordinator)
             })
