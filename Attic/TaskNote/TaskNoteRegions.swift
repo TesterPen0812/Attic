@@ -3,8 +3,10 @@ import SwiftUI
 /// The geometry of the task's note page (mockups `p3-20` 2b, `p3-21`, block
 /// shape `p3-19` column 2). Everything sits on the note's text column.
 enum TaskNoteMetrics {
-    /// The status circle's column: the title starts 28 in.
-    static let titleIndent: CGFloat = 28
+    /// The status circle's column: the title starts where a Tasks row's
+    /// does, the circle plus spacing B's circle-to-title gap (15 + 8 = 23;
+    /// was 16 + 12 = 28 before Attic Rows, owner 2026-10-20).
+    static let titleIndent: CGFloat = AtticControlSize.statusCircle + AtticLayout.circleToTitle
     /// Room at the end of the title's lines for the note's ⋯.
     static let titleTrailing: CGFloat = 26
     static let titleLineHeight: CGFloat = 22
