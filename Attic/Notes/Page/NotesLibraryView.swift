@@ -40,6 +40,9 @@ struct NotesLibraryView: View {
     /// More tags…'s card is open (its keys are its own).
     @State private var moreTagsShown = false
     @State private var recoveryReview: WorkspaceOperationCoordinator.RecoveryIssue?
+    @State private var recoveryActionRunning = false
+    @State private var confirmRecoveryDiscard = false
+    @State private var recoveryActionMessage: String?
 
     /// The most tags the top line tries to fit after "All notes".
     static let tagTabLimit = 4
@@ -126,12 +129,51 @@ struct NotesLibraryView: View {
                 Text(issue.preIntentAbort
                      ? "An interrupted change stopped before it could save. Its recovery files are kept. Your notes and tasks can still save."
                      : "An interrupted change has damaged recovery data. Its files are kept, and changes to known affected items wait for recovery. Other notes and tasks can still save.")
+                ScrollView {
+                    Text(issue.previewText ?? String(localized: "No readable interrupted text is available. The original recovery files are kept."))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }.frame(maxHeight: 200)
+                    .accessibilityIdentifier("notes-workspace-recovery-preview")
+                if let recoveryActionMessage { Text(recoveryActionMessage).font(.caption) }
+                HStack {
+                    Button("Restore as New Note") { resolveRecovery(issue, restoring: true) }
+                        .disabled(recoveryActionRunning || issue.previewText == nil)
+                    Button("Discard…", role: .destructive) { confirmRecoveryDiscard = true }
+                        .disabled(recoveryActionRunning)
+                }
                 HStack {
                     Button("Show Recovery Files") { NSWorkspace.shared.activateFileViewerSelecting([issue.directory]) }
                     Spacer()
                     Button("Done") { recoveryReview = nil }.keyboardShortcut(.defaultAction)
+                        .disabled(recoveryActionRunning)
                 }
             }.padding(24).frame(width: 420)
+                .alert("Discard interrupted change?", isPresented: $confirmRecoveryDiscard) {
+                    Button("Discard", role: .destructive) { resolveRecovery(issue, restoring: false) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This removes this recovery entry and moves its files to Attic’s quarantine trash. Saved notes, legacy files and other recovery copies are kept.")
+                }
+        }
+        .onChange(of: recoveryReview?.id) { _, _ in recoveryActionMessage = nil }
+    }
+
+    private func resolveRecovery(_ issue: WorkspaceOperationCoordinator.RecoveryIssue, restoring: Bool) {
+        recoveryActionRunning = true
+        recoveryActionMessage = nil
+        Task { @MainActor in
+            defer { recoveryActionRunning = false }
+            do {
+                if restoring { _ = try await controller.restoreWorkspaceRecoveryAsNewNote(issue) }
+                else { try await controller.discardWorkspaceRecovery(issue) }
+                guard recoveryReview?.id == issue.id else { return }
+                if controller.workspaceRecoveryIssues.contains(issue) {
+                    recoveryActionMessage = String(localized: "A new note was saved. Its interrupted recovery copy remains until its earlier save can be confirmed.")
+                } else { recoveryReview = nil }
+            } catch {
+                if recoveryReview?.id == issue.id { recoveryActionMessage = error.localizedDescription }
+            }
         }
     }
 
