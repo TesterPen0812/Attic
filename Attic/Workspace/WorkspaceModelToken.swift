@@ -6,7 +6,7 @@ import SwiftData
 /// records expected absence; a failed read throws and cannot produce absence.
 struct WorkspaceOwner: Codable, Hashable, Sendable {
     enum Entity: String, Codable, Sendable {
-        case task, note, attachment, version, proposal, link, association, preservation, receipt, board, stroke, image, semantic, tagColour
+        case task, note, attachment, version, proposal, link, association, preservation, receipt, board, stroke, image, semantic, tagColour, migration
     }
     let entity: Entity
     let id: UUID
@@ -37,6 +37,7 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
         case .association: return try capture(owner, rows: context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.id == id })))
         case .preservation: return try capture(owner, rows: context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.id == id })))
         case .receipt: return try capture(owner, rows: context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { $0.id == id })))
+        case .migration: return try capture(owner, rows: context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>(predicate: #Predicate { $0.id == id })))
         }
     }
 
@@ -66,6 +67,7 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
             case .association: try collect(context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { ids.contains($0.id) })))
             case .preservation: try collect(context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { ids.contains($0.id) })))
             case .receipt: try collect(context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { ids.contains($0.id) })))
+            case .migration: try collect(context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>(predicate: #Predicate { ids.contains($0.id) })))
             case .board: try collect(context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { ids.contains($0.id) })))
             case .stroke: try collect(context.fetch(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { ids.contains($0.id) })))
             case .image: try collect(context.fetch(FetchDescriptor<CanvasImageItem>(predicate: #Predicate { ids.contains($0.id) })))
@@ -390,6 +392,19 @@ enum WorkspaceModelFields {
                 WorkspaceField("noteGeneration", \TaskNoteAssociation.noteGeneration),
                 WorkspaceField("detachedPreservationID", \TaskNoteAssociation.detachedPreservationID),
                 WorkspaceField("detachedAt", \TaskNoteAssociation.detachedAt)
+            ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
+        case let row as TaskAttachmentMigrationRecord:
+            return try record(row, fieldTable(for: row) { [
+                WorkspaceField("id", \TaskAttachmentMigrationRecord.id),
+                WorkspaceField("noteID", \TaskAttachmentMigrationRecord.noteID),
+                WorkspaceField("noteCreated", \TaskAttachmentMigrationRecord.noteCreated),
+                WorkspaceField("stateRaw", \TaskAttachmentMigrationRecord.stateRaw),
+                WorkspaceField("manifestData", \TaskAttachmentMigrationRecord.manifestData),
+                WorkspaceField("beforeData", \TaskAttachmentMigrationRecord.beforeData),
+                WorkspaceField("afterData", \TaskAttachmentMigrationRecord.afterData),
+                WorkspaceField("build", \TaskAttachmentMigrationRecord.build),
+                WorkspaceField("createdAt", \TaskAttachmentMigrationRecord.createdAt),
+                WorkspaceField("updatedAt", \TaskAttachmentMigrationRecord.updatedAt)
             ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as TaskDeletionPreservation:
             return try record(row, fieldTable(for: row) { [

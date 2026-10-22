@@ -25,12 +25,12 @@ enum AgentToolError: Error {
 /// the same rules (ordering, timestamps, cleanup) as edits made in the UI.
 @MainActor
 final class AgentTaskTools {
-    private let store: TaskStore
+    let store: TaskStore
 
-    private let noteStore: NoteStore?
+    let noteStore: NoteStore?
     /// The command layer every change goes through, so agent edits are
     /// undoable and deletes land in Recently Deleted like a person's.
-    private let library: AtticLibrary
+    let library: AtticLibrary
     /// Understands `due` ("tomorrow", "fri", "sep 30", ISO dates).
     private let parser: TaskTextParser
     /// `get_settings` and `update_settings` (Phase 1 Settings).
@@ -588,9 +588,15 @@ final class AgentTaskTools {
         ]
     ]
 
+    /// The app's task-note sessions, for the asynchronous workspace tools
+    /// (slice 2): the same producers and refusals people use. Nil where the
+    /// app has no Notes page (tests, the preview): those tools are absent.
+    var notesController: (() -> NotesPageController?)?
+
     var definitions: [[String: Any]] {
         Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : []) + Self.libraryDefinitions
             + (settingsTools != nil ? AgentSettingsTools.definitions : [])
+            + (notesController != nil ? Self.workspaceDefinitions : [])
     }
 
     func call(name: String, arguments: [String: Any]) throws -> String {

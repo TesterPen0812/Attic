@@ -235,7 +235,8 @@ final class WorkspaceCommitLedger {
         "TaskItem": .task, "NoteItem": .note, "NoteAttachment": .attachment, "NoteVersion": .version,
         "NotePendingEdit": .proposal, "ItemLink": .link, "TaskNoteAssociation": .association,
         "TaskDeletionPreservation": .preservation, "OperationReceipt": .receipt, "CanvasBoardItem": .board,
-        "CanvasStrokeItem": .stroke, "CanvasImageItem": .image, "CanvasSemanticObjectItem": .semantic, "TagColour": .tagColour
+        "CanvasStrokeItem": .stroke, "CanvasImageItem": .image, "CanvasSemanticObjectItem": .semantic, "TagColour": .tagColour,
+        "TaskAttachmentMigrationRecord": .migration
     ]
     static func entity(for id: PersistentIdentifier) -> WorkspaceOwner.Entity? { entities[id.entityName] }
     static func supportedEntities(in container: ModelContainer) -> Set<WorkspaceOwner.Entity> {
@@ -253,6 +254,7 @@ final class WorkspaceCommitLedger {
         case "TaskNoteAssociation": return context.registeredModel(for: id) as TaskNoteAssociation?
         case "TaskDeletionPreservation": return context.registeredModel(for: id) as TaskDeletionPreservation?
         case "OperationReceipt": return context.registeredModel(for: id) as OperationReceipt?
+        case "TaskAttachmentMigrationRecord": return context.registeredModel(for: id) as TaskAttachmentMigrationRecord?
         case "CanvasBoardItem": return context.registeredModel(for: id) as CanvasBoardItem?
         case "CanvasStrokeItem": return context.registeredModel(for: id) as CanvasStrokeItem?
         case "CanvasImageItem": return context.registeredModel(for: id) as CanvasImageItem?

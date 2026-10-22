@@ -543,6 +543,10 @@ final class AppCoordinator: ObservableObject {
             try? TaskNotePreviewSeed.seedOwnerPreview(in: container)
             try? TaskNoteLifecyclePreviewSeed.seed(in: container)
         }
+        // Phase 3 slice 2: "Attic Task Files"'s samples, for captures.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "taskfiles" {
+            try? TaskNotePreviewSeed.seedOwnerPreview(in: container)
+        }
         #endif
         // Preview builds only (owner, 2026-10-01): a fresh preview identity
         // opens on demo content, written into its own empty store once.
@@ -565,6 +569,11 @@ final class AppCoordinator: ObservableObject {
                         try TaskNotePreviewSeed.seedOwnerPreview(in: container)
                         try TaskNoteLifecyclePreviewSeed.seed(in: container)
                     }
+                    // "Attic Task Files" (slice 2): the task pages, then
+                    // legacy-attachment families once the stores exist.
+                    if runtime.bundleIdentifier == TaskFilesPreviewSeed.bundleIdentifier {
+                        try TaskNotePreviewSeed.seedOwnerPreview(in: container)
+                    }
                 } catch {
                     NSLog("Attic demo data: %@", error.localizedDescription)
                 }
@@ -580,8 +589,13 @@ final class AppCoordinator: ObservableObject {
         }
         // The heavy task's screenshots and PDFs (`p3-21`): the owner preview's
         // fresh store, and the in-memory UI-test seed used for captures.
-        if demoSeeded || (inMemoryStore && isUITesting && environment["ATTIC_UI_TEST_SEED"] == "tasknote") {
+        let taskFilesSeed = isUITesting ? (inMemoryStore && environment["ATTIC_UI_TEST_SEED"] == "taskfiles")
+            : (demoSeeded && runtime.bundleIdentifier == TaskFilesPreviewSeed.bundleIdentifier)
+        if demoSeeded || (inMemoryStore && isUITesting && ["tasknote", "taskfiles"].contains(environment["ATTIC_UI_TEST_SEED"] ?? "")) {
             Task { @MainActor in await TaskNotePreviewSeed.attachHeavyFiles(to: noteStore) }
+        }
+        if taskFilesSeed {
+            TaskFilesPreviewSeed.pending = Task { @MainActor in await TaskFilesPreviewSeed.seed(tasks: store) }
         }
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
@@ -617,13 +631,13 @@ final class AppCoordinator: ObservableObject {
         // delete) on the app's one undo route.
         noteDraft.pages.attachUndoRoute(library.undo)
         let shellTools = AgentShellTools()
-        let agentHandler = MCPRequestHandler(
-            tools: AgentTaskTools(
-                store: store, noteStore: noteStore, library: library,
-                settingsTools: AgentSettingsTools(settings: settings, loginItemService: loginItemService, undo: library.undo)
-            ),
-            shellTools: shellTools
+        let agentTools = AgentTaskTools(
+            store: store, noteStore: noteStore, library: library,
+            settingsTools: AgentSettingsTools(settings: settings, loginItemService: loginItemService, undo: library.undo)
         )
+        // Slice 2: the workspace tools run through the app's task-note pages.
+        agentTools.notesController = { [weak noteDraft] in noteDraft?.pages }
+        let agentHandler = MCPRequestHandler(tools: agentTools, shellTools: shellTools)
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
             agentServer = AgentServer(port: settings.agentServerPort,
@@ -730,6 +744,7 @@ final class AppCoordinator: ObservableObject {
 
         if isUITesting {
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PINNED"] == "1" { uiState.isPanelPinned = true }
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SEED"] == "taskfiles" { runTaskFileMigration() }
             // Phase 3 slice 0b's seeded entry point: a task's note over Notes.
             if let scenario = TaskNotePreviewSeed.requested(), let taskID = TaskNotePreviewSeed.seeded[scenario] {
                 uiState.selectSection(.notes)
@@ -970,6 +985,7 @@ final class AppCoordinator: ObservableObject {
                         if !self.isRunningTests { await self.store.sweepUnreferencedAttachmentStorage() }
                     })
             } catch { self.noteDraft.pages.recoveryStartupFailed(error) }
+            if !self.isRunningTests { self.runTaskFileMigration() }
         }
         if settings.quickCaptureEnabled { newTaskHotKey.register() }
         // Settings › General › Quick Capture (round 10): a new combination
@@ -1097,6 +1113,24 @@ final class AppCoordinator: ObservableObject {
         // bar focus request would take it back from the search field.
         guard hoverMonitor.revealProgrammatically(section: .tasks, focusesAddBar: false) == .shown else { return }
         uiState.requestSearch()
+    }
+
+    /// Phase 3 slice 2 (§ 13 "Safe running"): existing task attachments
+    /// move into their task's note in the background, once launch recovery
+    /// is done. A family whose note is open waits.
+    private func runTaskFileMigration() {
+        Task { @MainActor [weak self] in
+            await TaskFilesPreviewSeed.pending?.value
+            guard let self else { return }
+            let pages = self.noteDraft.pages
+            self.store.fileMigration.onNotesChanged = { [weak pages] in pages?.store.refresh() }
+            guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: self.store.container) else { return }
+            await self.store.fileMigration.runAtLaunch(tasks: self.store, isBusy: { [weak pages] root in
+                guard let pages else { return true }
+                return TaskFilesState.noteIsOpen(root, notes: pages, coordinator: coordinator)
+            })
+            pages.store.refresh()
+        }
     }
 
     func openSettings() {

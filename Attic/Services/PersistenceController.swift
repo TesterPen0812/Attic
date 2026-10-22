@@ -41,7 +41,9 @@ enum PersistenceController {
             TagColour.self,
             OperationReceipt.self,
             TaskNoteAssociation.self,
-            TaskDeletionPreservation.self
+            TaskDeletionPreservation.self,
+            // Phase 3 slice 2: task attachment migration records (§ 13).
+            TaskAttachmentMigrationRecord.self
         ]
         #else
         [

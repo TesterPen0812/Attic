@@ -248,13 +248,17 @@ final class NoteFileAttachment: NoteObjectAttachment {
 
     override var isBlockObject: Bool { true }
     static let cardHeight: CGFloat = AtticNoteObjectMetrics.cardHeight
+    /// Drawn as the block card (a task's note, slice 2): the column's
+    /// width and the header's height.
+    var isBlockCard = false
 
     override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
                                    textContainer: NSTextContainer?, proposedLineFragment: CGRect,
                                    position: CGPoint) -> CGRect {
         let padding = textContainer?.lineFragmentPadding ?? 0
-        return CGRect(x: 0, y: 0, width: min(300, max(40, proposedLineFragment.width - padding * 2)),
-                      height: Self.cardHeight)
+        let column = max(40, proposedLineFragment.width - padding * 2)
+        if isBlockCard { return CGRect(x: 0, y: 0, width: column, height: AtticNoteObjectMetrics.blockCardHeight) }
+        return CGRect(x: 0, y: 0, width: min(300, column), height: Self.cardHeight)
     }
 
     override var accessibilityDescription: String {
@@ -357,13 +361,15 @@ final class NoteObjectRenderer {
             ?? NSImage(size: size)
     }
 
-    /// The card's width: the column, at most 300 (the card's bounds).
+    /// The card's width: the column, at most 300 (the card's bounds); a
+    /// block card spans the column.
     var fileCardWidth: CGFloat { min(300, max(40, columnWidth())) }
 
     func fileCard(_ face: AtticNoteObjectFace) -> NSImage {
-        let width = fileCardWidth
+        let block = face.header != nil
+        let width = block ? max(40, columnWidth()) : fileCardWidth
         return render(AtticNoteFileCard(face: face, width: width))
-            ?? NSImage(size: CGSize(width: width, height: NoteFileAttachment.cardHeight))
+            ?? NSImage(size: CGSize(width: width, height: block ? AtticNoteObjectMetrics.blockCardHeight : NoteFileAttachment.cardHeight))
     }
 
     /// An image that cannot be shown, in its reserved size.
@@ -409,6 +415,7 @@ final class NoteObjectRenderer {
             let size = ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)
             let face = faceProvider?(file) ?? AtticNoteObjectFace(kind: .file, name: file.filename, detail: size,
                 systemImage: AtticNoteObjectFace.systemImage(forContentType: file.contentTypeIdentifier))
+            file.isBlockCard = face.header != nil
             file.renderedImage = fileCard(face)
         default:
             break

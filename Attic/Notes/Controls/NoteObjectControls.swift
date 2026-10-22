@@ -133,7 +133,7 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         selectionView.show(objectRect: rect, resizable: resizable,
                            // The object's own corners (F-06b): the card's 10;
                            // a picture's 8 (U-24: the same rounded ring).
-                           cornerRadius: object is NoteFileAttachment ? AtticNoteObjectMetrics.cardRadius : AtticRadius.image,
+                           cornerRadius: (object as? NoteFileAttachment).map { $0.isBlockCard ? AtticNoteObjectMetrics.blockRadius : AtticNoteObjectMetrics.cardRadius } ?? AtticRadius.image,
                            in: textView)
         if selectionView.isHidden || selectionView.alphaValue < 1 { fade(selectionView, in: true) }
     }
@@ -210,6 +210,21 @@ final class NoteObjectControls: NSObject, NoteObjectInteraction {
         // An action drawn on the object.
         if let face = engine.objectFace(for: object) {
             let local = CGPoint(x: point.x - rect.minX, y: point.y - rect.minY)
+            // A block card's header (a task's note): Quick Look, or ⋯ for
+            // the file's menu, where they are drawn.
+            switch AtticNoteObjectLayout.headerAction(at: local, face: face, size: rect.size) {
+            case .quickLook?:
+                textView.setSelectedRange(range)
+                run(.quickLook, objectID: object.objectID)
+                return true
+            case .more?:
+                textView.setSelectedRange(range)
+                let frame = AtticNoteObjectLayout.headerActions(in: rect.size).first { $0.0 == .more }?.1 ?? .zero
+                let anchor = frame.offsetBy(dx: rect.minX, dy: rect.minY)
+                AtticNativeMenu.popUpContextMenu(objectCommands(for: object.objectID), below: anchor, in: textView)
+                return true
+            case nil: break
+            }
             let actions = engine.inlineActions(for: object)
             if let index = AtticNoteObjectLayout.action(at: local, face: face, size: rect.size), index < actions.count {
                 textView.setSelectedRange(range)

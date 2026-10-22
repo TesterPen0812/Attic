@@ -24,6 +24,16 @@ struct AtticNoteObjectFace: Equatable {
     /// The actions drawn on the object, most important first. Those that do
     /// not fit are left off the face; the menu and VoiceOver have them all.
     var actions: [String] = []
+    /// The block card's header label (a task's note, slice 2): the type,
+    /// "PDF". nil draws today's card.
+    var header: String? = nil
+
+    /// The header's type label: the file's extension, upper case ("PDF").
+    static func kindLabel(contentType identifier: String, filename: String) -> String {
+        let fromName = (filename as NSString).pathExtension
+        let raw = UTType(identifier)?.preferredFilenameExtension ?? (fromName.isEmpty ? nil : fromName)
+        return raw.map { $0.uppercased() } ?? String(localized: "File")
+    }
 
     /// The type's glyph for a file card.
     static func systemImage(forContentType identifier: String) -> String {
@@ -79,7 +89,37 @@ enum AtticNoteObjectLayout {
     }
 
     static func placement(of face: AtticNoteObjectFace, in size: CGSize) -> Placement {
-        face.kind == .file ? card(face, size: size) : imageFailure(face, size: size)
+        guard face.kind == .file else { return imageFailure(face, size: size) }
+        return face.header == nil ? card(face, size: size) : blockCard(face, size: size)
+    }
+
+    /// The block card's body: the same lines as the card, under its header.
+    private static func blockCard(_ face: AtticNoteObjectFace, size: CGSize) -> Placement {
+        let m = AtticNoteObjectMetrics.self
+        let x = m.cardPadding + m.cardIconSlot + m.cardIconGap
+        let maxX = size.width - m.cardPadding
+        let width = min(textWidth(face.detail), max(0, maxX - x))
+        let message = CGRect(x: x, y: m.blockSecondLine - 8, width: width, height: 16)
+        let chips = chips(face.actions, from: x + width + m.messageGap, centerY: m.blockSecondLine, maxX: maxX)
+        return Placement(message: message, glyph: nil, chips: chips)
+    }
+
+    /// The block card's header actions, right-aligned: Quick Look (its eye
+    /// and name), then ⋯ (the file's menu).
+    enum HeaderAction: Equatable { case quickLook, more }
+
+    static func headerActions(in size: CGSize) -> [(HeaderAction, CGRect)] {
+        let m = AtticNoteObjectMetrics.self
+        let moreWidth: CGFloat = 20
+        let more = CGRect(x: size.width - m.cardPadding - moreWidth, y: 4, width: moreWidth, height: m.blockHeaderHeight - 8)
+        let lookWidth = textWidth(String(localized: "Quick Look")) + m.blockHeaderGlyph + 4 + 8
+        let look = CGRect(x: more.minX - m.blockHeaderGap - lookWidth, y: 4, width: lookWidth, height: m.blockHeaderHeight - 8)
+        return [(.quickLook, look), (.more, more)]
+    }
+
+    static func headerAction(at point: CGPoint, face: AtticNoteObjectFace, size: CGSize) -> HeaderAction? {
+        guard face.header != nil, point.y < AtticNoteObjectMetrics.blockHeaderHeight else { return nil }
+        return headerActions(in: size).first { $0.1.insetBy(dx: -3, dy: -3).contains(point) }?.0
     }
 
     /// A file card: the name on the first line, the detail on the second,
@@ -150,13 +190,60 @@ struct AtticNoteFileCard: View {
 
     @Environment(\.atticDesign) private var design
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if face.header != nil { blockBody } else { cardBody }
+    }
+
+    /// The block card (a task's note): `p3-19` column 2 with today's ink.
+    private var blockBody: some View {
+        let m = AtticNoteObjectMetrics.self
+        let size = CGSize(width: width, height: m.blockCardHeight)
+        let placement = AtticNoteObjectLayout.placement(of: face, in: size)
+        let shape = RoundedRectangle(cornerRadius: m.blockRadius, style: .continuous)
+        let nameX = m.cardPadding + m.cardIconSlot + m.cardIconGap
+        let actions = AtticNoteObjectLayout.headerActions(in: size)
+        return ZStack(alignment: .topLeading) {
+            shape.fill(design.tokens.recessed.color)
+            if let border = design.tokens.recessedBorder {
+                shape.strokeBorder(border.color, lineWidth: 1)
+            }
+            AtticText(verbatim: face.header ?? "", style: .chipLabel, ink: .helper)
+                .frame(height: m.blockHeaderHeight, alignment: .leading)
+                .offset(x: m.cardPadding)
+            if let look = actions.first(where: { $0.0 == .quickLook })?.1 {
+                HStack(spacing: 4) {
+                    AtticIcon(systemName: "eye", size: m.blockHeaderGlyph, weight: .regular, ink: .helper)
+                    AtticText(verbatim: String(localized: "Quick Look"), style: .chipLabel, ink: .helper)
+                }
+                .frame(width: look.width, height: look.height)
+                .offset(x: look.minX, y: look.minY)
+            }
+            if let more = actions.first(where: { $0.0 == .more })?.1 {
+                AtticIcon(systemName: "ellipsis", size: 12, weight: .regular, ink: .helper)
+                    .frame(width: more.width, height: more.height)
+                    .offset(x: more.minX, y: more.minY)
+            }
+            AtticIcon(systemName: face.systemImage, size: m.cardIcon, weight: .regular, ink: face.glyphInk)
+                .frame(width: m.cardIconSlot, height: 32)
+                .offset(x: m.cardPadding, y: m.blockHeaderHeight)
+            AtticText(verbatim: face.name, style: .chipLabel, ink: .body, truncates: true)
+                .frame(width: max(0, size.width - nameX - m.cardPadding), height: 16, alignment: .leading)
+                .offset(x: nameX, y: m.blockFirstLine - 8)
+            AtticText(verbatim: face.detail, style: .chipLabel, ink: face.ink)
+                .frame(width: placement.message.width + 1, height: placement.message.height, alignment: .leading)
+                .offset(x: placement.message.minX, y: placement.message.minY)
+            AtticNoteObjectChips(titles: face.actions, frames: placement.chips)
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    private var cardBody: some View {
         let m = AtticNoteObjectMetrics.self
         let size = CGSize(width: width, height: AtticNoteObjectMetrics.cardHeight)
         let placement = AtticNoteObjectLayout.placement(of: face, in: size)
         let shape = RoundedRectangle(cornerRadius: m.cardRadius, style: .continuous)
         let nameX = m.cardPadding + m.cardIconSlot + m.cardIconGap
-        ZStack(alignment: .topLeading) {
+        return ZStack(alignment: .topLeading) {
             shape.fill(design.tokens.recessed.color)
             if let border = design.tokens.recessedBorder {
                 shape.strokeBorder(border.color, lineWidth: 1)

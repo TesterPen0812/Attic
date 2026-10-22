@@ -262,7 +262,7 @@ final class AgentServer: ObservableObject {
                 connection.cancel()
                 return
             }
-            let result = self.handler.handle(
+            let result = await self.handler.handleAsync(
                 body: request.body,
                 protocolVersion: request.headers["mcp-protocol-version"]
             )

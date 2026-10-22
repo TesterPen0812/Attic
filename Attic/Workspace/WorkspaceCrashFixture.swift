@@ -63,6 +63,38 @@ enum WorkspaceCrashFixture {
         await files.remove(try purgeFiles(root))
         return result.outcome
     }
+    /// § 13 migration: a family with a shown image, a shown PDF, a child's
+    /// file and a removed file, its originals in the fixture's `TaskFiles`.
+    static func migrationFiles(_ root: URL) throws -> [TaskImageReference] {
+        try JSONDecoder().decode([TaskImageReference].self, from: Data(contentsOf: root.appendingPathComponent("migration-files.json")))
+    }
+    static func seedMigration(_ root: URL) async throws {
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+        var inputs: [URL] = []
+        for name in ["shot.png", "Spec.pdf", "child.txt", "removed.txt"] {
+            let input = root.appendingPathComponent(name)
+            if name.hasSuffix(".png") { try AtticDemoData.demoImage().write(to: input) } else { try Data((name + " bytes").utf8).write(to: input) }
+            inputs.append(input)
+        }
+        let references = try await files.importAttachments(inputs, existing: [])
+        try JSONEncoder().encode(references).write(to: root.appendingPathComponent("migration-files.json"))
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let context = ModelContext(container); context.autosaveEnabled = false
+        let parent = TaskItem(id: taskID, title: "Parent")
+        parent.imageReferencesData = try JSONEncoder().encode([references[0], references[1]])
+        parent.removedAttachmentsData = try JSONEncoder().encode([RemovedTaskAttachment(reference: references[3], removedAt: Date(timeIntervalSince1970: 1_700_000_000))])
+        let child = TaskItem(id: childID, title: "Child", parentID: taskID)
+        child.imageReferencesData = try JSONEncoder().encode([references[2]])
+        context.insert(parent); context.insert(child)
+        try context.save()
+    }
+    static func migrate(_ root: URL) async throws -> TaskAttachmentMigration.Outcome {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
+        try await coordinator.reconcileStartup()
+        return await TaskAttachmentMigration.migrate(rootID: taskID, coordinator: coordinator,
+            files: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")))
+    }
     static func journal(_ root: URL) -> NoteDraftJournal {
         NoteDraftJournal(directory: root.appendingPathComponent("NoteDrafts"))
     }

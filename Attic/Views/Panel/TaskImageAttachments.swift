@@ -272,6 +272,40 @@ enum TaskAttachmentActions {
         }
     }
 
+    /// Earlier files (§ 2.4): a disposable read-only copy, selected in
+    /// Finder. The private original is never handed out.
+    static func showCopyInFinder(_ reference: TaskImageReference, store: TaskStore, owner: UUID? = nil) {
+        Task {
+            do {
+                guard let url = try await store.taskImageFiles.openableCopy(for: reference) else {
+                    store.reportUnavailableAttachment(named: reference.filename, owner: owner)
+                    return
+                }
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                store.reportAttachmentOpenFailure(named: reference.filename, error: error, owner: owner)
+            }
+        }
+    }
+
+    /// Earlier files (§ 2.4): Export Copy… writes the verified bytes where
+    /// the person chooses.
+    static func exportCopy(_ reference: TaskImageReference, store: TaskStore, owner: UUID? = nil) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = AttachmentFileStore.sanitizedFilename(reference.filename)
+        panel.level = TaskAttachmentPickerSession.windowLevel
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        Task {
+            guard let source = await verifiedURL(reference, store: store, owner: owner) else { return }
+            do {
+                if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.trashItem(at: destination, resultingItemURL: nil) }
+                try FileManager.default.copyItem(at: source, to: destination)
+            } catch {
+                store.reportAttachmentOpenFailure(named: reference.filename, error: error, owner: owner)
+            }
+        }
+    }
+
     static func canOpen(_ reference: TaskImageReference) -> Bool {
         NoteAttachmentActions.isSafeToOpen(contentTypeIdentifier: reference.contentTypeIdentifier)
     }

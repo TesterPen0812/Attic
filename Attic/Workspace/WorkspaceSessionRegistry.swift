@@ -83,7 +83,7 @@ final class WorkspaceSessionRegistry {
 
     /// Resolve every physical alias conservatively. Divergent association
     /// replicas refuse instead of merging independently ordered workspaces.
-    private func resolve(_ identity: Identity) throws -> (Identity, UUID?) {
+    func resolve(_ identity: Identity) throws -> (Identity, UUID?) {
         guard let coordinator else { throw WorkspaceFoundationError.protectedOwner }
         let context = coordinator.freshContext()
         var noteRows = 0, associationRows = 0

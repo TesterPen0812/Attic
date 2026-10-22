@@ -63,3 +63,28 @@ final class TaskDeletionPreservation {
         self.capturedAt = capturedAt; self.provenance = provenance; self.snapshot = snapshot
     }
 }
+
+/// UX plan § 13: the migration record of one task family's legacy files
+/// (`id` is the top-level task's id). Replicas with the same id are one
+/// logical record (S10). Metadata only: the files' bytes stay owned at their
+/// attachment IDs, and the legacy lists and `TaskImages` bytes are never
+/// touched by the migration.
+@Model
+final class TaskAttachmentMigrationRecord {
+    var id: UUID = UUID()
+    var noteID: UUID = UUID()
+    var noteCreated: Bool = false
+    /// "migrated" or "reversed". A reversed family stays legacy until a
+    /// person moves its files again (reversal is never undone automatically).
+    var stateRaw: String = "migrated"
+    /// The source manifest (`TaskAttachmentMigration.Manifest`).
+    var manifestData: Data = Data()
+    /// The note before (`NoteState`), or "absent".
+    var beforeData: Data = Data()
+    /// The note after: revision, placement IDs, attachment IDs.
+    var afterData: Data = Data()
+    var build: String = ""
+    var createdAt: Date = Date()
+    var updatedAt: Date = Date()
+    init(id: UUID, noteID: UUID) { self.id = id; self.noteID = noteID }
+}

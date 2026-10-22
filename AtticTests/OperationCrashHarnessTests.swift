@@ -93,6 +93,63 @@ final class OperationCrashHarnessTests: XCTestCase {
             }
         }
     }
+    /// Phase 3 slice 2 (§ 13): a real process death at every migration
+    /// boundary leaves "not migrated" or "migrated", never a mix; launch
+    /// recovery plus the launch run then finish it exactly once.
+    func testM1MigrationCrashMatrixRecoversToOldOrNewAndFinishesOnce() async throws {
+        let points = ["M0-inventory", "M1-validation", "M2-bytes", "K0", "K1", "K2", "K3-validation", "M3-note", "M4-record",
+                      "K4", "K5", "K6-1", "M5-publication", "save-then-throw"]
+        let committedPoints: Set<String> = ["K5", "K6-1", "M5-publication", "save-then-throw"]
+        for point in points {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let seeded = try await runChild("seed-migration", root: root)
+            XCTAssertEqual(seeded, 73, point)
+            let crashed = try await runChild("migrate", root: root, point: point == "save-then-throw" ? nil : point,
+                                            saveThenThrow: point == "save-then-throw")
+            XCTAssertEqual(crashed, point == "save-then-throw" ? 73 : 86, point)
+            let references = try WorkspaceCrashFixture.migrationFiles(root)
+            let legacyRows = { (context: ModelContext) throws -> [Data?] in
+                try context.fetch(FetchDescriptor<TaskItem>()).sorted { $0.title < $1.title }.flatMap { [$0.imageReferencesData, $0.removedAttachmentsData] }
+            }
+            var legacy: [Data?]?
+            for reopen in 0..<2 {
+                let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))
+                try await coordinator.reconcileStartup()
+                let context = coordinator.freshContext()
+                let records = try context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>())
+                let notes = try context.fetch(FetchDescriptor<NoteItem>())
+                let rows = try context.fetch(FetchDescriptor<NoteAttachment>())
+                let committed = committedPoints.contains(point)
+                XCTAssertEqual(records.count, committed ? 1 : 0, "\(point) #\(reopen)")
+                XCTAssertEqual(notes.count, committed ? 1 : 0, "\(point) #\(reopen)")
+                XCTAssertEqual(rows.count, committed ? 4 : 0, "\(point) #\(reopen)")
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskNoteAssociation>()), committed ? 1 : 0, "\(point) #\(reopen)")
+                if legacy == nil { legacy = try legacyRows(context) } else { XCTAssertEqual(try legacyRows(context), legacy, point) }
+                if reopen == 1 {
+                    let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+                    let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: files)
+                    XCTAssertEqual(report.migrated, committed ? [] : [WorkspaceCrashFixture.taskID], point)
+                    let done = coordinator.freshContext()
+                    XCTAssertEqual(try done.fetchCount(FetchDescriptor<TaskAttachmentMigrationRecord>()), 1, point)
+                    let note = try XCTUnwrap(done.fetch(FetchDescriptor<NoteItem>()).first, point)
+                    let doc = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document }, point)
+                    XCTAssertEqual(doc.attachmentIDs, [references[0].id, references[1].id, references[2].id], point)
+                    let attachments = try done.fetch(FetchDescriptor<NoteAttachment>())
+                    XCTAssertEqual(Set(attachments.map(\.id)), Set(references.map(\.id)), point)
+                    XCTAssertEqual(attachments.count, 4, point)
+                    XCTAssertEqual(try legacyRows(done), legacy, "legacy lists stay untouched: \(point)")
+                    for reference in references {
+                        let exists = (try? await files.verifiedURL(for: reference)) != nil
+                        XCTAssertTrue(exists, "original kept: \(point)")
+                    }
+                }
+            }
+        }
+    }
+
     func testK8CoordinatedPurgeCrashesLeaveOnlyRecoverableExclusiveFileSurplus() async throws {
         let sentinel = FileManager.default.temporaryDirectory.appendingPathComponent("AtticPurgeSentinel-\(UUID())")
         let sentinelBytes = Data("outside purge fixture".utf8); try sentinelBytes.write(to: sentinel)

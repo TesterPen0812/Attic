@@ -391,7 +391,9 @@ enum WorkspacePurge {
             }, publication: .init(steps: materializationSteps + publication.steps))
             if outcome == .committed {
                 WorkspaceCrashHook.reach("K8-before-unlink")
-                await files.remove(references, collection: collection)
+                // § 13: a migration record keeps the legacy originals it covers.
+                let covered = (try? TaskAttachmentMigration.coveredAttachmentIDs(in: coordinator.freshContext())) ?? Set(references.map(\.id))
+                await files.remove(references.filter { !covered.contains($0.id) }, collection: collection)
             }
             return Result(outcome: outcome, operationID: envelope.id,
                 removedIDs: outcome == .committed || outcome == .publicationPending ? ids : [], preservationID: preservationID,

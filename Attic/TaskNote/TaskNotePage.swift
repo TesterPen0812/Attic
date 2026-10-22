@@ -137,7 +137,8 @@ final class TaskNotePresenter: ObservableObject {
     private static func blockView(_ model: TaskNotePageModel, design: AtticDesignContext, menus: TaskNoteMenuRelay) -> AnyView {
         return AnyView(TaskNoteSubtasksBlock(model: model, restoreNote: { menus.restoreNote() },
                                                      subtaskMenu: { menus.subtaskMenu($0) },
-                                                     reviewAlternate: { menus.reviewAlternate() })
+                                                     reviewAlternate: { menus.reviewAlternate() },
+                                                     earlierFiles: { menus.earlierFiles() })
             .environment(\.atticDesign, design).atticKeyboardFocusTracking(focusTracker))
     }
 
@@ -193,6 +194,7 @@ final class TaskNotePresenter: ObservableObject {
         menus.restoreNote = {}
         menus.subtaskMenu = { _ in [] }
         menus.reviewAlternate = { [] }
+        menus.earlierFiles = { [] }
         model.suspend()
         host.invalidate()
         if let session {
@@ -226,6 +228,8 @@ final class TaskNoteMenuRelay {
     var subtaskMenu: (UUID) -> [AtticMenuCommand] = { _ in [] }
     /// S10's Review menu.
     var reviewAlternate: () -> [AtticMenuCommand] = { [] }
+    /// Earlier files' menu (§ 2.4, § 13).
+    var earlierFiles: () -> [AtticMenuCommand] = { [] }
 }
 
 /// Where a task's page lives (OD-1: one place at a time).
@@ -495,6 +499,8 @@ struct TaskNotePage: View {
         presenter.menus.restoreNote = { restoreNote() }
         presenter.menus.subtaskMenu = { id in subtaskCommands(id) }
         presenter.menus.reviewAlternate = { reviewCommands() }
+        presenter.menus.earlierFiles = { earlierFileCommands() }
+        model.refreshEarlierFiles()
     }
 
     /// The note's ⋯: Insert and Format, then the note's own commands.
@@ -561,6 +567,11 @@ struct TaskNotePage: View {
                 model.requestFocus(.add)
             }.identified("task-note-task-add-subtask"))
         }
+        // § 2.4: the task's files are its note's; they go at the end.
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Add Files to Note…"),
+                                         isDisabled: presenter.session?.isReadOnly == true, startsSection: true) {
+            addFilesToNote()
+        }.identified("task-note-task-add-files"))
         commands.append(contentsOf: placementCommands(startsSection: true))
         commands.append(AtticMenuCommand(verbatim: String(localized: "Delete Task…"), isDestructive: true, startsSection: true) {
             confirming = .deleteTask
@@ -672,6 +683,76 @@ struct TaskNotePage: View {
             AtticMenuCommand(verbatim: String(localized: "Delete Subtask"), shortcut: AtticTaskShortcut.delete,
                              isDestructive: true, startsSection: true) { model.delete(id) }.identified("task-note-subtask-delete"),
         ]
+    }
+
+    /// Add Files to Note… (§ 2.4): the picker, then the same import as a
+    /// drop on the row; the files go at the end of the note.
+    private func addFilesToNote() {
+        let taskID = presenter.taskID, store = model.store, controller = controller, model = model
+        TaskAttachmentPickerSession.present(owner: taskID) { urls in
+            guard !urls.isEmpty else { return }
+            Task { @MainActor in
+                if !(await TaskNoteFiles.importFiles(urls, to: taskID, tasks: store, controller: controller)) {
+                    model.reportUnavailable(String(localized: "Couldn't add the files to the note"))
+                }
+            }
+        }
+    }
+
+    /// Earlier files (§ 2.4, § 13): the reason, Move into Note when the
+    /// limits allow, then each file with Quick Look, Open, Show Copy in
+    /// Finder, Export Copy… and Remove, as on the old files list.
+    func earlierFileCommands() -> [AtticMenuCommand] {
+        let status = model.earlierFiles
+        guard !status.earlier.isEmpty else { return [] }
+        let store = model.store, taskID = model.taskID, library = model.library
+        var commands: [AtticMenuCommand] = []
+        if let reason = status.refusal?.reason {
+            commands.append(AtticMenuCommand(verbatim: String(localized: "Not in the note: \(reason)"), isDisabled: true) {})
+        }
+        let movable = status.refusal.map(\.allowsMove) ?? true
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Move into Note"),
+                                         isDisabled: !movable || presenter.session?.isReadOnly == true) {
+            moveEarlierFilesIntoNote()
+        }.identified("task-note-earlier-move"))
+        for (index, file) in status.earlier.enumerated() {
+            commands.append(.submenu(file.filename, startsSection: index == 0, [
+                AtticMenuCommand(verbatim: String(localized: "Quick Look")) { TaskAttachmentActions.preview(file, store: store, owner: taskID) },
+                AtticMenuCommand(verbatim: String(localized: "Open"), isDisabled: !TaskAttachmentActions.canOpen(file)) {
+                    TaskAttachmentActions.open(file, store: store, owner: taskID)
+                },
+                AtticMenuCommand(verbatim: String(localized: "Show Copy in Finder")) { TaskAttachmentActions.showCopyInFinder(file, store: store, owner: taskID) },
+                AtticMenuCommand(verbatim: String(localized: "Export Copy…")) { TaskAttachmentActions.exportCopy(file, store: store, owner: taskID) },
+                AtticMenuCommand(verbatim: String(localized: "Remove"), isDestructive: true, startsSection: true) {
+                    let holder = TaskAttachmentMigration.holder(of: file.id, rootID: taskID, in: store) ?? taskID
+                    _ = library.removeTaskAttachment(file.id, from: holder)
+                    store.fileMigration.refreshAfterLegacyChange(taskID, tasks: store)
+                },
+            ]))
+        }
+        return commands
+    }
+
+    /// Move into Note: the page lets go of the note, the family's files
+    /// move in one operation, and the page opens again (the same handoff as
+    /// Restore Note).
+    private func moveEarlierFilesIntoNote() {
+        let taskID = presenter.taskID, store = model.store, reopen = onReopen, model = model
+        Task { @MainActor in
+            guard await presenter.close() else {
+                model.reportUnavailable(String(localized: "Couldn't move the files: the note is in use"))
+                return
+            }
+            let outcome = await store.fileMigration.moveIntoNote(taskID, tasks: store)
+            reopen()
+            // Success shows in the note itself; a refusal says why in the
+            // status slot (Earlier files keeps the files).
+            switch outcome {
+            case .migrated, .reconciled, .unchanged: break
+            case let .refused(refusal): model.reportUnavailable(String(localized: "Couldn't move the files: \(refusal.reason)"))
+            case .deferred: model.reportUnavailable(String(localized: "Couldn't move the files now"))
+            }
+        }
     }
 
     /// S10's Review (`p3-12` states): the oldest other note first.

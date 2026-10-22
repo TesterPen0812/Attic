@@ -547,6 +547,7 @@ enum WorkspaceLegacyBridge {
             case "TaskNoteAssociation": entity = .association
             case "TaskDeletionPreservation": entity = .preservation
             case "OperationReceipt": entity = .receipt
+            case "TaskAttachmentMigrationRecord": entity = .migration
             case "CanvasBoardItem": entity = .board
             case "CanvasStrokeItem": entity = .stroke
             case "CanvasImageItem": entity = .image
@@ -567,6 +568,7 @@ enum WorkspaceLegacyBridge {
         try include(NotePendingEdit.self, name: "NotePendingEdit"); try include(ItemLink.self, name: "ItemLink")
         try include(TaskNoteAssociation.self, name: "TaskNoteAssociation"); try include(TaskDeletionPreservation.self, name: "TaskDeletionPreservation")
         try include(OperationReceipt.self, name: "OperationReceipt")
+        try include(TaskAttachmentMigrationRecord.self, name: "TaskAttachmentMigrationRecord")
         if includeCanvas {
             try include(CanvasBoardItem.self, name: "CanvasBoardItem")
             try include(CanvasStrokeItem.self, name: "CanvasStrokeItem"); try include(CanvasImageItem.self, name: "CanvasImageItem")
@@ -588,6 +590,7 @@ enum WorkspaceLegacyBridge {
         case .association: TaskNoteAssociation(taskID: UUID(), noteID: UUID())
         case .preservation: TaskDeletionPreservation(rootID: UUID(), deletedAt: Date(), capturedAt: Date(), provenance: "", snapshot: Data())
         case .receipt: OperationReceipt(id: UUID(), envelopeDigest: "", affectedIDs: Data(), resultingTokens: Data())
+        case .migration: TaskAttachmentMigrationRecord(id: UUID(), noteID: UUID())
         case .board: CanvasBoardItem()
         case .stroke: CanvasStrokeItem()
         case .image: CanvasImageItem()

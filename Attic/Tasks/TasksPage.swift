@@ -2173,6 +2173,12 @@ struct TasksPage: View {
                                          startsSection: true) {
                 openTaskNote(menuRowID(key))
             })
+            // § 2.4: a task's files are its note's (D4).
+            if let choose = model.services.chooseFilesForNote {
+                list.append(AtticMenuCommand(verbatim: String(localized: "Add Files to Note…")) {
+                    choose(menuRowID(key))
+                })
+            }
         }
         if single, tab != .done {
             var more = [AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files") : String(localized: "Show Files"),

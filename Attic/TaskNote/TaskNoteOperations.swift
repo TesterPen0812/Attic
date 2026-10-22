@@ -348,13 +348,27 @@ extension TaskNotePresenter {
         guard let session, lease != nil, !session.isReadOnly, session.isPersisted else {
             return .refused(String(localized: "Couldn't merge the notes"))
         }
-        guard notes.store.attachments(for: alternateID).isEmpty else {
-            return .refused(String(localized: "That note has files: keep it as a separate note"))
-        }
         guard let loaded = notes.store.loadDocument(noteID: alternateID), let other = loaded.content.document,
               other.isWritableByThisBuild else {
             return .refused(String(localized: "That note can't be merged here"))
         }
+        // Slice 2 (S10): the other note's files move with its writing, through
+        // the transfer path (their rows change owner in the same commit). The
+        // combined note must stay within the limits.
+        let moving = Set(other.attachmentIDs)
+        let ownShown = Set(notes.store.loadDocument(noteID: session.noteID)?.content.document?.attachmentIDs ?? [])
+        if !moving.isEmpty {
+            guard ownShown.union(moving).count <= AttachmentLimits.maxAttachmentsPerNote else {
+                return .refused(String(localized: "The merged note would exceed 20 files: keep it as a separate note"))
+            }
+            var sizes: [UUID: Int64] = [:]
+            for row in notes.store.attachments(for: alternateID) + notes.store.attachments(for: session.noteID)
+            where moving.contains(row.id) || ownShown.contains(row.id) { sizes[row.id] = max(sizes[row.id] ?? 0, row.byteCount) }
+            guard sizes.values.reduce(0, +) <= AttachmentLimits.maxBytesPerNote else {
+                return .refused(String(localized: "The merged note would exceed 100 MB: keep it as a separate note"))
+            }
+        }
+        let ownID = session.noteID
         let engine = session.engine
         guard engine.textView?.hasMarkedText() != true, engine.activity == .idle else {
             return .refused(String(localized: "Finish typing first"))
@@ -364,14 +378,14 @@ extension TaskNotePresenter {
               let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else {
             return .refused(String(localized: "Couldn't save the note first"))
         }
-        // Its body (block 0 is its title snapshot or title).
+        // Its body (block 0 is its title snapshot or title), after this
+        // note's body. The whole body is encoded at once, so every line has
+        // the spacing the editor gives it in place (a line after a file card
+        // differs), and the step's Undo finds exactly what was installed.
         let body = Array(other.blocks.dropFirst())
-        let added = engine.bodyText(for: body)
-        let candidate = NSMutableAttributedString(attributedString: source)
-        if source.length > 0, added.length > 0 {
-            candidate.append(NSAttributedString(string: "\n", attributes: added.attributes(at: 0, effectiveRange: nil)))
-        }
-        candidate.append(added)
+        var own = Array(engine.document().blocks.dropFirst())
+        if own.count == 1, own[0].kind == .text, own[0].text.isEmpty { own = [] }
+        let candidate = NSMutableAttributedString(attributedString: engine.bodyText(for: own + body))
         let selection = engine.textView?.selectedRange() ?? NSRange(location: 0, length: 0)
         let edit = TaskNoteTextEdit(engine: engine, session: session, notes: notes, tasks: tasks,
                                     coordinator: coordinator, history: page.history, noteID: session.noteID,
@@ -383,15 +397,33 @@ extension TaskNotePresenter {
             let now = Date()
             for row in rows { row.deletedAt = deleted ? now : nil; row.deletedAttachmentIDsRaw = nil }
         }
+        /// The transfer path: every physical replica of each moved file
+        /// changes owner, shown in its new note; nothing is copied or deleted.
+        let movingIDs = Array(moving)
+        func transfer(into merged: Bool, in commit: ModelContext) throws {
+            guard !movingIDs.isEmpty else { return }
+            let rows = try commit.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { movingIDs.contains($0.id) }))
+            let from = merged ? alternateID : ownID, to = merged ? ownID : alternateID
+            guard Set(rows.map(\.id)) == moving, rows.allSatisfy({ $0.noteID == from }) else { throw WorkspaceFoundationError.conflict }
+            WorkspaceLegacyBridge.prepareMutations(rows, in: commit)
+            let now = Date()
+            for row in rows { row.noteID = to; row.deletedAt = nil; row.updatedAt = now }
+        }
         let entry = UUID()
         let owner = WorkspaceOwner(entity: .note, id: alternateID)
+        let writes = Set([owner] + movingIDs.map { WorkspaceOwner(entity: .attachment, id: $0) })
         let outcome = await edit.perform(name: String(localized: "Merge Notes"), candidate: candidate, entryID: entry,
-            forwardWrites: [owner], forward: { try stageDeleted(true, in: $0) },
+            forwardWrites: writes, forward: { try transfer(into: true, in: $0); try stageDeleted(true, in: $0) },
             inverse: { redo in
-                TaskNoteTextEdit.TaskStep(writes: [owner], check: { context in
+                TaskNoteTextEdit.TaskStep(writes: writes, check: { context in
                     let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == alternateID }))
                     guard !rows.isEmpty, rows.allSatisfy({ ($0.deletedAt == nil) == redo }) else { throw WorkspaceFoundationError.conflict }
-                }, preservations: [:], stage: { commit, _ in try stageDeleted(redo, in: commit) })
+                    let files = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { movingIDs.contains($0.id) }))
+                    guard files.allSatisfy({ $0.noteID == (redo ? alternateID : ownID) }) else { throw WorkspaceFoundationError.conflict }
+                }, preservations: [:], stage: { commit, _ in
+                    try transfer(into: redo, in: commit)
+                    try stageDeleted(redo, in: commit)
+                })
             })
         switch outcome {
         case .committed, .publicationPending:

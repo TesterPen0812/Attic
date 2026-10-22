@@ -385,6 +385,9 @@ final class TaskStore: ObservableObject {
     private let now: () -> Date
     let taskImageFiles: TaskImageFiles
     @Published private(set) var importingAttachmentTaskIDs: Set<UUID> = []
+    /// Phase 3 slice 2: which families' files are in their note, and their
+    /// Earlier files (UX plan § 2.4, § 13).
+    let fileMigration = TaskFilesState()
     private let persist: (ModelContext) throws -> Void
     private(set) var remoteChangeObservation: AnyCancellable?
     private(set) var cloudKitEventObservation: AnyCancellable?
@@ -1777,6 +1780,9 @@ final class TaskStore: ObservableObject {
                 referencedIDs.formUnion(removed.map(\.reference.id))
             }
         }
+        // § 13: originals a migration record covers stay until an approved,
+        // separate step deletes them.
+        referencedIDs.formUnion(try TaskAttachmentMigration.coveredAttachmentIDs(in: context))
         return referencedIDs
     }
 

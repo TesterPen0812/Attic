@@ -89,7 +89,7 @@ enum TaskNotePreviewSeed {
     }
 
     /// A one-page PDF with a line of text (the preview's sample files).
-    private static func pdf(_ text: String) throws -> Data {
+    static func pdf(_ text: String) throws -> Data {
         let data = NSMutableData()
         var box = CGRect(x: 0, y: 0, width: 420, height: 297)
         guard let consumer = CGDataConsumer(data: data as CFMutableData),

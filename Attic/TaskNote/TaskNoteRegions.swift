@@ -217,6 +217,8 @@ struct TaskNoteSubtasksBlock: View {
     var subtaskMenu: (UUID) -> [AtticMenuCommand] = { _ in [] }
     /// S10's Review: Merge into This Note, Keep as Separate Note.
     var reviewAlternate: () -> [AtticMenuCommand] = { [] }
+    /// Earlier files' menu: Move into Note, then each file's actions.
+    var earlierFiles: () -> [AtticMenuCommand] = { [] }
 
     /// What has the keyboard inside the block.
     enum Field: Hashable { case row(UUID), add }
@@ -231,6 +233,7 @@ struct TaskNoteSubtasksBlock: View {
             blockShape
             if model.deletedNote { deletedNoteLine }
             if !model.alternateNotes.isEmpty { alternateNoteLine }
+            if !model.earlierFiles.earlier.isEmpty { earlierFilesLine }
         }
             // The native host commits the arithmetic block height at once.
             // A SwiftUI fold transition would animate inside that final
@@ -286,6 +289,33 @@ struct TaskNoteSubtasksBlock: View {
         .frame(height: TaskNoteMetrics.noticeHeight, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task-note-alternate-note")
+    }
+
+    /// § 5.6 "Migration incomplete": "Earlier files · 3 · the note would
+    /// exceed 20 files", with the files and Move into Note in its menu.
+    private var earlierFilesLine: some View {
+        let status = model.earlierFiles
+        return HStack(spacing: 6) {
+            Menu {
+                AtticMenuItems(commands: earlierFiles())
+            } label: {
+                Text(String(localized: "Earlier files · \(status.earlier.count)"))
+                    .font(Font(AtticTextStyle.rowMeta.nsFont).weight(.semibold))
+                    .foregroundStyle(design.tokens.color(.heading))
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityIdentifier("task-note-earlier-files-menu")
+            if let reason = status.refusal?.reason ?? (status.kind == .legacy ? String(localized: "not moved into the note yet") : nil) {
+                AtticText(verbatim: "·", style: .rowMeta, ink: .helper)
+                AtticText(verbatim: reason, style: .rowMeta, ink: .helper, truncates: true)
+            }
+        }
+        .frame(height: TaskNoteMetrics.noticeHeight, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("task-note-earlier-files")
     }
 
     /// The block's shape (`p3-19` column 2): radius 17, the recessed fill;

@@ -1,0 +1,405 @@
+import AppKit
+import SwiftData
+import XCTest
+@testable import Attic
+
+/// Phase 3 slice 2, "files and migration" (UX plan § 2.4, § 5.6, § 13; S9,
+/// S10, S11): rows, the task's page, block file cards, Merge into This Note
+/// with files, and the asynchronous agent path, on in-memory stores.
+@MainActor
+final class TaskFilesSliceTests: XCTestCase {
+    private var container: ModelContainer!
+    private var tasks: TaskStore!
+    private var library: AtticLibrary!
+    private var notes: NotesPageController!
+    private var coordinator: WorkspaceOperationCoordinator!
+    private var filesRoot: URL!
+    private var windows: [NSWindow] = []
+    private var presenters: [TaskNotePresenter] = []
+
+    override func setUp() async throws {
+        container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        coordinator = try WorkspaceLegacyBridge.coordinator(for: container)
+        filesRoot = FileManager.default.temporaryDirectory.appendingPathComponent("TaskFilesSlice-\(UUID().uuidString)")
+        makeStores()
+    }
+
+    override func tearDown() async throws {
+        for presenter in presenters where presenter.lease != nil { _ = await presenter.close() }
+        presenters.removeAll()
+        windows.forEach { $0.close() }
+        windows.removeAll()
+        notes = nil; library = nil; tasks = nil; coordinator = nil; container = nil
+        // Materialized originals are read-only by design; make them
+        // removable, then remove only this test's own folder.
+        if let enumerator = FileManager.default.enumerator(at: filesRoot, includingPropertiesForKeys: nil) {
+            for case let url as URL in enumerator { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path) }
+        }
+        try? FileManager.default.removeItem(at: filesRoot)
+    }
+
+    private func makeStores() {
+        tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: filesRoot))
+        library = AtticLibrary(tasks: tasks)
+        notes = NotesPageController(store: NoteStore(container: container,
+                                                     attachmentFileStore: AttachmentFileStore(rootURL: filesRoot.appendingPathComponent("NoteFiles"))),
+                                    journal: coordinator.journal, defaults: nil,
+                                    saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        notes.attachUndoRoute(library.undo)
+        tasks.fileMigration.onNotesChanged = { [weak notes] in notes?.store.refresh() }
+    }
+
+    private func legacyFiles(_ names: [String]) async throws -> [TaskImageReference] {
+        let folder = filesRoot.appendingPathComponent("in-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let urls = try names.map { name -> URL in
+            let url = folder.appendingPathComponent(name)
+            if name.hasSuffix(".png") { try AtticDemoData.demoImage().write(to: url) } else { try Data("\(name) \(UUID())".utf8).write(to: url) }
+            return url
+        }
+        return try await tasks.taskImageFiles.importAttachments(urls, existing: [])
+    }
+
+    @discardableResult
+    private func legacyTask(_ title: String, shown: [TaskImageReference], removed: [TaskImageReference] = []) throws -> UUID {
+        let context = ModelContext(container)
+        let row = TaskItem(title: title, manualOrder: Int64.random(in: 1...1_000_000))
+        row.listOrderVersion = TaskItem.currentListOrderVersion
+        row.imageReferencesData = try JSONEncoder().encode(shown)
+        if !removed.isEmpty { row.removedAttachmentsData = try JSONEncoder().encode(removed.map { RemovedTaskAttachment(reference: $0, removedAt: Date()) }) }
+        context.insert(row)
+        try context.save()
+        tasks.refresh()
+        return row.id
+    }
+
+    private func open(_ taskID: UUID) throws -> TaskNotePresenter {
+        let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
+                                              design: .default, columnInset: 28, defaults: nil)
+        presenters.append(presenter)
+        let host = presenter.host
+        host.setContentInsets(top: 76, bottom: 60)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        host.scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 520)
+        window.contentView = host.scrollView
+        windows.append(window)
+        host.restack()
+        host.textView.window?.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date())
+        return presenter
+    }
+
+    private func close(_ presenter: TaskNotePresenter) async {
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+        presenters.removeAll { $0 === presenter }
+    }
+
+    private func document(_ noteID: UUID) throws -> NoteDocument {
+        let row = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first)
+        return try XCTUnwrap(row.content.flatMap { NoteContentCodec.decode($0).document })
+    }
+
+    private func ownNote(_ taskID: UUID) throws -> UUID? {
+        try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.taskID == taskID && $0.deletedAt == nil }?.id
+    }
+
+    // MARK: Rows: the paperclip retires only for migrated families
+
+    func testARowsPaperclipRetiresOnceItsFilesAreInItsNoteAndUnmigratedRowsLookAsOnMain() async throws {
+        let refs = try await legacyFiles(["a.png", "b.txt"])
+        let moved = try legacyTask("Moves", shown: refs)
+        let many = try await legacyFiles((0..<11).map { "m\($0).txt" }) + legacyFiles((11..<21).map { "m\($0).txt" })
+        let refused = try legacyTask("Refused", shown: many)
+        let model = TasksPageModel(library: library)
+        // Before the launch run: exactly as main (the legacy count).
+        XCTAssertEqual(try XCTUnwrap(model.rows(for: .now).first { $0.id == moved }).model.attachments, 2)
+        XCTAssertEqual(try XCTUnwrap(model.rows(for: .now).first { $0.id == refused }).model.attachments, 21)
+
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+        notes.store.refresh()
+        model.setNoteOwners(Set([try XCTUnwrap(ownNote(moved))].map { _ in moved }))
+        let row = try XCTUnwrap(model.rows(for: .now).first { $0.id == moved })
+        XCTAssertEqual(row.model.attachments, 0, "the paperclip and count retire")
+        XCTAssertTrue(row.model.hasPage, "the doc.text glyph stays")
+        model.setFilesExpanded(moved, true)
+        XCTAssertTrue(try XCTUnwrap(model.rows(for: .now).first { $0.id == moved }).files.isEmpty)
+        // A refused family keeps the legacy paperclip, count and files list.
+        let kept = try XCTUnwrap(model.rows(for: .now).first { $0.id == refused })
+        XCTAssertEqual(kept.model.attachments, 21)
+        XCTAssertEqual(tasks.fileMigration.status(of: refused).refusal, .tooManyFiles)
+        XCTAssertEqual(tasks.fileMigration.status(of: refused).refusal?.reason, "the note would exceed 20 files")
+    }
+
+    // MARK: The task's page: files in the note, Earlier files
+
+    func testAMigratedTasksPageShowsImagesInlineFilesAsBlockCardsAndNoEarlierFiles() async throws {
+        let refs = try await legacyFiles(["shot.png", "Spec.pdf"])
+        let id = try legacyTask("Spec review", shown: refs)
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        let engine = session.engine
+        XCTAssertEqual(Set(engine.objectIDs()).count, 2)
+        var faces: [AtticNoteObjectFace?] = []
+        let text = engine.textStorage.string as NSString
+        for index in 0..<text.length where text.character(at: index) == NoteDocument.objectUnit {
+            if let object = engine.object(at: index) { faces.append(engine.objectFace(for: object)) }
+        }
+        // D24: the image is a plain inline picture (no face); the other
+        // file is a block card with its type in the header (D5).
+        XCTAssertEqual(faces.compactMap { $0 }.count, 1)
+        XCTAssertEqual(faces.compactMap { $0 }.first?.header, "PDF")
+        XCTAssertTrue(presenter.model.earlierFiles.earlier.isEmpty)
+        XCTAssertEqual(presenter.model.noticeCount, 0)
+        // The block card's header actions sit where they are drawn.
+        let size = CGSize(width: 264, height: AtticNoteObjectMetrics.blockCardHeight)
+        let face = try XCTUnwrap(faces.compactMap { $0 }.first)
+        let look = try XCTUnwrap(AtticNoteObjectLayout.headerActions(in: size).first { $0.0 == .quickLook }?.1)
+        XCTAssertEqual(AtticNoteObjectLayout.headerAction(at: CGPoint(x: look.midX, y: look.midY), face: face, size: size), .quickLook)
+        XCTAssertNil(AtticNoteObjectLayout.headerAction(at: CGPoint(x: 20, y: 50), face: face, size: size))
+    }
+
+    func testAnOrdinaryNoteKeepsTodaysFileCard() throws {
+        let fileID = UUID()
+        let document = NoteDocument(blocks: [.text("Ordinary"), .file(attachmentID: fileID, filename: "Spec.pdf",
+                                                                       contentTypeIdentifier: "com.adobe.pdf", byteCount: 10)])
+        let engine = NoteEditorEngine(noteID: UUID(), document: document)
+        let text = engine.textStorage.string as NSString
+        let index = (0..<text.length).first { text.character(at: $0) == NoteDocument.objectUnit }
+        let object = try XCTUnwrap(index.flatMap { engine.object(at: $0) })
+        XCTAssertNil(engine.objectFace(for: object)?.header, "ordinary Notes behave as on main")
+    }
+
+    func testARefusedOrReversedFamilyShowsEarlierFilesWithItsReasonAndMoveIntoNoteBringsThemIn() async throws {
+        let refs = try await legacyFiles(["plan.txt", "photo.png"])
+        let id = try legacyTask("Garden", shown: refs)
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+        let reversed = await tasks.fileMigration.reverse(id, tasks: tasks)
+        XCTAssertEqual(reversed, .reversed)
+        let presenter = try open(id)
+        XCTAssertEqual(presenter.model.earlierFiles.earlier.map(\.id), refs.map(\.id), "Earlier files are never hidden")
+        XCTAssertEqual(presenter.model.earlierFiles.refusal, .reversed)
+        XCTAssertTrue(presenter.model.deletedNote, "the reversal sent the note it made to Recently Deleted")
+        XCTAssertEqual(presenter.model.noticeCount, 2, "Restore Note and Earlier files")
+        await close(presenter)
+        let moved = await tasks.fileMigration.moveIntoNote(id, tasks: tasks)
+        guard case .migrated = moved else { return XCTFail("\(moved)") }
+        let again = try open(id)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        again.model.refreshEarlierFiles()
+        XCTAssertTrue(again.model.earlierFiles.earlier.isEmpty)
+        XCTAssertEqual(Set(try document(XCTUnwrap(ownNote(id))).attachmentIDs), Set(refs.map(\.id)))
+    }
+
+    func testTheLaunchRunWaitsForAFamilyWhoseNoteIsOpen() async throws {
+        let refs = try await legacyFiles(["a.txt"])
+        let id = try legacyTask("Open page", shown: refs)
+        let presenter = try open(id)
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { [notes, coordinator] root in
+            TaskFilesState.noteIsOpen(root, notes: notes!, coordinator: coordinator!)
+        })
+        XCTAssertTrue(tasks.fileMigration.deferred.contains(id))
+        XCTAssertEqual(presenter.model.earlierFiles.kind, .legacy)
+        XCTAssertNil(try ownNote(id), "nothing written under the open page")
+    }
+
+    // MARK: Cut, copy, paste and Undo of a file card in a task's note
+
+    func testCutCopyPasteAndUndoOfAFileCardInATasksNote() async throws {
+        let refs = try await legacyFiles(["Spec.pdf"])
+        let id = try legacyTask("Cards", shown: refs)
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+        let presenter = try open(id)
+        let textView = presenter.host.textView
+        let engine = try XCTUnwrap(presenter.session?.engine)
+        let text = engine.textStorage.string as NSString
+        let index = try XCTUnwrap((0..<text.length).first { text.character(at: $0) == NoteDocument.objectUnit })
+        let card = try XCTUnwrap(engine.object(at: index)?.objectID)
+        let range = NSRange(location: index, length: 1)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-test-\(UUID().uuidString)"))
+        XCTAssertTrue(engine.writeSelection(range, to: pasteboard, types: [NoteEditorEngine.fragmentType, .string]))
+        let data = try XCTUnwrap(pasteboard.data(forType: NoteEditorEngine.fragmentType))
+        // Copy, then paste: a second card for the same stored file.
+        XCTAssertTrue(engine.paste(fragmentData: data, at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.objectIDs().count, 2)
+        XCTAssertEqual(engine.document().attachmentIDs, [refs[0].id, refs[0].id])
+        XCTAssertTrue(presenter.page.history.undo(), "⌘Z undoes the paste")
+        XCTAssertEqual(engine.objectIDs(), [card])
+        // Cut (copy, then remove the card), then paste: the same card.
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(range)
+        textView.delete(nil)
+        for _ in 0..<50 where !engine.objectIDs().isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(engine.objectIDs().isEmpty, "the cut takes the card")
+        XCTAssertTrue(engine.paste(fragmentData: data, at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.objectIDs(), [card], "cut and paste keep the card")
+        XCTAssertEqual(engine.document().attachmentIDs, [refs[0].id])
+        XCTAssertTrue(presenter.page.history.undo())
+        XCTAssertTrue(engine.objectIDs().isEmpty)
+        XCTAssertTrue(presenter.page.history.undo(), "⌘Z puts the cut card back")
+        XCTAssertEqual(engine.objectIDs(), [card])
+    }
+
+    // MARK: Merge into This Note with files (S10)
+
+    private func alternate(to taskID: UUID, files: Int, title: String = "Spec review") throws -> (UUID, [UUID]) {
+        let context = ModelContext(container)
+        let id = UUID()
+        let note = NoteItem(id: id, createdAt: Date().addingTimeInterval(3_600), updatedAt: Date().addingTimeInterval(3_600))
+        note.taskID = taskID
+        var blocks: [NoteBlock] = [.text(title), .text("From the other Mac")]
+        var ids: [UUID] = []
+        for index in 0..<files {
+            let bytes = Data("other file \(index)".utf8)
+            let row = NoteAttachment(noteID: id, originalFilename: "other\(index).txt", contentTypeIdentifier: "public.plain-text",
+                                     byteCount: Int64(bytes.count), sortIndex: Int64(index), contentDigest: NotePayloadDigest.sha256(bytes), payload: bytes)
+            context.insert(row)
+            ids.append(row.id)
+            blocks.append(.file(attachmentID: row.id, filename: row.originalFilename, contentTypeIdentifier: row.contentTypeIdentifier, byteCount: row.byteCount))
+        }
+        let document = try NoteDocument(blocks: blocks).taskSnapshot(title: title)
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(document), format: 1, on: [note], timestamp: Date(), revision: 0, revisionID: UUID())
+        context.insert(note)
+        context.insert(TaskNoteAssociation(taskID: taskID, noteID: id))
+        try context.save()
+        return (id, ids)
+    }
+
+    private func taskWithOwnNote() async throws -> (UUID, UUID) {
+        let refs = try await legacyFiles(["mine.txt"])
+        let id = try legacyTask("Spec review", shown: refs)
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+        return (id, try XCTUnwrap(ownNote(id)))
+    }
+
+    func testMergeIntoThisNoteMovesTheOtherNotesFilesAndUndoMovesThemBack() async throws {
+        let (id, own) = try await taskWithOwnNote()
+        let (other, moved) = try alternate(to: id, files: 2)
+        notes.store.refresh()
+        let presenter = try open(id)
+        XCTAssertEqual(presenter.model.alternateNotes, [other])
+        let engineBefore = presenter.session?.engine
+        let result = await presenter.mergeAlternate(other, tasks: tasks, notes: notes)
+        guard case let .made(entryID, _, _) = result else { return XCTFail("\(result)") }
+        XCTAssertTrue(presenter.session?.engine === engineBefore)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertTrue(moved.allSatisfy { id in rows.filter { $0.id == id }.allSatisfy { $0.noteID == own && $0.deletedAt == nil } },
+                      "the transfer path: the same rows change owner")
+        XCTAssertEqual(rows.count, 3, "nothing copied or deleted")
+        XCTAssertTrue(Set(try document(own).attachmentIDs).isSuperset(of: moved))
+        // The cards' availability checks settle first (as on screen).
+        for _ in 0..<50 where !(presenter.session?.engine.history.canPrepareWorkspaceCommand ?? false) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let undone = await presenter.page.history.undoLatest(stepID: entryID)
+        XCTAssertEqual(undone, .applied)
+        let back = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertTrue(moved.allSatisfy { id in back.filter { $0.id == id }.allSatisfy { $0.noteID == other && $0.deletedAt == nil } })
+        XCTAssertTrue(Set(try document(own).attachmentIDs).isDisjoint(with: moved))
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == other }.allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testMergeWithFilesRefusesBeyondTheLimitsAndAFailedSaveChangesNothing() async throws {
+        let (id, own) = try await taskWithOwnNote()
+        let (crowded, _) = try alternate(to: id, files: 20)
+        notes.store.refresh()
+        let presenter = try open(id)
+        let refused = await presenter.mergeAlternate(crowded, tasks: tasks, notes: notes)
+        XCTAssertEqual(refused, .refused("The merged note would exceed 20 files: keep it as a separate note"))
+        // Failure injection: the save throws; every row stays where it was.
+        let (small, moved) = try alternate(to: id, files: 1)
+        notes.store.refresh()
+        coordinator.save = { _ in throw CocoaError(.fileWriteNoPermission) }
+        defer { coordinator.save = { try $0.save() } }
+        let failed = await presenter.mergeAlternate(small, tasks: tasks, notes: notes)
+        guard case .refused = failed else { return XCTFail("\(failed)") }
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).filter { moved.contains($0.id) }
+        XCTAssertTrue(rows.allSatisfy { $0.noteID == small })
+        XCTAssertFalse(Set(try document(own).attachmentIDs).contains(moved[0]))
+    }
+
+    // MARK: The asynchronous agent path (§ 5.9)
+
+    private func agent() -> MCPRequestHandler {
+        let tools = AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
+        tools.notesController = { [weak notes] in notes }
+        return MCPRequestHandler(tools: tools)
+    }
+
+    private func call(_ handler: MCPRequestHandler, _ name: String, _ arguments: [String: Any]) async throws -> (String, Bool) {
+        let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                                               "params": ["name": name, "arguments": arguments]])
+        let result = await handler.handleAsync(body: body, protocolVersion: "2025-06-18")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(result.body)) as? [String: Any])
+        let payload = try XCTUnwrap(json["result"] as? [String: Any])
+        let text = try XCTUnwrap((payload["content"] as? [[String: Any]])?.first?["text"] as? String)
+        return (text, payload["isError"] as? Bool ?? false)
+    }
+
+    func testAgentsMakeSubtasksAndNoteCheckboxesThroughTheSameOperationAndRefusals() async throws {
+        let id = try XCTUnwrap(tasks.create(title: "Launch")?.id)
+        let handler = agent()
+        // make_note_checkbox on a task with no note creates the note.
+        let subtask = try XCTUnwrap(tasks.create(title: "Write the post", parentID: id)?.id)
+        let (checkbox, checkboxError) = try await call(handler, "make_note_checkbox", ["subtask_id": subtask.uuidString])
+        XCTAssertFalse(checkboxError, checkbox)
+        let noteID = try XCTUnwrap(ownNote(id))
+        XCTAssertTrue(try document(noteID).blocks.contains { $0.kind == .checklist && $0.text == "Write the post" })
+        XCTAssertNil(tasks.task(withID: subtask), "the subtask is in Recently Deleted")
+        // make_subtask from consecutive lines of the body.
+        let presenter = try open(id)
+        presenter.host.textView.window?.makeFirstResponder(presenter.host.textView)
+        presenter.host.textView.setSelectedRange(NSRange(location: (presenter.host.textView.string as NSString).length, length: 0))
+        presenter.host.textView.insertText("\nBook the room\nSend invites", replacementRange: NSRange(location: NSNotFound, length: 0))
+        _ = notes.save(try XCTUnwrap(presenter.session))
+        let (made, madeError) = try await call(handler, "make_subtask", ["task_id": id.uuidString, "lines": ["Book the room", "Send invites"]])
+        XCTAssertFalse(madeError, made)
+        XCTAssertEqual(Set(tasks.subtasks(of: id).map(\.title)), ["Book the room", "Send invites"])
+        XCTAssertFalse(presenter.host.textView.string.contains("Send invites"), "the lines left the writing in the same operation")
+        XCTAssertNotNil(presenter.page.history.route.undoStepID(in: presenter.page.history.historyID), "it entered the workspace history")
+        // Refusals as for people.
+        let (missing, missingError) = try await call(handler, "make_subtask", ["task_id": id.uuidString, "lines": ["Not in the note"]])
+        XCTAssertTrue(missingError, missing)
+        let (gone, goneError) = try await call(handler, "make_note_checkbox", ["subtask_id": UUID().uuidString])
+        XCTAssertTrue(goneError, gone)
+    }
+
+    func testAgentsMakeTasksFromNotesRestoreNotesAndMoveFilesIntoNotes() async throws {
+        let handler = agent()
+        // make_task_from_note
+        let ordinaryID = UUID()
+        let context = ModelContext(container)
+        let ordinary = NoteItem(id: ordinaryID)
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(NoteDocument(blocks: [.text("Trip plan"), .text("Pack light")])),
+                                       format: 1, on: [ordinary], timestamp: Date(), revision: 0, revisionID: UUID())
+        context.insert(ordinary)
+        try context.save()
+        notes.store.refresh()
+        let (made, madeError) = try await call(handler, "make_task_from_note", ["note_id": ordinaryID.uuidString])
+        XCTAssertFalse(madeError, made)
+        XCTAssertTrue(tasks.tasks.contains { $0.title == "Trip plan" })
+        // move_files_into_note: a reversed family's files go back in.
+        let refs = try await legacyFiles(["ticket.pdf"])
+        let id = try legacyTask("Flights", shown: refs)
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { _ in false })
+        _ = await tasks.fileMigration.reverse(id, tasks: tasks)
+        let (moved, movedError) = try await call(handler, "move_files_into_note", ["task_id": id.uuidString])
+        XCTAssertFalse(movedError, moved)
+        XCTAssertEqual(try document(XCTUnwrap(ownNote(id))).attachmentIDs, refs.map(\.id))
+        // restore: a task's deleted note comes back as its own note.
+        let noteID = try XCTUnwrap(ownNote(id))
+        notes.store.refresh()
+        XCTAssertTrue(notes.store.delete(try XCTUnwrap(notes.store.note(withID: noteID))))
+        notes.store.refresh()
+        let (restored, restoredError) = try await call(handler, "restore", ["id": noteID.uuidString])
+        XCTAssertFalse(restoredError, restored)
+        XCTAssertTrue(restored.contains("own_note"), restored)
+        // Refused while the note is open.
+        let presenter = try open(id)
+        _ = presenter
+        let (open, openError) = try await call(handler, "move_files_into_note", ["task_id": id.uuidString])
+        XCTAssertTrue(openError, open)
+    }
+}

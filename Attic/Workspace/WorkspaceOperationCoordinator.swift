@@ -1110,6 +1110,7 @@ final class WorkspaceOperationCoordinator {
         case let r as TaskNoteAssociation: WorkspaceOwner(entity: .association, id: r.id)
         case let r as TaskDeletionPreservation: WorkspaceOwner(entity: .preservation, id: r.id)
         case let r as OperationReceipt: WorkspaceOwner(entity: .receipt, id: r.id)
+        case let r as TaskAttachmentMigrationRecord: WorkspaceOwner(entity: .migration, id: r.id)
         default: nil
         }
     }

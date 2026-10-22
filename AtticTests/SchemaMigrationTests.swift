@@ -35,7 +35,7 @@ final class SchemaMigrationTests: XCTestCase {
                 "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem",
                 "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance",
                 "TagColour",
-                "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation"
+                "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation", "TaskAttachmentMigrationRecord"
             ])
             let taskAttributes = Set(entities["TaskItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(taskAttributes.isSuperset(of: [
@@ -100,7 +100,7 @@ final class SchemaMigrationTests: XCTestCase {
         }
         XCTAssertEqual(Set(current.entitiesByName.keys).subtracting(old.entitiesByName.keys),
                        ["ItemLink", "NoteVersion", "NotePendingEdit", "StoreMaintenance", "TagColour",
-                        "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation"])
+                        "OperationReceipt", "TaskNoteAssociation", "TaskDeletionPreservation", "TaskAttachmentMigrationRecord"])
         XCTAssertEqual(current.entitiesByName["NoteItem"]?.attributesByName["contentFormat"]?.defaultValue as? Int, 0)
         XCTAssertEqual(current.entitiesByName["TaskItem"]?.attributesByName["listOrderVersion"]?.defaultValue as? Int, 0)
         _ = try NSMappingModel.inferredMappingModel(forSourceModel: old, destinationModel: current)

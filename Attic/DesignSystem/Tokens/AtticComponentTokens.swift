@@ -892,6 +892,17 @@ enum AtticNoteObjectMetrics {
     /// The card: a content card (radius 10), 12 in, a 22 pt type glyph and
     /// two 12 pt lines: the name, then the size or the failure.
     static let cardHeight: CGFloat = 54
+    /// The block file card in a task's note (`p3-19` column 2, `p3-21`;
+    /// D5, D24): radius 17, the recessed fill, no border; a 28 pt header
+    /// with the type ("PDF") left and Quick Look and ⋯ right, then the
+    /// glyph, the name and the size, 10 under.
+    static let blockRadius: CGFloat = AtticRadius.groupCard
+    static let blockHeaderHeight: CGFloat = 28
+    static let blockCardHeight: CGFloat = 70
+    static let blockFirstLine: CGFloat = 36
+    static let blockSecondLine: CGFloat = 52
+    static let blockHeaderGlyph: CGFloat = 11
+    static let blockHeaderGap: CGFloat = 10
     static let cardRadius: CGFloat = AtticRadius.contentCard
     static let cardPadding: CGFloat = 12
     static let cardIcon: CGFloat = 20

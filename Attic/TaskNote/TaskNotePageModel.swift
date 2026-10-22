@@ -142,6 +142,7 @@ final class TaskNotePageModel: ObservableObject {
             isFolded = canonical.filter { $0.status != .done }.count > 6
         }
         refresh()
+        refreshEarlierFiles()
         observeStore()
     }
 
@@ -151,6 +152,9 @@ final class TaskNotePageModel: ObservableObject {
         // touches only its row, cards, head and block).
         store.$revision.dropFirst().sink { [weak self] _ in
             DispatchQueue.main.async { self?.refresh() }
+        }.store(in: &observations)
+        store.fileMigration.$statuses.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshEarlierFiles() }
         }.store(in: &observations)
         library.subtaskOrderChanges.filter { [taskID] in $0 == taskID }.sink { [weak self] _ in
             // A deliberate reorder (or its Undo) shows at once (round 10b).
@@ -162,6 +166,7 @@ final class TaskNotePageModel: ObservableObject {
 
     func resume() {
         refresh()
+        refreshEarlierFiles()
         observeStore()
     }
 
@@ -273,8 +278,23 @@ final class TaskNotePageModel: ObservableObject {
         didSet { if alternateNotes.isEmpty != oldValue.isEmpty { onGeometryChange?() } }
     }
 
+    /// Earlier files (§ 2.4, § 13, § 5.6 "Migration incomplete"): legacy
+    /// files the migration has not moved into this note, with the reason.
+    /// Never hidden while they exist. A region of its own, apart from the
+    /// writing (S8).
+    @Published private(set) var earlierFiles: TaskFilesState.Status = .none {
+        didSet { if earlierFiles.earlier.isEmpty != oldValue.earlier.isEmpty { onGeometryChange?() } }
+    }
+
+    func refreshEarlierFiles() {
+        let next = store.fileMigration.status(of: taskID)
+        if next != earlierFiles { earlierFiles = next }
+    }
+
     /// How many quiet lines sit under the block.
-    var noticeCount: Int { (deletedNote ? 1 : 0) + (alternateNotes.isEmpty ? 0 : 1) }
+    var noticeCount: Int {
+        (deletedNote ? 1 : 0) + (alternateNotes.isEmpty ? 0 : 1) + (earlierFiles.earlier.isEmpty ? 0 : 1)
+    }
 
     var countLabel: String {
         head.subtasks.total == 0 ? String(localized: "Subtasks")

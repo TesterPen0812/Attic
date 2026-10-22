@@ -56,11 +56,15 @@ extension NoteEditorEngine {
         switch object {
         case let file as NoteFileAttachment:
             let size = ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)
+            // A task's note draws files as block cards (slice 2, D5): the
+            // type in the header; ordinary notes keep today's card.
             return AtticNoteObjectFace(kind: .file, name: file.filename, detail: state.message ?? size,
                                        tone: Self.tone(state),
                                        systemImage: Self.glyph(state) ?? AtticNoteObjectFace.systemImage(
                                            forContentType: file.contentTypeIdentifier),
-                                       actions: actions)
+                                       actions: actions,
+                                       header: isBodyOnly ? AtticNoteObjectFace.kindLabel(
+                                           contentType: file.contentTypeIdentifier, filename: file.filename) : nil)
         case let image as NoteImageAttachment:
             guard state != .ready || image.isMissing else { return nil }
             return AtticNoteObjectFace(kind: .image, name: image.filename,

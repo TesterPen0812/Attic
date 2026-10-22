@@ -27,6 +27,37 @@ final class MCPRequestHandler {
         self.serverVersion = serverVersion
     }
 
+    /// The server's entry point: workspace tools that run a coordinator
+    /// operation (slice 2) are awaited here; everything else is `handle`.
+    func handleAsync(body: Data, protocolVersion: String? = nil) async -> MCPHTTPResult {
+        if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           json["jsonrpc"] as? String == "2.0", json["method"] as? String == "tools/call",
+           json.keys.contains("id"), let params = json["params"] as? [String: Any],
+           let name = params["name"] as? String, AgentTaskTools.asyncToolNames.contains(name), tools.notesController != nil {
+            let resolvedVersion = protocolVersion ?? "2025-03-26"
+            guard Self.supportedProtocolVersions.contains(resolvedVersion) else {
+                return badRequest("Unsupported MCP protocol version: \(resolvedVersion)")
+            }
+            let id = json["id"] ?? NSNull()
+            guard Self.isValidRequestID(id) else { return errorResponse(id: NSNull(), code: -32600, message: "Invalid JSON-RPC request") }
+            let arguments: [String: Any]
+            if let raw = params["arguments"], !(raw is NSNull) {
+                guard let object = raw as? [String: Any] else {
+                    return errorResponse(id: id, code: -32602, message: "Tool arguments must be an object")
+                }
+                arguments = object
+            } else { arguments = [:] }
+            do {
+                return toolResponse(id: id, text: try await tools.callAsync(name: name, arguments: arguments), isError: false)
+            } catch let error as AgentToolError {
+                return toolResponse(id: id, text: error.message, isError: true)
+            } catch {
+                return toolResponse(id: id, text: error.localizedDescription, isError: true)
+            }
+        }
+        return handle(body: body, protocolVersion: protocolVersion)
+    }
+
     func handle(body: Data, protocolVersion: String? = nil) -> MCPHTTPResult {
         guard let json = try? JSONSerialization.jsonObject(with: body) else {
             return errorResponse(id: NSNull(), code: -32700, message: "Parse error")

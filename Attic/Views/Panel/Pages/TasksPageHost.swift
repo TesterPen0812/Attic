@@ -165,7 +165,20 @@ struct TasksPageHost: View {
             // "Attach file…" in a row's files list (A1): the picker, which
             // keeps the panel open while it is up; the list opens on what
             // was attached.
+            // Add Files to Note… (slice 2): the picker, then the row drop's
+            // path into the task's note.
+            model.services.chooseFilesForNote = { [uiState, weak model] id in
+                guard !TaskAttachmentPicker.isPresenting(uiState), model?.services.addFilesToTaskNote != nil else { return }
+                uiState.taskAttachmentPickerOwnerID = id
+                TaskAttachmentPickerSession.present(owner: id) { urls in
+                    if uiState.taskAttachmentPickerOwnerID == id { uiState.taskAttachmentPickerOwnerID = nil }
+                    guard !urls.isEmpty else { return }
+                    model?.services.addFilesToTaskNote?(id, TaskAttachmentStaging(urls: urls))
+                }
+            }
             model.services.chooseFiles = { [store, uiState, weak model] id in
+                // A family whose files are in its note adds to the note.
+                if store.fileMigration.isMigrated(id), let choose = model?.services.chooseFilesForNote { choose(id); return }
                 TaskAttachmentPicker.choose(for: id, store: store, uiState: uiState) { _, ownerID in
                     model?.setFilesExpanded(ownerID, true)
                 }

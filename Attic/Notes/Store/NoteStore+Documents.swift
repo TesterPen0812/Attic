@@ -1585,4 +1585,14 @@ extension NoteStore {
         }
         WorkspaceCrashHook.reach("K3-note")
     }
+
+    /// A note created in the same commit (the attachment migration, § 13):
+    /// its shown files pass the same admission rule as every save (limits,
+    /// complete verified payloads), with no earlier rows.
+    static func stageAttachmentsOfNewNote(_ staged: [StagedNoteAttachment], document: NoteDocument,
+                                          noteID: UUID, context: ModelContext, timestamp: Date) throws {
+        let plan = try NoteAttachmentAdmission.evaluate(staged, referencedBy: document,
+            previouslyReferencedBy: nil, rows: [], metadataOnlyIDs: [])
+        stageAttachments(plan, noteID: noteID, context: context, timestamp: timestamp)
+    }
 }

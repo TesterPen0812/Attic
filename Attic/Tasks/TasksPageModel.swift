@@ -56,6 +56,8 @@ struct TasksPageServices {
     /// row 4). The receiver owns the staging and discards it once the
     /// import is done. Nil: they attach to the task as before.
     var addFilesToTaskNote: ((UUID, TaskAttachmentStaging) -> Void)?
+    /// Add Files to Note… (§ 2.4): the picker, then `addFilesToTaskNote`.
+    var chooseFilesForNote: ((UUID) -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -445,6 +447,14 @@ final class TasksPageModel: ObservableObject {
         library.tags.inventoryChanges
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        // Slice 2: a family's files moved into its note (or back).
+        library.tasks.fileMigration.$statuses.dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.noteOwnersRevision &+= 1
+                self.objectWillChange.send()
+            }
+            .store(in: &cancellables)
         // A subtask moved, or a move undone or redone (from here or the
         // shared history): the open quick look takes the new order.
         library.subtaskOrderChanges
@@ -490,12 +500,16 @@ final class TasksPageModel: ObservableObject {
         if let match, !match.isEmpty { model.titleMatch = match }
         // Phase 3 (`p3-06`, D11): the note glyph after the subtask count.
         model.hasPage = noteOwners.contains(task.id)
+        // Slice 2 (§ 2.4, D11): a family whose files are in its note shows
+        // no paperclip, unless Earlier files remain; others as on main.
+        let files = store.fileMigration.rowFiles(for: task)
+        model.attachments = files.count
         return TasksListRow(
             id: task.id,
             model: model,
             status: task.status,
             subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : [],
-            files: filesOpen ? task.attachments : []
+            files: filesOpen ? files : []
         )
     }
 
@@ -2059,7 +2073,7 @@ final class TasksPageModel: ObservableObject {
             finished: finished,
             metadata: doneMetadata(for: task),
             subtasks: children.map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) },
-            files: task.attachments
+            files: store.fileMigration.rowFiles(for: task)
         )
     }
 }
