@@ -789,3 +789,56 @@ extension TaskFilesSliceTests {
         XCTAssertFalse(try document(noteID).attachmentIDs.contains(refs[0].id))
     }
 }
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2WorkspaceProposalStatusCachesTypingAndInvalidatesOnDiscard() async throws {
+        try await coordinator.finishLaunch()
+        let rootID = try XCTUnwrap(tasks.create(title: "Cached proposal")?.id)
+        let childID = try XCTUnwrap(tasks.create(title: "Child", parentID: rootID)?.id)
+        let presenter = try open(rootID), session = try XCTUnwrap(presenter.session)
+        let (_, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": childID.uuidString])
+        XCTAssertFalse(error)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        XCTAssertEqual(notes.proposalAgent(for: session), "Agent")
+        let fetches = notes.store.pendingEditFetchCount
+        let text = presenter.host.textView
+        for _ in 0..<20 {
+            text.insertText("x", replacementRange: NSRange(location: (text.string as NSString).length, length: 0))
+            XCTAssertEqual(notes.proposalAgent(for: session), "Agent")
+        }
+        XCTAssertEqual(notes.store.pendingEditFetchCount, fetches, "typing must use the workspace proposal status cache too")
+        await notes.store.waitForAttachmentReconciliation()
+        XCTAssertTrue(notes.store.discardProposal(proposal.id, noteID: proposal.noteID), notes.store.lastErrorMessage ?? "proposal family refused")
+        XCTAssertNil(notes.proposalAgent(for: session), "a new store revision invalidates the cached proposal")
+        let emptyFetches = notes.store.pendingEditFetchCount
+        for _ in 0..<20 { XCTAssertNil(notes.proposalAgent(for: session)) }
+        XCTAssertEqual(notes.store.pendingEditFetchCount, emptyFetches, "an absent-note negative lookup is cached too")
+    }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2DiscardWorkspaceProposalDeletesEveryAgreeingPhysicalReplica() async throws {
+        try await coordinator.finishLaunch()
+        let rootID = try XCTUnwrap(tasks.create(title: "Replica proposal")?.id)
+        let childID = try XCTUnwrap(tasks.create(title: "Child", parentID: rootID)?.id)
+        _ = try open(rootID)
+        let (_, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": childID.uuidString])
+        XCTAssertFalse(error)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        let proposalID = proposal.id, anchor = proposal.noteID
+        let duplicate = NotePendingEdit(id: proposalID, noteID: anchor, baseRevisionToken: proposal.baseRevisionToken,
+            proposedContent: try XCTUnwrap(proposal.proposedContent), agentName: proposal.agentName, createdAt: proposal.createdAt)
+        try WorkspaceModelFields.copy(Set(WorkspaceModelFields.read(proposal).keys), from: proposal, to: duplicate)
+        let edit = ModelContext(container)
+        edit.insert(duplicate); try edit.save()
+        notes.store.refresh()
+        await notes.store.waitForAttachmentReconciliation()
+        XCTAssertEqual(try notes.store.pendingEditRows(proposalID).count, 2)
+        XCTAssertTrue(notes.store.discardProposal(proposalID, noteID: anchor), notes.store.lastErrorMessage ?? "")
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NotePendingEdit>()).filter { $0.id == proposalID }.isEmpty)
+        XCTAssertNotNil(tasks.task(withID: childID))
+        XCTAssertNil(try ownNote(rootID))
+    }
+}

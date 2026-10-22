@@ -887,24 +887,23 @@ final class NotesPageController: ObservableObject {
 
     /// A store revision can change this answer; typing alone cannot.
     func proposalAgent(for session: NoteSession) -> String? {
-        if let edit = pendingWorkspaceEdits(session).first(where: { $0.workspaceOperationData != nil }) {
-            proposalStatusCache[session.noteID] = ProposalStatus(revision: store.revision, agent: edit.agentName, deletionAgent: nil, editID: edit.id, deletionID: nil)
-            return edit.agentName
-        }
-        guard session.isPersisted else { return nil }
         if let cached = proposalStatusCache[session.noteID], cached.revision == store.revision { return cached.agent }
         let edits: [NotePendingEdit]
-        do { edits = try store.readPendingEdits(noteID: session.noteID) }
-        catch {
+        do {
+            edits = try store.readPendingEdits(noteID: session.noteID,
+                taskID: session.pendingTaskID ?? store.note(withID: session.noteID)?.taskID)
+        } catch {
             store.reportProposalReadFailure(error)
             return proposalStatusCache[session.noteID]?.agent
         }
-        let agent = edits.first(where: { !$0.isDeletion }).map {
-            $0.agentName.isEmpty ? String(localized: "Agent") : $0.agentName
-        }
+        // Task-anchored operations also belong to an absent-note draft. Cache
+        // both positive and negative answers by store revision before typing
+        // can ask again; typing never changes proposal membership.
+        let primary = edits.first(where: { $0.workspaceOperationData != nil }) ?? edits.first(where: { !$0.isDeletion })
+        let agent = primary.map { $0.agentName.isEmpty ? String(localized: "Agent") : $0.agentName }
         proposalStatusCache[session.noteID] = ProposalStatus(revision: store.revision, agent: agent,
             deletionAgent: edits.first(where: \.isDeletion).map { $0.agentName.isEmpty ? "Agent" : $0.agentName },
-            editID: edits.first(where: { !$0.isDeletion })?.id, deletionID: edits.first(where: \.isDeletion)?.id)
+            editID: primary?.id, deletionID: edits.first(where: \.isDeletion)?.id)
         return agent
     }
 
