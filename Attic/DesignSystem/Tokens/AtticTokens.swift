@@ -91,6 +91,11 @@ enum AtticControlSize {
     /// Control size Medium (owner, 2026-10-20): 30 pt (it was 32, and 36
     /// before chrome B); radius 12.5 by the 42 % rule.
     static let headerControl: CGFloat = 30
+    /// The secondary floating controls, one step under the corner controls
+    /// and the add bar (owner, 2026-10-22: "too big compared to everything
+    /// else"): the tabs capsule, Find and View Options, the composer strip.
+    /// Their hit areas stay larger than what is drawn.
+    static let secondaryControl: CGFloat = 26
     static let settingsHeaderHeight: CGFloat = 34
     /// The page switch: the corner controls' height (30, Medium), chips 22
     /// inside a 4 pt inset.

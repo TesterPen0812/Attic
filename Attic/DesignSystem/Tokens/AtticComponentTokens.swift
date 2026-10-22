@@ -952,8 +952,9 @@ enum AtticNoteObjectMetrics {
 /// icon (Find, View Options, the library's magnifier) in its own circle; an
 /// open search field on the same material. The labels stay where they were.
 enum AtticTopGlassMetrics {
-    /// The floating controls' Medium height (the corner buttons, the strip).
-    static let height: CGFloat = AtticControlSize.headerControl
+    /// The secondary floating controls' height, a step under the corner
+    /// buttons (owner, 2026-10-22).
+    static let height: CGFloat = AtticControlSize.secondaryControl
     /// How far a tab capsule reaches past its first and last label: its
     /// leading edge on the controls' line, the labels on the content line.
     static let capsulePadding: CGFloat = AtticLayout.contentFromChrome
@@ -990,9 +991,10 @@ enum AtticPickerMetrics {
     static let stripToBar: CGFloat = 8
     /// The strip's buttons are floating glass, each on its own (owner B,
     /// 2026-10-22: with no bottom blur, rows scroll sharp under the strip),
-    /// so they take the floating controls' Medium height: 30 (was 28). An
+    /// at the secondary controls' height: 26, a step under the add bar
+    /// (owner, 2026-10-22; it was 30, and 28 before the glass). An
     /// icon-only button (Attach's paperclip) is as wide as it is tall.
-    static let stripHeight: CGFloat = AtticControlSize.headerControl
+    static let stripHeight: CGFloat = AtticControlSize.secondaryControl
     /// A set strip button (v19): its value, 7 pt, the clear × (14 pt, its
     /// glyph 8), then 7 pt to the pill's end.
     static let stripClearGap: CGFloat = 7

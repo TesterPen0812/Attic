@@ -231,7 +231,8 @@ final class ComposerStripGlassTests: XCTestCase {
     }
 
     func testTheStripButtonsAreTheFloatingGlassOnePillEach() {
-        XCTAssertEqual(AtticPickerMetrics.stripHeight, AtticControlSize.headerControl, "the floating controls' Medium height")
+        XCTAssertEqual(AtticPickerMetrics.stripHeight, AtticControlSize.secondaryControl, "the secondary controls' height, a step under the add bar")
+        XCTAssertLessThan(AtticPickerMetrics.stripHeight, AtticControlSize.addBarHeight, "the strip reads under the add bar (owner, 2026-10-22)")
         XCTAssertEqual(Strip.usualWidth([("Attach", nil)], iconOnly: [0]), AtticPickerMetrics.stripHeight,
                        "the paperclip alone is a circle: as wide as it is tall")
         let tomorrow = AtticStripValue(text: "Tomorrow", spoken: "Tomorrow")
@@ -365,7 +366,8 @@ final class TopGlassTests: XCTestCase {
     }
 
     func testTheTopLineTakesTheFloatingControlsMeasures() {
-        XCTAssertEqual(AtticTopGlassMetrics.height, AtticControlSize.headerControl, "the corner buttons' Medium height")
+        XCTAssertEqual(AtticTopGlassMetrics.height, AtticControlSize.secondaryControl, "the secondary controls' height")
+        XCTAssertLessThan(AtticTopGlassMetrics.height, AtticControlSize.headerControl, "a step under the corner buttons (owner, 2026-10-22)")
         XCTAssertEqual(AtticTabsSearchField.height(floating: true), AtticControlSize.headerControl)
         XCTAssertEqual(AtticTabsSearchField.height(floating: false), AtticControlSize.smallHeight, "the find bar's field is unchanged")
         XCTAssertEqual(AtticNoteLibraryLine.height, AtticControlSize.headerControl)

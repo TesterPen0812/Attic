@@ -1341,7 +1341,7 @@ private struct AtticStripButton: View {
                         // bar's width); the full value is the tooltip.
                         AtticText(verbatim: value.text, style: value.style, ink: isEnabled ? value.ink : .disabledText, truncates: true)
                     } else if showsTitle {
-                        AtticText(verbatim: title, style: .controlLabel, ink: isEnabled ? .heading : .disabledText)
+                        AtticText(verbatim: title, style: .rowMetaEmphasis, ink: isEnabled ? .heading : .disabledText)
                     }
                 }
                 .padding(.leading, iconOnly ? 0 : m.labelPadding)
