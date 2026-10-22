@@ -230,7 +230,9 @@ final class WorkspacePurgeTests: XCTestCase {
         }
         ownership = .init(generation: 2, drafts: [noteID: try NoteDocument(blocks: [.text("Draft compatibility"), .text("newest draft")]).taskSnapshot(title: "Draft compatibility")])
         expectEqual(await purge().outcome, .committed)
-        expectEqual(try document().title, "Current task"); expectEqual(try document().blocks[1].text, "newest draft")
+        expectEqual(try document().title, "Current task")
+        XCTAssertTrue(try document().blocks[1].text.hasPrefix("Was a task · "))
+        expectEqual(try document().blocks[2].text, "newest draft")
         XCTAssertFalse(try document().requires.contains("taskNote")); XCTAssertNil(try note().taskID)
     }
     func testP2FailedCaptureSaveLeavesEveryTaskNoteAssociationAndHistoryRowUnchanged() async throws {
