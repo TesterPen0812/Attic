@@ -969,6 +969,11 @@ enum AtticPickerMetrics {
     static let stripTagPrefix: CGFloat = 34
     static let stripDatePrefix: CGFloat = 42
     static let stripToBar: CGFloat = 8
+    /// The strip's buttons are floating glass, each on its own (owner B,
+    /// 2026-10-22: with no bottom blur, rows scroll sharp under the strip),
+    /// so they take the floating controls' Medium height: 30 (was 28). An
+    /// icon-only button (Attach's paperclip) is as wide as it is tall.
+    static let stripHeight: CGFloat = AtticControlSize.headerControl
     /// A set strip button (v19): its value, 7 pt, the clear × (14 pt, its
     /// glyph 8), then 7 pt to the pill's end.
     static let stripClearGap: CGFloat = 7

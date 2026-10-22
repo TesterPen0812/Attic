@@ -103,7 +103,7 @@ final class FloatingControlsTests: XCTestCase {
                              "a resting row is clear of the line")
 
         let inset: CGFloat = 12
-        let idle = TasksViewport.bottomEdges(stack: TasksViewport.reservedStack - AtticControlSize.smallHeight, bottomInset: inset)
+        let idle = TasksViewport.bottomEdges(stack: TasksViewport.reservedStack - AtticPickerMetrics.stripHeight, bottomInset: inset)
         XCTAssertEqual(idle.bottom, AtticControlSize.addBarHeight + inset)
         let strip = TasksViewport.bottomEdges(stack: TasksViewport.reservedStack, bottomInset: inset)
         XCTAssertEqual(strip.bottom, TasksViewport.reservedStack + inset, "the strip is part of the bottom controls")
@@ -182,5 +182,93 @@ final class TopRevealTests: XCTestCase {
         XCTAssertLessThan(half.minY, rect.minY)
         let rest = AtticTopRevealShape(fraction: 1).path(in: rect).boundingRect
         XCTAssertTrue(rest.contains(rect.insetBy(dx: -20, dy: -20)), "at rest it cuts nothing")
+    }
+}
+
+/// Owner B (2026-10-22): with no bottom blur, the composer's Date, Tag,
+/// Priority and paperclip float on their own glass, as the corner buttons
+/// do: one shared container with one shape per button (never one capsule
+/// behind the row), and the other raised controls' opaque surface wherever
+/// the controls are not live glass (Reduce Transparency included).
+@MainActor
+final class ComposerStripGlassTests: XCTestCase {
+    private final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
+    private typealias Strip = AtticComposerStrip<EmptyView, EmptyView, EmptyView>
+
+    private func strip(date: AtticStripValue? = nil) -> Strip {
+        Strip(datePresented: .constant(false), tagsPresented: .constant(false), priorityPresented: .constant(false),
+              date: date, tags: nil, priority: nil, onClearDate: {}, onClearTags: {}, onClearPriority: {},
+              datePicker: { EmptyView() }, tagPicker: { EmptyView() }, priorityPicker: { EmptyView() },
+              files: nil, onAttach: {}, onClearFiles: {})
+    }
+
+    private func host(_ design: AtticDesignContext, date: AtticStripValue? = nil) -> (NSPanel, NSView) {
+        let size = CGSize(width: 300, height: 40)
+        let panel = KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let view = NSHostingView(rootView: strip(date: date).frame(width: size.width, height: size.height).atticDesign(design))
+        panel.contentView = view
+        panel.orderFront(nil)
+        panel.makeKey()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        view.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        CATransaction.flush()
+        return (panel, view)
+    }
+
+    /// AppKit's backdrop layers (the glass the window server samples), with
+    /// how many glass shapes each draws.
+    private func backdrops(in view: NSView) -> [Int] {
+        func shapes(_ layer: CALayer) -> Int {
+            ("\(type(of: layer))".contains("SDFElement") ? 1 : 0) + (layer.sublayers ?? []).map(shapes).reduce(0, +)
+        }
+        func walk(_ layer: CALayer) -> [Int] {
+            ("\(type(of: layer))".contains("Backdrop") ? [shapes(layer)] : []) + (layer.sublayers ?? []).flatMap(walk)
+        }
+        return view.layer.map(walk) ?? []
+    }
+
+    func testTheStripButtonsAreTheFloatingGlassOnePillEach() {
+        XCTAssertEqual(AtticPickerMetrics.stripHeight, AtticControlSize.headerControl, "the floating controls' Medium height")
+        XCTAssertEqual(Strip.usualWidth([("Attach", nil)], iconOnly: [0]), AtticPickerMetrics.stripHeight,
+                       "the paperclip alone is a circle: as wide as it is tall")
+        let tomorrow = AtticStripValue(text: "Tomorrow", spoken: "Tomorrow")
+        for surface in PanelSurfaceStyle.allCases {
+            for mode in [AtticDesignContext.Mode.light, .dark] {
+                for increaseContrast in [false, true] {
+                    for date in [nil, tomorrow] {
+                        let design = AtticDesignContext(mode: mode, surface: surface, increaseContrast: increaseContrast)
+                        guard design.effectiveControls == .liquidGlass else { continue }
+                        let (panel, view) = host(design, date: date)
+                        defer { panel.orderOut(nil); panel.close() }
+                        let name = "\(surface) \(mode) contrast=\(increaseContrast) date=\(date?.text ?? "unset")"
+                        XCTAssertEqual(backdrops(in: view), [4], "\(name): one container, Date, Tag, Priority and the paperclip its shapes")
+                    }
+                }
+            }
+        }
+    }
+
+    func testWhereTheControlsAreNotGlassTheStripTakesTheirOpaqueSurface() throws {
+        let opaque: [(String, AtticDesignContext)] = [
+            ("Reduce Transparency", AtticDesignContext(reduceTransparency: true)),
+            ("Reduce Transparency, Dark", AtticDesignContext(mode: .dark, reduceTransparency: true)),
+            ("Craft (a Solid panel that is not key)", AtticDesignContext(controls: .craft)),
+        ]
+        for (name, design) in opaque {
+            let (panel, view) = host(design)
+            defer { panel.orderOut(nil); panel.close() }
+            XCTAssertTrue(backdrops(in: view).isEmpty, "\(name): no glass")
+            guard design.reduceTransparency else { continue }
+            // Date's pill, between its edge and its icon, is opaque.
+            let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / view.bounds.width
+            let pixel = try XCTUnwrap(rep.colorAt(x: Int(4 * scale), y: Int(view.bounds.midY * scale)))
+            let opaqueFound = pixel.alphaComponent > 0.99
+            XCTAssertTrue(opaqueFound, "\(name): the pills lie on the opaque raised surface (U-02), alpha \(pixel.alphaComponent)")
+        }
     }
 }

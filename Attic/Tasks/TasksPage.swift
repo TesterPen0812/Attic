@@ -3358,7 +3358,7 @@ private struct TasksAddBar: View {
                 // Built with the bar and shown by a frame and an opacity, as
                 // the send button is: the first keystroke changes those,
                 // never builds the strip (spec: one frame per keystroke).
-                .frame(height: stripShown ? AtticControlSize.smallHeight : 0, alignment: .top)
+                .frame(height: stripShown ? AtticPickerMetrics.stripHeight : 0, alignment: .top)
                 .opacity(stripShown ? 1 : 0)
                 // It rises into place with the bar's spring (round 9).
                 .offset(y: stripShown || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
@@ -4734,7 +4734,7 @@ struct TasksEdgeBackdrops: View {
 enum TasksViewport {
     /// The bottom stack's room the lists always keep: the add bar, and the
     /// strip over it with its gap (it comes and goes with the draft).
-    static let reservedStack = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight
+    static let reservedStack = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar + AtticPickerMetrics.stripHeight
 
     /// Below every control on the tabs line, including Find's taller field.
     static func controlsBottom(tabsTop: CGFloat) -> CGFloat {

@@ -187,7 +187,7 @@ final class DeepReviewFixTests: XCTestCase {
 
         hosted.model.addBar = TaskAddBarText(text: "Pay rent tomorrow #home !!")
         hosted.spin(0.8)
-        let strip = AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight
+        let strip = AtticPickerMetrics.stripToBar + AtticPickerMetrics.stripHeight
         try assertClear(bottom: hosted.height - idle - strip, state: "metadata strip")
         hosted.model.addBarState.clearDraft()
         hosted.spin(0.8)
