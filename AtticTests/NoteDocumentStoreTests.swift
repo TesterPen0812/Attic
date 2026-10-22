@@ -190,6 +190,25 @@ final class NoteDocumentStoreTests: XCTestCase {
         try checkOpusVisibleReplica(restoring: true)
     }
 
+    func testOpusR2VersionRestoreKeepsEquivalentReplicasPurgeable() throws {
+        let (id, revision) = try create(document("Title", ["Body"]))
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let version = try XCTUnwrap(store.versions(noteID: id).first)
+        let original = try XCTUnwrap(store.note(withID: id))
+        let duplicate = NoteItem(id: id, title: original.title, body: original.body,
+            createdAt: original.createdAt, updatedAt: original.updatedAt.addingTimeInterval(-1))
+        duplicate.content = original.content; duplicate.contentFormat = original.contentFormat
+        duplicate.revisionID = revision; duplicate.revision = original.revision
+        store.modelContext.insert(duplicate); try store.modelContext.save(); store.refresh()
+
+        _ = try store.restoreVersion(version.id, noteID: id).get()
+        XCTAssertEqual(Set(try rows(id).map(\.updatedAt)).count, 1,
+            "Equivalent replicas must not acquire an artificial disagreement")
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [id])
+        XCTAssertTrue(try rows(id).isEmpty)
+    }
+
     private func checkOpusVisibleReplica(restoring: Bool) throws {
         let (id, revision) = try create(document("Title", ["Body"]))
         let visible = try XCTUnwrap(store.note(withID: id))

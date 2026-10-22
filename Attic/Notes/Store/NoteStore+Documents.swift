@@ -741,7 +741,6 @@ extension NoteStore {
                                      revisionID: UUID, tags: String? = nil) {
         if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context) }
         let preferred = canonicalReplicas(from: replicas)
-        let duplicated = Set(Dictionary(grouping: replicas, by: \.id).filter { $0.value.count > 1 }.keys)
         for replica in replicas {
             replica.installPreparedContent(projection)
             replica.contentFormat = format
@@ -759,10 +758,21 @@ extension NoteStore {
             // Untouched metadata belongs to each physical replica.
             if let tags { replica.tagsRaw = tags }
         }
-        // Body writes change every replica's timestamp. Keep presentation on
-        // its pre-save winner without copying that winner's unrelated fields.
-        for replica in preferred where duplicated.contains(replica.id) {
-            replica.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextUp)
+        preserveDocumentPresentation(preferred, on: replicas, timestamp: timestamp)
+    }
+
+    private static func preserveDocumentPresentation(_ preferred: [NoteItem], on replicas: [NoteItem], timestamp: Date) {
+        let families = Dictionary(grouping: replicas, by: \.id)
+        for winner in preferred {
+            // Compare after staging: equivalent copies must remain equivalent
+            // for conservative cleanup. A bias is needed only when a switch
+            // would expose different metadata that this write did not change.
+            guard families[winner.id]?.contains(where: {
+                $0.createdAt != winner.createdAt || $0.tagsRaw != winner.tagsRaw || $0.pinnedAt != winner.pinnedAt
+                    || $0.taskID != winner.taskID || $0.associationGeneration != winner.associationGeneration
+                    || $0.externalEditorName != winner.externalEditorName || $0.externalEditedAt != winner.externalEditedAt
+            }) == true else { continue }
+            winner.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextUp)
         }
     }
 
@@ -1133,9 +1143,7 @@ extension NoteStore {
             replica.deletedAt = nil
             replica.deletedAttachmentIDsRaw = nil
         }
-        if replicas.count > 1 {
-            preflight.canonical.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextUp)
-        }
+        Self.preserveDocumentPresentation([preflight.canonical], on: replicas, timestamp: timestamp)
         if let data = restoredContent, let restored = NoteContentCodec.decode(data).document {
             do {
                 let rows = try attachmentRows(forNoteID: noteID)
