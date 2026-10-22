@@ -53,6 +53,7 @@ enum TaskAttachmentMigration {
         var documentDigest: String?
         var placementIDs: [UUID] = []
         var attachmentIDs: [UUID] = []
+        var originalPlacements: [UUID: String]? = nil
         static let absentNote = NoteState(absent: true)
     }
 
@@ -161,6 +162,7 @@ enum TaskAttachmentMigration {
         for row in rows where row.imageReferencesData?.isEmpty == false || row.removedAttachmentsData?.isEmpty == false {
             roots.insert(row.parentID ?? row.id)
         }
+        roots.formUnion(try context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>()).map(\.id))
         return roots.sorted { $0.uuidString < $1.uuidString }
     }
 
@@ -379,6 +381,10 @@ enum TaskAttachmentMigration {
         return (width, height)
     }
 
+    private static func placementDigest(_ block: NoteBlock) throws -> String {
+        WorkspaceModelFields.digest(try NoteContentCodec.encode(NoteDocument(blocks: [.text(""), block])))
+    }
+
     // MARK: Migrate (and reconcile an older writer's changes)
 
     /// Moves one family's legacy files into its own note, as one S1
@@ -428,7 +434,9 @@ enum TaskAttachmentMigration {
                 for old in previous.shown where current[old.reference.id]?.isShown != true {
                     let placement = placementID(attachment: old.reference.id, note: destination.noteID)
                     guard let block = destination.document.blocks.first(where: { $0.id == placement }),
-                          block.attachmentID == old.reference.id else {
+                          block.attachmentID == old.reference.id,
+                          previousAfter?.originalPlacements?[placement] == (try placementDigest(block)),
+                          destination.document.blocks.filter({ $0.attachmentID == old.reference.id }).count == 1 else {
                         return .refused(.changedSinceMoving(old.reference.filename))
                     }
                     removals.append(old)
@@ -446,7 +454,7 @@ enum TaskAttachmentMigration {
             let noteReplicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
             let versions = Dictionary(uniqueKeysWithValues: noteReplicas.map { ($0.persistentModelID, UUID()) })
             var writes: Set<WorkspaceOwner> = [.init(entity: .note, id: noteID), .init(entity: .migration, id: rootID)]
-            writes.formUnion(ids.map { .init(entity: .attachment, id: $0) })
+            writes.formUnion(ids.union(destination.noteRows.map(\.id)).map { .init(entity: .attachment, id: $0) })
             writes.formUnion(versions.values.map { .init(entity: .version, id: $0) })
             if !destination.exists {
                 writes.formUnion([.init(entity: .association, id: associationID), .init(entity: .task, id: rootID)])
@@ -497,6 +505,15 @@ enum TaskAttachmentMigration {
             let after = NoteState(absent: false, revisionID: revision, documentDigest: WorkspaceModelFields.digest(prepared.content),
                                   placementIDs: placements,
                                   attachmentIDs: Array(Set((previousAfter?.attachmentIDs ?? []) + entries.map(\.reference.id))).sorted { $0.uuidString < $1.uuidString })
+            var recordedAfter = after
+            // Preserve the first shape of each placement. A later reconciliation
+            // must never bless a person's intervening resize or metadata edit.
+            recordedAfter.originalPlacements = previousAfter?.originalPlacements ?? [:]
+            for block in document.blocks where block.id.map(placements.contains) == true {
+                if previousAfter == nil || !((previousAfter?.placementIDs ?? []).contains(block.id!)) {
+                    recordedAfter.originalPlacements?[block.id!] = try placementDigest(block)
+                }
+            }
             let before = previousAfter == nil ? destination.before : nil
             let created = !destination.exists
             let revived = destination.revived
@@ -548,7 +565,7 @@ enum TaskAttachmentMigration {
                     commit.insert(row)
                 }
                 try stageRecord(rootID: rootID, noteID: noteID, created: created || revived, manifest: manifest,
-                                before: before, after: after, state: migratedState, in: commit, at: now)
+                                before: before, after: recordedAfter, state: migratedState, in: commit, at: now)
                 try boundary("M4-record")
             }, publication: .init(steps: [{ _ in
                 try boundary("M5-publication")

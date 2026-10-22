@@ -753,7 +753,7 @@ extension TaskFileMigrationTests {
         XCTAssertTrue(report.reconciled.contains(id))
         XCTAssertFalse(try document(noteID).attachmentIDs.contains(refs[0].id))
         let direct = await migrate(id)
-        XCTAssertEqual(direct, .reconciled)
+        XCTAssertEqual(direct, .unchanged, "launch already reconciled the removal; direct retry is idempotent")
     }
 
     func testP3S2F7ConflictingOriginalStaysVisible() async throws {
