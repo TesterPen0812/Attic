@@ -272,3 +272,167 @@ final class ComposerStripGlassTests: XCTestCase {
         }
     }
 }
+
+/// Top glass (option "B for the top", 2026-10-22): the plain controls on
+/// the top line, which rows and notes run under, float on the raised
+/// material as the composer strip's do: Tasks' tabs in one capsule and its
+/// Find and View Options each on a circle, All notes' title and tags in one
+/// capsule and its magnifier on a circle, an open search field, and
+/// History's version switch. Where the controls are not glass (Reduce
+/// Transparency, Craft) they take the opaque raised surface.
+@MainActor
+final class TopGlassTests: XCTestCase {
+    private final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
+
+    /// All notes' line, with its own focus state.
+    private struct LibraryLine: View {
+        let tags: [String]
+        var searchShown = false
+        @FocusState private var focused: Bool
+
+        var body: some View {
+            AtticNoteLibraryLine(title: "All notes", placeholder: "Search notes", query: .constant(""),
+                                 searchShown: searchShown, fieldFocused: $focused,
+                                 onBeginSearch: {}, onEndSearch: {}, tags: tags, activeTag: tags.first)
+        }
+    }
+
+    /// Tasks' top line as the page builds it: the tabs' capsule, then Find
+    /// and View Options on their circles, in one glass container.
+    private struct TasksLine: View {
+        var body: some View {
+            AtticControlGroup {
+                HStack(spacing: 0) {
+                    AtticPageTabs(items: [.init(page: 0, title: "Now"), .init(page: 1, title: "Later"), .init(page: 2, title: "Done")],
+                                  selection: .constant(0))
+                        .atticTopLineCapsule()
+                        .padding(.leading, AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding)
+                    Spacer(minLength: AtticTopGlassMetrics.spacing)
+                    AtticSmallButton(systemName: "magnifyingglass", label: "Find", quietIcon: true, floating: true) {}
+                        .padding(.trailing, AtticTopGlassMetrics.spacing)
+                    AtticMenuButton(systemName: "line.3.horizontal.decrease", label: "View Options", commands: { [] },
+                                    showsDot: true, quietIcon: false, floating: true)
+                        .padding(.trailing, AtticTopGlassMetrics.lineEndInset)
+                }
+            }
+        }
+    }
+
+    private struct VersionSwitch: View {
+        @State private var current = true
+        var body: some View {
+            NoteHistoryVersionSwitch(choices: [(true, "Current"), (false, "Oct 21, 9:41")], selection: $current)
+        }
+    }
+
+    private func host<V: View>(_ content: V, _ design: AtticDesignContext, width: CGFloat = 300) -> (NSPanel, NSView) {
+        let size = CGSize(width: width, height: 44)
+        let panel = KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let view = NSHostingView(rootView: content.frame(width: size.width, height: size.height).atticDesign(design))
+        panel.contentView = view
+        panel.orderFront(nil)
+        panel.makeKey()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        view.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        CATransaction.flush()
+        return (panel, view)
+    }
+
+    /// AppKit's backdrop layers (the glass the window server samples), with
+    /// how many glass shapes each draws.
+    private func backdrops(in view: NSView) -> [Int] {
+        func shapes(_ layer: CALayer) -> Int {
+            ("\(type(of: layer))".contains("SDFElement") ? 1 : 0) + (layer.sublayers ?? []).map(shapes).reduce(0, +)
+        }
+        func walk(_ layer: CALayer) -> [Int] {
+            ("\(type(of: layer))".contains("Backdrop") ? [shapes(layer)] : []) + (layer.sublayers ?? []).flatMap(walk)
+        }
+        return view.layer.map(walk) ?? []
+    }
+
+    /// The top line's controls in every glass context, with how many glass
+    /// shapes each must draw.
+    private var specimens: [(String, AnyView, Int)] {
+        [("Tasks' tabs, Find and View Options", AnyView(TasksLine()), 3),
+         ("All notes alone", AnyView(LibraryLine(tags: [])), 2),
+         ("All notes and its tags", AnyView(LibraryLine(tags: ["home", "work"])), 2),
+         ("All notes' search field", AnyView(LibraryLine(tags: [], searchShown: true)), 1),
+         ("Tasks' search field", AnyView(AtticTabsSearchField(placeholder: "Find", text: .constant(""), floating: true, onEscape: {})), 1),
+         ("History's version switch", AnyView(VersionSwitch()), 1)]
+    }
+
+    func testTheTopLineTakesTheFloatingControlsMeasures() {
+        XCTAssertEqual(AtticTopGlassMetrics.height, AtticControlSize.headerControl, "the corner buttons' Medium height")
+        XCTAssertEqual(AtticTabsSearchField.height(floating: true), AtticControlSize.headerControl)
+        XCTAssertEqual(AtticTabsSearchField.height(floating: false), AtticControlSize.smallHeight, "the find bar's field is unchanged")
+        XCTAssertEqual(AtticNoteLibraryLine.height, AtticControlSize.headerControl)
+        XCTAssertEqual(NoteHistoryVersionSwitch.height, AtticControlSize.headerControl)
+        // The capsule's edge and the last circle's on the controls' line;
+        // the labels stay on the content line (24 pt at the 16 pt chrome).
+        let chrome = AtticStyle.chromeMinimumInset
+        let pageEdge = AtticLayout.tasksPageEdge(chromeInset: chrome)
+        XCTAssertEqual(pageEdge + AtticLayout.pageTabsX, chrome + AtticLayout.contentFromChrome, "the labels where they were")
+        XCTAssertEqual(pageEdge + AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding, chrome, "the capsule's leading edge")
+        XCTAssertEqual(pageEdge + AtticTopGlassMetrics.lineEndInset, chrome, "the last circle's trailing edge")
+        XCTAssertEqual(AtticNoteMetrics.libraryPageEdge(chromeInset: chrome), pageEdge, "Notes' line on the same edges")
+    }
+
+    func testTheTopLinesControlsAreFloatingGlass() {
+        for surface in PanelSurfaceStyle.allCases {
+            for mode in [AtticDesignContext.Mode.light, .dark] {
+                for increaseContrast in [false, true] {
+                    let design = AtticDesignContext(mode: mode, surface: surface, increaseContrast: increaseContrast)
+                    guard design.effectiveControls == .liquidGlass else { continue }
+                    for (name, view, count) in specimens {
+                        let (panel, hosted) = host(view, design)
+                        defer { panel.orderOut(nil); panel.close() }
+                        let found = backdrops(in: hosted)
+                        XCTAssertEqual(found.reduce(0, +), count, "\(name), \(surface) \(mode) contrast=\(increaseContrast): \(found)")
+                        if count > 1 {
+                            XCTAssertEqual(found.count, 1, "\(name): one glass container, one shape per control")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testWhereTheControlsAreNotGlassTheTopLineTakesTheirOpaqueSurface() throws {
+        let opaque: [(String, AtticDesignContext)] = [
+            ("Reduce Transparency", AtticDesignContext(reduceTransparency: true)),
+            ("Reduce Transparency, Dark", AtticDesignContext(mode: .dark, reduceTransparency: true)),
+            ("Craft (a Solid panel that is not key)", AtticDesignContext(controls: .craft)),
+        ]
+        for (name, design) in opaque {
+            for (specimen, view, _) in specimens {
+                let (panel, hosted) = host(view, design)
+                defer { panel.orderOut(nil); panel.close() }
+                XCTAssertTrue(backdrops(in: hosted).isEmpty, "\(name), \(specimen): no glass")
+            }
+            guard design.reduceTransparency else { continue }
+            // The tabs' capsule, in its padding before "Now", and the last
+            // circle, at its centre's height near its trailing edge, are opaque.
+            let (panel, hosted) = host(TasksLine(), design)
+            defer { panel.orderOut(nil); panel.close() }
+            let rep = try XCTUnwrap(hosted.bitmapImageRepForCachingDisplay(in: hosted.bounds))
+            hosted.cacheDisplay(in: hosted.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / hosted.bounds.width
+            let y = Int(hosted.bounds.midY * scale)
+            let capsule = try XCTUnwrap(rep.colorAt(x: Int((AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding + 3) * scale), y: y))
+            XCTAssertGreaterThan(capsule.alphaComponent, 0.99, "\(name): the tabs' capsule is the opaque raised surface (U-02)")
+            let circleX = hosted.bounds.width - AtticTopGlassMetrics.lineEndInset - 4
+            let circle = try XCTUnwrap(rep.colorAt(x: Int(circleX * scale), y: y))
+            XCTAssertGreaterThan(circle.alphaComponent, 0.99, "\(name): View Options' circle is the opaque raised surface (U-02)")
+        }
+    }
+
+    func testTheFindBarsFieldKeepsItsRecessedFill() {
+        let (panel, hosted) = host(AtticTabsSearchField(placeholder: "Find in note", text: .constant(""), onEscape: {}),
+                                   AtticDesignContext())
+        defer { panel.orderOut(nil); panel.close() }
+        XCTAssertTrue(backdrops(in: hosted).isEmpty, "on its own card: no glass of its own")
+    }
+}
