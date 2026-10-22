@@ -748,6 +748,9 @@ final class AppCoordinator: ObservableObject {
             // seeded rows as they were before the migration.
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SEED"] == "taskfiles",
                ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SKIP_FILE_MIGRATION"] != "1" { runTaskFileMigration() }
+            else if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_SEED"] == "taskfiles" {
+                Task { @MainActor [weak self] in await TaskFilesPreviewSeed.pending?.value; self?.store.refresh() }
+            }
             // Phase 3 slice 0b's seeded entry point: a task's note over Notes.
             if let scenario = TaskNotePreviewSeed.requested(), let taskID = TaskNotePreviewSeed.seeded[scenario] {
                 uiState.selectSection(.notes)
@@ -1133,6 +1136,13 @@ final class AppCoordinator: ObservableObject {
                 return TaskFilesState.noteIsOpen(root, notes: pages, coordinator: coordinator)
             })
             pages.store.refresh()
+            // Capture seam (UI testing): open a seeded family's page
+            // (`ATTIC_UI_TEST_TASK_FILES=homepage|venue|taxes|kitchen`).
+            if self.isUITesting, let raw = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_TASK_FILES"],
+               let sample = TaskFilesPreviewSeed.Sample(rawValue: raw), let id = TaskFilesPreviewSeed.seeded[sample] {
+                self.uiState.selectSection(.notes)
+                self.uiState.openTaskNoteID = id
+            }
         }
     }
 
