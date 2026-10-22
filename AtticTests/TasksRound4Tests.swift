@@ -146,19 +146,29 @@ final class TasksRound4Tests: XCTestCase {
         return LiveBar(window: window, view: view, editor: editor, coordinator: coordinator)
     }
 
-    func testPerf3ModelAppliedSelectionIsReportedAfterTheUpdate() {
+    func testPerf3ModelAppliedSelectionIsReportedAfterTheUpdate() async {
         let bar = liveBar()
         defer { bar.window.close() }
         let state = model.addBarState
         state.text = TaskAddBarText(text: "Restored #tag")
         state.caret = nil
-        bar.coordinator.isApplyingModel = true
-        bar.view.textView.string = state.text.text
         let end = state.text.text.utf16.count
-        bar.view.textView.setSelectedRange(NSRange(location: end, length: 0))
-        XCTAssertNil(state.caret, "a model update must not publish into its active SwiftUI update")
-        bar.coordinator.isApplyingModel = false
-        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                bar.coordinator.isApplyingModel = true
+                bar.view.textView.string = state.text.text
+                bar.view.textView.setSelectedRange(NSRange(location: end, length: 0))
+                XCTAssertNil(state.caret, "a model update must not publish into its active SwiftUI update")
+                bar.coordinator.isApplyingModel = false
+                // A nested run loop cannot drain the main queue while this
+                // callback owns it. Queue the check behind the selection
+                // report, after the model update has returned.
+                DispatchQueue.main.async {
+                    XCTAssertEqual(state.caret, end, "the restored selection still reaches draft/chip state")
+                    continuation.resume()
+                }
+            }
+        }
         XCTAssertEqual(state.caret, end, "the restored selection still reaches draft/chip state")
         bar.view.textView.setSelectedRange(NSRange(location: 3, length: 0))
         XCTAssertEqual(state.caret, 3, "native caret movement remains synchronous")
