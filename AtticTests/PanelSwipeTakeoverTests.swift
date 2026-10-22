@@ -128,7 +128,7 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         let suite: String
     }
 
-    private func makeRig(_ mode: PanelHideAnimation) throws -> Rig {
+    private func makeRig(_ mode: PanelHideAnimation, reduceMotion: Bool = false) throws -> Rig {
         let suite = "PanelSwipeTakeoverTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -137,6 +137,12 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         let existing = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
         let settings = AppSettings(defaults: defaults)
         settings.hideAnimation = mode
+        settings.animations = .lively
+        // A takeover exists only with motion. State the setting under test
+        // rather than inherit the machine's: GitHub's macOS runner images
+        // turn Reduce Motion on, where every panel-level case here faded
+        // instead of moving (CI, 10-22).
+        AtticMotionPreference.systemReduceMotionOverride = reduceMotion
         let controller = AtticPanelController(
             store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: persistence)),
             noteDraft: NoteDraftController(noteStore: notes), settings: settings, uiState: PanelUIState()
@@ -158,6 +164,7 @@ final class PanelSwipeTakeoverTests: XCTestCase {
     }
 
     private func close(_ rig: Rig) {
+        AtticMotionPreference.systemReduceMotionOverride = nil
         rig.panel.orderOut(nil)
         rig.defaults.removePersistentDomain(forName: rig.suite)
     }
@@ -267,6 +274,21 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         spin(0.8)
         _ = rig.controller.requestHide { _ in }
         XCTAssertFalse(content.catchesSwipeStarts, "nor is a timed hide")
+    }
+
+    /// Under Reduce Motion a swipe's close or spring-back is a fade with no
+    /// position to pick up: nothing is taken over (as before).
+    func testUnderReduceMotionAReleaseIsNeverTakenOver() throws {
+        let rig = try makeRig(.slide, reduceMotion: true)
+        defer { close(rig) }
+        let content = try XCTUnwrap(rig.panel.contentView as? AtticPanelContentContainer)
+        try swipe(-5, steps: 8, still: 8, on: rig.panel)
+        XCTAssertTrue(rig.panel.isVisible, "a short pull fades back")
+        XCTAssertNil(rig.panel.trackpadSwipeTakeover?(), "the fade back is not taken over")
+        XCTAssertFalse(content.catchesSwipeStarts)
+        try swipe(-8, steps: 12, on: rig.panel)
+        XCTAssertNil(rig.panel.trackpadSwipeTakeover?(), "nor is the fade out")
+        XCTAssertFalse(content.catchesSwipeStarts)
     }
 
     /// Escape or the shortcut hides on a timed motion: a swipe never takes
