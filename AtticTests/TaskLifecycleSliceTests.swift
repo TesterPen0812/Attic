@@ -54,6 +54,28 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(notes.store.note(withID: noteID)?.tags, ["mine"])
     }
 
+    func testOpusR5OrdinaryProposalListFollowsTheReviewWithATaskPageOpen() async throws {
+        let id = try seed(.boundary)
+        let taskPage = try open(id)
+        notes.taskNotePresenter = taskPage
+        await notes.startAndWait()
+        let ordinary = UUID()
+        _ = try notes.store.createDocumentNote(id: ordinary, document: NoteDocument(blocks: [.text("Ordinary"), .text("Body")])).get()
+        XCTAssertTrue(notes.open(noteID: ordinary))
+        let revision = try XCTUnwrap(notes.store.note(withID: ordinary)?.revisionToken)
+        var ids: Set<UUID> = []
+        for text in ["Proposal one", "Proposal two"] {
+            guard case let .success(.pending(edit)) = notes.store.agentWrite(noteID: ordinary,
+                baseRevisionToken: revision, document: NoteDocument(blocks: [.text("Ordinary"), .text(text)]),
+                agentName: "Agent", disposition: .proposal) else { return XCTFail() }
+            ids.insert(edit)
+        }
+        let began = await notes.beginProposalReview(id: try XCTUnwrap(ids.first))
+        XCTAssertTrue(began)
+        XCTAssertEqual(Set(notes.reviewProposals.map(\.id)), ids)
+        XCTAssertTrue(notes.reviewProposals.allSatisfy { $0.noteID == ordinary })
+    }
+
     // MARK: Fixtures
 
     // Phase 3 reservations refuse native input visibly before storage changes.

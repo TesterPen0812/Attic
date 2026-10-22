@@ -847,8 +847,8 @@ final class NotesPageController: ObservableObject {
     }
 
     var reviewProposals: [NotePendingEdit] {
-        guard let session = reviewSession() else { return [] }
-        return store.pendingEdits(noteID: session.noteID)
+        guard let noteID = proposalReview?.noteID else { return [] }
+        return store.pendingEdits(noteID: noteID)
     }
 
     @discardableResult
