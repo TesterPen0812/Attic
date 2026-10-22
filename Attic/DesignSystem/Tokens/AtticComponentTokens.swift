@@ -945,6 +945,25 @@ enum AtticNoteObjectMetrics {
 /// The pickers of owner fix 5 (v17): the composer strip, the suggestions
 /// over the add bar and Move to Task…. The date and tag pickers' card, rows
 /// and month are the dropdown family's (`AtticDropdownMetrics`).
+/// Top glass (option "B for the top", 2026-10-22): with rows and notes
+/// running under the top line, its plain controls float on the raised
+/// material the corner buttons and the composer strip use. A tab group
+/// (Now · Later · Done, All notes and its tags) sits in one capsule; each
+/// icon (Find, View Options, the library's magnifier) in its own circle; an
+/// open search field on the same material. The labels stay where they were.
+enum AtticTopGlassMetrics {
+    /// The floating controls' Medium height (the corner buttons, the strip).
+    static let height: CGFloat = AtticControlSize.headerControl
+    /// How far a tab capsule reaches past its first and last label: its
+    /// leading edge on the controls' line, the labels on the content line.
+    static let capsulePadding: CGFloat = AtticLayout.contentFromChrome
+    /// Between two glass shapes on the line (the composer strip's gap).
+    static let spacing: CGFloat = AtticPickerMetrics.stripSpacing
+    /// The last circle's trailing edge from the page's edge: on the
+    /// controls' line, under the corner button above it.
+    static let lineEndInset: CGFloat = AtticLayout.contentFromChrome
+}
+
 enum AtticPickerMetrics {
     static let rowGap: CGFloat = 8
     /// Between two lit rows' fills (round 5, the owner saw two adjacent tag

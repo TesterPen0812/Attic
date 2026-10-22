@@ -814,6 +814,11 @@ struct AtticTabsSearchField: View {
     @Binding var text: String
     var isFocused: Binding<Bool>?
     var nativeInputIdentifier: String? = nil
+    /// Top glass (2026-10-22): on the top line, which content scrolls
+    /// under, the field floats on the raised material at the Medium height
+    /// (as the add bar does) instead of the recessed fill. The find bar,
+    /// on its own card, keeps the recessed field.
+    var floating = false
     /// Esc, or a click on the "Esc" hint: the search ends.
     let onEscape: () -> Void
 
@@ -822,10 +827,15 @@ struct AtticTabsSearchField: View {
     @FocusState private var focused: Bool
     @State private var claim = AtticFieldClaim()
 
+    /// The field's height: floating, the Medium height.
+    static func height(floating: Bool) -> CGFloat {
+        floating ? AtticTopGlassMetrics.height : AtticControlSize.smallHeight
+    }
+
     var body: some View {
         let m = AtticTabsSearchMetrics.self
         let tokens = design.tokens
-        let height = AtticControlSize.smallHeight
+        let height = Self.height(floating: floating)
         HStack(spacing: 0) {
             AtticIcon(systemName: "magnifyingglass", size: m.iconSize, weight: AtticIconWeight.outline, ink: .helper)
                 .frame(width: AtticControlSize.statusCircle)
@@ -869,7 +879,7 @@ struct AtticTabsSearchField: View {
             .accessibilityLabel(String(localized: "End search"))
         }
         .frame(height: height)
-        .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous).fill(tokens.recessed.color))
+        .modifier(AtticSearchFieldBacking(floating: floating, height: height))
         .contentShape(Rectangle())
         .onTapGesture {
             // The native field has no SwiftUI focus of its own: a click on
@@ -1053,6 +1063,25 @@ struct AtticFieldClaimProbe: NSViewRepresentable {
     }
 }
 
+/// A search field's backing: the recessed fill, or, floating on the top
+/// line, the raised material (not a button, so its glass does not answer
+/// the pointer).
+struct AtticSearchFieldBacking: ViewModifier {
+    let floating: Bool
+    let height: CGFloat
+
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        let radius = AtticRadius.control(height: height)
+        if floating {
+            content.atticRaisedMaterial(cornerRadius: radius, interactive: false)
+        } else {
+            content.background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(design.tokens.recessed.color))
+        }
+    }
+}
+
 // MARK: - Small controls
 
 /// A 28 pt control (radius 12) for the selection bar and other tight spots.
@@ -1066,6 +1095,11 @@ struct AtticSmallButton: View {
     /// next to them): the secondary tier's ink instead of the primary glyph's
     /// (`AtticColorTokens.quietIconInk`).
     let quietIcon: Bool
+    /// Top glass (2026-10-22): an icon on the top line, which content
+    /// scrolls under, floats on its own glass circle like the corner
+    /// buttons: the raised material at the Medium height, as wide as it is
+    /// tall, hover and press as the material's fills.
+    let floating: Bool
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1076,20 +1110,22 @@ struct AtticSmallButton: View {
     @State private var probeID = UUID()
 
     init(systemName: String?, title: String.LocalizationValue? = nil, label: String.LocalizationValue,
-         quietIcon: Bool = false, action: @escaping () -> Void) {
+         quietIcon: Bool = false, floating: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title.map { String(localized: $0) }
         self.accessibilityLabel = String(localized: label)
         self.quietIcon = quietIcon
+        self.floating = floating
         self.action = action
     }
 
     var body: some View {
-        let height = AtticControlSize.smallHeight
+        let height = floating ? AtticTopGlassMetrics.height : AtticControlSize.smallHeight
         let radius = AtticRadius.control(height: height)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Button(action: action) {
-            AtticSmallButtonFace(systemName: systemName, title: title, quietIcon: quietIcon, radius: radius, hovered: hovered)
+            AtticSmallButtonFace(systemName: systemName, title: title, quietIcon: quietIcon, radius: radius, hovered: hovered,
+                                 floating: floating)
                 .contentShape(shape)
         }
         .buttonStyle(AtticFlatPressStyle())
@@ -1097,7 +1133,8 @@ struct AtticSmallButton: View {
         .onHover { hovered = $0 }
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
-        .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
+        .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius,
+                           expectedRadius: floating ? AtticRadius.control(height: AtticTopGlassMetrics.height) : 12)
     }
 }
 
@@ -1135,6 +1172,7 @@ private struct AtticSmallButtonFace: View {
     let quietIcon: Bool
     let radius: CGFloat
     let hovered: Bool
+    var floating = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
@@ -1145,9 +1183,10 @@ private struct AtticSmallButtonFace: View {
     var body: some View {
         let tokens = design.tokens
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: isPressed, isFocused: isFocused).state
-        let fill: AtticRGBA = switch state {
-        case .hover: tokens.chipHover
-        case .pressed: tokens.chipSelected
+        // Floating, the material shows hover and press itself.
+        let fill: AtticRGBA = switch (floating, state) {
+        case (false, .hover): tokens.chipHover
+        case (false, .pressed): tokens.chipSelected
         default: .clear
         }
         let ink: AtticInk = state == .disabled ? .disabledIcon : (quietIcon ? tokens.quietIconInk : .glyph)
@@ -1160,9 +1199,43 @@ private struct AtticSmallButtonFace: View {
             }
         }
         .padding(.horizontal, title == nil ? 0 : AtticSmallControlMetrics.labelPadding)
-        .frame(minWidth: AtticControlSize.smallMinWidth, minHeight: AtticControlSize.smallHeight, maxHeight: AtticControlSize.smallHeight)
+        .modifier(AtticSmallButtonFrame(floating: floating, iconOnly: title == nil))
         .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
+        .modifier(AtticSmallButtonGlass(floating: floating, radius: radius, state: state))
         .atticFocusRing(state == .focused, cornerRadius: radius)
+    }
+}
+
+/// The small button's size: 28 tall and at least 32 wide; floating, the
+/// Medium height, an icon alone in a circle as wide as it is tall.
+private struct AtticSmallButtonFrame: ViewModifier {
+    let floating: Bool
+    let iconOnly: Bool
+
+    func body(content: Content) -> some View {
+        if floating {
+            let height = AtticTopGlassMetrics.height
+            content.frame(minWidth: height, maxWidth: iconOnly ? height : nil, minHeight: height, maxHeight: height)
+        } else {
+            content.frame(minWidth: AtticControlSize.smallMinWidth, minHeight: AtticControlSize.smallHeight,
+                          maxHeight: AtticControlSize.smallHeight)
+        }
+    }
+}
+
+/// A floating small button's own glass (or its opaque stand-in), with the
+/// face's state as the material's fill.
+private struct AtticSmallButtonGlass: ViewModifier {
+    let floating: Bool
+    let radius: CGFloat
+    let state: AtticControlState
+
+    func body(content: Content) -> some View {
+        if floating {
+            content.atticRaisedMaterial(cornerRadius: radius, state: state, interactive: state != .disabled)
+        } else {
+            content
+        }
     }
 }
 
@@ -1862,12 +1935,14 @@ struct AtticMenuButton: View {
     var value: String? = nil
     /// A quiet icon (see `AtticSmallButton.quietIcon`).
     var quietIcon = false
+    /// On its own glass circle (see `AtticSmallButton.floating`).
+    var floating = false
 
     @State private var ownAnchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let anchor = holder ?? ownAnchor
-        AtticSmallButton(systemName: systemName, label: label, quietIcon: quietIcon) {
+        AtticSmallButton(systemName: systemName, label: label, quietIcon: quietIcon, floating: floating) {
             guard let view = anchor.view else { return }
             AtticNativeMenu.popUp(commands(), in: view)
         }
