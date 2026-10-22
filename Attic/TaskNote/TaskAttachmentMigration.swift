@@ -349,6 +349,28 @@ enum TaskAttachmentMigration {
         return .success((staged, leases))
     }
 
+    /// Metadata is not proof of a payload. Nil payloads are repaired from an
+    /// independently verified original in the document commit; corrupt bytes refuse.
+    private static func payloadRepairs(_ entries: [Entry], container: ModelContainer) async throws -> [Entry] {
+        try await Task.detached(priority: .utility) {
+            let context = ModelContext(container)
+            var repair: [Entry] = []
+            for entry in entries {
+                let id = entry.reference.id
+                let rows = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id }))
+                for row in rows {
+                    guard let payload = row.payload else { continue }
+                    guard Int64(payload.count) == entry.reference.byteCount,
+                          NotePayloadDigest.sha256(payload) == entry.reference.digest.lowercased() else {
+                        throw Refusal.changedSinceMoving(entry.reference.filename)
+                    }
+                }
+                if rows.contains(where: { $0.payload == nil }) { repair.append(entry) }
+            }
+            return repair
+        }.value
+    }
+
     nonisolated private static func pixelSize(_ data: Data) -> (Int, Int)? {
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -384,7 +406,6 @@ enum TaskAttachmentMigration {
                 guard record.stateRaw == migratedState else { return nil }
                 return try JSONDecoder().decode(Manifest.self, from: record.manifestData)
             }
-            if let previous, previous.entries == family.manifest.entries { return .unchanged }
             let previousAfter = try records.first.flatMap { record -> NoteState? in
                 guard record.stateRaw == migratedState else { return nil }
                 return try JSONDecoder().decode(NoteState.self, from: record.afterData)
@@ -414,7 +435,7 @@ enum TaskAttachmentMigration {
                 }
             }
             let entries = family.manifest.entries.filter { entry in !removals.contains { $0.reference.id == entry.reference.id } }
-            let needed: [Entry]
+            var needed: [Entry]
             switch validate(entries, into: destination) {
             case let .success(value): needed = value
             case let .failure(refusal): return .refused(refusal)
@@ -434,6 +455,11 @@ enum TaskAttachmentMigration {
             let expected = try coordinator.capture(reads)
             let expectedScopes = try WorkspaceScopeToken.scopes(for: expected).map { try WorkspaceScopeToken.read($0, in: context) }
             try boundary("M1-validation")
+            do {
+                let repairs = try await payloadRepairs(entries, container: coordinator.container)
+                needed += repairs.filter { repair in !needed.contains { $0.reference.id == repair.reference.id } }
+            } catch let refusal as Refusal { return .refused(refusal) }
+            if let previous, previous.entries == family.manifest.entries, needed.isEmpty { return .unchanged }
             let staged: [StagedNoteAttachment]
             let leases: [WorkspaceOwnershipGate.Lease]
             switch await readOriginals(needed, files: files) {
@@ -509,6 +535,11 @@ enum TaskAttachmentMigration {
                 var next = (existing.map(\.sortIndex).max() ?? -1) &+ 1
                 for entry in removedNeeded {
                     guard let item = bytes[entry.reference.id] else { throw WorkspaceFoundationError.conflict }
+                    let family = existing.filter { $0.id == item.id }
+                    if !family.isEmpty {
+                        for row in family where row.payload == nil { row.payload = item.data }
+                        continue
+                    }
                     let row = NoteAttachment(id: item.id, noteID: noteID, originalFilename: item.filename,
                         contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount, sortIndex: next,
                         contentDigest: item.digest, createdAt: now, payload: item.data)

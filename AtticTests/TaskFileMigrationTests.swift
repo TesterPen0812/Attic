@@ -326,7 +326,7 @@ final class TaskFileMigrationTests: XCTestCase {
         let noteID = try insertOwnNote(for: mine, title: "Mine")
         let add = ModelContext(container)
         add.insert(NoteAttachment(id: refs[1].id, noteID: noteID, originalFilename: "mine.txt", byteCount: refs[1].byteCount,
-                                  sortIndex: 0, contentDigest: refs[1].digest, payload: Data()))
+                                  sortIndex: 0, contentDigest: refs[1].digest, payload: try Data(contentsOf: await files.files.materializedURL(for: refs[1].fileReference))))
         try add.save()
         let outcome = await migrate(mine)
         XCTAssertEqual(outcome, .migrated(noteID: noteID, created: false))
