@@ -615,3 +615,164 @@ final class TaskFileMigrationTests: XCTestCase {
         XCTAssertTrue(exists)
     }
 }
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2F1MigrationKeepsInventoryTokens() async throws {
+        let refs = try await legacyFiles(["race.txt"])
+        let id = try insertTask(shown: refs)
+        let noteID = try insertOwnNote(for: id)
+        var fired = false
+        TaskAttachmentMigration.interruption = { [self] point in
+            guard point == "M2-bytes", !fired else { return }
+            fired = true
+            let edit = ModelContext(container)
+            var changed = try document(noteID)
+            changed.blocks.append(.text("Saved while migration read bytes"))
+            let prepared = try PreparedNoteDocument(changed)
+            for row in try edit.fetch(FetchDescriptor<NoteItem>()) where row.id == noteID {
+                NoteStore.stageDocumentContent(prepared, format: 1, on: [row], timestamp: Date(), revision: 1, revisionID: UUID())
+            }
+            try edit.save()
+        }
+        let result = await migrate(id)
+        XCTAssertTrue(fired)
+        XCTAssertEqual(result, .deferred)
+        XCTAssertTrue(try document(noteID).blocks.contains { $0.text == "Saved while migration read bytes" })
+    }
+
+    func testP3S2F5OlderWriterKeepsEditedPlacement() async throws {
+        let refs = try await legacyFiles(["shot.png"])
+        let id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail() }
+        let edit = ModelContext(container)
+        var changed = try document(noteID)
+        let index = try XCTUnwrap(changed.blocks.firstIndex { $0.attachmentID == refs[0].id })
+        changed.blocks[index].widthFraction = 0.5
+        let prepared = try PreparedNoteDocument(changed)
+        for row in try edit.fetch(FetchDescriptor<NoteItem>()) where row.id == noteID {
+            NoteStore.stageDocumentContent(prepared, format: 1, on: [row], timestamp: Date(), revision: 1, revisionID: UUID())
+        }
+        for row in try edit.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+            row.imageReferencesData = nil
+            row.removedAttachmentsData = try JSONEncoder().encode([RemovedTaskAttachment(reference: refs[0], removedAt: Date())])
+        }
+        try edit.save()
+        let result = await migrate(id)
+        XCTAssertEqual(result, .refused(.changedSinceMoving("shot.png")))
+        XCTAssertTrue(try document(noteID).attachmentIDs.contains(refs[0].id))
+    }
+
+    func testP3S2F2OriginalCoverageIsCumulative() async throws {
+        let refs = try await legacyFiles(["retained.txt", "still.txt"])
+        let id = try insertTask(shown: refs)
+        guard case .migrated = await migrate(id) else { return XCTFail() }
+        let edit = ModelContext(container)
+        for row in try edit.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+            row.imageReferencesData = try JSONEncoder().encode([refs[1]])
+            row.removedAttachmentsData = nil
+        }
+        try edit.save()
+        // First reconcile the ordinary older-writer removal, then its
+        // later purge of the legacy Recently Deleted entry.
+        let removal = ModelContext(container)
+        for row in try removal.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+            row.removedAttachmentsData = try JSONEncoder().encode([RemovedTaskAttachment(reference: refs[0], removedAt: Date())])
+        }
+        try removal.save()
+        let firstRemoval = await migrate(id)
+        XCTAssertEqual(firstRemoval, .reconciled)
+        let expiry = ModelContext(container)
+        for row in try expiry.fetch(FetchDescriptor<TaskItem>()) where row.id == id { row.removedAttachmentsData = nil }
+        try expiry.save()
+        let result = await migrate(id)
+        XCTAssertEqual(result, .reconciled)
+        XCTAssertTrue(try TaskAttachmentMigration.coveredAttachmentIDs(in: coordinator.freshContext()).contains(refs[0].id))
+        let tasks = TaskStore(container: container, taskImageFiles: files)
+        files.files.finishCandidates(Set(refs.map(\.id)))
+        _ = await tasks.sweepUnreferencedAttachmentStorage(minimumAge: 0)
+        let exists = await originalExists(refs[0])
+        XCTAssertTrue(exists, "original covered by the first migration must survive reconciliation and sweep")
+    }
+
+    func testP3S2F8EarlierFilesUnionsPhysicalReplicas() async throws {
+        let refs = try await legacyFiles(["A.txt", "B.txt"])
+        let id = try insertTask(shown: [refs[0]])
+        try insertTask(id, shown: [refs[1]])
+        let result = await migrate(id)
+        XCTAssertEqual(result, .refused(.divergentReplicas))
+        let status = TaskAttachmentMigration.status(rootID: id, coordinator: coordinator)
+        XCTAssertEqual(Set(status.earlier.map(\.id)), Set(refs.map(\.id)))
+    }
+
+    func testP3S2F4ExistingRowsNeedVerifiedPayloads() async throws {
+        let refs = try await legacyFiles(["good.txt"])
+        let id = try insertTask(shown: refs)
+        let noteID = try insertOwnNote(for: id)
+        let edit = ModelContext(container)
+        edit.insert(NoteAttachment(id: refs[0].id, noteID: noteID, originalFilename: refs[0].filename,
+            contentTypeIdentifier: refs[0].contentTypeIdentifier, byteCount: refs[0].byteCount, sortIndex: 0,
+            contentDigest: refs[0].digest, payload: nil))
+        try edit.save()
+        let result = await migrate(id)
+        let row = try XCTUnwrap(all(NoteAttachment.self).first { $0.id == refs[0].id })
+        XCTAssertEqual(row.payload.map(NotePayloadDigest.sha256), refs[0].digest)
+        let status = TaskAttachmentMigration.status(rootID: id, coordinator: coordinator)
+        XCTAssertTrue(row.payload != nil || status.earlier.contains { $0.id == refs[0].id }, "either the note has verified bytes or the original remains accessible")
+    }
+}
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2F9ReversalRefusesRecoveryDependency() async throws {
+        let refs = try await legacyFiles(["draft.txt"])
+        let id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail() }
+        var draft = try document(noteID)
+        draft.blocks.append(.text("Unsaved writing using migrated files"))
+        let row = try XCTUnwrap(all(NoteItem.self).first { $0.id == noteID })
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: row.revisionID,
+            content: try NoteContentCodec.encode(draft), selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        _ = try await coordinator.journal.writeDurably(entry, staged: [])
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(refs[0].id))
+        let result = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator)
+        guard case .refused = result else { return XCTFail("a recovery draft still depends on the migrated files") }
+    }
+}
+
+@MainActor
+extension TaskFileMigrationTests {
+    func testP3S2F6LastLegacyRemovalReconciles() async throws {
+        let refs = try await legacyFiles(["last.txt"])
+        let id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail() }
+        let edit = ModelContext(container)
+        for row in try edit.fetch(FetchDescriptor<TaskItem>()) where row.id == id { row.imageReferencesData = nil; row.removedAttachmentsData = nil }
+        try edit.save()
+        let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: files)
+        XCTAssertTrue(report.reconciled.contains(id))
+        XCTAssertFalse(try document(noteID).attachmentIDs.contains(refs[0].id))
+        let direct = await migrate(id)
+        XCTAssertEqual(direct, .reconciled)
+    }
+
+    func testP3S2F7ConflictingOriginalStaysVisible() async throws {
+        let refs = try await legacyFiles(["old.txt", "replacement.txt"])
+        let id = try insertTask(shown: [refs[0]])
+        guard case .migrated = await migrate(id) else { return XCTFail() }
+        let source = try await files.files.materializedURL(for: refs[1].fileReference)
+        let replacement = TaskImageReference(id: refs[0].id, filename: refs[1].filename, digest: refs[1].digest,
+            contentTypeIdentifier: refs[1].contentTypeIdentifier, byteCount: refs[1].byteCount)
+        let target = try await files.files.materializedURL(for: replacement.fileReference)
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: source, to: target)
+        let edit = ModelContext(container)
+        for row in try edit.fetch(FetchDescriptor<TaskItem>()) where row.id == id { row.imageReferencesData = try JSONEncoder().encode([replacement]) }
+        try edit.save()
+        let result = await migrate(id)
+        guard case let .refused(reason) = result else { return XCTFail("\(result)") }
+        let status = TaskAttachmentMigration.status(rootID: id, coordinator: coordinator, refusal: reason)
+        XCTAssertTrue(status.earlier.contains(replacement), "a changed, refused original still exists and must be reachable")
+        XCTAssertNotNil(status.refusal)
+    }
+}

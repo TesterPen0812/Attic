@@ -49,6 +49,7 @@ private final class OnDemandFailingJournal: NoteDraftJournaling {
     let base: NoteDraftJournal
     var failNextWrite = false
     var failNextRemove = false
+    var failNextRead = false
     init(_ base: NoteDraftJournal) { self.base = base }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
@@ -62,7 +63,10 @@ private final class OnDemandFailingJournal: NoteDraftJournaling {
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
 
     var requiresAsyncIO: Bool { true }
-    func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
+    func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] {
+        if failNextRead { failNextRead = false; throw Failure() }
+        return try await base.readRecoveryEntries()
+    }
     func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
         if failNextRemove { failNextRemove = false; throw Failure() }
         try await base.discardOwnedDurably(noteID: noteID, claim: claim)
@@ -3682,5 +3686,61 @@ extension NoteSlice3bTests {
         journal.liveReferencedIDs = { throw NSError(domain: "unreadable live owners", code: 1) }
         do { _ = try await journal.readRecoveryEntries(); XCTFail("unknown owner snapshot must refuse collection") } catch {}
         XCTAssertEqual(try Data(contentsOf: file), item.data)
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testP3S2StartupAwaitsCheckpointAdmission() async throws {
+        let root = ownedTemporaryDirectory(prefix: "ReviewCollision")
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID(), item = staged()
+        let document = NoteDocument(blocks: [.text("Handoff"), .file(attachmentID: item.id,
+            filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        guard case let .success((_, revision)) = store.createDocumentNote(id: id, document: document, staged: [item]) else { return XCTFail() }
+        let journal = NoteDraftJournal(directory: root)
+        _ = try await journal.writeDurably(recoveryEntry(id, document: document, item: item, revision: revision), staged: [item])
+        for row in try store.attachmentRows(forNoteID: id) { store.modelContext.delete(row) }
+        try store.modelContext.save(); store.refresh()
+        await store.waitForAttachmentReconciliation()
+        let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+        let collection = try XCTUnwrap(coordinator.ownership.tryAcquire([item.id], kind: .collection))
+        let release = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            collection.release()
+        }
+        let controller = NotesPageController(store: store, journal: journal)
+        await controller.startAndWait()
+        await release.value
+        await controller.recoverAtLaunchAndWait()
+        let stored = await store.verifiedAttachmentBytes(item.id)
+        XCTAssertEqual(stored?.data, item.data, "recovery retries once the collector releases its lease")
+        let recovery = try await journal.entriesDurably()
+        XCTAssertTrue(stored?.data == item.data || recovery.flatMap { $0.1 }.contains { $0.id == item.id && $0.data == item.data }, "unique bytes still have a durable owner")
+    }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testP3S2StartupFailureRemainsRetryable() async throws {
+        let root = ownedTemporaryDirectory(prefix: "StartupRetry")
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID(), item = staged()
+        let document = NoteDocument(blocks: [.text("Handoff"), .file(attachmentID: item.id,
+            filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        guard case let .success((_, revision)) = store.createDocumentNote(id: id, document: document, staged: [item]) else { return XCTFail() }
+        let base = NoteDraftJournal(directory: root)
+        _ = try await base.writeDurably(recoveryEntry(id, document: document, item: item, revision: revision), staged: [item])
+        for row in try store.attachmentRows(forNoteID: id) { store.modelContext.delete(row) }
+        try store.modelContext.save(); store.refresh()
+        await store.waitForAttachmentReconciliation()
+        let journal = OnDemandFailingJournal(base)
+        journal.failNextRead = true
+        let controller = NotesPageController(store: store, journal: journal)
+        await controller.startAndWait()
+        XCTAssertFalse(controller.recoveryWarnings.isEmpty)
+        await controller.recoverAtLaunchAndWait()
+        let repaired = await store.verifiedAttachmentBytes(item.id)
+        XCTAssertEqual(repaired?.data, item.data, "a failed startup read can be retried")
     }
 }

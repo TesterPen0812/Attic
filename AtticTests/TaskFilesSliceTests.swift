@@ -403,3 +403,115 @@ final class TaskFilesSliceTests: XCTestCase {
         XCTAssertTrue(openError, open)
     }
 }
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2F10AgentOpenEditorRequiresProposal() async throws {
+        let (id, _) = try await taskWithOwnNote()
+        let presenter = try open(id)
+        let text = presenter.host.textView
+        text.insertText("\nFresh human line", replacementRange: NSRange(location: (text.string as NSString).length, length: 0))
+        let before = text.string
+        let (result, error) = try await call(agent(), "make_subtask", ["task_id": id.uuidString, "lines": ["Fresh human line"],
+            "base_note_token": "stale", "base_association_token": "stale", "base_task_token": "stale"])
+        XCTAssertTrue(error || result.contains("pending"), "an agent must not consume a live human draft without review")
+        XCTAssertEqual(text.string, before)
+        XCTAssertTrue(tasks.subtasks(of: id).isEmpty)
+    }
+
+    func testP3S2F12ExplicitFileMoveEntersHistory() async throws {
+        let refs = try await legacyFiles(["tool.txt"])
+        let id = try legacyTask("Tool files", shown: refs)
+        let history = notes.undoRoute.workspace(for: .taskWorkspace(id))
+        XCTAssertNil(history.route.undoStepID(in: history.historyID))
+        let (result, error) = try await call(agent(), "move_files_into_note", ["task_id": id.uuidString])
+        XCTAssertFalse(error, result)
+        XCTAssertNotNil(history.route.undoStepID(in: history.historyID), "agent file moves must enter workspace history")
+    }
+
+    func testP3S2F11FailedHeadlessCloseKeepsRecoverableLease() async throws {
+        let id = try XCTUnwrap(tasks.create(title: "Lease")?.id)
+        let child = try XCTUnwrap(tasks.create(title: "Do work", parentID: id)?.id)
+        coordinator.save = { context in
+            let changes = context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray
+            if !changes.isEmpty && changes.allSatisfy({ $0 is OperationReceipt }) { throw CocoaError(.fileWriteNoPermission) }
+            try context.save()
+        }
+        let (result, error) = try await call(agent(), "make_note_checkbox", ["subtask_id": child.uuidString])
+        coordinator.save = { try $0.save() }
+        let page = try coordinator.sessions.session(for: .task(id), notes: notes)
+        for _ in 0..<100 where page.history.hasPendingPublication { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNil(page.activeLease, "an engine-only call must close or retain a recoverable headless lease")
+        if let presenter = TaskNotePresenter.open(for: id) { _ = await presenter.close() }
+        else if let lease = page.activeLease { _ = await page.close(lease) }
+    }
+
+    func testP3S2F1LaunchRechecksOpenPage() async throws {
+        let refs = try await legacyFiles(["opening.txt"])
+        let id = try legacyTask("Opening", shown: refs)
+        var presenter: TaskNotePresenter?
+        TaskAttachmentMigration.interruption = { [self] point in
+            if point == "M2-bytes", presenter == nil { presenter = try open(id) }
+        }
+        await tasks.fileMigration.runAtLaunch(tasks: tasks, isBusy: { [notes, coordinator] root in
+            TaskFilesState.noteIsOpen(root, notes: notes!, coordinator: coordinator!)
+        })
+        TaskAttachmentMigration.interruption = nil
+        XCTAssertNotNil(presenter)
+        XCTAssertTrue(tasks.fileMigration.deferred.contains(id), "opening during file IO must defer migration")
+        XCTAssertNil(try ownNote(id))
+    }
+}
+
+@MainActor
+extension TaskFilesSliceTests {
+    func testP3S2F3LaunchWaitsForRecoveryRepair() async throws {
+        let (id, noteID) = try await taskWithOwnNote()
+        let bytes = Data("note-owned bytes, outside the legacy manifest".utf8)
+        let item = StagedNoteAttachment(id: UUID(), filename: "note-only.txt", contentTypeIdentifier: "public.plain-text",
+            byteCount: Int64(bytes.count), digest: NotePayloadDigest.sha256(bytes), data: bytes)
+        var old = try document(noteID)
+        old.blocks.append(.file(attachmentID: item.id, filename: item.filename,
+            contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount))
+        notes.store.refresh()
+        let beforeRevision = try XCTUnwrap(notes.store.note(withID: noteID)?.revisionID)
+        guard case let .success(revision) = notes.store.saveDocument(noteID: noteID, document: old,
+            baseRevisionID: beforeRevision, staged: [item]) else { return XCTFail("fixture note-only file must save") }
+        let entry = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: revision,
+            content: try NoteContentCodec.encode(old), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+        _ = try await coordinator.journal.writeDurably(entry, staged: [item])
+        let added = try await legacyFiles(["added-by-older-writer.txt"])
+        let edit = ModelContext(container)
+        for row in try edit.fetch(FetchDescriptor<NoteAttachment>()) where row.id == item.id { edit.delete(row) }
+        for row in try edit.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+            row.imageReferencesData = try JSONEncoder().encode(row.attachments + added)
+        }
+        try edit.save()
+        let noteStore = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: filesRoot.appendingPathComponent("recovery-files")))
+        var began = false
+        var resume: CheckedContinuation<Void, Never>?
+        noteStore.attachmentReconciliationWillBegin = {
+            guard !began else { return }
+            began = true
+            await withCheckedContinuation { resume = $0 }
+        }
+        let recovery = NotesPageController(store: noteStore, journal: coordinator.journal, defaults: nil)
+        for _ in 0..<100 where !began { await Task.yield() }
+        XCTAssertTrue(began)
+        // The launch's offers callback starts this work but does not await
+        // it. Let its startup task reach the attachment drain.
+        for _ in 0..<20 { await Task.yield() }
+        let report = await TaskAttachmentMigration.runAll(coordinator: coordinator, files: tasks.taskImageFiles,
+            isBusy: { root in TaskFilesState.noteIsOpen(root, notes: recovery, coordinator: self.coordinator) })
+        noteStore.refresh()
+        resume?.resume(); resume = nil
+        await recovery.startAndWait()
+        let stored = await noteStore.verifiedAttachmentBytes(item.id)
+        XCTAssertEqual(stored?.data, bytes, "launch must finish a matching missing-byte repair before migration advances its revision")
+        let checkpoint = try await coordinator.journal.entriesDurably()
+        XCTAssertTrue(stored?.data == bytes || checkpoint.flatMap { $0.1 }.contains { $0.id == item.id && $0.data == bytes })
+        await noteStore.waitForAttachmentReconciliation()
+    }
+}
