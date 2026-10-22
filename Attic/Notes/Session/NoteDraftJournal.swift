@@ -1017,8 +1017,13 @@ private extension NoteDraftJournalIO {
         let parent = directory.appendingPathComponent("quarantined-operations", isDirectory: true)
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
         var destination = parent.appendingPathComponent(root.lastPathComponent, isDirectory: true)
-        if fileManager.fileExists(atPath: destination.path) {
-            destination = parent.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        while fileManager.fileExists(atPath: destination.path) {
+            // Preserve whether this could be a journal operation identity.
+            // A foreign folder must not acquire a UUID/global owner hold
+            // merely because an earlier artifact used the same name.
+            let suffix = UUID().uuidString
+            let name = UUID(uuidString: root.lastPathComponent) == nil ? root.lastPathComponent + "-" + suffix : suffix
+            destination = parent.appendingPathComponent(name, isDirectory: true)
         }
         try fileManager.moveItem(at: root, to: destination)
         try journalSync(parent); try journalSync(operationsDirectory); try journalSync(directory)

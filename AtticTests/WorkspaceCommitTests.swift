@@ -1921,3 +1921,31 @@ final class WorkspaceTextReplayTests: XCTestCase {
     }
 
 }
+
+@MainActor
+extension WorkspaceCommitTests {
+    func testP3S2RepeatedForeignQuarantineNamesNeverBecomeOperationIdentities() async throws {
+        let operations = coordinator.journal.directory.appendingPathComponent("operations")
+        let archive = coordinator.journal.directory.appendingPathComponent("quarantined-operations")
+        let bytes = Data("foreign artifact kept for Review".utf8)
+        for _ in 0..<3 {
+            let foreign = operations.appendingPathComponent("not-an-operation")
+            try FileManager.default.createDirectory(at: foreign, withIntermediateDirectories: true)
+            try bytes.write(to: foreign.appendingPathComponent("intent.json"))
+            coordinator = try WorkspaceOperationCoordinator(container: container, journal: NoteDraftJournal(directory: coordinator.journal.directory))
+            try await coordinator.reconcileStartup()
+            let collection = coordinator.ownership.tryAcquire([UUID()], kind: .collection)
+            XCTAssertNotNil(collection); collection?.release()
+            let owner = WorkspaceOwner(entity: .task, id: taskID)
+            let envelope = try coordinator.newEnvelope(intent: "independent edit", reads: coordinator.capture([owner]), writes: [owner])
+            let outcome = await coordinator.execute(envelope) { [self] context in
+                for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == taskID { row.updatedAt = Date() }
+            }
+            XCTAssertEqual(outcome, .committed)
+        }
+        let artifacts = try FileManager.default.contentsOfDirectory(at: archive, includingPropertiesForKeys: nil)
+        XCTAssertEqual(artifacts.count, 3)
+        XCTAssertTrue(artifacts.allSatisfy { UUID(uuidString: $0.lastPathComponent) == nil })
+        for artifact in artifacts { XCTAssertEqual(try Data(contentsOf: artifact.appendingPathComponent("intent.json")), bytes) }
+    }
+}
