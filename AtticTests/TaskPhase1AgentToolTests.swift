@@ -92,6 +92,22 @@ final class TaskPhase1AgentToolTests: XCTestCase {
         }
     }
 
+    func testP3S2R3DeletedNotesKeepTheFreshRowsEmptyTitleWithoutRequestingTokens() async throws {
+        let context = ModelContext(store.container)
+        let row = NoteItem(title: "", body: "Body is not the stored title")
+        row.deletedAt = clock.value
+        context.insert(row); try context.save()
+        let notes = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        await notes.waitForAttachmentReconciliation()
+        library = AtticLibrary(tasks: store, notes: notes)
+        tools = AgentTaskTools(store: store, noteStore: notes, library: library)
+        AgentWorkspaceReadSet.captureCount = 0
+        let listed = try XCTUnwrap(call("list_deleted")["items"] as? [[String: Any]])
+        XCTAssertEqual(listed.first?["title"] as? String, "")
+        XCTAssertNil(listed.first?["workspace_token"])
+        XCTAssertEqual(AgentWorkspaceReadSet.captureCount, 0)
+    }
+
     func testCreateAndUpdateTakeStateIncludingBacklog() throws {
         let created = try call("create_task", ["title": "Idea", "state": "backlog"])
         let task = try XCTUnwrap(created["task"] as? [String: Any])

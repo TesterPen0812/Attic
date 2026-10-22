@@ -447,6 +447,14 @@ final class NotesPageController: ObservableObject {
     }
     var launchRecoveryCompleted: Bool { didRecoverAtLaunch }
     func recoverAtLaunchAndWait() async { recoverAtLaunch(); await waitForRecoveryWork() }
+
+    func discardWorkspaceRecovery(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) async throws {
+        throw WorkspaceFoundationError.preparationFailed
+    }
+
+    func restoreWorkspaceRecoveryAsNewNote(_ issue: WorkspaceOperationCoordinator.RecoveryIssue) async throws -> UUID {
+        throw WorkspaceFoundationError.preparationFailed
+    }
     /// Library navigation prepares only document bytes. Full byte ownership
     /// hydration remains part of the existing explicit durable-open API.
     func openFromLibrary(noteID: UUID) async -> Bool {

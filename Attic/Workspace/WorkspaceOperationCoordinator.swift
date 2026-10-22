@@ -272,10 +272,15 @@ final class WorkspaceOperationCoordinator {
         let payloads: [WorkspaceOperationEnvelope.Payload]
     }
     private(set) var preOperationRecoveryCopies: [RecoveryCopy] = []
-    struct RecoveryIssue: Identifiable, Equatable {
+    struct RecoveryIssue: Identifiable, Equatable, Sendable {
         let directory: URL
         let preIntentAbort: Bool
+        var draft: NoteDraftJournalEntry? = nil
+        var claim: WorkspaceOperationClaim? = nil
         var id: String { directory.path }
+        var previewText: String? {
+            draft.flatMap { NoteContentCodec.decode($0.content).document }.map(NoteTextExport.plainText)
+        }
     }
     private(set) var operationRecoveryIssues: [RecoveryIssue] = []
     private final class WeakHistory {

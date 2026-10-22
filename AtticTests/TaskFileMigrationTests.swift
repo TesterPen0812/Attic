@@ -898,3 +898,115 @@ extension TaskFileMigrationTests {
         XCTAssertFalse(coordinator.operationRecoveryIssues.isEmpty)
     }
 }
+
+@MainActor
+extension TaskFileMigrationTests {
+    private func interruptedCopy(_ document: NoteDocument, noteID: UUID, name: String? = nil) throws -> URL {
+        let pre = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [], savedAt: Date(), tags: ["recovered"], tagsChanged: false)
+        let folder = coordinator.journal.directory.appendingPathComponent("operations")
+            .appendingPathComponent(name ?? "preparing-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try WorkspaceModelFields.encode(pre).write(to: folder.appendingPathComponent("pre-draft.json"))
+        return folder
+    }
+
+    private func recoveryPages() async -> NotesPageController {
+        let store = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: root.appendingPathComponent("NoteFiles")))
+        await store.waitForAttachmentReconciliation()
+        let pages = NotesPageController(store: store, journal: coordinator.journal, defaults: nil)
+        await pages.recoverAtLaunchAndWait()
+        return pages
+    }
+
+    func testP3S2R3EmptyAndUnreadablePreIntentFoldersLeaveReviewForQuarantineTrash() async throws {
+        for name in ["preparing-\(UUID().uuidString)", UUID().uuidString] {
+            let folder = coordinator.journal.directory.appendingPathComponent("operations").appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if UUID(uuidString: name) != nil { try Data("damaged pre-copy".utf8).write(to: folder.appendingPathComponent("pre-draft.json")) }
+            try Data("keep artifact bytes".utf8).write(to: folder.appendingPathComponent("sentinel"))
+        }
+        for _ in 0..<2 {
+            try reopen(); try await coordinator.finishLaunch()
+            XCTAssertTrue(coordinator.operationRecoveryIssues.isEmpty, "nothing readable to review")
+            let trash = coordinator.journal.directory.appendingPathComponent("quarantine-trash")
+            let archived = (try? FileManager.default.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)) ?? []
+            XCTAssertEqual(archived.count, 2)
+            for folder in archived { XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("sentinel")), Data("keep artifact bytes".utf8)) }
+            XCTAssertTrue(coordinator.retryHeldWrites())
+        }
+    }
+
+    func testP3S2R3DiscardReleasesOnlyItsCopyAndAllowsMoveFilesBack() async throws {
+        let refs = try await legacyFiles(["discard.txt"]), id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail("seed migration") }
+        var draft = try document(noteID); draft.blocks.append(.text("Interrupted writing"))
+        _ = try interruptedCopy(draft, noteID: noteID)
+        _ = try interruptedCopy(draft, noteID: noteID)
+        try reopen(); try await coordinator.finishLaunch()
+        let pages = await recoveryPages()
+        XCTAssertEqual(pages.workspaceRecoveryIssues.count, 2)
+        guard case .refused = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator) else { return XCTFail("recovery must hold reversal") }
+        let first = try XCTUnwrap(pages.workspaceRecoveryIssues.first)
+        XCTAssertTrue(first.previewText?.contains("Interrupted writing") == true)
+        try await pages.discardWorkspaceRecovery(first)
+        XCTAssertEqual(pages.workspaceRecoveryIssues.count, 1)
+        XCTAssertTrue(coordinator.retainedRecoveryBytes.contains(refs[0].id), "the other operation still owns these bytes")
+        try await pages.discardWorkspaceRecovery(XCTUnwrap(pages.workspaceRecoveryIssues.first))
+        XCTAssertTrue(pages.workspaceRecoveryIssues.isEmpty)
+        XCTAssertFalse(coordinator.retainedRecoveryBytes.contains(refs[0].id))
+        let reversed = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator)
+        XCTAssertEqual(reversed, .reversed)
+        let originalKept = await originalExists(refs[0])
+        XCTAssertTrue(originalKept)
+        XCTAssertFalse(try all(NoteAttachment.self).filter { $0.id == refs[0].id }.isEmpty)
+        try reopen(); try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.operationRecoveryIssues.isEmpty)
+    }
+
+    func testP3S2R3RestoreAsNewNoteCopiesFilesAndReleasesTheOldRecoveryOwner() async throws {
+        let refs = try await legacyFiles(["restore.txt"]), id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail("seed migration") }
+        let saved = try document(noteID)
+        var draft = saved; draft.blocks.append(.text("Interrupted writing restored"))
+        _ = try interruptedCopy(draft, noteID: noteID)
+        try reopen(); try await coordinator.finishLaunch()
+        let pages = await recoveryPages()
+        let newID = try await pages.restoreWorkspaceRecoveryAsNewNote(XCTUnwrap(pages.workspaceRecoveryIssues.first))
+        XCTAssertNotEqual(newID, noteID)
+        let row = try XCTUnwrap(all(NoteItem.self).first { $0.id == newID })
+        XCTAssertNil(row.taskID)
+        XCTAssertEqual(row.tags, ["recovered"])
+        let restored = try document(newID)
+        XCTAssertFalse(restored.requires.contains("taskNote"))
+        XCTAssertTrue(NoteTextExport.plainText(restored).contains("Interrupted writing restored"))
+        XCTAssertEqual(try document(noteID), saved)
+        let newFile = try XCTUnwrap(restored.attachmentIDs.first)
+        XCTAssertNotEqual(newFile, refs[0].id, "restored files have independent owners")
+        let attachment = try XCTUnwrap(all(NoteAttachment.self).first { $0.id == newFile })
+        XCTAssertEqual(attachment.contentDigest, refs[0].digest)
+        XCTAssertEqual(attachment.payload?.count, Int(refs[0].byteCount))
+        XCTAssertTrue(pages.workspaceRecoveryIssues.isEmpty)
+        let reversed = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator)
+        XCTAssertEqual(reversed, .reversed)
+        let originalKept = await originalExists(refs[0])
+        XCTAssertTrue(originalKept)
+        try reopen(); try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.operationRecoveryIssues.isEmpty)
+        XCTAssertEqual(try document(newID), restored)
+    }
+
+    func testP3S2R3EqualStoredPreDraftAutoReleasesItsRetention() async throws {
+        let refs = try await legacyFiles(["equal.txt"]), id = try insertTask(shown: refs)
+        guard case let .migrated(noteID, _) = await migrate(id) else { return XCTFail("seed migration") }
+        _ = try interruptedCopy(document(noteID), noteID: noteID)
+        try reopen(); try await coordinator.finishLaunch()
+        XCTAssertTrue(coordinator.operationRecoveryIssues.isEmpty)
+        XCTAssertFalse(coordinator.retainedRecoveryBytes.contains(refs[0].id))
+        let reversed = await TaskAttachmentMigration.reverse(rootID: id, coordinator: coordinator)
+        XCTAssertEqual(reversed, .reversed)
+        let originalKept = await originalExists(refs[0])
+        XCTAssertTrue(originalKept)
+    }
+}
