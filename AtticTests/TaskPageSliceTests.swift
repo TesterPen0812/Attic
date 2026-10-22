@@ -179,6 +179,43 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertTrue(tasks.task(withID: id)?.attachments.isEmpty ?? true, "not a task attachment")
     }
 
+    func testP3F11FailedHeadlessDropKeepsAnOwnerThatCanCloseAfterStorageRecovers() async throws {
+        let id = try seed(.nonote)
+        let gate = PersistenceGate()
+        gate.shouldFail = true
+        let controller = NotesPageController(store: NoteStore(container: container, persist: gate.save,
+            attachmentFileStore: makeTestAttachmentFileStore()), journal: nil, defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        let url = try temporaryFile("recover.txt")
+        let first = await TaskNoteFiles.importFiles([url], to: id, tasks: tasks, controller: controller)
+        XCTAssertFalse(first)
+        gate.shouldFail = false
+        let second = await TaskNoteFiles.importFiles([url], to: id, tasks: tasks, controller: controller)
+        XCTAssertTrue(second, "the retained owner retries its failed close before the next drop")
+        let presenter = try TaskNotePresenter(taskID: id, tasks: tasks, library: library, notes: controller,
+                                              design: .default, columnInset: 28, defaults: nil)
+        XCTAssertNotNil(presenter.lease)
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+    }
+
+    func testP3F11FailedDropCanHandItsLeaseAndDraftToAVisiblePage() async throws {
+        let id = try seed(.nonote)
+        let gate = PersistenceGate()
+        gate.shouldFail = true
+        let controller = NotesPageController(store: NoteStore(container: container, persist: gate.save,
+            attachmentFileStore: makeTestAttachmentFileStore()), journal: nil, defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        let first = await TaskNoteFiles.importFiles([try temporaryFile("kept.txt")], to: id, tasks: tasks, controller: controller)
+        XCTAssertFalse(first)
+        gate.shouldFail = false
+        let presenter = try TaskNotePresenter(taskID: id, tasks: tasks, library: library, notes: controller,
+                                              design: .default, columnInset: 28, defaults: nil)
+        XCTAssertEqual(presenter.host.engine.objectIDs().count, 1, "the failed drop's draft moves with the lease")
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+    }
+
     func testFilesDroppedOnARowAppendToAnExistingTaskNote() async throws {
         let id = try seed(.boundary)
         let before = try XCTUnwrap(try ownNotes(id).first?.id)

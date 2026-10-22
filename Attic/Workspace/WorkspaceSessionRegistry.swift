@@ -48,6 +48,27 @@ final class WorkspaceSessionRegistry {
     private weak var coordinator: WorkspaceOperationCoordinator?
     let domain: WorkspacePersistenceDomain
     private var sessions: [Identity: WorkspacePageSession] = [:]
+    private var headlessClosures: [UUID: (WorkspacePageSession, WorkspacePageSession.Lease)] = [:]
+
+    /// A failed durable close keeps its concrete lease and owner. The next
+    /// drop can retry after storage recovers without abandoning the writer.
+    func closeHeadless(_ page: WorkspacePageSession, lease: WorkspacePageSession.Lease) async -> Bool {
+        if await page.close(lease) {
+            headlessClosures[page.id] = nil
+            return true
+        }
+        headlessClosures[page.id] = (page, lease)
+        page.retainHeadlessLease(lease)
+        return false
+    }
+
+    func retryHeadlessClosures() async {
+        for (id, pending) in Array(headlessClosures) {
+            if pending.0.controller == nil { headlessClosures[id] = nil; continue }
+            if pending.0.activeLease != pending.1 { headlessClosures[id] = nil; continue }
+            if await pending.0.close(pending.1) { headlessClosures[id] = nil }
+        }
+    }
     /// Optional diagnostic of rows actually materialized by alias resolution.
     var didFetchResolutionRows: ((Int, Int) -> Void)?
     private init(coordinator: WorkspaceOperationCoordinator, domain: WorkspacePersistenceDomain) {
@@ -211,6 +232,8 @@ final class WorkspacePageSession {
     let history: WorkspaceHistory
     private(set) var note: NoteSession?
     private(set) var activeLease: Lease?
+    private var retainedHeadlessLease: Lease?
+    fileprivate func retainHeadlessLease(_ lease: Lease) { if activeLease == lease { retainedHeadlessLease = lease } }
     private var bindingGeneration: UInt64 = 0
     private var closing = false
     private var released = false
@@ -276,6 +299,11 @@ final class WorkspacePageSession {
     func acquire(surfaceID: UUID) throws -> Lease {
         guard !closing, !released, controller != nil else { throw WorkspaceFoundationError.protectedOwner }
         if let activeLease {
+            if retainedHeadlessLease == activeLease {
+                let moved = try handoff(from: activeLease, to: surfaceID)
+                retainedHeadlessLease = nil
+                return moved
+            }
             guard activeLease.surfaceID == surfaceID else { throw WorkspaceFoundationError.protectedOwner }
             return activeLease
         }

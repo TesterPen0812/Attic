@@ -31,20 +31,21 @@ enum TaskNoteFiles {
     /// its own lease, and lets go durably when the batch is in.
     static func importFiles(_ urls: [URL], to taskID: UUID, tasks: TaskStore, controller: NotesPageController) async -> Bool {
         guard !urls.isEmpty else { return false }
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return false }
+        await coordinator.sessions.retryHeadlessClosures()
         if let presenter = TaskNotePresenter.open(for: taskID) {
             guard let session = presenter.session, !session.isReadOnly else { return false }
             return await run(urls, into: session, controller: controller)
         }
-        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container),
-              let page = try? coordinator.sessions.session(for: .task(taskID), notes: controller),
+        guard let page = try? coordinator.sessions.session(for: .task(taskID), notes: controller),
               let lease = try? page.acquire(surfaceID: UUID()) else { return false }
         guard let session = page.note, !session.isReadOnly else {
-            _ = await page.close(lease)
+            _ = await coordinator.sessions.closeHeadless(page, lease: lease)
             return false
         }
         let added = await run(urls, into: session, controller: controller)
         // Closing preserves durably: the batch's save creates the note.
-        let closed = await page.close(lease)
+        let closed = await coordinator.sessions.closeHeadless(page, lease: lease)
         return added && closed
     }
 
