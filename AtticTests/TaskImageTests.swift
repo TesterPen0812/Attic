@@ -61,6 +61,9 @@ final class TaskImageTests: XCTestCase {
             XCTAssertTrue(calls.allSatisfy { $0 > 0 }, "must exercise the production journaled path")
             print("P3_2_WAIT_FOR_IO scenario=\(scenario) samples=\(totals.count) median_ms=\(median) p95_ms=\(sorted.last!) calls=\(calls) all_ms=\(totals)")
         }
+        // The measurement queues metadata/file reconciliation. Its model
+        // context must finish using the store before the owned root leaves.
+        await notes.waitForAttachmentReconciliation()
     }
 
     private func imageFile(in directory: URL) throws -> URL {
