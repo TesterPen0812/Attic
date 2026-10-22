@@ -158,15 +158,23 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 
-    /// Phases: 1 began, 2 changed, 4 ended. Right-docked, classic scrolling:
-    /// toward the edge is a negative dx.
+    /// Phases: 1 began, 2 changed, 4 ended. Right-docked: a negative `dx`
+    /// is toward the edge with classic scrolling; natural scrolling (CI's
+    /// runners) reports the other sign, so it is flipped there. Over the
+    /// header, like a real swipe.
     private func send(_ dx: Int32, phase: Int64, to panel: AtticPanel) throws {
-        let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: dx, wheel3: 0))
-        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
-        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
-        event.location = CGPoint(x: 10, y: 10)
-        panel.sendEvent(try XCTUnwrap(NSEvent(cgEvent: event)))
+        func event(_ dx: Int32) throws -> CGEvent {
+            let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: dx, wheel3: 0))
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+            let point = CGPoint(x: panel.frame.width / 2, y: panel.frame.height - AtticStyle.panelElevationMargin - 20)
+            let screen = panel.convertPoint(toScreen: point)
+            event.location = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.height ?? 0) - screen.y)
+            return event
+        }
+        let inverted = try XCTUnwrap(NSEvent(cgEvent: try event(1))).isDirectionInvertedFromDevice
+        panel.sendEvent(try XCTUnwrap(NSEvent(cgEvent: try event(inverted ? -dx : dx))))
     }
 
     /// A gesture at 120 Hz: `steps` events of `dx` each, `still` resting
