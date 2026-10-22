@@ -269,11 +269,15 @@ final class NoteStoreTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let seedContext = ModelContext(container)
         let sharedID = UUID()
-        seedContext.insert(NoteItem(id: sharedID, title: "Older", body: "a"))
+        // This case isolates changed-field fan-out. Unchanged metadata
+        // must already agree for the later destructive purge to be safe.
+        let createdAt = Date()
+        seedContext.insert(NoteItem(id: sharedID, title: "Older", body: "a", createdAt: createdAt))
         seedContext.insert(NoteItem(
             id: sharedID,
             title: "Visible",
             body: "b",
+            createdAt: createdAt,
             updatedAt: Date().addingTimeInterval(1)
         ))
         try seedContext.save()

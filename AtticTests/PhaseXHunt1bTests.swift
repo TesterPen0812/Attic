@@ -243,7 +243,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(page.active?.engine.document().title, "Current")
     }
 
-    func testR2_05RestoreKeepsNewerUnpinnedReplicaCanonical() async throws {
+    func testR2_05RestorePreservesEachReplicasPinState() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
@@ -263,7 +263,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
         let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
         XCTAssertEqual(physical.count, 2)
-        XCTAssertTrue(physical.allSatisfy { $0.pinnedAt == nil }, "Restore must converge on the newer replica's explicit unpin")
+        XCTAssertEqual(Set(physical.filter(\.isPinned).map(\.persistentModelID)), [older.persistentModelID], "Body restore preserves both the older pin and the newer explicit unpin")
     }
 
     func testH3_01CleanCachedSessionFollowsSameTokenContentRefresh() async throws {
@@ -291,7 +291,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         XCTAssertEqual(page.active?.engine.document().blocks.last?.text, "New body mine")
     }
 
-    func testH3_02BrowserRestoreConvergesPinnedMetadataAcrossPhysicalReplicas() async throws {
+    func testH3_02BrowserRestorePreservesEveryPhysicalReplicasMetadata() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let id = try create(store)
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
@@ -308,6 +308,10 @@ final class PhaseXHunt1bTests: XCTestCase {
         duplicate.revision = canonical.revision; duplicate.revisionID = canonical.revisionID
         duplicate.pinnedAt = nil
         store.modelContext.insert(duplicate); try store.modelContext.save()
+        let expectedMetadata = Dictionary(uniqueKeysWithValues: [canonical, duplicate].map {
+            ($0.persistentModelID, (pinnedAt: $0.pinnedAt, createdAt: $0.createdAt, tags: $0.tags,
+                                    taskID: $0.taskID, editor: $0.externalEditorName, editedAt: $0.externalEditedAt))
+        })
         store.refresh()
         XCTAssertTrue(try XCTUnwrap(store.note(withID: id)).isPinned)
         let page = await controller(store)
@@ -316,14 +320,15 @@ final class PhaseXHunt1bTests: XCTestCase {
         await XCTAssertTrueAsync(await page.restoreHistoryVersionDurably())
         let physical = try ModelContext(store.container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
         XCTAssertEqual(physical.count, 2)
-        XCTAssertTrue(physical.allSatisfy(\.isPinned), "Restore must preserve canonical metadata on every replica")
+        XCTAssertEqual(Set(physical.filter(\.isPinned).map(\.persistentModelID)), [canonical.persistentModelID], "Body restore preserves each replica's unrelated metadata")
         for replica in physical {
-            XCTAssertEqual(replica.pinnedAt, canonical.pinnedAt)
-            XCTAssertEqual(replica.createdAt, canonical.createdAt)
-            XCTAssertEqual(replica.tags, canonical.tags)
-            XCTAssertEqual(replica.taskID, canonical.taskID)
-            XCTAssertEqual(replica.externalEditorName, canonical.externalEditorName)
-            XCTAssertEqual(replica.externalEditedAt, canonical.externalEditedAt)
+            let expected = try XCTUnwrap(expectedMetadata[replica.persistentModelID])
+            XCTAssertEqual(replica.pinnedAt, expected.pinnedAt)
+            XCTAssertEqual(replica.createdAt, expected.createdAt)
+            XCTAssertEqual(replica.tags, expected.tags)
+            XCTAssertEqual(replica.taskID, expected.taskID)
+            XCTAssertEqual(replica.externalEditorName, expected.editor)
+            XCTAssertEqual(replica.externalEditedAt, expected.editedAt)
         }
     }
 
@@ -1434,6 +1439,21 @@ extension PhaseXHunt5Tests {
             })
         }
         XCTAssertTrue(coordinator.noteDraft.pages.newNote())
+        // Phase 3 F17: history must not retain controllers through a
+        // conversion or the task page's retained presentation relays.
+        let pages = coordinator.noteDraft.pages
+        let convertedID = UUID()
+        _ = try coordinator.noteStore.createDocumentNote(id: convertedID,
+            document: NoteDocument(blocks: [.text("Release conversion"), .text("Body")])).get()
+        XCTAssertTrue(pages.open(noteID: convertedID))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: convertedID, notes: pages,
+                                                                       tasks: coordinator.library.tasks) else {
+            throw WorkspaceFoundationError.conflict
+        }
+        let taskPage = try TaskNotePresenter(taskID: taskID, tasks: coordinator.library.tasks,
+            library: coordinator.library, notes: pages, design: .default, columnInset: 28, defaults: nil)
+        let closed = await taskPage.close()
+        XCTAssertTrue(closed)
         let panel: AtticPanelController = try field("panelController", in: coordinator)
         let settings: SettingsWindowController = try field("settingsWindowController", in: coordinator)
         let probes = [WeakProbe<AnyObject>(coordinator), WeakProbe<AnyObject>(panel), WeakProbe<AnyObject>(settings),
