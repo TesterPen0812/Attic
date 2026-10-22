@@ -725,6 +725,8 @@ extension NoteStore {
                                      on replicas: [NoteItem], timestamp: Date, revision: Int64,
                                      revisionID: UUID, tags: String? = nil) {
         if let context = replicas.first?.modelContext { WorkspaceLegacyBridge.prepareMutations(replicas, in: context) }
+        let preferred = canonicalReplicas(from: replicas)
+        let duplicated = Set(Dictionary(grouping: replicas, by: \.id).filter { $0.value.count > 1 }.keys)
         for replica in replicas {
             replica.installPreparedContent(projection)
             replica.contentFormat = format
@@ -741,6 +743,11 @@ extension NoteStore {
             replica.deletedAttachmentIDsRaw = nil
             // Untouched metadata belongs to each physical replica.
             if let tags { replica.tagsRaw = tags }
+        }
+        // Body writes change every replica's timestamp. Keep presentation on
+        // its pre-save winner without copying that winner's unrelated fields.
+        for replica in preferred where duplicated.contains(replica.id) {
+            replica.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextUp)
         }
     }
 
@@ -1110,6 +1117,9 @@ extension NoteStore {
             replica.updatedAt = timestamp
             replica.deletedAt = nil
             replica.deletedAttachmentIDsRaw = nil
+        }
+        if replicas.count > 1 {
+            preflight.canonical.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextUp)
         }
         if let data = restoredContent, let restored = NoteContentCodec.decode(data).document {
             do {

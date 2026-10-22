@@ -182,6 +182,50 @@ final class NoteDocumentStoreTests: XCTestCase {
 
     // MARK: Saves and replicas
 
+    func testOpusR2BodySaveKeepsTheVisibleReplicaAndEachReplicasMetadata() throws {
+        try checkOpusVisibleReplica(restoring: false)
+    }
+
+    func testOpusR2VersionRestoreKeepsTheVisibleReplicaAndEachReplicasMetadata() throws {
+        try checkOpusVisibleReplica(restoring: true)
+    }
+
+    private func checkOpusVisibleReplica(restoring: Bool) throws {
+        let (id, revision) = try create(document("Title", ["Body"]))
+        let visible = try XCTUnwrap(store.note(withID: id))
+        visible.createdAt = Date(timeIntervalSinceReferenceDate: 100)
+        visible.updatedAt = Date(timeIntervalSinceReferenceDate: 500)
+        visible.tags = ["mine"]
+        let other = NoteItem(id: id, title: visible.title, body: visible.body,
+            createdAt: Date(timeIntervalSinceReferenceDate: 200), updatedAt: Date(timeIntervalSinceReferenceDate: 400))
+        other.content = visible.content; other.contentFormat = visible.contentFormat
+        other.revisionID = revision; other.revision = visible.revision
+        other.pinnedAt = Date(timeIntervalSinceReferenceDate: 300); other.tags = ["other"]
+        store.modelContext.insert(other); try store.modelContext.save(); store.refresh()
+        let before = try XCTUnwrap(store.note(withID: id))
+        let physicalID = before.persistentModelID, creation = before.createdAt
+        XCTAssertFalse(before.isPinned)
+        if restoring {
+            XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+            let version = try XCTUnwrap(store.versions(noteID: id).first)
+            _ = try store.restoreVersion(version.id, noteID: id).get()
+        } else {
+            _ = try store.saveDocument(noteID: id, document: document("Title", ["Saved body"]), baseRevisionID: revision).get()
+        }
+        let after = try XCTUnwrap(store.note(withID: id))
+        XCTAssertEqual(after.persistentModelID, physicalID)
+        XCTAssertFalse(after.isPinned)
+        XCTAssertEqual(after.tags, ["mine"])
+        XCTAssertEqual(after.createdAt, creation)
+        let physical = try rows(id)
+        let old = try XCTUnwrap(physical.first { $0.persistentModelID != physicalID })
+        XCTAssertEqual(old.tags, ["other"])
+        XCTAssertEqual(old.createdAt, Date(timeIntervalSinceReferenceDate: 200))
+        XCTAssertEqual(old.pinnedAt, Date(timeIntervalSinceReferenceDate: 300))
+        XCTAssertEqual(physical.first { $0.persistentModelID == physicalID }?.tags, ["mine"])
+    }
+
+
     func testP3F6BodySavePreservesEveryReplicasUnchangedMetadata() throws {
         try checkP3ReplicaMetadata(restoring: false)
     }
