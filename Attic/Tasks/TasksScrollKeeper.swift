@@ -28,21 +28,16 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.pointer = pointer
         view.focusSelection = focusSelection
         view.drawn = drawn
-        pointer?.setContentView(view, for: tab)
         return view
     }
 
     func updateNSView(_ view: KeeperView, context: Context) {
-        if view.tab != tab || view.pointer !== pointer {
-            view.pointer?.removeContentView(view, for: view.tab)
-        }
         view.model = model
         view.tab = tab
         view.proxies = proxies
         view.pointer = pointer
         view.focusSelection = focusSelection
         view.drawn = drawn
-        pointer?.setContentView(view, for: tab)
     }
 
     /// Scrolls `scroll` so the content from `place.top` for `place.height`
@@ -77,7 +72,6 @@ struct TasksScrollKeeper: NSViewRepresentable {
 
     static func dismantleNSView(_ view: KeeperView, coordinator: ()) {
         view.stopObserving()
-        view.pointer?.removeContentView(view, for: view.tab)
     }
 
     /// Thin overlay scrollers whatever the system's "Show scroll bars"
@@ -97,8 +91,6 @@ struct TasksScrollKeeper: NSViewRepresentable {
     }
 
     final class KeeperView: NSView {
-        // Matches SwiftUI's list-content coordinate space.
-        override var isFlipped: Bool { true }
         weak var model: TasksPageModel?
         var tab: TasksTab = .now
         weak var proxies: TasksListProxies?

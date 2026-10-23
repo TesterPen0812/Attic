@@ -72,78 +72,15 @@ final class ScrollEdgeHangTests: XCTestCase {
         try check(reduceMotion: true, deltas: [-145] + Array(repeating: -1, count: 8) + Array(repeating: 1, count: 8))
     }
 
-    private final class ContentView: NSView {
-        override var isFlipped: Bool { true }
+    func testLongDenseListsStillVirtualizeTheirRows() throws {
+        try check(reduceMotion: true, deltas: [], extraRows: 500, enablesAccessibility: false)
     }
 
-    func testContentFrameHitTestingTracksNativeScrollingWithoutAnotherGeometryReport() throws {
-        let window = Panel(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 464),
-                           styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let page = ContentView(frame: CGRect(x: 0, y: 0, width: 320, height: 464))
-        window.contentView = page
-        let scroll = NSScrollView(frame: page.bounds)
-        let content = ContentView(frame: CGRect(x: 0, y: 0, width: 320, height: 1_000))
-        page.addSubview(scroll)
-        scroll.documentView = content
-        let pointer = TasksPointer()
-        pointer.view = page
-        pointer.setContentView(content, for: .now)
-        let row = TasksRowID(tab: .now, id: UUID()), reports = TasksCellReports()
-        let local = CGRect(x: 24, y: 100, width: 272, height: 32)
-        pointer.setContentFrame(local, for: row, from: reports)
-        pointer.setCompletedTodayContentFrame(local.offsetBy(dx: 0, dy: 100), for: .now)
-        let before = try XCTUnwrap(pointer.frames[row])
-        scroll.contentView.scroll(to: CGPoint(x: 0, y: 52))
-        scroll.reflectScrolledClipView(scroll.contentView)
-        let after = try XCTUnwrap(pointer.frames[row])
-        XCTAssertEqual(after.minY, before.minY - 52, accuracy: 0.5)
-        XCTAssertEqual(reports.frame, local, "scrolling needs no SwiftUI geometry report")
-        XCTAssertEqual(pointer.row(at: CGPoint(x: after.midX, y: after.midY), in: .now), row.id)
-        XCTAssertEqual(try XCTUnwrap(pointer.completedTodayFrames[.now]).minY, after.minY + 100, accuracy: 0.5)
-
-        // A retiring native keeper must not remove its replacement.
-        let replacement = ContentView(frame: content.bounds)
-        content.addSubview(replacement)
-        pointer.setContentView(replacement, for: .now)
-        pointer.removeContentView(content, for: .now)
-        XCTAssertEqual(pointer.frames[row], after)
-        pointer.removeContentView(replacement, for: .now)
-        XCTAssertNil(pointer.frames[row], "no stale page coordinates survive a detached content view")
-    }
-
-    func testContentFramesFollowReusedCellsWithoutRemovingAnotherCellsReport() throws {
-        let window = Panel(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 464),
-                           styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let page = ContentView(frame: CGRect(x: 0, y: 0, width: 320, height: 464))
-        window.contentView = page
-        let content = ContentView(frame: page.bounds)
-        page.addSubview(content)
-        let pointer = TasksPointer()
-        pointer.view = page
-        pointer.setContentView(content, for: .done)
-        let first = TasksCellReports(), replacement = TasksCellReports()
-        let old = TasksRowID(tab: .done, id: UUID()), new = TasksRowID(tab: .done, id: UUID())
-        let a = CGRect(x: 24, y: 100, width: 272, height: 32)
-        let b = a.offsetBy(dx: 0, dy: 48)
-        pointer.setContentFrame(a, for: old, from: first)
-        pointer.setContentFrame(b, for: old, from: replacement)
-        pointer.moveFrame(from: old, to: new, of: first)
-        XCTAssertEqual(pointer.frames[old], b)
-        XCTAssertEqual(pointer.frames[new], a)
-        pointer.removeFrame(for: old, of: first)
-        XCTAssertEqual(pointer.frames[old], b)
-        pointer.removeFrame(for: old, of: replacement)
-        XCTAssertNil(pointer.frames[old])
-    }
-
-    private func check(reduceMotion: Bool, deltas: [CGFloat] = [-170, 11, 11, 340]) throws {
+    private func check(reduceMotion: Bool, deltas: [CGFloat] = [-170, 11, 11, 340],
+                       extraRows: Int = 0, enablesAccessibility: Bool = true) throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
-        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        NSApp.accessibilitySetValue(enablesAccessibility, forAttribute: enhanced)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
 
         #if DEBUG
@@ -153,13 +90,16 @@ final class ScrollEdgeHangTests: XCTestCase {
         defer { watchdog.stop() }
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container, long: true)
+        for index in 0..<extraRows { container.mainContext.insert(TaskItem(title: "Dense row \(index)")) }
+        if extraRows > 0 { try container.mainContext.save() }
         let store = TaskStore(container: container)
         let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         // The UI test's panel: 320 × 464, solid, light.
         let size = CGSize(width: 320, height: 464)
         var focused = true
+        let pointer = TasksPointer()
         let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
-                             addBarFocused: Binding(get: { focused }, set: { focused = $0 }))
+                             addBarFocused: Binding(get: { focused }, set: { focused = $0 }), pointer: pointer)
         let window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -190,6 +130,13 @@ final class ScrollEdgeHangTests: XCTestCase {
             settle(1)
         }
         XCTAssertLessThan(typed, 2.5, "the draft settles")
+        if !enablesAccessibility {
+            let resident = pointer.frames.count
+            print("ATTIC_SCROLL_HANG resident=\(resident) total=\(model.rows(for: .now).count)")
+            XCTAssertGreaterThan(resident, 0, "real rows must be laid out")
+            XCTAssertLessThan(resident, extraRows, "the loop fix must preserve virtualization")
+            return
+        }
         let stripShown = Self.axFind("composer-date", in: window.contentView as Any, depth: 0)
         XCTAssertTrue(stripShown, "the accessibility snapshot reaches the visible composer strip")
         print("ATTIC_SCROLL_HANG strip_identified=\(stripShown) reduceMotion=\(reduceMotion)")
