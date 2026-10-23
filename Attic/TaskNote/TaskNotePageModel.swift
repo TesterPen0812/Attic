@@ -109,6 +109,9 @@ final class TaskNotePageModel: ObservableObject {
     var onFocusWriting: ((_ atTop: Bool) -> Void)?
     /// The head's or the block's height may have changed (the host restacks).
     var onGeometryChange: (() -> Void)?
+    /// A native field of the page (a rename, Add subtask, the title) has
+    /// marked text: an input method is composing in it.
+    var isFieldComposing: (() -> Bool)?
     private var retry: (() -> Void)?
 
     // MARK: Held order (§ 2.3.1)
@@ -171,6 +174,15 @@ final class TaskNotePageModel: ObservableObject {
 
     func suspend() {
         observations.removeAll()
+        // A reveal for the moment ends with the page (C1 review P2); a
+        // section remount does not suspend, so it keeps the reveal. Fields
+        // were resolved before the page closed.
+        if isRevealedForTheMoment {
+            isRevealedForTheMoment = false
+            isExpanded = false
+            if let id = focusedRowID, !isVisible(id) { focusedRowID = visibleRows.last?.id }
+        }
+        isFieldComposing = nil
         focusInside = false
         pointerInside = false
         heldOrder = nil
@@ -373,24 +385,48 @@ final class TaskNotePageModel: ObservableObject {
 
     // MARK: Expand and collapse (presentation state only: no history, no revision)
 
-    func toggleExpanded() { setExpanded(!isExpanded) }
+    @discardableResult
+    func toggleExpanded() -> Bool { setExpanded(!isExpanded) }
 
     /// "N more…" and "Show less". `remember: false` reveals a row for the
-    /// moment (a new or focused row) without changing how the item opens.
-    /// Collapsing keeps the held order while the list is in use (owner
-    /// answer 5: rows hold still while you work).
-    func setExpanded(_ expanded: Bool, remember: Bool = true) {
-        if remember { defaults?.set(expanded, forKey: Self.expandKey(taskID)) }
-        guard expanded != isExpanded else { return }
-        isExpanded = expanded
-        if !expanded {
-            // A rename on a row going out of sight ends; the ring stays on
-            // a row that is still shown.
-            if let id = renamingID, !isVisible(id) { cancelRename() }
-            if let id = focusedRowID, !isVisible(id) { focusedRowID = visibleRows.last?.id }
+    /// moment (a new or focused row) without changing how the item opens;
+    /// that reveal ends when the page closes. Collapsing keeps the held
+    /// order while the list is in use (owner answer 5: rows hold still
+    /// while you work). Returns false when a collapse is refused (see
+    /// `resolveFieldsBeforeCollapse`).
+    @discardableResult
+    func setExpanded(_ expanded: Bool, remember: Bool = true) -> Bool {
+        if !expanded, isExpanded, !resolveFieldsBeforeCollapse() { return false }
+        if remember {
+            isRevealedForTheMoment = false
+            defaults?.set(expanded, forKey: Self.expandKey(taskID))
         }
+        guard expanded != isExpanded else { return true }
+        if expanded, !remember { isRevealedForTheMoment = true }
+        isExpanded = expanded
+        // The ring stays on a row that is still shown.
+        if !expanded, let id = focusedRowID, !isVisible(id) { focusedRowID = visibleRows.last?.id }
         onGeometryChange?()
+        return true
     }
+
+    /// A collapse never throws away a draft (C1 review P1): a rename on a
+    /// row going out of sight is saved first, and a refused save keeps the
+    /// list open with the editor and its draft. While an input method is
+    /// composing, nothing that holds a field (the rename's row, Add
+    /// subtask) goes out of sight.
+    private func resolveFieldsBeforeCollapse() -> Bool {
+        let shown = rows.prefix(Self.collapsedRowLimit)
+        let hidesRename = renamingID.map { id in !shown.contains { $0.id == id } } ?? false
+        let hidesAdd = showsAddRow && rows.count > Self.collapsedRowLimit
+        guard hidesRename || hidesAdd else { return true }
+        if isFieldComposing?() == true { return false }
+        return hidesRename ? commitRename() : true
+    }
+
+    /// The expansion is a reveal for the moment (Add Subtask, a new fourth
+    /// row, a reorder, ⌃⇧Tab), not the person's choice.
+    private(set) var isRevealedForTheMoment = false
 
     /// Shows every row without remembering it, when rows would be hidden.
     func revealAll() {
