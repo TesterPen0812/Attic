@@ -246,10 +246,10 @@ extension AgentTaskTools {
         case .make_note_checkbox: return try await makeNoteCheckbox(intent.arguments, notes: notes)
         case .make_task_from_note, .add_to_tasks: return try await makeTaskFromNote(intent.arguments, notes: notes)
         case .remove_from_tasks:
-            return try await withPage(try uuid(intent.arguments, "task_id"), notes: notes) { presenter in
+            return try await withPage(try uuid(intent.arguments, "task_id"), notes: notes) { presenter, wasOpen in
                 switch await TaskNoteConversion.removeTask(presenter.taskID, notes: notes, tasks: store, workspaceSession: presenter.session) {
                 case let .removed(noteID):
-                    await notes.retireConvertedNote(noteID)
+                    if wasOpen { await notes.retireConvertedNote(noteID) }
                     return try encodeJSON(["ok": true, "note_id": noteID.uuidString])
                 case let .refused(reason): throw AgentToolError.notPerformed(reason)
                 }
@@ -336,7 +336,7 @@ extension AgentTaskTools {
 
     /// The task's page: the open one, or an engine-only one for this call.
     private func withPage<T>(_ taskID: UUID, notes: NotesPageController,
-                             _ body: (TaskNotePresenter) async throws -> T) async throws -> T {
+                             _ body: (TaskNotePresenter, Bool) async throws -> T) async throws -> T {
         let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
         await coordinator.sessions.retryHeadlessClosures()
         if let open = TaskNotePresenter.open(for: taskID) {
@@ -345,7 +345,7 @@ extension AgentTaskTools {
                 throw AgentToolError.notPerformed("The note is open; the operation needs review.")
             }
             AgentWorkspaceCall.current?.presenter = open
-            return try await body(open)
+            return try await body(open, true)
         }
         let presenter: TaskNotePresenter
         do {
@@ -356,7 +356,7 @@ extension AgentTaskTools {
         }
         AgentWorkspaceCall.current?.presenter = presenter
         do {
-            let result = try await body(presenter)
+            let result = try await body(presenter, false)
             if !(await presenter.close()), let lease = presenter.lease {
                 _ = await coordinator.sessions.closeHeadless(presenter.page, lease: lease)
             }
@@ -389,7 +389,7 @@ extension AgentTaskTools {
         }
         let keepOriginal = arguments["keep_original"] as? Bool ?? false
         guard store.task(withID: taskID) != nil else { throw AgentToolError.notFound(taskID.uuidString) }
-        return try await withPage(taskID, notes: notes) { presenter in
+        return try await withPage(taskID, notes: notes) { presenter, _ in
             guard let session = presenter.session else { throw AgentToolError.notPerformed("The task has no note to make subtasks from.") }
             let text = session.engine.textStorage
             let string = text.string as NSString
@@ -429,7 +429,7 @@ extension AgentTaskTools {
             call.conflicted = true
             throw AgentToolError.notPerformed("The subtask moved to another task. Review a new proposal from its current task.")
         }
-        return try await withPage(parentID, notes: notes) { presenter in
+        return try await withPage(parentID, notes: notes) { presenter, _ in
             try outcomeText(await presenter.makeNoteCheckbox(subtaskID: subtaskID, tasks: store, notes: notes))
         }
     }

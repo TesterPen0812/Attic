@@ -424,6 +424,30 @@ final class TaskFilesSliceTests: XCTestCase {
         XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(taskID)).undoName, "Remove from Tasks")
     }
 
+    func testBAgentRemoveClosedPageLeavesPresentationUnchanged() async throws {
+        for hasActiveNote in [false, true] {
+            let (id, noteID) = try await taskWithOwnNote()
+            XCTAssertNil(TaskNotePresenter.open(for: id))
+            if hasActiveNote {
+                let ordinary = UUID()
+                _ = try notes.store.createDocumentNote(id: ordinary,
+                    document: NoteDocument(blocks: [.text("Owner's note"), .text("Keep this open")])).get()
+                XCTAssertTrue(notes.open(noteID: ordinary))
+            }
+            let active = notes.active
+            var handedOff = false
+            notes.taskNoteBecameOrdinary = { _, _ in handedOff = true }
+            let (result, failed) = try await call(agent(), "remove_from_tasks", ["task_id": id.uuidString])
+            XCTAssertFalse(failed, result)
+            XCTAssertNil(tasks.task(withID: id))
+            XCTAssertNil(ownNoteTask(noteID))
+            XCTAssertFalse(handedOff, "a headless operation must not switch the owner's panel")
+            XCTAssertTrue(notes.active === active, "the owner's active editor must stay unchanged")
+            XCTAssertNil(TaskNotePresenter.open(for: id))
+            XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(id)).undoName, "Remove from Tasks")
+        }
+    }
+
     func testBAcceptedAgentRemoveClosesOpenPageAndHandsOffOrdinaryWriting() async throws {
         let (id, noteID) = try await taskWithOwnNote(), presenter = try open(id)
         notes.taskNotePresenter = presenter
