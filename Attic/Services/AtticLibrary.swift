@@ -1002,8 +1002,8 @@ final class AtticLibrary {
         return nil
     }
 
-    /// A retained step can only restore the deletion it actually made.
-    /// Later deletions may contain new writing even when UUIDs are unchanged.
+    /// A retained step may adopt a newer deletion only while its complete
+    /// task and writing membership remains inside the step's ownership.
     func wholeItemRestoreGuard(_ owned: FamilyOwnership, refs: [AtticItemRef]) -> UndoOutcome? {
         guard !owned.groups.isEmpty else { return nil } // pre-group history
         do {
@@ -1018,7 +1018,7 @@ final class AtticLibrary {
                 } else if ref.kind == .note {
                     group = notes.filter { $0.id == ref.id }.max { ($0.deletedAt ?? .distantPast) < ($1.deletedAt ?? .distantPast) }?.deletionGroupID
                 } else { continue }
-                guard let group, owned.groups.contains(group) else { return .obsolete }
+                guard let group else { return .obsolete }
                 groups.insert(group)
             }
             guard Set(tasks.filter { $0.deletionGroupID.map(groups.contains) == true }.map(\.id)).isSubset(of: owned.members),
