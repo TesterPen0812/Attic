@@ -1236,8 +1236,19 @@ extension View {
 private struct AtticContextMenuModifier: ViewModifier {
     let build: () -> [AtticMenuCommand]
     @State private var anchor = AtticMenuAnchor.Holder()
+    @Environment(\.atticCapture) private var capture
 
     func body(content: Content) -> some View {
+        // `ImageRenderer` captures cannot draw AppKit views: no anchors
+        // there (as `.contextMenu` drew nothing).
+        if capture != nil {
+            content
+        } else {
+            anchored(content)
+        }
+    }
+
+    private func anchored(_ content: Content) -> some View {
         content
             .background(AtticContextMenuAnchor(build: build).accessibilityHidden(true))
             .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))

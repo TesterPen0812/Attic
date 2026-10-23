@@ -305,7 +305,7 @@ final class CombinedFixRoundTests: XCTestCase {
         let host = try XCTUnwrap(presenter.host)
         XCTAssertTrue(presenter.isOpen)
         let items = accessibilityElements(host).compactMap { $0 as? AtticDropdownMenuItem.ItemView }
-        XCTAssertEqual(items.compactMap { $0.accessibilityLabel() }, ["#launch-october, 1", "#launch, 2", "#kyoto, 1", "New Tag…"],
+        XCTAssertEqual(items.compactMap { $0.accessibilityLabel() }, ["#launch-october, 1", "#launch, 2", "#kyoto, 1"],
                        "the note's tag first, then by count, as the tag editor listed them")
         XCTAssertTrue(items.allSatisfy { !$0.isAccessibilitySelected() }, "an empty field lights nothing")
         // Typing lights the exact tag, never the note's own tag listed first.
@@ -334,7 +334,7 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertTrue(tasks.setTags(["cu2taskonly", "launch"], for: task))
         spin(0.4)
         host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(labels(), ["#launch-october, 1", "#launch, 3", "#cu2taskonly, 1", "#kyoto, 1", "New Tag…"],
+        XCTAssertEqual(labels(), ["#launch-october, 1", "#launch, 3", "#cu2taskonly, 1", "#kyoto, 1"],
                        "the already-open E1 card refreshes from the cross-page inventory")
         XCTAssertEqual(AtticTagSuggestion.make(typed: try XCTUnwrap(AtticTag.normalize("#CU2TaskOnly")),
                                                counts: harness.store.tagCounts, excluding: []),
@@ -345,7 +345,7 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertTrue(tasks.setTags([], for: task))
         spin(0.4)
         host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(labels(), ["#launch-october, 1", "#launch, 2", "#kyoto, 1", "New Tag…"],
+        XCTAssertEqual(labels(), ["#launch-october, 1", "#launch, 2", "#kyoto, 1"],
                        "removing the last task use removes it from the open card")
         withExtendedLifetime(library) {}
     }
@@ -751,7 +751,7 @@ final class CombinedFixRoundTests: XCTestCase {
             spin(0.3)
         }
         try setQuery("launch")
-        XCTAssertEqual(items().compactMap { $0.accessibilityLabel() }, ["#launch-october, 1", "#launch, 2", "New Tag…"])
+        XCTAssertEqual(items().compactMap { $0.accessibilityLabel() }, ["#launch-october, 1", "#launch, 2"])
         XCTAssertEqual(lit(), ["#launch, 2"], "the exact tag, though the note's own tag is listed first")
         let launch = try XCTUnwrap(items().first { $0.accessibilityLabel() == "#launch, 2" })
         XCTAssertTrue(launch.accessibilityPerformPress())

@@ -956,9 +956,7 @@ struct AtticTagPicker: View {
             }
             .id(tags.count)
         } else {
-            AtticDropdownRow(title: String(localized: "New Tag…"), check: .off, checkGlyph: "plus", titleInk: .label) {
-                focus.wrappedValue = .field
-            }
+            AtticTagPickerFoot { focus.wrappedValue = .field }
         }
     }
 
@@ -978,6 +976,38 @@ struct AtticTagPicker: View {
         // Never narrower than draft C's 224 pt card.
         return max(m.dateCardWidth - m.inset * 2,
                    ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + max(widestTag, createRow) + m.columnGap + m.checkSlot))
+    }
+}
+
+/// The tag picker's resting foot (draft C): "+ New Tag…", which puts the
+/// keyboard in the field. A plain button with its own hover fill, kept
+/// lighter than a list row (no menu-item stand-in), since it is not one of
+/// the list's choices and the picker's open cost is gated.
+private struct AtticTagPickerFoot: View {
+    let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let m = AtticDropdownMetrics.self
+        Button(action: action) {
+            HStack(spacing: m.columnGap) {
+                AtticIcon(systemName: "plus", size: m.checkSize, weight: .medium, ink: .icon)
+                    .frame(width: m.dotSlot)
+                AtticText(verbatim: String(localized: "New Tag…"), style: .dropdownRow, ink: .label)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, m.rowPadding)
+            .frame(height: m.rowHeight)
+            .background(RoundedRectangle(cornerRadius: m.highlightRadius, style: .continuous)
+                .fill((hovered ? design.tokens.dropdownHighlight : .clear).color))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .focusable(false)
+        .focusEffectDisabled()
+        .onHover { hovered = $0 }
+        .accessibilityLabel(String(localized: "New Tag…"))
     }
 }
 
