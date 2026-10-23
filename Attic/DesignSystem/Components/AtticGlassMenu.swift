@@ -362,8 +362,8 @@ final class AtticGlassMenu {
 
     private func closeFocusedSubmenu() {
         guard focus > 0 else { return }
+        // Closing the cards after the parent puts the keyboard there.
         closeCards(after: focus - 1)
-        focus -= 1
     }
 
     private func activateHighlighted(byKeyboard: Bool) {
@@ -579,6 +579,31 @@ final class AtticGlassMenu {
     }
 }
 
+// MARK: - Icons
+
+/// Draft C's leading icons for the commands that do not name their own
+/// (the row menus were built for native menus, which drew none): looked up
+/// by the command's localized title, so only these commands get one and a
+/// submenu of choices (Today, Tomorrow…) keeps its plain rows, as drawn.
+enum AtticMenuSymbols {
+    static func symbol(for command: AtticMenuCommand) -> String? {
+        command.systemImage ?? (command.isHeader ? nil : table[command.title])
+    }
+
+    private static let table: [String: String] = {
+        let pairs: [(String.LocalizationValue, String)] = [
+            ("Complete", "checkmark.circle"), ("Mark as Not Done", "circle"), ("Restore to Now", "arrow.uturn.backward.circle"),
+            ("Start Working", "play.circle"), ("Stop Working", "stop.circle"), ("Edit Title", "pencil"),
+            ("Date", "calendar"), ("Tags", "tag"), ("Priority", "flag"),
+            ("Move to Later", "clock"), ("Move to Now", "sun.max"), ("Add Subtask", "plus.square"),
+            ("Copy", "doc.on.doc"), ("Duplicate", "plus.square.on.square"), ("More", "ellipsis"),
+            ("Delete", "trash"), ("Show Files", "paperclip"), ("Hide Files", "paperclip"),
+            ("Move Up", "arrow.up"), ("Move Down", "arrow.down"), ("Rename", "pencil"), ("Pin", "pin"), ("Unpin", "pin.slash"),
+        ]
+        return Dictionary(pairs.map { (String(localized: $0.0), $0.1) }, uniquingKeysWith: { first, _ in first })
+    }()
+}
+
 // MARK: - Style
 
 /// The colours and fonts a glass menu draws with: draft C on Attic's tokens.
@@ -704,7 +729,7 @@ final class AtticGlassMenuCard {
     /// never over 320 pt).
     static func layout(_ commands: [AtticMenuCommand]) -> Layout {
         let m = AtticDropdownMetrics.self
-        let hasIcons = commands.contains { $0.systemImage != nil || $0.image != nil || $0.swatch != nil }
+        let hasIcons = commands.contains { AtticMenuSymbols.symbol(for: $0) != nil || $0.image != nil || $0.swatch != nil }
         let leading = m.rowPadding + (hasIcons ? m.iconSlot + m.columnGap : 0)
         var widest: CGFloat = 0
         var kinds: [Entry.Kind] = []
@@ -975,7 +1000,7 @@ final class AtticGlassMenuView: NSView {
             let slot = NSRect(x: x, y: frame.midY - m.iconSlot / 2, width: m.iconSlot, height: m.iconSlot)
             if command.state == .mixed, command.systemImage != nil {
                 drawImage(AtticGlassMenuStyle.symbol("minus", size: m.iconSize, color: iconInk), centeredIn: slot)
-            } else if let name = command.systemImage {
+            } else if let name = AtticMenuSymbols.symbol(for: command) {
                 drawImage(AtticGlassMenuStyle.symbol(name, size: m.iconSize, color: iconInk), centeredIn: slot)
             } else if let image = command.image {
                 drawImage(image, centeredIn: slot)
