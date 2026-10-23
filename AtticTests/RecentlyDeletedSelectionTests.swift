@@ -966,9 +966,8 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         deleteChildThenParent(family)
         XCTAssertTrue(library.restore(family.parent, in: .library))
         XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
-        // Owner decision 2026-10-23: an old step cannot restore a later group.
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete, "P was deleted again by Undo Restore")
-        XCTAssertTrue(library.restore(family.parent, in: .taskWorkspace(family.parent.id)))
+        // Undo may adopt a newer group wholly inside this step's ownership.
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "P was deleted again by Undo Restore")
         XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "C's Delete")
         XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.live, .live, .live])
         XCTAssertTrue(library.delete(family.parent))
@@ -989,9 +988,8 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent, family.note], attachments: []).restored, 2)
         XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
         XCTAssertEqual(library.state(of: family.note), .deleted)
-        // 2026-10-23: explicitly restore the later group; stale Undo cannot.
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete)
-        XCTAssertTrue(library.restore(family.parent, in: .taskWorkspace(family.parent.id)))
+        // Undo may adopt a newer group wholly inside this step's ownership.
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
         XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
         XCTAssertTrue(library.delete(family.parent))
 
@@ -1009,9 +1007,8 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         deleteChildThenParent(family)
         XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent], attachments: []).restored, 1)
         XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
-        // 2026-10-23: explicitly restore the later group; stale Undo cannot.
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete)
-        XCTAssertTrue(library.restore(family.parent, in: .taskWorkspace(family.parent.id)))
+        // Undo may adopt a newer group wholly inside this step's ownership.
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
         XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
         XCTAssertTrue(library.delete(family.parent))
 

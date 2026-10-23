@@ -1704,3 +1704,144 @@ extension TaskNoteComposedHostTests {
         XCTAssertEqual(model.disclosureSpokenLabel, "Show fewer subtasks")
     }
 }
+
+/// C1 review fix round (GPT-6.1 Sol): a collapse never throws away a rename
+/// or a composition, a reveal that is not remembered ends with the page, a
+/// reorder keeps the focused row in sight, and only expanded items are
+/// remembered (purged ones are forgotten).
+@MainActor
+extension TaskNoteComposedHostTests {
+    func testCollapsingSavesARenameGoingOutOfSightAndARefusedSaveKeepsTheList() throws {
+        let id = try seed(.heavy)
+        let model = try open(id, expanded: true).model
+        let hidden = model.rows[6]
+        model.beginRename(hidden.id)
+        model.renameEdited(NSRange(location: 0, length: 0), replacement: "X")
+        model.renameText = "X" + hidden.title
+        // Another command is still preparing: the save is refused.
+        XCTAssertTrue(model.history.reserveInput())
+        model.setExpanded(false)
+        model.history.releaseInput()
+        XCTAssertTrue(model.isExpanded, "a refused rename keeps its row in sight")
+        XCTAssertEqual(model.renamingID, hidden.id, "the editor stays")
+        XCTAssertEqual(model.renameText, "X" + hidden.title, "with its draft")
+        XCTAssertNotNil(model.undoRenameDraft(), "and its draft Undo")
+        XCTAssertNotNil(model.redoRenameDraft())
+        XCTAssertEqual(tasks.task(withID: hidden.id)?.title, hidden.title)
+        // A title changed elsewhere refuses too.
+        XCTAssertTrue(library.updateTask(hidden.id, title: "Newer subtask").isApplied)
+        model.setExpanded(false)
+        XCTAssertTrue(model.isExpanded)
+        XCTAssertEqual(model.renameText, "X" + hidden.title)
+        XCTAssertEqual(tasks.task(withID: hidden.id)?.title, "Newer subtask")
+        model.cancelRename()
+        // Accepted: the rename is saved, then the list collapses.
+        model.beginRename(hidden.id)
+        model.renameEdited(NSRange(location: 0, length: 0), replacement: "Y")
+        model.renameText = "Y" + "Newer subtask"
+        model.setExpanded(false)
+        XCTAssertFalse(model.isExpanded)
+        XCTAssertNil(model.renamingID)
+        XCTAssertEqual(tasks.task(withID: hidden.id)?.title, "YNewer subtask")
+    }
+
+    func testCollapsingNeverHidesAFieldWhileAnInputMethodIsComposing() throws {
+        let id = try seed(.heavy)
+        let model = try open(id, expanded: true).model
+        let hidden = model.rows[6]
+        var composing = true
+        model.isFieldComposing = { composing }
+        model.beginRename(hidden.id)
+        model.renameEdited(NSRange(location: 0, length: 0), replacement: "X")
+        model.renameText = "X" + hidden.title
+        model.setExpanded(false)
+        XCTAssertTrue(model.isExpanded, "a composing rename keeps its row in sight")
+        XCTAssertEqual(model.renamingID, hidden.id)
+        XCTAssertEqual(model.renameText, "X" + hidden.title)
+        XCTAssertEqual(tasks.task(withID: hidden.id)?.title, hidden.title, "nothing half composed is saved")
+        // Add subtask goes out of sight on a collapse: not mid-composition.
+        model.cancelRename()
+        model.setExpanded(false)
+        XCTAssertTrue(model.isExpanded, "the Add field is not hidden mid-composition")
+        composing = false
+        model.setExpanded(false)
+        XCTAssertFalse(model.isExpanded)
+    }
+
+    func testATemporaryRevealEndsWhenThePageClosesButSurvivesARemount() async throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let model = presenter.model
+        model.requestFocus(.add)
+        XCTAssertTrue(model.isExpanded)
+        presenter.restoreViewStateOnMount()
+        XCTAssertTrue(model.isExpanded, "a section remount keeps the reveal")
+        let closed = await presenter.close()
+        XCTAssertTrue(closed)
+        let reopened = try open(id)
+        XCTAssertTrue(reopened.model === model, "a warm reopen")
+        XCTAssertFalse(reopened.model.isExpanded, "the item opens as remembered")
+        XCTAssertEqual(reopened.model.visibleRowCount, 3)
+        // An expansion the person chose stays across close and reopen.
+        reopened.model.toggleExpanded()
+        let closedAgain = await reopened.close()
+        XCTAssertTrue(closedAgain)
+        XCTAssertTrue(try open(id).model.isExpanded)
+    }
+
+    func testReorderingTheFocusedRowPastTheThirdRowRevealsItForTheMoment() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let defaults = freshDefaults()
+        let model = TaskNotePageModel(taskID: id, store: tasks, library: library, history: presenter.model.history, defaults: defaults)
+        model.setFocusInside(true)
+        let third = model.rows[2].id
+        model.focusedRowID = third
+        XCTAssertTrue(model.move(third, by: 1))
+        XCTAssertEqual(model.rows[3].id, third)
+        XCTAssertTrue(model.isVisible(third), "the moved row stays in sight")
+        XCTAssertEqual(model.focusedRowID, third, "and keeps the ring")
+        XCTAssertFalse(TaskNotePageModel(taskID: id, store: tasks, library: library, history: model.history, defaults: defaults).isExpanded,
+                       "a reveal does not change how the item opens")
+    }
+
+    func testOnlyExpandedItemsAreRememberedAndPurgedOnesAreForgotten() async throws {
+        let id = try seed(.heavy)
+        // Physical deletion must wait for startup classification; opening a
+        // page pumps the run loop and can otherwise enter the launch hold.
+        let recovered = expectation(description: "startup recovery completes")
+        let controller = try XCTUnwrap(notes)
+        let recovery = Task { @MainActor in
+            await controller.recoverAtLaunchAndWait()
+            guard !Task.isCancelled else { return }
+            recovered.fulfill()
+        }
+        defer { recovery.cancel() }
+        await fulfillment(of: [recovered], timeout: 5)
+        XCTAssertTrue(notes.launchRecoveryCompleted)
+        XCTAssertTrue(coordinator.startupReconciled)
+        let presenter = try open(id)
+        let defaults = freshDefaults()
+        library.presentationDefaults = defaults
+        func model(_ item: UUID) -> TaskNotePageModel {
+            TaskNotePageModel(taskID: item, store: tasks, library: library, history: presenter.model.history, defaults: defaults)
+        }
+        let page = model(id)
+        page.toggleExpanded()
+        XCTAssertEqual(defaults.object(forKey: TaskNotePageModel.expandKey(id)) as? Bool, true)
+        page.toggleExpanded()
+        XCTAssertNil(defaults.object(forKey: TaskNotePageModel.expandKey(id)), "collapsed is the default: nothing is stored")
+        // A task with no note of its own goes through the daily collector.
+        let purged = try XCTUnwrap(library.createTasks([TaskDraft(title: "Purge me", status: .todo)])?.first?.id)
+        let kept = try XCTUnwrap(tasks.subtasks(of: id).first?.id)
+        model(purged).toggleExpanded()
+        model(kept).toggleExpanded()
+        XCTAssertTrue(library.deleteListedTasks([purged]).isApplied)
+        let wasReconciled = coordinator.startupReconciled
+        let wasRecovered = notes.launchRecoveryCompleted
+        let report = library.emptyRecentlyDeleted(RecentlyDeletedSelection(items: library.recentlyDeleted()))
+        XCTAssertTrue(report.taskIDs.contains(purged), "Purge refused: \(tasks.lastErrorMessage ?? "no store error"), startup=\(wasReconciled), recovery=\(wasRecovered)")
+        XCTAssertNil(defaults.object(forKey: TaskNotePageModel.expandKey(purged)), "a purged item's entry goes")
+        XCTAssertEqual(defaults.object(forKey: TaskNotePageModel.expandKey(kept)) as? Bool, true)
+    }
+}

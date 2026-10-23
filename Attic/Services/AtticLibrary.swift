@@ -679,12 +679,14 @@ final class AtticLibrary {
         let context = ModelContext(container)
         let taskRows = (try? context.fetch(FetchDescriptor<TaskItem>())) ?? []
         let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(FetchDescriptor<NoteItem>())) ?? []) : []
+        let tasksByID = Dictionary(grouping: taskRows, by: \.id)
+        let notesByID = Dictionary(grouping: noteRows, by: \.id)
         let candidates = tasks.recentlyDeletedTasks() + (notes?.recentlyDeletedNotes() ?? []) + (canvases?.recentlyDeletedCanvases() ?? [])
         var seen = Set<UUID>()
         return candidates.filter { item in
             let group: UUID? = switch item.ref.kind {
-            case .task: taskRows.first { $0.id == item.ref.id }?.deletionGroupID
-            case .note: noteRows.first { $0.id == item.ref.id }?.deletionGroupID
+            case .task: tasksByID[item.ref.id]?.first?.deletionGroupID
+            case .note: notesByID[item.ref.id]?.first?.deletionGroupID
             case .canvas: nil
             }
             return group.map { seen.insert($0).inserted } ?? true
@@ -706,8 +708,10 @@ final class AtticLibrary {
         // (Phase 3), after the legacy collector, without holding it up.
         if let taskNotePurge {
             Task { @MainActor [weak self] in
+                let writing = self?.deletedGroupWritingRefs() ?? [:]
                 let removed = await taskNotePurge(cutoff, nil)
-                self?.undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+                self?.invalidatePurgedTaskHistory(removed, writing: writing)
+                self?.forgetPresentation(ofTasks: removed)
             }
         }
         return report
@@ -719,15 +723,48 @@ final class AtticLibrary {
     /// leaves those families in Recently Deleted (tests, previews).
     var taskNotePurge: ((_ cutoff: Date, _ confirmed: [UUID: Date]?) async -> Set<UUID>)?
 
+    /// Where per-item presentation state lives (the item page's expansion):
+    /// a purged task's entry goes with it.
+    var presentationDefaults: UserDefaults? = .standard
+
+    private func forgetPresentation(ofTasks ids: Set<UUID>) {
+        guard let presentationDefaults else { return }
+        for id in ids { presentationDefaults.removeObject(forKey: TaskNotePageModel.expandKey(id)) }
+    }
+
     /// Empty Recently Deleted's second half: the confirmed deleted tasks
     /// that own notes, through the coordinated purge (Phase 3). The rest of
     /// the selection was removed synchronously by `emptyRecentlyDeleted`.
     @discardableResult
     func emptyTaskNoteFamilies(_ selection: RecentlyDeletedSelection) async -> Set<UUID> {
         guard !selection.isEmpty, let taskNotePurge else { return [] }
+        let writing = deletedGroupWritingRefs()
         let removed = await taskNotePurge(.distantFuture, selection.items(.task))
-        undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+        invalidatePurgedTaskHistory(removed, writing: writing)
+        forgetPresentation(ofTasks: removed)
         return removed
+    }
+
+    /// Capture group writing before the coordinated purge removes its rows.
+    /// Surviving independent writing keeps its materialization history.
+    private func deletedGroupWritingRefs() -> [UUID: Set<AtticItemRef>] {
+        let context = ModelContext(container)
+        guard let tasks = try? context.fetch(FetchDescriptor<TaskItem>()),
+              WorkspaceItemLifecycle.has("NoteItem", in: context),
+              let notes = try? context.fetch(FetchDescriptor<NoteItem>()) else { return [:] }
+        let byGroup = Dictionary(grouping: notes.filter { $0.deletionGroupID != nil }, by: { $0.deletionGroupID! })
+        var refs: [UUID: Set<AtticItemRef>] = [:]
+        for task in tasks {
+            guard let group = task.deletionGroupID else { continue }
+            refs[task.id, default: []].formUnion((byGroup[group] ?? []).map { .init(.note, $0.id) })
+        }
+        return refs
+    }
+
+    private func invalidatePurgedTaskHistory(_ removed: Set<UUID>, writing: [UUID: Set<AtticItemRef>]) {
+        var refs = Set(removed.map { AtticItemRef(.task, $0) })
+        for id in removed { refs.formUnion(writing[id] ?? []) }
+        undo.invalidate(refs)
     }
 
     /// Empties Recently Deleted: removes for good exactly the deletions the
@@ -780,6 +817,7 @@ final class AtticLibrary {
         undo.invalidate(Set(report.taskIDs.map { AtticItemRef(.task, $0) }
             + report.noteIDs.map { AtticItemRef(.note, $0) }
             + report.canvasIDs.map { AtticItemRef(.canvas, $0) }))
+        forgetPresentation(ofTasks: report.taskIDs)
         return report
     }
 
@@ -1002,8 +1040,8 @@ final class AtticLibrary {
         return nil
     }
 
-    /// A retained step can only restore the deletion it actually made.
-    /// Later deletions may contain new writing even when UUIDs are unchanged.
+    /// A retained step may adopt a newer deletion only while its complete
+    /// task and writing membership remains inside the step's ownership.
     func wholeItemRestoreGuard(_ owned: FamilyOwnership, refs: [AtticItemRef]) -> UndoOutcome? {
         guard !owned.groups.isEmpty else { return nil } // pre-group history
         do {
@@ -1018,7 +1056,7 @@ final class AtticLibrary {
                 } else if ref.kind == .note {
                     group = notes.filter { $0.id == ref.id }.max { ($0.deletedAt ?? .distantPast) < ($1.deletedAt ?? .distantPast) }?.deletionGroupID
                 } else { continue }
-                guard let group, owned.groups.contains(group) else { return .obsolete }
+                guard let group else { return .obsolete }
                 groups.insert(group)
             }
             guard Set(tasks.filter { $0.deletionGroupID.map(groups.contains) == true }.map(\.id)).isSubset(of: owned.members),

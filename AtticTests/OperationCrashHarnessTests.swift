@@ -28,15 +28,24 @@ final class OperationCrashHarnessTests: XCTestCase {
 
     /// Owner decision 2026-10-23: process death cannot split a whole item.
     func testAWholeItemDeleteAndPurgeCrashMatricesReopenTwice() async throws {
+        try await assertWholeItemCrashMatrices(modes: ["delete-item", "purge-item"])
+    }
+
+    func testARestoreWholeItemCrashMatrixReopensTwice() async throws {
+        try await assertWholeItemCrashMatrices(modes: ["restore-item"])
+    }
+
+    private func assertWholeItemCrashMatrices(modes: [String]) async throws {
         let deletePoints = ["A-delete-tasks", "A-delete-writing", "K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", "K4", "K5", "A-delete-published", "save-then-throw"]
         let purgePoints = ["K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", "A-purge-staged", "K4", "K5", "K6-1", "K7", "K8-before-unlink", "save-then-throw"]
-        for mode in ["delete-item", "purge-item"] {
-            for point in mode == "delete-item" ? deletePoints : purgePoints {
+        let restorePoints = ["K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", "K4", "K5", "save-then-throw"]
+        for mode in modes {
+            for point in mode == "delete-item" ? deletePoints : (mode == "purge-item" ? purgePoints : restorePoints) {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 defer { try? FileManager.default.removeItem(at: root) }
                 let seed = try await runChild("seed-item", root: root); XCTAssertEqual(seed, 73, point)
-                if mode == "purge-item" {
+                if mode != "delete-item" {
                     let deleted = try await runChild("delete-item", root: root); XCTAssertEqual(deleted, 73, point)
                 }
                 let result = try await runChild(mode, root: root, point: point == "save-then-throw" ? nil : point,
@@ -52,20 +61,59 @@ final class OperationCrashHarnessTests: XCTestCase {
                     let notes = try context.fetch(FetchDescriptor<NoteItem>())
                     let files = try context.fetch(FetchDescriptor<NoteAttachment>())
                     let purged = mode == "purge-item" && committed
-                    XCTAssertEqual(tasks.count, purged ? 0 : 4, "\(mode) \(point) #\(reopen)")
+                    XCTAssertEqual(tasks.count, purged ? 1 : 5)
+                    XCTAssertEqual(tasks.filter { $0.id != WorkspaceCrashFixture.alternateID }.count, purged ? 0 : 4, "\(mode) \(point) #\(reopen)")
                     XCTAssertEqual(notes.count, purged ? 0 : 4)
                     XCTAssertEqual(files.count, purged ? 0 : 4)
                     if !purged {
-                        let deleted = mode == "purge-item" || committed
-                        XCTAssertTrue(tasks.allSatisfy { ($0.deletedAt != nil) == deleted })
+                        for copies in Dictionary(grouping: tasks, by: \.id).values {
+                            let first = try WorkspaceModelFields.read(copies[0])
+                            for copy in copies.dropFirst() { XCTAssertEqual(try WorkspaceModelFields.read(copy), first) }
+                        }
+                        let deleted = mode == "restore-item" ? !committed : (mode == "purge-item" || committed)
+                        XCTAssertTrue(tasks.filter { $0.id != WorkspaceCrashFixture.alternateID }.allSatisfy { ($0.deletedAt != nil) == deleted })
                         XCTAssertTrue(notes.allSatisfy { ($0.deletedAt != nil) == deleted })
-                        let groups = Set(tasks.compactMap(\.deletionGroupID) + notes.compactMap(\.deletionGroupID))
+                        let groups = Set(tasks.filter { $0.id != WorkspaceCrashFixture.alternateID }.compactMap(\.deletionGroupID) + notes.compactMap(\.deletionGroupID))
                         XCTAssertEqual(groups.count, deleted ? 1 : 0)
                         XCTAssertTrue(notes.allSatisfy { $0.content == (try? PreparedNoteDocument(WorkspaceCrashFixture.original).content) })
                         XCTAssertTrue(files.allSatisfy { $0.payload == WorkspaceCrashFixture.bytes })
                         XCTAssertEqual(files.filter { $0.id == WorkspaceCrashFixture.removedFileID && $0.deletedAt != nil }.count, 2)
                     }
-                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), (mode == "purge-item" ? 1 : 0) + (committed ? 1 : 0))
+                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<NoteVersion>()), purged ? 0 : 1)
+                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<NotePendingEdit>()), purged ? 0 : 1)
+                    if !purged {
+                        let expected = try PreparedNoteDocument(WorkspaceCrashFixture.original).content
+                        let version = try XCTUnwrap(context.fetch(FetchDescriptor<NoteVersion>()).first)
+                        XCTAssertEqual(version.content, expected)
+                        let proposal = try XCTUnwrap(context.fetch(FetchDescriptor<NotePendingEdit>()).first)
+                        XCTAssertEqual(proposal.proposedContent, expected)
+                        XCTAssertEqual(proposal.baseVersionID, version.id)
+                        XCTAssertTrue(tasks.filter { $0.id == WorkspaceCrashFixture.taskID }.allSatisfy { $0.manualOrder == 42 })
+                    }
+                    let references = try WorkspaceCrashFixture.purgeFiles(root)
+                    XCTAssertEqual(references.count, 2, "one exclusive and one shared original")
+                    if references.count == 2 {
+                        let taskFiles = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+                        // A kill before unlink may retain surplus bytes; shared bytes must always survive.
+                        let shared = try await taskFiles.verifiedURL(for: references[1])
+                        XCTAssertEqual(try shared.map { try Data(contentsOf: $0) }, WorkspaceCrashFixture.bytes)
+                        if !purged {
+                            let exclusive = try await taskFiles.verifiedURL(for: references[0])
+                            XCTAssertEqual(try exclusive.map { try Data(contentsOf: $0) }, WorkspaceCrashFixture.bytes)
+                        }
+                        if purged, point == "save-then-throw" {
+                            let exclusive = try await taskFiles.verifiedURL(for: references[0])
+                            XCTAssertNil(exclusive, "committed completion collects the exclusive original")
+                            let reasons = try JSONDecoder().decode([UUID: String].self,
+                                from: Data(contentsOf: root.appendingPathComponent("retained-reasons.json")))
+                            XCTAssertNotNil(reasons[references[1].id])
+                        }
+                        let outside = tasks.filter { $0.id == WorkspaceCrashFixture.alternateID }
+                        XCTAssertEqual(outside.count, 1)
+                        XCTAssertTrue(outside.allSatisfy { $0.deletedAt == nil })
+                        if let row = outside.first { XCTAssertEqual(try WorkspacePurge.legacyReferences(row), [references[1]]) }
+                    }
+                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), (mode != "delete-item" ? 1 : 0) + (committed ? 1 : 0))
                 }
             }
         }

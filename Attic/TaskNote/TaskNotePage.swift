@@ -107,6 +107,12 @@ final class TaskNotePresenter: ObservableObject {
             self.host.setNeedsRestack()
         }
         model.onFocusWriting = { [weak self] atTop in self?.host.focusWriting(atTop: atTop) }
+        // A native field (not the writing) has an input method composing.
+        model.isFieldComposing = { [weak self] in
+            guard let self, let field = self.host.textView.window?.firstResponder as? NSTextView,
+                  field !== self.host.textView else { return false }
+            return field.hasMarkedText()
+        }
         host.onHeaderProgress = { [weak self] progress in self?.headerTitleProgress = progress }
         model.deletedNote = deletedNoteID != nil
         if session?.isPersisted == true { model.alternateNotes = coordinator.sessions.alternateOwnNotes(taskID) }

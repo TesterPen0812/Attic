@@ -80,13 +80,6 @@ enum WorkspaceItemLifecycle {
             roots.contains($0.rootID) && $0.deletedAt == date && $0.retiredAt == nil
         } : []
         let snapshots = try records.map { try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: $0.snapshot) }
-        // Global tag edits deliberately include deleted rows. They must
-        // survive Restore; every other captured task field remains guarded.
-        func matchesCapture(_ fields: [String: Data], _ captured: [String: Data]) -> Bool {
-            let mutableTagFields: Set<String> = ["tagsRaw", "updatedAt"]
-            return fields.filter { !mutableTagFields.contains($0.key) }
-                == captured.filter { !mutableTagFields.contains($0.key) }
-        }
         guard roots.allSatisfy({ root in
             let peers = records.filter { $0.rootID == root }
             guard let first = peers.first else { return false }
@@ -106,7 +99,7 @@ enum WorkspaceItemLifecycle {
             guard Set(captured.map { $0.0 }) == Set(actual.map(\.id)),
                   try actual.allSatisfy({ row in
                       let fields = try WorkspaceModelFields.read(row)
-                      return captured.contains { $0.0 == row.id && matchesCapture(fields, $0.1) }
+                      return captured.contains { $0.0 == row.id && WorkspacePurge.matchesTaskCapture(fields, $0.1) }
                   }) else { throw WorkspaceFoundationError.conflict }
         }
         for root in roots {
@@ -132,7 +125,7 @@ enum WorkspaceItemLifecycle {
                 } else {
                     let fields = try WorkspaceModelFields.read(peer)
                     guard snapshots.flatMap(\.members).filter({ $0.id == row.id }).contains(where: {
-                        ($0.replicas ?? [$0.fields]).contains { matchesCapture(fields, $0) }
+                        ($0.replicas ?? [$0.fields]).contains { WorkspacePurge.matchesTaskCapture(fields, $0) }
                     }) else { throw TaskReplicaMutationError.incompleteRestore(row.id) }
                 }
             }
@@ -197,7 +190,8 @@ extension WorkspaceItemLifecycle {
     /// member and every ownership query; any ambiguity retains the group.
     static func purge(group: UUID, before cutoff: Date, confirmed: Date?, coordinator: WorkspaceOperationCoordinator,
                       files: TaskImageFiles, inventory: () throws -> WorkspacePurge.Inventory?,
-                      publication: WorkspaceOperationCoordinator.Publication) async -> WorkspacePurge.Result {
+                      publication: WorkspaceOperationCoordinator.Publication,
+                      materialize: ((UUID, [WorkspaceMaterializationPatch]) throws -> Void)? = nil) async -> WorkspacePurge.Result {
         func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict) -> WorkspacePurge.Result {
             return .init(outcome: outcome, operationID: nil, removedIDs: [], preservationID: nil, retentionReason: "The whole item was retained because ownership or replica consistency could not be proved.")
         }
@@ -258,12 +252,26 @@ extension WorkspaceItemLifecycle {
             let associations = try context.fetch(FetchDescriptor<TaskNoteAssociation>())
             let associationIDs = Set(associations.filter { taskIDs.contains($0.taskID) || noteIDs.contains($0.noteID) }.map(\.id))
             let touchingAssociations = associations.filter { associationIDs.contains($0.id) }
-            guard touchingAssociations.allSatisfy({ $0.detachedAt != nil || taskIDs.contains($0.taskID) }),
-                  try writing(taskIDs: taskIDs, in: context).filter({ $0.deletedAt == nil }).isEmpty else { return refused() }
-            // Previously deleted writing stays independently restorable via
-            // its existing detached association and immutable preservation.
-            let olderNotes = allNotes.filter { $0.taskID.map(taskIDs.contains) == true && !noteIDs.contains($0.id) }
-            guard olderNotes.allSatisfy({ $0.deletedAt != nil }) else { return refused() }
+            guard touchingAssociations.allSatisfy({ $0.detachedAt != nil || taskIDs.contains($0.taskID) }) else { return refused() }
+            // Independent writing survives via its detached association and
+            // preservation. Live writing is materialized in this same commit.
+            let survivingNotes = try writing(taskIDs: taskIDs, in: context).filter { !noteIDs.contains($0.id) }
+            let survivorIDs = Set(survivingNotes.map(\.id))
+            guard survivorIDs.isDisjoint(with: ownership.blockedNotes),
+                  survivorIDs.allSatisfy({ ownership.sessions[$0]?.canCommit ?? true }),
+                  survivorIDs.allSatisfy({ !coordinator.recoveryDependsOnNote($0) }),
+                  survivingNotes.allSatisfy({ $0.associationGeneration < Int64.max }) else { return refused() }
+            var survivorTasks: [UUID: UUID] = [:]
+            for (id, copies) in Dictionary(grouping: survivingNotes, by: \.id) {
+                let owners = Set(copies.compactMap(\.taskID)).union(touchingAssociations.filter { $0.noteID == id && $0.detachedAt == nil }.map(\.taskID))
+                guard owners.count == 1, let owner = owners.first else { return refused() }
+                survivorTasks[id] = owner
+            }
+            let liveSurvivorIDs = Set(survivingNotes.filter { $0.deletedAt == nil }.map(\.id))
+            for association in touchingAssociations where association.detachedAt == nil && survivorIDs.contains(association.noteID) {
+                guard tasks.filter({ $0.id == association.taskID }).allSatisfy({ $0.associationGeneration == association.taskGeneration }),
+                      survivingNotes.filter({ $0.id == association.noteID }).allSatisfy({ $0.associationGeneration == association.noteGeneration }) else { return refused() }
+            }
             let touching: Set<AtticItemRef> = Set(taskIDs.map { .init(.task, $0) } + noteIDs.map { .init(.note, $0) })
             let allLinks = try context.fetch(FetchDescriptor<ItemLink>())
             let linkIDs = Set(allLinks.filter { $0.source.map(touching.contains) == true || $0.target.map(touching.contains) == true }.map(\.id))
@@ -283,7 +291,7 @@ extension WorkspaceItemLifecycle {
                           guard !copies.isEmpty, (member.replicas ?? [member.fields]).contains(member.fields) else { return false }
                           return copies.allSatisfy { row in
                               guard let fields = try? WorkspaceModelFields.read(row) else { return false }
-                              return (member.replicas ?? [member.fields]).contains(fields)
+                              return (member.replicas ?? [member.fields]).contains { WorkspacePurge.matchesTaskCapture(fields, $0) }
                           }
                       }), Set(snapshot.members.map(\.id)).isSuperset(of: Set(tasks.filter { $0.deletionRootID == record.rootID }.map(\.id))),
                       let dependencies = snapshot.dependencies else { return refused() }
@@ -291,7 +299,17 @@ extension WorkspaceItemLifecycle {
                 guard snapshot.originals.allSatisfy({ originals.contains($0.reference) }),
                       originals.allSatisfy({ reference in snapshot.originals.contains { $0.reference == reference } }) else { return refused() }
                 let current = try WorkspacePurge.preservationDependencies(taskIDs: Set(family.map(\.id)), in: context)
-                guard dependencies.allSatisfy({ captured in current.contains { $0 == captured } }) else { return refused() }
+                guard dependencies.allSatisfy({ captured in current.contains { actual in
+                    guard actual.owner == captured.owner else { return false }
+                    if captured.owner.entity == .note, liveSurvivorIDs.contains(captured.owner.id) {
+                        // An independently deleted note may have been restored.
+                        // Revision and association ownership must still agree.
+                        let lifecycle: Set<String> = ["deletedAt", "deletionGroupID"]
+                        return actual.fields.filter { !lifecycle.contains($0.key) }
+                            == captured.fields.filter { !lifecycle.contains($0.key) }
+                    }
+                    return actual == captured
+                } }) else { return refused() }
             }
             for other in activePreservations where !preservations.contains(where: { $0.id == other.id }) {
                 let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: other.snapshot)
@@ -299,9 +317,35 @@ extension WorkspaceItemLifecycle {
                     noteIDs.contains(dependency.owner.id) || attachmentIDs.contains(dependency.owner.id)
                 }) else { return refused() }
             }
-            let missingRedirects = Dictionary(uniqueKeysWithValues: Set(olderNotes.map(\.id)).subtracting(Set(touchingAssociations.map(\.noteID))).map { ($0, UUID()) })
-            let rows: [any PersistentModel] = tasks + notes + attachments + ownVersions + ownProposals + touchingAssociations + olderNotes + links + preservations
-            let owners = Set(rows.compactMap(WorkspaceOperationCoordinator.owner)).union(missingRedirects.values.map { WorkspaceOwner(entity: .association, id: $0) })
+            var documents: [UUID: NoteDocument] = [:]
+            var materializedTags: [UUID: [String]] = [:]
+            var patches: [WorkspaceMaterializationPatch] = []
+            for id in liveSurvivorIDs {
+                let copies = survivingNotes.filter { $0.id == id }
+                guard let first = copies.first, let taskID = survivorTasks[id],
+                      let root = tasks.first(where: { $0.id == taskID })?.deletionRootID,
+                      let record = preservations.first(where: { $0.rootID == root }),
+                      copies.allSatisfy({ $0.deletedAt == nil }),
+                      let bytes = first.content, case let .editable(before) = NoteContentCodec.decode(bytes) else { return refused() }
+                let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+                let value = try WorkspaceTaskNoteMaterializer.materialize(before, taskID: taskID, preservation: snapshot)
+                documents[id] = value.document
+                // Tags are globally editable after the immutable capture.
+                materializedTags[id] = tasks.first(where: { $0.id == taskID })?.tags ?? value.tags
+                patches.append(.init(noteID: id, taskID: taskID, preservationRootID: root,
+                    preservationID: record.id, before: before, after: value.document))
+            }
+            let prepared = try documents.mapValues { try PreparedNoteDocument($0) }
+            let newVersions = Dictionary(uniqueKeysWithValues: survivingNotes.filter { liveSurvivorIDs.contains($0.id) }.map { ($0.persistentModelID, UUID()) })
+            let survivorAttachments = allAttachments.filter { liveSurvivorIDs.contains($0.noteID) }
+            let survivorAttachmentIDs = Set(survivorAttachments.map(\.id))
+            guard allAttachments.filter({ survivorAttachmentIDs.contains($0.id) }).allSatisfy({ liveSurvivorIDs.contains($0.noteID) }),
+                  touchingAssociations.allSatisfy({ $0.taskGeneration < Int64.max && $0.noteGeneration < Int64.max }) else { return refused() }
+            let missingRedirects = Dictionary(uniqueKeysWithValues: Set(survivingNotes.map(\.id)).subtracting(Set(touchingAssociations.map(\.noteID))).map { ($0, UUID()) })
+            let rows: [any PersistentModel] = tasks + notes + attachments + ownVersions + ownProposals + touchingAssociations + survivingNotes + links + preservations + survivorAttachments
+            let owners = Set(rows.compactMap(WorkspaceOperationCoordinator.owner))
+                .union(missingRedirects.values.map { WorkspaceOwner(entity: .association, id: $0) })
+                .union(newVersions.values.map { WorkspaceOwner(entity: .version, id: $0) })
             guard ownership.rows.isDisjoint(with: owners) else { return refused() }
             for owner in owners {
                 let peers = rows.filter { WorkspaceOperationCoordinator.owner($0) == owner }
@@ -337,20 +381,30 @@ extension WorkspaceItemLifecycle {
             let references = try tasks.flatMap(WorkspacePurge.legacyReferences)
             // Ownership must be readable before the irreversible boundary.
             let covered = try TaskAttachmentMigration.coveredAttachmentIDs(in: context)
-            let leased = Set(rows.compactMap(WorkspaceOperationCoordinator.owner).map(\.id)).union(references.map(\.id)).union(attachmentIDs)
+            let leased = Set(rows.compactMap(WorkspaceOperationCoordinator.owner).map(\.id)).union(references.map(\.id)).union(attachmentIDs).union(documents.values.flatMap(\.attachmentIDs))
             files.files.registerWriter(coordinator.ownership)
             guard let collection = files.files.acquireCollection(leased) else { return refused() }
             defer { collection.release() }
-            let envelope = try coordinator.newEnvelope(intent: "Purge whole item", reads: Array(initial.values) + missingRedirects.values.map { WorkspaceModelToken(owner: .init(entity: .association, id: $0), replicas: []) }, writes: owners,
+            let envelope = try coordinator.newEnvelope(intent: "Purge whole item", reads: Array(initial.values)
+                    + missingRedirects.values.map { WorkspaceModelToken(owner: .init(entity: .association, id: $0), replicas: []) }
+                    + newVersions.values.map { WorkspaceModelToken(owner: .init(entity: .version, id: $0), replicas: []) }, writes: owners,
                 // Empty ownership tables are reads too: the first outside
                 // proposal/version/association may arrive during journal IO.
                 scopes: [WorkspaceOwner.Entity.task, .note, .attachment, .version, .proposal, .link, .association, .preservation, .migration]
-                    .map { index.token(.all($0)) })
+                    .map { index.token(.all($0)) }, afterDocuments: prepared.mapValues(\.content))
+            let materializationSteps: [@MainActor (UUID) throws -> Void] = materialize.map { handler in
+                [{ operation in try handler(operation, patches) }]
+            } ?? []
             let result = await coordinator.execute(envelope, sessionValid: {
                 guard let current = try? inventory() else { return false }
                 return current.generation == ownership.generation && files.files.validatesCollection(collection, ids: leased)
             }, collection: collection, stage: { commit in
+                for (id, document) in documents {
+                    try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared[id]!,
+                        revisionID: UUID(), versionIDs: newVersions, tags: materializedTags[id], timestamp: Date())
+                }
                 for row in rows {
+                    if row is NoteAttachment, survivorAttachments.contains(where: { $0.persistentModelID == row.persistentModelID }) { continue }
                     guard let owner = WorkspaceOperationCoordinator.owner(row) else { throw WorkspaceFoundationError.unknown }
                     let stored = commit.model(for: row.persistentModelID)
                     if owner.entity == .preservation {
@@ -361,22 +415,24 @@ extension WorkspaceItemLifecycle {
                         if noteIDs.contains(association.noteID) { commit.delete(association) }
                         else {
                             guard let record = preservations.first(where: { $0.rootID == tasks.first(where: { $0.id == association.taskID })?.deletionRootID }) else { throw WorkspaceFoundationError.conflict }
+                            association.taskGeneration += 1; association.noteGeneration += 1
                             association.detachedAt = Date(); association.detachedPreservationID = record.id
                         }
                     } else if let old = stored as? NoteItem, !noteIDs.contains(old.id) {
-                        old.taskID = nil
+                        old.taskID = nil; old.associationGeneration += 1
                     } else { commit.delete(stored) }
                 }
                 for (noteID, id) in missingRedirects {
-                    guard let old = olderNotes.first(where: { $0.id == noteID }), let taskID = old.taskID,
+                    guard let taskID = survivorTasks[noteID],
                           let rootID = tasks.first(where: { $0.id == taskID })?.deletionRootID,
                           let record = preservations.first(where: { $0.rootID == rootID }) else { throw WorkspaceFoundationError.conflict }
                     let association = TaskNoteAssociation(id: id, taskID: taskID, noteID: noteID)
                     association.detachedAt = Date(); association.detachedPreservationID = record.id
+                    association.noteGeneration = (survivingNotes.first(where: { $0.id == noteID })?.associationGeneration ?? 0) + 1
                     commit.insert(association)
                 }
                 WorkspaceCrashHook.reach("A-purge-staged")
-            }, publication: publication)
+            }, publication: .init(steps: materializationSteps + publication.steps))
             var retainedReasons: [UUID: String] = [:]
             if result == .committed {
                 WorkspaceCrashHook.reach("K8-before-unlink")
@@ -390,6 +446,7 @@ extension WorkspaceItemLifecycle {
             }
             return .init(outcome: result, operationID: envelope.id,
                 removedIDs: [.committed, .publicationPending].contains(result) ? taskIDs : [], preservationID: preservations.first?.id,
+                materialization: [.committed, .publicationPending, .unknown].contains(result) ? patches : [],
                 retainedByteReasons: retainedReasons)
         } catch { return refused(.unknown) }
     }

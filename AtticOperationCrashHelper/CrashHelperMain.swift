@@ -11,7 +11,7 @@ import SwiftData
 @MainActor
 func runFixture() async throws {
     guard CommandLine.arguments.count == 3,
-          ["launch-probe", "seed-conversion", "convert", "writer-probe", "seed-purge", "purge", "seed-migration", "migrate", "seed-item", "delete-item", "purge-item", "seed-add-to-tasks", "seed-remove-from-tasks", "add-to-tasks", "remove-from-tasks"].contains(CommandLine.arguments[1]) else { _exit(64) }
+          ["launch-probe", "seed-conversion", "convert", "writer-probe", "seed-purge", "purge", "seed-migration", "migrate", "seed-item", "delete-item", "purge-item", "restore-item", "seed-add-to-tasks", "seed-remove-from-tasks", "add-to-tasks", "remove-from-tasks"].contains(CommandLine.arguments[1]) else { _exit(64) }
     let root = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
         .resolvingSymlinksInPath()
     let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
@@ -26,6 +26,8 @@ func runFixture() async throws {
         try await WorkspaceCrashFixture.seedItem(root); _exit(73)
     case "delete-item":
         guard try WorkspaceCrashFixture.deleteItem(root) else { _exit(75) }; _exit(73)
+    case "restore-item":
+        guard try await WorkspaceCrashFixture.restoreItem(root) else { _exit(75) }; _exit(73)
     case "purge-item":
         guard try await WorkspaceCrashFixture.purgeItem(root) == .committed else { _exit(75) }; _exit(73)
     case "seed-purge":

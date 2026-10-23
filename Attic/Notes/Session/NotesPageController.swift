@@ -4272,10 +4272,13 @@ extension NotesPageController {
         let context = ModelContext(store.container)
         guard let rows = try? context.fetch(FetchDescriptor<NoteItem>()),
               let tasks = try? context.fetch(FetchDescriptor<TaskItem>()) else { return }
+        let notesByID = Dictionary(grouping: rows, by: \.id)
+        let deletedTaskIDs = Set(tasks.filter { $0.deletedAt != nil && $0.deletionGroupID != nil }.map(\.id))
+        let liveTaskIDs = Set(tasks.filter { $0.deletedAt == nil }.map(\.id))
         for session in cache.values {
-            let row = NoteStore.canonicalReplicas(from: rows.filter { $0.id == session.noteID }).first
+            let row = NoteStore.canonicalReplicas(from: notesByID[session.noteID] ?? []).first
             let deleted = row?.deletionGroupID != nil && row?.deletedAt != nil
-                || (session.pendingTaskID.map { id in tasks.contains { $0.id == id && $0.deletedAt != nil && $0.deletionGroupID != nil } } ?? false)
+                || (session.pendingTaskID.map(deletedTaskIDs.contains) ?? false)
             if deleted, !session.isItemDeleted {
                 let history = session.engine.history.workspace
                 let document = row?.content.flatMap { NoteContentCodec.decode($0).document } ?? session.engine.checkpointDocument()
@@ -4288,7 +4291,7 @@ extension NotesPageController {
                 session.state = .readOnly
                 wire(session)
             } else if !deleted, session.isItemDeleted, row?.deletedAt == nil,
-                      row != nil || (!session.isPersisted && session.pendingTaskID.map { id in tasks.contains { $0.id == id && $0.deletedAt == nil } } == true) {
+                      row != nil || (!session.isPersisted && session.pendingTaskID.map(liveTaskIDs.contains) == true) {
                 session.isItemDeleted = false
                 if row != nil { installCommittedTaskNoteForm(session) }
                 else {
