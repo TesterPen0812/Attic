@@ -796,8 +796,20 @@ enum AtticMotionPreference {
 
     /// Reduced in Settings, or Reduce Motion on in macOS.
     static var reducesMotion: Bool {
-        level.reducesMotion(systemReduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        #if DEBUG
+        let system = systemReduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #else
+        let system = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #endif
+        return level.reducesMotion(systemReduceMotion: system)
     }
+
+    #if DEBUG
+    /// Tests only: stands in for macOS Reduce Motion, which GitHub's macOS
+    /// runner images turn on (`configure-system.sh`), so panel-motion tests
+    /// can state the setting they test instead of inheriting the machine's.
+    static var systemReduceMotionOverride: Bool?
+    #endif
 }
 
 // MARK: - Touch
