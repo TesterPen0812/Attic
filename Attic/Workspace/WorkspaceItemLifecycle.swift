@@ -201,9 +201,10 @@ extension WorkspaceItemLifecycle {
             let index = try WorkspaceScopeIndex(initial)
             let allTasks = try context.fetch(FetchDescriptor<TaskItem>())
             let allNotes = try context.fetch(FetchDescriptor<NoteItem>())
-            let tasks = allTasks.filter { $0.deletionGroupID == group }
+            var tasks = allTasks.filter { $0.deletionGroupID == group }
             let notes = allNotes.filter { $0.deletionGroupID == group }
-            let taskIDs = Set(tasks.map(\.id)), noteIDs = Set(notes.map(\.id))
+            var taskIDs = Set(tasks.map(\.id))
+            let primaryTaskIDs = taskIDs, noteIDs = Set(notes.map(\.id))
             let dates = Set(tasks.compactMap(\.deletedAt) + notes.compactMap(\.deletedAt))
             guard let date = dates.first, dates.count == 1, date < cutoff,
                   confirmed == nil || confirmed == date, !tasks.isEmpty || !notes.isEmpty,
@@ -214,8 +215,25 @@ extension WorkspaceItemLifecycle {
                   noteIDs.allSatisfy({ ownership.sessions[$0]?.canCommit ?? true }),
                   noteIDs.allSatisfy({ !coordinator.recoveryDependsOnNote($0) }),
                   coordinator.collectionProtectedRecoveryBytes != nil else { return refused() }
+            let associations = try context.fetch(FetchDescriptor<TaskNoteAssociation>())
+            let activePreservations = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.retiredAt == nil }
+            // A note owns the retired circle families that redirect to it.
+            // Collect them in this same commit, each against its own deletion
+            // date/capture. The selected group's confirmation remains exact.
+            let dependentIDs = Set(associations.filter {
+                noteIDs.contains($0.noteID) && $0.detachedAt != nil
+            }.compactMap(\.detachedPreservationID))
+            for record in activePreservations where dependentIDs.contains(record.id) && record.provenance == "circle removed" {
+                guard record.purgedAt == nil, record.deletedAt < cutoff,
+                      let family = try TaskStore.guardedDeletedFamily(in: context, rootID: record.rootID, before: cutoff,
+                          confirmed: record.deletedAt),
+                      family.allSatisfy({ $0.deletionGroupID != nil }) else { return refused() }
+                taskIDs.formUnion(family.map(\.id))
+            }
+            tasks = allTasks.filter { taskIDs.contains($0.id) }
             for root in Set(tasks.compactMap(\.deletionRootID)) {
-                guard let family = try TaskStore.guardedDeletedFamily(in: context, rootID: root, before: cutoff, confirmed: confirmed),
+                guard let family = try TaskStore.guardedDeletedFamily(in: context, rootID: root, before: cutoff,
+                          confirmed: primaryTaskIDs.contains(root) ? confirmed : nil),
                       Set(family.map(\.id)).isSubset(of: taskIDs) else { return refused() }
             }
             let allAttachments = try context.fetch(FetchDescriptor<NoteAttachment>())
@@ -249,7 +267,6 @@ extension WorkspaceItemLifecycle {
             guard versions.filter({ versionIDs.contains($0.id) }).allSatisfy({ noteIDs.contains($0.noteID) }),
                   proposals.filter({ proposalIDs.contains($0.id) }).allSatisfy({ noteIDs.contains($0.noteID) }),
                   proposals.filter({ !noteIDs.contains($0.noteID) }).allSatisfy({ $0.baseVersionID.map { !versionIDs.contains($0) } ?? true }) else { return refused() }
-            let associations = try context.fetch(FetchDescriptor<TaskNoteAssociation>())
             let associationIDs = Set(associations.filter { taskIDs.contains($0.taskID) || noteIDs.contains($0.noteID) }.map(\.id))
             let touchingAssociations = associations.filter { associationIDs.contains($0.id) }
             guard touchingAssociations.allSatisfy({ $0.detachedAt != nil || taskIDs.contains($0.taskID) }) else { return refused() }
@@ -277,8 +294,9 @@ extension WorkspaceItemLifecycle {
             let linkIDs = Set(allLinks.filter { $0.source.map(touching.contains) == true || $0.target.map(touching.contains) == true }.map(\.id))
             let links = allLinks.filter { linkIDs.contains($0.id) }
             let roots = Set(tasks.compactMap(\.deletionRootID))
-            let activePreservations = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter { $0.retiredAt == nil }
-            let preservations = activePreservations.filter { roots.contains($0.rootID) && $0.deletedAt == date }
+            let preservations = activePreservations.filter { record in
+                roots.contains(record.rootID) && tasks.contains { $0.deletionRootID == record.rootID && $0.deletedAt == record.deletedAt }
+            }
             guard tasks.allSatisfy({ $0.deletionRootID != nil }),
                   roots.allSatisfy({ root in Set(preservations.filter { $0.rootID == root }.map(\.id)).count == 1 }) else { return refused() }
             for record in preservations {
