@@ -266,6 +266,11 @@ final class TaskNotePageModel: ObservableObject {
             apply()
         }
         if let id = focusedRowID, !nextRows.contains(where: { $0.id == id }) { focusedRowID = nil }
+        // A reorder (⌘↓ past the third row, its Undo, a change elsewhere)
+        // never takes the open rename or the keyboard's row out of sight:
+        // the list shows for the moment (C1 review P2).
+        let kept = [renamingID, focusInside ? focusedRowID : nil].compactMap { $0 }
+        if !isExpanded, kept.contains(where: { !isVisible($0) }) { revealAll() }
         onGeometryChange?()
     }
 

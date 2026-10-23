@@ -1788,4 +1788,20 @@ extension TaskNoteComposedHostTests {
         XCTAssertTrue(closedAgain)
         XCTAssertTrue(try open(id).model.isExpanded)
     }
+
+    func testReorderingTheFocusedRowPastTheThirdRowRevealsItForTheMoment() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let defaults = freshDefaults()
+        let model = TaskNotePageModel(taskID: id, store: tasks, library: library, history: presenter.model.history, defaults: defaults)
+        model.setFocusInside(true)
+        let third = model.rows[2].id
+        model.focusedRowID = third
+        XCTAssertTrue(model.move(third, by: 1))
+        XCTAssertEqual(model.rows[3].id, third)
+        XCTAssertTrue(model.isVisible(third), "the moved row stays in sight")
+        XCTAssertEqual(model.focusedRowID, third, "and keeps the ring")
+        XCTAssertFalse(TaskNotePageModel(taskID: id, store: tasks, library: library, history: model.history, defaults: defaults).isExpanded,
+                       "a reveal does not change how the item opens")
+    }
 }
