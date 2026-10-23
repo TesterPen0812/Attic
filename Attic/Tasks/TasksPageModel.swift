@@ -58,6 +58,8 @@ struct TasksPageServices {
     var addFilesToTaskNote: ((UUID, TaskAttachmentStaging) -> Void)?
     /// Add Files to Note… (§ 2.4): the picker, then `addFilesToTaskNote`.
     var chooseFilesForNote: ((UUID) -> Void)?
+    var removeFromTasks: ((UUID) -> Void)?
+    var canRemoveFromTasks: ((UUID) -> Bool)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent

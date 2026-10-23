@@ -2189,6 +2189,10 @@ struct TasksPage: View {
                 })
             }
         }
+        if single, model.services.canRemoveFromTasks?(id) == true, let remove = model.services.removeFromTasks {
+            list += TaskNoteConversion.commands(taskID: id, hasWriting: true,
+                isSubtask: store.listedTask(withID: id)?.parentID != nil, add: {}, remove: { remove(id) })
+        }
         if single, tab != .done {
             var more = [AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files") : String(localized: "Show Files"),
                                          shortcut: opensTaskNotes ? nil : AtticTaskShortcut.openPage) {

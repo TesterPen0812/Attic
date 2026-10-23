@@ -376,6 +376,34 @@ final class TaskFilesSliceTests: XCTestCase {
         return (text, payload["isError"] as? Bool ?? false)
     }
 
+    // Owner decision 2026-10-23: agents use the same circle commands,
+    // combined read sets, refusal rules and retained workspace history.
+    func testBAgentsExposeCircleCommandsAndKeepStaleRemovalAsOneProposal() async throws {
+        let handler = agent()
+        XCTAssertTrue(AgentTaskTools.asyncToolNames.isSuperset(of: ["add_to_tasks", "remove_from_tasks"]))
+        let ordinaryID = UUID(), original = NoteDocument(blocks: [.text("Agent item"), .checklist("Keep writing", checked: true)])
+        _ = try notes.store.createDocumentNote(id: ordinaryID, document: original).get()
+        let (added, addError) = try await call(handler, "add_to_tasks", ["note_id": ordinaryID.uuidString])
+        XCTAssertFalse(addError, added)
+        guard !addError, let taskID = ownNoteTask(ordinaryID) else { return }
+        XCTAssertTrue(tasks.subtasks(of: taskID).isEmpty)
+        let stale = try AgentWorkspaceReadSet.capture(taskID: taskID, noteID: nil, in: ModelContext(container))
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "New task title"))
+        let (pending, pendingError) = try await call(handler, "remove_from_tasks", ["task_id": taskID.uuidString,
+            "base_workspace_token": try WorkspaceModelFields.encode(stale).base64EncodedString()])
+        XCTAssertFalse(pendingError, pending); XCTAssertTrue(pending.contains("pending"), pending)
+        XCTAssertNotNil(tasks.task(withID: taskID)); XCTAssertEqual(notes.workspaceProposals.count, 1)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        let began = await notes.beginProposalReview(id: proposal.id); XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal(); XCTAssertTrue(accepted)
+        XCTAssertNil(tasks.task(withID: taskID)); XCTAssertNil(ownNoteTask(ordinaryID))
+        XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(taskID)).undoName, "Remove from Tasks")
+    }
+
+    private func ownNoteTask(_ id: UUID) -> UUID? {
+        try? ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id }?.taskID
+    }
+
     func testAgentsMakeSubtasksAndNoteCheckboxesThroughTheSameOperationAndRefusals() async throws {
         let id = try XCTUnwrap(tasks.create(title: "Launch")?.id)
         let handler = agent()

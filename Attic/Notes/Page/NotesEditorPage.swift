@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SwiftData
 import UniformTypeIdentifiers
 
 /// The Phase 2 Notes page (slice 2, "Everyday capture and return"; mockups
@@ -26,6 +27,7 @@ struct NotesEditorPage: View {
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
+    private let taskStore: TaskStore?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var tagColouring
@@ -62,6 +64,7 @@ struct NotesEditorPage: View {
         self.noteDraft = noteDraft
         self.uiState = uiState
         self.layout = layout
+        self.taskStore = taskStore
         let store = noteStore
         _damagedRecovery = StateObject(wrappedValue: NoteDamagedRecoveryExit(perform: { [controller] command in
             await controller.perform(command)
@@ -700,8 +703,8 @@ struct NotesEditorPage: View {
         // Phase 3 (§ 2.1): the whole note becomes a task's own note. No
         // shortcut.
         if editable, noteStore.note(withID: id)?.taskID == nil, let makeTask = controller.makeTaskFromNote {
-            commands.append(AtticMenuCommand("Make Task from Note", isDisabled: !session.isPersisted,
-                                             identifier: "notes-menu-make-task") { makeTask(id) })
+            commands += TaskNoteConversion.commands(taskID: nil, hasWriting: true, isSubtask: false,
+                add: { makeTask(id) }, remove: {})
         }
         if controller.canSaveRecoveryCopy(session) {
             commands.append(AtticMenuCommand("Save Recovery Copy…", shortcut: Self.saveRecoveryCopyShortcut,
@@ -723,6 +726,21 @@ struct NotesEditorPage: View {
     private func rowCommands(_ id: UUID) -> [AtticMenuCommand] {
         let stored = noteStore.note(withID: id)
         let pinned = stored?.isPinned ?? false
+        var conversion: [AtticMenuCommand] = []
+        if let stored {
+            if let taskID = stored.taskID, let remove = controller.removeFromTasks {
+                conversion = TaskNoteConversion.commands(taskID: taskID,
+                    hasWriting: TaskNoteConversion.hasWriting(taskID, in: ModelContext(noteStore.container)),
+                    isSubtask: taskStore?.listedTask(withID: taskID)?.parentID != nil, add: {}, remove: { remove(taskID) })
+            } else if stored.taskID == nil, let add = controller.makeTaskFromNote {
+                conversion = TaskNoteConversion.commands(taskID: nil, hasWriting: true, isSubtask: false,
+                    add: {
+                        Task { @MainActor in
+                            if await controller.openFromLibrary(noteID: id) { controller.dismissLibrary(); add(id) }
+                        }
+                    }, remove: {})
+            }
+        }
         return [
             AtticMenuCommand("Open", identifier: "notes-row-open") { openFromLibrary(id) },
             AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: stored == nil, startsSection: true,
@@ -743,7 +761,7 @@ struct NotesEditorPage: View {
             },
             AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
                              isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }
-        ] + Self.historyCommands(for: controller)
+        ] + conversion + Self.historyCommands(for: controller)
     }
 
     /// The library's history (pin, duplicate, delete) as commands, named for

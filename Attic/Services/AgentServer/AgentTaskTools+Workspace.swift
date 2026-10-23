@@ -42,7 +42,7 @@ struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
 }
 
 struct AgentWorkspaceIntent: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case make_subtask, make_note_checkbox, make_task_from_note, restore, move_files_into_note, delete_item, restore_item }
+    enum Kind: String, Codable, Sendable { case make_subtask, make_note_checkbox, make_task_from_note, add_to_tasks, remove_from_tasks, restore, move_files_into_note, delete_item, restore_item }
     let kind: Kind
     let taskID: UUID?
     let noteID: UUID?
@@ -53,7 +53,8 @@ struct AgentWorkspaceIntent: Codable, Equatable, Sendable {
         switch kind {
         case .make_subtask: "Make subtasks from these consecutive lines: " + lines.joined(separator: " · ") + (keepOriginal ? ". Keep rich lines in the writing." : ". Remove the promoted lines from the writing.")
         case .make_note_checkbox: "In task \(taskID?.uuidString ?? ""), turn subtask \(subtaskID?.uuidString ?? "") into a note checkbox and move the subtask to Recently Deleted."
-        case .make_task_from_note: "Make a task from this note, keeping its writing and files."
+        case .make_task_from_note, .add_to_tasks: "Add this note to Tasks in Now, keeping its writing and files."
+        case .remove_from_tasks: "Remove from Tasks, keeping the writing and materializing subtasks as checkboxes. Drop task-only details; Undo restores them."
         case .restore: "Restore note \(noteID?.uuidString ?? ""). If its task has a newer note, restore it as a separate note."
         case .delete_item: "Delete the whole item, including its writing, subtasks and files."
         case .restore_item: "Restore the whole item to its exact previous placement."
@@ -135,7 +136,7 @@ final class AgentWorkspaceCall {
 @MainActor
 extension AgentTaskTools {
     static let asyncToolNames: Set<String> = ["make_subtask", "make_note_checkbox", "make_task_from_note",
-                                              "restore", "move_files_into_note", "delete_task", "delete_note", "delete_item", "restore_item"]
+                                              "add_to_tasks", "remove_from_tasks", "restore", "move_files_into_note", "delete_task", "delete_note", "delete_item", "restore_item"]
 
     static let workspaceDefinitions: [[String: Any]] = [
         definition("make_subtask", title: "Make Subtasks from a Task's Note",
@@ -148,7 +149,15 @@ extension AgentTaskTools {
                    description: "Puts a subtask's title at the top of its task's note as a note checkbox (ticked as it was) and moves the subtask to Recently Deleted, in one operation. Creates the note when the task has none.",
                    properties: ["subtask_id": ["type": "string", "description": "The subtask's id (UUID)."]],
                    required: ["subtask_id"], destructive: false),
-        definition("make_task_from_note", title: "Make a Task from a Note",
+        definition("add_to_tasks", title: "Add to Tasks",
+                   description: "Adds an ordinary note to Tasks in Now as a fresh task. Keeps note identity, writing, files and versions; leading checkboxes stay writing. A blank title commits immediately.",
+                   properties: ["note_id": ["type": "string", "description": "The ordinary note's id (UUID)."]],
+                   required: ["note_id"], destructive: false),
+        definition("remove_from_tasks", title: "Remove from Tasks",
+                   description: "Retires a top-level task with writing, keeping the same ordinary note. Subtasks become leading checkboxes; task-only date, priority and completion details are dropped. Refuses divergent copies, unresolved writing and unproven Earlier files: use move_files_into_note then retry. One guarded Undo restores the exact task family.",
+                   properties: ["task_id": ["type": "string", "description": "The top-level task's id (UUID)."]],
+                   required: ["task_id"], destructive: false),
+        definition("make_task_from_note", title: "Add to Tasks (Compatibility Alias)",
                    description: "Turns an ordinary note into a task's own note: the task takes the note's title and tags, in one operation.",
                    properties: ["note_id": ["type": "string", "description": "The note's id (UUID)."]],
                    required: ["note_id"], destructive: false),
@@ -205,7 +214,7 @@ extension AgentTaskTools {
         let context = ModelContext(store.container)
         var taskID: UUID?, noteID: UUID?, subtaskID: UUID?, lines: [String] = []
         switch kind {
-        case .make_subtask, .move_files_into_note:
+        case .make_subtask, .move_files_into_note, .remove_from_tasks:
             taskID = try uuid(arguments, "task_id")
             if kind == .make_subtask {
                 guard let value = arguments["lines"] as? [String], !value.isEmpty else { throw AgentToolError.invalidArguments("lines must be non-empty.") }
@@ -218,7 +227,7 @@ extension AgentTaskTools {
             taskID = parent
         case .delete_item, .restore_item:
             throw AgentToolError.invalidArguments("Use a whole-item lifecycle alias.")
-        case .make_task_from_note, .restore:
+        case .make_task_from_note, .add_to_tasks, .restore:
             let id = try uuid(arguments, kind == .restore ? "id" : "note_id"); noteID = id
             let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
             guard let first = rows.first, rows.allSatisfy({ $0.taskID == first.taskID }) else { throw AgentToolError.notPerformed("The note is unavailable or its copies disagree.") }
@@ -235,7 +244,14 @@ extension AgentTaskTools {
         case .delete_item, .restore_item: return try executeWholeItemLifecycle(intent, notes: notes)
         case .make_subtask: return try await makeSubtask(intent.arguments, notes: notes)
         case .make_note_checkbox: return try await makeNoteCheckbox(intent.arguments, notes: notes)
-        case .make_task_from_note: return try await makeTaskFromNote(intent.arguments, notes: notes)
+        case .make_task_from_note, .add_to_tasks: return try await makeTaskFromNote(intent.arguments, notes: notes)
+        case .remove_from_tasks:
+            return try await withPage(try uuid(intent.arguments, "task_id"), notes: notes) { presenter in
+                switch await TaskNoteConversion.removeTask(presenter.taskID, notes: notes, tasks: store, workspaceSession: presenter.session) {
+                case let .removed(noteID): return try encodeJSON(["ok": true, "note_id": noteID.uuidString])
+                case let .refused(reason): throw AgentToolError.notPerformed(reason)
+                }
+            }
         case .restore: return try await restoreNote(intent.arguments, notes: notes)
         case .move_files_into_note: return try await moveFilesIntoNote(intent.arguments)
         }

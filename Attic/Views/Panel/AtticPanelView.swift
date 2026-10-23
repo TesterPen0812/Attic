@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import SwiftData
 
 /// The panel's shell: the surface, the header (Pin and the page switch), the
 /// page host for the current page, and the notices above it (the Undo toast
@@ -233,6 +234,11 @@ struct AtticPanelView: View {
                     uiState.openTaskNote(id, from: .tasks, row: id, backTitle: nil)
                 }
             },
+            removeFromTasks: { [weak pages = noteDraft.pages] id in pages?.removeFromTasks?(id) },
+            canRemoveFromTasks: { [weak store] id in
+                guard let store else { return false }
+                return TaskNoteConversion.hasWriting(id, in: ModelContext(store.container))
+            },
             noteOwners: noteDraft.pages.store.$notes
                 .map { Set($0.compactMap(\.taskID)) }
                 .removeDuplicates()
@@ -259,7 +265,7 @@ struct AtticPanelView: View {
                     let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
                     let stepID = pages.undoRoute.undoStepID(in: history.historyID)
                     uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
-                    toasts.show(String(localized: "Made a task from the note"), answersUndoKey: false, performingAsync: { [weak pages, weak uiState, weak history] in
+                    toasts.show(String(localized: "Added to Now"), answersUndoKey: false, performingAsync: { [weak pages, weak uiState, weak history] in
                         guard let pages, let uiState, let history, let stepID,
                               history.route.undoStepID(in: history.historyID) == stepID else { return .applied }
                         if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
@@ -272,6 +278,12 @@ struct AtticPanelView: View {
                 case let .refused(reason):
                     pages.active?.showNotice(NoteNotice(kind: .didntWork, detail: reason))
                 }
+            }
+        }
+        pages.removeFromTasks = { [weak pages, weak store, weak uiState, weak toasts] taskID in
+            guard let pages, let store, let uiState else { return }
+            Task { @MainActor in
+                await Self.removeFromTasks(taskID, pages: pages, tasks: store, uiState: uiState, toasts: toasts)
             }
         }
         pages.taskNoteMaterialized = { [weak pages, weak store, weak uiState, weak toasts] patch, operationID in
@@ -642,5 +654,60 @@ struct PanelRootLayout: Layout {
         let size = bounds.size
         MainActor.assumeIsolated { Self.lastPlacedSize = size }
         #endif
+    }
+}
+
+
+extension AtticPanelView {
+    @MainActor private static func removeFromTasks(_ taskID: UUID, pages: NotesPageController,
+        tasks: TaskStore, uiState: PanelUIState, toasts: PanelToastCenter?, moveFilesFirst: Bool = false) async {
+        func report(_ reason: String) {
+            toasts?.show(reason, actionTitle: String(localized: "Retry"), answersUndoKey: false) { [weak pages, weak tasks, weak uiState, weak toasts] in
+                guard let pages, let tasks, let uiState else { return }
+                Task { @MainActor in await Self.removeFromTasks(taskID, pages: pages, tasks: tasks,
+                    uiState: uiState, toasts: toasts, moveFilesFirst: moveFilesFirst) }
+            }
+        }
+        if moveFilesFirst {
+            if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) { return }
+            TaskNoteWindows.shared.finishHandoff(taskID)
+            let moved = await tasks.fileMigration.moveIntoNote(taskID, tasks: tasks, notes: pages)
+            switch moved {
+            case .migrated, .reconciled, .unchanged: break
+            case let .refused(reason): report(reason.reason); return
+            case .deferred: report(String(localized: "Couldn't move the files now")); return
+            }
+        }
+        let open = TaskNotePresenter.open(for: taskID)
+        switch await TaskNoteConversion.removeTask(taskID, notes: pages, tasks: tasks, workspaceSession: open?.session) {
+        case let .removed(noteID):
+            let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
+            let entry = history.route.undoStepID(in: history.historyID)
+            // The committed ordinary projection is already installed while
+            // input is reserved; durable close preserves any queued writing.
+            if let open, !(await open.close()) { return }
+            TaskNoteWindows.shared.finishHandoff(taskID)
+            TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState, controller: pages)
+            _ = pages.open(noteID: noteID)
+            uiState.switchPage(to: .notes, motion: .instant)
+            toasts?.show(String(localized: "Removed from Tasks"), answersUndoKey: false, performingAsync: { [weak pages, weak history, weak uiState] in
+                guard let pages, let history, let uiState, let entry,
+                      history.route.undoStepID(in: history.historyID) == entry else { return .applied }
+                guard await history.undoLatest(stepID: entry) == .applied else {
+                    return .failed(CommandFailure(String(localized: "Couldn't undo")))
+                }
+                await pages.retireConvertedNote(noteID, installingCommittedForm: false)
+                uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
+                return .applied
+            })
+        case let .refused(reason):
+            if reason == TaskNoteConversion.earlierFilesReason {
+                toasts?.show(reason, actionTitle: String(localized: "Move Files into Note"), answersUndoKey: false) { [weak pages, weak tasks, weak uiState, weak toasts] in
+                    guard let pages, let tasks, let uiState else { return }
+                    Task { @MainActor in await Self.removeFromTasks(taskID, pages: pages, tasks: tasks,
+                        uiState: uiState, toasts: toasts, moveFilesFirst: true) }
+                }
+            } else { report(reason) }
+        }
     }
 }

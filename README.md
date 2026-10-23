@@ -52,6 +52,14 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ### Everywhere
 
+- **Add to Tasks** puts an ordinary note in Now as a fresh task. Its writing,
+  files and versions stay on the same note; leading checkboxes stay writing.
+  **Remove from Tasks** keeps a task's writing as an ordinary note, with its
+  subtasks as leading checkboxes in page order. Task dates, priority and
+  completion details are dropped; Undo restores the exact family. Retired
+  task records stay hidden from Recently Deleted and expire after 30 days.
+  Unproven Earlier files must first use **Move Files into Note**. Subtasks
+  and tasks without writing have no Remove from Tasks command.
 - Deleting a task or its writing moves the whole item, including subtasks and files, to one Recently Deleted entry for 30 days. Restore returns its original placement. Old independent deletions remain separate.
 - Recently Deleted keeps deleted items and canvases for 30 days.
 - Settings: General, Panel, Appearance, Recently Deleted, Agent Access and
@@ -190,7 +198,8 @@ describes its arguments in `tools/list`. A few rules:
   These cover every physical replica and expected absence. A stale workspace
   write is kept as a proposal requiring review.
 - The async workspace tools `make_subtask`, `make_note_checkbox`,
-  `make_task_from_note`, `restore` (notes), and `move_files_into_note` require
+  `add_to_tasks`, `remove_from_tasks`, `make_task_from_note` (compatibility
+  alias for Add to Tasks), `restore` (notes), and `move_files_into_note` require
   `base_workspace_token`: paired Delete/Restore aliases also require this combined token and run as one whole-item change (a stale or open-editor call becomes one proposal). Pass the combined `workspace_token` returned by
   `get_task_workspace`, or request it with `include_workspace_token: true`
   in `list_notes` or `list_deleted`. This token covers the complete read set
