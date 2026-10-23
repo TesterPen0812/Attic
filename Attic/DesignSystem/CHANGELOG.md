@@ -5,6 +5,11 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase X
 
+### 2026-10-23 · Tasks scroll layout and PR #11 verification (Sol)
+
+- Task cells report geometry within their list content. The existing native scroll keeper converts those frames for page hit testing, avoiding a lazy-layout feedback dependency through the scroll viewport while preserving lazy rows and intrinsic expanded content.
+- Scroll coverage follows the owner's 2026-10-20/22 decisions: 32/48 pt row pitches, 30/26 pt controls, glass tabs without an underline, slight top blur, and no bottom blur/fade. The superseded N-6 plain-label and bottom-edge fade assertions are replaced by live geometry/hit-target checks; rendered row movement and all four scroll steps remain.
+
 ### 2026-10-20 · Table add-chip cancellation (owner review round PRB1, B7-01)
 
 - Releasing a table add-chip press outside its 28 pt target cancels the click. Returning inside before release still clicks; grip dragging and Escape cancellation keep their existing behavior.
