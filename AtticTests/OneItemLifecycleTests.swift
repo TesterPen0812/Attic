@@ -317,12 +317,15 @@ final class OneItemLifecycleTests: XCTestCase {
         let data = Data("shared original".utf8); try data.write(to: input)
         let refs = try await files.importAttachments([input], existing: [])
         let reference = try XCTUnwrap(refs.first), context = ModelContext(container)
-        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == root { row.imageReferencesData = try JSONEncoder().encode(refs) }
-        let other = TaskItem(title: "Other owner"); other.imageReferencesData = try JSONEncoder().encode(refs); context.insert(other)
+        let encodedReferences = try JSONEncoder().encode(refs)
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == root { row.imageReferencesData = encodedReferences }
+        let other = TaskItem(title: "Other owner"); other.imageReferencesData = encodedReferences; context.insert(other)
         try context.save(); tasks.refresh()
         // This fixture bound imports with a raw model save; finish the
         // import admission that TaskStore.save normally releases on commit.
         files.files.finishCandidates(Set(refs.map(\.id)))
+        XCTAssertEqual(Set(try rows().0.filter { $0.id == root }.compactMap(\.imageReferencesData)).count, 1,
+            "The positive purge fixture must have byte-identical physical attachment metadata")
         XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
         let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
             coordinator: coordinator, files: files, inventory: { .init(generation: 0) })

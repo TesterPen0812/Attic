@@ -21,20 +21,6 @@ final class NotesPageControllerTests: XCTestCase {
         directory = ownedTemporaryDirectory(prefix: "AtticNoteDrafts")
     }
 
-    /// An imported tombstone is an external event, not the local Delete
-    /// command, which now settles/reserves the whole item (2026-10-23).
-    /// Keep every existing recovery/conflict assertion below unchanged.
-    private func deleteElsewhere(_ id: UUID, from source: NoteStore? = nil) throws -> Bool {
-        let source = source ?? store!
-        let context = WorkspaceLegacyBridge.context(for: source.container)
-        let rows = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
-        guard !rows.isEmpty else { return false }
-        try WorkspaceItemLifecycle.stageWritingDeletion(rows, group: UUID(), timestamp: Date(), in: context)
-        try WorkspaceLegacyBridge.persist(context, using: { try $0.save() }, sourceName: "Test imported deletion")
-        source.refresh()
-        return true
-    }
-
     override func tearDown() async throws {
 
     }
@@ -1924,7 +1910,7 @@ final class NotesPageControllerTests: XCTestCase {
         controller.importImages([URL(fileURLWithPath: "/tmp/delayed.png")])
         type(" after", into: draft)
         await waitForImageRequests(loader, count: 1)
-        XCTAssertTrue(try deleteElsewhere(id))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(id, in: store))
         await loader.releaseNext(success: true)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(store.notes.isEmpty)
@@ -1945,7 +1931,7 @@ final class NotesPageControllerTests: XCTestCase {
         await XCTAssertTrueAsync(await controller.preserveAllDurably())
         controller.importImages([URL(fileURLWithPath: "/tmp/late.png")])
         await waitForImageRequests(loader, count: 1)
-        XCTAssertTrue(try deleteElsewhere(session.noteID))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(session.noteID, in: store))
         await loader.releaseNext(success: true)
         await controller.waitForImportWork()
         XCTAssertFalse(session.isImporting)
@@ -2292,7 +2278,7 @@ final class NotesPageControllerTests: XCTestCase {
         draft.engine.insertImage(image, pixelSize: CGSize(width: 1, height: 1))
         await XCTAssertTrueAsync(await first.preserveAllDurably())
         let oldID = draft.noteID
-        XCTAssertTrue(try deleteElsewhere(oldID, from: firstStore))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(oldID, in: firstStore))
         type(" later", into: draft)
         persistence.shouldFail = true
         await XCTAssertTrueAsync(await first.preserveAllDurably(), "failed store save must retain recovery")
@@ -2515,7 +2501,7 @@ final class NotesPageControllerTests: XCTestCase {
         type("Original", into: draft)
         await XCTAssertTrueAsync(await controller.preserveAllDurably())
         let oldID = draft.noteID
-        XCTAssertTrue(try deleteElsewhere(oldID))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(oldID, in: store))
         type(" later", into: draft)
         await XCTAssertTrueAsync(await controller.preserveDurably(draft))
         XCTAssertEqual(draft.state, .conflict(.deleted))
@@ -2543,7 +2529,7 @@ final class NotesPageControllerTests: XCTestCase {
         else { return XCTFail("external change fixture") }
         await XCTAssertTrueAsync(await controller.preserveDurably(session))
         XCTAssertEqual(session.state, .conflict(.changed))
-        XCTAssertTrue(try deleteElsewhere(id))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(id, in: store))
         controller.present()
         XCTAssertEqual(session.state, .conflict(.deleted))
         XCTAssertTrue(store.restoreDeleted(noteID: id))
@@ -3052,7 +3038,7 @@ final class NoteSessionMatrixTests: XCTestCase {
                 return "R"
             case .externalDelete:
                 guard let note = store.note(withID: session.noteID) else { return "N" }
-                return store.delete(note) ? "A" : "R"
+                return try deleteNoteElsewhereForTest(note.id, in: store) ? "A" : "R"
             case .retry:
                 guard onScreen else { return "N" }
                 guard session.engine.activity == .idle else { return "N" }
@@ -3199,8 +3185,8 @@ final class NoteSessionMatrixTests: XCTestCase {
                 XCTAssertFalse(NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
                     hasBatch: session.isImporting, presence: .background))
             }
-            // Slice 2: a deleted note leaves no session, no recovery copy and
-            // no store row; its latest text is what Restore brings back.
+            // 2026-10-23 whole-item decision: Delete retains a read-only
+            // engine; Restore opens the saved text in a fresh session.
             if event == .deleteNote && decision == "A" {
                 XCTAssertNil(store.note(withID: session.noteID), context)
                 XCTAssertEqual(store.agentWriteDisposition(session.noteID), .direct, context)
@@ -3211,8 +3197,8 @@ final class NoteSessionMatrixTests: XCTestCase {
             if event == .restoreDeleted && decision == "A" {
                 let restored = try XCTUnwrap(controller.active, context)
                 XCTAssertEqual(restored.noteID, session.noteID, context)
-                XCTAssertEqual(restored.state, session.isReadOnly ? .readOnly : .clean, context)
-                if !session.isReadOnly {
+                XCTAssertEqual(restored.state, initialState == .readOnly ? .readOnly : .clean, context)
+                if initialState != .readOnly {
                     XCTAssertEqual(store.loadDocument(noteID: session.noteID)?.content.document, textBeforeDelete, context)
                 }
                 XCTAssertEqual(store.agentWriteDisposition(session.noteID), .proposal, context)

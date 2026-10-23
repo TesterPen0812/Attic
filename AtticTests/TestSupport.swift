@@ -3,6 +3,19 @@ import Foundation
 import SwiftData
 @testable import Attic
 
+/// An imported tombstone bypasses local Delete's input settlement and
+/// publication. Recovery tests need this external event (2026-10-23).
+@MainActor
+func deleteNoteElsewhereForTest(_ id: UUID, in source: NoteStore) throws -> Bool {
+    let context = WorkspaceLegacyBridge.context(for: source.container)
+    let rows = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
+    guard !rows.isEmpty else { return false }
+    try WorkspaceItemLifecycle.stageWritingDeletion(rows, group: UUID(), timestamp: Date(), in: context)
+    try WorkspaceLegacyBridge.persist(context, using: { try $0.save() }, sourceName: "Test imported deletion")
+    source.refresh()
+    return true
+}
+
 @MainActor
 func makeTestStore(
     now: @escaping () -> Date = Date.init,

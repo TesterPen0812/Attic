@@ -468,7 +468,7 @@ final class NoteSlice3bTests: XCTestCase {
         await XCTAssertTrueAsync(await controller.prepareToLeaveDurably(.hide))
         XCTAssertTrue(controller.active?.isImporting == true)
         await XCTAssertNotNilAsync(try await NoteDraftJournal(directory: directory).entriesDurably().first?.0.pendingImport)
-        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: noteID))))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(noteID, in: store))
         try await Task.sleep(for: .milliseconds(450))
         XCTAssertNil(store.note(withID: noteID))
         XCTAssertFalse(controller.active?.isImporting ?? true)
@@ -2538,7 +2538,7 @@ extension NoteSlice3bTests {
             if operation == .redo { XCTAssertTrue(controller.undoLibrary()) }
             XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Changed "), name: "Typing"))
             if operation == .keepAsNew {
-                XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+                XCTAssertTrue(try deleteNoteElsewhereForTest(id, in: store))
                 XCTAssertFalse(controller.save(session))
             }
             journal.blockWrites = true
@@ -2679,7 +2679,7 @@ extension NoteSlice3bTests {
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
         XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft "), name: "Typing"))
-        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(id, in: store))
         XCTAssertFalse(controller.save(session))
         await XCTAssertTrueAsync(await controller.preserveDurably(session))
         journal.failNextRemove = true
@@ -2711,7 +2711,7 @@ extension NoteSlice3bTests {
         XCTAssertEqual(destination.engine.document().attachmentIDs.count, 3, "bounded cache eviction cannot silently drop pasted objects")
         await XCTAssertTrueAsync(await controller.openDurably(noteID: source))
         XCTAssertTrue(session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft "), name: "Typing"))
-        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: source))))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(source, in: store))
         XCTAssertFalse(controller.save(session))
         await XCTAssertTrueAsync(await controller.keepAsNewNoteDurably())
         XCTAssertNotEqual(session.noteID, source)
