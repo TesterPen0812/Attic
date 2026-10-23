@@ -169,7 +169,7 @@ struct WorkspaceScopeToken: Codable, Equatable, Sendable {
         for token in tokens {
             switch token.owner.entity {
             case .task:
-                scopes.formUnion([.children(token.owner.id), .taskNotes(token.owner.id), .taskAssociations(token.owner.id), .preservations(token.owner.id)])
+                scopes.formUnion([.children(token.owner.id), .taskAssociations(token.owner.id), .preservations(token.owner.id)])
             case .note:
                 scopes.formUnion([.attachments(token.owner.id), .versions(token.owner.id),
                                   .proposals(token.owner.id), .noteAssociations(token.owner.id)])

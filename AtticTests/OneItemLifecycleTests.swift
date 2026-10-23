@@ -41,6 +41,13 @@ final class OneItemLifecycleTests: XCTestCase {
         tasks = TaskStore(container: container, now: { fixedDate }, taskImageFiles: files)
         notes = NoteStore(container: container, now: { fixedDate }, attachmentFileStore: makeTestAttachmentFileStore())
         library = AtticLibrary(tasks: tasks, notes: notes)
+        await notes.waitForAttachmentReconciliation()
+    }
+
+    override func tearDown() async throws {
+        await coordinator.lifecycleNotes?.waitForRecoveryWork()
+        await notes.waitForAttachmentReconciliation()
+        library = nil; tasks = nil; notes = nil; coordinator = nil; container = nil; files = nil
     }
 
     private func rows() throws -> ([TaskItem], [NoteItem]) {
@@ -259,6 +266,9 @@ final class OneItemLifecycleTests: XCTestCase {
             context.insert(file)
         }
         try context.save(); notes.refresh()
+        let scope = try XCTUnwrap(library.deletionScope(for: root))
+        XCTAssertTrue(scope.hasWriting); XCTAssertEqual(scope.subtaskCount, 1); XCTAssertEqual(scope.fileCount, 2)
+        XCTAssertEqual(scope.confirmationMessage, "Its writing, 1 subtask and 2 files go to Recently Deleted for 30 days.")
         XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
         XCTAssertTrue(library.restore(AtticItemRef(.task, root)))
         let restored = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
@@ -269,6 +279,253 @@ final class OneItemLifecycleTests: XCTestCase {
             coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
         XCTAssertEqual(result.outcome, .committed)
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 0)
+    }
+
+    func testChangedButReadablePreservationKeepsWholeGroup() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = ModelContext(container)
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<TaskDeletionPreservation>()).first)
+        let old = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+        let changed = old.members.map { member in
+            var fields = member.fields
+            if member.id == root { fields["title"] = try? WorkspaceModelFields.encode("Wrong title") }
+            return WorkspacePurge.Preservation.Member(id: member.id, fields: fields, replicas: member.replicas)
+        }
+        record.snapshot = try WorkspaceModelFields.encode(WorkspacePurge.Preservation(rootID: old.rootID, title: old.title,
+            members: changed, originals: old.originals, dependencies: old.dependencies))
+        try context.save()
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertNotEqual(result.outcome, .committed)
+        XCTAssertEqual(try rows().0.count, 6); XCTAssertEqual(try rows().1.count, 4)
+    }
+
+    func testUnreadableOwnProposalKeepsWholeGroup() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = ModelContext(container)
+        context.insert(NotePendingEdit(noteID: note, baseRevisionToken: "old", proposedContent: Data("unreadable".utf8), agentName: "Agent", createdAt: date))
+        try context.save()
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertNotEqual(result.outcome, .committed)
+        XCTAssertEqual(try rows().0.count, 6)
+    }
+
+    func testSharedLegacyBytesSurviveGroupPurgeWithAReason() async throws {
+        let input = ownedTemporaryDirectory(prefix: "AtticSharedBytes").appendingPathComponent("shared.txt")
+        try FileManager.default.createDirectory(at: input.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = Data("shared original".utf8); try data.write(to: input)
+        let refs = try await files.importAttachments([input], existing: [])
+        let reference = try XCTUnwrap(refs.first), context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == root { row.imageReferencesData = try JSONEncoder().encode(refs) }
+        let other = TaskItem(title: "Other owner"); other.imageReferencesData = try JSONEncoder().encode(refs); context.insert(other)
+        try context.save(); tasks.refresh()
+        // This fixture bound imports with a raw model save; finish the
+        // import admission that TaskStore.save normally releases on commit.
+        files.files.finishCandidates(Set(refs.map(\.id)))
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed, result.retentionReason ?? "The coordinated commit refused.")
+        XCTAssertNotNil(result.retainedByteReasons[reference.id])
+        let url = try await files.verifiedURL(for: reference)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(url)), data)
+        XCTAssertTrue(try rows().0.contains { $0.id == other.id })
+    }
+
+    func testOldDeleteUndoCannotRestoreLaterGroup() throws {
+        for alias in [AtticItemRef(.task, root), AtticItemRef(.note, note)] {
+            let old = library.itemOwnership([root, child], deleted: false)
+            XCTAssertTrue(alias.kind == .task ? library.deleteListedTasks([root], in: .taskWorkspace(root)).isApplied : library.delete(alias, in: .taskWorkspace(root)))
+            let deleted = library.itemOwnership([root, child], deleted: true)
+            old.groups = deleted.groups; old.writing = deleted.writing
+            XCTAssertTrue(library.restore(alias))
+            let context = ModelContext(container), extra = NoteItem(title: "Later writing")
+            extra.taskID = root; context.insert(extra); try context.save(); notes.refresh()
+            XCTAssertTrue(alias.kind == .task ? library.deleteListedTasks([root], in: .taskWorkspace(root)).isApplied : library.delete(alias, in: .taskWorkspace(root)))
+            XCTAssertEqual(library.restoreOutcome(alias, owning: old), .obsolete)
+            XCTAssertTrue(try rows().1.allSatisfy { $0.deletedAt != nil })
+            XCTAssertTrue(library.restore(alias))
+        }
+    }
+
+    func testRestoreRefusesLostWritingOrRootMembership() throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = ModelContext(container)
+        let changed = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == note }
+        let group = try XCTUnwrap(changed.first?.deletionGroupID)
+        for row in changed { row.deletionGroupID = nil }
+        try context.save()
+        XCTAssertFalse(library.restore(AtticItemRef(.task, root)))
+        XCTAssertTrue(try rows().0.allSatisfy { $0.deletedAt != nil })
+        for row in changed { row.deletionGroupID = group }
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.deletionGroupID == group { row.deletionRootID = nil }
+        try context.save()
+        XCTAssertFalse(library.restore(AtticItemRef(.task, root)))
+        XCTAssertTrue(try rows().0.allSatisfy { $0.deletedAt != nil })
+    }
+
+    func testGroupedLegacyWritingMaterializesAfterOldTaskPurge() async throws {
+        let context = WorkspaceLegacyBridge.context(for: container)
+        try TaskStore.stageSoftDeletion(in: context, taskID: root, preservationID: UUID(), timestamp: date)
+        try context.save(); tasks.refresh(); notes.refresh()
+        XCTAssertTrue(library.delete(AtticItemRef(.note, note)))
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed)
+        XCTAssertTrue(library.restore(AtticItemRef(.note, note)))
+        for row in try rows().1 where row.id == note {
+            let document = try XCTUnwrap(row.content.flatMap { NoteContentCodec.decode($0).document })
+            XCTAssertFalse(document.requires.contains("taskNote"))
+            XCTAssertEqual(document.blocks.map(\.text), ["Parent", "Child", "Writing"])
+            XCTAssertNil(row.taskID)
+        }
+    }
+
+    func testAssociationOnlyAliasRedoRefusesLaterFamilyAndReassociation() throws {
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == note { row.taskID = nil }
+        let association = TaskNoteAssociation(taskID: root, noteID: note)
+        context.insert(association); try context.save(); notes.refresh()
+        XCTAssertTrue(library.delete(AtticItemRef(.note, note)))
+        XCTAssertTrue(library.undo.undo(in: .note(note)))
+        let later = TaskItem(title: "Later child", parentID: root)
+        context.insert(later); try context.save(); tasks.refresh()
+        XCTAssertFalse(library.undo.redo(in: .note(note)))
+        XCTAssertNil(try rows().0.first { $0.id == later.id }?.deletedAt)
+        _ = library.restore(AtticItemRef(.note, note))
+        let owned = library.itemOwnership([root, child], deleted: false)
+        let other = TaskItem(title: "Other task"); context.insert(other)
+        for row in try context.fetch(FetchDescriptor<TaskNoteAssociation>()) where row.id == association.id { row.taskID = other.id }
+        try context.save(); tasks.refresh()
+        XCTAssertEqual(library.deleteOutcome(AtticItemRef(.note, note), owning: owned), .obsolete)
+        XCTAssertNil(try rows().0.first { $0.id == other.id }?.deletedAt)
+    }
+
+    func testBulkRestoreUndoCannotDeleteNewWriting() throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        XCTAssertEqual(library.restoreRecentlyDeleted(items: [.init(.task, root)], attachments: []).restored, 1)
+        let context = ModelContext(container), extra = NoteItem(title: "Later writing")
+        extra.taskID = root; context.insert(extra); try context.save(); notes.refresh()
+        XCTAssertFalse(library.undo.undo(in: .library))
+        XCTAssertTrue(try rows().1.allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testAgentRestoreAliasesRequireWholeItemToken() throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: library)
+        XCTAssertThrowsError(try tools.call(name: "restore_item", arguments: ["kind": "note", "id": note.uuidString]))
+        XCTAssertThrowsError(try tools.call(name: "restore_items", arguments: ["items": [["kind": "task", "id": root.uuidString]]]))
+        XCTAssertTrue(try rows().0.allSatisfy { $0.deletedAt != nil })
+        XCTAssertTrue(try rows().1.allSatisfy { $0.deletedAt != nil })
+    }
+
+
+
+    func testIdenticalPreservationReplicasRestoreTogether() throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = ModelContext(container)
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<TaskDeletionPreservation>()).first)
+        let copy = TaskDeletionPreservation(id: record.id, rootID: record.rootID, deletedAt: record.deletedAt,
+            capturedAt: record.capturedAt, provenance: record.provenance, snapshot: record.snapshot)
+        copy.dependencyOwnersData = record.dependencyOwnersData; context.insert(copy); try context.save()
+        XCTAssertTrue(library.restore(.init(.task, root)))
+        XCTAssertTrue(try rows().1.allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testUnreadableMigrationOwnershipRefusesBeforeGroupPurge() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = ModelContext(container)
+        let migration = TaskAttachmentMigrationRecord(id: UUID(), noteID: UUID())
+        migration.manifestData = Data("broken".utf8); context.insert(migration)
+        try context.save()
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertNotEqual(result.outcome, .committed)
+        XCTAssertEqual(try rows().0.count, 6); XCTAssertEqual(try rows().1.count, 4)
+    }
+
+    func testAgentAssociationOnlyAliasUsesWholeItemToken() async throws {
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == note { row.taskID = nil }
+        context.insert(TaskNoteAssociation(taskID: root, noteID: note)); try context.save(); notes.refresh()
+        let controller = NotesPageController(store: notes, journal: coordinator.journal)
+        let tools = AgentTaskTools(store: tasks, noteStore: notes, library: library); tools.notesController = { controller }
+        XCTAssertThrowsError(try tools.call(name: "delete_note", arguments: ["id": note.uuidString, "base_revision": try XCTUnwrap(notes.note(withID: note)).revisionToken]))
+        let readSet = try AgentWorkspaceReadSet.capture(taskID: root, noteID: nil, in: ModelContext(container))
+        let token = try WorkspaceModelFields.encode(readSet).base64EncodedString()
+        do {
+            _ = try await tools.callAsync(name: "delete_note", arguments: ["id": note.uuidString, "base_workspace_token": token])
+        } catch { XCTFail("Association-only alias must accept its combined token: \(error)") }
+        XCTAssertTrue(try rows().0.allSatisfy { $0.deletedAt != nil })
+        await controller.waitForRecoveryWork()
+    }
+
+    func testRestoreRequiresCapturedWritingOwnership() throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = ModelContext(container)
+        let changed = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == note }
+        for row in changed { row.taskID = nil }
+        try context.save()
+        XCTAssertFalse(library.restore(.init(.task, root)))
+        XCTAssertTrue(try rows().0.allSatisfy { $0.deletedAt != nil })
+    }
+
+    func testRestoreRefusesExtraGroupWritingMember() throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = ModelContext(container)
+        let group = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first { $0.id == root }?.deletionGroupID)
+        let extra = NoteItem(title: "Unknown group member")
+        extra.taskID = root; extra.deletionGroupID = group; extra.deletedAt = date
+        extra.deletedAttachmentIDsRaw = ""; context.insert(extra); try context.save()
+        XCTAssertFalse(library.restore(.init(.task, root)))
+        XCTAssertTrue(try rows().0.allSatisfy { $0.deletedAt != nil })
+    }
+
+    func testRestoreLeavesPreviouslyDeletedWritingReplicaEvenAtSameTimestamp() throws {
+        let context = ModelContext(container), oldGroup = UUID()
+        let old = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first { $0.id == note })
+        old.deletedAt = date; old.deletionGroupID = oldGroup; old.deletedAttachmentIDsRaw = ""
+        try context.save(); notes.refresh()
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        XCTAssertTrue(library.restore(.init(.task, root)))
+        let copies = try rows().1.filter { $0.id == note }
+        XCTAssertEqual(copies.filter { $0.deletedAt == nil }.count, 1)
+        XCTAssertEqual(copies.first { $0.deletionGroupID == oldGroup }?.deletedAt, date)
+    }
+
+    func testOrdinaryWritingRestoreKeepsPreviouslyDeletedPhysicalReplica() throws {
+        let context = ModelContext(container), id = UUID()
+        let old = NoteItem(id: id, title: "Ordinary", createdAt: date.addingTimeInterval(-10))
+        old.updatedAt = date.addingTimeInterval(-1)
+        old.deletedAt = date; old.deletedAttachmentIDsRaw = ""
+        context.insert(old); context.insert(NoteItem(id: id, title: "Ordinary", createdAt: date))
+        try context.save(); notes.refresh()
+        XCTAssertTrue(library.delete(.init(.note, id)))
+        XCTAssertTrue(library.restore(.init(.note, id)))
+        let copies = try rows().1.filter { $0.id == id }
+        XCTAssertEqual(copies.filter { $0.deletedAt == nil }.count, 1)
+        XCTAssertEqual(copies.filter { $0.deletedAt == date && $0.deletionGroupID == nil }.count, 1)
+    }
+
+    func testPurgeRechecksAbsenceWhenFirstOutsideProposalArrivesDuringPreparation() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        var inserted = false
+        let taskID = root, instant = date, fixtureContainer = container!
+        let content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Outside")]))
+        coordinator.afterPreparation = {
+            let context = ModelContext(fixtureContainer)
+            let proposal = NotePendingEdit(noteID: UUID(), baseRevisionToken: "outside",
+                proposedContent: content, agentName: "Agent", createdAt: instant)
+            proposal.workspaceTaskID = taskID; context.insert(proposal)
+            do { try context.save(); inserted = true } catch { XCTFail("Could not inject external proposal: \(error)") }
+        }
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        coordinator.afterPreparation = nil
+        XCTAssertTrue(inserted)
+        XCTAssertNotEqual(result.outcome, .committed)
+        XCTAssertEqual(try rows().0.count, 6); XCTAssertEqual(try rows().1.count, 4)
     }
 
 }

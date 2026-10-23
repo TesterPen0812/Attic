@@ -507,7 +507,11 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         var results: [Bool] = []
 
         func save(_ context: ModelContext) throws {
-            if !results.isEmpty, !results.removeFirst() { throw PersistenceGate.Failure() }
+            // 2026-10-23: grouped deletes journal receipt publication too.
+            // This script targets model commits, not receipt bookkeeping.
+            let models = context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray
+            if models.contains(where: { $0 is TaskItem || $0 is NoteItem }),
+               !results.isEmpty, !results.removeFirst() { throw PersistenceGate.Failure() }
             try context.save()
         }
     }
@@ -962,7 +966,9 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         deleteChildThenParent(family)
         XCTAssertTrue(library.restore(family.parent, in: .library))
         XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "P's Delete")
+        // Owner decision 2026-10-23: an old step cannot restore a later group.
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete, "P was deleted again by Undo Restore")
+        XCTAssertTrue(library.restore(family.parent, in: .taskWorkspace(family.parent.id)))
         XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied, "C's Delete")
         XCTAssertEqual([family.parent, family.child, family.sibling].map { library.state(of: $0) }, [.live, .live, .live])
         XCTAssertTrue(library.delete(family.parent))
@@ -983,7 +989,9 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent, family.note], attachments: []).restored, 2)
         XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
         XCTAssertEqual(library.state(of: family.note), .deleted)
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        // 2026-10-23: explicitly restore the later group; stale Undo cannot.
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete)
+        XCTAssertTrue(library.restore(family.parent, in: .taskWorkspace(family.parent.id)))
         XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
         XCTAssertTrue(library.delete(family.parent))
 
@@ -1001,7 +1009,9 @@ final class RecentlyDeletedSelectionTests: XCTestCase {
         deleteChildThenParent(family)
         XCTAssertEqual(library.restoreRecentlyDeleted(items: [family.parent], attachments: []).restored, 1)
         XCTAssertEqual(library.undo.undoStep(in: .library), .applied)
-        XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
+        // 2026-10-23: explicitly restore the later group; stale Undo cannot.
+        XCTAssertEqual(library.undo.undoStep(in: .tasks), .obsolete)
+        XCTAssertTrue(library.restore(family.parent, in: .taskWorkspace(family.parent.id)))
         XCTAssertEqual(library.undo.undoStep(in: .tasks), .applied)
         XCTAssertTrue(library.delete(family.parent))
 

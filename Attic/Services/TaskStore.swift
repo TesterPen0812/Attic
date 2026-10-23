@@ -2050,7 +2050,12 @@ final class TaskStore: ObservableObject {
                 let candidates = all.filter { $0.id == id && $0.deletedAt != nil }.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
                 if let group = candidates.first?.deletionGroupID { selected[id] = group }
             }
-            for group in Set(selected.values) { try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context) }
+            let ordered = Set(selected.values).sorted { left, right in
+                let l = all.first { $0.deletionGroupID == left && $0.deletionRootID == $0.id }?.parentID == nil
+                let r = all.first { $0.deletionGroupID == right && $0.deletionRootID == $0.id }?.parentID == nil
+                return l == r ? left.uuidString < right.uuidString : l
+            }
+            for group in ordered { try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context) }
             let remaining = taskIDs.filter { selected[$0] == nil }
             if remaining.isEmpty { return }
             try stageRestoration(taskIDs: remaining, includeGroups: false)

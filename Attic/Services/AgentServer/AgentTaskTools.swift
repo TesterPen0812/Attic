@@ -1123,7 +1123,9 @@ final class AgentTaskTools {
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("delete_note") }
         let note = try findNote(arguments)
-        if let taskID = note.taskID { try requireWholeItemRoute(taskID: taskID) }
+        if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: note.id, in: ModelContext(store.container)) {
+            try requireWholeItemRoute(taskID: taskID)
+        }
         guard let base = arguments["base_revision"] as? String, !base.isEmpty else {
             throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
         }
@@ -1364,12 +1366,23 @@ final class AgentTaskTools {
         ])
     }
 
+    private func requireWholeItemRestoreRoute(_ ref: AtticItemRef) throws {
+        if ref.kind == .task { try requireWholeItemRoute(taskID: ref.id) }
+        if ref.kind == .note {
+            let context = ModelContext(store.container)
+            let rows = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == ref.id }
+            let groups = Set(rows.compactMap(\.deletionGroupID))
+            let tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletionGroupID.map(groups.contains) == true }
+            for id in Set(tasks.map(\.id)) { try requireWholeItemRoute(taskID: id) }
+        }
+    }
+
     private func restoreItem(_ arguments: [String: Any]) throws -> String {
         let ref = try itemRef(from: arguments, field: "The item")
         guard library.state(of: ref) == .deleted else {
             throw AgentToolError.invalidArguments("No \(ref.kind.rawValue) with id \(ref.id.uuidString) is in Recently Deleted.")
         }
-        if ref.kind == .task { try requireWholeItemRoute(taskID: ref.id) }
+        try requireWholeItemRestoreRoute(ref)
         try performLibrary { library.restore(ref) }
         return try encode(["restored": ref.id.uuidString, "kind": ref.kind.rawValue])
     }
@@ -1385,6 +1398,7 @@ final class AgentTaskTools {
         if let missing = refs.first(where: { library.state(of: $0) != .deleted }) {
             throw AgentToolError.invalidArguments("No \(missing.kind.rawValue) with id \(missing.id.uuidString) is in Recently Deleted. Nothing was restored.")
         }
+        for ref in refs { try requireWholeItemRestoreRoute(ref) }
         let report = library.restoreRecentlyDeleted(items: refs, attachments: [])
         let failed = Set(report.failures.compactMap(\.item))
         return try encode([

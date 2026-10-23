@@ -27,6 +27,7 @@ struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
             noteIDs.formUnion(try WorkspaceItemLifecycle.writing(taskIDs: family, in: context).map(\.id))
         }
         if let noteID { noteIDs.insert(noteID); owners.insert(.init(entity: .note, id: noteID)) }
+        owners.formUnion(noteIDs.map { .init(entity: .note, id: $0) })
         for id in noteIDs { scopes.formUnion([.attachments(id), .versions(id), .noteAssociations(id), .proposals(id)]) }
         let scopeTokens = try scopes.map { try WorkspaceScopeToken.read($0, in: context) }
             .sorted { String(describing: $0.scope) < String(describing: $1.scope) }
@@ -247,10 +248,7 @@ extension AgentTaskTools {
         let context = ModelContext(store.container)
         let taskID: UUID?
         if isNote {
-            let replicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
-            let owners = Set(replicas.compactMap(\.taskID))
-            guard owners.count <= 1 else { throw AgentToolError.notPerformed("The item's ownership is unclear.") }
-            taskID = owners.first
+            taskID = try WorkspaceItemLifecycle.taskOwner(noteID: id, in: context, includingDeleted: name == "restore_item")
         } else { taskID = id }
         let intent = AgentWorkspaceIntent(kind: name == "restore_item" ? .restore_item : .delete_item,
             taskID: taskID, noteID: isNote ? id : nil, subtaskID: nil, lines: [], keepOriginal: false)

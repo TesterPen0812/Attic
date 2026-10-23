@@ -850,7 +850,7 @@ final class WorkspaceCommitTests: XCTestCase {
         }
     }
 
-    func testC5ProductionTaskCRUDHasNoEnvelopeOrReceipt() async throws {
+    func testC5TaskMetadataStaysPlainAndWholeItemDeletionIsJournaled() async throws {
         let gate = PersistenceGate()
         let tasks = TaskStore(container: container, persist: gate.save)
         let library = AtticLibrary(tasks: tasks)
@@ -859,9 +859,12 @@ final class WorkspaceCommitTests: XCTestCase {
         XCTAssertEqual(library.updateTask(taskID, title: "Renamed"), .applied)
         let added = try XCTUnwrap(library.createTasks([TaskDraft(title: "Added"), TaskDraft(title: "Peer")]))
         XCTAssertEqual(library.moveTask(added[0].id, toIndex: 1), .applied)
-        XCTAssertEqual(library.deleteTasks([added[0].id]), .applied)
         XCTAssertEqual(gate.bookkeepingSaveCount, initial)
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 0)
+        // 2026-10-23: lifecycle changes always carry journal/receipt evidence.
+        XCTAssertEqual(library.deleteTasks([added[0].id]), .applied)
+        XCTAssertGreaterThan(gate.bookkeepingSaveCount, initial)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<OperationReceipt>()), 1)
         let envelopes = try await coordinator.journal.operationEnvelopes()
         XCTAssertTrue(envelopes.isEmpty)
     }

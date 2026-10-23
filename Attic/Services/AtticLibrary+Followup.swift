@@ -91,12 +91,16 @@ extension AtticLibrary {
         let items = items.filter { seenItems.insert($0).inserted }
         let attachments = attachments.filter { seenAttachments.insert($0.attachmentID).inserted }
         undo.perform(in: history) {
+            let lifecycle = Dictionary(uniqueKeysWithValues: items.map { ref in
+                (ref, itemOwnership(ownedMembers(of: ref), deleted: true, noteID: ref.kind == .note ? ref.id : nil))
+            })
             let (restoredItems, restoredAttachments, failures, owned) = performRestoreAll(items: items, attachments: attachments)
             report.restored = restoredItems.count + restoredAttachments.count
             report.failures = failures
             guard report.restored > 0 else { return nil }
             let count = report.restored
             let progress = BulkRestoreProgress(items: restoredItems, attachments: restoredAttachments, owned: owned)
+            progress.lifecycle = lifecycle
             return UndoStep(
                 name: count == 1 ? "Restore Item" : "Restore \(count) Items",
                 items: { Set(restoredItems + restoredAttachments.map(\.owner)) },
@@ -135,6 +139,7 @@ extension AtticLibrary {
         /// again each time Redo restores it). Undo deletes a main task only
         /// while every live subtask is one of these or one this step tracks.
         var owned: [UUID: Set<UUID>]
+        var lifecycle: [AtticItemRef: FamilyOwnership] = [:]
 
         init(items: [AtticItemRef], attachments: [DeletedAttachmentSummary], owned: [UUID: Set<UUID>]) {
             self.items = items
@@ -175,7 +180,12 @@ extension AtticLibrary {
         for ref in pending {
             // What this step may take: what its restore brought back for the
             // task, plus the tasks it tracks itself.
-            let reach = FamilyOwnership((progress.owned[ref.id] ?? [ref.id]).union(tracked))
+            let reach = progress.lifecycle[ref] ?? FamilyOwnership(progress.owned[ref.id] ?? [ref.id])
+            reach.members.formUnion(tracked)
+            if reach.writing != nil {
+                reach.writing = progress.lifecycle.values.reduce(into: Set<UUID>()) { $0.formUnion($1.writing ?? []) }
+            }
+            progress.lifecycle[ref] = reach
             // Deleting a main task takes its subtasks with it, whatever the
             // step tracked. Look at the family it would take right now.
             if ref.kind == .task, let listed = tasks.listedTask(withID: ref.id), listed.parentID == nil {
@@ -237,6 +247,11 @@ extension AtticLibrary {
         var outcomes: [UndoOutcome] = []
         var items: [AtticItemRef] = []
         for ref in sentBack {
+            if let owned = progress.lifecycle[ref], let stop = wholeItemRestoreGuard(owned, refs: [ref]) {
+                if stop == .obsolete { progress.itemPhase[ref] = .dropped }
+                outcomes.append(stop)
+                continue
+            }
             guard ref.kind == .task else { items.append(ref); continue }
             let reach = (progress.owned[ref.id] ?? [ref.id]).union(tracked)
             switch restoreClearance(of: [ref.id], owning: reach) {

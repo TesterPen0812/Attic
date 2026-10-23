@@ -56,6 +56,7 @@ enum WorkspaceLegacyBridge {
         let includeCanvas: Bool
         var plainCommit = false
         var itemLifecycle = false
+        var itemLifecycleScopes: Set<WorkspaceScope> = []
         var scopeBaseline: ScopeBaseline?
         // Only references and scalar membership from rows presentation already
         // fetched. Owner fingerprints and dependency guards are demand-loaded.
@@ -334,8 +335,12 @@ enum WorkspaceLegacyBridge {
         prepareMutation(row, in: context)
         context.delete(row)
     }
-    static func markItemLifecycle(in source: ModelContext) {
-        (objc_getAssociatedObject(source, &contextKey) as? ContextState)?.itemLifecycle = true
+    static func markItemLifecycle(in source: ModelContext, taskIDs: Set<UUID> = []) {
+        guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { return }
+        state.itemLifecycle = true
+        let scopes = Set(taskIDs.map { WorkspaceScope.taskNotes($0) })
+        do { _ = try scopeTokens(scopes, state: state, in: source); state.itemLifecycleScopes.formUnion(scopes) }
+        catch { state.captureFailed = true }
     }
     static func wasPlainCommit(in source: ModelContext) throws -> Bool {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
@@ -370,7 +375,7 @@ enum WorkspaceLegacyBridge {
         }
         guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
         let call = state.itemLifecycle ? AgentWorkspaceCall.current : nil
-        defer { state.itemLifecycle = false }
+        defer { state.itemLifecycle = false; state.itemLifecycleScopes = [] }
         if let call {
             guard call.valid() else { throw WorkspaceFoundationError.conflict }
             try call.stageResolution(in: source)
@@ -451,7 +456,7 @@ enum WorkspaceLegacyBridge {
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
         let plain = try state.coordinator.mayUsePlainSave(
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
-        let requiredScopes = WorkspaceScopeToken.scopes(for: reads).union(declaredScopes.map(\.scope))
+        let requiredScopes = WorkspaceScopeToken.scopes(for: reads).union(declaredScopes.map(\.scope)).union(state.itemLifecycleScopes)
         if plain {
             var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
             var writeError: Error?

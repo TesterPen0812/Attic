@@ -66,6 +66,8 @@ enum WorkspacePurge {
         let preservationID: UUID?
         var materialization: [WorkspaceMaterializationPatch] = []
         var checkpoint: (UUID, NoteRecoveryClaim)? = nil
+        var retentionReason: String? = nil
+        var retainedByteReasons: [UUID: String] = [:]
     }
     static func hasOwnNotesOrAssociations(_ taskIDs: Set<UUID>, in context: ModelContext) throws -> Bool {
         let schema = Set(context.container.schema.entities.map(\.name))
@@ -137,7 +139,7 @@ enum WorkspacePurge {
         }
     }
 
-    private static func preservationDependencies(taskIDs: Set<UUID>, in context: ModelContext) throws -> [Preservation.Dependency] {
+    static func preservationDependencies(taskIDs: Set<UUID>, in context: ModelContext) throws -> [Preservation.Dependency] {
         let schema = Set(context.container.schema.entities.map(\.name))
         let associations = schema.contains("TaskNoteAssociation") ? try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter { taskIDs.contains($0.taskID) } : []
         let associatedNotes = Set(associations.map(\.noteID))
@@ -147,7 +149,9 @@ enum WorkspacePurge {
         for note in notes {
             result.append(.init(owner: .init(entity: .note, id: note.id), fields: [
                 "revisionID": try WorkspaceModelFields.encode(note.revisionID),
-                "associationGeneration": try WorkspaceModelFields.encode(note.associationGeneration)]))
+                "associationGeneration": try WorkspaceModelFields.encode(note.associationGeneration),
+                "deletionGroupID": try WorkspaceModelFields.encode(note.deletionGroupID),
+                "deletedAt": try WorkspaceModelFields.encode(note.deletedAt)]))
         }
         if schema.contains("NoteVersion") {
             for version in try context.fetch(FetchDescriptor<NoteVersion>()) where noteIDs.contains(version.noteID) {
@@ -174,8 +178,7 @@ enum WorkspacePurge {
                 coordinator: coordinator, files: files, inventory: inventory, publication: publication)
         }
         var checkpoint: (UUID, NoteRecoveryClaim)?
-        func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict, line: Int = #line) -> Result {
-            print("LEGACY PURGE REFUSED", line, outcome)
+        func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict) -> Result {
             return Result(outcome: outcome, operationID: nil, removedIDs: [], preservationID: nil, checkpoint: checkpoint)
         }
         let context = coordinator.freshContext()

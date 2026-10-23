@@ -2,17 +2,9 @@ import Foundation
 import SwiftData
 import SwiftUI
 
-/// Removing for good a deleted task whose family owns notes (UX plan
-/// § 2.7.2, S5): the legacy collector leaves these families alone, so the
-/// daily cleanup and Empty Recently Deleted send them through the
-/// coordinated purge. One store transaction per family materializes each
-/// live own note into an ordinary note and clears its association.
-///
-/// A note open on a task's page is materialized through its session: the
-/// draft the person is writing is what the purge saves (merged, never
-/// replaced by stored content); a composition, an import or a conflict
-/// defers the family to a later cleanup. The page then leaves, and the
-/// note is ordinary.
+/// Whole-item groups are purged atomically. Pre-group independent task
+/// deletions alone use the legacy Remove from Tasks materialization.
+/// Busy, divergent or ambiguously owned families stay for a later cleanup.
 @MainActor
 enum TaskNotePurge {
     struct Report: Equatable {
@@ -21,6 +13,8 @@ enum TaskNotePurge {
         var materializedNoteIDs: Set<UUID> = []
         /// Families kept for a later cleanup (a busy editor, a conflict).
         var deferredRootIDs: Set<UUID> = []
+        var deferredReasons: [UUID: String] = [:]
+        var retainedByteReasons: [UUID: String] = [:]
     }
 
     @MainActor private final class PublicationState {
@@ -83,6 +77,8 @@ enum TaskNotePurge {
                 leader.trackExternalOperation(operation, using: coordinator, peers: reservations,
                     installed: published.installed, completion: present)
             } else { reservations.forEach { $0.releaseInput() } }
+            report.retainedByteReasons.merge(result.retainedByteReasons) { _, latest in latest }
+            if let reason = result.retentionReason { report.deferredReasons[root] = reason }
             guard result.outcome == .committed || result.outcome == .publicationPending else {
                 report.deferredRootIDs.insert(root)
                 continue

@@ -61,24 +61,21 @@ final class WorkspacePurgeTests: XCTestCase {
         XCTAssertTrue(store.delete(taskIDs: [taskID]))
         expectEqual(await purge().outcome, .committed)
         XCTAssertFalse(try WorkspacePurge.preservationOwners(in: coordinator.freshContext()).contains(.init(entity: .note, id: noteID)))
-        let notes = NoteStore(container: coordinator.container)
-        XCTAssertTrue(notes.delete(try XCTUnwrap(notes.note(withID: noteID))))
-        XCTAssertEqual(notes.purgeDeleted(before: .distantFuture), [noteID])
+        // 2026-10-23: the writing is purged in the same whole-item commit.
         XCTAssertTrue(try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>()).isEmpty)
     }
 
-    func testP3_1RestoredLegacyTaskCanExpireAfterItsNoteIsPurgedAndKeepsTombstone() throws {
+    func testP3_1RestoredWholeItemCanExpireAndKeepsTombstone() async throws {
         try seed(note: true)
         let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
         XCTAssertTrue(store.restoreDeleted(taskID: taskID))
         XCTAssertTrue(store.delete(taskIDs: [taskID]))
         XCTAssertTrue(store.restoreDeleted(taskID: taskID))
-        let notes = NoteStore(container: coordinator.container)
-        XCTAssertTrue(notes.delete(try XCTUnwrap(notes.note(withID: noteID))))
-        XCTAssertEqual(notes.purgeDeleted(before: .distantFuture), [noteID])
         XCTAssertTrue(store.delete(taskIDs: [taskID]))
-        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [taskID])
+        // Owner decision 2026-10-23: purge and Restore move both endpoints.
+        expectEqual(await purge().outcome, .committed)
         XCTAssertTrue(try tasks() == 0)
+        XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<NoteItem>()), 0)
         XCTAssertTrue(try records().contains { $0.purgedAt != nil && $0.retiredAt != nil })
         let owner = WorkspaceOwner(entity: .task, id: taskID)
         XCTAssertEqual(coordinator.plainSave(tokens: [.init(owner: owner, replicas: [])], writes: [owner]) {
@@ -92,7 +89,7 @@ final class WorkspacePurgeTests: XCTestCase {
         context.insert(task)
         let note = NoteItem(id: noteID); note.taskID = taskID; context.insert(note)
         let association = TaskNoteAssociation(taskID: taskID, noteID: noteID); context.insert(association)
-        let version = NoteVersion(noteID: noteID, createdAt: deletion, reason: .beforeRestore, content: nil, contentFormat: 0,
+        let version = NoteVersion(noteID: noteID, createdAt: deletion, reason: .beforeRestore, content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Historical"), .text("body")])), contentFormat: 1,
             title: "Historical", body: "body", attachmentIDs: [], sourceRevisionID: note.revisionID)
         context.insert(version); try context.save()
         let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
@@ -150,21 +147,20 @@ final class WorkspacePurgeTests: XCTestCase {
     // Format-zero materialization/restore tests from Phase 3 are obsolete:
     // main removed legacy Notes and refuses restoring format-zero versions.
     // Modern task-note detach/restore remains covered above and below.
-    func testP3PreservationReferencesKeepDeletedNoteAndVersionRowsIndependentOfTaskLifetime() async throws {
+    func testP3WholeItemPurgesReadableWritingAndOwnHistoryTogether() async throws {
         let context = coordinator.freshContext(), task = TaskItem(id: taskID, title: "Task")
         task.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(task)
         let row = NoteItem(id: noteID, title: "Legacy", body: "body"); row.taskID = taskID; context.insert(row)
         let version = NoteVersion(noteID: noteID, createdAt: deletion, reason: .beforeRestore,
-            content: nil, contentFormat: 0, title: "Old", body: "old", attachmentIDs: [], sourceRevisionID: nil)
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Old"), .text("old")])), contentFormat: 1,
+            title: "Old", body: "old", attachmentIDs: [], sourceRevisionID: nil)
         context.insert(version); try context.save()
         let store = TaskStore(container: coordinator.container, now: { self.deletion }, taskImageFiles: files)
         XCTAssertTrue(store.delete(taskIDs: [taskID])); expectEqual(await purge().outcome, .committed)
-        let notes = NoteStore(container: coordinator.container)
-        XCTAssertTrue(notes.delete(try XCTUnwrap(notes.notes.first { $0.id == noteID })))
-        expectEqual(notes.purgeDeleted(before: .distantFuture), [])
-        notes.thinVersions(noteID: noteID)
-        XCTAssertTrue(try coordinator.freshContext().fetch(FetchDescriptor<NoteVersion>()).contains { $0.id == version.id })
-        expectEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<NoteItem>()), 1)
+        // 2026-10-23: the group's writing and readable own history purge together.
+        // Unreadable history still retains the group (OneItemLifecycleTests).
+        expectEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<NoteItem>()), 0)
+        XCTAssertFalse(try coordinator.freshContext().fetch(FetchDescriptor<NoteVersion>()).contains { $0.id == version.id })
     }
 
     func testP4SharedWriterTombstoneBlocksTaskAndAssociationResurrectionAndOldTaskNoteContent() async throws {
@@ -231,8 +227,9 @@ final class WorkspacePurgeTests: XCTestCase {
         ownership = .init(generation: 2, drafts: [noteID: try NoteDocument(blocks: [.text("Draft compatibility"), .text("newest draft")]).taskSnapshot(title: "Draft compatibility")])
         expectEqual(await purge().outcome, .committed)
         expectEqual(try document().title, "Current task")
-        XCTAssertTrue(try document().blocks[1].text.hasPrefix("Was a task · "))
-        expectEqual(try document().blocks[2].text, "newest draft")
+        // 2026-10-23: no generated completion/status summary.
+        XCTAssertFalse(try document().blocks.contains { $0.text.hasPrefix("Was a task") })
+        expectEqual(try document().blocks[1].text, "newest draft")
         XCTAssertFalse(try document().requires.contains("taskNote")); XCTAssertNil(try note().taskID)
     }
     func testP2FailedCaptureSaveLeavesEveryTaskNoteAssociationAndHistoryRowUnchanged() async throws {
