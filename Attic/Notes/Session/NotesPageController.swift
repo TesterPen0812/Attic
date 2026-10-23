@@ -1606,6 +1606,15 @@ final class NotesPageController: ObservableObject {
 
     private func wire(_ session: NoteSession) {
         let engine = session.engine
+        engine.permitsReadOnlyLifecycleReplay = { [weak session] redo in
+            guard let session, session.isItemDeleted, let history = session.engine.history.workspace,
+                  let step = history.route.steps(in: history.historyID, redo: redo).last,
+                  step.name.hasPrefix(redo ? "Restore" : "Delete") else { return false }
+            let ref: AtticItemRef
+            if let page = session.workspacePage, case let .task(id) = page.key.workspace { ref = .init(.task, id) }
+            else { ref = .init(.note, session.noteID) }
+            return step.affectedItems().contains(ref)
+        }
         engine.history.onWorkspaceRecoveryChanged = { [weak self, weak session] pending, permitsDraft, conflict in
             guard let self, let session else { return }
             session.workspacePublicationPending = pending
@@ -3614,16 +3623,20 @@ extension NotesPageController {
     /// All notes.
     @discardableResult
     func deleteNote(noteID: UUID) -> Bool {
-        // Deleting the note on screen returns to it on Undo.
         let reopen = active?.noteID == noteID && !isLibraryPresented
+        let context = ModelContext(store.container)
+        let taskID = try? WorkspaceItemLifecycle.taskOwner(noteID: noteID, in: context)
         guard removeNote(noteID: noteID) else { return false }
-        undoRoute.record(deleteStep(noteID: noteID, reopen: reopen), in: .notesLibrary)
+        if let taskID, let library = store.commandLibrary ?? workspaceTaskStore?.commandLibrary
+            ?? (try? WorkspaceLegacyBridge.coordinator(for: store.container))?.lifecycleLibrary {
+            library.recordCommittedDeletion(.init(.task, taskID), in: .notesLibrary)
+        } else { undoRoute.record(deleteStep(noteID: noteID, reopen: reopen), in: .notesLibrary) }
         return true
     }
 
     /// The delete itself, as a history step also runs it (Redo, and Undo of
     /// a duplicate).
-    private func removeNote(noteID: UUID) -> Bool {
+    private func removeNote(noteID: UUID, restoredLegacy: Bool = false) -> Bool {
         let session = cache[noteID]
         if let session {
             session.engine.refreshCompositionActivity()
@@ -3659,9 +3672,8 @@ extension NotesPageController {
             session.saveTask?.cancel()
             session.durabilityTask?.cancel()
             session.pauseTask?.cancel()
-            cache[noteID] = nil
         }
-        guard store.delete(note) else {
+        guard (restoredLegacy ? store.deleteRestoredLegacyNote(noteID: noteID) : store.delete(note)) else {
             if let session {
                 cache[noteID] = session
                 touch(noteID)
@@ -3669,13 +3681,15 @@ extension NotesPageController {
             }
             return false
         }
+        let keepWorkspace = session?.workspacePage?.activeLease != nil && session?.isItemDeleted == true
+        if !keepWorkspace { cache[noteID] = nil }
         recency.removeAll { $0 == noteID }
         if lastViewedNoteID == noteID { defaults?.removeObject(forKey: Self.lastViewedKey) }
         if let session, active === session {
             active = nil
             isLibraryPresented = true
         }
-        session?.engine.detachView()
+        if !keepWorkspace { session?.engine.detachView() }
         collectReleasedStaging()
         return true
     }
@@ -3738,23 +3752,22 @@ extension NotesPageController {
     /// separate, ordinary note (the task had a newer own note) and the
     /// step's id (the toast's Undo targets exactly that step).
     func restoreTaskNote(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> (separate: Bool, stepID: UUID?)? {
-        let owner = (try? store.replicasIncludingDeleted(of: noteID))?.first?.taskID
+        let before = (try? store.replicasIncludingDeleted(of: noteID)) ?? []
+        let owner = before.first?.taskID
+        let independent = before.allSatisfy { $0.deletionGroupID == nil }
         let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
+        let owned = noteHistoryOwnership(noteID, deleted: true)
         guard store.restoreDeleted(noteID: noteID, staging: staging) else { return nil }
         let separate = store.lastRestoreWasSeparate
         undoRoute.record(UndoStep(
             name: String(localized: "Restore Note"),
-            items: { [AtticItemRef(.note, noteID)] },
+            items: { owned.itemRefs.union([.init(.note, noteID)]) },
             undoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                guard self.store.note(withID: noteID) != nil else { return .obsolete }
-                return self.removeNote(noteID: noteID) ? .applied : .failed
+                self?.deleteHistoryNote(noteID, owned: owned, legacyOwner: separate ? nil : owner,
+                    restoredLegacy: independent) ?? .obsolete
             },
-            redoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                if self.store.restoreDeleted(noteID: noteID) { return .applied }
-                return self.store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete
-            }), in: historyID)
+            redoOutcome: { [weak self] in self?.restoreHistoryNote(noteID, owned: owned, reopen: false) ?? .obsolete }
+        ), in: historyID)
         return (separate, undoRoute.undoStepID(in: historyID))
     }
 
@@ -3938,20 +3951,66 @@ extension NotesPageController {
     /// shows it again when it was the note on screen); Redo deletes it
     /// again. A refused restore of a note still in Recently Deleted keeps
     /// the step; one that can never apply drops it.
+    private var lifecycleHistoryLibrary: AtticLibrary? {
+        store.commandLibrary ?? workspaceTaskStore?.commandLibrary
+            ?? (try? WorkspaceLegacyBridge.coordinator(for: store.container))?.lifecycleLibrary
+    }
+
+    private func noteHistoryOwnership(_ noteID: UUID, deleted: Bool) -> AtticLibrary.FamilyOwnership {
+        if let library = lifecycleHistoryLibrary {
+            let owned = library.itemOwnership(deleted ? library.ownedMembers(of: .init(.note, noteID)) : [], deleted: deleted, noteID: noteID)
+            owned.writing = (owned.writing ?? []).union([noteID])
+            return owned
+        }
+        let owned = AtticLibrary.FamilyOwnership([])
+        owned.writing = [noteID]
+        if deleted, let copies = try? store.replicasIncludingDeleted(of: noteID) {
+            owned.groups = Set(copies.compactMap(\.deletionGroupID))
+        }
+        return owned
+    }
+
+    private func restoreHistoryNote(_ noteID: UUID, owned: AtticLibrary.FamilyOwnership, reopen: Bool) -> UndoOutcome {
+        let outcome: UndoOutcome
+        if let library = lifecycleHistoryLibrary {
+            if let stop = library.wholeItemRestoreGuard(owned, refs: [.init(.note, noteID)]) { return stop }
+            if store.restoreDeleted(noteID: noteID) { outcome = .applied }
+            else { outcome = store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete }
+        } else {
+            guard let copies = try? store.replicasIncludingDeleted(of: noteID) else { return .failed }
+            let current = Set(copies.compactMap(\.deletionGroupID))
+            guard owned.groups.isEmpty || !current.isEmpty && current.isSubset(of: owned.groups) else { return .obsolete }
+            if store.restoreDeleted(noteID: noteID) { outcome = .applied }
+            else { outcome = store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete }
+        }
+        if outcome == .applied, reopen, open(noteID: noteID) { isLibraryPresented = false }
+        return outcome
+    }
+
+    private func deleteHistoryNote(_ noteID: UUID, owned: AtticLibrary.FamilyOwnership,
+                                   legacyOwner: UUID? = nil, restoredLegacy: Bool = false) -> UndoOutcome {
+        guard store.note(withID: noteID) != nil else { return .obsolete }
+        do {
+            let root = try WorkspaceItemLifecycle.taskOwner(noteID: noteID, in: ModelContext(store.container))
+            if restoredLegacy {
+                guard root == legacyOwner else { return .obsolete }
+            } else if let library = lifecycleHistoryLibrary {
+                if let stop = library.wholeItemDeleteGuard(owned, roots: root.map { [$0] } ?? []) { return stop }
+            } else if root != nil { return .obsolete }
+        } catch { return .failed }
+        guard removeNote(noteID: noteID, restoredLegacy: restoredLegacy) else { return .failed }
+        let updated = noteHistoryOwnership(noteID, deleted: true)
+        owned.members = updated.members; owned.writing = updated.writing; owned.groups = updated.groups
+        return .applied
+    }
+
     private func deleteStep(noteID: UUID, reopen: Bool) -> UndoStep {
-        UndoStep(
+        let owned = noteHistoryOwnership(noteID, deleted: true)
+        return UndoStep(
             name: String(localized: "Delete Note"),
-            items: { [AtticItemRef(.note, noteID)] },
-            undoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                if self.restoreDeletedNote(noteID: noteID, reopen: reopen) { return .applied }
-                return self.store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete
-            },
-            redoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                guard self.store.note(withID: noteID) != nil else { return .obsolete }
-                return self.removeNote(noteID: noteID) ? .applied : .failed
-            }
+            items: { owned.itemRefs.union([.init(.note, noteID)]) },
+            undoOutcome: { [weak self] in self?.restoreHistoryNote(noteID, owned: owned, reopen: reopen) ?? .obsolete },
+            redoOutcome: { [weak self] in self?.deleteHistoryNote(noteID, owned: owned) ?? .obsolete }
         )
     }
 
@@ -3977,19 +4036,12 @@ extension NotesPageController {
     /// typed into it since saved first, so nothing is lost); Redo restores
     /// it without opening it.
     private func duplicateStep(newID: UUID) -> UndoStep {
-        UndoStep(
+        let owned = noteHistoryOwnership(newID, deleted: false)
+        return UndoStep(
             name: String(localized: "Duplicate Note"),
-            items: { [AtticItemRef(.note, newID)] },
-            undoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                guard self.store.note(withID: newID) != nil else { return .obsolete }
-                return self.removeNote(noteID: newID) ? .applied : .failed
-            },
-            redoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                if self.restoreDeletedNote(noteID: newID, reopen: false) { return .applied }
-                return self.store.recentlyDeletedNotes().contains { $0.ref.id == newID } ? .failed : .obsolete
-            }
+            items: { owned.itemRefs.union([.init(.note, newID)]) },
+            undoOutcome: { [weak self] in self?.deleteHistoryNote(newID, owned: owned) ?? .obsolete },
+            redoOutcome: { [weak self] in self?.restoreHistoryNote(newID, owned: owned, reopen: false) ?? .obsolete }
         )
     }
 
@@ -4220,7 +4272,8 @@ extension NotesPageController {
                 if let history { history.attach(session.engine.history) }
                 session.state = .readOnly
                 wire(session)
-            } else if !deleted, session.isItemDeleted {
+            } else if !deleted, session.isItemDeleted, row?.deletedAt == nil,
+                      row != nil || (!session.isPersisted && session.pendingTaskID.map { id in tasks.contains { $0.id == id && $0.deletedAt == nil } } == true) {
                 session.isItemDeleted = false
                 if row != nil { installCommittedTaskNoteForm(session) }
                 else {
@@ -4232,5 +4285,24 @@ extension NotesPageController {
                 }
             }
         }
+    }
+}
+
+extension NotesPageController {
+    /// A new-style deleted item opens its preserved writing read-only; only
+    /// legacy split states may offer an independent replacement draft.
+    func workspaceDeletedItemSession(noteID: UUID) -> NoteSession? {
+        let context = ModelContext(store.container)
+        guard let rows = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })),
+              let row = NoteStore.canonicalReplicas(from: rows).first,
+              row.deletedAt != nil, row.deletionGroupID != nil else { return nil }
+        if let existing = cache[noteID], existing.isItemDeleted { return existing }
+        let document = row.content.flatMap { NoteContentCodec.decode($0).document } ?? .blank
+        let session = NoteSession(noteID: noteID, isPersisted: true, baseRevisionID: row.revisionID,
+            engine: makeEngine(noteID: noteID, document: document, readOnly: true, tags: row.tags, bodyOnly: row.taskID != nil),
+            readOnlyReason: .unreadable("This item is in Recently Deleted."))
+        session.isItemDeleted = true; session.baseContent = row.content; session.baseTags = row.tags
+        cache[noteID] = session; wire(session)
+        return session
     }
 }

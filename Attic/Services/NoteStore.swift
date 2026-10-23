@@ -630,6 +630,19 @@ final class NoteStore: ObservableObject {
         return true
     }
 
+    /// Exact inverse of restoring a pre-group independent note deletion.
+    /// This is not a user Delete route; it must not hide the surviving task.
+    func deleteRestoredLegacyNote(noteID: UUID) -> Bool {
+        do {
+            let rows = try storedNotesIncludingDeleted(matching: noteID)
+            guard rows.contains(where: { $0.deletedAt == nil }) else { return false }
+            try WorkspaceItemLifecycle.stageWritingDeletion(rows, group: UUID(), timestamp: now(), in: context)
+        } catch { context.rollback(); lastErrorMessage = error.localizedDescription; return false }
+        guard save() else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
+        return true
+    }
+
     /// Notes in Recently Deleted, newest deletion first.
     func recentlyDeletedNotes() -> [DeletedItemSummary] {
         do {

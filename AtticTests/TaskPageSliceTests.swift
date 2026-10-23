@@ -44,6 +44,18 @@ final class TaskPageSliceTests: XCTestCase {
         return id
     }
 
+    /// Pre-2026-10-23 split-state fixture. New deletes use the whole-item test.
+    private func legacyDeleteNote(_ id: UUID) throws -> Bool {
+        let context = ModelContext(container)
+        let files = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { $0.noteID == id }
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == id {
+            row.deletedAt = Date(); row.deletionGroupID = nil
+            row.deletedAttachmentIDsRaw = Set(files.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
+        }
+        try context.save(); notes.store.refresh()
+        return true
+    }
+
     private func open(_ taskID: UUID) throws -> TaskNotePresenter {
         let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
                                               design: .default, columnInset: 28, defaults: nil)
@@ -256,10 +268,50 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(model.rows.count, 2)
     }
 
+    func testDeletedItemKeepsNativeUndoForItsWholeLifecycleStep() async throws {
+        let id = try seed(.boundary)
+        await notes.startAndWait()
+        let presenter = try open(id), before = presenter.host.textView.string
+        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(presenter.host.engine.isReadOnly)
+        XCTAssertTrue(presenter.host.engine.canUndoCommand)
+        XCTAssertTrue(presenter.host.engine.undoCommand())
+        for _ in 0..<200 where tasks.task(withID: id) == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(tasks.task(withID: id))
+        XCTAssertFalse(presenter.host.engine.isReadOnly)
+        XCTAssertEqual(presenter.host.textView.string, before)
+    }
+
+    func testPurgedCachedWritingStaysReadOnlyOnLaterPublication() async throws {
+        let id = try seed(.boundary)
+        await notes.startAndWait()
+        let presenter = try open(id), noteID = try XCTUnwrap(presenter.session?.noteID)
+        XCTAssertTrue(presenter.model.deleteTask())
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == noteID { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == id { context.delete(row) }
+        try context.save()
+        notes.publishWholeItemLifecycle()
+        XCTAssertTrue(presenter.host.engine.isReadOnly)
+    }
+
+    func testWholeItemDeletedPageReopensReadOnlyWithoutReplacementDraft() async throws {
+        let id = try seed(.boundary)
+        await notes.startAndWait()
+        let first = try open(id), noteID = try XCTUnwrap(first.session?.noteID)
+        XCTAssertTrue(first.model.deleteTask())
+        let closed = await first.close(); XCTAssertTrue(closed)
+        let reopened = try open(id)
+        XCTAssertTrue(reopened.host.engine.isReadOnly)
+        XCTAssertEqual(reopened.session?.noteID, noteID)
+        XCTAssertFalse(reopened.model.deletedNote, "new groups have one Restore, with no replacement writing")
+        XCTAssertTrue(try ownNotes(id).allSatisfy { $0.deletedAt != nil })
+    }
+
     func testATaskWhoseNoteIsInRecentlyDeletedOffersRestoreNote() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
-        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        let deleted = try legacyDeleteNote(noteID)
         XCTAssertTrue(deleted)
         let presenter = try open(id)
         // § 2.7.2: the writing reads "Write a new note": a never-saved draft
@@ -284,7 +336,7 @@ final class TaskPageSliceTests: XCTestCase {
     func testRestoreNoteReopensThePageWithItsOwnEditorOnScreen() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
-        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        let deleted = try legacyDeleteNote(noteID)
         XCTAssertTrue(deleted)
         let hosting = NSHostingController(rootView: AnyView(
             TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,

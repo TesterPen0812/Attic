@@ -21,6 +21,20 @@ final class NotesPageControllerTests: XCTestCase {
         directory = ownedTemporaryDirectory(prefix: "AtticNoteDrafts")
     }
 
+    /// An imported tombstone is an external event, not the local Delete
+    /// command, which now settles/reserves the whole item (2026-10-23).
+    /// Keep every existing recovery/conflict assertion below unchanged.
+    private func deleteElsewhere(_ id: UUID, from source: NoteStore? = nil) throws -> Bool {
+        let source = source ?? store!
+        let context = WorkspaceLegacyBridge.context(for: source.container)
+        let rows = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == id }
+        guard !rows.isEmpty else { return false }
+        try WorkspaceItemLifecycle.stageWritingDeletion(rows, group: UUID(), timestamp: Date(), in: context)
+        try WorkspaceLegacyBridge.persist(context, using: { try $0.save() }, sourceName: "Test imported deletion")
+        source.refresh()
+        return true
+    }
+
     override func tearDown() async throws {
 
     }
@@ -1910,7 +1924,7 @@ final class NotesPageControllerTests: XCTestCase {
         controller.importImages([URL(fileURLWithPath: "/tmp/delayed.png")])
         type(" after", into: draft)
         await waitForImageRequests(loader, count: 1)
-        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        XCTAssertTrue(try deleteElsewhere(id))
         await loader.releaseNext(success: true)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(store.notes.isEmpty)
@@ -1931,7 +1945,7 @@ final class NotesPageControllerTests: XCTestCase {
         await XCTAssertTrueAsync(await controller.preserveAllDurably())
         controller.importImages([URL(fileURLWithPath: "/tmp/late.png")])
         await waitForImageRequests(loader, count: 1)
-        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: session.noteID))))
+        XCTAssertTrue(try deleteElsewhere(session.noteID))
         await loader.releaseNext(success: true)
         await controller.waitForImportWork()
         XCTAssertFalse(session.isImporting)
@@ -2278,7 +2292,7 @@ final class NotesPageControllerTests: XCTestCase {
         draft.engine.insertImage(image, pixelSize: CGSize(width: 1, height: 1))
         await XCTAssertTrueAsync(await first.preserveAllDurably())
         let oldID = draft.noteID
-        XCTAssertTrue(firstStore.delete(try XCTUnwrap(firstStore.note(withID: oldID))))
+        XCTAssertTrue(try deleteElsewhere(oldID, from: firstStore))
         type(" later", into: draft)
         persistence.shouldFail = true
         await XCTAssertTrueAsync(await first.preserveAllDurably(), "failed store save must retain recovery")
@@ -2501,7 +2515,7 @@ final class NotesPageControllerTests: XCTestCase {
         type("Original", into: draft)
         await XCTAssertTrueAsync(await controller.preserveAllDurably())
         let oldID = draft.noteID
-        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: oldID))))
+        XCTAssertTrue(try deleteElsewhere(oldID))
         type(" later", into: draft)
         await XCTAssertTrueAsync(await controller.preserveDurably(draft))
         XCTAssertEqual(draft.state, .conflict(.deleted))
@@ -2529,7 +2543,7 @@ final class NotesPageControllerTests: XCTestCase {
         else { return XCTFail("external change fixture") }
         await XCTAssertTrueAsync(await controller.preserveDurably(session))
         XCTAssertEqual(session.state, .conflict(.changed))
-        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        XCTAssertTrue(try deleteElsewhere(id))
         controller.present()
         XCTAssertEqual(session.state, .conflict(.deleted))
         XCTAssertTrue(store.restoreDeleted(noteID: id))

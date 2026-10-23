@@ -420,7 +420,34 @@ final class OneItemLifecycleTests: XCTestCase {
         XCTAssertTrue(try rows().1.allSatisfy { $0.deletedAt != nil })
     }
 
+    func testNativeNotesDeleteUndoCannotReachLaterWholeItemGroup() async throws {
+        let ordinary = try XCTUnwrap(notes.create(title: "Ordinary"))
+        let id = ordinary.id, controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await controller.startAndWait()
+        XCTAssertTrue(controller.deleteNote(noteID: id))
+        XCTAssertTrue(library.restore(.init(.note, id)))
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == id { row.taskID = root }
+        try context.save(); notes.refresh()
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        XCTAssertFalse(controller.undoLibrary())
+        XCTAssertTrue(try rows().0.allSatisfy { $0.deletedAt != nil })
+        XCTAssertTrue(try rows().1.allSatisfy { $0.deletedAt != nil })
+        await controller.waitForRecoveryWork()
+    }
 
+    func testNativeDuplicateUndoRefusesReassociatedTask() async throws {
+        let source = try XCTUnwrap(notes.create(title: "Source")), controller = NotesPageController(store: notes, journal: coordinator.journal)
+        await controller.startAndWait()
+        let before = Set(notes.notes.map(\.id))
+        let copied = await controller.duplicateNote(noteID: source.id); XCTAssertTrue(copied)
+        let id = try XCTUnwrap(Set(notes.notes.map(\.id)).subtracting(before).first), context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == id { row.taskID = root }
+        try context.save(); notes.refresh()
+        XCTAssertFalse(controller.undoLibrary())
+        XCTAssertTrue(try rows().0.filter { $0.id != earlier }.allSatisfy { $0.deletedAt == nil })
+        await controller.waitForRecoveryWork()
+    }
 
     func testIdenticalPreservationReplicasRestoreTogether() throws {
         XCTAssertTrue(library.deleteListedTasks([root]).isApplied)

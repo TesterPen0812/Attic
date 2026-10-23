@@ -135,9 +135,10 @@ final class WorkspaceSessionRegistry {
             if case let .note(id) = identity { return (identity, id) }
             throw WorkspaceFoundationError.invalidIdentity
         }
-        guard try context.fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })) > 0 else {
-            throw WorkspaceFoundationError.conflict
-        }
+        let taskRows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
+        guard !taskRows.isEmpty else { throw WorkspaceFoundationError.conflict }
+        let deletedGroup = taskRows.allSatisfy({ $0.deletedAt != nil })
+            ? taskRows.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }.first?.deletionGroupID : nil
         let taskNotes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID }))
         let taskLinks = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil }))
         noteRows += taskNotes.count; associationRows += taskLinks.count
@@ -147,7 +148,9 @@ final class WorkspaceSessionRegistry {
         own = try own.filter { id in
             let rows = taskNotes.filter { $0.id == id }
             // A linked note without a `taskID` row is checked on its own.
-            return try (rows.isEmpty ? notes(id: id) : rows).contains { $0.deletedAt == nil }
+            return try (rows.isEmpty ? notes(id: id) : rows).contains {
+                $0.deletedAt == nil || (deletedGroup != nil && $0.deletionGroupID == deletedGroup)
+            }
         }
         // S10: two different notes claiming one task. The one made first
         // (createdAt, then UUID) is the task's note; the others are
@@ -272,7 +275,7 @@ final class WorkspacePageSession {
     }
     fileprivate func attach(noteID: UUID) throws {
         guard let controller, note == nil,
-              let session = controller.workspaceSession(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
+              let session = controller.workspaceSession(noteID: noteID) ?? controller.workspaceDeletedItemSession(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
         let adapter = session.engine.history
         guard adapter.workspace === history || (adapter.workspace == nil && adapter.redoOps.isEmpty),
               history.bind(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
@@ -296,6 +299,7 @@ final class WorkspacePageSession {
         session.usesWorkspaceBinding = true
         session.workspacePage = self
         note = session
+        controller.publishWholeItemLifecycle()
     }
 
     private static func storedTitle(_ taskID: UUID, in controller: NotesPageController) -> String {
