@@ -364,6 +364,21 @@ struct AtticDropdownGap: View {
 /// One highlight (fix 1): a list with a keyboard highlight owns it and the
 /// pointer moves it (`onHover`), as in a native menu; with no `onHover` the
 /// row lights while hovered.
+/// A row's press: a click anywhere on it runs its action. A plain tap,
+/// not a SwiftUI Button: a Button per row was the largest part of a list's
+/// opening cost (menus fix 1; a tag picker opens with a row per tag), and
+/// it was never the row's keyboard or VoiceOver face. The keyboard reaches
+/// rows through their list (`atticDropdownList`), never as Tab stops, and
+/// VoiceOver presses the row's menu item (`AtticDropdownMenuItem`).
+private struct AtticDropdownRowPress: ViewModifier {
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+
+    func body(content: Content) -> some View {
+        content.onTapGesture { if enabled { action() } }
+    }
+}
+
 /// A tag row's inline colour dot: an image as wide as the dot column and
 /// the gap after it, the 7 pt dot centred in the column on the capitals'
 /// middle (it sits on the baseline in the text).
@@ -577,70 +592,63 @@ struct AtticDropdownRow: View {
         let tokens = design.tokens
         let lit = Self.isLit(highlighted: isHighlighted, hovered: hovered, listOwnsHighlight: onHover != nil)
         let pill = RoundedRectangle(cornerRadius: m.highlightRadius, style: .continuous)
-        Button(action: action) {
-            HStack(spacing: 0) {
-                HStack(spacing: m.columnGap) {
-                    if dot != nil, titleFont == nil, match?.isEmpty ?? true {
-                        // The dot is set inline in the name's own text (one
-                        // view per row: the tag picker opens with a row per
-                        // tag and its open cost is gated).
-                        dottedName
-                    } else if let checkGlyph {
-                        AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
-                            .frame(width: m.dotSlot)
-                    }
-                    if let mark {
-                        // None keeps the column (U-15): an empty mark is
-                        // EmptyView, which a frame alone would not hold open.
-                        ZStack { AtticPriorityMark(priority: mark) }
-                            .frame(width: m.markSlot)
-                    }
-                    if let systemName {
-                        AtticIcon(systemName: systemName, size: m.iconSize, ink: .icon)
-                            .frame(width: m.iconSlot)
-                    }
-                    if !(dot != nil && titleFont == nil && (match?.isEmpty ?? true)) {
-                        name
-                    }
+        HStack(spacing: 0) {
+            HStack(spacing: m.columnGap) {
+                if dot != nil, titleFont == nil, match?.isEmpty ?? true {
+                    // The dot is set inline in the name's own text (one
+                    // view per row: the tag picker opens with a row per
+                    // tag and its open cost is gated).
+                    dottedName
+                } else if let checkGlyph {
+                    AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
+                        .frame(width: m.dotSlot)
                 }
-                Spacer(minLength: detail == nil ? (check == nil ? 0 : m.columnGap) : m.detailGap)
-                if let detail {
-                    if AtticOptionHints.isShortcut(detail) {
-                        // O14-08: shortcuts show while ⌥ is held.
-                        if let shortcutHintsShown {
-                            AtticShortcutHintText(text: detail, shown: shortcutHintsShown)
-                        } else {
-                            AtticShortcutHint(text: detail)
-                        }
-                    } else {
-                        AtticText(verbatim: detail, style: .shortcut, ink: .helper)
-                            .fixedSize()
-                    }
+                if let mark {
+                    // None keeps the column (U-15): an empty mark is
+                    // EmptyView, which a frame alone would not hold open.
+                    ZStack { AtticPriorityMark(priority: mark) }
+                        .frame(width: m.markSlot)
                 }
-                // An unticked row draws nothing there: its column is room the
-                // card's width already keeps (the tag picker opens with a row
-                // per tag, so every view a row saves counts).
-                if let check, check != .off {
-                    AtticIcon(systemName: check == .on ? "checkmark" : "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
-                        .frame(width: m.checkSlot)
-                        .padding(.leading, detail == nil ? 0 : m.columnGap)
-                } else if check == .off, detail != nil {
-                    // Details stay in one column, ticked or not.
-                    Color.clear.frame(width: m.checkSlot + m.columnGap, height: 1)
+                if let systemName {
+                    AtticIcon(systemName: systemName, size: m.iconSize, ink: .icon)
+                        .frame(width: m.iconSlot)
+                }
+                if !(dot != nil && titleFont == nil && (match?.isEmpty ?? true)) {
+                    name
                 }
             }
-            .padding(.horizontal, m.rowPadding)
-            .frame(height: m.rowHeight)
-            .background(pill.fill((lit ? tokens.dropdownHighlight : .clear).color))
-            .contentShape(Rectangle())
+            Spacer(minLength: detail == nil ? (check == nil ? 0 : m.columnGap) : m.detailGap)
+            if let detail {
+                if AtticOptionHints.isShortcut(detail) {
+                    // O14-08: shortcuts show while ⌥ is held.
+                    if let shortcutHintsShown {
+                        AtticShortcutHintText(text: detail, shown: shortcutHintsShown)
+                    } else {
+                        AtticShortcutHint(text: detail)
+                    }
+                } else {
+                    AtticText(verbatim: detail, style: .shortcut, ink: .helper)
+                        .fixedSize()
+                }
+            }
+            // An unticked row draws nothing there: its column is room the
+            // card's width already keeps (the tag picker opens with a row
+            // per tag, so every view a row saves counts).
+            if let check, check != .off {
+                AtticIcon(systemName: check == .on ? "checkmark" : "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
+                    .frame(width: m.checkSlot)
+                    .padding(.leading, detail == nil ? 0 : m.columnGap)
+            } else if check == .off, detail != nil {
+                // Details stay in one column, ticked or not.
+                Color.clear.frame(width: m.checkSlot + m.columnGap, height: 1)
+            }
         }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        // Never its own Tab stop: a list's rows are one keyboard stop, as a
-        // native menu's are (`atticDropdownList`), and the one highlight
-        // shows where the keyboard is. Under Full Keyboard Access a row
-        // took Tab as a button but its Space reached nothing.
-        .focusable(false)
-        .focusEffectDisabled()
+        .padding(.horizontal, m.rowPadding)
+        .frame(height: m.rowHeight)
+        .background(pill.fill((lit ? tokens.dropdownHighlight : .clear).color))
+        .contentShape(Rectangle())
+        // The whole row picks on a click (`AtticDropdownRowPress`).
+        .modifier(AtticDropdownRowPress(action: action))
         // The whole row answers the pointer (no dead gap between rows). A
         // row sliding under a resting pointer as the keyboard scrolls the
         // list is not the pointer moving: the keyboard keeps its highlight.
