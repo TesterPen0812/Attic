@@ -150,7 +150,7 @@ final class ScrollEdgeUITests: XCTestCase {
             for delta in [CGFloat(-170), 11, 11, 340] {
                 middle.scroll(byDeltaX: 0, deltaY: delta)
                 RunLoop.current.run(until: Date().addingTimeInterval(1))
-                let after = try bitmap(panel)
+                let after = try sampledIfStalled(app, step: "\(surface)-\(mode)-\(delta)") { try bitmap(panel) }
                 let movement = changedFraction(before, after, in: body, panel: panel.frame)
                 guard movement > 0.02 else { continue }
                 moved = true
@@ -226,6 +226,39 @@ final class ScrollEdgeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["tasks-page-now"].waitForExistence(timeout: 5))
         return app
+    }
+
+    /// PR #11: on CI this step's snapshot found the app's main thread busy
+    /// for minutes after the third scroll, and it does not reproduce on
+    /// the Pro or the Air. If the call has not returned in 20 s, sample the
+    /// app (5 s), print the main thread's stack and attach the whole sample.
+    private func sampledIfStalled<T>(_ app: XCUIApplication, step: String, _ body: () throws -> T) throws -> T {
+        let pid = (app.responds(to: NSSelectorFromString("processID")) ? app.value(forKey: "processID") as? Int32 : nil) ?? 0
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("attic-scroll-stall-\(step).txt")
+        try? FileManager.default.removeItem(at: output)
+        let sampler = DispatchWorkItem {
+            guard pid > 0 else { return }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+            process.arguments = [String(pid), "5", "-mayDie", "-file", output.path]
+            try? process.run()
+            process.waitUntilExit()
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 20, execute: sampler)
+        defer {
+            sampler.cancel()
+            if FileManager.default.fileExists(atPath: output.path) {
+                sampler.wait()
+                let text = (try? String(contentsOf: output, encoding: .utf8)) ?? ""
+                let main = text.components(separatedBy: "\n").drop { !$0.contains("Thread_") || !$0.contains("main-thread") }
+                print("ATTIC_SCROLL_STALL step=\(step) pid=\(pid)\n" + main.prefix(160).joined(separator: "\n"))
+                let attachment = XCTAttachment(contentsOfFile: output)
+                attachment.name = "scroll-stall-sample-\(step)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        return try body()
     }
 
     private func bitmap(_ panel: XCUIElement) throws -> NSBitmapImageRep {
