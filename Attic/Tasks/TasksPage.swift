@@ -1390,13 +1390,7 @@ struct TasksPage: View {
         let query = model.trimmedQuery(for: tab)
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                // macOS 26.6.2's LazyVStack tail estimator cycles between
-                // two heights for spacing B at a 1× prefetch boundary,
-                // even with constant row frames and no state writes. A
-                // single-column lazy grid keeps the same rows/pitches and
-                // virtualization without that stack measurement path.
-                LazyVGrid(columns: [GridItem(.flexible(minimum: 0), spacing: 0, alignment: .leading)],
-                          alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     // An active filter never hides silently (item 6): what
                     // is shown, and Show All.
                     if view.filters, query.isEmpty {
