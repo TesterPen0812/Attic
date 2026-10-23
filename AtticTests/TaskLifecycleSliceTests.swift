@@ -1633,6 +1633,85 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(presenter.model.needsReopen(toggling: sub.id))
     }
 
+    // Owner decision 2026-10-23: the same writing survives circle removal;
+    // only children become checkboxes, and Undo is the sole old-task return.
+    func testBRemoveKeepsWritingDropsDetailsAndRestoresExactFamilyThroughUndoRedo() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session), noteID = session.noteID
+        let original = try storedDocument(noteID)
+        let context = ModelContext(container)
+        let family = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.id == id || $0.parentID == id }
+        let before = try Dictionary(uniqueKeysWithValues: family.map { ($0.persistentModelID, try WorkspaceModelFields.read($0)) })
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(result, .removed(noteID: noteID))
+        guard case .removed = result else { return }
+        XCTAssertNil(tasks.task(withID: id))
+        XCTAssertTrue(tasks.recentlyDeletedTasks().isEmpty, "circle removed is hidden from trash")
+        let ordinary = try storedDocument(noteID)
+        XCTAssertFalse(ordinary.requires.contains("taskNote"))
+        XCTAssertEqual(ordinary.blocks.dropFirst().prefix(2).map(\.text), ["Write release notes", "Freeze strings"])
+        XCTAssertEqual(ordinary.blocks.dropFirst().prefix(2).map(\.checked), [false, true])
+        XCTAssertEqual(Array(ordinary.blocks.dropFirst(3)), Array(original.blocks.dropFirst()))
+        XCTAssertFalse(ordinary.blocks.contains { $0.text.contains("Was a task") || $0.text.contains("Due:") })
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == nil && $0.deletedAt == nil })
+        XCTAssertTrue(try associations(note: noteID).allSatisfy { $0.detachedAt != nil && $0.detachedPreservationID != nil })
+        let history = presenter.page.history
+        await close(presenter)
+        XCTAssertEqual(history.undoName, "Remove from Tasks")
+        let undone = await history.replay(redo: false); XCTAssertEqual(undone, .applied)
+        XCTAssertEqual(try storedDocument(noteID), original)
+        for row in try ModelContext(container).fetch(FetchDescriptor<TaskItem>()) where before[row.persistentModelID] != nil {
+            XCTAssertEqual(try WorkspaceModelFields.read(row), before[row.persistentModelID])
+        }
+        let redone = await history.replay(redo: true); XCTAssertEqual(redone, .applied)
+        XCTAssertEqual(try storedDocument(noteID), ordinary)
+    }
+
+    func testBRemoveFailureRollsBackEveryRowAndReceipt() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session), original = try storedDocument(session.noteID)
+        let receipts = try ModelContext(container).fetchCount(FetchDescriptor<OperationReceipt>())
+        var attempted = false
+        coordinator.save = { _ in attempted = true; throw WorkspaceFoundationError.unknown }
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        coordinator.save = { try $0.save() }
+        guard case .refused = result else { return XCTFail("failed save succeeded") }
+        XCTAssertTrue(attempted, "exercise the staged conversion, not a preflight refusal")
+        XCTAssertNotNil(tasks.task(withID: id)); XCTAssertEqual(try storedDocument(session.noteID), original)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<OperationReceipt>()), receipts)
+        XCTAssertTrue(try associations(note: session.noteID).allSatisfy { $0.detachedAt == nil })
+    }
+
+    func testBRemoveRefusesAlternateWritingAndDivergentFamily() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session), original = try storedDocument(session.noteID)
+        let context = ModelContext(container)
+        let alternate = NoteItem(title: "Other writing", body: "Keep me"); alternate.taskID = id
+        context.insert(alternate); try context.save()
+        var result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        guard case .refused = result else { return XCTFail("S10 must resolve first") }
+        context.delete(alternate); try context.save()
+        let replica = TaskItem(id: id, title: "Different head"); context.insert(replica); try context.save()
+        result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        guard case .refused = result else { return XCTFail("divergence must refuse") }
+        XCTAssertEqual(try storedDocument(session.noteID), original)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<TaskItem>()).allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testBAddCommitsBlankTitleInNowWithoutParsingOrPromotingCheckboxes() async throws {
+        makeStores()
+        let id = UUID(), original = NoteDocument(blocks: [.text(""), .checklist("Tomorrow !high", checked: true)])
+        _ = try notes.store.createDocumentNote(id: id, document: original, tags: ["mine"]).get()
+        XCTAssertTrue(notes.open(noteID: id))
+        let result = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks)
+        guard case let .made(taskID) = result else { return XCTFail("blank title must commit: \(result)") }
+        let task = try XCTUnwrap(tasks.task(withID: taskID))
+        XCTAssertEqual(task.title, ""); XCTAssertEqual(task.status, .todo)
+        XCTAssertNil(task.dueDay); XCTAssertEqual(task.priority, .none)
+        XCTAssertTrue(tasks.subtasks(of: taskID).isEmpty)
+        XCTAssertEqual(Array(try storedDocument(id).blocks.dropFirst()), Array(original.blocks.dropFirst()))
+    }
+
     // MARK: Make Task from Note (§ 2.1)
 
     func testMakeTaskFromNoteMakesTheSameDocumentTheTasksOwnNoteAndUndoReturnsItAsItWas() async throws {

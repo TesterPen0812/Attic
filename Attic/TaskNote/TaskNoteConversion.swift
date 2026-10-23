@@ -240,3 +240,12 @@ enum TaskNoteConversion {
         })
     }
 }
+
+// Slice B producer; implemented after the red conversion regressions.
+extension TaskNoteConversion {
+    enum RemovalOutcome: Equatable { case removed(noteID: UUID); case refused(String) }
+    static func removeTask(_ taskID: UUID, notes: NotesPageController, tasks: TaskStore,
+                           workspaceSession: NoteSession? = nil) async -> RemovalOutcome {
+        .refused("Remove from Tasks isn't available yet")
+    }
+}
