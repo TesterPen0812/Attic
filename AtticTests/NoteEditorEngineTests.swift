@@ -10,6 +10,28 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testB02RichCopyPreservesNumberedListStartsAndRestarts() throws {
+        var first = NoteBlock.text("first", style: "number"); first.start = 7
+        var restart = NoteBlock.text("restart", style: "number"); restart.start = 12
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), first, .text("second", style: "number"), restart, .text("last", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        for offset in [2, location(of: "second", in: engine)] {
+            XCTAssertTrue(engine.writeSelection(NSRange(location: offset, length: engine.textStorage.length - offset), to: board, types: [.rtf]))
+            let data = try XCTUnwrap(board.data(forType: .rtf))
+            let copied = try NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
+            var starts: [Int] = []
+            var previous: NSTextList?
+            (copied.string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: copied.length), options: .byParagraphs) { _, range, _, _ in
+                let list = (copied.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.textLists.last
+                XCTAssertNotNil(list)
+                if let list, list !== previous { starts.append(list.startingItemNumber) }
+                previous = list
+            }
+            XCTAssertEqual(starts, offset == 2 ? [7, 12] : [8, 12])
+        }
+    }
+
     func testPRB12InlineMeasurementsReuseWarmCache() throws {
         let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let today = NoteDay(date: Date())

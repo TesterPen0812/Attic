@@ -2515,7 +2515,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func writeSelection(_ range: NSRange, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard range.length > 0, rangeIsInStorage(range) else { return false }
-        return writeSelection(textStorage.attributedSubstring(from: range), to: pasteboard, types: types)
+        let selected = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
+        // A partial list selection starts at the visible ordinal of its
+        // first item, which may not carry the run's explicit start metadata.
+        if case let .number(marker) = listMarker(at: range.location),
+           let ordinal = Int(marker.dropLast()) {
+            let first = (selected.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+            selected.addAttribute(.noteListStart, value: ordinal, range: first)
+        }
+        return writeSelection(selected, to: pasteboard, types: types)
     }
 
     /// Also accepts a discontiguous block selection assembled in document
@@ -2548,6 +2556,29 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 wrote = pasteboard.setString(NoteMarkdownExport.markdown(body), forType: type) || wrote
             case .rtf:
                 let selected = NSMutableAttributedString(attributedString: text)
+                // Native export reads NSTextList, not Attic's marker metadata.
+                // Build run identities for explicit starts/restarts at each depth.
+                var lists: [NSTextList] = []
+                let string = selected.string as NSString
+                var position = 0
+                while position < selected.length {
+                    let paragraph = string.paragraphRange(for: NSRange(location: position, length: 0))
+                    let attrs = selected.attributes(at: position, effectiveRange: nil)
+                    if let kind = attrs[.noteBlockStyle] as? String, ["number", "bullet"].contains(kind) {
+                        let depth = min(2, max(0, attrs[.noteBlockIndent] as? Int ?? 0))
+                        let marker: NSTextList.MarkerFormat = kind == "number" ? .decimal : .disc
+                        if lists.count > depth + 1 { lists = Array(lists.prefix(depth + 1)) }
+                        while lists.count <= depth { lists.append(NSTextList(markerFormat: marker, options: 0)) }
+                        if lists[depth].markerFormat != marker || attrs[.noteListStart] != nil {
+                            lists[depth] = NSTextList(markerFormat: marker, options: 0)
+                            lists[depth].startingItemNumber = attrs[.noteListStart] as? Int ?? 1
+                        }
+                        let style = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                        style.textLists = lists
+                        selected.addAttribute(.paragraphStyle, value: style, range: paragraph)
+                    } else { lists.removeAll() }
+                    position = NSMaxRange(paragraph)
+                }
                 // Tables read as their rows of tab-separated text in rich text.
                 var tables: [(NSRange, NoteTable)] = []
                 selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, part, _ in
