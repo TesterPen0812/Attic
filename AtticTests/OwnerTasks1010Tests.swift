@@ -505,7 +505,7 @@ final class OwnerTasks1010Tests: XCTestCase {
                     meta: .init(onDate: {}, onTags: {}, datePresented: .constant(false), tagsPresented: .constant(false),
                                 datePicker: { AnyView(EmptyView()) }, tagPicker: { AnyView(EmptyView()) })
                 )
-                .onPreferenceChange(AtticRowControlFramesKey.self) { frames in
+                .onAtticRowControlFramesChange { frames in
                     MainActor.assumeIsolated { state.frames = frames }
                 }
                 .frame(width: 340, height: 48, alignment: .top)

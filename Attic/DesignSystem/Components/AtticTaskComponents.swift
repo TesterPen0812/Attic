@@ -1474,25 +1474,32 @@ struct AtticRowActionsButton: View {
     }
 }
 
-/// The frames of the controls inside a task row (its circle, checklist,
-/// date and tags), in the row's own coordinate space
-/// (`AtticTaskRow.space`), so a list can keep a drag from starting on
-/// them (round 4: embedded controls keep their own presses).
-struct AtticRowControlFramesKey: PreferenceKey {
-    static var defaultValue: [CGRect] { [] }
+/// Controls publish layout anchors; resolving a frame while constructing
+/// its preference would make the writer depend on the layout it reports.
+private struct AtticRowControlAnchorsKey: PreferenceKey {
+    static var defaultValue: [Anchor<CGRect>] { [] }
 
-    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
         value.append(contentsOf: nextValue())
     }
 }
 
 extension View {
-    /// Reports this control's frame in its task row (see
-    /// `AtticRowControlFramesKey`).
     func atticRowControl() -> some View {
-        background(GeometryReader { proxy in
-            Color.clear.preference(key: AtticRowControlFramesKey.self, value: [proxy.frame(in: AtticTaskRow.space)])
-        })
+        anchorPreference(key: AtticRowControlAnchorsKey.self, value: .bounds) { [$0] }
+    }
+
+    /// Resolve the anchors in the row's coordinates. Only actual rectangle
+    /// changes reach the input cache; geometry never constructs a writer.
+    func onAtticRowControlFramesChange(_ action: @escaping ([CGRect]) -> Void) -> some View {
+        overlayPreferenceValue(AtticRowControlAnchorsKey.self) { anchors in
+            Color.clear
+                .onGeometryChange(for: [CGRect].self) { proxy in anchors.map { proxy[$0] } } action: { frames in
+                    action(frames)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 

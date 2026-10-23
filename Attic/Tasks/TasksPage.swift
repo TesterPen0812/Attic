@@ -4027,7 +4027,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
-                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id, tab, reports] frames in
+                .onAtticRowControlFramesChange { [session, id, tab, reports] frames in
                     MainActor.assumeIsolated {
                         reports.controls = frames
                         session.setControlFrames(frames, for: TasksRowID(tab: tab, id: id), from: reports)
