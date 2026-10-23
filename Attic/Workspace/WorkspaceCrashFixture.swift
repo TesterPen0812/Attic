@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SwiftData
 
@@ -218,9 +219,67 @@ enum WorkspaceCrashFixture {
         try context.save()
     }
 
+    static let earlierCircleChildID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47450")!
+
+    static func seedReviewedCircle(_ root: URL, adding: Bool, moving: Bool = false) async throws {
+        try await seedCircle(root, adding: adding)
+        var references: [TaskImageReference] = []
+        if !adding {
+            let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+            var inputs: [URL] = []
+            for name in moving ? ["earlier.txt", "move.txt"] : ["earlier.txt"] {
+                let input = root.appendingPathComponent(name); try bytes.write(to: input); inputs.append(input)
+            }
+            references = try await files.importAttachments(inputs, existing: [])
+            try JSONEncoder().encode(references).write(to: root.appendingPathComponent("review-files.json"))
+        }
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let context = ModelContext(container), date = Date(timeIntervalSince1970: 1_699_999_990)
+        let document = try PreparedNoteDocument(adding ? original.ordinarySnapshot(title: "Parent") : original)
+        context.insert(NoteVersion(id: versionID, noteID: noteID, createdAt: date, reason: .pause,
+            content: document.content, contentFormat: 1, title: document.title, body: document.body,
+            attachmentIDs: original.attachmentIDs, sourceRevisionID: versionID))
+        context.insert(ItemLink(source: .init(.note, alternateID), target: .init(adding ? .note : .task, adding ? noteID : taskID),
+            kind: .reference, createdAt: date))
+        if !adding {
+            let encoded = try JSONEncoder().encode([references[0]])
+            for _ in 0..<2 {
+                let child = TaskItem(id: earlierCircleChildID, title: "Earlier deleted child", createdAt: date, parentID: taskID)
+                child.listOrderVersion = TaskItem.currentListOrderVersion
+                child.deletedAt = date; child.deletionRootID = earlierCircleChildID
+                child.deletionMembersRaw = earlierCircleChildID.uuidString; child.imageReferencesData = encoded
+                context.insert(child)
+            }
+            if moving {
+                let encoded = try JSONEncoder().encode([references[1]])
+                for parent in try context.fetch(FetchDescriptor<TaskItem>()) where parent.id == taskID { parent.imageReferencesData = encoded }
+                // Keep two physical replicas in this expanded fixture, just
+                // like its original shown/removed note-owned files. Move
+                // revives these removed payload rows and places their card.
+                for _ in 0..<2 {
+                    let reference = references[1]
+                    let file = NoteAttachment(id: reference.id, noteID: noteID, originalFilename: reference.filename,
+                        contentTypeIdentifier: reference.contentTypeIdentifier, byteCount: reference.byteCount, sortIndex: 2, contentDigest: reference.digest, createdAt: date, payload: bytes)
+                    file.deletedAt = date; context.insert(file)
+                }
+            }
+        }
+        try context.save()
+    }
+
     /// Exercise the same history/reservation producer as the app, with an
     /// engine-only session and fixture-owned journal/store/files.
-    static func changeCircle(_ root: URL, adding: Bool) async throws -> Bool {
+    static func changeCircle(_ root: URL, adding: Bool, reviewAction: String? = nil) async throws -> Bool {
+        // Only the reviewed operation receives the kill/save-then-throw;
+        // bootstrap its prior committed history in this child first.
+        let point = ProcessInfo.processInfo.environment["ATTIC_CRASH_POINT"]
+        let saveThenThrow = ProcessInfo.processInfo.environment["ATTIC_SAVE_THEN_THROW"]
+        func arm() {
+            if let point { setenv("ATTIC_CRASH_POINT", point, 1) } else { unsetenv("ATTIC_CRASH_POINT") }
+            if let saveThenThrow { setenv("ATTIC_SAVE_THEN_THROW", saveThenThrow, 1) } else { unsetenv("ATTIC_SAVE_THEN_THROW") }
+        }
+        if reviewAction != nil { unsetenv("ATTIC_CRASH_POINT"); unsetenv("ATTIC_SAVE_THEN_THROW") }
+        defer { arm() }
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
         let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")))
@@ -229,14 +288,50 @@ enum WorkspaceCrashFixture {
             attachmentFileStore: NoteAttachmentFileStore(rootURL: root.appendingPathComponent("NoteFiles"))),
             journal: coordinator.journal, defaults: nil, saveDelay: .seconds(600), durabilityDelay: .seconds(600))
         notes.attachUndoRoute(library.undo)
+        func armReviewedOperation() throws {
+            let rows = try coordinator.freshContext().fetch(FetchDescriptor<NoteItem>())
+            guard let content = rows.first?.content, rows.allSatisfy({ $0.content == content }) else { throw WorkspaceFoundationError.conflict }
+            try content.write(to: root.appendingPathComponent("review-before-content.json"), options: .atomic)
+            coordinator.save = { commit in
+                let writing = (commit.changedModelsArray + commit.insertedModelsArray).compactMap { $0 as? NoteItem }
+                if let content = writing.first?.content {
+                    guard writing.allSatisfy({ $0.content == content }) else { throw WorkspaceFoundationError.conflict }
+                    try content.write(to: root.appendingPathComponent("review-after-content.json"), options: .atomic)
+                }
+                try commit.save()
+            }
+            arm()
+        }
+        if reviewAction != nil { await notes.recoverAtLaunchAndWait() }
+        if reviewAction == "move-review-remove" {
+            guard case .migrated = await tasks.fileMigration.moveIntoNote(taskID, tasks: tasks, notes: notes) else { return false }
+            await notes.waitForRecoveryWork()
+            try armReviewedOperation(); WorkspaceCrashHook.reach("B-move-before-remove")
+        }
         // Add is invoked from the ordinary note's active controller session;
         // activating this engine-only session presents no native surface.
         if adding, !notes.open(noteID: noteID) { throw WorkspaceFoundationError.unknown }
         guard let session = notes.workspaceSession(noteID: noteID) else { throw WorkspaceFoundationError.unknown }
+        var changedTaskID = taskID
         if adding {
-            guard case .made = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks, workspaceSession: session) else { return false }
+            guard case let .made(id) = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks, workspaceSession: session) else { return false }
+            changedTaskID = id
         } else {
             guard case .removed = await TaskNoteConversion.removeTask(taskID, notes: notes, tasks: tasks, workspaceSession: session) else { return false }
+        }
+        let history = notes.undoRoute.workspace(for: .taskWorkspace(changedTaskID))
+        if reviewAction == "undo-review-add" || reviewAction == "undo-review-remove" {
+            try armReviewedOperation()
+            return await history.replay(redo: false) == .applied
+        }
+        if reviewAction == "purge-review-circle" {
+            await notes.retireConvertedNote(noteID)
+            await notes.waitForRecoveryWork()
+            await notes.store.waitForAttachmentReconciliation()
+            history.clear()
+            try armReviewedOperation()
+            let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+            return report.removedTaskIDs.contains(taskID)
         }
         return true
     }

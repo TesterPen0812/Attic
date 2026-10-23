@@ -182,6 +182,128 @@ final class OperationCrashHarnessTests: XCTestCase {
         }
     }
 
+    /// Engineering rule: inverse commits, collection and migration handoff
+    /// have the same all-or-none receipt and byte contract as forward changes.
+    func testBReviewInversePurgeAndMoveCrashMatricesReopenTwice() async throws {
+        let common = ["K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", "K3-note", "K4", "K5", "K6-1", "save-then-throw"]
+        for mode in ["undo-review-add", "undo-review-remove", "purge-review-circle", "move-review-remove"] {
+            let points: [String]
+            switch mode {
+            case "purge-review-circle": points = common.filter { $0 != "K3-note" } + ["B-purge-links", "A-purge-staged", "K7", "K8-before-unlink"]
+            case "move-review-remove": points = common + ["B-move-before-remove", "B-remove-writing", "B-remove-tasks", "B-remove-published"]
+            default: points = common
+            }
+            for point in points {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: root) }
+                let adding = mode == "undo-review-add", moving = mode == "move-review-remove", purging = mode == "purge-review-circle"
+                let seeded = try await runChild(adding ? "seed-review-add" : (moving ? "seed-review-move" : "seed-review-remove"), root: root)
+                XCTAssertEqual(seeded, 73, mode)
+                guard seeded == 73 else { break }
+                let crashed = try await runChild(mode, root: root, point: point == "save-then-throw" ? nil : point,
+                    saveThenThrow: point == "save-then-throw")
+                XCTAssertEqual(crashed, point == "save-then-throw" ? 73 : 86, "\(mode) \(point)")
+                let committed = ["K5", "K6-1", "K7", "K8-before-unlink", "B-remove-published", "save-then-throw"].contains(point)
+                for reopen in 0..<2 {
+                    let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                    let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))
+                    try await coordinator.reconcileStartup()
+                    let context = coordinator.freshContext(), message = "\(mode) \(point) #\(reopen)"
+                    let tasks = try context.fetch(FetchDescriptor<TaskItem>()), notes = try context.fetch(FetchDescriptor<NoteItem>())
+                    let files = try context.fetch(FetchDescriptor<NoteAttachment>()), links = try context.fetch(FetchDescriptor<ItemLink>())
+                    let versions = try context.fetch(FetchDescriptor<NoteVersion>())
+                    XCTAssertEqual(tasks.count, adding ? 1 : (purging && committed ? 0 : 6), message)
+                    XCTAssertEqual(notes.count, 2, message); XCTAssertEqual(notes.filter(\.isPinned).count, 1, message)
+                    XCTAssertTrue(notes.allSatisfy { $0.deletedAt == nil }, message)
+                    XCTAssertEqual(files.count, moving ? 6 : 4, message)
+                    XCTAssertTrue(files.allSatisfy { $0.payload == WorkspaceCrashFixture.bytes }, message)
+                    XCTAssertEqual(files.filter { $0.id == WorkspaceCrashFixture.removedFileID && $0.deletedAt != nil }.count, 2, message)
+                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), 1 + (committed ? 1 : 0), message)
+                    XCTAssertEqual(versions.count, 3 + (committed && !purging ? 2 : 0), message)
+                    XCTAssertEqual(versions.first { $0.id == WorkspaceCrashFixture.versionID }?.content,
+                        try PreparedNoteDocument(adding ? WorkspaceCrashFixture.original.ordinarySnapshot(title: "Parent") : WorkspaceCrashFixture.original).content, message)
+                    XCTAssertEqual(links.count, 1, message)
+                    XCTAssertEqual(links.first?.target, .init(adding || (purging && committed) ? .note : .task,
+                        adding || (purging && committed) ? WorkspaceCrashFixture.noteID : WorkspaceCrashFixture.taskID), message)
+                    let taskForm = adding ? !committed : (mode == "undo-review-remove" ? committed : (moving ? !committed : false))
+                    XCTAssertTrue(notes.allSatisfy { ($0.taskID != nil) == taskForm }, message)
+                    let rawExpected = try Data(contentsOf: root.appendingPathComponent(committed && !purging
+                        ? "review-after-content.json" : "review-before-content.json"))
+                    let intended = try XCTUnwrap(NoteContentCodec.decode(rawExpected).document)
+                    var expected = adding && taskForm
+                        ? try WorkspaceCrashFixture.original.ordinarySnapshot(title: "Parent").taskSnapshot(title: "Parent")
+                        : WorkspaceCrashFixture.original
+                    if moving {
+                        let references = try JSONDecoder().decode([TaskImageReference].self, from: Data(contentsOf: root.appendingPathComponent("review-files.json")))
+                        let reference = try XCTUnwrap(references.last)
+                        expected.blocks.append(.file(id: TaskAttachmentMigration.placementID(attachment: reference.id, note: WorkspaceCrashFixture.noteID), attachmentID: reference.id, filename: reference.filename,
+                            contentTypeIdentifier: reference.contentTypeIdentifier, byteCount: reference.byteCount))
+                    }
+                    if !taskForm {
+                        expected = try expected.ordinarySnapshot(title: "Parent")
+                        if !adding {
+                            let blockID = try XCTUnwrap(intended.blocks[1].id, "generated checkbox has a persisted identity")
+                            var checkbox = NoteBlock.checklist("Child", checked: false); checkbox.id = blockID
+                            expected.blocks.insert(checkbox, at: 1)
+                        }
+                    }
+                    for note in notes {
+                        XCTAssertEqual(note.content, rawExpected, "exact intended pre-save/baseline bytes: \(message)")
+                        XCTAssertEqual(note.content.flatMap { NoteContentCodec.decode($0).document }, expected, message)
+                    }
+                    let associations = try context.fetch(FetchDescriptor<TaskNoteAssociation>())
+                    let preservations = try context.fetch(FetchDescriptor<TaskDeletionPreservation>())
+                    if adding {
+                        let task = try XCTUnwrap(tasks.first)
+                        XCTAssertEqual(task.deletedAt != nil, committed, message)
+                        XCTAssertEqual(task.deletionGroupID != nil, committed, message)
+                        XCTAssertEqual(associations.count, 1, message)
+                        XCTAssertTrue(associations.allSatisfy { ($0.detachedAt != nil) == committed && ($0.detachedPreservationID != nil) == committed }, message)
+                        XCTAssertEqual(preservations.filter { $0.provenance == "circle removed" && $0.retiredAt == nil }.count, committed ? 1 : 0, message)
+                        XCTAssertEqual(task.priority, .none); XCTAssertNil(task.dueDay); XCTAssertEqual(task.status, .todo)
+                    } else if mode == "undo-review-remove" {
+                        XCTAssertEqual(associations.count, 1, message)
+                        XCTAssertTrue(associations.allSatisfy { ($0.detachedAt == nil) == committed }, message)
+                        XCTAssertEqual(preservations.filter { $0.retiredAt == nil }.count, committed ? 0 : 1, message)
+                    }
+                    if !adding, !(purging && committed) {
+                        let earlier = tasks.filter { $0.title == "Earlier deleted child" }
+                        XCTAssertEqual(earlier.count, 2, message)
+                        XCTAssertTrue(earlier.allSatisfy { $0.deletedAt == Date(timeIntervalSince1970: 1_699_999_990) }, message)
+                        let primary = tasks.filter { $0.title != "Earlier deleted child" }
+                        let parents = primary.filter { $0.id == WorkspaceCrashFixture.taskID }
+                        XCTAssertEqual(parents.count, 2, message)
+                        XCTAssertTrue(parents.allSatisfy { $0.priority == .high && $0.dueDayRaw == "2026-10-23"
+                            && $0.manualOrder == 42 && $0.tags == ["kept"] && $0.parentID == nil }, message)
+                        let children = primary.filter { $0.id == WorkspaceCrashFixture.childID }
+                        XCTAssertEqual(children.count, 2, message)
+                        XCTAssertTrue(children.allSatisfy { $0.parentID == WorkspaceCrashFixture.taskID && $0.status == .todo }, message)
+                        if mode == "undo-review-remove" && committed {
+                            XCTAssertTrue(primary.allSatisfy { $0.deletionGroupID == nil && $0.deletionRootID == nil && $0.deletionMembersRaw.isEmpty }, message)
+                        }
+
+                        let retired = moving ? committed : (mode == "undo-review-remove" ? !committed : true)
+                        XCTAssertTrue(primary.allSatisfy { ($0.deletedAt != nil) == retired }, message)
+                        for copies in Dictionary(grouping: tasks, by: \.id).values {
+                            let fields = try WorkspaceModelFields.read(copies[0])
+                            for copy in copies { XCTAssertEqual(try WorkspaceModelFields.read(copy), fields, message) }
+                        }
+                    }
+                    if !adding {
+                        let references = try JSONDecoder().decode([TaskImageReference].self, from: Data(contentsOf: root.appendingPathComponent("review-files.json")))
+                        let storage = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+                        for (index, reference) in references.enumerated() {
+                            let url = try await storage.verifiedURL(for: reference)
+                            if purging && committed && point == "save-then-throw" && index == 0 { XCTAssertNil(url, "exclusive earlier original unlinked after commit") }
+                            else { XCTAssertEqual(try url.map { try Data(contentsOf: $0) }, WorkspaceCrashFixture.bytes, message) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     func testC2SecondProcessWriterLeaseRefusesTheSameStoreAndReleasesOnDeath() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
