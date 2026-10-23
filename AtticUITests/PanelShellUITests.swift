@@ -135,26 +135,27 @@ final class PanelShellUITests: XCTestCase {
         XCTAssertEqual(["tasks", "notes", "canvas"].filter { page($0).isSelected }, [name], file: file, line: line)
     }
 
-    /// Chrome B: shut, the page button is a 32 pt square showing the current
-    /// page; under the pointer it opens into all three (84 wide), a click goes
-    /// there; ⌘1–⌘3 work from anywhere; it shuts when the pointer leaves.
+    /// Chrome B: shut, the page button is a square the pin's size showing the
+    /// current page (30 pt since control size Medium, owner 2026-10-20; it
+    /// was 32); under the pointer it opens into all three (78 wide, three
+    /// 22 pt chips; it was 84), a click goes there; ⌘1–⌘3 work from anywhere; it shuts when the pointer leaves.
     /// VoiceOver reads one "Pages" group with a named button per page.
     func testThePageButtonOpensUnderThePointerAndSelectsPages() throws {
         let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pageButton.waitForExistence(timeout: 3))
         XCTAssertEqual(pageButton.label, "Pages")
         pin.hover()
-        XCTAssertEqual(pin.frame.width, 32, accuracy: 1, "chrome B's corner control")
-        XCTAssertEqual(pin.frame.height, 32, accuracy: 1)
-        waitFor(abs(pageButton.frame.width - 32) < 1.5, "shut, it is the pin's size (\(pageButton.frame.width))")
-        XCTAssertEqual(pageButton.frame.height, 32, accuracy: 1)
+        XCTAssertEqual(pin.frame.width, 30, accuracy: 1, "chrome B's corner control, Medium")
+        XCTAssertEqual(pin.frame.height, 30, accuracy: 1)
+        waitFor(abs(pageButton.frame.width - 30) < 1.5, "shut, it is the pin's size (\(pageButton.frame.width))")
+        XCTAssertEqual(pageButton.frame.height, 30, accuracy: 1)
         XCTAssertTrue(page("tasks").isHittable, "the current page shows")
         XCTAssertEqual(page("notes").label, "Notes")
         assertOnlySelected("tasks")
 
         pageButton.hover()
         waitFor(page("notes").isHittable && page("canvas").isHittable, "under the pointer it opens")
-        waitFor(abs(pageButton.frame.width - 84) < 1.5, "to 84 pt (\(pageButton.frame.width))")
+        waitFor(abs(pageButton.frame.width - 78) < 1.5, "to 78 pt (\(pageButton.frame.width))")
         page("notes").click()
         assertOnlySelected("notes")
 
@@ -164,7 +165,7 @@ final class PanelShellUITests: XCTestCase {
         assertOnlySelected("tasks")
 
         pin.hover()
-        waitFor(abs(pageButton.frame.width - 32) < 1.5, "it shuts when the pointer leaves")
+        waitFor(abs(pageButton.frame.width - 30) < 1.5, "it shuts when the pointer leaves")
     }
 
     /// Focus rings are for keyboard navigation only: clicking pages leaves
