@@ -170,6 +170,57 @@ enum WorkspaceCrashFixture {
         }
         try context.save()
     }
+    static func seedCircle(_ root: URL, adding: Bool) async throws {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let context = ModelContext(container), date = Date(timeIntervalSince1970: 1_700_000_000)
+        let document = try PreparedNoteDocument(adding ? original.ordinarySnapshot(title: "Parent") : original)
+        for index in 0..<2 {
+            if !adding {
+                let parent = TaskItem(id: taskID, title: "Parent", priority: .high, createdAt: date, manualOrder: 42)
+                parent.dueDayRaw = "2026-10-23"; parent.tags = ["kept"]
+                parent.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(parent)
+                let child = TaskItem(id: childID, title: "Child", createdAt: date, parentID: taskID)
+                child.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(child)
+            }
+            let note = NoteItem(id: noteID, createdAt: date)
+            note.taskID = adding ? nil : taskID
+            note.pinnedAt = index == 0 ? date : nil
+            NoteStore.stageDocumentContent(document, format: 1, on: [note], timestamp: date, revision: 0, revisionID: versionID)
+            context.insert(note)
+            for id in [fileID, removedFileID] {
+                let file = NoteAttachment(id: id, noteID: noteID, originalFilename: "fixture.txt", byteCount: Int64(bytes.count),
+                    sortIndex: id == fileID ? 0 : 1, contentDigest: staged.digest, createdAt: date, payload: bytes)
+                if id == removedFileID { file.deletedAt = date.addingTimeInterval(-10) }
+                context.insert(file)
+            }
+        }
+        if !adding { context.insert(TaskNoteAssociation(id: associationID, taskID: taskID, noteID: noteID)) }
+        try context.save()
+    }
+
+    /// Exercise the same history/reservation producer as the app, with an
+    /// engine-only session and fixture-owned journal/store/files.
+    static func changeCircle(_ root: URL, adding: Bool) async throws -> Bool {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
+        let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")))
+        let library = AtticLibrary(tasks: tasks)
+        let notes = NotesPageController(store: NoteStore(container: container,
+            attachmentFileStore: NoteAttachmentFileStore(rootURL: root.appendingPathComponent("NoteFiles"))),
+            journal: coordinator.journal, defaults: nil, saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        notes.attachUndoRoute(library.undo)
+        // Add is invoked from the ordinary note's active controller session;
+        // activating this engine-only session presents no native surface.
+        if adding, !notes.open(noteID: noteID) { throw WorkspaceFoundationError.unknown }
+        guard let session = notes.workspaceSession(noteID: noteID) else { throw WorkspaceFoundationError.unknown }
+        if adding {
+            guard case .made = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks, workspaceSession: session) else { return false }
+        } else {
+            guard case .removed = await TaskNoteConversion.removeTask(taskID, notes: notes, tasks: tasks, workspaceSession: session) else { return false }
+        }
+        return true
+    }
+
     static func deleteItem(_ root: URL) throws -> Bool {
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))

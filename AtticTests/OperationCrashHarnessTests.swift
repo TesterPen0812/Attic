@@ -71,6 +71,69 @@ final class OperationCrashHarnessTests: XCTestCase {
         }
     }
 
+    /// Owner decision 2026-10-23: both circle changes are atomic across
+    /// replica rows, document projection, retirement/redirect and receipts.
+    func testBAddAndRemoveTasksRealKillMatricesReopenTwice() async throws {
+        for adding in [true, false] {
+            let mode = adding ? "add-to-tasks" : "remove-from-tasks"
+            let staged = adding ? "B-add-association" : "B-remove-tasks"
+            let points = ["K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", staged,
+                          "K3-note", "K4", "K5", "K6-1", "save-then-throw"] + (adding ? ["K3-task", "B-add-published"] : ["B-remove-writing", "B-remove-published"])
+            for point in points {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: root) }
+                let seeded = try await runChild(adding ? "seed-add-to-tasks" : "seed-remove-from-tasks", root: root)
+                XCTAssertEqual(seeded, 73, mode)
+                guard seeded == 73 else { break }
+                let crashed = try await runChild(mode, root: root, point: point == "save-then-throw" ? nil : point,
+                    saveThenThrow: point == "save-then-throw")
+                XCTAssertEqual(crashed, point == "save-then-throw" ? 73 : 86, "\(mode) \(point)")
+                let committed = ["K5", "K6-1", "B-add-published", "B-remove-published", "save-then-throw"].contains(point)
+                for reopen in 0..<2 {
+                    let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                    let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))
+                    try await coordinator.reconcileStartup()
+                    let context = coordinator.freshContext(), message = "\(mode) \(point) #\(reopen)"
+                    let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+                    let notes = try context.fetch(FetchDescriptor<NoteItem>())
+                    let files = try context.fetch(FetchDescriptor<NoteAttachment>())
+                    XCTAssertEqual(tasks.count, adding ? (committed ? 1 : 0) : 4, message)
+                    XCTAssertEqual(notes.count, 2, message); XCTAssertTrue(notes.allSatisfy { $0.deletedAt == nil }, message)
+                    XCTAssertEqual(notes.filter(\.isPinned).count, 1, message)
+                    XCTAssertEqual(files.count, 4, message); XCTAssertTrue(files.allSatisfy { $0.payload == WorkspaceCrashFixture.bytes }, message)
+                    XCTAssertEqual(files.filter { $0.id == WorkspaceCrashFixture.removedFileID && $0.deletedAt != nil }.count, 2, message)
+                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), committed ? 1 : 0, message)
+                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<NoteVersion>()), committed ? 2 : 0, message)
+                    let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>())
+                    if adding {
+                        XCTAssertEqual(links.count, committed ? 1 : 0, message)
+                        XCTAssertTrue(notes.allSatisfy { ($0.taskID != nil) == committed }, message)
+                        for note in notes {
+                            let document = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document })
+                            XCTAssertEqual(document.requires.contains("taskNote"), committed, message)
+                            XCTAssertEqual(Array(document.blocks.dropFirst()), Array(try WorkspaceCrashFixture.original.ordinarySnapshot(title: "Parent").blocks.dropFirst()), message)
+                        }
+                        XCTAssertTrue(tasks.allSatisfy { $0.status == .todo && $0.priority == .none && $0.dueDay == nil && $0.parentID == nil }, message)
+                    } else {
+                        XCTAssertTrue(tasks.allSatisfy { ($0.deletedAt != nil) == committed }, message)
+                        XCTAssertEqual(Set(tasks.compactMap(\.deletionGroupID)).count, committed ? 1 : 0, message)
+                        XCTAssertTrue(links.allSatisfy { ($0.detachedAt != nil) == committed && ($0.detachedPreservationID != nil) == committed }, message)
+                        for note in notes {
+                            let document = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document })
+                            XCTAssertEqual(document.requires.contains("taskNote"), !committed, message)
+                            if committed {
+                                XCTAssertEqual(document.blocks[1].kind, .checklist, message)
+                                XCTAssertEqual(document.blocks[1].text, "Child", message)
+                                XCTAssertEqual(Array(document.blocks.dropFirst(2)), Array(WorkspaceCrashFixture.original.blocks.dropFirst()), message)
+                            } else { XCTAssertEqual(document, WorkspaceCrashFixture.original, message) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     func testC2SecondProcessWriterLeaseRefusesTheSameStoreAndReleasesOnDeath() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

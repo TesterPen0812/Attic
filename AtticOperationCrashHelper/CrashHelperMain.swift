@@ -11,13 +11,17 @@ import SwiftData
 @MainActor
 func runFixture() async throws {
     guard CommandLine.arguments.count == 3,
-          ["launch-probe", "seed-conversion", "convert", "writer-probe", "seed-purge", "purge", "seed-migration", "migrate", "seed-item", "delete-item", "purge-item"].contains(CommandLine.arguments[1]) else { _exit(64) }
+          ["launch-probe", "seed-conversion", "convert", "writer-probe", "seed-purge", "purge", "seed-migration", "migrate", "seed-item", "delete-item", "purge-item", "seed-add-to-tasks", "seed-remove-from-tasks", "add-to-tasks", "remove-from-tasks"].contains(CommandLine.arguments[1]) else { _exit(64) }
     let root = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
         .resolvingSymlinksInPath()
     let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
     guard root.path.hasPrefix(temporary.path + "/"),
           root.lastPathComponent.hasPrefix("AtticOperationCrash-") else { _exit(65) }
     switch CommandLine.arguments[1] {
+    case "seed-add-to-tasks", "seed-remove-from-tasks":
+        try await WorkspaceCrashFixture.seedCircle(root, adding: CommandLine.arguments[1] == "seed-add-to-tasks"); _exit(73)
+    case "add-to-tasks", "remove-from-tasks":
+        guard try await WorkspaceCrashFixture.changeCircle(root, adding: CommandLine.arguments[1] == "add-to-tasks") else { _exit(75) }; _exit(73)
     case "seed-item":
         try await WorkspaceCrashFixture.seedItem(root); _exit(73)
     case "delete-item":
