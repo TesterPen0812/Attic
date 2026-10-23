@@ -711,6 +711,7 @@ final class AtticLibrary {
                 let writing = self?.deletedGroupWritingRefs() ?? [:]
                 let removed = await taskNotePurge(cutoff, nil)
                 self?.invalidatePurgedTaskHistory(removed, writing: writing)
+                self?.forgetPresentation(ofTasks: removed)
             }
         }
         return report
@@ -722,6 +723,15 @@ final class AtticLibrary {
     /// leaves those families in Recently Deleted (tests, previews).
     var taskNotePurge: ((_ cutoff: Date, _ confirmed: [UUID: Date]?) async -> Set<UUID>)?
 
+    /// Where per-item presentation state lives (the item page's expansion):
+    /// a purged task's entry goes with it.
+    var presentationDefaults: UserDefaults? = .standard
+
+    private func forgetPresentation(ofTasks ids: Set<UUID>) {
+        guard let presentationDefaults else { return }
+        for id in ids { presentationDefaults.removeObject(forKey: TaskNotePageModel.expandKey(id)) }
+    }
+
     /// Empty Recently Deleted's second half: the confirmed deleted tasks
     /// that own notes, through the coordinated purge (Phase 3). The rest of
     /// the selection was removed synchronously by `emptyRecentlyDeleted`.
@@ -731,6 +741,7 @@ final class AtticLibrary {
         let writing = deletedGroupWritingRefs()
         let removed = await taskNotePurge(.distantFuture, selection.items(.task))
         invalidatePurgedTaskHistory(removed, writing: writing)
+        forgetPresentation(ofTasks: removed)
         return removed
     }
 
@@ -806,6 +817,7 @@ final class AtticLibrary {
         undo.invalidate(Set(report.taskIDs.map { AtticItemRef(.task, $0) }
             + report.noteIDs.map { AtticItemRef(.note, $0) }
             + report.canvasIDs.map { AtticItemRef(.canvas, $0) }))
+        forgetPresentation(ofTasks: report.taskIDs)
         return report
     }
 
