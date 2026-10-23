@@ -26,6 +26,51 @@ final class OperationCrashHarnessTests: XCTestCase {
         return child.terminationStatus
     }
 
+    /// Owner decision 2026-10-23: process death cannot split a whole item.
+    func testAWholeItemDeleteAndPurgeCrashMatricesReopenTwice() async throws {
+        let deletePoints = ["A-delete-tasks", "A-delete-writing", "K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", "K4", "K5", "A-delete-published", "save-then-throw"]
+        let purgePoints = ["K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", "A-purge-staged", "K4", "K5", "K6-1", "K7", "K8-before-unlink", "save-then-throw"]
+        for mode in ["delete-item", "purge-item"] {
+            for point in mode == "delete-item" ? deletePoints : purgePoints {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: root) }
+                let seed = try await runChild("seed-item", root: root); XCTAssertEqual(seed, 73, point)
+                if mode == "purge-item" {
+                    let deleted = try await runChild("delete-item", root: root); XCTAssertEqual(deleted, 73, point)
+                }
+                let result = try await runChild(mode, root: root, point: point == "save-then-throw" ? nil : point,
+                    saveThenThrow: point == "save-then-throw")
+                XCTAssertEqual(result, point == "save-then-throw" ? 73 : 86, "\(mode) \(point)")
+                let committed = ["K5", "K6-1", "K7", "K8-before-unlink", "A-delete-published", "save-then-throw"].contains(point)
+                for reopen in 0..<2 {
+                    let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                    let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))
+                    try await coordinator.reconcileStartup()
+                    let context = coordinator.freshContext()
+                    let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+                    let notes = try context.fetch(FetchDescriptor<NoteItem>())
+                    let files = try context.fetch(FetchDescriptor<NoteAttachment>())
+                    let purged = mode == "purge-item" && committed
+                    XCTAssertEqual(tasks.count, purged ? 0 : 4, "\(mode) \(point) #\(reopen)")
+                    XCTAssertEqual(notes.count, purged ? 0 : 4)
+                    XCTAssertEqual(files.count, purged ? 0 : 4)
+                    if !purged {
+                        let deleted = mode == "purge-item" || committed
+                        XCTAssertTrue(tasks.allSatisfy { ($0.deletedAt != nil) == deleted })
+                        XCTAssertTrue(notes.allSatisfy { ($0.deletedAt != nil) == deleted })
+                        let groups = Set(tasks.compactMap(\.deletionGroupID) + notes.compactMap(\.deletionGroupID))
+                        XCTAssertEqual(groups.count, deleted ? 1 : 0)
+                        XCTAssertTrue(notes.allSatisfy { $0.content == (try? PreparedNoteDocument(WorkspaceCrashFixture.original).content) })
+                        XCTAssertTrue(files.allSatisfy { $0.payload == WorkspaceCrashFixture.bytes })
+                        XCTAssertEqual(files.filter { $0.id == WorkspaceCrashFixture.removedFileID && $0.deletedAt != nil }.count, 2)
+                    }
+                    XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), (mode == "purge-item" ? 1 : 0) + (committed ? 1 : 0))
+                }
+            }
+        }
+    }
+
     func testC2SecondProcessWriterLeaseRefusesTheSameStoreAndReleasesOnDeath() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -177,11 +222,12 @@ final class OperationCrashHarnessTests: XCTestCase {
                 XCTAssertNil(note.taskID); XCTAssertEqual(note.title, "Parent")
                 let doc = try XCTUnwrap(note.content.flatMap { NoteContentCodec.decode($0).document })
                 XCTAssertFalse(doc.requires.contains("taskNote"))
-                XCTAssertTrue(doc.blocks[1].text.hasPrefix("Was a task · "))
-                XCTAssertEqual(doc.blocks[2].kind, .checklist)
-                XCTAssertEqual(doc.blocks[2].text, "Child")
-                XCTAssertFalse(doc.blocks[2].checked)
-                XCTAssertEqual(doc.blocks[3].text, "Retain body", "body follows the preserved summary and child checkbox")
+                // 2026-10-23: conversion drops task-only completion metadata.
+                XCTAssertFalse(doc.blocks.contains { $0.text.hasPrefix("Was a task") })
+                XCTAssertEqual(doc.blocks[1].kind, .checklist)
+                XCTAssertEqual(doc.blocks[1].text, "Child")
+                XCTAssertFalse(doc.blocks[1].checked)
+                XCTAssertEqual(doc.blocks[2].text, "Retain body", "body follows the preserved child checkbox")
                 let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
                 var remaining = 0
                 for reference in references { if try await files.verifiedURL(for: reference) != nil { remaining += 1 } }

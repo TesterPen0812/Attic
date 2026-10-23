@@ -143,5 +143,49 @@ enum WorkspaceCrashFixture {
             WorkspaceCrashHook.reach("K3-association")
         }, publication: .init(steps: (0..<5).map { _ in { _ in } }))
     }
+    static let alternateID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47438")!
+    static let removedFileID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47439")!
+    static func seedItem(_ root: URL) async throws {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let context = ModelContext(container), date = Date(timeIntervalSince1970: 1_700_000_000)
+        let document = try PreparedNoteDocument(original)
+        for _ in 0..<2 {
+            let parent = TaskItem(id: taskID, title: "Parent", createdAt: date, manualOrder: 42)
+            parent.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(parent)
+            let child = TaskItem(id: childID, title: "Child", createdAt: date, parentID: taskID)
+            child.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(child)
+            for id in [noteID, alternateID] {
+                let row = NoteItem(id: id, createdAt: date); row.taskID = taskID
+                NoteStore.stageDocumentContent(document, format: 1, on: [row], timestamp: date, revision: 0, revisionID: versionID)
+                context.insert(row)
+            }
+            for id in [fileID, removedFileID] {
+                let file = NoteAttachment(id: id, noteID: noteID, originalFilename: "fixture.txt", byteCount: Int64(bytes.count),
+                    sortIndex: id == fileID ? 0 : 1, contentDigest: staged.digest, createdAt: date, payload: bytes)
+                if id == removedFileID { file.deletedAt = date.addingTimeInterval(-10) }
+                context.insert(file)
+            }
+        }
+        try context.save()
+    }
+    static func deleteItem(_ root: URL) throws -> Bool {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
+        let store = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")))
+        let result = store.delete(taskIDs: [taskID])
+        withExtendedLifetime(coordinator) { WorkspaceCrashHook.reach("A-delete-published") }
+        return result
+    }
+    static func purgeItem(_ root: URL) async throws -> WorkspaceOperationCoordinator.Outcome {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
+        try await coordinator.reconcileStartup()
+        return await WorkspacePurge.purge(rootID: taskID, before: .distantFuture, coordinator: coordinator,
+            files: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")), inventory: { .init(generation: 0) },
+            publication: .init(steps: [{ _ in }])).outcome
+    }
+
 }
 #endif
