@@ -424,6 +424,23 @@ final class TaskFilesSliceTests: XCTestCase {
         XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(taskID)).undoName, "Remove from Tasks")
     }
 
+    func testBAcceptedAgentRemoveClosesOpenPageAndHandsOffOrdinaryWriting() async throws {
+        let (id, noteID) = try await taskWithOwnNote(), presenter = try open(id)
+        notes.taskNotePresenter = presenter
+        var handoff: (UUID, UUID)?
+        notes.taskNoteBecameOrdinary = { handoff = ($0, $1) }
+        let (pending, failed) = try await call(agent(), "remove_from_tasks", ["task_id": id.uuidString])
+        XCTAssertFalse(failed, pending); XCTAssertTrue(pending.contains("pending"), pending)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        let began = await notes.beginProposalReview(id: proposal.id); XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal(); XCTAssertTrue(accepted)
+        XCTAssertNil(tasks.task(withID: id))
+        XCTAssertNil(presenter.lease)
+        XCTAssertNil(notes.taskNotePresenter)
+        XCTAssertEqual(notes.active?.noteID, noteID)
+        XCTAssertEqual(handoff?.0, id); XCTAssertEqual(handoff?.1, noteID)
+    }
+
     private func ownNoteTask(_ id: UUID) -> UUID? {
         try? ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id }?.taskID
     }

@@ -659,7 +659,7 @@ struct PanelRootLayout: Layout {
 
 
 extension AtticPanelView {
-    @MainActor private static func removeFromTasks(_ taskID: UUID, pages: NotesPageController,
+    @MainActor static func removeFromTasks(_ taskID: UUID, pages: NotesPageController,
         tasks: TaskStore, uiState: PanelUIState, toasts: PanelToastCenter?, moveFilesFirst: Bool = false) async {
         func report(_ reason: String) {
             toasts?.show(reason, actionTitle: String(localized: "Retry"), answersUndoKey: false) { [weak pages, weak tasks, weak uiState, weak toasts] in
@@ -683,13 +683,6 @@ extension AtticPanelView {
         case let .removed(noteID):
             let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
             let entry = history.route.undoStepID(in: history.historyID)
-            // The committed ordinary projection is already installed while
-            // input is reserved; durable close preserves any queued writing.
-            if let open, !(await open.close()) { return }
-            TaskNoteWindows.shared.finishHandoff(taskID)
-            TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState, controller: pages)
-            _ = pages.open(noteID: noteID)
-            uiState.switchPage(to: .notes, motion: .instant)
             toasts?.show(String(localized: "Removed from Tasks"), answersUndoKey: false, performingAsync: { [weak pages, weak history, weak uiState] in
                 guard let pages, let history, let uiState, let entry,
                       history.route.undoStepID(in: history.historyID) == entry else { return .applied }
@@ -700,6 +693,14 @@ extension AtticPanelView {
                 uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
                 return .applied
             })
+            // The committed ordinary projection is already installed while
+            // input is reserved; durable close preserves any queued writing.
+            if let open, !(await open.close()) { return }
+            TaskNoteWindows.shared.finishHandoff(taskID)
+            TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState, controller: pages)
+            _ = pages.open(noteID: noteID)
+            uiState.switchPage(to: .notes, motion: .instant)
+
         case let .refused(reason):
             if reason == TaskNoteConversion.earlierFilesReason {
                 toasts?.show(reason, actionTitle: String(localized: "Move Files into Note"), answersUndoKey: false) { [weak pages, weak tasks, weak uiState, weak toasts] in

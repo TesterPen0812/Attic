@@ -248,7 +248,9 @@ extension AgentTaskTools {
         case .remove_from_tasks:
             return try await withPage(try uuid(intent.arguments, "task_id"), notes: notes) { presenter in
                 switch await TaskNoteConversion.removeTask(presenter.taskID, notes: notes, tasks: store, workspaceSession: presenter.session) {
-                case let .removed(noteID): return try encodeJSON(["ok": true, "note_id": noteID.uuidString])
+                case let .removed(noteID):
+                    await notes.retireConvertedNote(noteID)
+                    return try encodeJSON(["ok": true, "note_id": noteID.uuidString])
                 case let .refused(reason): throw AgentToolError.notPerformed(reason)
                 }
             }

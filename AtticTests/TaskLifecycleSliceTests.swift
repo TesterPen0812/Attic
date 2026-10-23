@@ -2009,6 +2009,28 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(library.undo.canUndo(in: .note(noteID)))
     }
 
+    func testBCommittedRemoveStillShowsUndoWhenCloseRefuses() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let uiState = PanelUIState(), toasts = PanelToastCenter()
+        uiState.openTaskNote(id, from: .tasks, backTitle: "Back")
+        notes.taskNotePresenter = presenter
+        coordinator.save = { context in
+            let removing = context.changedModelsArray.contains { ($0 as? NoteItem)?.id == session.noteID && ($0 as? NoteItem)?.taskID == nil }
+            try context.save()
+            if removing { presenter.model.newSubtaskText = "Late child draft" }
+        }
+        defer { coordinator.save = { try $0.save() }; presenter.model.newSubtaskText = "" }
+        await AtticPanelView.removeFromTasks(id, pages: notes, tasks: tasks, uiState: uiState, toasts: toasts)
+        XCTAssertNil(tasks.task(withID: id), "conversion committed")
+        XCTAssertNotNil(presenter.lease, "the busy close must refuse")
+        XCTAssertEqual(toasts.current?.message, "Removed from Tasks")
+        XCTAssertEqual(toasts.current?.actionTitle, "Undo")
+        presenter.model.newSubtaskText = ""
+        coordinator.save = { try $0.save() }
+        await notes.waitForRecoveryWork()
+        _ = await presenter.page.history.retryPublication(using: coordinator)
+    }
+
     func testBCommandTableNamesAndHidesBothCommandsForSubtasksAndBareTasks() {
         func names(_ id: UUID?, writing: Bool, child: Bool) -> [String] {
             TaskNoteConversion.commands(taskID: id, hasWriting: writing, isSubtask: child, add: {}, remove: {}).map(\.title)
