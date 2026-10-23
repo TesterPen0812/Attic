@@ -72,6 +72,116 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         XCTAssertFalse(Tracker.closes(progress: 60, velocity: -200), "flung back from past the distance: springs back")
     }
 
+    // MARK: Slow drags (owner, 10-23: "it slips, and hides quickly")
+
+    /// Right-docked, classic scrolling. `moves` are (seconds since the last
+    /// event, points toward the edge); the lift comes `lift` seconds after
+    /// the last of them.
+    private func release(_ moves: [(TimeInterval, CGFloat)], lift: TimeInterval) -> (PanelTrackpadDismissUpdate, CGFloat) {
+        var tracker = Tracker()
+        var time: TimeInterval = 100
+        _ = tracker.update(sample: .init(deltaX: 0, deltaY: 0, phase: .began, isPrecise: true,
+                                         isDirectionInvertedFromDevice: false, time: time), dockedCorner: .topRight)
+        var total: CGFloat = 0
+        for (gap, delta) in moves {
+            time += gap
+            total += delta
+            _ = tracker.update(sample: .init(deltaX: -delta, deltaY: 0, phase: .changed, isPrecise: true,
+                                             isDirectionInvertedFromDevice: false, time: time), dockedCorner: .topRight)
+        }
+        let update = tracker.update(sample: .init(deltaX: 0, deltaY: 0, phase: .ended, isPrecise: true,
+                                                  isDirectionInvertedFromDevice: false, time: time + lift),
+                                    dockedCorner: .topRight)
+        return (update, total)
+    }
+
+    /// A drag at `speed` to `distance`, as a trackpad reports it: every
+    /// 1/120 s with fractional deltas, or (`quantized`) only once a whole
+    /// point has built up.
+    private func drag(_ distance: CGFloat, at speed: CGFloat, quantized: Bool = false) -> [(TimeInterval, CGFloat)] {
+        let step: TimeInterval = 1.0 / 120
+        var moves: [(TimeInterval, CGFloat)] = []
+        var travelled: CGFloat = 0, pending: CGFloat = 0, gap: TimeInterval = 0
+        while travelled < distance - 0.001 {
+            let delta = min(speed * CGFloat(step), distance - travelled)
+            travelled += delta
+            gap += step
+            pending += delta
+            if !quantized || pending >= 1 || travelled >= distance - 0.001 {
+                moves.append((gap, pending))
+                pending = 0
+                gap = 0
+            }
+        }
+        return moves
+    }
+
+    /// A slow drag (30–120 pt/s) never closes short of 48 pt, however the
+    /// fingers lift: smoothly, after slowing with a last small burst as the
+    /// fingers leave the glass, after a pause and a nudge, or with tiny
+    /// reversals on the way. Before the fix, the release's speed was a
+    /// handful of events over the time since the first of them (at least
+    /// 1/120 s), so a nudge of a few points just before the lift read as
+    /// hundreds of points a second and projected the panel shut.
+    func testASlowDragNeverClosesShortOfTheDistance() {
+        for speed in [CGFloat(30), 60, 90, 120] {
+            for distance in [CGFloat(30), 38, 44] {
+                var streams: [(String, [(TimeInterval, CGFloat)], TimeInterval)] = [
+                    ("smooth", drag(distance, at: speed), 1.0 / 120),
+                    ("quantized", drag(distance, at: speed, quantized: true), 0.008)
+                ]
+                // Slowing to half speed for the last 100 ms, then a 3 pt
+                // burst as the fingers lift.
+                let slowing = drag(distance - 3 - speed * 0.05, at: speed) + drag(speed * 0.05, at: speed / 2)
+                streams.append(("lift burst", slowing + [(0.006, 3)], 0.006))
+                // A pause mid-drag, then a nudge and the lift.
+                streams.append(("pause, nudge", drag(distance - 3, at: speed) + [(0.25, 3)], 0.008))
+                streams.append(("pause, two nudges", drag(distance - 4, at: speed) + [(0.3, 1.5), (0.008, 2.5)], 0.008))
+                // Tiny reversals on the way.
+                var jitter = drag(distance - 2, at: speed)
+                for index in jitter.indices where index % 6 == 3 { jitter[index].1 -= 0.6; jitter[index + 1 < jitter.count ? index + 1 : index].1 += 0.6 }
+                streams.append(("reversals", jitter + [(0.008, 2)], 0.008))
+                for (name, moves, lift) in streams {
+                    let (update, total) = release(moves, lift: lift)
+                    XCTAssertLessThan(total, Tracker.minimumDistance, "\(name): the stream stays short of the distance")
+                    XCTAssertEqual(update, .passThrough, "\(name): \(distance) pt at \(speed) pt/s")
+                }
+            }
+        }
+    }
+
+    /// The same drags past the distance still close, and a real flick that
+    /// speeds up from rest (not a constant speed) still closes short of it.
+    func testADragPastTheDistanceAndARealFlickStillClose() {
+        for speed in [CGFloat(30), 120] {
+            XCTAssertEqual(release(drag(50, at: speed), lift: 0.3).0, .requestHide, "\(speed) pt/s past 48 pt, after a rest")
+            XCTAssertEqual(release(drag(50, at: speed, quantized: true) + [(0.2, 2)], lift: 0.008).0, .requestHide)
+        }
+        // From rest to about 600 pt/s over 60 ms: 30 pt.
+        var flick: [(TimeInterval, CGFloat)] = []
+        for frame in 1...8 { flick.append((1.0 / 120, CGFloat(frame) * 0.68)) }
+        let (update, total) = release(flick, lift: 1.0 / 120)
+        XCTAssertLessThan(total, 30)
+        XCTAssertEqual(update, .requestHide, "an accelerating flick of \(total) pt closes")
+        // The borderline flicks (g6: 35–47 pt at 430–470 pt/s) as fingers
+        // make them: up to speed over 25 ms, at speed, easing a little as
+        // they lift; every 1/120 s or only whole points; after a rest.
+        for (distance, speed) in [(CGFloat(35), CGFloat(430)), (35, 470), (40, 445), (43, 458), (47, 430), (47, 470)] {
+            let ramp = speed / 2 * 0.025, easing = speed * 0.8 * 0.01
+            for quantized in [false, true] {
+                let moves = drag(ramp, at: speed / 2, quantized: quantized)
+                    + drag(distance - ramp - easing, at: speed, quantized: quantized)
+                    + drag(easing, at: speed * 0.8, quantized: quantized)
+                for rest in [0.0, 0.3] {
+                    let rested = rest > 0 ? [(rest, CGFloat(0))] + moves : moves
+                    let (update, total) = release(rested, lift: 1.0 / 120)
+                    XCTAssertEqual(total, distance, accuracy: 0.01)
+                    XCTAssertEqual(update, .requestHide, "\(distance) pt at \(speed) pt/s, quantized \(quantized), rest \(rest) s")
+                }
+            }
+        }
+    }
+
     // MARK: Takeover, as the tracker decides it
 
     func testATakeoverGoesEitherWayAndDecidesOnThePanelsPosition() {
@@ -177,12 +287,15 @@ final class PanelSwipeTakeoverTests: XCTestCase {
     /// is toward the edge with classic scrolling; natural scrolling (CI's
     /// runners) reports the other sign, so it is flipped there. Over the
     /// header, like a real swipe.
-    private func send(_ dx: Int32, phase: Int64, to panel: AtticPanel) throws {
+    private func send(_ dx: Int32, phase: Int64, momentum: Int64 = 0, to panel: AtticPanel) throws {
         func event(_ dx: Int32) throws -> CGEvent {
             let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: dx, wheel3: 0))
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
             event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
-            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum)
+            // A real event's time (a made one has none, and the release's
+            // speed is timed by the events' own times).
+            event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
             let point = CGPoint(x: panel.frame.width / 2, y: panel.frame.height - AtticStyle.panelElevationMargin - 20)
             let screen = panel.convertPoint(toScreen: point)
             event.location = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.height ?? 0) - screen.y)
@@ -201,6 +314,30 @@ final class PanelSwipeTakeoverTests: XCTestCase {
         guard lifts else { return }
         spin(1.0 / 120)
         try send(0, phase: 4, to: panel)
+    }
+
+    /// On a real panel: a slow drag to 40 pt, a pause, a 3 pt nudge as the
+    /// fingers lift, then the trackpad's momentum events (strong, as a
+    /// real trackpad sends after a lift) springs back and stays open.
+    func testASlowDragWithANudgeAndMomentumSpringsBack() throws {
+        for mode in [PanelHideAnimation.slide, .swoop] {
+            let rig = try makeRig(mode)
+            defer { close(rig) }
+            try send(0, phase: 1, to: rig.panel)
+            for _ in 0..<40 { spin(1.0 / 60); try send(-1, phase: 2, to: rig.panel) }
+            XCTAssertGreaterThan(rig.controller.displayedProgressForProbe, 0.05, "\(mode): the panel follows the drag")
+            spin(0.25)
+            try send(-3, phase: 2, to: rig.panel)
+            spin(0.008)
+            try send(0, phase: 4, to: rig.panel)
+            // Momentum: began, a run of strong changes, ended.
+            try send(-8, phase: 0, momentum: 1, to: rig.panel)
+            for _ in 0..<12 { spin(1.0 / 120); try send(-8, phase: 0, momentum: 2, to: rig.panel) }
+            try send(0, phase: 0, momentum: 3, to: rig.panel)
+            spin(0.8)
+            XCTAssertTrue(rig.panel.isVisible, "\(mode): 43 pt slowly, then a nudge: it springs back")
+            XCTAssertEqual(rig.controller.displayedProgressForProbe, 0, accuracy: 0.01, "\(mode): back at rest")
+        }
     }
 
     /// A pull of 40 pt that rests and lifts springs back; a new swipe toward
