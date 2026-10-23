@@ -113,6 +113,158 @@ final class OneItemLifecycleTests: XCTestCase {
         XCTAssertTrue(try rows().1.isEmpty)
     }
 
+    func testGlobalTagRenameDoesNotStrandGroupPurge() async throws {
+        try await assertTagEditedPurge(legacy: false)
+    }
+
+    func testGlobalTagRenameDoesNotStrandLegacyPurge() async throws {
+        try await assertTagEditedPurge(legacy: true)
+    }
+
+    private func assertTagEditedPurge(legacy: Bool) async throws {
+        let context = WorkspaceLegacyBridge.context(for: container)
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.deletedAt == nil { row.tags = ["before"] }
+        try context.save(); tasks.refresh()
+        if legacy {
+            try TaskStore.stageSoftDeletion(in: context, taskID: root, preservationID: UUID(), timestamp: date)
+            try context.save(); tasks.refresh()
+        } else { XCTAssertTrue(library.deleteListedTasks([root]).isApplied) }
+        XCTAssertTrue(library.renameTag("before", to: "after"))
+        XCTAssertTrue(try rows().0.filter { $0.id != earlier }.allSatisfy { $0.tags == ["after"] })
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed)
+        XCTAssertEqual(Set(try rows().0.map(\.id)), [earlier])
+    }
+
+    func testTagEditExemptionStillRefusesOtherTaskDrift() async throws {
+        for legacy in [false, true] {
+            let context = WorkspaceLegacyBridge.context(for: container)
+            if legacy {
+                // Reuse the restored fixture for the independent path.
+                XCTAssertTrue(library.restore(.init(.task, root)))
+                try TaskStore.stageSoftDeletion(in: context, taskID: root, preservationID: UUID(), timestamp: date)
+                try context.save()
+            } else { XCTAssertTrue(library.deleteListedTasks([root]).isApplied) }
+            for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == child { row.title = "Changed child" }
+            try context.save()
+            let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+                coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+            XCTAssertEqual(result.outcome, .conflict)
+            XCTAssertEqual(try rows().0.count, 6)
+            // Restore requires captured fields too, so reset the fixture's test-only drift.
+            for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == child { row.title = "Child" }
+            try context.save()
+        }
+    }
+
+    func testRestoredIndependentWritingIsMaterializedByLaterTaskGroupPurge() async throws {
+        let context = WorkspaceLegacyBridge.context(for: container)
+        let independent = UUID()
+        try WorkspaceItemLifecycle.stageWritingDeletion(
+            try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == note },
+            group: independent, timestamp: date.addingTimeInterval(-10), in: context)
+        try context.save(); notes.refresh()
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        XCTAssertTrue(library.restore(.init(.note, note)))
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed)
+        for row in try rows().1 {
+            XCTAssertEqual(row.id, note); XCTAssertNil(row.taskID)
+            let document = try XCTUnwrap(row.content.flatMap { NoteContentCodec.decode($0).document })
+            XCTAssertEqual(document.blocks.map(\.text), ["Parent", "Child", "Writing"])
+            XCTAssertFalse(document.requires.contains("taskNote"))
+        }
+    }
+
+    func testLateLiveWritingIsMaterializedInsideGroupPurge() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = WorkspaceLegacyBridge.context(for: container)
+        let late = NoteItem(title: "Stale title")
+        late.taskID = root
+        late.content = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Stale title"), .text("Late writing")], requires: ["taskNote"]))
+        context.insert(late); try context.save()
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .committed)
+        let surviving = try rows().1
+        XCTAssertEqual(surviving.map(\.id), [late.id])
+        let row = try XCTUnwrap(surviving.first { $0.id == late.id })
+        XCTAssertNil(row.taskID)
+        let document = try XCTUnwrap(row.content.flatMap { NoteContentCodec.decode($0).document })
+        XCTAssertFalse(document.requires.contains("taskNote"))
+        XCTAssertEqual(document.blocks.map(\.text), ["Parent", "Child", "Late writing"])
+        XCTAssertEqual(document.blocks[1].kind, .checklist)
+    }
+
+    func testLateLiveWritingPurgeSaveFailureKeepsOriginalAndWholeGroup() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = WorkspaceLegacyBridge.context(for: container)
+        let late = NoteItem(title: "Late writing"); late.taskID = root
+        context.insert(late); try context.save()
+        let before = late.content
+        enum Failure: Error { case save }
+        coordinator.save = { _ in throw Failure.save }
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .notCommitted)
+        XCTAssertEqual(try rows().0.count, 6)
+        let survivor = try XCTUnwrap(try rows().1.first { $0.id == late.id })
+        XCTAssertEqual(survivor.taskID, root); XCTAssertEqual(survivor.content, before)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteVersion>()), 0)
+    }
+
+    func testLateStaleAssociationCannotMaterializeUnownedWriting() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = WorkspaceLegacyBridge.context(for: container)
+        let late = NoteItem(title: "Unrelated ordinary writing")
+        context.insert(late)
+        let link = TaskNoteAssociation(taskID: root, noteID: late.id)
+        link.noteGeneration = late.associationGeneration + 1
+        context.insert(link); try context.save()
+        let before = late.content
+        let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(result.outcome, .conflict)
+        XCTAssertEqual(try rows().0.count, 6)
+        XCTAssertEqual(try rows().1.first { $0.id == late.id }?.content, before)
+    }
+
+    func testLateWritingStillRefusesBlockedOwnershipAndDivergentReplicas() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let context = WorkspaceLegacyBridge.context(for: container)
+        let late = NoteItem(title: "Late writing"); late.taskID = root
+        context.insert(late); try context.save()
+        let blocked = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0, blockedNotes: [late.id]) })
+        XCTAssertEqual(blocked.outcome, .conflict)
+        let replica = NoteItem(id: late.id, title: "Different writing"); replica.taskID = root
+        context.insert(replica); try context.save()
+        let divergent = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+            coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+        XCTAssertEqual(divergent.outcome, .conflict)
+        XCTAssertEqual(try rows().0.count, 6); XCTAssertEqual(try rows().1.count, 6)
+    }
+
+    func testCoordinatedEmptyInvalidatesPurgedWritingHistory() async throws {
+        XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
+        let id = note
+        library.undo.perform(in: .note(id)) {
+            UndoStep(name: "Writing", items: { [.init(.note, id)] }, undo: { true }, redo: { true })
+        }
+        XCTAssertTrue(library.undo.canUndo(in: .note(id)))
+        library.taskNotePurge = { [self] _, _ in
+            let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
+                coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
+            XCTAssertEqual(result.outcome, .committed)
+            return result.removedIDs
+        }
+        let removed = await library.emptyTaskNoteFamilies(.init(items: library.recentlyDeleted()))
+        XCTAssertEqual(removed, [root, child])
+        XCTAssertFalse(library.undo.canUndo(in: .note(id)), "purging the group invalidates writing refs too")
+    }
+
     func testDivergentWritingReplicaKeepsEntirePurgeGroup() async throws {
         XCTAssertTrue(library.deleteListedTasks([root]).isApplied)
         let context = ModelContext(container)

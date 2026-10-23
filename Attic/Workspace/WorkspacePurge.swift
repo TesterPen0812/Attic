@@ -69,6 +69,14 @@ enum WorkspacePurge {
         var retentionReason: String? = nil
         var retainedByteReasons: [UUID: String] = [:]
     }
+    /// Global tag edits include deleted rows. No other captured task field
+    /// may drift before Restore or destructive collection.
+    static func matchesTaskCapture(_ fields: [String: Data], _ captured: [String: Data]) -> Bool {
+        let tagFields: Set<String> = ["tagsRaw", "updatedAt"]
+        return fields.filter { !tagFields.contains($0.key) }
+            == captured.filter { !tagFields.contains($0.key) }
+    }
+
     static func hasOwnNotesOrAssociations(_ taskIDs: Set<UUID>, in context: ModelContext) throws -> Bool {
         let schema = Set(context.container.schema.entities.map(\.name))
         let notes = schema.contains("NoteItem") ? try context.fetch(FetchDescriptor<NoteItem>()) : []
@@ -175,7 +183,7 @@ enum WorkspacePurge {
         if let rows = try? probe.fetch(FetchDescriptor<TaskItem>()),
            let group = rows.first(where: { $0.id == rootID })?.deletionGroupID {
             return await WorkspaceItemLifecycle.purge(group: group, before: cutoff, confirmed: confirmed,
-                coordinator: coordinator, files: files, inventory: inventory, publication: publication)
+                coordinator: coordinator, files: files, inventory: inventory, publication: publication, materialize: materialize)
         }
         var checkpoint: (UUID, NoteRecoveryClaim)?
         func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict) -> Result {
@@ -299,7 +307,7 @@ enum WorkspacePurge {
                     guard captured.rootID == snapshot.rootID,
                           captured.members.map(\.id) == snapshot.members.map(\.id),
                           captured.members.allSatisfy({ member in
-                              snapshot.members.first(where: { $0.id == member.id })?.fields == member.fields
+                              snapshot.members.first(where: { $0.id == member.id }).map { matchesTaskCapture($0.fields, member.fields) } == true
                                   && (member.replicas ?? [member.fields]).allSatisfy { $0 == member.fields }
                           }),
                           captured.originals.map(\.reference) == snapshot.originals.map(\.reference),

@@ -2,8 +2,8 @@ import Foundation
 import SwiftData
 import SwiftUI
 
-/// Whole-item groups are purged atomically. Pre-group independent task
-/// deletions alone use the legacy Remove from Tasks materialization.
+/// Whole-item groups are purged atomically. Surviving independent writing
+/// uses the same Remove from Tasks materialization as legacy deletions.
 /// Busy, divergent or ambiguously owned families stay for a later cleanup.
 @MainActor
 enum TaskNotePurge {

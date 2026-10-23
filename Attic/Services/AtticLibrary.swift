@@ -706,8 +706,9 @@ final class AtticLibrary {
         // (Phase 3), after the legacy collector, without holding it up.
         if let taskNotePurge {
             Task { @MainActor [weak self] in
+                let writing = self?.deletedGroupWritingRefs() ?? [:]
                 let removed = await taskNotePurge(cutoff, nil)
-                self?.undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+                self?.invalidatePurgedTaskHistory(removed, writing: writing)
             }
         }
         return report
@@ -725,9 +726,32 @@ final class AtticLibrary {
     @discardableResult
     func emptyTaskNoteFamilies(_ selection: RecentlyDeletedSelection) async -> Set<UUID> {
         guard !selection.isEmpty, let taskNotePurge else { return [] }
+        let writing = deletedGroupWritingRefs()
         let removed = await taskNotePurge(.distantFuture, selection.items(.task))
-        undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+        invalidatePurgedTaskHistory(removed, writing: writing)
         return removed
+    }
+
+    /// Capture group writing before the coordinated purge removes its rows.
+    /// Surviving independent writing keeps its materialization history.
+    private func deletedGroupWritingRefs() -> [UUID: Set<AtticItemRef>] {
+        let context = ModelContext(container)
+        guard let tasks = try? context.fetch(FetchDescriptor<TaskItem>()),
+              WorkspaceItemLifecycle.has("NoteItem", in: context),
+              let notes = try? context.fetch(FetchDescriptor<NoteItem>()) else { return [:] }
+        let byGroup = Dictionary(grouping: notes.filter { $0.deletionGroupID != nil }, by: { $0.deletionGroupID! })
+        var refs: [UUID: Set<AtticItemRef>] = [:]
+        for task in tasks {
+            guard let group = task.deletionGroupID else { continue }
+            refs[task.id, default: []].formUnion((byGroup[group] ?? []).map { .init(.note, $0.id) })
+        }
+        return refs
+    }
+
+    private func invalidatePurgedTaskHistory(_ removed: Set<UUID>, writing: [UUID: Set<AtticItemRef>]) {
+        var refs = Set(removed.map { AtticItemRef(.task, $0) })
+        for id in removed { refs.formUnion(writing[id] ?? []) }
+        undo.invalidate(refs)
     }
 
     /// Empties Recently Deleted: removes for good exactly the deletions the
