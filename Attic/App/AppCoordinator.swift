@@ -681,9 +681,9 @@ final class AppCoordinator: ObservableObject {
         // coordinated path, through any open task page (§ 2.7.2).
         // Weak: the library must never keep an unshown coordinator's stores
         // and editors alive.
-        library.taskNotePurge = { [weak store, weak noteDraft] cutoff, confirmed in
+        library.taskNotePurge = { [weak store, weak noteDraft] cutoff, confirmed, confirmedNotes in
             guard let store, let noteDraft else { return [] }
-            return await TaskNotePurge.run(tasks: store, notes: noteDraft.pages, before: cutoff, confirmed: confirmed).removedTaskIDs
+            return await TaskNotePurge.run(tasks: store, notes: noteDraft.pages, before: cutoff, confirmed: confirmed, confirmedNotes: confirmedNotes).removedTaskIDs
         }
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController

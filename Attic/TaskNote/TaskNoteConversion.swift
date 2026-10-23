@@ -326,7 +326,18 @@ extension TaskNoteConversion {
             row.deletionGroupID = group; row.deletionMembersRaw = members
         }
         WorkspaceCrashHook.reach("B-remove-tasks")
-        try WorkspacePurge.stageDeletionCapture(id: preservationID, rootID: taskID, rows: rows,
+        // Earlier independent deletions keep every field, but their immutable
+        // replicas join this family's eventual purge. Undo changes only `rows`.
+        let capturedIDs = Set(all.filter { $0.id == taskID || $0.parentID == taskID }.map(\.id))
+        let captured = all.filter { capturedIDs.contains($0.id) }
+        guard captured.allSatisfy({ $0.deletedAt != nil && ($0.id == taskID ? $0.parentID == nil : $0.parentID == taskID) }) else {
+            throw WorkspaceFoundationError.conflict
+        }
+        for root in Set(captured.filter { !ids.contains($0.id) }.compactMap(\.deletionRootID)) {
+            guard let earlier = try TaskStore.guardedDeletedFamily(in: context, rootID: root, before: .distantFuture),
+                  Set(earlier.map(\.id)).isSubset(of: capturedIDs) else { throw WorkspaceFoundationError.conflict }
+        }
+        try WorkspacePurge.stageDeletionCapture(id: preservationID, rootID: taskID, rows: captured,
             deletedAt: date, in: context, provenance: "circle removed")
     }
 

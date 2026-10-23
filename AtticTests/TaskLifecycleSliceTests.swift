@@ -1915,9 +1915,98 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(try WorkspaceModelFields.read(try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == earlier.id })), originalFields)
         let redone = await presenter.page.history.replay(redo: true); XCTAssertEqual(redone, .applied)
         await close(presenter); presenter.page.history.clear()
-        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
-        XCTAssertTrue(report.removedTaskIDs.contains(earlier.id), "a hidden earlier deletion must go with its retired family: \(report)")
+        let result = await WorkspacePurge.purge(rootID: id, before: .distantFuture,
+            coordinator: coordinator, files: tasks.taskImageFiles,
+            inventory: { self.notes.taskNotePurgeInventory(ownNotes: []) })
+        XCTAssertEqual(result.outcome, .committed)
+        XCTAssertTrue(result.removedIDs.contains(id))
+        XCTAssertTrue(result.removedIDs.contains(earlier.id), "one family commit must collect the hidden earlier deletion")
         XCTAssertFalse(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).contains { $0.id == earlier.id })
+    }
+
+    func testBLegacyCollectorCannotSplitCapturedEarlierChildFromCirclePurge() async throws {
+        let id = try seed(.boundary), context = WorkspaceLegacyBridge.context(for: container)
+        let child = TaskItem(title: "Earlier", parentID: id)
+        child.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(child); try context.save(); tasks.refresh()
+        XCTAssertTrue(tasks.delete(taskIDs: [child.id]))
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID)); await close(presenter); presenter.page.history.clear()
+        XCTAssertFalse(tasks.purgeDeleted(before: .distantFuture).contains(child.id), "daily cleanup's first collector must keep captured members")
+        let result = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(result.removedTaskIDs.isSuperset(of: [id, child.id]), "\(result)")
+    }
+
+    func testBEarlierPairedChildWritingIsHiddenWithFamilyButSurvivesPurge() async throws {
+        let id = try seed(.boundary), context = WorkspaceLegacyBridge.context(for: container)
+        let child = TaskItem(title: "Earlier", parentID: id), childNote = NoteItem(title: "Earlier")
+        child.listOrderVersion = TaskItem.currentListOrderVersion; childNote.taskID = child.id
+        let document = try NoteDocument(blocks: [.text("Earlier"), .text("Earlier writing")]).taskSnapshot(title: "Earlier")
+        NoteStore.stageDocumentContent(try PreparedNoteDocument(document), format: 1, on: [childNote], timestamp: Date(), revision: 0, revisionID: UUID())
+        context.insert(child); context.insert(childNote); try context.save(); tasks.refresh(); notes.store.refresh()
+        library = AtticLibrary(tasks: tasks, notes: notes.store, undo: library.undo)
+        XCTAssertTrue(tasks.delete(taskIDs: [child.id]))
+        let deletedAt = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == childNote.id }?.deletedAt)
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        XCTAssertFalse(library.recentlyDeleted().contains { $0.ref.id == child.id || $0.ref.id == childNote.id })
+        await close(presenter); presenter.page.history.clear()
+        let result = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(result.removedTaskIDs.isSuperset(of: [id, child.id]), "\(result)")
+        XCTAssertEqual(try rows(childNote.id).first?.deletedAt, deletedAt)
+        XCTAssertTrue(notes.store.restoreDeleted(noteID: childNote.id))
+        XCTAssertEqual(try storedDocument(childNote.id).blocks.map(\.text), ["Earlier", "Earlier writing"])
+        XCTAssertFalse(try storedDocument(childNote.id).requires.contains("taskNote"))
+    }
+
+    func testBOrdinaryRedirectNotePurgeCollectsCircleAndLinksTogether() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let context = WorkspaceLegacyBridge.context(for: container)
+        context.insert(ItemLink(source: .init(.note, UUID()), target: .init(.task, id), kind: .reference)); try context.save()
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID)); await close(presenter); presenter.page.history.clear()
+        XCTAssertTrue(notes.store.delete(try XCTUnwrap(notes.store.note(withID: session.noteID))))
+        XCTAssertFalse(notes.store.purgeDeleted(before: .distantFuture).contains(session.noteID), "redirect note waits for the combined commit")
+        let result = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(result.removedTaskIDs.contains(id), "\(result)")
+        XCTAssertTrue(try rows(session.noteID).isEmpty)
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<ItemLink>()).isEmpty)
+        XCTAssertTrue(try associations(note: session.noteID).isEmpty)
+    }
+
+    func testBMaterializerReadsCapturesFromBeforeDeletionGroupField() throws {
+        let id = try seed(.boundary), context = ModelContext(container)
+        let family = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.id == id || $0.parentID == id }
+        let snapshot = try WorkspacePurge.Preservation(rootID: id, title: "Parent", members: family.map {
+            var fields = try WorkspaceModelFields.read($0); fields.removeValue(forKey: "deletionGroupID")
+            return .init(id: $0.id, fields: fields)
+        }, originals: [])
+        let value = try WorkspaceTaskNoteMaterializer.materialize(try storedDocument(try XCTUnwrap(ownNotes(id).first?.id)), taskID: id, preservation: snapshot)
+        XCTAssertEqual(value.document.blocks.filter { $0.kind == .checklist }.count, family.count - 1)
+    }
+
+    func testBSettingsEmptyOrdinaryRedirectNoteDispatchesAndInvalidatesPurgedWriting() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let noteID = session.noteID
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: noteID)); await close(presenter); presenter.page.history.clear()
+        library = AtticLibrary(tasks: tasks, notes: notes.store, undo: library.undo)
+        XCTAssertTrue(notes.store.delete(try XCTUnwrap(notes.store.note(withID: noteID))))
+        library.undo.perform(in: .note(noteID)) {
+            UndoStep(name: "Writing", items: { [.init(.note, noteID)] }, undo: { true }, redo: { true })
+        }
+        let dispatched = expectation(description: "note-only Settings selection reaches coordinated purge")
+        library.taskNotePurge = { [self] cutoff, confirmed, confirmedNotes in
+            let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: cutoff, confirmed: confirmed, confirmedNotes: confirmedNotes)
+            dispatched.fulfill(); return report.removedTaskIDs
+        }
+        let model = RecentlyDeletedModel(library: library)
+        model.reload(); XCTAssertEqual(model.entries.count, 1)
+        model.requestEmpty(); model.confirmEmpty()
+        await fulfillment(of: [dispatched], timeout: 2)
+        XCTAssertTrue(try rows(noteID).isEmpty)
+        XCTAssertFalse(library.undo.canUndo(in: .note(noteID)))
     }
 
     func testBCommandTableNamesAndHidesBothCommandsForSubtasksAndBareTasks() {

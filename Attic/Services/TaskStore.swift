@@ -1966,6 +1966,18 @@ final class TaskStore: ObservableObject {
         }.map(\.rootID))
     }
 
+    /// Only explicitly captured members are hidden. Old or late independent
+    /// deletions outside the circle capture keep their existing visibility.
+    static func circleRemovedMembers(in context: ModelContext) throws -> Set<UUID> {
+        guard WorkspaceItemLifecycle.has("TaskDeletionPreservation", in: context) else { return [] }
+        var ids = Set<UUID>()
+        for record in try context.fetch(FetchDescriptor<TaskDeletionPreservation>()) where record.provenance == "circle removed" && record.retiredAt == nil {
+            let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+            ids.formUnion(snapshot.members.map(\.id))
+        }
+        return ids
+    }
+
     /// One entry per delete: the task a delete started from, newest first.
     /// Subtasks that went with their parent are counted, not listed.
     func recentlyDeletedTasks() -> [DeletedItemSummary] {
@@ -1974,7 +1986,7 @@ final class TaskStore: ObservableObject {
         let circleRemoved: Set<UUID>
         do {
             let freshContext = Self.makeStoreContext(container)
-            circleRemoved = try Self.circleRemovedRoots(in: freshContext)
+            circleRemoved = try Self.circleRemovedMembers(in: freshContext)
             deleted = try freshContext.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
@@ -2284,7 +2296,7 @@ final class TaskStore: ObservableObject {
                   Set(complete.map(\.id)) == ids else { continue }
             // Circle-removed groups retain live writing redirects and use
             // the same whole-group coordinator as other one-item groups.
-            guard (try? Self.circleRemovedRoots(in: context).contains(rootID)) == false else { continue }
+            guard (try? Self.circleRemovedMembers(in: context).contains(rootID)) == false else { continue }
             // Own notes/associations must go through the coordinated path.
             // The legacy collector cannot leave an actionable purged task ID.
             guard (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == false else { continue }

@@ -254,7 +254,7 @@ final class OneItemLifecycleTests: XCTestCase {
             UndoStep(name: "Writing", items: { [.init(.note, id)] }, undo: { true }, redo: { true })
         }
         XCTAssertTrue(library.undo.canUndo(in: .note(id)))
-        library.taskNotePurge = { [self] _, _ in
+        library.taskNotePurge = { [self] _, _, _ in
             let result = await WorkspacePurge.purge(rootID: root, before: .distantFuture,
                 coordinator: coordinator, files: files, inventory: { .init(generation: 0) })
             XCTAssertEqual(result.outcome, .committed)

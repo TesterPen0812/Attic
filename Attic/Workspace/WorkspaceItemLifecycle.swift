@@ -230,6 +230,24 @@ extension WorkspaceItemLifecycle {
                       family.allSatisfy({ $0.deletionGroupID != nil }) else { return refused() }
                 taskIDs.formUnion(family.map(\.id))
             }
+            // Captured earlier children are independent deletions until the
+            // retired parent is collected. Validate their own batches/dates.
+            let circles = activePreservations.filter { record in
+                record.provenance == "circle removed" && taskIDs.contains(record.rootID)
+                    && allTasks.contains { $0.id == record.rootID && $0.deletedAt == record.deletedAt }
+            }
+            var capturedEarlierRoots = Set<UUID>()
+            for record in circles {
+                let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+                for member in snapshot.members where !taskIDs.contains(member.id) {
+                    let copies = allTasks.filter { $0.id == member.id }
+                    guard !copies.isEmpty, copies.allSatisfy({
+                        $0.parentID == record.rootID && $0.deletedAt.map { $0 <= record.deletedAt && $0 < cutoff } == true
+                    }) else { return refused() }
+                    capturedEarlierRoots.formUnion(copies.compactMap(\.deletionRootID))
+                    taskIDs.insert(member.id)
+                }
+            }
             tasks = allTasks.filter { taskIDs.contains($0.id) }
             for root in Set(tasks.compactMap(\.deletionRootID)) {
                 guard let family = try TaskStore.guardedDeletedFamily(in: context, rootID: root, before: cutoff,
@@ -298,7 +316,10 @@ extension WorkspaceItemLifecycle {
                 roots.contains(record.rootID) && tasks.contains { $0.deletionRootID == record.rootID && $0.deletedAt == record.deletedAt }
             }
             guard tasks.allSatisfy({ $0.deletionRootID != nil }),
-                  roots.allSatisfy({ root in Set(preservations.filter { $0.rootID == root }.map(\.id)).count == 1 }) else { return refused() }
+                  roots.allSatisfy({ root in
+                      let count = Set(preservations.filter { $0.rootID == root }.map(\.id)).count
+                      return count == 1 || (count == 0 && capturedEarlierRoots.contains(root))
+                  }) else { return refused() }
             for record in preservations {
                 let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
                 let family = allTasks.filter { row in snapshot.members.contains { $0.id == row.id } }
@@ -312,6 +333,7 @@ extension WorkspaceItemLifecycle {
                               return (member.replicas ?? [member.fields]).contains { WorkspacePurge.matchesTaskCapture(fields, $0) }
                           }
                       }), Set(snapshot.members.map(\.id)).isSuperset(of: Set(tasks.filter { $0.deletionRootID == record.rootID }.map(\.id))),
+                      Set(snapshot.members.map(\.id)).isSubset(of: taskIDs),
                       let dependencies = snapshot.dependencies else { return refused() }
                 let originals = try family.flatMap(WorkspacePurge.legacyReferences)
                 guard snapshot.originals.allSatisfy({ originals.contains($0.reference) }),
@@ -358,14 +380,22 @@ extension WorkspaceItemLifecycle {
                     noteIDs.contains(dependency.owner.id) || attachmentIDs.contains(dependency.owner.id)
                 }) else { return refused() }
             }
+            var taskPreservations: [UUID: TaskDeletionPreservation] = [:]
+            for task in tasks {
+                if let own = preservations.first(where: { $0.rootID == task.deletionRootID }) { taskPreservations[task.id] = own }
+                else {
+                    taskPreservations[task.id] = try preservations.first { record in
+                        try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot).members.contains { $0.id == task.id }
+                    }
+                }
+            }
             var documents: [UUID: NoteDocument] = [:]
             var materializedTags: [UUID: [String]] = [:]
             var patches: [WorkspaceMaterializationPatch] = []
             for id in liveSurvivorIDs {
                 let copies = survivingNotes.filter { $0.id == id }
                 guard let first = copies.first, let taskID = survivorTasks[id],
-                      let root = tasks.first(where: { $0.id == taskID })?.deletionRootID,
-                      let record = preservations.first(where: { $0.rootID == root }),
+                      let record = taskPreservations[taskID],
                       copies.allSatisfy({ $0.deletedAt == nil }),
                       let bytes = first.content, case let .editable(before) = NoteContentCodec.decode(bytes) else { return refused() }
                 let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
@@ -373,7 +403,7 @@ extension WorkspaceItemLifecycle {
                 documents[id] = value.document
                 // Tags are globally editable after the immutable capture.
                 materializedTags[id] = tasks.first(where: { $0.id == taskID })?.tags ?? value.tags
-                patches.append(.init(noteID: id, taskID: taskID, preservationRootID: root,
+                patches.append(.init(noteID: id, taskID: taskID, preservationRootID: record.rootID,
                     preservationID: record.id, before: before, after: value.document))
             }
             let prepared = try documents.mapValues { try PreparedNoteDocument($0) }
@@ -456,7 +486,7 @@ extension WorkspaceItemLifecycle {
                         let association = stored as! TaskNoteAssociation
                         if noteIDs.contains(association.noteID) { commit.delete(association) }
                         else {
-                            guard let record = preservations.first(where: { $0.rootID == tasks.first(where: { $0.id == association.taskID })?.deletionRootID }) else { throw WorkspaceFoundationError.conflict }
+                            guard let record = taskPreservations[association.taskID] else { throw WorkspaceFoundationError.conflict }
                             association.taskGeneration += 1; association.noteGeneration += 1
                             association.detachedAt = Date(); association.detachedPreservationID = record.id
                         }
@@ -471,8 +501,7 @@ extension WorkspaceItemLifecycle {
                 }
                 for (noteID, id) in missingRedirects {
                     guard let taskID = survivorTasks[noteID],
-                          let rootID = tasks.first(where: { $0.id == taskID })?.deletionRootID,
-                          let record = preservations.first(where: { $0.rootID == rootID }) else { throw WorkspaceFoundationError.conflict }
+                          let record = taskPreservations[taskID] else { throw WorkspaceFoundationError.conflict }
                     let association = TaskNoteAssociation(id: id, taskID: taskID, noteID: noteID)
                     association.detachedAt = Date(); association.detachedPreservationID = record.id
                     association.noteGeneration = (survivingNotes.first(where: { $0.id == noteID })?.associationGeneration ?? 0) + 1

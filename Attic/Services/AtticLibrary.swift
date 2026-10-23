@@ -682,6 +682,8 @@ final class AtticLibrary {
         let tasksByID = Dictionary(grouping: taskRows, by: \.id)
         let notesByID = Dictionary(grouping: noteRows, by: \.id)
         let candidates = tasks.recentlyDeletedTasks() + (notes?.recentlyDeletedNotes() ?? []) + (canvases?.recentlyDeletedCanvases() ?? [])
+        let hidden = (try? TaskStore.circleRemovedMembers(in: context)) ?? []
+        let hiddenGroups = Set(taskRows.filter { hidden.contains($0.id) }.compactMap(\.deletionGroupID))
         var seen = Set<UUID>()
         return candidates.filter { item in
             let group: UUID? = switch item.ref.kind {
@@ -689,7 +691,7 @@ final class AtticLibrary {
             case .note: notesByID[item.ref.id]?.first?.deletionGroupID
             case .canvas: nil
             }
-            return group.map { seen.insert($0).inserted } ?? true
+            return group.map { !hiddenGroups.contains($0) && seen.insert($0).inserted } ?? true
         }.sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.ref.id.uuidString < $1.ref.id.uuidString }
 
     }
@@ -709,7 +711,7 @@ final class AtticLibrary {
         if let taskNotePurge {
             Task { @MainActor [weak self] in
                 let writing = self?.deletedGroupWritingRefs() ?? [:]
-                let removed = await taskNotePurge(cutoff, nil)
+                let removed = await taskNotePurge(cutoff, nil, nil)
                 self?.invalidatePurgedTaskHistory(removed, writing: writing)
                 self?.forgetPresentation(ofTasks: removed)
             }
@@ -721,7 +723,7 @@ final class AtticLibrary {
     /// in one coordinated transaction that makes their notes ordinary
     /// (§ 2.7.2, through an open page's session). Installed by the app; nil
     /// leaves those families in Recently Deleted (tests, previews).
-    var taskNotePurge: ((_ cutoff: Date, _ confirmed: [UUID: Date]?) async -> Set<UUID>)?
+    var taskNotePurge: ((_ cutoff: Date, _ confirmed: [UUID: Date]?, _ confirmedNotes: [UUID: Date]?) async -> Set<UUID>)?
 
     /// Where per-item presentation state lives (the item page's expansion):
     /// a purged task's entry goes with it.
@@ -739,7 +741,7 @@ final class AtticLibrary {
     func emptyTaskNoteFamilies(_ selection: RecentlyDeletedSelection) async -> Set<UUID> {
         guard !selection.isEmpty, let taskNotePurge else { return [] }
         let writing = deletedGroupWritingRefs()
-        let removed = await taskNotePurge(.distantFuture, selection.items(.task))
+        let removed = await taskNotePurge(.distantFuture, selection.items(.task), selection.items(.note))
         invalidatePurgedTaskHistory(removed, writing: writing)
         forgetPresentation(ofTasks: removed)
         return removed
@@ -758,12 +760,25 @@ final class AtticLibrary {
             guard let group = task.deletionGroupID else { continue }
             refs[task.id, default: []].formUnion((byGroup[group] ?? []).map { .init(.note, $0.id) })
         }
+        if WorkspaceItemLifecycle.has("TaskNoteAssociation", in: context),
+           let redirects = try? context.fetch(FetchDescriptor<TaskNoteAssociation>()) {
+            for redirect in redirects where redirect.detachedAt != nil && notes.contains(where: { $0.id == redirect.noteID && $0.deletedAt != nil }) {
+                refs[redirect.taskID, default: []].insert(.init(.note, redirect.noteID))
+            }
+        }
         return refs
     }
 
     private func invalidatePurgedTaskHistory(_ removed: Set<UUID>, writing: [UUID: Set<AtticItemRef>]) {
         var refs = Set(removed.map { AtticItemRef(.task, $0) })
-        for id in removed { refs.formUnion(writing[id] ?? []) }
+        // A removed task may leave independent writing alive. Conversely a
+        // redirect note can have its own group. Invalidate note history only
+        // after a fresh physical read proves that note was actually collected.
+        let context = ModelContext(container)
+        if let surviving = try? context.fetch(FetchDescriptor<NoteItem>()) {
+            let present = Set(surviving.map(\.id))
+            for id in removed { refs.formUnion((writing[id] ?? []).filter { !present.contains($0.id) }) }
+        }
         undo.invalidate(refs)
     }
 

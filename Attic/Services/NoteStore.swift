@@ -853,8 +853,17 @@ final class NoteStore: ObservableObject {
             ))
             let expiredIDs = Set(deleted.filter { ($0.deletedAt ?? .distantFuture) < cutoff }.map(\.id))
             let preserved = try WorkspacePurge.preservationOwners(in: context)
+#if os(macOS)
+            let circles = try TaskStore.circleRemovedRoots(in: context)
+            let redirectNotes = WorkspaceItemLifecycle.has("TaskNoteAssociation", in: context)
+                ? Set(try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter {
+                    circles.contains($0.taskID) && $0.detachedAt != nil && $0.detachedPreservationID != nil
+                }.map(\.noteID)) : []
+#else
+            let redirectNotes = Set<UUID>()
+#endif
             for id in expiredIDs {
-                guard !preserved.contains(.init(entity: .note, id: id)) else { continue }
+                guard !preserved.contains(.init(entity: .note, id: id)), !redirectNotes.contains(id) else { continue }
                 let replicas = try storedNotesIncludingDeleted(matching: id)
                 guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
                 if let group = first.deletionGroupID {

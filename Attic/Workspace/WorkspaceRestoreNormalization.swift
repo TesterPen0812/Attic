@@ -106,7 +106,12 @@ enum WorkspaceTaskNoteMaterializer {
         }
         let title = try value("title", in: head, as: String.self)
         let tags = AtticTag.decode(try value("tagsRaw", in: head, as: String.self))
-        var children = try preservation.members.filter { try value("parentID", in: $0, as: UUID?.self) == taskID }
+        var children = try preservation.members.filter {
+            try value("parentID", in: $0, as: UUID?.self) == taskID
+                && value("deletedAt", in: $0, as: Date?.self) == value("deletedAt", in: head, as: Date?.self)
+                && ($0.fields["deletionGroupID"].map { try JSONDecoder().decode(UUID?.self, from: $0) } ?? nil)
+                    == (head.fields["deletionGroupID"].map { try JSONDecoder().decode(UUID?.self, from: $0) } ?? nil)
+        }
             .sorted { left, right in
                 let leftDone = try value("statusRaw", in: left, as: String.self) == TaskStatus.done.rawValue
                 let rightDone = try value("statusRaw", in: right, as: String.self) == TaskStatus.done.rawValue
