@@ -258,7 +258,7 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(model.head.subtasks.total, 2)
         let kept = try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == noteID }
         XCTAssertFalse(kept.isEmpty)
-        // Owner decision 2026-10-23: task and writing have one lifecycle.
+        // Orchestrator decision 2026-10-23: task and writing have one lifecycle.
         XCTAssertTrue(kept.allSatisfy { $0.deletedAt != nil }, "the writing goes with the task")
         XCTAssertTrue(presenter.host.engine.isReadOnly, "deleted writing cannot keep accepting edits")
         XCTAssertTrue(model.restoreTask())

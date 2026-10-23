@@ -1551,7 +1551,7 @@ final class TasksPageModel: ObservableObject {
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
         expandedFiles.subtract(live)
-        // Owner decision 2026-10-23: deletion includes each task's writing.
+        // Orchestrator decision 2026-10-23: deletion includes each task's writing.
         let withWriting = live.filter(noteOwners.contains).count
         if let title {
             showToast(String(localized: "“\(title)” deleted"))

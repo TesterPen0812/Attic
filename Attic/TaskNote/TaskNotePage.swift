@@ -170,7 +170,7 @@ final class TaskNotePresenter: ObservableObject {
         host.restack()
         if !hasMounted {
             host.scrollToTop(); hasMounted = true
-            // Owner decision 2026-10-23: Add commits a blank title, then
+            // Orchestrator decision 2026-10-23: Add commits a blank title, then
             // puts the caret in the existing title field on first mount.
             if model.head.exists, model.head.title.isEmpty { model.requestFocus(.title) }
         }

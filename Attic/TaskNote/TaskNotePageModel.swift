@@ -587,9 +587,9 @@ final class TaskNotePageModel: ObservableObject {
         return applied
     }
 
-    // MARK: Whole-item lifecycle (owner decision 2026-10-23)
+    // MARK: Whole-item lifecycle (orchestrator decision 2026-10-23)
 
-    /// Owner decision 2026-10-23: Delete moves the whole item, including
+    /// Orchestrator decision 2026-10-23: Delete moves the whole item, including
     /// writing and files, in one step in the retained workspace history.
     @discardableResult
     func deleteTask() -> Bool {

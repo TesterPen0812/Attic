@@ -72,7 +72,7 @@ final class WorkspacePurgeTests: XCTestCase {
         XCTAssertTrue(store.delete(taskIDs: [taskID]))
         XCTAssertTrue(store.restoreDeleted(taskID: taskID))
         XCTAssertTrue(store.delete(taskIDs: [taskID]))
-        // Owner decision 2026-10-23: purge and Restore move both endpoints.
+        // Engineering rule 2026-10-23: purge and Restore move both endpoints.
         expectEqual(await purge().outcome, .committed)
         XCTAssertTrue(try tasks() == 0)
         XCTAssertEqual(try coordinator.freshContext().fetchCount(FetchDescriptor<NoteItem>()), 0)
