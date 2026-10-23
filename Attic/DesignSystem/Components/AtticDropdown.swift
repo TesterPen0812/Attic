@@ -2049,7 +2049,11 @@ final class AtticDropdownPresenter {
             let placed = space.place(idealWidth: self.openIdealWidth, height: self.naturalHeight,
                                      anchor: space.anchor(anchor.bounds, in: anchor), prefer: self.prefer, current: self.stage.side)
             if self.stage.side != placed.side { self.stage.side = placed.side }
-            if self.stage.height != placed.heightLimit { self.stage.height = placed.heightLimit }
+            if self.stage.height != placed.heightLimit {
+                self.stage.height = placed.heightLimit
+                // The on-screen gate counts these (with the frame monitor).
+                PerformanceSignposts.noteInput("dropdown-recut \(placed.heightLimit.map { "\($0)" } ?? "none")")
+            }
             if self.openWidth != placed.width { self.openWidth = placed.width; self.stage.width = placed.width }
             space.show(host, at: placed)
         }

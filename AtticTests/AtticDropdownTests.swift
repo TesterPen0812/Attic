@@ -1481,6 +1481,54 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(card.maxY, anchorTop - AtticDropdownMetrics.anchorGap, accuracy: 1, "still hanging from the row")
     }
 
+    /// Menus fix 1: a card cut short to fit (a row's six-week date card in
+    /// the panel) is placed once. A scroll that keeps its anchor in view
+    /// moves it with the anchor and re-cuts nothing: re-cutting real glass
+    /// over moving rows on every frame doubled the missed frames.
+    func testACutShortCardMovesWithItsAnchorThroughAScrollWithoutReCutting() throws {
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let window = makeWindow()
+        window.setContentSize(CGSize(width: 320, height: 420))
+        defer { window.close() }
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 420))
+        let list = Flipped(frame: NSRect(x: 0, y: 0, width: 320, height: 1600))
+        scroll.documentView = list
+        window.contentView?.addSubview(scroll)
+        // The row 220 pt from the window's top: about 200 pt above it, 155 below.
+        let anchor = NSView(frame: NSRect(x: 40, y: 820, width: 60, height: 28))
+        list.addSubview(anchor)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 600))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.contentHasCard = true
+        presenter.contentHeight = 300
+        presenter.content = AnyView(AtticDropdownCard(width: 200) { Color.clear.frame(height: 292) })
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        let cut = try XCTUnwrap(presenter.stage.height, "neither side holds the card")
+        XCTAssertEqual(presenter.stage.side, .above, "the roomier side")
+        let host = try XCTUnwrap(presenter.host)
+        let opened = host.frame
+        var heights: [CGFloat?] = []
+        let watch = presenter.stage.$height.dropFirst().sink { heights.append($0) }
+        defer { watch.cancel() }
+        // Twenty 3 pt frames up the list: the row moves 60 pt down, in view.
+        for step in 1...20 {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 600 - CGFloat(step) * 3))
+            spin(0.02)
+        }
+        XCTAssertEqual(heights.count, 0, "no re-cut while the row stays in view: \(heights)")
+        XCTAssertEqual(presenter.stage.height, cut)
+        XCTAssertEqual(host.frame.height, opened.height)
+        XCTAssertEqual(opened.minY - host.frame.minY, 60, accuracy: 1, "the card moved with its row")
+        // The row scrolls out of view: the card is placed again.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        spin(0.1)
+        XCTAssertNotEqual(presenter.stage.height, cut, "placed again once its row left the view")
+    }
+
     private func accessibilityElements(_ root: AnyObject) -> [AnyObject] {
         let children = (root.accessibilityChildren?() ?? nil) ?? []
         return [root] + children.flatMap { accessibilityElements($0 as AnyObject) }
