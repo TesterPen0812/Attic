@@ -416,7 +416,7 @@ final class PanelHideMotionShipTests: XCTestCase {
         window.contentView = root
         genie.layoutSubtreeIfNeeded()
         genie.captureSnapshot(of: content, tiers: nil, surfaceRect: root.bounds.insetBy(dx: 20, dy: 20), cornerRadius: 30,
-                              translucent: false, dark: false)
+                              dark: false)
         XCTAssertNil(genie.shownFrame)
         var tookOver = false
         genie.beginFlight(progress: 0, corner: .topRight) {
@@ -445,7 +445,7 @@ final class PanelHideMotionShipTests: XCTestCase {
         root.addSubview(genie)
         window.contentView = root
         let surface = root.bounds.insetBy(dx: 20, dy: 20)
-        genie.captureSnapshot(of: content, tiers: nil, surfaceRect: surface, cornerRadius: 30, translucent: true, dark: false)
+        genie.captureSnapshot(of: content, tiers: nil, surfaceRect: surface, cornerRadius: 30, dark: false)
         let scale = window.backingScaleFactor
         XCTAssertGreaterThanOrEqual(scale, 1)
         XCTAssertEqual(genie.snapshotPixelSize, CGSize(width: 200 * scale, height: 300 * scale))
@@ -612,34 +612,6 @@ final class PanelHideMotionShipTests: XCTestCase {
         XCTAssertFalse(Set(glass.hidden.map(ObjectIdentifier.init)).contains(ObjectIdentifier(darken)))
     }
 
-    /// The controls' glass averages only what lies inside the panel: where
-    /// the blur reaches past the edge, an opaque (Solid) panel stays opaque
-    /// and a translucent one keeps its own translucency.
-    func testTheControlsGlassBlurStaysInsideThePanel() throws {
-        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
-        func image(_ value: UInt8, alpha: UInt8) throws -> CGImage {
-            // Two pixels: as blurred near the edge, half the weight is outside.
-            let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 1, bitsPerComponent: 8, bytesPerRow: 8, space: space,
-                                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
-            let data = try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self))
-            for pixel in 0..<2 { for channel in 0..<3 { data[pixel * 4 + channel] = value }; data[pixel * 4 + 3] = alpha }
-            return try XCTUnwrap(context.makeImage())
-        }
-        func alpha(_ image: CGImage?) throws -> UInt8 {
-            let image = try XCTUnwrap(image)
-            let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 1, bitsPerComponent: 8, bytesPerRow: 8, space: space,
-                                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
-            context.draw(image, in: CGRect(x: 0, y: 0, width: 2, height: 1))
-            return try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self))[3]
-        }
-        // Solid: opaque content, blurred to half by the edge, over a half-covered shape.
-        let solid = PanelGenieView.normalisedBlur(try image(100, alpha: 128), over: try image(128, alpha: 128), space: space)
-        XCTAssertEqual(Int(try alpha(solid)), 255, accuracy: 2)
-        // Glass: 30% content, blurred to 15% by the edge: 30% again.
-        let glass = PanelGenieView.normalisedBlur(try image(30, alpha: 38), over: try image(128, alpha: 128), space: space)
-        XCTAssertEqual(Int(try alpha(glass)), 76, accuracy: 2)
-    }
-
     /// Each control's glass in flight has the control's own shape at rest,
     /// read from its glass element: the corner buttons are 32 pt squares at
     /// 13.5 continuous, not circles (owner, 2026-10-21: "why do the controls
@@ -678,52 +650,129 @@ final class PanelHideMotionShipTests: XCTestCase {
         }
     }
 
-    /// On a real panel: the corner buttons' in-flight glass has the radius
-    /// they have at rest (13.5, the 42 % rule on 32 pt), continuous.
-    /// The controls' glass in flight fills as the live glass does at rest,
-    /// on every surface in Light and Dark (owner: in Solid Dark the corner
-    /// buttons were darker in flight). Fixtures, measured on the Air (g7,
-    /// 2026-10-22): the blurred content under a control (sRGB levels) and
-    /// the live glass over it at rest, for the corner buttons over the
-    /// header and the add bar over the list. Drawn through the snapshot's
-    /// own fill.
-    func testInFlightControlFillMatchesRestOnEverySurface() throws {
-        typealias Look = PanelGenieGlassLook
-        let measured: [(Look.Surface, Bool, under: [Int], rest: [Int])] = [
-            (.glass, false, [220, 225, 222], [244, 246, 243]), (.glass, false, [242, 222, 180], [253, 246, 218]),
-            (.glass, true, [15, 16, 16], [21, 23, 22]), (.glass, true, [125, 116, 96], [79, 72, 59]),
-            (.frosted, false, [218, 218, 218], [244, 245, 245]), (.frosted, false, [182, 180, 158], [233, 232, 216]),
-            (.frosted, true, [13, 13, 13], [21, 21, 21]), (.frosted, true, [95, 93, 78], [45, 44, 35]),
-            (.solid, false, [225, 225, 225], [247, 247, 247]), (.solid, false, [242, 242, 242], [252, 252, 252]),
-            (.solid, true, [5, 5, 5], [19, 19, 19]), (.solid, true, [51, 51, 51], [29, 29, 29])
+    /// The controls' Liquid Glass rides a Genie flight live (owner,
+    /// 2026-10-23: a stand-in fill calibrated on one backdrop turned the
+    /// grey glass over a dark wallpaper flat white in flight). At rest each
+    /// control's glass has its own shape, in the part the panel shows; in
+    /// flight its outline is the mesh's; it shows only with the controls'
+    /// mesh, and none without controls.
+    func testTheControlsGlassRidesTheMeshLive() {
+        let size = CGSize(width: 376, height: 616)
+        let panel = CGRect(x: 28, y: 28, width: 320, height: 560)
+        let view = PanelGenieControlGlassView(frame: CGRect(origin: .zero, size: size))
+        let pills = [
+            PanelGenieView.GlassPill(rect: CGRect(x: 44, y: 540, width: 32, height: 32), clip: panel, cornerRadius: 13.5),
+            PanelGenieView.GlassPill(rect: CGRect(x: 44, y: 44, width: 288, height: 32), clip: panel, cornerRadius: 13.5),
+            // Half past the panel's side: only the part the panel shows.
+            PanelGenieView.GlassPill(rect: CGRect(x: 332, y: 300, width: 32, height: 32), clip: panel, cornerRadius: 13.5)
         ]
-        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
-        func drawn(_ tint: Look.Tint, over under: [Int]) throws -> [Int] {
-            let context = try XCTUnwrap(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: space,
-                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-            context.setFillColor(CGColor(colorSpace: space, components: under.map { CGFloat($0) / 255 } + [1])!)
-            context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
-            tint.fill(CGRect(x: 0, y: 0, width: 1, height: 1), in: context)
-            let pixel = try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self))
-            return (0..<3).map { Int(pixel[$0]) }
-        }
-        for (index, (surface, dark, under, rest)) in measured.enumerated() {
-            let fill = try drawn(Look.tint(for: surface, dark: dark), over: under)
-            // Corner buttons (neutral) within 4 levels; Light's add bar keeps
-            // the live glass's slight saturation (up to 8).
-            let tolerance = index.isMultiple(of: 2) || dark ? 4 : 8
-            for channel in 0..<3 {
-                XCTAssertEqual(fill[channel], rest[channel], accuracy: tolerance, "\(surface) \(dark ? "Dark" : "Light") over \(under): \(fill) vs \(rest)")
-                XCTAssertEqual(CGFloat(fill[channel]) / 255,
-                               Look.tint(for: surface, dark: dark).composite(over: CGFloat(under[channel]) / 255), accuracy: 0.01)
+        func flipped(_ rect: CGRect) -> CGRect { CGRect(x: rect.minX, y: size.height - rect.maxY, width: rect.width, height: rect.height) }
+        func assertAtRest(_ message: String) {
+            XCTAssertEqual(view.shapes.count, pills.count, message)
+            for (pill, shape) in zip(pills, view.shapes) {
+                let expected = flipped(pill.rect.intersection(pill.clip))
+                let bounds = shape.boundingRect
+                XCTAssertEqual(bounds.minX, expected.minX, accuracy: 0.01, "\(message): \(pill.rect)")
+                XCTAssertEqual(bounds.maxX, expected.maxX, accuracy: 0.01, "\(message): \(pill.rect)")
+                XCTAssertEqual(bounds.minY, expected.minY, accuracy: 0.01, "\(message): \(pill.rect)")
+                XCTAssertEqual(bounds.maxY, expected.maxY, accuracy: 0.01, "\(message): \(pill.rect)")
             }
+            // The corner button's own continuous 13.5 corner, not a square's.
+            XCTAssertFalse(view.shapes[0].contains(CGPoint(x: 44.5, y: size.height - 571.5)), message)
+            XCTAssertTrue(view.shapes[0].contains(CGPoint(x: 60, y: size.height - 556)), message)
         }
-        // The g6 tint (black 0.45 in Dark) left Solid Dark's corner buttons
-        // near-black over a header the live glass lifts to 19.
-        let old = try drawn(Look.Tint(white: 0, alpha: 0.45), over: [5, 5, 5])
-        XCTAssertGreaterThan(19 - old[0], 10)
+        view.configure(pills: pills, in: size, dark: true)
+        assertAtRest("configured")
+        view.update(PanelGenieRenderer.uniforms(progress: 0, corner: .topRight), isShown: false)
+        XCTAssertTrue(view.isHidden, "not without the controls' mesh")
+        view.update(PanelGenieRenderer.uniforms(progress: 0, corner: .topRight), isShown: true)
+        XCTAssertFalse(view.isHidden)
+        assertAtRest("the first frame")
+
+        for progress in [0.2, 0.5, 0.8] {
+            let uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: .topRight)
+            view.update(uniforms, isShown: true)
+            func mapped(_ point: CGPoint) -> CGPoint {
+                let p = PanelGenieRenderer.meshPosition(SIMD2(Float(point.x / size.width), Float(point.y / size.height)), uniforms)
+                return CGPoint(x: CGFloat(p.x) * size.width, y: size.height - CGFloat(p.y) * size.height)
+            }
+            func box(_ rect: CGRect, corners: Bool) -> CGRect {
+                // The rect's edges, every half point, through the mesh.
+                let inset: CGFloat = corners ? 0 : 14
+                var points: [CGPoint] = []
+                var t = rect.minX + inset
+                while t <= rect.maxX - inset { points += [CGPoint(x: t, y: rect.minY), CGPoint(x: t, y: rect.maxY)]; t += 0.5 }
+                t = rect.minY + inset
+                while t <= rect.maxY - inset { points += [CGPoint(x: rect.minX, y: t), CGPoint(x: rect.maxX, y: t)]; t += 0.5 }
+                let moved = points.map(mapped)
+                let xs = moved.map(\.x), ys = moved.map(\.y)
+                return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+            }
+            for (pill, shape) in zip(pills, view.shapes) {
+                let visible = pill.rect.intersection(pill.clip)
+                let bounds = shape.boundingRect
+                // Inside the bent square, around the bent edges' straight runs.
+                XCTAssertTrue(box(visible, corners: true).insetBy(dx: -0.6, dy: -0.6).contains(bounds), "\(progress) \(pill.rect)")
+                XCTAssertTrue(bounds.insetBy(dx: -0.6, dy: -0.6).contains(box(visible, corners: false)), "\(progress) \(pill.rect)")
+                // Past the slide's edge the mesh folds a control onto a line.
+                if Float(visible.midX / size.width) + uniforms.slide < 0.98 {
+                    XCTAssertTrue(shape.contains(mapped(CGPoint(x: visible.midX, y: visible.midY))), "\(progress) \(pill.rect)")
+                }
+            }
+            XCTAssertNotEqual(view.shapes[1].boundingRect, flipped(pills[1].rect), "bent in flight")
+        }
+        view.update(PanelGenieRenderer.uniforms(progress: 0, corner: .topRight), isShown: true)
+        assertAtRest("back at rest")
+
+        view.configure(pills: [], in: size, dark: false)
+        view.update(PanelGenieRenderer.uniforms(progress: 0.5, corner: .topRight), isShown: true)
+        XCTAssertTrue(view.isHidden, "no controls, no glass")
+        XCTAssertTrue(view.shapes.isEmpty)
     }
 
+    /// On a real panel: a Genie flight draws the content and the controls as
+    /// two meshes with the controls' live glass between them, one shape per
+    /// control, bent with the mesh; the stand-in fill is gone.
+    func testOnARealPanelTheControlsGlassRidesBetweenTheMeshes() throws {
+        try XCTSkipIf(PanelGenieRenderer.shared.device == nil, "no Metal device")
+        PanelGenieRenderer.shared.prewarm()
+        let deadline = Date().addingTimeInterval(5)
+        while PanelGenieRenderer.shared.state() == nil, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
+        defer { rig.close() }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        rig.content.layoutSubtreeIfNeeded()
+        let root = try XCTUnwrap(rig.content.subviews.first?.layer ?? rig.host.superview?.layer)
+        let scan = PanelGenieView.scanGlass(in: root, surfaceRect: rig.host.frame, hidesSurfaceMaterial: false)
+        try XCTSkipIf(scan.pills.isEmpty, "this Mac draws no Liquid Glass controls")
+        let surface = PanelGenieSurface(live: PanelGenieLiveMaterial(kind: .glass, colorScheme: .dark, cornerRadius: 52),
+                                        translucent: true)
+        rig.content.setAlternateProgress(.genieLiveGlass, 0, corner: .topRight, surface: surface)
+        let genie = rig.content.genieForTesting
+        let glass = genie.liveControlGlass
+        XCTAssertNotNil(genie.shownFrame)
+        XCTAssertNotNil(genie.shownControlsFrame, "the controls have their own mesh")
+        XCTAssertFalse(glass.isHidden)
+        XCTAssertEqual(glass.shapes.count, scan.pills.count)
+        // One glass per control (each glass group has two SDF layers).
+        XCTAssertEqual(Set(scan.pills.map { "\($0.rect)" }).count, scan.pills.count, "\(scan.pills.map(\.rect))")
+        XCTAssertEqual(genie.subviews.firstIndex(of: glass), 1, "between the content's mesh and the controls'")
+        let rest = glass.shapes.map(\.boundingRect)
+        // Each control's glass at rest covers the part of it the panel shows.
+        let height = genie.bounds.height
+        for (pill, bounds) in zip(scan.pills, rest) {
+            let shown = pill.rect.intersection(pill.clip)
+            XCTAssertEqual(bounds.width, shown.width, accuracy: 0.5, "\(pill.rect) clip \(pill.clip): \(bounds)")
+            XCTAssertEqual(bounds.minY, height - shown.maxY, accuracy: 0.5, "\(pill.rect) clip \(pill.clip): \(bounds)")
+        }
+        rig.content.setAlternateProgress(.genieLiveGlass, 0.4, corner: .topRight, surface: surface)
+        XCTAssertNotEqual(glass.shapes.map(\.boundingRect), rest, "bent with the mesh")
+        rig.content.clearAlternateMotion()
+        XCTAssertTrue(genie.isHidden)
+    }
+
+    /// On a real panel: the corner buttons' in-flight glass has the radius
+    /// they have at rest (13.5, the 42 % rule on 32 pt), continuous.
     func testThePanelsCornerButtonsKeepTheirRadiusInFlight() throws {
         let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
         defer { rig.close() }

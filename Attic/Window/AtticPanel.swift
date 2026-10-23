@@ -1251,6 +1251,8 @@ final class AtticPanelContentContainer: NSView {
         addSubview(view, positioned: .above, relativeTo: motionView)
         return view
     }()
+    /// The Genie mesh (tests read what a flight draws).
+    var genieForTesting: PanelGenieView { genieView }
     /// Genie over Glass or Frosted: the panel's material, live, under the mesh.
     private lazy var liveGlassView: PanelGenieLiveGlassView = {
         let view = PanelGenieLiveGlassView(frame: bounds)
@@ -1455,7 +1457,6 @@ final class AtticPanelContentContainer: NSView {
         let live = surface?.live
         genieView.captureSnapshot(of: motionView, tiers: hostingView.layer, surfaceRect: hostingView.frame,
                                   cornerRadius: hostingView.panelCornerRadius,
-                                  translucent: surface?.translucent ?? false,
                                   dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
                                   hidesSurfaceMaterial: live?.kind == .frosted)
         if opacity != 1 {
