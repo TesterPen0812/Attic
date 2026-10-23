@@ -121,6 +121,7 @@ struct TasksDonePage<Cell: View>: View {
                         .accessibilityIdentifier("tasks-done-search-count")
                 }
             }
+            .coordinateSpace(TasksPage.listSpace)
             .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).
             .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, pointer: pointer,

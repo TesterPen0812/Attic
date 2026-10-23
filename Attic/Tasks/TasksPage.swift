@@ -133,6 +133,9 @@ struct TasksPage: View {
     }
 
     static let space = NamedCoordinateSpace.named("AtticTasksPage")
+    /// Row measurements stay inside their lazy content. Reading the page's
+    /// space here couples them back to ScrollView's estimated content height.
+    static let listSpace = NamedCoordinateSpace.named("AtticTasksListContent")
     #if DEBUG
     /// Hosted scroll-frame regression, alongside PanelHeader and AtticAddBar.
     static var tabsEvaluations = 0
@@ -267,7 +270,7 @@ struct TasksPage: View {
         // O17-13: a file dropped on a row settles into its files list.
         pointer.dropLandingSlot = { [weak model, weak pointer, $fileDropRow] point in
             guard let model, let pointer, let row = $fileDropRow.wrappedValue, row.tab == model.tab,
-                  let frame = pointer.frames[row], frame.minY - 1 <= point.y, point.y <= frame.maxY + 1 else { return nil }
+                  let frame = pointer.frame(for: row), frame.minY - 1 <= point.y, point.y <= frame.maxY + 1 else { return nil }
             return Self.dropLandingSlot(rowFrame: frame, filesExpanded: model.expandedFiles.contains(row.id))
         }
         AtticDropLanding.register(pointer)
@@ -606,7 +609,7 @@ struct TasksPage: View {
             for day in model.doneDays() {
                 top += AtticLayout.rowPitch
                 for row in day.rows {
-                    let height = pointer.frames[TasksRowID(tab: .done, id: row.id)]?.height ?? AtticLayout.rowPitch
+                    let height = pointer.frame(for: TasksRowID(tab: .done, id: row.id))?.height ?? AtticLayout.rowPitch
                     if row.id == id { return (top, height) }
                     top += height
                 }
@@ -1306,7 +1309,7 @@ struct TasksPage: View {
     /// task): the page's geometry decides how.
     @discardableResult
     private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) -> Bool {
-        let reveal = TasksViewport.reveal(frame: pointer.frames[TasksRowID(tab: tab, id: id)], height: rowHeight(id, in: tab),
+        let reveal = TasksViewport.reveal(frame: pointer.frame(for: TasksRowID(tab: tab, id: id)), height: rowHeight(id, in: tab),
                                           viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
                                           listTop: listTop,
                                           bottomMargin: bottomMargin,
@@ -1450,10 +1453,10 @@ struct TasksPage: View {
                             }
                         }
                         .accessibilityIdentifier("tasks-completed-today")
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer, tab] frame in
-                            pointer.completedTodayFrames[tab] = frame
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.listSpace) } action: { [pointer, tab] frame in
+                            pointer.setCompletedTodayContentFrame(frame, for: tab)
                         }
-                        .onDisappear { [pointer, tab] in pointer.completedTodayFrames[tab] = nil }
+                        .onDisappear { [pointer, tab] in pointer.setCompletedTodayContentFrame(nil, for: tab) }
                         // Under an empty message it is the next row (one
                         // row apart); after tasks, 12 below the last one.
                         .padding(.top, sections.open.isEmpty
@@ -1469,6 +1472,7 @@ struct TasksPage: View {
                     }
                 }
                 .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
+                .coordinateSpace(Self.listSpace)
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
                     focusSelection: { id in setFocus(id) }, drawn: drawn).accessibilityHidden(true))
@@ -1550,12 +1554,12 @@ struct TasksPage: View {
                 // controls), and never one of the row's controls.
                 point.x > cornerInset + AtticLayout.textX - AtticSpacing.s4
                     && !dragSession.isOnControl(TasksRowID(tab: tab, id: id), at: point,
-                                                rowOrigin: pointer.frames[TasksRowID(tab: tab, id: id)]?.origin)
+                                                rowOrigin: pointer.frame(for: TasksRowID(tab: tab, id: id))?.origin)
             },
             heights: { rowHeight($0, in: tab) },
             onBegin: {
                 beginDragSession(in: tab)
-                if let origin = pointer.frames[TasksRowID(tab: tab, id: id)] {
+                if let origin = pointer.frame(for: TasksRowID(tab: tab, id: id)) {
                     pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
                 }
             },
@@ -2392,7 +2396,7 @@ struct TasksPage: View {
     private func presentMenu(_ commands: [AtticMenuCommand], at id: TasksRowID, anchor: NSView?) {
         if let anchor, anchor.window != nil {
             AtticNativeMenu.popUpContextMenu(commands, in: anchor)
-        } else if let view = pointer.view, let frame = pointer.frames[id] {
+        } else if let view = pointer.view, let frame = pointer.frame(for: id) {
             AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: frame.minX + AtticLayout.textX, y: frame.minY + AtticLayout.rowPitch))
         } else if let view = pointer.view {
             AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: AtticLayout.textX, y: listTop))
@@ -2630,7 +2634,7 @@ struct TasksPage: View {
     static var dragHeightLookupVisits = 0
     func rowHeight(_ id: UUID, in tab: TasksTab) -> CGFloat {
         if dragSession.geometryTab == tab, let height = dragSession.geometry?.height(id) { return height }
-        if let measured = pointer.frames[TasksRowID(tab: tab, id: id)]?.height, measured > 0 { return measured }
+        if let measured = pointer.frame(for: TasksRowID(tab: tab, id: id))?.height, measured > 0 { return measured }
         guard let row = model.rows(for: tab).first(where: { Self.dragHeightLookupVisits += 1; return $0.id == id }) else { return AtticLayout.rowPitch }
         return estimatedHeight(row)
     }
@@ -2653,7 +2657,7 @@ struct TasksPage: View {
     func prepareDragGeometry(group: [UUID], tab: TasksTab) -> TasksDragGeometry {
         let rows = Dictionary(uniqueKeysWithValues: model.rows(for: tab).map { ($0.id, $0) })
         return TasksDragGeometry(group: group) { id in
-            if let measured = pointer.frames[TasksRowID(tab: tab, id: id)]?.height, measured > 0 { return measured }
+            if let measured = pointer.frame(for: TasksRowID(tab: tab, id: id))?.height, measured > 0 { return measured }
             return rows[id].map { estimatedHeight($0) } ?? AtticLayout.rowPitch
         }
     }
@@ -2765,7 +2769,7 @@ struct TasksPage: View {
             images: images, frame: frame,
             home: { [pointer, weak view] in
                 // The row where it is now (the list may have moved), on screen.
-                guard let view, let window = view.window, window.isVisible, let rowFrame = pointer.frames[row] else { return nil }
+                guard let view, let window = view.window, window.isVisible, let rowFrame = pointer.frame(for: row) else { return nil }
                 let image = CGRect(x: rowFrame.minX - room, y: rowFrame.minY - room, width: frame.width, height: frame.height)
                 return window.convertToScreen(view.convert(image, to: nil))
             },
@@ -3196,11 +3200,12 @@ final class TasksDrawnSearch {
     var shown = false
 }
 
-/// What a row's cell last reported: its frame in the page and its
-/// controls' frames in the row. A Done cell can draw another task after a
+/// What a row's cell last reported: its content-space frame (or an
+/// explicitly supplied page frame), and its controls' frames in the row. A Done cell can draw another task after a
 /// new query (`TasksDoneSlots`); what it reported then moves to that task.
 final class TasksCellReports {
     var frame: CGRect?
+    var frameIsInContent = false
     var controls: [CGRect]?
 }
 
@@ -4048,11 +4053,11 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             session.moveControlFrames(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
             pointer.moveFrame(from: TasksRowID(tab: tab, id: old), to: TasksRowID(tab: tab, id: new), of: reports)
         }
-        // Each row's frame in the page, for the pointer's questions (which
-        // row a right-click, a drop or a drag-out is on) and the reveal.
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.space) } action: { [pointer, tab, id, reports] frame in
-            reports.frame = frame
-            pointer.setFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
+        // Measure in content coordinates, independent of the scroll view's
+        // placement/height estimates. TasksPointer converts through the native
+        // scroll keeper when hit testing or reveal needs a page-space frame.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: TasksPage.listSpace) } action: { [pointer, tab, id, reports] frame in
+            pointer.setContentFrame(frame, for: TasksRowID(tab: tab, id: id), from: reports)
         }
         .onDisappear { [session, pointer, tab, id, reports] in
             let row = TasksRowID(tab: tab, id: id)
@@ -4243,9 +4248,59 @@ final class TasksPointer {
     /// Each row's frame in the page, by its identity on its page: a task
     /// that two pages list (Now's "Completed today" and Done) is two rows
     /// with two frames (round 12).
-    var frames: [TasksRowID: CGRect] = [:]
+    var frames: [TasksRowID: CGRect] {
+        get {
+            var result = pageFrames
+            for (row, frame) in contentFrames {
+                if let converted = pageFrame(frame, in: row.tab) { result[row] = converted }
+            }
+            return result
+        }
+        set { pageFrames = newValue; contentFrames.removeAll() }
+    }
+    /// Single-row queries (notably drag height lookup) convert only that
+    /// row; hit testing/marquee can request the complete `frames` snapshot.
+    func frame(for row: TasksRowID) -> CGRect? {
+        if let content = contentFrames[row] { return pageFrame(content, in: row.tab) }
+        return pageFrames[row]
+    }
+
+    private var pageFrames: [TasksRowID: CGRect] = [:]
+    private var contentFrames: [TasksRowID: CGRect] = [:]
     /// This SwiftUI button lives between rows and must keep its native click.
-    var completedTodayFrames: [TasksTab: CGRect] = [:]
+    var completedTodayFrames: [TasksTab: CGRect] {
+        get {
+            var result = completedPageFrames
+            for (tab, frame) in completedContentFrames {
+                if let converted = pageFrame(frame, in: tab) { result[tab] = converted }
+            }
+            return result
+        }
+        set { completedPageFrames = newValue; completedContentFrames.removeAll() }
+    }
+    private var completedPageFrames: [TasksTab: CGRect] = [:]
+    private var completedContentFrames: [TasksTab: CGRect] = [:]
+    private struct ContentView { weak var view: NSView? }
+    private var contentViews: [TasksTab: ContentView] = [:]
+
+    func setContentView(_ view: NSView, for tab: TasksTab) {
+        contentViews[tab] = ContentView(view: view)
+    }
+
+    func removeContentView(_ view: NSView, for tab: TasksTab) {
+        if contentViews[tab]?.view === view { contentViews[tab] = nil }
+    }
+
+    private func pageFrame(_ frame: CGRect, in tab: TasksTab) -> CGRect? {
+        guard let view, let content = contentViews[tab]?.view,
+              let window = view.window, content.window === window else { return nil }
+        return view.convert(frame, from: content)
+    }
+
+    func setCompletedTodayContentFrame(_ frame: CGRect?, for tab: TasksTab) {
+        completedContentFrames[tab] = frame
+        completedPageFrames[tab] = nil
+    }
     /// The card a reorder lifts, over the whole page.
     let liftedCard = TasksLiftedCard()
     /// Tests: receives a drag out of the panel instead of AppKit.
@@ -4355,7 +4410,18 @@ final class TasksPointer {
     private var frameOwners: [TasksRowID: ObjectIdentifier] = [:]
 
     func setFrame(_ frame: CGRect, for row: TasksRowID, from cell: TasksCellReports) {
-        frames[row] = frame
+        pageFrames[row] = frame
+        contentFrames[row] = nil
+        cell.frame = frame
+        cell.frameIsInContent = false
+        frameOwners[row] = ObjectIdentifier(cell)
+    }
+
+    func setContentFrame(_ frame: CGRect, for row: TasksRowID, from cell: TasksCellReports) {
+        contentFrames[row] = frame
+        pageFrames[row] = nil
+        cell.frame = frame
+        cell.frameIsInContent = true
         frameOwners[row] = ObjectIdentifier(cell)
     }
 
@@ -4365,13 +4431,15 @@ final class TasksPointer {
     func moveFrame(from old: TasksRowID, to new: TasksRowID, of cell: TasksCellReports) {
         removeFrame(for: old, of: cell)
         guard let frame = cell.frame else { return }
-        setFrame(frame, for: new, from: cell)
+        if cell.frameIsInContent { setContentFrame(frame, for: new, from: cell) }
+        else { setFrame(frame, for: new, from: cell) }
     }
 
     /// A cell went: the frame it reported goes with it.
     func removeFrame(for row: TasksRowID, of cell: TasksCellReports) {
         guard frameOwners[row] == nil || frameOwners[row] == ObjectIdentifier(cell) else { return }
-        frames[row] = nil
+        pageFrames[row] = nil
+        contentFrames[row] = nil
         frameOwners[row] = nil
     }
 
