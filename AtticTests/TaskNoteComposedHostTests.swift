@@ -74,7 +74,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         original.restoreViewStateOnMount()
         type("Reopen draft ", into: original.host.textView)
         original.host.textView.setSelectedRange(NSRange(location: 7, length: 3))
-        original.model.setFolded(true)
+        original.model.setExpanded(true)
         original.model.newSubtaskText = "Uncommitted subtask"
         let session = try XCTUnwrap(original.session), lease = original.lease
         let body = original.host.engine.textStorage.string
@@ -92,7 +92,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
             XCTAssertEqual(reopened.lease, lease)
             XCTAssertEqual(reopened.host.engine.textStorage.string, body)
             XCTAssertEqual(reopened.host.textView.selectedRange(), NSRange(location: 7, length: 3))
-            XCTAssertTrue(reopened.model.isFolded)
+            XCTAssertTrue(reopened.model.isExpanded)
             XCTAssertEqual(reopened.model.newSubtaskText, "Uncommitted subtask")
             XCTAssertTrue(session.usesWorkspaceBinding)
             XCTAssertFalse(hosting.view.window?.isVisible == true)
@@ -117,7 +117,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let session = try XCTUnwrap(original.session), stamp = session.callbackStamp
         type(" pending", into: original.host.textView)
         original.host.textView.setSelectedRange(NSRange(location: 4, length: 0))
-        original.model.setFolded(true)
+        original.model.setExpanded(true)
         XCTAssertTrue(notes.prepareToLeave(.pageSwitch), "retained section navigation may queue its checkpoint")
         await barrier.waitUntilStarted()
         hosting.rootView = AnyView(Text("Tasks")); hosting.view.layoutSubtreeIfNeeded()
@@ -127,7 +127,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         reopened.restoreViewStateOnMount()
         XCTAssertTrue(reopened === original)
         XCTAssertEqual(reopened.host.textView.selectedRange(), NSRange(location: 4, length: 0))
-        XCTAssertTrue(reopened.model.isFolded)
+        XCTAssertTrue(reopened.model.isExpanded)
         XCTAssertEqual(session.callbackStamp.binding, stamp.binding, "remount does not invalidate the queued checkpoint")
         type(" latest", into: reopened.host.textView)
         let expected = reopened.host.engine.textStorage.string
@@ -438,7 +438,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
     }
 
     func testJustUncheckedSubtaskMovesUpRelativeToItsHeldNeighbourRatherThanItsCanonicalIndex() throws {
-        let id = try seed(.heavy), presenter = try open(id, unfolded: true), model = presenter.model
+        let id = try seed(.heavy), presenter = try open(id, expanded: true), model = presenter.model
         let export = try XCTUnwrap(model.rows.first { $0.title == "Export the blog posts" })
         let announce = try XCTUnwrap(model.rows.first { $0.title == "Announce the launch" })
         model.setFocusInside(true)
@@ -464,13 +464,13 @@ final class TaskNoteComposedHostTests: XCTestCase {
         return id
     }
 
-    private func open(_ taskID: UUID, unfolded: Bool? = nil) throws -> TaskNotePresenter {
+    private func open(_ taskID: UUID, expanded: Bool? = nil) throws -> TaskNotePresenter {
         let start = DispatchTime.now().uptimeNanoseconds
         let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
                                               design: .default, columnInset: columnInset, defaults: nil)
         let initialized = DispatchTime.now().uptimeNanoseconds
         presenters.append(presenter)
-        if let unfolded { presenter.model.setFolded(!unfolded) }
+        if let expanded { presenter.model.setExpanded(expanded) }
         let host = presenter.host
         if openingWindow != nil {
             // The measured page includes its normal native editor controls.
@@ -550,7 +550,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     func testOneScrollStacksTheHeadTheBlockAndTheTextViewThatNeverScrollsOnItsOwn() throws {
         let id = try seed(.heavy)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let host = presenter.host
         XCTAssertTrue(host.textView.superview === host.documentView)
         XCTAssertTrue(host.textView.enclosingScrollView === host.scrollView)
@@ -565,12 +565,13 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(host.textView.frame.minY, host.blockFrame.maxY + TaskNoteMetrics.blockToWriting, accuracy: 0.5)
         XCTAssertEqual(host.headFrame.minX, columnInset)
         XCTAssertEqual(host.documentView.frame.height, host.textView.frame.maxY, accuracy: 1)
-        // Ten rows (28 pt each), the 28 pt header and Add subtask.
+        // Ten rows (28 pt each), the 28 pt label, Add subtask and Show less.
         XCTAssertGreaterThanOrEqual(host.blockFrame.height, CGFloat(10 + 2) * 28)
-        // Folded, the block is one line.
-        presenter.model.setFolded(true)
+        // Owner 2026-10-23 (draft B) supersedes the folded one-line card:
+        // collapsed, the label, the first three rows and "N more…".
+        presenter.model.setExpanded(false)
         host.restack()
-        XCTAssertEqual(host.blockFrame.height, TaskNoteMetrics.blockHeader, accuracy: 1)
+        XCTAssertEqual(host.blockFrame.height, TaskNoteMetrics.blockHeader + 4 * TaskNoteMetrics.rowHeight, accuracy: 1)
     }
 
     func testTheEditorIsNeverRecreatedAcrossFoldHeadChangesRestackAndALookChange() throws {
@@ -578,8 +579,8 @@ final class TaskNoteComposedHostTests: XCTestCase {
         let presenter = try open(id)
         let textView = presenter.host.textView
         let engine = presenter.host.engine
-        presenter.model.toggleFold(); presenter.host.restack()
-        presenter.model.toggleFold(); presenter.host.restack()
+        presenter.model.toggleExpanded(); presenter.host.restack()
+        presenter.model.toggleExpanded(); presenter.host.restack()
         XCTAssertTrue(library.updateTask(id, title: "A much longer title that wraps onto three lines in the narrow panel column").isApplied)
         presenter.model.refresh(); presenter.host.restack()
         var dark = AtticDesignContext.default
@@ -763,7 +764,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     func testTheCaretStaysVisibleAfterAFoldAboveItAndAfterTheTitleWraps() throws {
         let id = try seed(.fifty)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let host = presenter.host
         // In the writing, past the regions (50 rows above it).
         let line = (host.engine.textStorage.string as NSString).range(of: "Line 30 ").location
@@ -773,7 +774,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         caretIsVisible(host)
         let clip = host.scrollView.contentView
         let before = host.mapper.textRect(for: host.textView.selectedRange()).map { clip.convert($0, from: host.textView).minY - clip.bounds.minY }
-        presenter.model.setFolded(true)
+        presenter.model.setExpanded(false)
         host.restack(); settle(host.textView)
         caretIsVisible(host)
         // The viewport kept its anchor: the caret did not jump on screen.
@@ -781,7 +782,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         if let before, let after {
             XCTAssertEqual(before, after, accuracy: 1, "the writing stays put on screen while the block folds above it")
         }
-        presenter.model.setFolded(false); host.restack(); settle(host.textView)
+        presenter.model.setExpanded(true); host.restack(); settle(host.textView)
         host.textView.scrollRangeToVisible(host.textView.selectedRange()); settle(host.textView)
         XCTAssertTrue(library.updateTask(id, title: String(repeating: "A title that wraps across lines ", count: 4)).isApplied)
         presenter.model.refresh(); host.restack(); settle(host.textView)
@@ -793,9 +794,9 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     private struct LayoutSample { let open: Int; let keystroke: [Int]; let scroll: [Int]; let paragraphs: Int }
 
-    private func layoutSample(_ scenario: TaskNotePreviewSeed.Scenario, unfolded: Bool? = nil) throws -> LayoutSample {
+    private func layoutSample(_ scenario: TaskNotePreviewSeed.Scenario, expanded: Bool? = nil) throws -> LayoutSample {
         let id = try seed(scenario)
-        let presenter = try open(id, unfolded: unfolded)
+        let presenter = try open(id, expanded: expanded)
         let host = presenter.host
         let counter = try XCTUnwrap(host.layoutCounter)
         let open = counter.census().laidOut
@@ -838,8 +839,8 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertLessThanOrEqual(host.scroll.max() ?? 0, visibleLines, "a scroll step lays out within the viewport")
     }
 
-    func testFiftyUnfoldedSubtasksKeepLayoutProportionalToTheViewport() throws {
-        let fifty = try layoutSample(.fifty, unfolded: true)
+    func testFiftyExpandedSubtasksKeepLayoutProportionalToTheViewport() throws {
+        let fifty = try layoutSample(.fifty, expanded: true)
         let visibleLines = Int(ceil((panel.height - topInset - bottomInset) / 21))
         let report = "TASKNOTE-LAYOUT fifty: open laid out \(fifty.open) of \(fifty.paragraphs); per keystroke \(fifty.keystroke); per scroll step \(fifty.scroll)"
         print(report); XCTContext.runActivity(named: report) { _ in }
@@ -852,7 +853,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     func testCanonicalInsertionPutsANewOpenSubtaskAtTheEndOfTheOpenGroup() throws {
         let id = try seed(.heavy)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let model = presenter.model
         model.newSubtaskText = "Write the launch post"
         XCTAssertTrue(model.commitNewSubtask())
@@ -866,7 +867,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     func testHeldOrderKeepsTicksInPlaceAndPutsNewRowsAtTheEndUntilTheHoldReleases() throws {
         let id = try seed(.heavy)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let model = presenter.model
         model.setFocusInside(true)
         let held = model.rows.map(\.id)
@@ -889,26 +890,34 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertNotEqual(model.rows.last?.title, "Fresh row")
     }
 
-    func testFoldingReleasesTheHoldAndIsPresentationStateOnly() throws {
+    /// Owner 2026-10-23 (draft B, answer 5) supersedes "folding releases the
+    /// hold": "Show less" leaves rows on screen, so they hold still while the
+    /// list is in use; leaving it settles them, as before.
+    func testCollapsingKeepsTheHoldWhileInUseAndIsPresentationStateOnly() throws {
         let id = try seed(.heavy)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let model = presenter.model
         let revision = tasks.revision
         let steps = model.history.route.totalStepCount
         model.setPointerInside(true)
-        XCTAssertTrue(model.toggle(model.rows[4].id))
-        let ticked = model.rows[4].id
-        model.setFolded(true)
+        let held = model.rows.map(\.id)
+        XCTAssertTrue(model.toggle(model.rows[1].id))
+        let ticked = model.rows[1].id
+        model.setExpanded(false)
+        XCTAssertNotNil(model.heldOrder)
+        XCTAssertEqual(model.rows.map(\.id), held, "nothing jumps while the list is in use")
+        XCTAssertEqual(model.visibleRows.map(\.id), Array(held.prefix(3)))
+        XCTAssertTrue(model.visibleRows[1].isDone, "the ticked row stays where it was clicked")
+        model.setPointerInside(false)
         XCTAssertNil(model.heldOrder)
-        model.setFolded(false)
-        XCTAssertNotEqual(model.rows[4].id, ticked, "after the hold, the ticked row settles into the completed group")
-        XCTAssertEqual(model.history.route.totalStepCount, steps + 1, "only the tick is history; folding is not")
-        XCTAssertEqual(tasks.revision, revision + 1, "folding saves nothing")
+        XCTAssertNotEqual(model.rows[1].id, ticked, "after the hold, the ticked row settles into the completed group")
+        XCTAssertEqual(model.history.route.totalStepCount, steps + 1, "only the tick is history; expanding is not")
+        XCTAssertEqual(tasks.revision, revision + 1, "expanding saves nothing")
     }
 
     func testReorderStaysWithinItsStateGroup() throws {
         let id = try seed(.heavy)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let model = presenter.model
         let canonical = tasks.subtasks(of: id)
         let lastOpen = try XCTUnwrap(canonical.last { $0.status != .done })
@@ -944,10 +953,12 @@ final class TaskNoteComposedHostTests: XCTestCase {
         model.focusBlockFromWriting()
         XCTAssertEqual(model.focusRequest, .list)
         XCTAssertEqual(model.focusedRowID, model.rows[1].id)
-        // A folded block unfolds on the way in.
-        model.setFolded(true)
+        // Owner 2026-10-23 (draft B): with three rows or fewer nothing is
+        // behind "N more…", so the collapsed list takes the keyboard as is.
+        model.setExpanded(false)
         model.focusBlockFromWriting()
-        XCTAssertFalse(model.isFolded)
+        XCTAssertEqual(model.focusRequest, .list)
+        XCTAssertEqual(model.focusedRowID, model.rows[1].id)
     }
 
     func testARenameIsOneStepInTheWorkspaceHistoryAndRetiresTheFieldUndo() throws {
@@ -1005,7 +1016,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertFalse(draft.isPersisted)
         XCTAssertEqual(draft.pendingTaskID, id)
         let model = presenter.model
-        model.toggleFold(); model.toggleFold()
+        model.toggleExpanded(); model.toggleExpanded()
         XCTAssertTrue(model.toggle(model.rows[0].id))
         model.newSubtaskText = "Another"
         XCTAssertTrue(model.commitNewSubtask())
@@ -1088,7 +1099,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     func testKeystrokeWithFiftySubtasksUnfoldedDoesNotRegressAgainstThePlainNote() throws {
         let id = try seed(.fifty)
-        let composed = try open(id, unfolded: true).host
+        let composed = try open(id, expanded: true).host
         let (_, plainView, _) = plainEditor(TaskNotePreviewSeed.longProse())
         var candidate: [Double] = [], reference: [Double] = []
         for round in 0..<4 {
@@ -1255,7 +1266,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
     /// plain note of the same length (40 pt steps, layout and display).
     func testScrollingTheComposedViewDoesNotRegressAgainstThePlainNote() throws {
         let id = try seed(.fifty)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let composed = presenter.host
         let (_, plainView, plainScroll) = plainEditor(TaskNotePreviewSeed.longProse())
         settle(plainView)
@@ -1277,12 +1288,12 @@ final class TaskNoteComposedHostTests: XCTestCase {
         }
         report("scroll step", candidate: candidate, reference: reference)
         XCTAssertLessThanOrEqual(median(candidate), bound(reference))
-        // Folding 50 rows above the writing: the final height once, the
-        // anchor kept, then layout and display (reported; a plain note has
-        // no fold).
+        // Collapsing 50 rows to three above the writing: the final height
+        // once, the anchor kept, then layout and display (reported; a plain
+        // note has no subtasks).
         let fold = (0..<6).map { index in
             ms {
-                presenter.model.setFolded(index.isMultiple(of: 2))
+                presenter.model.setExpanded(!index.isMultiple(of: 2))
                 composed.restack()
                 composed.textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
                 composed.textView.window?.displayIfNeeded()
@@ -1290,14 +1301,14 @@ final class TaskNoteComposedHostTests: XCTestCase {
         }
         var parts: [[Double]] = [[], [], [], []]
         for index in 0..<6 {
-            parts[0].append(ms { presenter.model.setFolded(index.isMultiple(of: 2)) })
+            parts[0].append(ms { presenter.model.setExpanded(!index.isMultiple(of: 2)) })
             parts[1].append(ms { composed.restack() })
             parts[2].append(ms { composed.textView.textLayoutManager?.textViewportLayoutController.layoutViewport() })
             parts[3].append(ms { composed.textView.window?.displayIfNeeded() })
         }
-        print(String(format: "TASKNOTE-PERF fold parts: model %.2f · restack %.2f · viewport %.2f · display %.2f ms (medians)",
+        print(String(format: "TASKNOTE-PERF collapse parts: model %.2f · restack %.2f · viewport %.2f · display %.2f ms (medians)",
                      median(parts[0]), median(parts[1]), median(parts[2]), median(parts[3])))
-        let line = String(format: "TASKNOTE-PERF fold/unfold 50 rows median %.2f ms (max %.2f)", median(fold), fold.max() ?? 0)
+        let line = String(format: "TASKNOTE-PERF collapse/expand 50 rows median %.2f ms (max %.2f)", median(fold), fold.max() ?? 0)
         print(line); XCTContext.runActivity(named: line) { _ in }
     }
 
@@ -1318,8 +1329,9 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertEqual(model.renamingID, row.id, "the field stays open")
         XCTAssertEqual(model.renameText, "X" + row.title, "with its text")
         XCTAssertNotNil(model.undoRenameDraft(), "and its draft Undo")
-        // Folding cancels it and retires the draft.
-        model.setFolded(true)
+        // Esc cancels it and retires the draft (draft B: collapsing ends a
+        // rename only on a row going out of sight, tested below).
+        model.cancelRename()
         XCTAssertNil(model.renamingID)
         XCTAssertNil(model.undoRenameDraft())
     }
@@ -1353,7 +1365,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     func testReorderingCompletedSubtasksSaves() throws {
         let id = try seed(.boundary)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let model = presenter.model
         model.newSubtaskText = "CU order row"
         XCTAssertTrue(model.commitNewSubtask())
@@ -1370,7 +1382,7 @@ final class TaskNoteComposedHostTests: XCTestCase {
 
     func testListEntrySelectsTheLastRowElseTheFirst() throws {
         let id = try seed(.heavy)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let model = presenter.model
         XCTAssertEqual(model.listEntryRowID, model.rows.first?.id, "a fresh Tab into the list selects the first row")
         model.noteRowFocused(model.rows[3].id)
@@ -1442,22 +1454,25 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertTrue(host.mapper.unobscuredRect().intersects(rect))
     }
 
-    func testTheBlockClipsRowsLeavingOnAFold() throws {
+    /// Owner 2026-10-23 (draft B): "Show less" replaces the fold; the rows
+    /// leaving still stay inside the block.
+    func testTheBlockClipsRowsLeavingOnACollapse() throws {
         let id = try seed(.heavy)
-        let presenter = try open(id, unfolded: true)
+        let presenter = try open(id, expanded: true)
         let block = presenter.host.blockView
         XCTAssertEqual(block.layer?.masksToBounds, true)
-        presenter.model.setFolded(true)
+        presenter.model.setExpanded(false)
         presenter.host.restack()
-        XCTAssertEqual(block.frame.height, TaskNoteMetrics.blockHeader, accuracy: 1)
+        XCTAssertEqual(block.frame.height, TaskNoteMetrics.blockHeader + 4 * TaskNoteMetrics.rowHeight, accuracy: 1)
     }
 
-    func testFoldAndUnfoldCommitNativeGeometryBeforeTheNextSwiftUIFrame() throws {
-        let id = try seed(.fifty), presenter = try open(id, unfolded: true)
-        presenter.model.setFolded(true)
-        XCTAssertEqual(presenter.host.blockView.frame.height, TaskNoteMetrics.blockHeader, accuracy: 1)
-        presenter.model.setFolded(false)
+    func testCollapseAndExpandCommitNativeGeometryBeforeTheNextSwiftUIFrame() throws {
+        let id = try seed(.fifty), presenter = try open(id, expanded: true)
+        presenter.model.setExpanded(false)
+        XCTAssertEqual(presenter.host.blockView.frame.height, TaskNoteMetrics.blockHeader + 4 * TaskNoteMetrics.rowHeight, accuracy: 1)
+        presenter.model.setExpanded(true)
         XCTAssertEqual(presenter.host.blockView.frame.height, presenter.model.blockHeight, accuracy: 1)
+        XCTAssertEqual(presenter.model.blockHeight, TaskNoteMetrics.blockHeader + CGFloat(50 + 2) * TaskNoteMetrics.rowHeight)
     }
 }
 
@@ -1517,5 +1532,163 @@ extension TaskNoteComposedHostTests {
         XCTAssertNil(notes.taskNotePresenter)
         XCTAssertNil(presenter.lease)
         XCTAssertNil(uiState.openTaskNoteID)
+    }
+}
+
+// MARK: - Draft B: the three-row disclosure (owner, 2026-10-23)
+
+/// The owner picked draft B for the item page ("b is fine", 2026-10-23) and
+/// answered "all (a)": unfinished subtasks first, rows hold still while you
+/// work. These replace the folded card's expectations.
+@MainActor
+extension TaskNoteComposedHostTests {
+    private func freshDefaults() -> UserDefaults {
+        let name = "TaskNoteDraftB.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
+    func testDraftBShowsTheFirstThreeOpenRowsThenNMoreInTheTasksRhythm() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let model = presenter.model
+        XCTAssertFalse(model.isExpanded, "an item opens collapsed to three rows")
+        XCTAssertEqual(model.rows.count, 10)
+        XCTAssertEqual(model.visibleRows.count, 3)
+        XCTAssertTrue(model.visibleRows.allSatisfy { !$0.isDone }, "unfinished subtasks first (owner answer 5)")
+        XCTAssertEqual(model.hiddenRowCount, 7)
+        XCTAssertTrue(model.showsDisclosure)
+        XCTAssertEqual(model.disclosureLabel, "7 more…")
+        XCTAssertFalse(model.showsAddRow, "Add subtask is in the expanded list")
+        XCTAssertEqual(model.countLabel, "Subtasks · 4/10")
+        // The label, three 28 pt rows and "N more…"; no card padding.
+        XCTAssertEqual(model.blockHeight, 28 + 3 * 28 + 28)
+        XCTAssertEqual(TaskNoteMetrics.rowHeight, 28)
+        XCTAssertEqual(TaskNoteMetrics.rowTextIndent, TaskNoteMetrics.titleIndent, "row text on the title's (Tasks title) column")
+        XCTAssertEqual(TaskNoteMetrics.headToBlock, 10)
+        XCTAssertEqual(TaskNoteMetrics.blockToWriting, 12)
+        let host = presenter.host
+        host.restack()
+        XCTAssertEqual(host.blockFrame.height, model.blockHeight, accuracy: 0.5)
+        XCTAssertEqual(host.textView.frame.minY, host.blockFrame.maxY + 12, accuracy: 0.5)
+    }
+
+    func testExpandShowsEveryRowAddSubtaskAndShowLessAndIsRememberedPerItemOnly() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let defaults = freshDefaults()
+        let model = TaskNotePageModel(taskID: id, store: tasks, library: library, history: presenter.model.history, defaults: defaults)
+        let revision = tasks.revision
+        let steps = model.history.route.totalStepCount
+        model.toggleExpanded()
+        XCTAssertTrue(model.isExpanded)
+        XCTAssertEqual(model.visibleRows.count, 10)
+        XCTAssertEqual(model.hiddenRowCount, 0)
+        XCTAssertTrue(model.showsAddRow)
+        XCTAssertEqual(model.disclosureLabel, "Show less")
+        XCTAssertEqual(model.blockHeight, 28 + 10 * 28 + 28 + 28)
+        XCTAssertEqual(tasks.revision, revision, "expanding saves nothing")
+        XCTAssertEqual(model.history.route.totalStepCount, steps, "expanding is not history")
+        // Remembered for this item only.
+        let again = TaskNotePageModel(taskID: id, store: tasks, library: library, history: model.history, defaults: defaults)
+        XCTAssertTrue(again.isExpanded)
+        let other = try XCTUnwrap(tasks.subtasks(of: id).first?.id)
+        XCTAssertFalse(TaskNotePageModel(taskID: other, store: tasks, library: library, history: model.history, defaults: defaults).isExpanded)
+        model.toggleExpanded()
+        XCTAssertFalse(TaskNotePageModel(taskID: id, store: tasks, library: library, history: model.history, defaults: defaults).isExpanded)
+        // The old whole-block fold key is not read.
+        defaults.set(false, forKey: "AtticTaskNote.folded.\(id.uuidString)")
+        XCTAssertFalse(TaskNotePageModel(taskID: id, store: tasks, library: library, history: model.history, defaults: defaults).isExpanded)
+    }
+
+    func testZeroToThreeSubtasksShowAddSubtaskAndAFourthRevealsWithoutBeingRemembered() throws {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let defaults = freshDefaults()
+        let model = TaskNotePageModel(taskID: id, store: tasks, library: library, history: presenter.model.history, defaults: defaults)
+        XCTAssertEqual(model.rows.count, 2)
+        XCTAssertTrue(model.showsAddRow)
+        XCTAssertFalse(model.showsDisclosure)
+        XCTAssertNil(model.disclosureActionName)
+        XCTAssertEqual(model.blockHeight, 28 + 2 * 28 + 28)
+        model.setFocusInside(true)
+        model.newSubtaskText = "Third"
+        XCTAssertTrue(model.commitNewSubtask())
+        XCTAssertFalse(model.isExpanded)
+        XCTAssertTrue(model.showsAddRow, "three rows keep Add subtask")
+        model.newSubtaskText = "Fourth"
+        XCTAssertTrue(model.commitNewSubtask())
+        XCTAssertTrue(model.isExpanded, "the new fourth row and the field stay in sight")
+        XCTAssertTrue(model.isVisible(try XCTUnwrap(model.rows.last?.id)))
+        XCTAssertTrue(model.showsAddRow)
+        XCTAssertFalse(TaskNotePageModel(taskID: id, store: tasks, library: library, history: model.history, defaults: defaults).isExpanded,
+                       "a reveal does not change how the item opens")
+    }
+
+    func testCollapsingEndsARenameOnlyOnAHiddenRowAndKeepsTheRingOnScreen() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id, expanded: true)
+        let model = presenter.model
+        let shown = model.rows[1].id, hidden = model.rows[6].id
+        model.beginRename(shown)
+        model.setExpanded(false)
+        XCTAssertEqual(model.renamingID, shown, "a rename on a row still shown survives")
+        model.cancelRename()
+        model.setExpanded(true)
+        model.focusedRowID = hidden
+        model.beginRename(hidden)
+        model.setExpanded(false)
+        XCTAssertNil(model.renamingID)
+        XCTAssertEqual(model.focusedRowID, model.rows[2].id, "the ring moves to the last row on screen")
+        // ↓ holds still at the last shown row.
+        model.moveRing(by: 1)
+        XCTAssertEqual(model.focusedRowID, model.rows[2].id)
+    }
+
+    func testTheKeyboardAndFullKeyboardAccessReachNMore() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let model = presenter.model
+        // Collapsed: list → "N more…" → writing.
+        XCTAssertEqual(model.tabTarget(from: .title), .list)
+        XCTAssertEqual(model.tabTarget(from: .list), .more)
+        XCTAssertEqual(model.tabTarget(from: .more), .writing)
+        XCTAssertEqual(model.tabTarget(from: .more, backwards: true), .list)
+        model.requestFocus(.more)
+        XCTAssertEqual(model.focusRequest, .more)
+        // Expanded: list → Add subtask → "Show less" → writing.
+        model.toggleExpanded()
+        XCTAssertEqual(model.tabTarget(from: .list), .add)
+        XCTAssertEqual(model.tabTarget(from: .add), .more)
+        XCTAssertEqual(model.tabTarget(from: .more), .writing)
+        XCTAssertEqual(model.tabTarget(from: .add, backwards: true), .list)
+        // Add Subtask (menu) on a collapsed list shows the field.
+        model.toggleExpanded()
+        model.requestFocus(.add)
+        XCTAssertTrue(model.isExpanded)
+        XCTAssertEqual(model.focusRequest, .add)
+        // ⌃⇧Tab back to a row that is behind "N more…" reveals it.
+        model.setExpanded(false)
+        model.noteRowFocused(model.rows[8].id)
+        model.focusBlockFromWriting()
+        XCTAssertTrue(model.isExpanded)
+        XCTAssertEqual(model.focusRequest, .list)
+        XCTAssertEqual(model.focusedRowID, model.rows[8].id)
+        // With no disclosure, Add subtask goes on to the writing.
+        let small = try open(try seed(.boundary)).model
+        XCTAssertEqual(small.tabTarget(from: .add), .writing)
+    }
+
+    func testVoiceOverReadsSubtasksNOfMDoneWithAnExpandAction() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let model = presenter.model
+        XCTAssertEqual(model.spokenGroup, "Subtasks, 4 of 10 done")
+        XCTAssertEqual(model.disclosureActionName, "Show All Subtasks")
+        XCTAssertEqual(model.disclosureSpokenLabel, "Show 7 more subtasks")
+        model.toggleExpanded()
+        XCTAssertEqual(model.disclosureActionName, "Show Fewer Subtasks")
+        XCTAssertEqual(model.disclosureSpokenLabel, "Show fewer subtasks")
     }
 }

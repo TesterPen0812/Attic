@@ -137,7 +137,7 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertTrue(reopened.session?.isPersisted == true)
     }
 
-    /// Opening, folding and closing without writing leaves no note, no
+    /// Opening, expanding and closing without writing leaves no note, no
     /// association and no cached draft.
     func testClosingAnUntouchedTaskPageLeavesNothingBehind() async throws {
         let id = try seed(.nonote)
@@ -145,7 +145,7 @@ final class TaskPageSliceTests: XCTestCase {
         let draft = try XCTUnwrap(presenter.session)
         XCTAssertFalse(draft.isPersisted)
         XCTAssertEqual(draft.pendingTaskID, id)
-        presenter.model.toggleFold(); presenter.model.toggleFold()
+        presenter.model.toggleExpanded(); presenter.model.toggleExpanded()
         let closed = await presenter.close()
         XCTAssertTrue(closed)
         XCTAssertTrue(try ownNotes(id).isEmpty)
