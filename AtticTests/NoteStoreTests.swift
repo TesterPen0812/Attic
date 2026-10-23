@@ -26,6 +26,23 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertEqual(store.attachmentReconciliationPasses, passes, "the obsolete pass cannot invalidate the newer signature")
     }
 
+    func testB09LegacyRemovalDoesNotRebuildPreferredPayloadInReplicaScan() throws {
+        // A deterministic cost guard: each comparison must read only the
+        // candidate payload, never fault the preferred blob again per replica.
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Attic/Services/NoteStore.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "func removeAttachment("))
+        let end = try XCTUnwrap(source.range(of: "func recentlyDeletedAttachments()", range: start.upperBound..<source.endIndex))
+        let removal = String(source[start.lowerBound..<end.lowerBound])
+        let scans = try NSRegularExpression(pattern: #"contains\(where:\s*\{([^}]*)\}"#)
+        let matches = scans.matches(in: removal, range: NSRange(removal.startIndex..., in: removal))
+        XCTAssertFalse(matches.isEmpty, "the guard must inspect the replica comparisons")
+        for match in matches {
+            let body = (removal as NSString).substring(with: match.range(at: 1))
+            XCTAssertFalse(body.contains("NoteAttachmentReplicaSnapshot(preferred)"), "preferred payload must be snapshotted outside the replica scan")
+        }
+    }
+
     @MainActor
     func testB09LegacyAttachmentRemovalKeepsCanonicalNoteAndAttachment() async throws {
         for equivalent in [false, true] {

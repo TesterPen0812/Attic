@@ -838,11 +838,12 @@ final class NoteStore: ObservableObject {
             replica.deletedAt = timestamp
             replica.updatedAt = timestamp
         }
-        if let preferred, replicas.contains(where: {
-            NoteAttachmentReplicaSnapshot($0) != NoteAttachmentReplicaSnapshot(preferred)
-        }) {
-            for replica in replicas where replica !== preferred {
-                replica.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextDown)
+        if let preferred {
+            let snapshot = NoteAttachmentReplicaSnapshot(preferred)
+            if replicas.contains(where: { NoteAttachmentReplicaSnapshot($0) != snapshot }) {
+                for replica in replicas where replica !== preferred {
+                    replica.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextDown)
+                }
             }
         }
         for noteID in attachmentsByNoteID.keys {
