@@ -810,15 +810,40 @@ final class NoteStore: ObservableObject {
         }
         let timestamp = now()
         do {
-            for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
+            let notes = try storedNotesIfPresent(matching: noteID)
+            let preferred = Self.canonicalReplicas(from: notes).first
+            for note in notes { note.updatedAt = timestamp }
+            if let preferred, notes.contains(where: {
+                NoteReplicaSnapshot($0) != NoteReplicaSnapshot(preferred)
+                    || $0.pinnedAt != preferred.pinnedAt
+                    || $0.externalEditorName != preferred.externalEditorName
+                    || $0.externalEditedAt != preferred.externalEditedAt
+            }) {
+                for note in notes where note !== preferred {
+                    note.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextDown)
+                }
+            }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
             return false
         }
+        // Include removed rows: a stale removal must preserve the same
+        // winner too. This is the presentation comparator before staging.
+        let preferred = replicas.max {
+            if $0.updatedAt != $1.updatedAt { return $0.updatedAt < $1.updatedAt }
+            return String(reflecting: $0.persistentModelID) < String(reflecting: $1.persistentModelID)
+        }
         for replica in replicas {
             replica.deletedAt = timestamp
             replica.updatedAt = timestamp
+        }
+        if let preferred, replicas.contains(where: {
+            NoteAttachmentReplicaSnapshot($0) != NoteAttachmentReplicaSnapshot(preferred)
+        }) {
+            for replica in replicas where replica !== preferred {
+                replica.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextDown)
+            }
         }
         for noteID in attachmentsByNoteID.keys {
             attachmentsByNoteID[noteID]?.removeAll { $0.id == attachment.id }

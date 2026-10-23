@@ -27,6 +27,83 @@ final class NoteStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testB09LegacyAttachmentRemovalKeepsCanonicalNoteAndAttachment() async throws {
+        for equivalent in [false, true] {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let seed = ModelContext(container)
+            let id = UUID(), attachmentID = UUID()
+            let older = NoteItem(id: id, title: equivalent ? "A visible" : "Z older", body: "older", createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2))
+            let winner = NoteItem(id: id, title: "A visible", body: equivalent ? "older" : "winner", createdAt: older.createdAt, updatedAt: Date(timeIntervalSince1970: 3))
+            if equivalent { winner.content = older.content }
+            let first = NoteAttachment(id: attachmentID, noteID: id, originalFilename: "old.txt", byteCount: 1, sortIndex: 0, contentDigest: String(repeating: "a", count: 64), createdAt: older.createdAt, updatedAt: older.updatedAt, payload: Data([1]))
+            let second = NoteAttachment(id: attachmentID, noteID: id, originalFilename: equivalent ? "old.txt" : "visible.txt", byteCount: 1, sortIndex: 0, contentDigest: String(repeating: equivalent ? "a" : "b", count: 64), createdAt: first.createdAt, updatedAt: winner.updatedAt, payload: equivalent ? first.payload : Data([2]))
+            for row in [older, winner] { seed.insert(row) }
+            for row in [first, second] { seed.insert(row) }
+            try seed.save()
+            let store = trackAttachmentReconciliation(of: NoteStore(container: container, now: { Date(timeIntervalSince1970: 10) }, attachmentFileStore: makeTestAttachmentFileStore()))
+            let visible = try XCTUnwrap(store.notes.first)
+            let attachment = try XCTUnwrap(store.attachments(for: id).first)
+            XCTAssertEqual(visible.title, "A visible")
+            XCTAssertTrue(store.removeAttachment(attachment))
+            store.refresh()
+            XCTAssertEqual(store.notes.first?.title, "A visible")
+            XCTAssertEqual(store.notes.first?.body, equivalent ? "older" : "winner")
+            XCTAssertEqual(store.recentlyDeletedAttachments().first?.filename, equivalent ? "old.txt" : "visible.txt")
+            let fresh = ModelContext(container)
+            let notes = try fresh.fetch(FetchDescriptor<NoteItem>())
+            let files = try fresh.fetch(FetchDescriptor<NoteAttachment>())
+            XCTAssertEqual(Set(notes.map(\.title)), equivalent ? ["A visible"] : ["A visible", "Z older"])
+            XCTAssertEqual(Set(files.map(\.contentDigest)).count, equivalent ? 1 : 2)
+            XCTAssertEqual(Set(notes.compactMap(\.content)), Set([older.content, winner.content].compactMap { $0 }))
+            XCTAssertEqual(Set(files.compactMap(\.payload)), equivalent ? [Data([1])] : [Data([1]), Data([2])])
+            XCTAssertTrue(files.allSatisfy { $0.updatedAt <= $0.deletedAt! })
+            XCTAssertTrue(files.allSatisfy { $0.deletedAt == Date(timeIntervalSince1970: 10) })
+            if equivalent {
+                XCTAssertEqual(Set(notes.map(\.updatedAt)).count, 1)
+                XCTAssertEqual(Set(files.map(\.updatedAt)).count, 1)
+            }
+            XCTAssertTrue(store.delete(try XCTUnwrap(store.notes.first)))
+            XCTAssertEqual(store.recentlyDeletedNotes().first?.title, "A visible")
+            XCTAssertTrue(store.restoreDeleted(noteID: id))
+            XCTAssertEqual(store.notes.first?.title, "A visible")
+            await store.waitForAttachmentReconciliation()
+        }
+    }
+
+    @MainActor
+    func testB09FailedLegacyAttachmentRemovalRollsBackEveryReplica() async throws {
+        struct SaveFailure: Error {}
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "A visible", body: "keep")
+        let older = NoteItem(id: note.id, title: "Z older", body: "variant", updatedAt: note.updatedAt.addingTimeInterval(-1))
+        let file = NoteAttachment(noteID: note.id, originalFilename: "visible.txt", byteCount: 1, sortIndex: 0,
+                                  contentDigest: String(repeating: "a", count: 64), payload: Data([1]))
+        let oldFile = NoteAttachment(id: file.id, noteID: note.id, originalFilename: "older.txt", byteCount: 1, sortIndex: 0,
+                                     contentDigest: String(repeating: "b", count: 64), updatedAt: file.updatedAt.addingTimeInterval(-1), payload: Data([2]))
+        for row in [note, older] { seed.insert(row) }
+        for row in [file, oldFile] { seed.insert(row) }
+        try seed.save()
+        var failSave = false
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, persist: {
+            if failSave { throw SaveFailure() }; try $0.save()
+        }, attachmentFileStore: makeTestAttachmentFileStore()))
+        failSave = true
+        XCTAssertFalse(store.removeAttachment(try XCTUnwrap(store.attachments(for: note.id).first)))
+        XCTAssertEqual(store.notes.first?.title, "A visible")
+        XCTAssertEqual(store.attachments(for: note.id).first?.originalFilename, "visible.txt")
+        let fresh = ModelContext(container)
+        let notes = try fresh.fetch(FetchDescriptor<NoteItem>())
+        let files = try fresh.fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertEqual(Set(notes.map(\.updatedAt)), Set([note.updatedAt, older.updatedAt]))
+        XCTAssertEqual(Set(notes.compactMap(\.content)), Set([note.content, older.content].compactMap { $0 }))
+        XCTAssertEqual(Set(files.map(\.updatedAt)), Set([file.updatedAt, oldFile.updatedAt]))
+        XCTAssertEqual(Set(files.compactMap(\.payload)), [Data([1]), Data([2])])
+        XCTAssertTrue(files.allSatisfy { $0.deletedAt == nil })
+        await store.waitForAttachmentReconciliation()
+    }
+
+    @MainActor
     func testRepresentativeStoreDirectoryIsRemovedAfterXCTestTeardown() async throws {
         var directory: URL?
         // Registered first, this check runs last: after the helper's actual
