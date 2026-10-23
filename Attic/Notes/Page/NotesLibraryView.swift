@@ -354,7 +354,7 @@ struct NotesLibraryView: View {
                                 commands: { rowCommands(row.id) }, anchors: anchors,
                                 onShowActions: { showActions(for: row.id) }, onOpen: { onOpen(row.id) })
                                 .id(row.id)
-                                .contextMenu { AtticMenuItems(commands: rowCommands(row.id)) }
+                                .atticContextMenu { rowCommands(row.id) }
                                 // Delete and restore: the row folds away or springs back.
                                 .transition(design.reduceMotion ? .opacity
                                     : .opacity.combined(with: .move(edge: .leading)))
@@ -379,7 +379,7 @@ struct NotesLibraryView: View {
             // Right-click anywhere the rows are not (all of it, with none):
             // the library's history, so Undo never depends on a row.
             .contentShape(Rectangle())
-            .contextMenu { AtticMenuItems(commands: libraryCommands()) }
+            .atticContextMenu { libraryCommands() }
             .onAppear {
                 if let selected { proxy.scrollTo(selected, anchor: .center) }
             }

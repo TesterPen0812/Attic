@@ -129,9 +129,16 @@ final class PhaseXPicksTests: XCTestCase {
     func testTheTagPickersRowsHaveTheirDotFirstAndTheirTickLast() {
         let m = AtticDropdownMetrics.self
         let width = AtticTagPicker.rowsWidth(tags: ["launch"], create: nil)
-        XCTAssertEqual(width, ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth("#launch")
-                                   + m.columnGap + m.checkSlot))
-        XCTAssertEqual(m.dotSize, 7, "N-4's card: a 7 pt dot")
+        // Draft C (owner, 2026-10-23): never narrower than its 224 pt card,
+        // and an 8 pt dot (N-4's was 7).
+        XCTAssertEqual(width, max(m.dateCardWidth - m.inset * 2,
+                                  ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth("#launch")
+                                       + m.columnGap + m.checkSlot)))
+        let long = "launch-october-planning-and-the-rest"
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: [long], create: nil),
+                       ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth("#" + long)
+                            + m.columnGap + m.checkSlot), "the dot first, the tick's column last")
+        XCTAssertEqual(m.dotSize, 8, "draft C's 8 pt dot")
     }
 
     /// Native menus of choices draw their tick after the item and no

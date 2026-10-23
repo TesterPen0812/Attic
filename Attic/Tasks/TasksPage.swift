@@ -444,8 +444,10 @@ struct TasksPage: View {
         .onChange(of: store.revision) { _, _ in closePickerOfAMissingRow() }
         // A menu opening decides whether the last press opened it: if not
         // (the keyboard, VoiceOver, another menu), no earlier binding holds.
-        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
-            pointer.menuBegan(with: NSApp.currentEvent)
+        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { note in
+            // A glass menu names the press that opened it (it opens a turn
+            // after the press, when the current event may have moved on).
+            pointer.menuBegan(with: (note.userInfo?[AtticGlassMenu.openerKey] as? NSEvent) ?? NSApp.currentEvent)
         }
         .onChange(of: model.tab) { _, _ in
             cancelTransientState()
@@ -1599,7 +1601,8 @@ struct TasksPage: View {
                         meta: rowMeta(for: id, open: live.metaPopover),
                         onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) }
                     )
-                    .contextMenu { rowMenu(row, tab: tab) }
+                    // A kept page that is not shown opens no menu.
+                    .atticContextMenu { model.isPageShown && model.tab == tab ? taskCommands(row.id, tab: tab) : [] }
                 }
                 if editing {
                     TasksTitleDraftView(draft: model.titleDraft, content: drawRow)
@@ -2047,10 +2050,6 @@ struct TasksPage: View {
 
     /// The right-click menu: the task's commands (`taskCommands`), the
     /// same list the actions button and ⇧⌘I open.
-    private func rowMenu(_ row: TasksListRow, tab: TasksTab) -> some View {
-        AtticMenuItems { taskCommands(row.id, tab: tab) }
-    }
-
     /// Every command a row offers, in one list (round 10: one definition
     /// for the right-click menu, the actions button, ⇧⌘I, and the keys
     /// ⌘C and ⌘D, which run the command this list holds for their key).

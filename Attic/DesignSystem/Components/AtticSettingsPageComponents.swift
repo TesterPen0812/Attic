@@ -362,9 +362,7 @@ struct AtticDeletedItemRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onSelect?(NSEvent.modifierFlags) }
-        .contextMenu {
-            if let commands { AtticMenuItems(building: commands) }
-        }
+        .atticContextMenu { commands?() ?? [] }
         .accessibilityElement(children: .contain)
         .accessibilityAction(named: Text("Restore")) { onRestore() }
         .accessibilityActions {

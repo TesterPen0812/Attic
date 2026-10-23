@@ -3,7 +3,7 @@ import SwiftUI
 /// The date card on `TaskDateChoices` (the shared `AtticDateCard`): the
 /// same for the add bar's strip, a row's date and the right-click menu's
 /// "Pick a Date…". Typed text resolves through the shorthand's parser.
-/// Every one offers "Remove date" once there is a date (U-19).
+/// Every one offers "Clear Date" once there is a date (U-19; draft C).
 struct TaskDatePickerView: View {
     let choices: TaskDateChoices
     /// The task's current day (filled), if any.
@@ -23,7 +23,7 @@ struct TaskDatePickerView: View {
             calendar: calendar,
             typed: $typed,
             parse: { parser.parseDueDay($0)?.startDate(in: calendar) },
-            removeTitle: selected != nil && onRemove != nil ? String(localized: "Remove date") : nil,
+            removeTitle: selected != nil && onRemove != nil ? String(localized: "Clear Date") : nil,
             onPick: { onPick(DueDay(date: $0, calendar: calendar)) },
             onRemove: { onRemove?() }
         )

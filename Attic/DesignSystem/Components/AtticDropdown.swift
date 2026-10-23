@@ -1,19 +1,21 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Attic's own dropdowns (E1)
+// MARK: - Attic's own dropdowns (draft C, "Craft on glass")
 
-// The one pop-over list Attic draws itself (owner, 2026-10-02: E1 of
-// mockup p2-25, with p2-24 D's rows and p2-23's width rule): the `/` list,
-// the date card (Notes and Tasks), the tag and priority pickers, Aa and the
-// link card. Native menus (right-click, ⋯, the menu bar) stay native.
+// The pop-over cards Attic draws itself (owner, 2026-10-23: draft C, "the
+// menus look good", superseding E1 of 2026-10-02): the `/` list, the date
+// card (Notes and Tasks), the tag and priority pickers, Aa and the link
+// card. The command menus (right-click, ⋯, ⇧⌘I) are glass cards too, drawn
+// by `AtticGlassMenu` on the same metrics and tokens.
 //
-// - `AtticDropdownCard`: the solid card (no blur), one hairline, D's shadow,
-//   16 pt corners, rows 6 pt in (the Compact size, p2-28).
-// - `AtticDropdownRow`: a 28 pt row, touching its neighbours; the pill is the
-//   whole row. One highlight per list, which the keyboard and the pointer
-//   share (`onHover` moves the list's).
-// - `AtticDropdownField`: the card's field (Find or add a tag, the date).
+// - `AtticDropdownCard`: real system glass (Liquid Glass, regular) with 18 pt
+//   corners, a light hairline rim and a soft shadow; rows 4 pt in.
+// - `AtticDropdownRow`: a 32 pt row, touching its neighbours; the soft fill
+//   is the whole row. One highlight per list, which the keyboard and the
+//   pointer share (`onHover` moves the list's).
+// - `AtticDropdownField`: the card's field (Date, Tag), 30 pt in a 40 pt
+//   header ruled off by a full-width hairline (`AtticDropdownFieldHeader`).
 // - `AtticDropdownLayout`: the width rule and where the card opens;
 //   `AtticDropdownLayout.place` and `AtticDropdownSpace` are the one
 //   placement every card uses (the presenter's, the `/` list, Notes' date
@@ -23,36 +25,105 @@ import SwiftUI
 //   behind it.
 //
 // Every value is in `AtticDropdownMetrics` and the colour tokens
-// (`popoverFill`, `popoverOuterRim`, `dropdownHighlight`, `dropdownShadow`,
-// `dropdownContactShadow`).
+// (`dropdownHighlight`, `dropdownRim`, `dropdownRule`, `dropdownSelected`,
+// `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
+// `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: a solid fill, one hairline just outside it (Attic's
-/// outer-rim token, 1 pt under Increase Contrast) and D's two shadows. Solid,
-/// so Reduce Transparency changes nothing.
+/// The card's face: regular system glass (draft C on real glass), a light
+/// 0.5 pt rim just inside its edge (1 pt in the contrast edge's ink under
+/// Increase Contrast) and its soft shadow. Under Reduce Transparency, with
+/// the solid controls setting, and in `ImageRenderer` captures (which
+/// cannot draw glass) the face is the opaque `popoverFill` with
+/// `popoverOuterRim`.
 ///
-/// While the card unfolds (`AtticDropdownReveal`) the face is drawn at the
-/// revealed height, so its corners, hairline and shadow travel with it.
+/// While the card fades in or out (`AtticDropdownReveal`) the face goes
+/// with it, as one piece.
 struct AtticDropdownSurface: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticUnfold) private var unfold
+    @Environment(\.atticCapture) private var capture
+
+    /// Whether the face is glass for this design (and not a capture).
+    static func isGlass(_ design: AtticDesignContext, capture: Bool) -> Bool {
+        !capture && design.effectiveControls == .liquidGlass
+    }
 
     var body: some View {
         let tokens = design.tokens
         let shape = AtticUnfoldShape(cornerRadius: AtticDropdownMetrics.cornerRadius, reveal: unfold?.reveal ?? 1,
                                      fromTop: unfold?.fromTop ?? true)
-        let edge = design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width
+        let contrast = design.increaseContrast
+        let edge = contrast ? AtticHairline.widthIncreased : AtticHairline.width
         let shadow = Double(unfold?.shadow ?? 1)
         ZStack {
             AtticOutsideShadow(shape: shape, color: tokens.dropdownShadow.withAlpha(tokens.dropdownShadow.alpha * shadow),
                                spec: AtticShadows.dropdown)
             AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
                                spec: AtticShadows.dropdownContact)
-            shape.fill(tokens.popoverFill.color)
-            // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
-            shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
+            if Self.isGlass(design, capture: capture != nil) {
+                Color.clear.glassEffect(.regular, in: shape)
+                shape.inset(by: edge / 2)
+                    .stroke((contrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark) : tokens.dropdownRim).color,
+                            lineWidth: edge)
+            } else {
+                shape.fill(tokens.popoverFill.color)
+                // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
+                shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
+            }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// A full-width hairline: under a card's field header (1 pt, edge to edge
+/// of the card) or between a list's groups (0.5 pt, 4 pt in, 4 pt above
+/// and below).
+struct AtticDropdownRule: View {
+    /// The header's rule, through the card's inset to its edges.
+    var header = false
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let m = AtticDropdownMetrics.self
+        Rectangle()
+            .fill(design.tokens.dropdownRule.color)
+            .frame(height: header ? m.headerRule : m.separator)
+            .padding(.horizontal, header ? -m.inset : m.separatorInset)
+            .padding(.vertical, header ? 0 : m.separatorGap)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A list's section header ("Tags"): 11 pt semibold in a light ink, on the
+/// rows' leading edge.
+struct AtticDropdownSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        let m = AtticDropdownMetrics.self
+        AtticText(verbatim: title, style: .dropdownSection, ink: .helper)
+            .padding(.horizontal, m.rowPadding)
+            .padding(.bottom, m.sectionHeaderBottom)
+            .frame(maxWidth: .infinity, minHeight: m.sectionHeaderHeight, maxHeight: m.sectionHeaderHeight, alignment: .bottomLeading)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The card's 40 pt header: its field 6 pt in from the edges, then the
+/// full-width rule.
+struct AtticDropdownFieldHeader<Field: View>: View {
+    @ViewBuilder let field: Field
+
+    var body: some View {
+        let m = AtticDropdownMetrics.self
+        VStack(spacing: 0) {
+            field
+                .padding(.horizontal, m.fieldInset)
+                .padding(.top, (m.fieldHeaderHeight - m.fieldHeight) / 2 - m.inset)
+                .padding(.bottom, (m.fieldHeaderHeight - m.fieldHeight) / 2)
+            AtticDropdownRule(header: true)
+        }
     }
 }
 
@@ -689,15 +760,16 @@ struct AtticDropdownField: View {
         let font = AtticTextStyle.dropdownRow.font
         HStack(spacing: 0) {
             if let systemName {
-                AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, ink: .helper)
-                    .frame(width: m.dotSlot)
-                    .padding(.trailing, m.columnGap)
+                // Draft C: the magnifier 10 pt in, the text 32 pt in.
+                AtticIcon(systemName: systemName, size: m.iconSize, ink: .helper)
+                    .frame(width: m.iconSlot)
+                    .padding(.trailing, m.fieldTextLeading - m.fieldIconLeading - m.iconSlot)
                     .accessibilityHidden(true)
             }
             ZStack(alignment: .leading) {
                 Text(verbatim: placeholder).font(font).lineLimit(1).fixedSize().hidden()
                     .accessibilityHidden(true)
-                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.helper)))
+                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.placeholder)))
                     .textFieldStyle(.plain)
                     .font(font)
                     .modifier(AtticDropdownFieldFocusModifier(focus: focus))
@@ -706,9 +778,10 @@ struct AtticDropdownField: View {
                     .accessibilityIdentifier(identifier ?? "")
             }
         }
-        .padding(.horizontal, m.rowPadding)
+        .padding(.leading, systemName == nil ? m.rowPadding : m.fieldIconLeading)
+        .padding(.trailing, m.rowPadding)
         .frame(height: m.fieldHeight)
-        .background(RoundedRectangle(cornerRadius: m.highlightRadius, style: .continuous).fill(design.tokens.recessed.color))
+        .background(RoundedRectangle(cornerRadius: m.fieldRadius, style: .continuous).fill(design.tokens.dropdownHighlight.color))
     }
 }
 
@@ -1300,11 +1373,12 @@ enum AtticDropdownReveal {
             return Frame(reveal: 1, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
                          contentBlur: 0, shadow: 1 - e)
         }
+        // Draft C (owner, 2026-10-23): the card opens as one piece too, as
+        // it closes (V-11): whole, a quick fade from 0.98 and 4 pt towards
+        // its anchor, never unfolding row by row (glass is never re-cut).
         let e = CGFloat(curve.y(at: t))
-        let contentTime = (t * openDuration - contentDelay) / contentDuration
-        let c = CGFloat(curve.y(at: contentTime))
-        return Frame(reveal: e, opacity: opacity(progress: e), scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
-                     contentBlur: contentBlur * (1 - c), shadow: e)
+        return Frame(reveal: 1, opacity: opacity(progress: e), scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
+                     contentBlur: 0, shadow: e)
     }
 
     #if DEBUG
@@ -1345,7 +1419,8 @@ struct AtticUnfoldPresence<Value: Equatable, Content: View>: View {
         ZStack {
             if let value {
                 AtticUnfolding(fromTop: fromTop, reduced: reduced) { content(value) }
-                    .transition(reduced ? .opacity.animation(AtticDropdownReveal.fadeAnimation) : AtticDropdownReveal.presence(fromTop: fromTop))
+                    // Reduce Motion: there and gone at once (draft C).
+                    .transition(reduced ? .identity : AtticDropdownReveal.presence(fromTop: fromTop))
             }
         }
         // The insertion and removal run in an animated transaction, as
@@ -1632,8 +1707,8 @@ struct AtticDropdownStage: View {
             .animation(reduce ? nil : (closing ? AtticDropdownReveal.closeAnimation : AtticDropdownReveal.openAnimation)) {
                 $0.modifier(AtticUnfoldEffect(clock: reduce || model.shown ? 1 : 0, closing: closing, fromTop: fromTop))
             }
-            // Reduced: the fade alone.
-            .animation(model.shown ? AtticDropdownReveal.fadeAnimation : AtticMotionScale.exit) {
+            // Reduced: no motion at all, opening or closing (draft C).
+            .animation(nil) {
                 $0.opacity(!reduce || model.shown ? 1 : 0)
             }
             .environment(\.atticDropdownFocusRequest, model.focusRequest)

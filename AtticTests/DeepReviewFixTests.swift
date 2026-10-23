@@ -234,7 +234,11 @@ final class DeepReviewFixTests: XCTestCase {
                                                      timestamp: ProcessInfo.processInfo.systemUptime,
                                                      windowNumber: hosted.window.windowNumber, context: nil,
                                                      eventNumber: 3, clickCount: 1, pressure: 1))
-        let menu = try XCTUnwrap(content.menu(for: press), "a secondary click on the row has the row's menu")
+        // Draft C (owner, 2026-10-23): the row's right-click menu is a glass
+        // menu built from its commands; the same commands as an NSMenu stand
+        // in for choosing an item here.
+        _ = content
+        let menu = AtticNativeMenu.make(try XCTUnwrap(AtticContextMenus.commands(for: press), "a secondary click on the row has the row's menu"))
         menu.update()
         let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
         more.update()
@@ -350,7 +354,7 @@ final class DeepReviewFixTests: XCTestCase {
                                                      timestamp: ProcessInfo.processInfo.systemUptime,
                                                      windowNumber: hosted.window.windowNumber, context: nil,
                                                      eventNumber: 3, clickCount: 1, pressure: 1))
-        let contextMenu = try XCTUnwrap(hosted.window.contentView?.menu(for: press))
+        let contextMenu = AtticNativeMenu.make(try XCTUnwrap(AtticContextMenus.commands(for: press)))
         makeCurrent(try keyEvent("\r", keyCode: 36))
         XCTAssertEqual(NSApp.currentEvent?.type, .keyDown, "the Return is the current event")
         try chooseOpenFiles(in: contextMenu)

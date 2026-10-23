@@ -199,12 +199,10 @@ struct TasksFileRow: View {
             // its name), never the row's hover fill and buttons.
             TaskFileDragPreview(file: file)
         }
-        .contextMenu {
-            Button(String(localized: "Quick Look"), systemImage: "eye", action: preview)
-            Button(String(localized: "Open"), systemImage: "arrow.up.forward.square", action: open)
-                .disabled(!canOpen)
-            Divider()
-            Button(String(localized: "Remove"), systemImage: "trash", role: .destructive, action: remove)
+        .atticContextMenu {
+            [AtticMenuCommand("Quick Look", systemImage: "eye", action: preview),
+             AtticMenuCommand("Open", systemImage: "arrow.up.forward.square", isDisabled: !canOpen, action: open),
+             AtticMenuCommand("Remove", systemImage: "trash", isDestructive: true, startsSection: true, action: remove)]
         }
         .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false), value: showsControls)
         .help(file.filename)

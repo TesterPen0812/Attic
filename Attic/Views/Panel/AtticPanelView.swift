@@ -237,9 +237,7 @@ struct AtticPanelView: View {
                 cornerSize: cornerRadius,
                 elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil
             ))
-            .contextMenu {
-                AtticMenuItems(commands: panelMenuCommands)
-            }
+            .atticContextMenu { panelMenuCommands }
     }
 
     private var storeObservedPanel: some View {

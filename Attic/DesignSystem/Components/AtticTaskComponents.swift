@@ -2073,7 +2073,7 @@ private struct AtticSubtaskCommands: ViewModifier {
                     return AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
                                                               modifiers: press.modifiers, in: commands, showActions: showActions)
                 }
-                .contextMenu { AtticMenuItems(commands: commands) }
+                .atticContextMenu { commands }
         }
     }
 }
@@ -2525,7 +2525,7 @@ private struct AtticTagColourMenu: ViewModifier {
         if commands.isEmpty {
             content
         } else {
-            content.contextMenu { AtticMenuItems(commands: commands) }
+            content.atticContextMenu { commands }
         }
     }
 }

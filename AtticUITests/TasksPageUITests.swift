@@ -854,7 +854,7 @@ final class TasksPageUITests: XCTestCase {
         // The date sits at the row's right end, on the title line.
         let row = row("Book dentist")
         row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
-        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear Date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the picker offers Remove date")
         clickDropdownRow(remove)
         waitFor(!label("Book dentist").contains("due"), "the date is removed")
@@ -948,7 +948,7 @@ final class TasksPageUITests: XCTestCase {
     func testKeysPressedInTheDatePickerNeverReachTheRow() throws {
         let row = row("Book dentist")
         row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
-        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        let remove = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear Date")).firstMatch
         XCTAssertTrue(remove.waitForExistence(timeout: 3), "the date picker opens")
         pressRowKeys()
         XCTAssertTrue(self.row("Book dentist").exists, "the task is still there")

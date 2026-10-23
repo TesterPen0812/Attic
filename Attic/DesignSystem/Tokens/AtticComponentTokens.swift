@@ -55,8 +55,10 @@ enum AtticShadows {
     /// Attic's own dropdowns (E1, p2-25): D's drop shadow, CSS
     /// `0 12px 32px` and `0 2px 6px` (a SwiftUI radius is half a CSS blur),
     /// in `dropdownShadow` and `dropdownContactShadow`.
-    static let dropdown = AtticShadowSpec(radius: 16, y: 12)
-    static let dropdownContact = AtticShadowSpec(radius: 3, y: 2)
+    /// Draft C's card shadow (the Craft spec): CSS `0 6px 16px`, black
+    /// 12 % Light / 28 % Dark, and a hairline-close contact shadow.
+    static let dropdown = AtticShadowSpec(radius: 8, y: 6)
+    static let dropdownContact = AtticShadowSpec(radius: 0.5, y: 0)
 }
 
 /// Hairlines of raised surfaces over content (menus, pop-overs, toasts, drag cards).
@@ -361,84 +363,122 @@ enum AtticPopoverMetrics {
     static let groupGap: CGFloat = 6
 }
 
-/// Attic's own dropdowns, the E1 family (owner, 2026-10-02; mockups p2-25
-/// E1, p2-24 D, p2-23): the `/` list, the date card (Notes and Tasks), the
-/// tag and priority pickers, Aa and the link card. A solid card (no blur)
-/// with one hairline and D's shadow. The Compact size (owner, 2026-10-05,
-/// p2-28): 16 pt corners, 28 pt rows touching, 6 pt in from the edge, with
-/// 13 pt names (`AtticTextStyle.dropdownRow`).
+/// Attic's own dropdowns and menus: draft C, "Craft on glass" (owner,
+/// 2026-10-23: "the menus look good"), which supersedes E1 (2026-10-02)
+/// and its Compact size (2026-10-05). Craft's finish on real glass, sized
+/// for the 320 pt panel (`phaseX/dropdown-redo/craft-spec-from-owner-codex.md`,
+/// draft C's `work/c-style.css`): 18 pt corners, rows 4 pt in, 32 pt rows
+/// with 13 pt names, 14 pt icons, a soft 6 pt hover fill, hairline
+/// separators, 11 pt section headers, a 30 pt field in a 40 pt header.
+/// The same values draw the SwiftUI cards (the date card, the tag picker,
+/// the `/` list and the rest) and the glass menus (`AtticGlassMenu`).
 /// Every value of the look is here, so it is tuned in one place.
 enum AtticDropdownMetrics {
-    static let cornerRadius: CGFloat = 16
+    static let cornerRadius: CGFloat = 18
     /// Rows and fields sit this far in from the card's edge.
-    static let inset: CGFloat = 6
-    static let rowHeight: CGFloat = 28
-    static let rowPadding: CGFloat = 9
-    /// The pill: the whole row.
-    static let highlightRadius: CGFloat = 8
-    /// Native soft scroll edges overlap this small inset in cramped lists.
+    static let inset: CGFloat = 4
+    static let rowHeight: CGFloat = 32
+    static let rowPadding: CGFloat = 10
+    /// The hover fill: the whole row, 6 pt corners.
+    static let highlightRadius: CGFloat = 6
     static let iconSize: CGFloat = 13
-    static let iconSlot: CGFloat = 16
-    /// Between a row's columns (check, mark, icon, name).
-    static let columnGap: CGFloat = 10
-    static let checkSize: CGFloat = 10.5
-    /// The tick's column, at the row's end (N-4's card design).
+    static let iconSlot: CGFloat = 14
+    /// Between a row's columns (dot or icon, name).
+    static let columnGap: CGFloat = 8
+    static let checkSize: CGFloat = 11
+    /// The tick's column, at the row's end.
     static let checkSlot: CGFloat = 12
-    /// A tag's colour dot before its name (N-4's card: 7 pt), in a column
-    /// as wide as the tick's.
-    static let dotSize: CGFloat = 7
-    static let dotSlot: CGFloat = 12
+    /// A tag's colour dot before its name (draft C: 8 pt), in the icons'
+    /// column.
+    static let dotSize: CGFloat = 8
+    static let dotSlot: CGFloat = 14
     /// A priority's mark (↓, !, !!).
     static let markSlot: CGFloat = 15
-    /// The least room before a trailing detail (⌥⌘2, 2 Oct).
+    /// The least room before a trailing detail (Fri, 2 Oct).
     static let detailGap: CGFloat = 14
-    /// A field (Find or add a tag, the link): 26 pt on the row's pill; the
-    /// gap under it.
-    static let fieldHeight: CGFloat = 26
-    static let fieldGap: CGFloat = 3
-    /// A quiet gap between groups (space, never a line).
-    static let groupGap: CGFloat = 5
-    /// The width rule (p2-23): fits its content, never under 144 pt, never
-    /// past the panel's 12 pt margin.
-    static let minWidth: CGFloat = 144
+    /// The field (Date, Tag): 30 pt with 12 pt corners, 6 pt in from the
+    /// card's edge, in a 40 pt header ruled off by a full-width hairline.
+    static let fieldHeight: CGFloat = 30
+    static let fieldRadius: CGFloat = 12
+    static let fieldHeaderHeight: CGFloat = 40
+    /// The field is this much further in than the rows (6 pt from the edge).
+    static let fieldInset: CGFloat = 2
+    /// The magnifier's slot: text starts 32 pt into the field.
+    static let fieldIconLeading: CGFloat = 10
+    static let fieldTextLeading: CGFloat = 32
+    /// The gap under a field with no header rule (the link card).
+    static let fieldGap: CGFloat = 4
+    /// The header's rule: full width, 1 pt.
+    static let headerRule: CGFloat = 1
+    /// A separator between a menu's groups: a 0.5 pt hairline 4 pt in from
+    /// the rows' edge, with 4 pt above and below.
+    static let separator: CGFloat = 0.5
+    static let separatorInset: CGFloat = 4
+    static let separatorGap: CGFloat = 4
+    static var separatorHeight: CGFloat { separator + separatorGap * 2 }
+    /// A section header ("Tags", "Date"): 11 pt semibold on the row's
+    /// leading edge, 26 pt tall with its text 5 pt off the bottom.
+    static let sectionHeaderHeight: CGFloat = 26
+    static let sectionHeaderBottom: CGFloat = 5
+    /// A quiet gap between groups (Notes' cards that have no rule).
+    static let groupGap: CGFloat = 4
+    /// The width rule: fits its content, never under 150 pt, never past
+    /// the panel's 12 pt margin.
+    static let minWidth: CGFloat = 150
     static let panelMargin: CGFloat = 12
     /// From the anchor (the caret's line, a strip button) to the card.
     static let anchorGap: CGFloat = 6
-    /// Room around the card for its shadow (12 down plus a 32 pt blur).
+    /// Room around the card for its shadow (6 down plus a 16 pt blur).
     static let shadowRoom: CGFloat = 44
-    /// The date card (p2-30 draft 2 on p2-29 draft A; O14-09's polish,
-    /// 2026-10-14): one grid of 29 x 29 cells, each holding a 25 pt
-    /// rounded-square mark (7 pt corners), so the marks are 4 pt apart
-    /// across and down. The month header is a row as tall as a week (3 pt
-    /// more above it), on the grid's edges: the title starts at the first
-    /// column's mark and › ends at the last column's. Then a 16 pt weekday
-    /// row and the weeks. Every mark is 11 pt from the card's edges (3 pt
-    /// in from the rows' edge, 3 pt above the card's).
-    static let monthHeaderTop: CGFloat = 3
-    static let monthChevron: CGFloat = 10
-    /// ‹ and ›: 22 pt marks (6 pt corners), 2 pt apart, lit as a day is.
-    static let monthNavMark: CGFloat = 22
-    static let monthNavRadius: CGFloat = 6
-    static let monthNavGap: CGFloat = 2
-    /// Today in the month header: 12 pt text on a mark as tall as ‹ ›
-    /// (their corners too), 2 pt before ‹.
-    static let todayHeight: CGFloat = 22
-    static let todayPadding: CGFloat = 6
-    static let todayRadius: CGFloat = 6
-    static let monthTodayGap: CGFloat = 2
-    static let weekdayHeight: CGFloat = 16
-    static let monthCellWidth: CGFloat = 29
-    static let monthCellHeight: CGFloat = 29
-    static let monthMark: CGFloat = 25
-    static let monthMarkRadius: CGFloat = 7
-    static let monthGridInset: CGFloat = 3
-    static let monthGridBottom: CGFloat = 3
-    /// The month title's start and ›'s end: the first and last columns'
-    /// marks.
-    static let monthTitleLeading: CGFloat = monthGridInset + (monthCellWidth - monthMark) / 2
-    static let monthHeaderTrailing: CGFloat = monthTitleLeading
+    /// The date card (draft C on the Craft spec): 224 pt wide, its body
+    /// 8 pt in. The month title (13 medium) in a 28 pt header with ‹ ⦿ ›
+    /// in 24 x 28 frames; a 20 pt weekday strip after a 4 pt gap; six
+    /// weeks of 29.7 x 26.7 cells (no gap), whose marks are 25.7 x 22.7
+    /// rounded squares (6 pt corners); then Clear Date, a 32 pt row with
+    /// 10 pt corners, 8 pt below the grid.
+    static let dateCardWidth: CGFloat = 224
+    static let dateBodyInset: CGFloat = 8
+    static let monthHeaderHeight: CGFloat = 28
+    static let monthTitleLeading: CGFloat = 6
+    static let monthNavWidth: CGFloat = 24
+    static let monthChevron: CGFloat = 11
+    static let weekdayGap: CGFloat = 4
+    static let weekdayHeight: CGFloat = 20
+    static let monthWeeks = 6
+    static let monthCellWidth: CGFloat = (dateCardWidth - dateBodyInset * 2) / 7
+    static let monthCellHeight: CGFloat = 26.7
+    static let monthMarkWidth: CGFloat = monthCellWidth - 4
+    static let monthMarkHeight: CGFloat = monthCellHeight - 4
+    static let monthMarkRadius: CGFloat = 6
+    static let clearGap: CGFloat = 8
+    static let clearHeight: CGFloat = 32
+    static let clearRadius: CGFloat = 10
     /// How long a closing card stays in the overlay for its leave motion.
     static let leaveCleanup: TimeInterval = 0.3
+}
+
+/// The glass menus (`AtticGlassMenu`): right-click, ⋯ and the other
+/// command menus, on `AtticDropdownMetrics`' card and rows. Submenus are
+/// their own floating cards, 4 pt to the side, their first row level with
+/// the row that opened them; they open after 180 ms of hover and keep
+/// 250 ms of grace for a pointer on its way to them (the Craft spec).
+enum AtticMenuMetrics {
+    static let minWidth: CGFloat = 150
+    static let maxWidth: CGFloat = 320
+    static let trailingGap: CGFloat = 16
+    static let chevronSize: CGFloat = 10
+    static let submenuGap: CGFloat = 4
+    static let submenuDelay: TimeInterval = 0.18
+    static let pointerGrace: TimeInterval = 0.25
+    /// Kept clear of the screen's visible edges.
+    static let screenMargin: CGFloat = 6
+    /// From the point or the anchor to the menu.
+    static let anchorGap: CGFloat = 4
+    /// Type-to-select forgets what was typed after this long.
+    static let typeAheadReset: TimeInterval = 1
+    /// The open and close fades (none under Reduce Motion).
+    static let openFade: TimeInterval = 0.1
+    static let closeFade: TimeInterval = 0.12
 }
 
 /// The title that opens a native menu (a note's or a page's title).

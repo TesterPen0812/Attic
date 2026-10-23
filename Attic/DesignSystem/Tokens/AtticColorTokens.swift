@@ -283,12 +283,19 @@ struct AtticColorTokens: Equatable, Sendable {
     let popoverInnerRim: AtticRGBA
     let popoverOuterRim: AtticRGBA
     let popoverShadow: AtticRGBA
-    /// Attic's own dropdowns (E1): the pill on a solid `popoverFill`
-    /// (#F1F1F1 / #444445) and D's two shadows. The card's edge is
-    /// `popoverOuterRim`, which steps up under Increase Contrast.
+    /// Attic's own dropdowns and menus (draft C, owner 2026-10-23): a soft
+    /// hover fill of the foreground (5 % Light / 10 % Dark) that reads on
+    /// glass and on the solid fallback alike, the card's shadow and contact
+    /// shadow, its light glass rim (white 50 % / 15 %), the hairline rule
+    /// between groups and under a field, and the chosen day's fill (8 % /
+    /// 12 %). Under Reduce Transparency the card is `popoverFill` with
+    /// `popoverOuterRim`; under Increase Contrast every one steps up.
     let dropdownHighlight: AtticRGBA
     let dropdownShadow: AtticRGBA
     let dropdownContactShadow: AtticRGBA
+    let dropdownRim: AtticRGBA
+    let dropdownRule: AtticRGBA
+    let dropdownSelected: AtticRGBA
     let dragShadow: AtticRGBA
 
     // MARK: Inks
@@ -968,9 +975,12 @@ struct AtticColorTokens: Equatable, Sendable {
             popoverInnerRim: dark ? .white(ic ? 0.24 : 0.10) : .white(0.9),
             popoverOuterRim: dark ? (ic ? .white(0.35) : .black(0.55)) : .black(ic ? 0.30 : 0.11),
             popoverShadow: .black(dark ? 0.40 : 0.11),
-            dropdownHighlight: dark ? AtticRGBA(0x444445) : AtticRGBA(0xF1F1F1),
-            dropdownShadow: .black(dark ? 0.42 : 0.12),
-            dropdownContactShadow: .black(dark ? 0.24 : 0.05),
+            dropdownHighlight: dark ? .white(ic ? 0.18 : 0.10) : .black(ic ? 0.12 : 0.05),
+            dropdownShadow: .black(dark ? 0.28 : 0.12),
+            dropdownContactShadow: .black(dark ? 0.30 : 0.05),
+            dropdownRim: .white(dark ? (ic ? 0.35 : 0.15) : 0.5),
+            dropdownRule: dark ? .white(ic ? 0.30 : 0.10) : .black(ic ? 0.28 : 0.08),
+            dropdownSelected: dark ? .white(ic ? 0.22 : 0.12) : .black(ic ? 0.16 : 0.08),
             dragShadow: .black(dark ? 0.45 : 0.16),
             inks: inks
         )
