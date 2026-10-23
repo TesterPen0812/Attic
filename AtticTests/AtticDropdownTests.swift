@@ -2258,6 +2258,22 @@ final class AtticDateCardTests: XCTestCase {
     /// Monday 5 October 2026, as in the drafts.
     private var today: Date { date(2026, 10, 5) }
 
+    /// Menus fix 1: the grid takes the pointer for its days (one tap and
+    /// one hover, not a button per day); each point answers its own cell,
+    /// edges included, and nothing outside the six weeks.
+    @MainActor func testTheGridFindsTheDayUnderThePointer() {
+        let d = AtticDropdownMetrics.self
+        let month = AtticDateMonth(containing: today, calendar: calendar)
+        // October 2026 starts on a Thursday: the grid opens on Monday 28 September.
+        XCTAssertEqual(AtticDateCard.day(at: CGPoint(x: 1, y: 1), in: month), date(2026, 9, 28))
+        XCTAssertEqual(AtticDateCard.day(at: CGPoint(x: d.monthCellWidth * 3 + 1, y: 1), in: month), date(2026, 10, 1))
+        XCTAssertEqual(AtticDateCard.day(at: CGPoint(x: d.monthCellWidth * 7 - 0.5, y: d.monthCellHeight * 6 - 0.5), in: month),
+                       date(2026, 11, 8), "the last cell: the grid's bottom-right corner")
+        XCTAssertNil(AtticDateCard.day(at: CGPoint(x: d.monthCellWidth * 7, y: 1), in: month))
+        XCTAssertNil(AtticDateCard.day(at: CGPoint(x: 1, y: d.monthCellHeight * 6), in: month))
+        XCTAssertNil(AtticDateCard.day(at: CGPoint(x: -1, y: 1), in: month))
+    }
+
     private func parse(_ text: String) -> Date? {
         NoteDateQuery.parse(text, today: today, calendar: calendar, locale: Locale(identifier: "en_GB"))
     }

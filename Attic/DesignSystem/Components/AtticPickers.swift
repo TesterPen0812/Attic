@@ -480,6 +480,8 @@ struct AtticDateCard: View {
     @State private var state: AtticDateCardState?
     /// ‹ (-1) or › (1) under the pointer.
     @State private var hoveredMonthStep: Int?
+    /// The grid's day under the pointer.
+    @State private var hoveredDay: Date?
     @FocusState private var focused: Bool
     @Environment(\.atticDesign) private var design
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
@@ -523,6 +525,27 @@ struct AtticDateCard: View {
                         }
                     }
                 }
+                // One pointer for the grid (menus fix 1): a press picks the
+                // day under it and the pointer lights it, as 42 buttons with
+                // a hover each did, at a third of the open's cost.
+                .contentShape(Rectangle())
+                .onTapGesture(coordinateSpace: .local) { point in
+                    if let day = Self.day(at: point, in: month) { onPick(day) }
+                }
+                .onContinuousHover(coordinateSpace: .local) { phase in
+                    switch phase {
+                    case let .active(point):
+                        guard AtticListHighlight.isPointerMove(NSApp.currentEvent), let day = Self.day(at: point, in: month) else { return }
+                        if let hovered = hoveredDay, hovered != day { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
+                        hoveredDay = day
+                        if !current.isLit(day, calendar: calendar) { update { $0.hoverDay(day, inside: true, calendar: calendar) } }
+                    case .ended:
+                        if let hovered = hoveredDay { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
+                        hoveredDay = nil
+                    }
+                }
+                .preference(key: AtticDropdownHighlightKey.self,
+                            value: state.lit == .day ? Self.dayID(calendar.startOfDay(for: state.cursor)) : nil)
                 if let removeTitle {
                     clearRow(removeTitle, lit: state.lit == .remove)
                         .padding(.top, d.clearGap)
@@ -759,37 +782,33 @@ struct AtticDateCard: View {
         // Today keeps a ring of its own, so it reads apart from the choice.
         let ring: AtticRGBA? = isToday ? tokens.ink(.helper) : (isSelected ? tokens.dropdownRule : nil)
         let spokenState = [isToday ? String(localized: "today") : nil, isSelected ? String(localized: "chosen") : nil].compactMap { $0 }
-        return Button { onPick(day) } label: {
-            AtticText(verbatim: "\(calendar.component(.day, from: day))", style: isSelected || isToday ? .dropdownDaySelected : .dropdownDay,
-                      ink: .body)
-                .opacity(quiet)
-                .frame(width: d.monthMarkWidth, height: d.monthMarkHeight)
-                .background {
-                    if fill != nil || ring != nil {
-                        AtticCalendarMark(radius: d.monthMarkRadius, fill: (fill ?? .clear).color, ring: (ring ?? .clear).color)
-                    }
+        // A plain cell: the grid takes the pointer (`day(at:in:)`), and
+        // VoiceOver presses the cell itself.
+        return AtticText(verbatim: "\(calendar.component(.day, from: day))", style: isSelected || isToday ? .dropdownDaySelected : .dropdownDay,
+                         ink: .body)
+            .opacity(quiet)
+            .frame(width: d.monthMarkWidth, height: d.monthMarkHeight)
+            .background {
+                if fill != nil || ring != nil {
+                    AtticCalendarMark(radius: d.monthMarkRadius, fill: (fill ?? .clear).color, ring: (ring ?? .clear).color)
                 }
-                .frame(width: d.monthCellWidth, height: d.monthCellHeight)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        .focusable(false)
-        .focusEffectDisabled()
-        .preference(key: AtticDropdownHighlightKey.self, value: lit ? Self.dayID(day) : nil)
-        .id(Self.dayID(day))
-        // The pointer moves the highlight, as it moves a menu's.
-        .onContinuousHover { phase in
-            switch phase {
-            case .active:
-                guard AtticListHighlight.isPointerMove(NSApp.currentEvent), !current.isLit(day, calendar: calendar) else { return }
-                update { $0.hoverDay(day, inside: true, calendar: calendar) }
-            case .ended:
-                update { $0.hoverDay(day, inside: false, calendar: calendar) }
             }
-        }
-        .accessibilityLabel(AtticDateCardFormat.spoken(day, calendar: calendar))
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityValue(spokenState.joined(separator: ", "))
+            .frame(width: d.monthCellWidth, height: d.monthCellHeight)
+            .id(Self.dayID(day))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(AtticDateCardFormat.spoken(day, calendar: calendar))
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityValue(spokenState.joined(separator: ", "))
+            .accessibilityAction { onPick(day) }
+    }
+
+    /// The day at `point` in the grid (its own coordinates), if any.
+    static func day(at point: CGPoint, in month: AtticDateMonth) -> Date? {
+        let d = AtticDropdownMetrics.self
+        guard point.x >= 0, point.y >= 0 else { return nil }
+        let column = Int(point.x / d.monthCellWidth), week = Int(point.y / d.monthCellHeight)
+        guard column < 7, week < month.weeks else { return nil }
+        return month.cells[week * 7 + column]
     }
 
     private static func dayID(_ day: Date) -> String { "attic.date.\(Int(day.timeIntervalSinceReferenceDate))" }
