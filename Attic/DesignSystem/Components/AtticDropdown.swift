@@ -888,6 +888,25 @@ enum AtticDropdownLayout {
         return Placement(frame: placed.frame, side: placed.side,
                          heightLimit: placed.frame.height < height ? placed.frame.height : nil)
     }
+
+    /// A card cut short to fit (`heightLimit`) through a scroll or a move:
+    /// placed once, it moves with its anchor and keeps its cut, stopping
+    /// at the edge of `bounds` rather than leave them. Re-cutting it on
+    /// every frame re-laid its content and re-shaped real glass over
+    /// moving rows (menus fix 1). Nil when it is placed again instead: it
+    /// fits (moving it is then all a placement does), `bounds` changed
+    /// (the panel resized), or its anchor left the view or went wholly
+    /// under the card.
+    static func follow(_ placement: Placement, placedAnchor: CGRect, placedBounds: CGRect,
+                       anchor: CGRect, bounds: CGRect, anchorShown: Bool) -> Placement? {
+        guard placement.heightLimit != nil, bounds == placedBounds, anchorShown,
+              anchor.maxY > bounds.minY, anchor.minY < bounds.maxY else { return nil }
+        var frame = placement.frame.offsetBy(dx: anchor.minX - placedAnchor.minX, dy: anchor.minY - placedAnchor.minY)
+        frame.origin.x = max(bounds.minX, min(frame.minX, bounds.maxX - frame.width))
+        frame.origin.y = max(bounds.minY, min(frame.minY, bounds.maxY - frame.height))
+        guard !(frame.minY <= anchor.minY && frame.maxY >= anchor.maxY) else { return nil }
+        return Placement(frame: frame, side: placement.side, heightLimit: placement.heightLimit)
+    }
 }
 
 /// Where a view's cards go: the panel's overlay layer (above the page,
@@ -1761,6 +1780,10 @@ final class AtticDropdownPresenter {
     private var resignObserver: NSObjectProtocol?
     private var geometryObservers: [NSObjectProtocol] = []
     private var placementScheduled = false
+    /// The last full placement, with the anchor and bounds it was made
+    /// for: a card cut short follows its anchor from it
+    /// (`AtticDropdownLayout.follow`).
+    private var lastPlacement: (placement: AtticDropdownLayout.Placement, anchor: CGRect, bounds: CGRect)?
     private var removal: DispatchWorkItem?
     private var updateScheduled = false
     private var pendingClose: DispatchWorkItem?
@@ -1805,7 +1828,9 @@ final class AtticDropdownPresenter {
         let fitting = host.fittingSize
         let ideal = contentWidth ?? (fitting.width - room * 2)
         let height = contentHeight ?? max(0, fitting.height - room * 2)
-        let placed = space.place(idealWidth: ideal, height: height, anchor: space.anchor(anchor.bounds, in: anchor), prefer: prefer)
+        let anchorRect = space.anchor(anchor.bounds, in: anchor)
+        let placed = space.place(idealWidth: ideal, height: height, anchor: anchorRect, prefer: prefer)
+        lastPlacement = (placed, anchorRect, space.bounds)
         if contentHasCard || placed.width != ideal.rounded(.up) { stage.width = placed.width }
         openWidth = placed.width
         openIdealWidth = ideal
@@ -1896,8 +1921,10 @@ final class AtticDropdownPresenter {
         guard isOpen, height.isFinite, height > 0, abs(height - naturalHeight) > 0.5 || widthChanged,
               let host, let anchor, let space = AtticDropdownSpace(around: anchor) else { return }
         naturalHeight = height
-        let placed = space.place(idealWidth: width ?? openWidth, height: height, anchor: space.anchor(anchor.bounds, in: anchor),
+        let anchorRect = space.anchor(anchor.bounds, in: anchor)
+        let placed = space.place(idealWidth: width ?? openWidth, height: height, anchor: anchorRect,
                                  prefer: prefer, current: stage.side)
+        lastPlacement = (placed, anchorRect, space.bounds)
         if let width {
             openIdealWidth = width
             if placed.width != openWidth {
@@ -1918,9 +1945,11 @@ final class AtticDropdownPresenter {
         guard isOpen, width.isFinite, width > openIdealWidth + 0.5,
               let host, let anchor, let space = AtticDropdownSpace(around: anchor) else { return }
         openIdealWidth = width
-        let placed = space.place(idealWidth: width, height: naturalHeight, anchor: space.anchor(anchor.bounds, in: anchor),
+        let anchorRect = space.anchor(anchor.bounds, in: anchor)
+        let placed = space.place(idealWidth: width, height: naturalHeight, anchor: anchorRect,
                                  prefer: prefer, current: stage.side)
         guard placed.width > openWidth + 0.5 else { return }
+        lastPlacement = (placed, anchorRect, space.bounds)
         openWidth = placed.width
         stage.width = placed.width
         if stage.side != placed.side { stage.side = placed.side }
@@ -2046,8 +2075,19 @@ final class AtticDropdownPresenter {
             if AtticOverlayHierarchy.isInLayoutPass { self.schedulePlacementUpdate(); return }
             guard self.isOpen, let host = self.host, let anchor = self.anchor,
                   let space = AtticDropdownSpace(around: anchor) else { return }
+            let anchorRect = space.anchor(anchor.bounds, in: anchor)
+            // A card cut short moves with its row and keeps its cut while
+            // the row stays in view (menus fix 1).
+            if let last = self.lastPlacement,
+               let moved = AtticDropdownLayout.follow(last.placement, placedAnchor: last.anchor, placedBounds: last.bounds,
+                                                      anchor: anchorRect, bounds: space.bounds,
+                                                      anchorShown: !anchor.visibleRect.isEmpty) {
+                space.show(host, at: moved)
+                return
+            }
             let placed = space.place(idealWidth: self.openIdealWidth, height: self.naturalHeight,
-                                     anchor: space.anchor(anchor.bounds, in: anchor), prefer: self.prefer, current: self.stage.side)
+                                     anchor: anchorRect, prefer: self.prefer, current: self.stage.side)
+            self.lastPlacement = (placed, anchorRect, space.bounds)
             if self.stage.side != placed.side { self.stage.side = placed.side }
             if self.stage.height != placed.heightLimit {
                 self.stage.height = placed.heightLimit
