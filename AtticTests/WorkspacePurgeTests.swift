@@ -134,6 +134,57 @@ final class WorkspacePurgeTests: XCTestCase {
         let survivors = try coordinator.freshContext().fetch(FetchDescriptor<ItemLink>())
         expectEqual(Set(survivors.map(\.id)), [unrelated.id]); XCTAssertFalse(survivors.contains { $0.id == affected.id })
     }
+    func testGroupedIndependentPurgeRedirectsLiveWritingLinks() async throws {
+        try seed(note: true)
+        let context = coordinator.freshContext(), group = UUID()
+        let family = try context.fetch(FetchDescriptor<TaskItem>())
+        for row in family { row.deletionGroupID = group }
+        try WorkspacePurge.stageDeletionCapture(rootID: taskID, rows: family, deletedAt: deletion, in: context)
+        let external = UUID(), linkID = UUID()
+        for _ in 0..<2 {
+            context.insert(ItemLink(id: linkID, source: .init(.note, external), target: .init(.task, taskID),
+                kind: .card, createdAt: deletion))
+        }
+        context.insert(ItemLink(source: .init(.note, noteID), target: .init(.task, taskID), kind: .card))
+        try context.save()
+        let result = await purge()
+        XCTAssertEqual(result.outcome, .committed)
+        let links = try coordinator.freshContext().fetch(FetchDescriptor<ItemLink>())
+        XCTAssertEqual(links.count, 2, "only the self-link is redundant")
+        XCTAssertTrue(links.allSatisfy { $0.id == linkID && $0.source == .init(.note, external)
+            && $0.target == .init(.note, noteID) && $0.kind == .card && $0.createdAt == deletion })
+        XCTAssertNil(try note().taskID)
+        XCTAssertFalse(try document().requires.contains("taskNote"))
+    }
+
+    func testLegacyRedirectRefusesConflictingDirectAndAssociationOwners() async throws {
+        try await assertLegacyRedirectRefusesConflictingOwners(linkToChild: false)
+    }
+
+    func testLegacyRedirectRefusesConflictingOwnersWhenOnlyAssociationOwnerIsLinked() async throws {
+        try await assertLegacyRedirectRefusesConflictingOwners(linkToChild: true)
+    }
+
+    private func assertLegacyRedirectRefusesConflictingOwners(linkToChild: Bool) async throws {
+        try seed(note: true)
+        let context = coordinator.freshContext(), childID = UUID()
+        let parent = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first)
+        let members = [taskID!, childID].map(\.uuidString).sorted().joined(separator: " ")
+        parent.deletionMembersRaw = members
+        let child = TaskItem(id: childID, title: "Child", parentID: taskID)
+        child.deletedAt = deletion; child.deletionRootID = taskID; child.deletionMembersRaw = members
+        context.insert(child)
+        context.insert(TaskNoteAssociation(taskID: childID, noteID: noteID))
+        let link = ItemLink(source: .init(.note, UUID()), target: .init(.task, linkToChild ? childID : taskID), kind: .card)
+        context.insert(link); try context.save()
+        let before = try coordinator.capture([.init(entity: .note, id: noteID), .init(entity: .link, id: link.id)])
+        let result = await purge()
+        XCTAssertEqual(result.outcome, .conflict, "do not redirect through contradictory own-writing aliases")
+        XCTAssertEqual(try tasks(), 2)
+        XCTAssertEqual(try coordinator.capture([.init(entity: .note, id: noteID), .init(entity: .link, id: link.id)]), before)
+        XCTAssertTrue(try records().isEmpty)
+    }
+
     func testP3DivergentAffectedLinkFamilyRetainsEveryTaskAndRecord() async throws {
         try seed()
         let context = coordinator.freshContext(), link = ItemLink(source: .init(.task, taskID), target: .init(.note, UUID()), kind: .reference)
@@ -234,7 +285,11 @@ final class WorkspacePurgeTests: XCTestCase {
     }
     func testP2FailedCaptureSaveLeavesEveryTaskNoteAssociationAndHistoryRowUnchanged() async throws {
         try seed(note: true)
-        let owners: Set<WorkspaceOwner> = [.init(entity: .task, id: taskID), .init(entity: .note, id: noteID)]
+        let context = coordinator.freshContext()
+        let link = ItemLink(source: .init(.note, UUID()), target: .init(.task, taskID), kind: .card)
+        context.insert(link); try context.save()
+        let owners: Set<WorkspaceOwner> = [.init(entity: .task, id: taskID), .init(entity: .note, id: noteID),
+                                           .init(entity: .link, id: link.id)]
         let before = try coordinator.capture(owners)
         coordinator.save = { _ in throw WorkspaceFoundationError.preparationFailed }
         expectEqual(await purge().outcome, .notCommitted); expectEqual(try coordinator.capture(owners), before)

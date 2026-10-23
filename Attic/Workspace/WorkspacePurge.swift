@@ -342,6 +342,34 @@ enum WorkspacePurge {
             let attachmentRows = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { ownIDs.contains($0.noteID) }
             let missingAssociations = ownIDs.subtracting(Set(associations.map(\.noteID)))
             let detachedIDs = Dictionary(uniqueKeysWithValues: missingAssociations.map { ($0, UUID()) })
+            // These notes and associations are detached in this purge's own
+            // envelope. Retain their links through the same redirect rather
+            // than collecting a link whose writing endpoint survives.
+            let linkedTaskIDs = Set((affectedLinks.compactMap(\.source) + affectedLinks.compactMap(\.target))
+                .filter { $0.kind == .task }.map(\.id))
+            var redirects: [UUID: UUID] = [:]
+            for note in notes {
+                let candidates = Set([note.taskID].compactMap { $0 })
+                    .union(associations.filter { $0.noteID == note.id }.map(\.taskID))
+                guard !candidates.isDisjoint(with: linkedTaskIDs) else { continue }
+                guard candidates.count == 1, let taskID = candidates.first else { return refused() }
+                if let old = redirects[taskID], old != note.id { return refused() }
+                redirects[taskID] = note.id
+            }
+            var redirectedLinks: [PersistentIdentifier: (AtticItemRef, AtticItemRef)] = [:]
+            for link in affectedLinks {
+                guard let source = link.source, let target = link.target else { return refused() }
+                func redirected(_ endpoint: AtticItemRef) -> AtticItemRef {
+                    guard endpoint.kind == .task, let note = redirects[endpoint.id] else { return endpoint }
+                    return .init(.note, note)
+                }
+                let afterSource = redirected(source), afterTarget = redirected(target)
+                if afterSource != afterTarget, !touching.contains(afterSource), !touching.contains(afterTarget) {
+                    redirectedLinks[link.persistentModelID] = (afterSource, afterTarget)
+                }
+            }
+            let linkTimestamp = Date()
+
             var owners = taskOwners.union(notes.map { WorkspaceOwner(entity: .note, id: $0.id) })
                 .union(associations.map { WorkspaceOwner(entity: .association, id: $0.id) })
                 .union(detachedIDs.values.map { WorkspaceOwner(entity: .association, id: $0) })
@@ -409,7 +437,14 @@ enum WorkspacePurge {
                     association.noteGeneration = notes.filter { $0.id == noteID }.map(\.associationGeneration).max().map { $0 + 1 } ?? 1
                     commit.insert(association)
                 }
-                guard try LinkStore.stagePurge(touching: touching, in: commit) == affectedLinkIDs.count else { throw WorkspaceFoundationError.conflict }
+                for row in affectedLinks {
+                    guard let link = commit.model(for: row.persistentModelID) as? ItemLink else { throw WorkspaceFoundationError.conflict }
+                    if let endpoints = redirectedLinks[row.persistentModelID] {
+                        link.sourceKindRaw = endpoints.0.kind.rawValue; link.sourceID = endpoints.0.id
+                        link.targetKindRaw = endpoints.1.kind.rawValue; link.targetID = endpoints.1.id
+                        link.updatedAt = linkTimestamp
+                    } else { commit.delete(link) }
+                }
                 _ = try TaskStore.stagePermanentRemoval(in: commit, rootID: rootID, before: cutoff, confirmed: confirmed)
             }, publication: .init(steps: materializationSteps + publication.steps))
             if outcome == .committed {

@@ -362,6 +362,14 @@ extension WorkspaceItemLifecycle {
                 if let old = redirects[association.taskID], old != association.noteID { return refused() }
                 redirects[association.taskID] = association.noteID
             }
+            // Independent deletions detach surviving writing in this same
+            // envelope too. Its validated owner supplies the new redirect.
+            let linkedTaskIDs = Set((links.compactMap(\.source) + links.compactMap(\.target))
+                .filter { $0.kind == .task }.map(\.id))
+            for (noteID, taskID) in survivorTasks where linkedTaskIDs.contains(taskID) {
+                if let old = redirects[taskID], old != noteID { return refused() }
+                redirects[taskID] = noteID
+            }
             var redirectedLinks: [PersistentIdentifier: (AtticItemRef, AtticItemRef)] = [:]
             for link in links {
                 guard let source = link.source, let target = link.target else { return refused() }
