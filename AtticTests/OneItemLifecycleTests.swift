@@ -3,7 +3,7 @@ import SwiftData
 import XCTest
 @testable import Attic
 
-/// Owner decision 2026-10-23: one deletion/restore for the whole item.
+/// Orchestrator build rule 2026-10-23: one deletion/restore for the whole item.
 @MainActor
 final class OneItemLifecycleTests: XCTestCase {
     private var container: ModelContainer!

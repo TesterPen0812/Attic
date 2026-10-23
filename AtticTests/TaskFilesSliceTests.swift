@@ -400,7 +400,7 @@ final class TaskFilesSliceTests: XCTestCase {
         return (text, payload["isError"] as? Bool ?? false)
     }
 
-    // Owner decision 2026-10-23: agents use the same circle commands,
+    // Engineering rule 2026-10-23: agents use the same circle commands,
     // combined read sets, refusal rules and retained workspace history.
     func testBAgentsExposeCircleCommandsAndKeepStaleRemovalAsOneProposal() async throws {
         let handler = agent()

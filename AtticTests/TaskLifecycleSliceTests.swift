@@ -1116,7 +1116,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(model.toasts.current?.message, "“Finalize launch checklist” deleted")
         XCTAssertNil(tasks.task(withID: id))
         XCTAssertFalse(try ownNotes(id).isEmpty, "the note stays")
-        // Owner decision 2026-10-23: deletion takes the writing too.
+        // Orchestrator build rule 2026-10-23: deletion takes the writing too.
         XCTAssertTrue(try ownNotes(id).allSatisfy { $0.deletedAt != nil })
         XCTAssertTrue(model.delete([other.id]).isApplied)
         XCTAssertEqual(model.toasts.current?.message, "“No note here” deleted", "a task without a note reads as before")
@@ -1634,8 +1634,9 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(presenter.model.needsReopen(toggling: sub.id))
     }
 
-    // Owner decision 2026-10-23: the same writing survives circle removal;
-    // only children become checkboxes, and Undo is the sole old-task return.
+    // Build rules 2026-10-23: the same writing survives circle removal.
+    // Owner answer: only children become checkboxes; task details are dropped.
+    // Orchestrator decision: Undo is the sole return to the old task.
     func testBRemoveKeepsWritingDropsDetailsAndRestoresExactFamilyThroughUndoRedo() async throws {
         let id = try seed(.boundary), presenter = try open(id)
         let session = try XCTUnwrap(presenter.session), noteID = session.noteID
@@ -2279,7 +2280,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         guard case .success = notes.store.createDocumentNote(id: untitled, document: NoteDocument(blocks: [.text(""), .text("body")])) else { return XCTFail() }
         XCTAssertTrue(notes.open(noteID: untitled))
         let outcome = await TaskNoteConversion.makeTask(fromNote: untitled, notes: notes, tasks: tasks)
-        // Owner decision 2026-10-23: a blank title commits immediately.
+        // Orchestrator decision 2026-10-23: a blank title commits immediately.
         guard case let .made(taskID) = outcome else { return XCTFail("\(outcome)") }
         XCTAssertTrue(try rows(untitled).allSatisfy { $0.taskID == taskID })
         XCTAssertEqual(tasks.task(withID: taskID)?.title, "")

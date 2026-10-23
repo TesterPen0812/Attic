@@ -26,7 +26,7 @@ final class OperationCrashHarnessTests: XCTestCase {
         return child.terminationStatus
     }
 
-    /// Owner decision 2026-10-23: process death cannot split a whole item.
+    /// Engineering rule 2026-10-23: process death cannot split a whole item.
     func testAWholeItemDeleteAndPurgeCrashMatricesReopenTwice() async throws {
         try await assertWholeItemCrashMatrices(modes: ["delete-item", "purge-item"])
     }
@@ -119,7 +119,7 @@ final class OperationCrashHarnessTests: XCTestCase {
         }
     }
 
-    /// Owner decision 2026-10-23: both circle changes are atomic across
+    /// Engineering rule 2026-10-23: both circle changes are atomic across
     /// replica rows, document projection, retirement/redirect and receipts.
     func testBAddAndRemoveTasksRealKillMatricesReopenTwice() async throws {
         for adding in [true, false] {
