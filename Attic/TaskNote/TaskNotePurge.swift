@@ -37,7 +37,8 @@ enum TaskNotePurge {
         }
         for root in roots.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
             let ids = Set(deleted.filter { ($0.deletionRootID ?? $0.id) == root }.map(\.id))
-            guard (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == true else { continue }
+            let grouped = deleted.contains { $0.id == root && $0.deletionGroupID != nil }
+            guard grouped || (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == true else { continue }
             let own = ownNotes(of: ids, in: coordinator.freshContext())
             guard let reservations = notes.reserveTaskNoteInput(own) else {
                 report.deferredRootIDs.insert(root)

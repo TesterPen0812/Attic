@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import SwiftData
 import os
 
 @MainActor
@@ -161,7 +162,12 @@ final class TaskNotePresenter: ObservableObject {
     /// starts at the top; subsequent mounts keep the reading position.
     func restoreViewStateOnMount() {
         host.restack()
-        if !hasMounted { host.scrollToTop(); hasMounted = true }
+        if !hasMounted {
+            host.scrollToTop(); hasMounted = true
+            // Owner decision 2026-10-23: Add commits a blank title, then
+            // puts the caret in the existing title field on first mount.
+            if model.head.exists, model.head.title.isEmpty { model.requestFocus(.title) }
+        }
         if let session {
             let length = host.engine.textStorage.length
             let selection = session.selection
@@ -550,6 +556,12 @@ struct TaskNotePage: View {
             commands.append(AtticMenuCommand("Restore Note", startsSection: !commands.isEmpty,
                                              identifier: "task-note-menu-restore-note") { restoreNote() })
         }
+        if let remove = controller.removeFromTasks {
+            commands += TaskNoteConversion.commands(taskID: presenter.taskID,
+                hasWriting: TaskNoteConversion.hasWriting(presenter.taskID, in: ModelContext(model.store.container)),
+                isSubtask: model.store.listedTask(withID: presenter.taskID)?.parentID != nil,
+                add: {}, remove: { remove(presenter.taskID) })
+        }
         commands.append(contentsOf: placementCommands(startsSection: !commands.isEmpty))
         if persisted, model.head.exists {
             commands.append(AtticMenuCommand("Delete…", isDestructive: true, startsSection: true,
@@ -581,6 +593,12 @@ struct TaskNotePage: View {
                                          isDisabled: presenter.session?.isReadOnly == true, startsSection: true) {
             addFilesToNote()
         }.identified("task-note-task-add-files"))
+        if let remove = controller.removeFromTasks {
+            commands += TaskNoteConversion.commands(taskID: presenter.taskID,
+                hasWriting: TaskNoteConversion.hasWriting(presenter.taskID, in: ModelContext(model.store.container)),
+                isSubtask: model.store.listedTask(withID: presenter.taskID)?.parentID != nil,
+                add: {}, remove: { remove(presenter.taskID) })
+        }
         commands.append(contentsOf: placementCommands(startsSection: true))
         commands.append(AtticMenuCommand(verbatim: String(localized: "Delete…"), isDestructive: true, startsSection: true) {
             confirming = .deleteTask
@@ -685,7 +703,7 @@ struct TaskNotePage: View {
         let readOnly = presenter.session?.isReadOnly == true
         return [
             AtticMenuCommand(verbatim: String(localized: "Rename")) { model.beginRename(id) }.identified("task-note-subtask-rename"),
-            AtticMenuCommand(verbatim: String(localized: "Make Note Checkbox"), isDisabled: readOnly) {
+            AtticMenuCommand(verbatim: String(localized: "Make Checkbox"), isDisabled: readOnly) {
                 makeNoteCheckbox(id)
             }.identified("task-note-subtask-make-checkbox"),
             AtticMenuCommand(verbatim: String(localized: "Delete Subtask"), shortcut: AtticTaskShortcut.delete,

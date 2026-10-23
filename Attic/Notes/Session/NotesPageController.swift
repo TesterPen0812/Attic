@@ -1381,8 +1381,9 @@ final class NotesPageController: ObservableObject {
     /// host closes that task's page and shows the note (with the patch and
     /// its operation for "Task removed permanently · Undo").
     var taskNoteMaterialized: ((WorkspaceMaterializationPatch, UUID) -> Void)?
-    /// Make Task from Note (the ⋯ of an ordinary note); nil hides it.
+    /// Add to Tasks (the ⋯ of an ordinary note); nil hides it.
     var makeTaskFromNote: ((UUID) -> Void)?
+    var removeFromTasks: ((UUID) -> Void)?
 
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
@@ -4188,9 +4189,22 @@ extension NotesPageController {
         session.state = reason == nil ? .clean : .readOnly
     }
 
-    func installCommittedTaskNote(_ noteID: UUID) {
+    func installCommittedTaskNote(_ noteID: UUID, preservingWritingSelection: Bool = false) {
         store.refresh()
-        if let session = cache[noteID] { installCommittedTaskNoteForm(session) }
+        if let session = cache[noteID] {
+            let old = session.engine.textStorage.string
+            let selection = session.engine.textView?.selectedRange() ?? session.selection
+            installCommittedTaskNoteForm(session)
+            if preservingWritingSelection {
+                let text = session.engine.textStorage.string
+                if old.hasSuffix(text) || text.hasSuffix(old) {
+                    let shift = (text as NSString).length - (old as NSString).length
+                    let location = min(session.engine.textStorage.length, max(0, selection.location + shift))
+                    session.selection = NSRange(location: location, length: min(selection.length, session.engine.textStorage.length - location))
+                    session.engine.textView?.setSelectedRange(session.selection)
+                }
+            }
+        }
     }
 
     /// A change written by another owner (a purge's Undo): a clean editor
@@ -4223,6 +4237,7 @@ extension NotesPageController {
             } else if let page = session.workspacePage, let lease = page.activeLease {
                 guard await page.close(lease) else { return }
             }
+            if let owner { TaskNoteWindows.shared.finishHandoff(owner) }
         }
         if NoteSessionPolicy.hasPendingWork(session.state), !(await preserveDurably(session)) { return }
         guard cache[noteID] === session, session.noteID == noteID else { return }

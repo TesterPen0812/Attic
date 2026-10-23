@@ -469,7 +469,7 @@ struct TaskNoteSubtasksBlock: View {
             .accessibilityAction { model.toggle(row.id) }
             .accessibilityAction(named: Text("Rename")) { model.beginRename(row.id, undoManager: undoManager) }
             .accessibilityAction(named: Text("Delete Subtask")) { model.delete(row.id) }
-            .accessibilityAction(named: Text("Make Note Checkbox")) {
+            .accessibilityAction(named: Text("Make Checkbox")) {
                 subtaskMenu(row.id).first { $0.identifier == "task-note-subtask-make-checkbox" }?.action()
             }
             .accessibilityIdentifier("task-note-subtask-row")

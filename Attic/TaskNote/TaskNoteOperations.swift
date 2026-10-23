@@ -294,7 +294,7 @@ extension TaskNotePresenter {
         let preservation = UUID()
         let entry = UUID()
         let parent = taskID
-        let outcome = await edit.perform(name: String(localized: "Make Note Checkbox"), candidate: candidate, entryID: entry,
+        let outcome = await edit.perform(name: String(localized: "Make Checkbox"), candidate: candidate, entryID: entry,
             forwardWrites: [.init(entity: .task, id: subtaskID), .init(entity: .preservation, id: preservation)],
             forward: { commit in
                 try TaskStore.stageSoftDeletion(in: commit, taskID: subtaskID, preservationID: preservation, timestamp: Date())

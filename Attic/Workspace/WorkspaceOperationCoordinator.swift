@@ -1390,6 +1390,20 @@ extension WorkspaceOperationCoordinator {
                         $0.noteID == note.id && $0.detachedPreservationID != nil
                     }
                     if detached {
+                        // A fresh Add creates a new live task/association.
+                        // Historical redirects cannot revoke its writing, but
+                        // every physical current endpoint must agree and none
+                        // may resurrect a purged UUID.
+                        if let taskID = note.taskID, !removed.contains(taskID) {
+                            let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
+                            let notes = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.id == note.id }
+                            let links = try TaskNoteConversion.associationRows(noteID: note.id, in: context).filter { $0.detachedAt == nil }
+                            if !tasks.isEmpty, tasks.allSatisfy({ $0.deletedAt == nil && $0.parentID == nil }),
+                               notes.allSatisfy({ $0.taskID == taskID }), !links.isEmpty,
+                               links.allSatisfy({ $0.taskID == taskID && $0.detachedPreservationID == nil
+                                   && $0.taskGeneration == tasks.map(\.associationGeneration).max()
+                                   && $0.noteGeneration == notes.map(\.associationGeneration).max() }) { continue }
+                        }
                         guard let original, let content = original.fields["content"], let format = original.fields["contentFormat"],
                               content == (try WorkspaceModelFields.encode(WorkspaceModelFields.digest(note.content))),
                               try JSONDecoder().decode(Int.self, from: format) == note.contentFormat else { throw WorkspaceFoundationError.protectedOwner }

@@ -796,10 +796,11 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    private func stageCreation(_ drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+    private func stageCreation(_ drafts: [TaskDraft], ids: [UUID], timestamp: Date, allowingBlankTitle: Bool = false) throws -> [TaskItem] {
         guard ids.count == drafts.count else { throw TaskEditRefusal("Task identity count does not match the draft count.") }
-        let titles = drafts.map { Self.normalized($0.title) }
-        guard titles.allSatisfy({ !$0.isEmpty }) else { throw TaskEditRefusal("A task needs a title.") }
+        // Note conversion keeps the literal title, including an empty one.
+        let titles = drafts.map { allowingBlankTitle ? $0.title : Self.normalized($0.title) }
+        guard allowingBlankTitle || titles.allSatisfy({ !$0.isEmpty }) else { throw TaskEditRefusal("A task needs a title.") }
         let parentIDs = Set(drafts.map(\.parentID))
         var created: [TaskItem?] = Array(repeating: nil, count: drafts.count)
             for parentID in parentIDs.compactMap({ $0 }) {
@@ -868,9 +869,9 @@ final class TaskStore: ObservableObject {
         self.tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletedAt == nil }
     }
 
-    static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+    static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date, allowingBlankTitle: Bool = false) throws -> [TaskItem] {
         let adapter = try TaskStore(staging: context, timestamp: timestamp)
-        let rows = try adapter.stageCreation(drafts, ids: ids, timestamp: timestamp)
+        let rows = try adapter.stageCreation(drafts, ids: ids, timestamp: timestamp, allowingBlankTitle: allowingBlankTitle)
         WorkspaceCrashHook.reach("K3-task")
         return rows
     }
@@ -1958,13 +1959,22 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    static func circleRemovedRoots(in context: ModelContext) throws -> Set<UUID> {
+        guard WorkspaceItemLifecycle.has("TaskDeletionPreservation", in: context) else { return [] }
+        return Set(try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter {
+            $0.provenance == "circle removed" && $0.retiredAt == nil
+        }.map(\.rootID))
+    }
+
     /// One entry per delete: the task a delete started from, newest first.
     /// Subtasks that went with their parent are counted, not listed.
     func recentlyDeletedTasks() -> [DeletedItemSummary] {
         let deleted: [TaskItem]
         let rootWinners: [UUID: TaskItem]
+        let circleRemoved: Set<UUID>
         do {
             let freshContext = Self.makeStoreContext(container)
+            circleRemoved = try Self.circleRemovedRoots(in: freshContext)
             deleted = try freshContext.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
@@ -1986,7 +1996,7 @@ final class TaskStore: ObservableObject {
         }
         return Dictionary(grouping: deleted) { $0.deletionRootID ?? $0.id }
             .compactMap { rootID, rows -> DeletedItemSummary? in
-                guard let root = rootWinners[rootID],
+                guard !circleRemoved.contains(rootID), let root = rootWinners[rootID],
                       (root.deletionRootID ?? root.id) == rootID,
                       let deletedAt = root.deletedAt else { return nil }
                 return DeletedItemSummary(
@@ -2031,6 +2041,12 @@ final class TaskStore: ObservableObject {
         // replicas saved by another context since the previous refusal.
         if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
+            let retired = try Self.circleRemovedRoots(in: context)
+            let requested = try context.fetch(FetchDescriptor<TaskItem>()).filter { taskIDs.contains($0.id) }
+            let roots = Set(requested.map { $0.deletionRootID ?? $0.id }).union(taskIDs)
+            guard retired.isDisjoint(with: roots) else {
+                throw TaskEditRefusal("Only Undo can return a task removed from Tasks.")
+            }
             try stageRestoration(taskIDs: taskIDs)
         } catch {
             context.rollback()
@@ -2266,6 +2282,9 @@ final class TaskStore: ObservableObject {
             guard let complete = try? Self.guardedDeletedFamily(in: context, rootID: rootID, before: cutoff,
                                                                  confirmed: confirmed?[rootID]),
                   Set(complete.map(\.id)) == ids else { continue }
+            // Circle-removed groups retain live writing redirects and use
+            // the same whole-group coordinator as other one-item groups.
+            guard (try? Self.circleRemovedRoots(in: context).contains(rootID)) == false else { continue }
             // Own notes/associations must go through the coordinated path.
             // The legacy collector cannot leave an actionable purged task ID.
             guard (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == false else { continue }

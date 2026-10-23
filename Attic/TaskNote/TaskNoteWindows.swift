@@ -24,6 +24,16 @@ final class TaskNoteWindows: NSObject, NSWindowDelegate {
 
     func window(for taskID: UUID) -> NSWindow? { entries[taskID]?.window }
 
+    /// A conversion has durably released its presenter. The minimal host
+    /// hands writing to Notes until C2 supplies in-place window parity.
+    func finishHandoff(_ taskID: UUID) {
+        guard let entry = entries.removeValue(forKey: taskID) else { return }
+        closing.remove(taskID)
+        entry.window.delegate = nil
+        entry.window.close()
+        entry.window.contentViewController = nil
+    }
+
     /// Brings the task's window forward. False when it has none.
     @discardableResult
     func bringForward(_ taskID: UUID) -> Bool {

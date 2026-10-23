@@ -393,7 +393,8 @@ final class TaskLifecycleSliceTests: XCTestCase {
         tasks.refresh(); notes.store.refresh()
         let taskID = try XCTUnwrap(notes.store.note(withID: id)?.taskID)
         XCTAssertNotNil(tasks.task(withID: taskID))
-        XCTAssertEqual(history.undoName, "Make Task from Note")
+        // Owner decision 2026-10-23: the command is Add to Tasks.
+        XCTAssertEqual(history.undoName, "Add to Tasks")
     }
 
     func testOpusR4UndeliveredTypingCannotPassTheQuitDurabilityBoundary() async throws {
@@ -1658,7 +1659,10 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let history = presenter.page.history
         await close(presenter)
         XCTAssertEqual(history.undoName, "Remove from Tasks")
+        var opened: UUID?
+        notes.openTaskPage = { opened = $0; return true }
         let undone = await history.replay(redo: false); XCTAssertEqual(undone, .applied)
+        XCTAssertEqual(opened, id, "native workspace Undo returns to the task page")
         XCTAssertEqual(try storedDocument(noteID), original)
         for row in try ModelContext(container).fetch(FetchDescriptor<TaskItem>()) where before[row.persistentModelID] != nil {
             XCTAssertEqual(try WorkspaceModelFields.read(row), before[row.persistentModelID])
@@ -1712,6 +1716,340 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(Array(try storedDocument(id).blocks.dropFirst()), Array(original.blocks.dropFirst()))
     }
 
+    func testBRemoveThenAddAlwaysMakesFreshTaskAndUndoCanReturnTheRetiredOne() async throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session), noteID = session.noteID, history = presenter.page.history
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: noteID))
+        await close(presenter)
+        XCTAssertTrue(notes.open(noteID: noteID))
+        guard case let .made(fresh) = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks) else { return XCTFail() }
+        XCTAssertNotEqual(fresh, id); XCTAssertNil(tasks.task(withID: id)); XCTAssertTrue(tasks.subtasks(of: fresh).isEmpty)
+        let undoAdd = await history.replay(redo: false); XCTAssertEqual(undoAdd, .applied)
+        let undoRemove = await history.replay(redo: false); XCTAssertEqual(undoRemove, .applied)
+        XCTAssertNotNil(tasks.task(withID: id)); XCTAssertNil(tasks.task(withID: fresh))
+        let redoRemove = await history.replay(redo: true); XCTAssertEqual(redoRemove, .applied)
+        let redoAdd = await history.replay(redo: true); XCTAssertEqual(redoAdd, .applied)
+        XCTAssertNotNil(tasks.task(withID: fresh)); XCTAssertNil(tasks.task(withID: id))
+    }
+
+    func testBRemoveExcludesPreviouslyDeletedChildrenAndKeepsEveryReplica() async throws {
+        let id = try seed(.boundary)
+        let context = ModelContext(container)
+        for task in try context.fetch(FetchDescriptor<TaskItem>()) {
+            let copy = TaskItem(title: ""); try WorkspaceModelFields.apply(WorkspaceModelFields.read(task), to: copy); context.insert(copy)
+        }
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        for note in try rows(noteID) {
+            let copy = NoteItem(); try WorkspaceModelFields.apply(WorkspaceModelFields.read(note), to: copy)
+            copy.pinnedAt = note.isPinned ? nil : Date(); context.insert(copy)
+        }
+        let earlier = TaskItem(title: "Earlier deleted child", parentID: id)
+        earlier.deletedAt = Date(timeIntervalSince1970: 1); earlier.deletionRootID = earlier.id
+        earlier.deletionMembersRaw = earlier.id.uuidString; context.insert(earlier); try context.save()
+        tasks.refresh(); notes.store.refresh()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(result, .removed(noteID: noteID))
+        XCTAssertFalse(try storedDocument(noteID).blocks.contains { $0.text == "Earlier deleted child" })
+        let copies = try rows(noteID)
+        XCTAssertEqual(copies.count, 2); XCTAssertEqual(copies.filter(\.isPinned).count, 1)
+        XCTAssertTrue(copies.allSatisfy { $0.taskID == nil })
+        let family = try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).filter { $0.id == id || $0.parentID == id }
+        XCTAssertTrue(family.allSatisfy { $0.deletedAt != nil })
+        XCTAssertEqual(family.first { $0.id == earlier.id }?.deletedAt, earlier.deletedAt)
+    }
+
+    func testBRemoveReservesInputAndGuardsLaterWriting() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let view = presenter.host.textView, history = presenter.page.history
+        var reserved = false
+        coordinator.afterPreparation = {
+            reserved = history.isInputReserved
+            view.insertText("queued", replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.setMarkedText("composition", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertFalse(view.hasMarkedText())
+        }
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        coordinator.afterPreparation = nil
+        XCTAssertEqual(result, .removed(noteID: session.noteID)); XCTAssertTrue(reserved)
+        XCTAssertTrue(history.hasQueuedTyping || session.engine.textStorage.string.contains("queued"))
+        await close(presenter)
+        XCTAssertTrue(notes.open(noteID: session.noteID))
+        let active = try XCTUnwrap(notes.active)
+        if let textView = active.engine.textView { textView.insertText("later", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        // Queued typing is its own later step. Undo it before testing the
+        // guarded conversion inverse against independently saved writing.
+        if history.undoName != "Remove from Tasks" { _ = await history.replay(redo: false) }
+        // An independent saved edit must refuse the conversion inverse.
+        var changed = try storedDocument(session.noteID); changed.blocks.append(.text("Outside edit"))
+        _ = try notes.store.saveDocument(noteID: session.noteID, document: changed,
+            baseRevisionID: notes.store.note(withID: session.noteID)?.revisionID).get()
+        let undo = await history.replay(redo: false); XCTAssertEqual(undo, .failed)
+        XCTAssertEqual(try storedDocument(session.noteID), changed)
+    }
+
+    func testBRemoveRejectsUnprovenEarlierFilesThenSucceedsAfterMove() async throws {
+        let id = try seed(.boundary)
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent("AtticB-\(UUID()).txt")
+        try Data("legacy bytes".utf8).write(to: input); defer { try? FileManager.default.removeItem(at: input) }
+        let references = try await tasks.taskImageFiles.importAttachments([input], existing: [])
+        let context = ModelContext(container)
+        for task in try context.fetch(FetchDescriptor<TaskItem>()) where task.id == id {
+            task.imageReferencesData = try JSONEncoder().encode(references)
+        }
+        try context.save(); tasks.refresh()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let refused = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(refused, .refused(TaskNoteConversion.earlierFilesReason))
+        await close(presenter)
+        let moved = await tasks.fileMigration.moveIntoNote(id, tasks: tasks, notes: notes)
+        guard case .migrated = moved else { return XCTFail("\(moved)") }
+        let reopened = try open(id), writing = try XCTUnwrap(reopened.session)
+        let beforeRace = try storedDocument(writing.noteID)
+        coordinator.afterPreparation = {
+            let outside = ModelContext(self.container)
+            for record in (try? outside.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>())) ?? [] where record.id == id {
+                record.stateRaw = "reversed"
+            }
+            try? outside.save()
+        }
+        let raced = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: writing)
+        coordinator.afterPreparation = nil
+        guard case .refused = raced else { return XCTFail("changed migration proof must refuse") }
+        XCTAssertEqual(try storedDocument(writing.noteID), beforeRace)
+        let reset = ModelContext(container)
+        for record in try reset.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>()) where record.id == id { record.stateRaw = "migrated" }
+        try reset.save()
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: writing)
+        XCTAssertEqual(result, .removed(noteID: writing.noteID))
+        XCTAssertEqual(try storedDocument(writing.noteID).attachmentIDs, references.map(\.id))
+        let attachments = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertEqual(attachments.first?.payload, Data("legacy bytes".utf8))
+    }
+
+    func testBCircleRemovedFamilyPurgesAfterHistoryExpiresAndKeepsEditedWritingAndRedirect() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(result, .removed(noteID: session.noteID))
+        await close(presenter)
+        XCTAssertFalse(tasks.restoreDeleted(taskID: id), "only Undo can return a retired circle")
+        presenter.page.history.clear()
+        var changed = try storedDocument(session.noteID); changed.blocks.append(.text("New ordinary writing"))
+        _ = try notes.store.saveDocument(noteID: session.noteID, document: changed,
+            baseRevisionID: notes.store.note(withID: session.noteID)?.revisionID).get()
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id), "\(report)")
+        XCTAssertEqual(try storedDocument(session.noteID), changed)
+        XCTAssertFalse(try associations(note: session.noteID).isEmpty)
+    }
+
+    func testBCommandTableNamesAndHidesBothCommandsForSubtasksAndBareTasks() {
+        func names(_ id: UUID?, writing: Bool, child: Bool) -> [String] {
+            TaskNoteConversion.commands(taskID: id, hasWriting: writing, isSubtask: child, add: {}, remove: {}).map(\.title)
+        }
+        XCTAssertEqual(names(nil, writing: true, child: false), ["Add to Tasks"])
+        XCTAssertEqual(names(UUID(), writing: true, child: false), ["Remove from Tasks"])
+        XCTAssertEqual(names(UUID(), writing: false, child: false), [])
+        XCTAssertEqual(names(UUID(), writing: true, child: true), [])
+        XCTAssertEqual(names(nil, writing: true, child: true), [])
+    }
+
+    func testBBlankTitleAddFocusesTitleOnFirstMount() async throws {
+        makeStores(); let id = UUID()
+        _ = try notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text(""), .text("Writing")])).get()
+        XCTAssertTrue(notes.open(noteID: id))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        let presenter = try open(taskID); presenter.restoreViewStateOnMount()
+        XCTAssertEqual(presenter.model.focusRequest, .title)
+    }
+
+    func testBWritingVersionRestoreAfterRemovalNeverReactivatesTaskOrDuplicatesChildren() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(notes.store.recordVersion(noteID: session.noteID, reason: .pause))
+        let version = try XCTUnwrap(notes.store.versions(noteID: session.noteID).first)
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        await close(presenter)
+        _ = try notes.store.restoreVersion(version.id, noteID: session.noteID).get()
+        let document = try storedDocument(session.noteID)
+        XCTAssertFalse(document.requires.contains("taskNote")); XCTAssertNil(notes.store.note(withID: session.noteID)?.taskID)
+        XCTAssertNil(tasks.task(withID: id))
+        XCTAssertFalse(document.blocks.contains { $0.text == "Write release notes" }, "restoring writing never rematerializes the task's children")
+    }
+
+    func testBRemoveChildRestoreAliasCannotReturnTheRetiredFamily() async throws {
+        let id = try seed(.boundary), child = try XCTUnwrap(tasks.subtasks(of: id).first?.id)
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        await close(presenter)
+        XCTAssertFalse(tasks.restoreDeleted(taskID: child))
+        XCTAssertNil(tasks.task(withID: id)); XCTAssertNil(tasks.task(withID: child))
+    }
+
+    func testBRemoveUsesHeldPageOrderInsteadOfResortingChildren() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let done = try XCTUnwrap(tasks.subtasks(of: id).first { $0.status == .done }?.id)
+        presenter.model.setPointerInside(true)
+        let owner = WorkspaceOwner(entity: .task, id: done)
+        let envelope = try coordinator.newEnvelope(intent: "Fixture reorder", reads: coordinator.capture([owner]), writes: [owner])
+        let reordered = await coordinator.execute(envelope, stage: { commit in
+            for row in try commit.fetch(FetchDescriptor<TaskItem>()) where row.id == done {
+                row.status = .todo; row.completedAt = nil; row.manualOrder = 2_000_000
+            }
+        })
+        XCTAssertEqual(reordered, .committed)
+        tasks.refresh(); presenter.model.refresh()
+        let shown = presenter.model.rows.map(\.title)
+        XCTAssertNotEqual(tasks.subtasks(of: id).map(\.title), shown, "fixture must hold a different order")
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        XCTAssertEqual(Array(try storedDocument(session.noteID).blocks.dropFirst().prefix(shown.count).map(\.text)), shown)
+    }
+
+    func testBAddAfterRetiredFamilyPurgeKeepsFreshTaskWritable() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(result, .removed(noteID: session.noteID)); await close(presenter)
+        presenter.page.history.clear()
+        let purged = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(purged.removedTaskIDs.contains(id), "\(purged)")
+        XCTAssertTrue(notes.open(noteID: session.noteID))
+        let added = await TaskNoteConversion.makeTask(fromNote: session.noteID, notes: notes, tasks: tasks)
+        guard case let .made(freshID) = added else { return XCTFail("fresh task after purge: \(added)") }
+        XCTAssertNotEqual(freshID, id)
+        let removedFresh = await TaskNoteConversion.removeTask(freshID, notes: notes, tasks: tasks)
+        XCTAssertEqual(removedFresh, .removed(noteID: session.noteID))
+        let freshHistory = notes.undoRoute.workspace(for: .taskWorkspace(freshID))
+        let undoneFresh = await freshHistory.replay(redo: false); XCTAssertEqual(undoneFresh, .applied)
+        XCTAssertEqual(notes.store.note(withID: session.noteID)?.taskID, freshID)
+        var changed = try storedDocument(session.noteID); changed.blocks.append(.text("Fresh task writing"))
+        _ = try notes.store.saveDocument(noteID: session.noteID, document: changed,
+            baseRevisionID: notes.store.note(withID: session.noteID)?.revisionID).get()
+        XCTAssertEqual(try storedDocument(session.noteID), changed)
+    }
+
+    func testBRetiringConvertedPageReleasesTheMinimalWindowHost() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+            design: .default, uiState: PanelUIState())
+        let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id))
+        defer { window.delegate = nil; window.close() }
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        await notes.retireConvertedNote(session.noteID, installingCommittedForm: false)
+        XCTAssertNil(presenter.lease)
+        XCTAssertNil(TaskNoteWindows.shared.window(for: id), "a closed task editor cannot remain mounted in its old window")
+        XCTAssertNil(window.contentViewController)
+    }
+
+    func testBAddPreservesLiteralTitleAndFailureRollsBack() async throws {
+        makeStores(); let id = UUID(), title = "Plan  tomorrow !high #literal"
+        let original = NoteDocument(blocks: [.text(title), .text("Writing")])
+        _ = try notes.store.createDocumentNote(id: id, document: original).get(); XCTAssertTrue(notes.open(noteID: id))
+        let count = tasks.tasks.count
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        let failed = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks)
+        coordinator.save = { try $0.save() }
+        guard case .refused = failed else { return XCTFail() }
+        XCTAssertEqual(try storedDocument(id), original); XCTAssertEqual(tasks.tasks.count, count)
+        let result = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks)
+        guard case let .made(taskID) = result else { return XCTFail("\(result)") }
+        XCTAssertEqual(tasks.task(withID: taskID)?.title, title)
+        XCTAssertNil(tasks.task(withID: taskID)?.dueDay); XCTAssertEqual(tasks.task(withID: taskID)?.priority, TaskPriority.none)
+    }
+
+    func testBRemoveRefusesChildReplicaWithForeignParentAndPreservesBoth() async throws {
+        let id = try seed(.boundary), child = try XCTUnwrap(tasks.subtasks(of: id).first)
+        let context = ModelContext(container), other = TaskItem(title: "Other parent")
+        context.insert(other)
+        let replica = TaskItem(title: ""); try WorkspaceModelFields.apply(WorkspaceModelFields.read(child), to: replica)
+        replica.parentID = other.id; context.insert(replica); try context.save()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session), before = try storedDocument(session.noteID)
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        guard case .refused = result else { return XCTFail("foreign child replica must refuse") }
+        XCTAssertEqual(try storedDocument(session.noteID), before)
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).allSatisfy { $0.deletedAt == nil })
+    }
+
+    func testBRemovePreservesSelectionWithTheWritingAcrossProjection() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let text = session.engine.textStorage.string, before = NSRange(location: 4, length: 7)
+        presenter.host.textView.setSelectedRange(before)
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(result, .removed(noteID: session.noteID))
+        let shift = session.engine.textStorage.length - (text as NSString).length
+        XCTAssertEqual(presenter.host.textView.selectedRange(), NSRange(location: before.location + shift, length: before.length))
+    }
+
+    func testBRemoveUnknownSavePublishesAndKeepsQueuedTyping() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let history = presenter.page.history
+        coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
+        coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
+        _ = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertTrue(history.hasPendingPublication)
+        presenter.host.textView.insertText(" queued", replacementRange: NSRange(location: NSNotFound, length: 0))
+        coordinator.save = { try $0.save() }; coordinator.beforeReconciliationRead = nil
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(history.hasPendingPublication)
+        XCTAssertNil(tasks.task(withID: id))
+        XCTAssertFalse(try storedDocument(session.noteID).requires.contains("taskNote"))
+        XCTAssertTrue(history.hasQueuedTyping || session.engine.textStorage.string.contains(" queued"))
+    }
+
+    func testBAddRefusesAnOrdinaryNoteStillClaimedByAnActiveAssociation() async throws {
+        makeStores(); let id = UUID()
+        _ = try notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Ordinary"), .text("Writing")])).get()
+        let context = ModelContext(container), owner = TaskItem(title: "Existing owner")
+        context.insert(owner); context.insert(TaskNoteAssociation(taskID: owner.id, noteID: id)); try context.save()
+        tasks.refresh(); XCTAssertTrue(notes.open(noteID: id))
+        let before = try storedDocument(id)
+        let result = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks)
+        guard case .refused = result else { return XCTFail("active ownership must be resolved first") }
+        XCTAssertNil(notes.store.note(withID: id)?.taskID); XCTAssertEqual(try storedDocument(id), before)
+    }
+
+    func testBRemoveRefusesAssociationReplicaOwnedByAnotherTask() async throws {
+        let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let association = try XCTUnwrap(try associations(note: noteID).first)
+        let context = ModelContext(container), other = TaskItem(title: "Foreign owner")
+        context.insert(other)
+        let foreign = NoteItem(title: "Foreign note", body: "Keep this writing"); foreign.taskID = other.id
+        context.insert(foreign)
+        let copy = TaskNoteAssociation(id: association.id, taskID: other.id, noteID: foreign.id)
+        context.insert(copy); try context.save()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let result = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        guard case .refused = result else { return XCTFail("association UUID must mutate as a complete family") }
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskNoteAssociation>()).filter { $0.id == association.id }.allSatisfy { $0.detachedAt == nil })
+        XCTAssertNotNil(tasks.task(withID: id))
+    }
+
+    func testBAddRemoveHistoryUnwindsAndReplaysInBothDirections() async throws {
+        makeStores(); let id = UUID(), original = NoteDocument(blocks: [.text("History"), .text("Writing")])
+        _ = try notes.store.createDocumentNote(id: id, document: original).get(); XCTAssertTrue(notes.open(noteID: id))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        let history = notes.undoRoute.workspace(for: .taskWorkspace(taskID))
+        let removed = await TaskNoteConversion.removeTask(taskID, notes: notes, tasks: tasks)
+        XCTAssertEqual(removed, .removed(noteID: id))
+        for _ in 0..<2 { let undo = await history.replay(redo: false); XCTAssertEqual(undo, .applied) }
+        XCTAssertEqual(try storedDocument(id), original)
+        for _ in 0..<2 { let redo = await history.replay(redo: true); XCTAssertEqual(redo, .applied) }
+        XCTAssertNil(tasks.task(withID: taskID)); XCTAssertNil(notes.store.note(withID: id)?.taskID)
+    }
+
+    func testBRemoveSettlesThePagesTitleDraftBeforeCopyingTheTitle() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        presenter.model.beginEditingTitle()
+        presenter.model.titleEdit = TaskAddBarText(text: "The edited title")
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        XCTAssertEqual(try storedDocument(session.noteID).title, "The edited title")
+        presenter.model.cancelTitle()
+    }
+
     // MARK: Make Task from Note (§ 2.1)
 
     func testMakeTaskFromNoteMakesTheSameDocumentTheTasksOwnNoteAndUndoReturnsItAsItWas() async throws {
@@ -1744,7 +2082,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == taskID })
     }
 
-    func testMakeTaskFromNoteRefusesATasksNoteAndAnUntitledNote() async throws {
+    func testAddToTasksRefusesATasksNoteAndAcceptsAnUntitledNote() async throws {
         let id = try seed(.boundary)
         let own = try XCTUnwrap(try ownNotes(id).first?.id)
         let refused = await TaskNoteConversion.makeTask(fromNote: own, notes: notes, tasks: tasks)
@@ -1754,8 +2092,10 @@ final class TaskLifecycleSliceTests: XCTestCase {
         guard case .success = notes.store.createDocumentNote(id: untitled, document: NoteDocument(blocks: [.text(""), .text("body")])) else { return XCTFail() }
         XCTAssertTrue(notes.open(noteID: untitled))
         let outcome = await TaskNoteConversion.makeTask(fromNote: untitled, notes: notes, tasks: tasks)
-        XCTAssertEqual(outcome, .refused("Give the note a title first"))
-        XCTAssertTrue(try rows(untitled).allSatisfy { $0.taskID == nil })
+        // Owner decision 2026-10-23: a blank title commits immediately.
+        guard case let .made(taskID) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertTrue(try rows(untitled).allSatisfy { $0.taskID == taskID })
+        XCTAssertEqual(tasks.task(withID: taskID)?.title, "")
     }
 
     // MARK: Version History of a task's note (S4, § 2.10)
