@@ -1844,6 +1844,82 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(try associations(note: session.noteID).isEmpty)
     }
 
+    func testBRetiredFamilyPurgeRedirectsBothLinkEndsAndPreservesReplicas() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let context = WorkspaceLegacyBridge.context(for: container), outside = UUID(), linkID = UUID()
+        for _ in 0..<2 {
+            context.insert(ItemLink(id: linkID, source: .init(.note, outside), target: .init(.task, id), kind: .card,
+                createdAt: Date(timeIntervalSince1970: 1)))
+        }
+        let reverse = ItemLink(source: .init(.task, id), target: .init(.note, outside), kind: .reference)
+        reverse.deletedAt = Date(timeIntervalSince1970: 2); context.insert(reverse)
+        try context.save()
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        await close(presenter); presenter.page.history.clear()
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id), "\(report)")
+        let links = try ModelContext(container).fetch(FetchDescriptor<ItemLink>())
+        XCTAssertEqual(links.count, 3)
+        XCTAssertEqual(links.filter { $0.id == linkID && $0.target == .init(.note, session.noteID) && $0.kind == .card }.count, 2)
+        XCTAssertEqual(links.first { $0.id == reverse.id }?.source, .init(.note, session.noteID))
+        XCTAssertEqual(links.first { $0.id == reverse.id }?.deletedAt, reverse.deletedAt)
+    }
+
+    func testBPurgingReaddedNoteTakesOlderRetiredFamilyInSameCommit() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let history = presenter.page.history, noteID = session.noteID
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: noteID)); await close(presenter)
+        XCTAssertTrue(notes.open(noteID: noteID))
+        guard case let .made(fresh) = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks) else { return XCTFail() }
+        XCTAssertTrue(library.deleteListedTasks([fresh]).isApplied)
+        await notes.waitForRecoveryWork(); history.clear()
+        let freshRow = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == fresh })
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture,
+            confirmed: [fresh: try XCTUnwrap(freshRow.deletedAt)])
+        XCTAssertTrue(report.removedTaskIDs.contains(fresh), "\(report)")
+        XCTAssertTrue(report.removedTaskIDs.contains(id), "old hidden family belongs to the same purge commit")
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).isEmpty)
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).isEmpty)
+        let later = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(later.deferredRootIDs.isEmpty, "no invisible orphan remains: \(later)")
+    }
+
+    func testBTagRenameDoesNotStrandCircleRemovedFamily() async throws {
+        let id = try seed(.boundary)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["before"]))
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID)); await close(presenter)
+        presenter.page.history.clear()
+        XCTAssertTrue(library.renameTag("before", to: "after"))
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(id), "\(report)")
+        XCTAssertEqual(notes.store.note(withID: session.noteID)?.tags, ["after"])
+    }
+
+    func testBEarlierDeletedChildIsHiddenOnlyWithAtomicFamilyPurge() async throws {
+        let id = try seed(.boundary), context = WorkspaceLegacyBridge.context(for: container)
+        let earlier = TaskItem(title: "Earlier deleted child", parentID: id)
+        earlier.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(earlier); try context.save(); tasks.refresh()
+        XCTAssertTrue(tasks.delete(taskIDs: [earlier.id]))
+        let old = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == earlier.id })
+        let originalFields = try WorkspaceModelFields.read(old)
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        XCTAssertFalse(tasks.recentlyDeletedTasks().contains { $0.ref.id == earlier.id }, "never advertise an unrestorable child")
+        let undone = await presenter.page.history.replay(redo: false); XCTAssertEqual(undone, .applied)
+        XCTAssertTrue(tasks.recentlyDeletedTasks().contains { $0.ref.id == earlier.id })
+        XCTAssertEqual(try WorkspaceModelFields.read(try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == earlier.id })), originalFields)
+        let redone = await presenter.page.history.replay(redo: true); XCTAssertEqual(redone, .applied)
+        await close(presenter); presenter.page.history.clear()
+        let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(report.removedTaskIDs.contains(earlier.id), "a hidden earlier deletion must go with its retired family: \(report)")
+        XCTAssertFalse(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).contains { $0.id == earlier.id })
+    }
+
     func testBCommandTableNamesAndHidesBothCommandsForSubtasksAndBareTasks() {
         func names(_ id: UUID?, writing: Bool, child: Bool) -> [String] {
             TaskNoteConversion.commands(taskID: id, hasWriting: writing, isSubtask: child, add: {}, remove: {}).map(\.title)
