@@ -1938,7 +1938,8 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(result.removedTaskIDs.isSuperset(of: [id, child.id]), "\(result)")
     }
 
-    func testBEarlierPairedChildWritingIsHiddenWithFamilyButSurvivesPurge() async throws {
+    // Fix check 2026-10-24: restorable writing must keep its entire restore window.
+    func testBRemoveRefusesEarlierDeletedChildWritingAndKeepsItRestorable() async throws {
         let id = try seed(.boundary), context = WorkspaceLegacyBridge.context(for: container)
         let child = TaskItem(title: "Earlier", parentID: id), childNote = NoteItem(title: "Earlier")
         child.listOrderVersion = TaskItem.currentListOrderVersion; childNote.taskID = child.id
@@ -1947,18 +1948,99 @@ final class TaskLifecycleSliceTests: XCTestCase {
         context.insert(child); context.insert(childNote); try context.save(); tasks.refresh(); notes.store.refresh()
         library = AtticLibrary(tasks: tasks, notes: notes.store, undo: library.undo)
         XCTAssertTrue(tasks.delete(taskIDs: [child.id]))
-        let deletedAt = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == childNote.id }?.deletedAt)
+        let before = try WorkspaceModelFields.read(try XCTUnwrap(rows(childNote.id).first))
+        let childBefore = try WorkspaceModelFields.read(try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == child.id }))
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let parentBefore = try storedDocument(session.noteID)
+        let receipts = try ModelContext(container).fetchCount(FetchDescriptor<OperationReceipt>())
         let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
-        XCTAssertEqual(removed, .removed(noteID: session.noteID))
-        XCTAssertFalse(library.recentlyDeleted().contains { $0.ref.id == child.id || $0.ref.id == childNote.id })
-        await close(presenter); presenter.page.history.clear()
-        let result = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
-        XCTAssertTrue(result.removedTaskIDs.isSuperset(of: [id, child.id]), "\(result)")
-        XCTAssertEqual(try rows(childNote.id).first?.deletedAt, deletedAt)
+        XCTAssertEqual(removed, .refused("Restore or empty the deleted subtask's writing before removing from Tasks"))
+        XCTAssertNotNil(tasks.task(withID: id))
+        XCTAssertTrue(library.recentlyDeleted().contains { $0.ref.id == child.id || $0.ref.id == childNote.id })
+        XCTAssertEqual(try WorkspaceModelFields.read(try XCTUnwrap(rows(childNote.id).first)), before)
+        XCTAssertEqual(try WorkspaceModelFields.read(try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == child.id })), childBefore)
+        XCTAssertEqual(try storedDocument(session.noteID), parentBefore)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<OperationReceipt>()), receipts)
         XCTAssertTrue(notes.store.restoreDeleted(noteID: childNote.id))
         XCTAssertEqual(try storedDocument(childNote.id).blocks.map(\.text), ["Earlier", "Earlier writing"])
-        XCTAssertFalse(try storedDocument(childNote.id).requires.contains("taskNote"))
+        XCTAssertTrue(try storedDocument(childNote.id).requires.contains("taskNote"), "Restore still returns the original paired child")
+        XCTAssertNotNil(tasks.task(withID: child.id))
+    }
+
+    func testBRemoveRefusesWritingJoiningEarlierDeletionGroupDuringPreparation() async throws {
+        let id = try seed(.boundary), context = WorkspaceLegacyBridge.context(for: container)
+        let child = TaskItem(title: "Earlier", parentID: id)
+        child.listOrderVersion = TaskItem.currentListOrderVersion; context.insert(child); try context.save(); tasks.refresh()
+        XCTAssertTrue(tasks.delete(taskIDs: [child.id]))
+        let deleted = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first { $0.id == child.id })
+        let group = try XCTUnwrap(deleted.deletionGroupID), date = try XCTUnwrap(deleted.deletedAt)
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let before = try storedDocument(session.noteID)
+        let receipts = try ModelContext(container).fetchCount(FetchDescriptor<OperationReceipt>())
+        let writingID = UUID()
+        var injected = false
+        coordinator.afterPreparation = {
+            self.coordinator.afterPreparation = nil
+            let external = ModelContext(self.container)
+            let writing = NoteItem(id: writingID, title: "Still restorable", body: "Keep my writing")
+            writing.deletedAt = date; writing.deletionGroupID = group
+            external.insert(writing); try! external.save()
+            injected = true
+        }
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        coordinator.afterPreparation = nil
+        XCTAssertTrue(injected, "exercise the journal-time membership race")
+        XCTAssertEqual(removed, .refused("Restore or empty the deleted subtask's writing before removing from Tasks"))
+        XCTAssertNotNil(tasks.task(withID: id))
+        XCTAssertEqual(try storedDocument(session.noteID), before)
+        XCTAssertEqual(try rows(writingID).first?.body, "Keep my writing")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<OperationReceipt>()), receipts)
+        XCTAssertTrue(library.recentlyDeleted().contains { $0.ref.id == child.id || $0.ref.id == writingID })
+    }
+
+    func testBRetiredFamilyPurgeDropsSelfLinksWithoutChangingWriting() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let context = WorkspaceLegacyBridge.context(for: container)
+        for reverse in [false, true] {
+            let linkID = UUID(), date = Date(timeIntervalSince1970: 1)
+            for _ in 0..<2 {
+                context.insert(ItemLink(id: linkID,
+                    source: .init(reverse ? .task : .note, reverse ? id : session.noteID),
+                    target: .init(reverse ? .note : .task, reverse ? session.noteID : id), kind: .card, createdAt: date))
+            }
+        }
+        try context.save()
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        let writing = try storedDocument(session.noteID)
+        await close(presenter); presenter.page.history.clear()
+        let result = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(result.removedTaskIDs.contains(id), "\(result)")
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<ItemLink>()).isEmpty, "never produce note → same note")
+        XCTAssertEqual(try storedDocument(session.noteID), writing, "link cleanup must not remove any writing or card blocks")
+    }
+
+    func testBLegacyPurgeRedirectsLinksWhenMaterializingSurvivingWriting() async throws {
+        let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        let context = WorkspaceLegacyBridge.context(for: container), outside = UUID(), linkID = UUID()
+        for _ in 0..<2 {
+            context.insert(ItemLink(id: linkID, source: .init(.note, outside), target: .init(.task, id), kind: .card,
+                createdAt: Date(timeIntervalSince1970: 1)))
+        }
+        let reverse = ItemLink(source: .init(.task, id), target: .init(.note, outside), kind: .reference)
+        reverse.deletedAt = Date(timeIntervalSince1970: 2); context.insert(reverse)
+        context.insert(ItemLink(source: .init(.note, noteID), target: .init(.task, id), kind: .card))
+        try context.save()
+        XCTAssertTrue(try legacyDeleteTask(id))
+        let result = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
+        XCTAssertTrue(result.removedTaskIDs.contains(id), "\(result)")
+        let links = try ModelContext(container).fetch(FetchDescriptor<ItemLink>())
+        XCTAssertEqual(links.count, 3, "redirect external links and drop only the self-link")
+        XCTAssertEqual(links.filter { $0.id == linkID && $0.target == .init(.note, noteID) && $0.kind == .card && $0.createdAt == Date(timeIntervalSince1970: 1) }.count, 2)
+        XCTAssertEqual(links.first { $0.id == reverse.id }?.source, .init(.note, noteID))
+        XCTAssertEqual(links.first { $0.id == reverse.id }?.deletedAt, reverse.deletedAt)
+        XCTAssertTrue(try associations(note: noteID).contains { $0.taskID == id && $0.detachedAt != nil })
+        XCTAssertFalse(try storedDocument(noteID).requires.contains("taskNote"))
     }
 
     func testBOrdinaryRedirectNotePurgeCollectsCircleAndLinksTogether() async throws {
