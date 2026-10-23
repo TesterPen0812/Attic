@@ -374,7 +374,15 @@ enum NoteMarkdownImport {
                 result += prefix + replacement
                 cursor = upper
             }
-            return result + rawInline(cursor..<end, node: nodes[0], table: table)
+            let literal = result + rawInline(cursor..<end, node: nodes[0], table: table)
+            // Multiline leaves (code, raw tags, links) can contain boundaries
+            // with no sibling break node. Normalize those continuations too,
+            // keeping the direct bare-document LF contract above.
+            if (forPaste || inContainer || table), literal.rangeOfCharacter(from: .newlines) != nil {
+                return literal.replacingOccurrences(of: #"(?:\r\n|\r|\n)[ \t]*(?:>[ \t]?)*"#,
+                                                    with: softBreak, options: .regularExpression)
+            }
+            return literal
         }
 
         /// Interpret only balanced inline forms emitted by our exporter.

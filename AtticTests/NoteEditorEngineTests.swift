@@ -111,6 +111,31 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testB03PairedHTMLMultilineLeavesDiscardQuotePrefixes() throws {
+        for (content, expected) in [
+            ("`a\n> b`", "`a b`"),
+            ("<span\n> title=\"x\">a</span>", "<span title=\"x\">a</span>"),
+            ("[\n> a](https://example.com)", "[ a](https://example.com)"),
+            ("`é\r\n> b`", "`é b`")
+        ] {
+            let source = "> <u>" + content + "</u>"
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("Target"), .text("")]))
+            defer { engine.detachView() }
+            let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+            board.setString(source, forType: .string)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            let before = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.handlePaste(board), source)
+            let blocks = Array(engine.document().blocks.dropFirst())
+            XCTAssertEqual(blocks.map(\.text), [expected], source)
+            XCTAssertEqual(blocks.first?.style, "quote", source)
+            XCTAssertEqual(blocks.first?.marks, [NoteMark(.underline, offset: 0, length: expected.utf16.count)], source)
+            let after = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), after)
+        }
+    }
+
     func testPRB12InlineMeasurementsReuseWarmCache() throws {
         let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let today = NoteDay(date: Date())
