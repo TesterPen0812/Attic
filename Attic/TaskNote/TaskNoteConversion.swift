@@ -311,10 +311,26 @@ enum TaskNoteConversion {
 extension TaskNoteConversion {
     enum RemovalOutcome: Equatable { case removed(noteID: UUID); case refused(String) }
     static let earlierFilesReason = String(localized: "Move Files into Note before removing from Tasks")
+    static let earlierWritingReason = String(localized: "Restore or empty the deleted subtask's writing before removing from Tasks")
+
+    /// Capturing an earlier child hides its whole deletion group. Refuse
+    /// while any writing could lose its restore window, including group-only
+    /// notes and independently deleted writing in old stores.
+    private static func proveEarlierWritingAbsent(taskID: UUID, in context: ModelContext) throws {
+        let earlier = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.parentID == taskID && $0.deletedAt != nil }
+        guard !earlier.isEmpty else { return }
+        let ids = Set(earlier.map(\.id)), groups = Set(earlier.compactMap(\.deletionGroupID))
+        let writing = try WorkspaceItemLifecycle.writing(taskIDs: ids, in: context)
+        let grouped = try context.fetch(FetchDescriptor<NoteItem>()).contains { $0.deletionGroupID.map(groups.contains) == true }
+        guard writing.isEmpty, !grouped else { throw RemovalRefusal.earlierWriting }
+    }
 
     /// Shared by Remove and Undo Add. The reason is stored on the existing
     /// immutable preservation, rather than introducing another lifecycle model.
     static func stageCircleRetirement(taskID: UUID, preservationID: UUID, in context: ModelContext) throws {
+        // Recheck in the fresh commit context after journal IO. Undo Add and
+        // redo use this boundary too; preflight alone cannot protect new rows.
+        try proveEarlierWritingAbsent(taskID: taskID, in: context)
         let all = try context.fetch(FetchDescriptor<TaskItem>())
         let ids = Set(all.filter { ($0.id == taskID || $0.parentID == taskID) && $0.deletedAt == nil }.map(\.id))
         let rows = all.filter { ids.contains($0.id) }
@@ -400,6 +416,7 @@ extension TaskNoteConversion {
 
     private static func removalSource(_ taskID: UUID, coordinator: WorkspaceOperationCoordinator) throws -> RemovalSource {
         let context = coordinator.freshContext()
+        try proveEarlierWritingAbsent(taskID: taskID, in: context)
         guard hasWriting(taskID, in: context) else { throw WorkspaceFoundationError.conflict }
         let all = try context.fetch(FetchDescriptor<TaskItem>())
         let candidateIDs = Set(all.filter { $0.id == taskID || $0.parentID == taskID }.map(\.id))
@@ -440,8 +457,11 @@ extension TaskNoteConversion {
         if let page = TaskNotePresenter.open(for: taskID), !page.model.resolveFieldDrafts() {
             return .refused(String(localized: "Couldn't save the task's fields first"))
         }
-        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container),
-              let initial = try? removalSource(taskID, coordinator: coordinator),
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return .refused("Couldn't remove from Tasks") }
+        do { try proveEarlierWritingAbsent(taskID: taskID, in: coordinator.freshContext()) }
+        catch RemovalRefusal.earlierWriting { return .refused(earlierWritingReason) }
+        catch { return .refused(String(localized: "Resolve this item's writing and copies before removing from Tasks")) }
+        guard let initial = try? removalSource(taskID, coordinator: coordinator),
               let session = workspaceSession ?? notes.workspaceSession(noteID: initial.noteID),
               session.noteID == initial.noteID, !session.isReadOnly else {
             return .refused(String(localized: "Resolve this item's writing and copies before removing from Tasks"))
@@ -489,12 +509,15 @@ extension TaskNoteConversion {
         }
         agent?.observe(outcome)
         if [.committed, .publicationPending].contains(outcome) { return .removed(noteID: initial.noteID) }
+        do { try proveEarlierWritingAbsent(taskID: taskID, in: coordinator.freshContext()) }
+        catch RemovalRefusal.earlierWriting { return .refused(earlierWritingReason) }
+        catch { return .refused(String(localized: "Couldn't remove from Tasks")) }
         if (try? proveFiles(taskID: taskID, noteID: initial.noteID, in: coordinator.freshContext())) == nil {
             return .refused(earlierFilesReason)
         }
         return .refused(String(localized: "Couldn't remove from Tasks"))
     }
-    private enum RemovalRefusal: Error { case earlierFiles }
+    private enum RemovalRefusal: Error { case earlierFiles, earlierWriting }
 
     private static func removalPublication(_ source: RemovalSource, result: ResultState, notes: NotesPageController,
         tasks: TaskStore, history: WorkspaceHistory, coordinator: WorkspaceOperationCoordinator) -> WorkspaceOperationCoordinator.Publication {

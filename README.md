@@ -58,7 +58,8 @@ switched off (see [What is not active](#what-is-not-active)).
   subtasks as leading checkboxes in page order. Task dates, priority and
   completion details are dropped; Undo restores the exact family. Retired
   task records stay hidden from Recently Deleted and expire after 30 days.
-  Unproven Earlier files must first use **Move Files into Note**. Subtasks
+  Unproven Earlier files must first use **Move Files into Note**. Earlier-deleted
+  subtasks with writing must first be restored or emptied in Recently Deleted. Subtasks
   and tasks without writing have no Remove from Tasks command.
 - Deleting a task or its writing moves the whole item, including subtasks and files, to one Recently Deleted entry for 30 days. Restore returns its original placement. Old independent deletions remain separate.
 - Recently Deleted keeps deleted items and canvases for 30 days.

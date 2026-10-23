@@ -154,7 +154,7 @@ extension AgentTaskTools {
                    properties: ["note_id": ["type": "string", "description": "The ordinary note's id (UUID)."]],
                    required: ["note_id"], destructive: false),
         definition("remove_from_tasks", title: "Remove from Tasks",
-                   description: "Retires a top-level task with writing, keeping the same ordinary note. Subtasks become leading checkboxes; task-only date, priority and completion details are dropped. Refuses divergent copies, unresolved writing and unproven Earlier files: use move_files_into_note then retry. One guarded Undo restores the exact task family.",
+                   description: "Retires a top-level task with writing, keeping the same ordinary note. Subtasks become leading checkboxes; task-only date, priority and completion details are dropped. Refuses divergent copies, unresolved writing, and earlier-deleted subtasks with writing: restore or empty those first. For unproven Earlier files, use move_files_into_note then retry. One guarded Undo restores the exact task family.",
                    properties: ["task_id": ["type": "string", "description": "The top-level task's id (UUID)."]],
                    required: ["task_id"], destructive: false),
         definition("make_task_from_note", title: "Add to Tasks (Compatibility Alias)",
