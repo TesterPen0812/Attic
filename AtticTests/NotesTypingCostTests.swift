@@ -5,6 +5,35 @@ import XCTest
 /// Deterministic work counters; times are evidence, never invented budgets.
 @MainActor
 final class NotesTypingCostTests: XCTestCase {
+    func testB11MeasureWrapLayout() throws {
+        for run in 0..<5 {
+            let (engine, view) = editor([.text("Title"), .text("")])
+            let scroll = try XCTUnwrap(view.enclosingScrollView)
+            let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = scroll
+            window.makeFirstResponder(view)
+            defer { engine.detachView(); window.close() }
+            view.setFrameSize(NSSize(width: 400, height: 600))
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+            var previousY = engine.caretRect(at: view.selectedRange().location)?.minY ?? 0
+            var samples: [Double] = [], wraps: [Double] = []
+            for _ in 0..<100 {
+                let elapsed = milliseconds {
+                    view.insertText("x", replacementRange: view.selectedRange())
+                    engine.layoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+                    view.layoutSubtreeIfNeeded()
+                }
+                let y = try XCTUnwrap(engine.caretRect(at: view.selectedRange().location)).minY
+                if y > previousY + 1 { wraps.append(elapsed) } else { samples.append(elapsed) }
+                previousY = y
+            }
+            XCTAssertFalse(wraps.isEmpty)
+            print("B11_LAYOUT run=\(run) wraps_ms=\(wraps) ordinary_median_ms=\(samples.sorted()[samples.count / 2])")
+        }
+    }
+
     func testP06TailAttachmentLookupWork() throws {
         for count in [100, 1000, 5000] {
             let document = NoteDocument(blocks: [.text("Title")] + (0..<count).map { .text("Unrelated paragraph \($0)") } + [

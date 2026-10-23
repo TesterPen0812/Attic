@@ -2022,6 +2022,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textDidChange(_ notification: Notification) {
+        let phase = PerformanceSignposts.beginNoteWork("NoteTextDidChange")
+        defer { PerformanceSignposts.endNoteWork("NoteTextDidChange", phase) }
         refreshRestoredEmptyParagraphView()
         textView?.marquee?.textChanged()
         history.didChange()
