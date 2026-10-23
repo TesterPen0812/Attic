@@ -4681,7 +4681,7 @@ extension NoteEditorEngine {
 
     @discardableResult func pasteMarkdown(_ text: String, at selection: NSRange) -> Bool {
         guard paragraphStyle(at: selection.location)?.isCode != true, activeTableView == nil,
-              var fragment = try? NoteMarkdownImport.document(text) else { return false }
+              var fragment = try? NoteMarkdownImport.document(text, forPaste: true) else { return false }
         if let icon = paragraphStyle(at: selection.location)?.calloutIcon {
             fragment.blocks = NoteMarkdownImport.calloutParagraphs(fragment.blocks, icon: icon)
         }

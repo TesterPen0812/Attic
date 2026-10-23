@@ -10,8 +10,8 @@ enum NoteMarkdownImport {
         return text.range(of: #"(?m)^(?: {4,}\S|\t[ \t]*\S| {0,3}#{1,6} |\s*[-*+] |\s*[1-9][0-9]*\. |> ?| {0,3}(?:---+|\*\*\*+|___+)\s*$|\s*\|.*\|)|\[[^\]]+\]\([^\)]+\)"#, options: .regularExpression) != nil
     }
 
-    static func document(_ markdown: String) throws -> NoteDocument {
-        let reader = Reader(markdown)
+    static func document(_ markdown: String, forPaste: Bool = false) throws -> NoteDocument {
+        let reader = Reader(markdown, forPaste: forPaste)
         let blocks = reader.blocks(Array(Document(parsing: markdown, options: [.disableSmartOpts]).children), preservingDefinitions: true)
         return NoteDocument(blocks: blocks.isEmpty ? [.text("")] : blocks)
     }
@@ -22,8 +22,10 @@ enum NoteMarkdownImport {
         let source: [UInt8]
         let lines: [Int]
         var tableColumns: [Int: [Int]] = [:]
+        let forPaste: Bool
 
-        init(_ source: String) {
+        init(_ source: String, forPaste: Bool) {
+            self.forPaste = forPaste
             let bytes = Array(source.utf8)
             self.source = bytes
             var starts = [0], index = 0
@@ -142,7 +144,7 @@ enum NoteMarkdownImport {
                             line = range.upperBound.line; next += 1
                         }
                         if tail.isEmpty || tail == "<!-- attic:empty-item -->" { result.append(.text("")) }
-                        else { result += Reader(tail).blocks(Array(Document(parsing: tail, options: [.disableSmartOpts]).children), depth: depth, preservingDefinitions: true) }
+                        else { result += Reader(tail, forPaste: forPaste).blocks(Array(Document(parsing: tail, options: [.disableSmartOpts]).children), depth: depth, preservingDefinitions: true) }
                         continue
                     }
                     // An exact standalone <br> is the exported empty Body.
@@ -331,6 +333,49 @@ enum NoteMarkdownImport {
             return result
         }
 
+        /// Preserve literal punctuation inside paired HTML, but let the AST
+        /// define continuation boundaries. Raw source between the surrounding
+        /// leaves includes quote/list prefixes and hard-break whitespace.
+        func pairedInlineSource(_ nodes: [any Markup], table: Bool) -> String {
+            guard let start = nodes.first?.range?.lowerBound,
+                  let end = nodes.last?.range?.upperBound else { return "" }
+            // Direct document import historically preserves literal LF in
+            // bare HTML spans. Clipboard fragments use CommonMark soft-break
+            // spacing so an embedded LF cannot become another editor block.
+            // Container continuations always discard their structural prefix.
+            var parent = nodes.first?.parent
+            var inContainer = false
+            while let value = parent {
+                if value is BlockQuote || value is ListItem { inContainer = true; break }
+                parent = value.parent
+            }
+            let softBreak = forPaste || inContainer || table ? " " : "&#10;"
+            var breaks: [(SourceLocation, SourceLocation, String)] = []
+            func visit(_ siblings: [any Markup]) {
+                for (index, node) in siblings.enumerated() {
+                    if node is SoftBreak || node is LineBreak {
+                        guard index > 0, index + 1 < siblings.count,
+                              let lower = siblings[index - 1].range?.upperBound,
+                              let upper = siblings[index + 1].range?.lowerBound else { continue }
+                        breaks.append((lower, upper, node is SoftBreak ? softBreak : (table ? "&#10;" : "&#8232;")))
+                    } else { visit(Array(node.children)) }
+                }
+            }
+            visit(nodes)
+            var cursor = start, result = ""
+            for (lower, upper, replacement) in breaks.sorted(by: { $0.0 < $1.0 }) {
+                guard lower >= cursor, upper <= end else { continue }
+                var prefix = rawInline(cursor..<lower, node: nodes[0], table: table)
+                // cmark's preceding text range can include the source's
+                // break spelling even though its Text value excludes it.
+                while prefix.last == " " || prefix.last == "\t" { prefix.removeLast() }
+                if replacement != " ", prefix.last == "\\" { prefix.removeLast() }
+                result += prefix + replacement
+                cursor = upper
+            }
+            return result + rawInline(cursor..<end, node: nodes[0], table: table)
+        }
+
         /// Interpret only balanced inline forms emitted by our exporter.
         /// Pairing uses AST HTML leaves; code and escaped tags cannot enter it.
         /// Raw source inside a recognized pair preserves punctuation literally,
@@ -361,8 +406,8 @@ enum NoteMarkdownImport {
             }
             while index < nodes.count {
                 let node = nodes[index]
-                if let end = pairs[index], let startRange = node.range, let endRange = nodes[end].range {
-                    var literal = rawInline(startRange.lowerBound..<endRange.upperBound, node: node, table: table)
+                if let end = pairs[index] {
+                    var literal = pairedInlineSource(Array(nodes[index...end]), table: table)
                     if table { literal = NoteTableText.unescape(literal, decodeHTML: false) }
                     literal = literal.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
                     // A balanced pair always has source bytes. Failed range

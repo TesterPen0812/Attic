@@ -32,6 +32,33 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testB03PairedInlineHTMLAcrossExternalContinuations() throws {
+        for (source, expected, style, mark) in [
+            ("<u>first\nsecond</u>", "first second", nil, NoteMark.Kind.underline),
+            ("> <u>first\n> second</u>", "first second", "quote", .underline),
+            ("- <u>first\n  second</u>", "first second", "bullet", .underline),
+            ("<strong>first\nsecond</strong>", "first second", nil, .bold),
+            ("> <u>first  \n> second</u>", "first\u{2028}second", "quote", .underline),
+            ("> <strong>é **literal**\n> second</strong>", "é **literal** second", "quote", .bold),
+            ("> <u>first\r\n> second</u>", "first second", "quote", .underline)
+        ] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("Target"), .text("")]))
+            defer { engine.detachView() }
+            let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+            board.setString(source, forType: .string)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            let before = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.handlePaste(board), source)
+            let blocks = Array(engine.document().blocks.dropFirst())
+            XCTAssertEqual(blocks.map(\.text), [expected], source)
+            XCTAssertEqual(blocks.first?.style, style, source)
+            XCTAssertEqual(blocks.first?.marks, [NoteMark(mark, offset: 0, length: expected.utf16.count)], source)
+            let after = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), after)
+        }
+    }
+
     func testPRB12InlineMeasurementsReuseWarmCache() throws {
         let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let today = NoteDay(date: Date())
