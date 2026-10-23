@@ -679,12 +679,14 @@ final class AtticLibrary {
         let context = ModelContext(container)
         let taskRows = (try? context.fetch(FetchDescriptor<TaskItem>())) ?? []
         let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(FetchDescriptor<NoteItem>())) ?? []) : []
+        let tasksByID = Dictionary(grouping: taskRows, by: \.id)
+        let notesByID = Dictionary(grouping: noteRows, by: \.id)
         let candidates = tasks.recentlyDeletedTasks() + (notes?.recentlyDeletedNotes() ?? []) + (canvases?.recentlyDeletedCanvases() ?? [])
         var seen = Set<UUID>()
         return candidates.filter { item in
             let group: UUID? = switch item.ref.kind {
-            case .task: taskRows.first { $0.id == item.ref.id }?.deletionGroupID
-            case .note: noteRows.first { $0.id == item.ref.id }?.deletionGroupID
+            case .task: tasksByID[item.ref.id]?.first?.deletionGroupID
+            case .note: notesByID[item.ref.id]?.first?.deletionGroupID
             case .canvas: nil
             }
             return group.map { seen.insert($0).inserted } ?? true

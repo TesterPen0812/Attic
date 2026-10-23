@@ -66,6 +66,30 @@ final class TaskFilesSliceTests: XCTestCase {
         try? FileManager.default.removeItem(at: filesRoot)
     }
 
+    /// A deadline surrounds the await itself, including a stalled retirement.
+    private func finishPublication(timeout: Duration = .seconds(5), work: @escaping @MainActor () async -> Void) async -> Bool {
+        var finished = false
+        let pending = Task { @MainActor in
+            await work()
+            finished = true
+        }
+        defer { pending.cancel() }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !finished, !Task.isCancelled, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return finished
+    }
+
+    func testPublicationWaitHasAnOverallDeadline() async throws {
+        let start = ContinuousClock.now
+        let finished = await finishPublication(timeout: .milliseconds(50)) {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        XCTAssertFalse(finished, "a stalled awaited dependency must time out")
+        XCTAssertLessThan(start.duration(to: .now), .milliseconds(200))
+    }
+
     private func makeStores() {
         tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: filesRoot))
         library = AtticLibrary(tasks: tasks)
@@ -642,22 +666,30 @@ extension TaskFilesSliceTests {
             let history = presenter.page.history
             let undone = await history.replay(redo: false)
             XCTAssertEqual(undone, .applied)
-            for _ in 0..<200 where history.hasPendingPublication {
-                // Publication needs the queued editor recovery retirement;
-                // completion tests await that dependency, not a 10 ms guess.
-                await notes.waitForRecoveryWork()
-                _ = await history.retryPublication(using: coordinator)
+            let undoFinished = await finishPublication { [self] in
+                for _ in 0..<200 where history.hasPendingPublication {
+                    guard !Task.isCancelled else { return }
+                    await notes.waitForRecoveryWork()
+                    guard !Task.isCancelled else { return }
+                    _ = await history.retryPublication(using: coordinator)
+                }
             }
+            XCTAssertTrue(undoFinished, "Undo publication exceeded its overall 5 s deadline")
             XCTAssertFalse(history.hasPendingPublication)
             XCTAssertNil(try ownNote(id))
             XCTAssertFalse(try XCTUnwrap(presenter.session).isPersisted)
             XCTAssertFalse(presenter.host.textView.string.contains("history.txt"))
             let redone = await history.replay(redo: true)
             XCTAssertEqual(redone, .applied)
-            for _ in 0..<200 where history.hasPendingPublication {
-                await notes.waitForRecoveryWork()
-                _ = await history.retryPublication(using: coordinator)
+            let redoFinished = await finishPublication { [self] in
+                for _ in 0..<200 where history.hasPendingPublication {
+                    guard !Task.isCancelled else { return }
+                    await notes.waitForRecoveryWork()
+                    guard !Task.isCancelled else { return }
+                    _ = await history.retryPublication(using: coordinator)
+                }
             }
+            XCTAssertTrue(redoFinished, "Redo publication exceeded its overall 5 s deadline")
             XCTAssertFalse(history.hasPendingPublication)
             XCTAssertEqual(try ownNote(id), noteID)
             XCTAssertTrue(try XCTUnwrap(presenter.session).isPersisted)
@@ -853,10 +885,15 @@ extension TaskFilesSliceTests {
         let savedUndo = await notes.preserveDurably(session); XCTAssertTrue(savedUndo)
         let undone = await history.replay(redo: false)
         XCTAssertEqual(undone, .applied)
-        for _ in 0..<200 where history.hasPendingPublication {
-            await notes.waitForRecoveryWork()
-            _ = await history.retryPublication(using: coordinator)
+        let finished = await finishPublication { [self] in
+            for _ in 0..<200 where history.hasPendingPublication {
+                guard !Task.isCancelled else { return }
+                await notes.waitForRecoveryWork()
+                guard !Task.isCancelled else { return }
+                _ = await history.retryPublication(using: coordinator)
+            }
         }
+        XCTAssertTrue(finished, "Publication exceeded its overall 5 s deadline")
         XCTAssertFalse(history.hasPendingPublication)
         XCTAssertNil(try ownNote(rootID))
         XCTAssertFalse(try document(noteID).attachmentIDs.contains(refs[0].id))
