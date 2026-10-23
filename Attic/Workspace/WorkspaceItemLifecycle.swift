@@ -370,7 +370,7 @@ extension WorkspaceItemLifecycle {
                     return .init(.note, note)
                 }
                 let afterSource = redirected(source), afterTarget = redirected(target)
-                if !touching.contains(afterSource), !touching.contains(afterTarget) {
+                if afterSource != afterTarget, !touching.contains(afterSource), !touching.contains(afterTarget) {
                     redirectedLinks[link.persistentModelID] = (afterSource, afterTarget)
                 }
             }
