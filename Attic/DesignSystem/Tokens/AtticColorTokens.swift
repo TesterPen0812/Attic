@@ -611,7 +611,14 @@ struct AtticColorTokens: Equatable, Sendable {
             inks[ink] = inks[.priorityNone]!.tuned(toContrast: noneOnBase * step, against: [basePanel], lighten: dark)
         }
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
-        inks[.priorityMark] = (dark ? AtticRGBA(0xF0A04E) : AtticRGBA(0xE2711D)).tuned(toContrast: target(.priorityMark), against: meaning, lighten: dark)
+        // High's "!!" also sits in the composer strip's Priority pill: the
+        // recessed fill inside a raised control (the strip on glass, owner
+        // 2026-10-22), lighter in Dark than the rows' fills. Under Increase
+        // Contrast in Dark it starts from the same orange at full chroma, so
+        // reaching 4.5 : 1 there leaves it orange, not peach.
+        let stripValue = [recipes.rest.face.over(basePanel), glassFace.over(panelBase)].map { recessed.over($0) }
+        let highMark = dark ? (ic ? AtticRGBA(0xFF9F40) : AtticRGBA(0xF0A04E)) : AtticRGBA(0xE2711D)
+        inks[.priorityMark] = highMark.tuned(toContrast: target(.priorityMark), against: meaning + stripValue, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
         // The PR #5 coverage was measured with the old faded Done (#C9CBCE /
         // a dim fill, at 3 : 1); it keeps setting the coverage, so the new
