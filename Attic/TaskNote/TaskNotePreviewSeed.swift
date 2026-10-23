@@ -22,6 +22,9 @@ enum TaskNotePreviewSeed {
         case fifty
         /// A task with no note: opening it creates nothing.
         case nonote
+        /// Draft B (owner, 2026-10-23): eight open subtasks over the draft's
+        /// note, with enough prose below it to scroll (the C1 gate).
+        case eight
     }
 
     /// The owner's preview of the task page ("Attic Task Page"): its fresh
@@ -163,6 +166,21 @@ enum TaskNotePreviewSeed {
         case .nonote:
             parent = task("A task with no note yet", .todo, .none)
             _ = task("One subtask", parent: parent.id)
+        case .eight:
+            parent = task("Prepare the launch demo", .inProgress, .medium, tags: ["launch"])
+            for title in ["Book the meeting room", "Write the demo script", "Record a backup video", "Print the handouts",
+                          "Charge the clicker", "Test the projector", "Send the agenda", "Rehearse with the sales team"] {
+                _ = task(title, parent: parent.id)
+            }
+            var heading = NoteBlock.text("Things to turn into subtasks")
+            heading.style = "heading"
+            heading.level = 2
+            body = [heading,
+                    .text("Ideas from Monday\u{2019}s call that still need someone to own them."),
+                    .text("Keep the demo under ten minutes and leave time for questions."),
+                    .text("Ask Sam for the new logo files", style: "bullet"),
+                    .text("Check the room has HDMI", style: "bullet"),
+                    .text("Bring a spare clicker", style: "bullet")] + longProse(lines: 400)
         }
         if scenario != .nonote {
             let note = NoteItem(id: UUID())

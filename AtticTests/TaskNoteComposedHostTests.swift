@@ -1574,6 +1574,18 @@ extension TaskNoteComposedHostTests {
         XCTAssertEqual(host.textView.frame.minY, host.blockFrame.maxY + 12, accuracy: 0.5)
     }
 
+    /// The C1 gate's and image's fixture is draft B itself: eight open
+    /// subtasks read "Subtasks · 0/8", three rows and "5 more…".
+    func testDraftBFixtureOpensOnThreeRowsAndFiveMore() throws {
+        let id = try seed(.eight)
+        let model = try open(id).model
+        XCTAssertEqual(model.countLabel, "Subtasks · 0/8")
+        XCTAssertEqual(model.visibleRows.map(\.title), ["Book the meeting room", "Write the demo script", "Record a backup video"])
+        XCTAssertEqual(model.disclosureLabel, "5 more…")
+        XCTAssertFalse(model.showsAddRow)
+        XCTAssertEqual(model.spokenGroup, "Subtasks, 0 of 8 done")
+    }
+
     func testExpandShowsEveryRowAddSubtaskAndShowLessAndIsRememberedPerItemOnly() throws {
         let id = try seed(.heavy)
         let presenter = try open(id)
