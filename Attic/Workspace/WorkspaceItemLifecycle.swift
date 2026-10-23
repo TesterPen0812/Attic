@@ -80,6 +80,13 @@ enum WorkspaceItemLifecycle {
             roots.contains($0.rootID) && $0.deletedAt == date && $0.retiredAt == nil
         } : []
         let snapshots = try records.map { try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: $0.snapshot) }
+        // Global tag edits deliberately include deleted rows. They must
+        // survive Restore; every other captured task field remains guarded.
+        func matchesCapture(_ fields: [String: Data], _ captured: [String: Data]) -> Bool {
+            let mutableTagFields: Set<String> = ["tagsRaw", "updatedAt"]
+            return fields.filter { !mutableTagFields.contains($0.key) }
+                == captured.filter { !mutableTagFields.contains($0.key) }
+        }
         guard roots.allSatisfy({ root in
             let peers = records.filter { $0.rootID == root }
             guard let first = peers.first else { return false }
@@ -99,7 +106,7 @@ enum WorkspaceItemLifecycle {
             guard Set(captured.map { $0.0 }) == Set(actual.map(\.id)),
                   try actual.allSatisfy({ row in
                       let fields = try WorkspaceModelFields.read(row)
-                      return captured.contains { $0.0 == row.id && $0.1 == fields }
+                      return captured.contains { $0.0 == row.id && matchesCapture(fields, $0.1) }
                   }) else { throw WorkspaceFoundationError.conflict }
         }
         for root in roots {
@@ -125,7 +132,7 @@ enum WorkspaceItemLifecycle {
                 } else {
                     let fields = try WorkspaceModelFields.read(peer)
                     guard snapshots.flatMap(\.members).filter({ $0.id == row.id }).contains(where: {
-                        ($0.replicas ?? [$0.fields]).contains(fields)
+                        ($0.replicas ?? [$0.fields]).contains { matchesCapture(fields, $0) }
                     }) else { throw TaskReplicaMutationError.incompleteRestore(row.id) }
                 }
             }
