@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The geometry of the task's note page (mockups `p3-20` 2b, `p3-21`, block
-/// shape `p3-19` column 2). Everything sits on the note's text column.
+/// The geometry of the item page (mockups `p3-20` 2b, `p3-21`; the subtasks
+/// in draft B, owner 2026-10-23). Everything sits on the note's text column.
 enum TaskNoteMetrics {
     /// The status circle's column: the title starts where a Tasks row's
     /// does, the circle plus spacing B's circle-to-title gap (15 + 8 = 23;
@@ -13,17 +13,21 @@ enum TaskNoteMetrics {
     static let detailsGap: CGFloat = 4
     static let detailsHeight: CGFloat = 16
     static let detailsSpacing: CGFloat = 12
-    /// Head to the block: 12, plus the block's own 4 above it.
-    static let headToBlock: CGFloat = 16
-    /// The block to the writing.
-    static let blockToWriting: CGFloat = 10
+    /// Head to the subtasks (draft B: 10).
+    static let headToBlock: CGFloat = 10
+    /// The list's last line to the writing (draft B: 12).
+    static let blockToWriting: CGFloat = 12
+    /// The quiet "Subtasks · n/m" label's line.
     static let blockHeader: CGFloat = 28
-    static let blockBottomPadding: CGFloat = 10
     /// "Its note is in Recently Deleted · Restore Note" under the block.
     static let noticeHeight: CGFloat = 34
+    /// Rows in the Tasks list's rhythm: a 28 pt pitch for one-line rows.
     static let rowHeight: CGFloat = AtticLayout.subtaskPitch
-    static var blockRadius: CGFloat { AtticRadius.groupCard }
-    static var blockPadding: CGFloat { AtticSpacing.s12 }
+    /// The rows' box column is the head's status-circle column (the 13 pt
+    /// box centred in 15), so the text starts on the title's line (x 47 on
+    /// the 24 pt content line), the Tasks title column.
+    static let boxColumn: CGFloat = AtticControlSize.statusCircle
+    static var rowTextIndent: CGFloat { boxColumn + AtticSubtaskMetrics.titleGap }
 }
 
 // MARK: - The head
@@ -200,16 +204,16 @@ struct TaskNoteHeadView: View {
 
 // MARK: - The Subtasks block
 
-/// "Subtasks · 4/10" with its disclosure chevron, the rows and "+ Add
-/// subtask" (§ 2.2 item 2), block-shaped (`p3-19` column 2: radius 17, the
-/// recessed fill, no border, 12 inside, a 28 pt header). Folded, it is one
-/// line: "Subtasks · 4/10 ›".
+/// Draft B (owner, 2026-10-23): a quiet "Subtasks · 4/10" label, the first
+/// three subtasks as compact rows in the Tasks list's rhythm, then "N more…"
+/// (expanded: every row, "+ Add subtask" and "Show less"). No card. With
+/// 0–3 subtasks, Add subtask follows the rows.
 ///
 /// Keys (§ 7): the list is one Tab stop (a roving focus: only the current
 /// row is focusable, so exactly one row is focused for VoiceOver too); ↑↓
-/// move it, Space ticks, Return renames (Return saves), ⌘↑↓ reorder within
-/// the group, ⌫ deletes (Undo), Tab goes to Add subtask and from there to the
-/// writing; → ← on the header unfold and fold.
+/// move it among the rows on screen, Space ticks, Return renames (Return
+/// saves), ⌘↑↓ reorder within the group, ⌫ deletes (Undo). Tab goes on to
+/// Add subtask and "N more…" / "Show less" when shown, then the writing.
 struct TaskNoteSubtasksBlock: View {
     @ObservedObject var model: TaskNotePageModel
     /// Restore Note (§ 5.6), shown while the task's note is in Recently
@@ -223,7 +227,7 @@ struct TaskNoteSubtasksBlock: View {
     var earlierFiles: () -> [AtticMenuCommand] = { [] }
 
     /// What has the keyboard inside the block.
-    enum Field: Hashable { case row(UUID), add }
+    enum Field: Hashable { case row(UUID), add, more }
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
@@ -232,22 +236,31 @@ struct TaskNoteSubtasksBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            blockShape
+            label
+            list
+                .disabled(isSnapshot)
+            if model.showsAddRow { addRow }
+            if model.showsDisclosure { disclosure }
             if model.deletedNote { deletedNoteLine }
             if !model.alternateNotes.isEmpty { alternateNoteLine }
             if !model.earlierFiles.earlier.isEmpty || model.earlierFiles.refusal != nil { earlierFilesLine }
         }
             // The native host commits the arithmetic block height at once.
-            // A SwiftUI fold transition would animate inside that final
-            // frame, briefly centering/emptying the rows and header.
-            .animation(nil, value: model.isFolded)
+            // A SwiftUI transition would animate inside that final frame,
+            // briefly centering/emptying the rows.
+            .animation(nil, value: model.isExpanded)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .onHover(perform: pointerMoved)
             .onChange(of: focus, focusMoved)
             .onChange(of: model.focusRequestCount, focusRequested)
             .onChange(of: model.focusedRowID, ringMoved)
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(spokenGroup)
+            .accessibilityLabel(model.spokenGroup)
+            .accessibilityActions {
+                if let name = model.disclosureActionName {
+                    Button(name) { toggleExpanded() }
+                }
+            }
             .accessibilityIdentifier("task-note-subtasks")
     }
 
@@ -320,38 +333,8 @@ struct TaskNoteSubtasksBlock: View {
         .accessibilityIdentifier("task-note-earlier-files")
     }
 
-    /// The block's shape (`p3-19` column 2): radius 17, the recessed fill;
-    /// with Increase Contrast, the recessed hairline (§ 4).
-    private var blockShape: some View {
-        let shape = RoundedRectangle(cornerRadius: TaskNoteMetrics.blockRadius, style: .continuous)
-        let fill: Color = design.tokens.recessed.color
-        let edge: Color = design.tokens.recessedBorder?.color ?? .clear
-        return content
-            .padding(.horizontal, TaskNoteMetrics.blockPadding)
-            .background(shape.fill(fill))
-            .overlay(shape.strokeBorder(edge, lineWidth: design.tokens.recessedBorder == nil ? 0 : 1))
-            .clipShape(shape)
-    }
-
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if !model.isFolded { rowsAndAdd }
-        }
-    }
-
     /// A deleted task's subtasks are a read-only snapshot "as it was".
     private var isSnapshot: Bool { !model.head.exists }
-
-    private var rowsAndAdd: some View {
-        return VStack(alignment: .leading, spacing: 0) {
-            list
-                .disabled(isSnapshot)
-            if !isSnapshot { addRow }
-        }
-        .padding(.bottom, TaskNoteMetrics.blockBottomPadding)
-        .transition(.identity)
-    }
 
     private func pointerMoved(_ inside: Bool) { model.setPointerInside(inside) }
 
@@ -376,6 +359,7 @@ struct TaskNoteSubtasksBlock: View {
         switch region {
         case .list: focus = model.listEntryRowID.map(Field.row)
         case .add: focus = .add
+        case .more: focus = .more
         case .title: focus = nil
         // AppKit's first-responder change takes SwiftUI's focus away; setting
         // it here would race the text view and win (CU P1).
@@ -383,41 +367,72 @@ struct TaskNoteSubtasksBlock: View {
         }
     }
 
-    // MARK: Header
-
-    private var header: some View {
-        Button(action: toggleFold) {
-            HStack(spacing: AtticSpacing.s8) {
-                // p3-20/p3-21: the label is quiet secondary text, lighter
-                // than the rows.
-                AtticText(verbatim: isSnapshot ? model.countLabel + " · " + String(localized: "as it was") : model.countLabel,
-                          style: .rowMeta, ink: .helper)
-                Spacer(minLength: 0)
-                AtticIcon(systemName: model.isFolded ? "chevron.right" : "chevron.down", size: 10, weight: .medium, ink: .helper)
-            }
-            .frame(height: TaskNoteMetrics.blockHeader)
-            .contentShape(Rectangle())
+    /// Tab and ⇧Tab inside the block follow the model's order.
+    private func tab(from region: TaskNotePageModel.Region, backwards: Bool) {
+        switch model.tabTarget(from: region, backwards: backwards) {
+        case .add: focus = .add
+        case .more: focus = .more
+        case .writing: model.focusWriting(atTop: true)
+        case .list: model.requestFocus(.list)
+        case .title: model.requestFocus(.title)
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .onKeyPress(.rightArrow) { model.setFolded(false); return .handled }
-        .onKeyPress(.leftArrow) { model.setFolded(true); return .handled }
-        .accessibilityLabel(model.countLabel)
-        .accessibilityValue(model.isFolded ? String(localized: "collapsed") : String(localized: "expanded"))
-        .accessibilityHint(model.isFolded ? String(localized: "Shows the subtasks") : String(localized: "Hides the subtasks"))
-        .accessibilityIdentifier("task-note-subtasks-header")
     }
 
-    private func toggleFold() {
-        let animation: Animation? = design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)
-        withAnimation(animation) { model.toggleFold(undoManager: undoManager) }
+    // MARK: The label and "N more…"
+
+    /// p3-20/p3-21: the label is quiet secondary text, lighter than the
+    /// rows, on the content line. VoiceOver hears it as the group's name.
+    private var label: some View {
+        AtticText(verbatim: isSnapshot ? model.countLabel + " · " + String(localized: "as it was") : model.countLabel,
+                  style: .rowMeta, ink: .helper)
+            .frame(height: TaskNoteMetrics.blockHeader, alignment: .leading)
+            .accessibilityHidden(true)
+            .accessibilityIdentifier("task-note-subtasks-label")
+    }
+
+    /// "5 more…" / "Show less" on the text column (draft B: 12.5 medium,
+    /// helper ink). A Tab stop, so Full Keyboard Access reaches it.
+    private var disclosure: some View {
+        let ringed = keyboardFocusVisible && focus == .more
+        return Button(action: toggleExpanded) {
+            AtticText(verbatim: model.disclosureLabel, style: .controlLabel, ink: .helper)
+                .frame(height: TaskNoteMetrics.rowHeight)
+                .background { ring(ringed, height: TaskNoteMetrics.rowHeight) }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(interactions: .activate)
+        .focused($focus, equals: .more)
+        .focusEffectDisabled()
+        .onKeyPress(phases: .down) { press in
+            switch press.key {
+            case .tab:
+                tab(from: .more, backwards: press.modifiers.contains(.shift))
+                return .handled
+            case .space, .return:
+                toggleExpanded()
+                return .handled
+            default:
+                return .ignored
+            }
+        }
+        .padding(.leading, TaskNoteMetrics.rowTextIndent)
+        .accessibilityLabel(model.disclosureSpokenLabel)
+        .accessibilityIdentifier("task-note-subtasks-more")
+    }
+
+    private func toggleExpanded() {
+        let wasFocused = focus == .more
+        model.toggleExpanded()
+        // The control moves with the list's end; the keyboard stays on it.
+        if wasFocused { focus = .more }
     }
 
     // MARK: Rows
 
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(model.rows) { row in
+            ForEach(model.visibleRows) { row in
                 rowView(row)
             }
         }
@@ -468,8 +483,10 @@ struct TaskNoteSubtasksBlock: View {
         }
     }
 
+    /// The 13 pt box centred in the 15 pt circle column; the 28 pt hit area
+    /// around it.
     private func checkbox(_ row: TaskNotePageModel.Row) -> some View {
-        let inset: CGFloat = -(AtticSubtaskMetrics.hitSize - AtticControlSize.subtaskCheckbox) / 2
+        let inset: CGFloat = -(AtticSubtaskMetrics.hitSize - TaskNoteMetrics.boxColumn) / 2
         return Button { model.toggle(row.id) } label: {
             AtticSubtaskCheckbox(isDone: row.isDone)
                 .frame(width: AtticSubtaskMetrics.hitSize, height: AtticSubtaskMetrics.hitSize)
@@ -522,11 +539,13 @@ struct TaskNoteSubtasksBlock: View {
         if let id { focus = .row(id) }
     }
 
+    private func rowRing(_ ringed: Bool) -> some View { ring(ringed, height: TaskNoteMetrics.rowHeight) }
+
     @ViewBuilder
-    private func rowRing(_ ringed: Bool) -> some View {
+    private func ring(_ ringed: Bool, height: CGFloat) -> some View {
         if ringed {
             Color.clear
-                .atticFocusRing(true, cornerRadius: AtticRadius.control(height: TaskNoteMetrics.rowHeight - 4))
+                .atticFocusRing(true, cornerRadius: AtticRadius.control(height: height - 4))
                 .padding(.horizontal, -6)
                 .padding(.vertical, 2)
         }
@@ -557,7 +576,7 @@ struct TaskNoteSubtasksBlock: View {
             model.delete(id)
             return .handled
         case .tab:
-            if press.modifiers.contains(.shift) { model.requestFocus(.title) } else { focus = .add }
+            tab(from: .list, backwards: press.modifiers.contains(.shift))
             return .handled
         default:
             if press.characters == "\u{7F}" || press.characters == "\u{8}" {
@@ -573,7 +592,7 @@ struct TaskNoteSubtasksBlock: View {
     private var addRow: some View {
         HStack(spacing: AtticSubtaskMetrics.titleGap) {
             AtticIcon(systemName: "plus", size: 11, weight: .medium, ink: .helper)
-                .frame(width: AtticControlSize.subtaskCheckbox)
+                .frame(width: TaskNoteMetrics.boxColumn)
             TextField(String(localized: "Add subtask"), text: $model.newSubtaskText)
                 .textFieldStyle(.plain)
                 .font(Font(AtticTextStyle.listBody.nsFont))
@@ -592,20 +611,10 @@ struct TaskNoteSubtasksBlock: View {
         if !leaving { focus = .add }
     }
 
-    /// Tab: the writing, with a caret and no ring (§ 7). ⇧Tab: back to the
-    /// list (or the title with no rows).
+    /// Tab: "Show less" when shown, else the writing, with a caret and no
+    /// ring (§ 7). ⇧Tab: back to the list (or the title with no rows).
     private func tabFromAdd(_ press: KeyPress) -> KeyPress.Result {
-        if press.modifiers.contains(.shift) {
-            model.requestFocus(model.rows.isEmpty ? .title : .list)
-        } else {
-            model.focusWriting(atTop: true)
-        }
+        tab(from: .add, backwards: press.modifiers.contains(.shift))
         return .handled
-    }
-
-    /// "Subtasks, 3 items, 1 completed" (§ 8).
-    private var spokenGroup: String {
-        let head = model.head
-        return String(localized: "Subtasks, \(head.subtasks.total) items, \(head.subtasks.done) completed")
     }
 }

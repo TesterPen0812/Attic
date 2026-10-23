@@ -235,7 +235,9 @@ extension TaskNotePresenter {
             })
         switch outcome {
         case .committed, .publicationPending:
-            if model.isFolded { model.setFolded(false) }
+            // The made subtask shows, even past the first three rows (for
+            // now: not remembered).
+            model.setExpanded(true, remember: false)
             return .made(entryID: entry, count: ids.count, kept: analysis.richCount)
         case .notCommitted, .conflict, .unknown:
             return .refused(String(localized: "Couldn't make the subtask"))

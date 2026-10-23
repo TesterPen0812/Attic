@@ -75,9 +75,11 @@ enum TaskNoteCaptureScript {
                      (0.6, { post(String(UnicodeScalar(NSUpArrowFunctionKey)!), keyCode: 126) }),
                      (0.8, { log("ax focused=\(focusedElements(in: host.blockView))", host) })]
         case "fold":
-            steps = [(2.5, { withAnimationIfAllowed { model.setFolded(true) } }),
-                     (1.5, { withAnimationIfAllowed { model.setFolded(false) } }),
-                     (1.5, { withAnimationIfAllowed { model.setFolded(true) } }),
+            // Draft B: "N more…" and "Show less" (the gate's comparison
+            // with the old whole-block fold uses the same three steps).
+            steps = [(2.5, { withAnimationIfAllowed { model.toggleExpanded() } }),
+                     (1.5, { withAnimationIfAllowed { model.toggleExpanded() } }),
+                     (1.5, { withAnimationIfAllowed { model.toggleExpanded() } }),
                      (1.0, { log("fold done", host) })]
         default:
             steps = []

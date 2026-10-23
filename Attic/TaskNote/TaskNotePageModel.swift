@@ -3,13 +3,14 @@ import Combine
 import SwiftUI
 
 /// A task's own note, the page (UX plan § 2.2, mockups `p3-20` 2b and
-/// `p3-21`): the live task head, the "Subtasks · n/m" block and the note's
-/// writing in one scroll. This model owns the head's and the block's state;
+/// `p3-21`; owner's draft B, 2026-10-23): the live task head, the quiet
+/// "Subtasks · n/m" label with the first three subtasks ("N more…" shows the
+/// rest) and the note's writing in one scroll. This model owns the head's and the block's state;
 /// the writing is the workspace session's engine (`TaskNoteComposedHost`).
 ///
 /// Every task change goes through the command library into the workspace's
 /// one history (S11), so ⌘Z in the page walks the head, the block and the
-/// writing in the order they happened. Opening, folding, ticking, adding,
+/// writing in the order they happened. Opening, expanding, ticking, adding,
 /// renaming and reordering never create a note (§ 2.1).
 @MainActor
 final class TaskNotePageModel: ObservableObject {
@@ -36,9 +37,10 @@ final class TaskNotePageModel: ObservableObject {
         var isDone: Bool
     }
 
-    /// The page's regions in Tab order without Full Keyboard Access (§ 7):
-    /// title → the subtask list (one stop) → Add subtask → writing.
-    enum Region: Hashable { case title, list, add, writing }
+    /// The page's regions in Tab order (§ 7): title → the subtask list (one
+    /// stop) → Add subtask (when shown) → "N more…" / "Show less" (when
+    /// shown) → writing.
+    enum Region: Hashable { case title, list, add, more, writing }
 
     /// A task command that changed nothing (§ 5.6: the control springs back
     /// and the status slot says so, with Retry when it can help).
@@ -61,7 +63,10 @@ final class TaskNotePageModel: ObservableObject {
 
     @Published private(set) var head: Head
     @Published private(set) var rows: [Row] = []
-    @Published private(set) var isFolded: Bool
+    /// Draft B (owner, 2026-10-23): collapsed, the list shows its first
+    /// three rows and "N more…"; expanded, every row, Add subtask and "Show
+    /// less". Presentation state only, remembered per item.
+    @Published private(set) var isExpanded: Bool
     /// The row the list's ring is on (arrows move it).
     @Published var focusedRowID: UUID?
     @Published private(set) var renamingID: UUID?
@@ -132,15 +137,9 @@ final class TaskNotePageModel: ObservableObject {
         self.calendar = calendar
         self.locale = locale
         head = Head(title: "", state: .todo, priority: .none, due: nil, tags: [], subtasks: (0, 0), exists: false)
-        isFolded = false
-        let canonical = store.subtasks(of: taskID)
-        // P3: folded when there are more than 6 open subtasks, until the
-        // person folds or unfolds it themselves (remembered per task).
-        if let remembered = defaults?.object(forKey: Self.foldKey(taskID)) as? Bool {
-            isFolded = remembered
-        } else {
-            isFolded = canonical.filter { $0.status != .done }.count > 6
-        }
+        // Draft B: collapsed to three rows until the person expands it
+        // (remembered per item; the old whole-block fold key is not read).
+        isExpanded = defaults?.object(forKey: Self.expandKey(taskID)) as? Bool ?? false
         refresh()
         refreshEarlierFiles()
         observeStore()
@@ -179,7 +178,10 @@ final class TaskNotePageModel: ObservableObject {
         onFocusWriting = nil
     }
 
-    static func foldKey(_ id: UUID) -> String { "AtticTaskNote.folded.\(id.uuidString)" }
+    static func expandKey(_ id: UUID) -> String { "AtticTaskNote.subtasksExpanded.\(id.uuidString)" }
+
+    /// Collapsed, the list shows this many rows (draft B).
+    static let collapsedRowLimit = 3
 
     var historyID: UndoHistoryID { history.historyID }
 
@@ -255,15 +257,54 @@ final class TaskNotePageModel: ObservableObject {
         onGeometryChange?()
     }
 
-    /// The block's height: the 28 pt header; unfolded, a 28 pt line per row,
-    /// Add subtask and the bottom padding (`TaskNoteSubtasksBlock`).
+    /// The block's height (`TaskNoteSubtasksBlock`): the 28 pt label, a
+    /// 28 pt line per shown row, Add subtask when shown and "N more…" /
+    /// "Show less" when shown. Arithmetic, so 50 rows are never measured.
     var blockHeight: CGFloat {
         let notice = CGFloat(noticeCount) * TaskNoteMetrics.noticeHeight
-        let header = TaskNoteMetrics.blockHeader
-        guard !isFolded else { return header + notice }
-        // A deleted task's snapshot has no Add subtask line.
-        let lines = rows.count + (head.exists ? 1 : 0)
-        return header + CGFloat(lines) * TaskNoteMetrics.rowHeight + TaskNoteMetrics.blockBottomPadding + notice
+        let lines = visibleRowCount + (showsAddRow ? 1 : 0) + (showsDisclosure ? 1 : 0)
+        return TaskNoteMetrics.blockHeader + CGFloat(lines) * TaskNoteMetrics.rowHeight + notice
+    }
+
+    // MARK: Draft B's three-row disclosure
+
+    /// The rows on screen: all of them expanded, else the first three of
+    /// the shown (held or canonical) order.
+    var visibleRows: ArraySlice<Row> { isExpanded ? rows[...] : rows.prefix(Self.collapsedRowLimit) }
+    var visibleRowCount: Int { isExpanded ? rows.count : min(rows.count, Self.collapsedRowLimit) }
+    /// Rows behind "N more…".
+    var hiddenRowCount: Int { rows.count - visibleRowCount }
+    /// "N more…" (collapsed) or "Show less" (expanded), only when there is
+    /// something to show or hide.
+    var showsDisclosure: Bool { rows.count > Self.collapsedRowLimit }
+    /// Add subtask: in the expanded list, and with 0–3 subtasks. A deleted
+    /// task's snapshot has none.
+    var showsAddRow: Bool { head.exists && (isExpanded || rows.count <= Self.collapsedRowLimit) }
+
+    func isVisible(_ id: UUID) -> Bool { visibleRows.contains { $0.id == id } }
+
+    /// "5 more…" or "Show less".
+    var disclosureLabel: String {
+        isExpanded ? String(localized: "Show less") : String(localized: "\(hiddenRowCount) more…")
+    }
+
+    /// VoiceOver's name for the same control.
+    var disclosureSpokenLabel: String {
+        isExpanded ? String(localized: "Show fewer subtasks") : String(localized: "Show \(hiddenRowCount) more subtasks")
+    }
+
+    /// The group's action (§ 8): expand or collapse, named as it reads.
+    var disclosureActionName: String? {
+        guard showsDisclosure else { return nil }
+        return isExpanded ? String(localized: "Show Fewer Subtasks") : String(localized: "Show All Subtasks")
+    }
+
+    /// "Subtasks, 2 of 8 done" (§ 8).
+    var spokenGroup: String {
+        let count = head.subtasks
+        let asItWas = head.exists ? "" : ", " + String(localized: "as it was")
+        guard count.total > 0 else { return String(localized: "Subtasks") + asItWas }
+        return String(localized: "Subtasks, \(count.done) of \(count.total) done") + asItWas
     }
 
     /// The task's note is in Recently Deleted (§ 5.6): a line under the
@@ -323,29 +364,38 @@ final class TaskNotePageModel: ObservableObject {
         }
     }
 
-    /// Focus and the pointer have both left, the block folded or the page
-    /// closed: rows settle into canonical order with the 220 ms move.
+    /// Focus and the pointer have both left, or the page closed: rows settle into canonical order with the 220 ms move.
     func releaseHold() {
         guard heldOrder != nil else { return }
         heldOrder = nil
         refresh(animated: true)
     }
 
-    // MARK: Fold (presentation state only: no history, no revision)
+    // MARK: Expand and collapse (presentation state only: no history, no revision)
 
-    func toggleFold(undoManager: UndoManager? = nil) { setFolded(!isFolded) }
+    func toggleExpanded() { setExpanded(!isExpanded) }
 
-    func setFolded(_ folded: Bool) {
-        guard folded != isFolded else { return }
-        isFolded = folded
-        defaults?.set(folded, forKey: Self.foldKey(taskID))
-        if folded {
-            focusInside = false
-            releaseHold()
-            // Folding cancels an open rename and retires its field Undo.
-            if renamingID != nil { cancelRename() }
+    /// "N more…" and "Show less". `remember: false` reveals a row for the
+    /// moment (a new or focused row) without changing how the item opens.
+    /// Collapsing keeps the held order while the list is in use (owner
+    /// answer 5: rows hold still while you work).
+    func setExpanded(_ expanded: Bool, remember: Bool = true) {
+        if remember { defaults?.set(expanded, forKey: Self.expandKey(taskID)) }
+        guard expanded != isExpanded else { return }
+        isExpanded = expanded
+        if !expanded {
+            // A rename on a row going out of sight ends; the ring stays on
+            // a row that is still shown.
+            if let id = renamingID, !isVisible(id) { cancelRename() }
+            if let id = focusedRowID, !isVisible(id) { focusedRowID = visibleRows.last?.id }
         }
         onGeometryChange?()
+    }
+
+    /// Shows every row without remembering it, when rows would be hidden.
+    func revealAll() {
+        guard !isExpanded, hiddenRowCount > 0 else { return }
+        setExpanded(true, remember: false)
     }
 
     // MARK: Subtask commands
@@ -388,6 +438,9 @@ final class TaskNotePageModel: ObservableObject {
         clearFailure()
         newSubtaskText = ""
         refresh()
+        // The new row and the field stay in sight (draft B: Add subtask
+        // shows with 0–3 rows, so a fourth row expands the list).
+        revealAll()
         return true
     }
 
@@ -645,9 +698,18 @@ final class TaskNotePageModel: ObservableObject {
 
     func requestFocus(_ region: Region) {
         if region == .writing { focusWriting(atTop: false); return }
-        if region == .list, rows.isEmpty || isFolded {
-            requestFocus(isFolded ? .writing : .add)
+        if region == .list, rows.isEmpty {
+            requestFocus(head.exists ? .add : .writing)
             return
+        }
+        if region == .more, !showsDisclosure {
+            requestFocus(.writing)
+            return
+        }
+        // Add subtask is in the expanded list (or with 0–3 rows).
+        if region == .add, !showsAddRow {
+            guard head.exists else { requestFocus(.writing); return }
+            revealAll()
         }
         if region == .list { focusedRowID = listEntryRowID }
         focusRequest = region
@@ -660,10 +722,11 @@ final class TaskNotePageModel: ObservableObject {
         onFocusWriting?(atTop)
     }
 
-    /// ⌃⇧Tab in the writing: the block's last focused row, else Add subtask.
+    /// ⌃⇧Tab in the writing: the block's last focused row (shown, even if
+    /// it was behind "N more…"), else Add subtask.
     func focusBlockFromWriting() {
-        if isFolded { setFolded(false) }
         if let id = lastFocusedRowID, rows.contains(where: { $0.id == id }) {
+            if !isVisible(id) { revealAll() }
             focusedRowID = id
             requestFocus(.list)
         } else {
@@ -671,11 +734,26 @@ final class TaskNotePageModel: ObservableObject {
         }
     }
 
+    /// Where Tab (or ⇧Tab) goes from a region of the block (§ 7). The list
+    /// is one stop; Add subtask and "N more…" / "Show less" are stops when
+    /// shown, so the keyboard (and Full Keyboard Access) reaches "N more…".
+    func tabTarget(from region: Region, backwards: Bool = false) -> Region {
+        var order: [Region] = [.title]
+        if !rows.isEmpty { order.append(.list) }
+        if showsAddRow { order.append(.add) }
+        if showsDisclosure { order.append(.more) }
+        order.append(.writing)
+        guard let index = order.firstIndex(of: region) else { return backwards ? .title : .writing }
+        let next = index + (backwards ? -1 : 1)
+        return order.indices.contains(next) ? order[next] : region
+    }
+
     /// The row the list's one Tab stop lands on (review P2-5): the ring's
-    /// row, else the last focused row, else the first.
+    /// row, else the last focused row, else the first, all among the rows
+    /// on screen.
     var listEntryRowID: UUID? {
-        if let id = focusedRowID, rows.contains(where: { $0.id == id }) { return id }
-        if let id = lastFocusedRowID, rows.contains(where: { $0.id == id }) { return id }
+        if let id = focusedRowID, isVisible(id) { return id }
+        if let id = lastFocusedRowID, isVisible(id) { return id }
         return rows.first?.id
     }
 
@@ -683,12 +761,14 @@ final class TaskNotePageModel: ObservableObject {
         if let id { lastFocusedRowID = id }
     }
 
-    /// ↑↓ in the list: the ring moves, holding still at either end.
+    /// ↑↓ in the list: the ring moves among the rows on screen, holding
+    /// still at either end.
     func moveRing(by offset: Int) {
-        guard !rows.isEmpty else { return }
-        let index = focusedRowID.flatMap { id in rows.firstIndex { $0.id == id } } ?? (offset > 0 ? -1 : rows.count)
-        let next = min(max(0, index + offset), rows.count - 1)
-        focusedRowID = rows[next].id
+        let shown = Array(visibleRows)
+        guard !shown.isEmpty else { return }
+        let index = focusedRowID.flatMap { id in shown.firstIndex { $0.id == id } } ?? (offset > 0 ? -1 : shown.count)
+        let next = min(max(0, index + offset), shown.count - 1)
+        focusedRowID = shown[next].id
         lastFocusedRowID = focusedRowID
     }
 

@@ -575,7 +575,7 @@ struct TaskNotePage: View {
         ]
         if !done {
             commands.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask")) {
-                if model.isFolded { model.setFolded(false) }
+                // Add subtask is in the expanded list (or with 0–3 rows).
                 model.requestFocus(.add)
             }.identified("task-note-task-add-subtask"))
         }

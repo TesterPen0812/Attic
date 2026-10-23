@@ -107,8 +107,8 @@ enum TaskNotePreviewSeed {
     @MainActor
     static func seedAll(in container: ModelContainer, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) throws {
         for scenario in Scenario.allCases { seeded[scenario] = try seed(scenario, in: container, now: now, calendar: calendar) }
-        // The 50-subtask scenario is measured unfolded.
-        if let fifty = seeded[.fifty] { UserDefaults.standard.set(false, forKey: TaskNotePageModel.foldKey(fifty)) }
+        // The 50-subtask scenario is measured expanded.
+        if let fifty = seeded[.fifty] { UserDefaults.standard.set(true, forKey: TaskNotePageModel.expandKey(fifty)) }
     }
 
     /// Writes one scenario's task, subtasks and (except `nonote`) its own
