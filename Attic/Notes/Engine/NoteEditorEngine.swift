@@ -2517,20 +2517,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func writeSelection(_ range: NSRange, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard range.length > 0, rangeIsInStorage(range) else { return false }
-        let selected = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
-        // A partial list selection starts at the visible ordinal of its
-        // first item, which may not carry the run's explicit start metadata.
-        if case let .number(marker) = listMarker(at: range.location),
-           let ordinal = Int(marker.dropLast()) {
-            let first = (selected.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
-            selected.addAttribute(.noteListStart, value: ordinal, range: first)
-        }
-        return writeSelection(selected, to: pasteboard, types: types)
+        let selected = textStorage.attributedSubstring(from: range)
+        // Only public RTF needs the visible ordinal. Private fragments keep
+        // implicit starts so copies and moves continue the destination's list.
+        let rtfVisibleStart: Int?
+        if case let .number(marker) = listMarker(at: range.location) {
+            rtfVisibleStart = Int(marker.dropLast())
+        } else { rtfVisibleStart = nil }
+        return writeSelection(selected, to: pasteboard, types: types, rtfVisibleStart: rtfVisibleStart)
     }
 
     /// Also accepts a discontiguous block selection assembled in document
     /// order, preserving the same private fragment, table and RTF routes.
-    func writeSelection(_ text: NSAttributedString, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+    func writeSelection(_ text: NSAttributedString, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType], rtfVisibleStart: Int? = nil) -> Bool {
         guard text.length > 0 else { return false }
         var fragment = NoteTextCodec.document(from: text, template: NoteDocument(blocks: []), firstBlockIsTitle: false)
         fragment.extras = ["sourceNoteID": .string(noteID.uuidString)]
@@ -2558,6 +2557,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 wrote = pasteboard.setString(NoteMarkdownExport.markdown(body), forType: type) || wrote
             case .rtf:
                 let selected = NSMutableAttributedString(attributedString: text)
+                if let rtfVisibleStart {
+                    let first = (selected.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+                    selected.addAttribute(.noteListStart, value: rtfVisibleStart, range: first)
+                }
                 // Native export reads NSTextList, not Attic's marker metadata.
                 // Build run identities for explicit starts/restarts at each depth.
                 var lists: [NSTextList] = []

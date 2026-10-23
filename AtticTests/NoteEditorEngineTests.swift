@@ -32,6 +32,45 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testB02InAppCopyContinuesNumbering() async throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("a", style: "number"), .text("b", style: "number"), .text("c", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: 3), to: board,
+                                             types: [NoteEditorEngine.fragmentType, .string, TasksTextExport.markdownType, .rtf]))
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        let didPaste = await engine.pasteDurably(fragmentData: try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType)), at: view.selectedRange())
+        XCTAssertTrue(didPaste)
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["a", "b", "c", "a", "b"])
+        let pasted = location(of: "c", in: engine) + 2
+        XCTAssertEqual(engine.listMarker(at: pasted), .number("4."))
+        XCTAssertEqual(engine.listMarker(at: pasted + 2), .number("5."))
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.start == nil })
+    }
+
+    func testB02InAppCutToReorderContinuesNumbering() async throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("a", style: "number"), .text("b", style: "number"), .text("c", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        let moved = NSRange(location: location(of: "b", in: engine), length: 2)
+        // The cut path writes the same selection before deleting it. A unique
+        // board exercises those operations without replacing the user's clipboard.
+        XCTAssertTrue(engine.writeSelection(moved, to: board,
+                                             types: [NoteEditorEngine.fragmentType, .string, TasksTextExport.markdownType, .rtf]))
+        XCTAssertEqual(board.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), "1. b")
+        XCTAssertEqual(board.string(forType: TasksTextExport.markdownType)?.trimmingCharacters(in: .whitespacesAndNewlines), "1. b\n\n<br>")
+        view.setSelectedRange(moved)
+        view.deleteBackward(nil)
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        let didPaste = await engine.pasteDurably(fragmentData: try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType)), at: view.selectedRange())
+        XCTAssertTrue(didPaste)
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["a", "c", "b", ""])
+        XCTAssertEqual(engine.listMarker(at: location(of: "b", in: engine)), .number("3."))
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.start == nil })
+    }
+
     func testB03PairedInlineHTMLAcrossExternalContinuations() throws {
         for (source, expected, style, mark) in [
             ("<u>first\nsecond</u>", "first second", nil, NoteMark.Kind.underline),
