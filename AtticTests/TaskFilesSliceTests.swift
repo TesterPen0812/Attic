@@ -643,7 +643,9 @@ extension TaskFilesSliceTests {
             let undone = await history.replay(redo: false)
             XCTAssertEqual(undone, .applied)
             for _ in 0..<200 where history.hasPendingPublication {
-                try await Task.sleep(for: .milliseconds(10))
+                // Publication needs the queued editor recovery retirement;
+                // completion tests await that dependency, not a 10 ms guess.
+                await notes.waitForRecoveryWork()
                 _ = await history.retryPublication(using: coordinator)
             }
             XCTAssertFalse(history.hasPendingPublication)
@@ -653,7 +655,7 @@ extension TaskFilesSliceTests {
             let redone = await history.replay(redo: true)
             XCTAssertEqual(redone, .applied)
             for _ in 0..<200 where history.hasPendingPublication {
-                try await Task.sleep(for: .milliseconds(10))
+                await notes.waitForRecoveryWork()
                 _ = await history.retryPublication(using: coordinator)
             }
             XCTAssertFalse(history.hasPendingPublication)
@@ -852,7 +854,7 @@ extension TaskFilesSliceTests {
         let undone = await history.replay(redo: false)
         XCTAssertEqual(undone, .applied)
         for _ in 0..<200 where history.hasPendingPublication {
-            try await Task.sleep(for: .milliseconds(10))
+            await notes.waitForRecoveryWork()
             _ = await history.retryPublication(using: coordinator)
         }
         XCTAssertFalse(history.hasPendingPublication)
