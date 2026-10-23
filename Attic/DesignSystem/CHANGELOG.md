@@ -1,3 +1,7 @@
+## 2026-10-23 · Whole-item lifecycle
+
+The item page has one Delete confirmation naming its writing, subtasks and files. Deleted writing is read-only and restores with the item; task-row deletion feedback includes writing in multi-selection counts. No layout change.
+
 # Design system change log
 
 The design system was frozen when the owner signed off the Phase 0 gallery.

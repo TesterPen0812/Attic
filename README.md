@@ -52,7 +52,8 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ### Everywhere
 
-- Recently Deleted keeps deleted tasks, notes and canvases for 30 days.
+- Deleting a task or its writing moves the whole item, including subtasks and files, to one Recently Deleted entry for 30 days. Restore returns its original placement. Old independent deletions remain separate.
+- Recently Deleted keeps deleted items and canvases for 30 days.
 - Settings: General, Panel, Appearance, Recently Deleted, Agent Access and
   About. `Command–,` opens it while Attic is focused.
 - An optional local MCP server lets AI agents on the same Mac read and change
@@ -190,7 +191,7 @@ describes its arguments in `tools/list`. A few rules:
   write is kept as a proposal requiring review.
 - The async workspace tools `make_subtask`, `make_note_checkbox`,
   `make_task_from_note`, `restore` (notes), and `move_files_into_note` require
-  `base_workspace_token`: pass the combined `workspace_token` returned by
+  `base_workspace_token`: paired Delete/Restore aliases also require this combined token and run as one whole-item change (a stale or open-editor call becomes one proposal). Pass the combined `workspace_token` returned by
   `get_task_workspace`, or request it with `include_workspace_token: true`
   in `list_notes` or `list_deleted`. This token covers the complete read set
   from one snapshot. Open-editor or stale writes wait as proposals for Review.

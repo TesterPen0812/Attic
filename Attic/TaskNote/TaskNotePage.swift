@@ -268,7 +268,7 @@ struct TaskNotePage: View {
     @State private var confirming: Confirmation?
 
     enum Confirmation: Identifiable {
-        case deleteTask, deleteNote
+        case deleteTask
         /// § 2.3.3: some lines hold what a subtask can't keep.
         case richSubtasks(TaskNoteSubtaskSelection)
         /// § 2.6: a Done task gets an open subtask.
@@ -280,7 +280,6 @@ struct TaskNotePage: View {
             case .reopenRequest: "reopenRequest"
 
             case .deleteTask: "deleteTask"
-            case .deleteNote: "deleteNote"
             case .richSubtasks: "richSubtasks"
             case .reopenForSubtasks: "reopenForSubtasks"
             }
@@ -381,9 +380,7 @@ struct TaskNotePage: View {
                             titleVisibility: .visible, presenting: confirming) { kind in
             switch kind {
             case .deleteTask:
-                Button(String(localized: "Delete Task"), role: .destructive) { model.deleteTask() }
-            case .deleteNote:
-                Button(String(localized: "Delete Note"), role: .destructive) { deleteNote() }
+                Button(String(localized: "Delete"), role: .destructive) { model.deleteTask() }
             case let .richSubtasks(analysis):
                 Button(String(localized: "Create Subtask and Keep Original")) { runMakeSubtask(analysis) }
                     .keyboardShortcut(.defaultAction)
@@ -554,9 +551,9 @@ struct TaskNotePage: View {
                                              identifier: "task-note-menu-restore-note") { restoreNote() })
         }
         commands.append(contentsOf: placementCommands(startsSection: !commands.isEmpty))
-        if persisted {
-            commands.append(AtticMenuCommand("Delete Note…", isDestructive: true, startsSection: true,
-                                             identifier: "task-note-menu-delete-note") { confirming = .deleteNote })
+        if persisted, model.head.exists {
+            commands.append(AtticMenuCommand("Delete…", isDestructive: true, startsSection: true,
+                                             identifier: "task-note-task-delete") { confirming = .deleteTask })
         }
         return commands
     }
@@ -585,7 +582,7 @@ struct TaskNotePage: View {
             addFilesToNote()
         }.identified("task-note-task-add-files"))
         commands.append(contentsOf: placementCommands(startsSection: true))
-        commands.append(AtticMenuCommand(verbatim: String(localized: "Delete Task…"), isDestructive: true, startsSection: true) {
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Delete…"), isDestructive: true, startsSection: true) {
             confirming = .deleteTask
         }.identified("task-note-task-delete"))
         return commands
@@ -615,7 +612,6 @@ struct TaskNotePage: View {
     private var confirmationTitle: String {
         switch confirming {
         case .deleteTask: String(localized: "Delete “\(model.head.title)”?")
-        case .deleteNote: String(localized: "Delete this note?")
         case let .richSubtasks(analysis):
             analysis.richCount == 1 ? String(localized: "1 line has links or formatting a subtask can't keep.")
                 : String(localized: "\(analysis.richCount) lines have links or formatting a subtask can't keep.")
@@ -837,12 +833,8 @@ struct TaskNotePage: View {
     private func confirmationMessage(_ kind: Confirmation) -> String {
         switch kind {
         case .deleteTask:
-            let count = model.head.subtasks.total
-            let subtasks = count == 0 ? String(localized: "The task goes")
-                : String(localized: "The task and its \(count) subtasks go")
-            return subtasks + " " + String(localized: "to Recently Deleted for 30 days. Its note stays in All notes, and you can keep editing it.")
-        case .deleteNote:
-            return String(localized: "Its writing and files go to Recently Deleted for 30 days. “\(model.head.title)” and its subtasks stay in Tasks.")
+            return model.library.deletionScope(for: model.taskID)?.confirmationMessage
+                ?? String(localized: "The item, its writing, subtasks and files go to Recently Deleted for 30 days.")
         case let .richSubtasks(analysis):
             return analysis.richCount == 1 ? String(localized: "That line stays in the note unchanged; plain lines still move.")
                 : String(localized: "Those lines stay in the note unchanged; plain lines still move.")
@@ -872,29 +864,6 @@ struct TaskNotePage: View {
         }
     }
 
-    private func deleteNote() {
-        guard let session = presenter.session else { return }
-        let id = session.noteID
-        Task { @MainActor in
-            // Leave the page durably first (its draft is saved), then delete
-            // the note itself; the page comes back with Restore Note.
-            guard await presenter.close() else {
-                Self.log.notice("Delete Note: the page kept its note (close refused)")
-                return
-            }
-            guard await controller.deleteNoteDurably(noteID: id) else {
-                Self.log.notice("Delete Note refused by the store")
-                onReopen()
-                return
-            }
-            onReopen()
-        }
-    }
-
-    /// Restore Note (§ 2.7.2) is its own Undo step, with its toast. The
-    /// page leaves first, durably: writing already in its "Write a new
-    /// note" draft becomes the task's note, and the restored one then
-    /// returns as a separate note (the task has a newer one).
     private func restoreNote() {
         guard let id = presenter.deletedNoteID, model.deletedNote else {
             Self.log.notice("Restore Note: no deleted note on this page")

@@ -32,11 +32,12 @@ final class TaskLifecycleSliceTests: XCTestCase {
         notes = nil; library = nil; tasks = nil; coordinator = nil; container = nil
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testOpusR1OrdinaryNoteRestoreAndSecondRestoreDoNotRematerialize() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["task-tag"]))
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         let mine = NoteDocument(blocks: [.text("My ordinary title"), .text("My ordinary body")])
         _ = try notes.store.saveDocument(noteID: noteID, document: mine,
@@ -95,11 +96,12 @@ final class TaskLifecycleSliceTests: XCTestCase {
         }
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testOpusR8SeparateRestoreKeepsTheNotesOwnTags() async throws {
         let id = try seed(.boundary)
         let oldID = try XCTUnwrap(try ownNotes(id).first?.id)
         XCTAssertTrue(notes.store.setTags(["mine"], for: try XCTUnwrap(notes.store.note(withID: oldID))))
-        XCTAssertTrue(notes.store.delete(try XCTUnwrap(notes.store.note(withID: oldID))))
+        XCTAssertTrue(try legacyDeleteNote(oldID))
         let presenter = try open(id)
         type("New own note", into: presenter.host.textView)
         XCTAssertTrue(notes.save(try XCTUnwrap(presenter.session)))
@@ -121,13 +123,15 @@ final class TaskLifecycleSliceTests: XCTestCase {
             let dateText = Calendar.autoupdatingCurrent.isDate(date, equalTo: Date(), toGranularity: .weekOfYear)
                 ? date.formatted(.dateTime.weekday(.abbreviated))
                 : date.formatted(.dateTime.day().month(.wide).year())
-            XCTAssertEqual(document.blocks[1].text, "Was a task · done \(dateText) · 1/2")
+            XCTAssertFalse(document.blocks.contains { $0.text.contains("Was a task") || $0.text.contains(dateText) }, "2026-10-23: conversion drops completion details")
+            XCTAssertEqual(document.blocks[1].kind, .checklist)
         }
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testOpusR10PurgeToastIsObsoleteAfterItsControllerLeaves() async throws {
         let id = try seed(.boundary)
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         var captured: (WorkspaceMaterializationPatch, UUID)?
         notes.taskNoteMaterialized = { captured = ($0, $1) }
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
@@ -404,6 +408,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         presenter.page.history.inputClientDidAttach()
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testOpusR3UnknownPurgeRecoversEveryOpenFamilyNoteOnce() async throws {
         let id = try seed(.boundary)
         let child = try XCTUnwrap(tasks.subtasks(of: id).first)
@@ -412,7 +417,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
             document: try NoteDocument(blocks: [.text("Child"), .text("Child body")]).taskSnapshot(title: child.title),
             taskOwner: child.id).get()
         let parentPage = try open(id), childPage = try open(child.id)
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
         coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
         var installed: Set<UUID> = []
@@ -451,13 +456,14 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(reopened.host.textView.string.contains("queued"))
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testOpusR3PurgeReusesTheCachedNotesHistoryWithoutATaskPresenter() async throws {
         let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         XCTAssertTrue(notes.open(noteID: noteID))
         let session = try XCTUnwrap(notes.active), view = session.engine.makeView()
         defer { withExtendedLifetime(view.0) {} }
         XCTAssertNil(session.engine.history.workspace)
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         let history = try XCTUnwrap(session.engine.history.workspace)
         XCTAssertFalse(history.hasPendingPublication)
@@ -489,12 +495,13 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(notes.active).engine.isBodyOnly)
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testOpusR3CachedPurgeKeepsNewerDraftDuringAnUnknownReceipt() async throws {
         let id = try seed(.boundary), noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         XCTAssertTrue(notes.open(noteID: noteID))
         let session = try XCTUnwrap(notes.active), view = session.engine.makeView()
         defer { withExtendedLifetime(view.0) {} }
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         coordinator.save = { context in try context.save(); throw WorkspaceFoundationError.unknown }
         coordinator.beforeReconciliationRead = { throw WorkspaceFoundationError.unknown }
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
@@ -602,41 +609,44 @@ final class TaskLifecycleSliceTests: XCTestCase {
         }
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F8HistoricalDetachedAssociationDoesNotBlockPurge() async throws {
         let id = try XCTUnwrap(TaskNoteLifecyclePreviewSeed.seed(in: container)[.alternateNote])
         makeStores()
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         XCTAssertTrue(notes.store.keepAsSeparateNote(noteID: noteID))
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         XCTAssertTrue(report.removedTaskIDs.contains(id))
         XCTAssertNotNil(notes.store.note(withID: noteID), "separate note survives")
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F14PurgeMaterializesTagsAndReadablePreservedSubtasks() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["launch"]))
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         XCTAssertTrue(report.removedTaskIDs.contains(id))
         let document = try storedDocument(noteID)
-        XCTAssertTrue(document.blocks.contains { $0.text.hasPrefix("Was a task") })
+        XCTAssertFalse(document.blocks.contains { $0.text.hasPrefix("Was a task") }, "2026-10-23: completion details are dropped")
         XCTAssertEqual(document.blocks.filter { $0.kind == .checklist }.map(\.text), ["Write release notes", "Freeze strings"])
         XCTAssertEqual(try rows(noteID).first?.tags, ["launch"])
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F14DeletedNoteRestoredAfterTaskPurgeGetsPreservedTagsAndSummary() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["launch"]))
-        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        let deleted = try legacyDeleteNote(noteID)
         XCTAssertTrue(deleted)
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         XCTAssertTrue(notes.store.restoreDeleted(noteID: noteID))
         XCTAssertEqual(try rows(noteID).first?.tags, ["launch"])
-        XCTAssertTrue(try storedDocument(noteID).blocks.contains { $0.text.hasPrefix("Was a task") })
+        XCTAssertFalse(try storedDocument(noteID).blocks.contains { $0.text.hasPrefix("Was a task") }, "2026-10-23: completion details are dropped")
     }
 
     func testP3F7AgentWriteToLeasedTaskEditorIsAProposal() async throws {
@@ -708,6 +718,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
 
     func testP3F13DoneLogTaskPageCanRenameAndDelete() async throws {
         let id = try seed(.boundary)
+        await notes.startAndWait()
         let presenter = try open(id)
         XCTAssertTrue(presenter.model.toggleTask())
         XCTAssertEqual(tasks.moveCompletedToDoneLog(before: Date().addingTimeInterval(60)), 3)
@@ -752,11 +763,12 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(try storedDocument(id).blocks.last?.text, "Keep body")
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F5PurgeReservesNativeInputThroughRetirement() async throws {
         let id = try seed(.boundary)
         let presenter = try open(id)
         let session = try XCTUnwrap(presenter.session)
-        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(try legacyDeleteTask(id))
         coordinator.afterPreparation = { [self] in checkReservedInput(session) }
         defer { coordinator.afterPreparation = nil }
         let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
@@ -764,11 +776,12 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(session.state, .clean)
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F5TypingBeforePurgePresentationClosesKeepsMaterializedContext() async throws {
         let id = try seed(.boundary)
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), tags: ["launch"]))
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
-        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(try legacyDeleteTask(id))
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         XCTAssertFalse(session.engine.isBodyOnly)
         let view = presenter.host.textView
@@ -776,7 +789,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         type(" Late writing", into: view)
         XCTAssertTrue(notes.save(session))
         let stored = try storedDocument(session.noteID)
-        XCTAssertTrue(stored.blocks.contains { $0.text.hasPrefix("Was a task") })
+        XCTAssertFalse(stored.blocks.contains { $0.text.hasPrefix("Was a task") }, "2026-10-23: no completion summary")
         XCTAssertEqual(stored.blocks.filter { $0.kind == .checklist }.count, 2)
         XCTAssertTrue(stored.blocks.last?.text.hasSuffix(" Late writing") == true)
         XCTAssertEqual(try rows(session.noteID).first?.tags, ["launch"])
@@ -787,12 +800,13 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(presenter.page.history.undoName, "Task removed permanently")
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F2PurgeUsesTheControllersRetainedWorkspaceHistory() async throws {
         let id = try seed(.boundary)
         let presenter = try open(id)
         let history = presenter.page.history
         let noteID = try XCTUnwrap(presenter.session?.noteID)
-        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(try legacyDeleteTask(id))
         var captured: (WorkspaceMaterializationPatch, UUID)?
         notes.taskNoteMaterialized = { captured = ($0, $1) }
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
@@ -873,10 +887,11 @@ final class TaskLifecycleSliceTests: XCTestCase {
         withExtendedLifetime(view) {}
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F2PurgeToastRefusesInsteadOfUndoingLaterTyping() async throws {
         let id = try seed(.boundary), presenter = try open(id)
         let noteID = try XCTUnwrap(presenter.session?.noteID)
-        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(try legacyDeleteTask(id))
         var captured: (WorkspaceMaterializationPatch, UUID)?
         notes.taskNoteMaterialized = { captured = ($0, $1) }
         _ = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
@@ -946,6 +961,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(try storedDocument(session.noteID), before)
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testP3F2FamilyPurgeKeepsEachOwningTasksHistoryAndPresentation() async throws {
         let id = try seed(.boundary)
         let parent = try open(id)
@@ -958,7 +974,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let parentHistory = parent.page.history, childHistory = child.page.history
         var patches: [(WorkspaceMaterializationPatch, UUID)] = []
         notes.taskNoteMaterialized = { patches.append(($0, $1)) }
-        XCTAssertTrue(parent.model.deleteTask())
+        XCTAssertTrue(try legacyDeleteTask(id))
         let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         XCTAssertTrue(report.materializedNoteIDs.isSuperset(of: [parentNote, childNote]))
         XCTAssertTrue(notes.undoRoute.workspace(for: .note(parentNote)) === parentHistory)
@@ -975,7 +991,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let childUndo = await childHistory.replay(redo: false)
         XCTAssertEqual(childUndo, .applied)
         XCTAssertFalse(try storedDocument(childNote).blocks.contains { $0.text.hasPrefix("Was a task") })
-        XCTAssertTrue(try storedDocument(parentNote).blocks.contains { $0.text.hasPrefix("Was a task") })
+        XCTAssertEqual(try storedDocument(parentNote).blocks.filter { $0.kind == .checklist }.count, 2, "the other owner remains materialized")
         let parentUndo = await parentHistory.replay(redo: false)
         XCTAssertEqual(parentUndo, .applied)
         XCTAssertFalse(try storedDocument(parentNote).blocks.contains { $0.text.hasPrefix("Was a task") })
@@ -1049,6 +1065,27 @@ final class TaskLifecycleSliceTests: XCTestCase {
         try ModelContext(container).fetch(FetchDescriptor<TaskNoteAssociation>()).filter { $0.noteID == noteID }
     }
 
+    /// Fixtures of pre-2026-10-23 independent deletions; new user commands
+    /// are covered by OneItemLifecycleTests and never call these helpers.
+    private func legacyDeleteTask(_ id: UUID) throws -> Bool {
+        let context = WorkspaceLegacyBridge.context(for: container)
+        try TaskStore.stageSoftDeletion(in: context, taskID: id, preservationID: UUID(), timestamp: Date())
+        try context.save()
+        tasks.refresh(); notes.store.refresh()
+        TaskNotePresenter.open(for: id)?.model.refresh()
+        return true
+    }
+    private func legacyDeleteNote(_ id: UUID) throws -> Bool {
+        let context = ModelContext(container)
+        let files = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { $0.noteID == id }
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == id {
+            row.deletedAt = Date(); row.deletionGroupID = nil
+            row.deletedAttachmentIDsRaw = Set(files.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
+        }
+        try context.save(); notes.store.refresh()
+        return true
+    }
+
     private func storedDocument(_ id: UUID) throws -> NoteDocument {
         let row = try XCTUnwrap(rows(id).first)
         return try XCTUnwrap(row.content.flatMap { NoteContentCodec.decode($0).document })
@@ -1086,9 +1123,10 @@ final class TaskLifecycleSliceTests: XCTestCase {
 
     // MARK: A deleted task's note from All notes (§ 2.7.2 row 1)
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testADeletedTasksPageOpensInTheQuietDeletedStateWithItsSubtasksAsTheyWere() async throws {
         let id = try seed(.boundary)
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         let presenter = try open(id)
         let model = presenter.model
         XCTAssertFalse(model.head.exists, "the head reads Task deleted · Restore")
@@ -1103,10 +1141,11 @@ final class TaskLifecycleSliceTests: XCTestCase {
 
     // MARK: "Write a new note" and Restore Note (§ 2.7.2)
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testWritingWhileTheNoteIsInRecentlyDeletedStartsANewSeparateOwnNote() async throws {
         let id = try seed(.boundary)
         let oldID = try XCTUnwrap(try ownNotes(id).first?.id)
-        let deleted = await notes.deleteNoteDurably(noteID: oldID)
+        let deleted = try legacyDeleteNote(oldID)
         XCTAssertTrue(deleted)
         let presenter = try open(id)
         XCTAssertTrue(presenter.model.deletedNote)
@@ -1122,10 +1161,11 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(presenter.model.deletedNote, "the Restore Note line goes once the new note exists")
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testRestoreNoteWhileTheTaskHasANewerNoteReturnsItAsAnOrdinaryNote() async throws {
         let id = try seed(.boundary)
         let oldID = try XCTUnwrap(try ownNotes(id).first?.id)
-        let deleted = await notes.deleteNoteDurably(noteID: oldID)
+        let deleted = try legacyDeleteNote(oldID)
         XCTAssertTrue(deleted)
         let presenter = try open(id)
         type("Newer", into: presenter.host.textView)
@@ -1162,16 +1202,17 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(try rows(noteID).allSatisfy { $0.deletedAt == nil && $0.taskID == id })
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testARestoredSeparateNoteCanBeDeletedAndRestoredAgain() async throws {
         let id = try seed(.boundary)
         let oldID = try XCTUnwrap(try ownNotes(id).first?.id)
-        _ = await notes.deleteNoteDurably(noteID: oldID)
+        _ = try legacyDeleteNote(oldID)
         let presenter = try open(id)
         type("Newer", into: presenter.host.textView)
         XCTAssertTrue(notes.save(try XCTUnwrap(presenter.session)))
         await close(presenter)
         XCTAssertEqual(notes.restoreTaskNote(noteID: oldID)?.separate, true)
-        let again = await notes.deleteNoteDurably(noteID: oldID)
+        let again = try legacyDeleteNote(oldID)
         XCTAssertTrue(again)
         XCTAssertTrue(notes.store.restoreDeleted(noteID: oldID), "an ordinary note restores as one")
         XCTAssertTrue(try rows(oldID).allSatisfy { $0.deletedAt == nil && $0.taskID == nil })
@@ -1298,6 +1339,7 @@ final class TaskLifecycleSliceTests: XCTestCase {
 
     func testMakeSubtaskRefusesInADeletedTaskAndOutsideATasksNote() async throws {
         let (id, presenter, _) = try makeSubtaskFixture()
+        await notes.startAndWait()
         XCTAssertNil(presenter.makeSubtaskUnavailableReason(tasks: tasks))
         XCTAssertTrue(library.deleteTasks([id]).isApplied)
         XCTAssertEqual(presenter.makeSubtaskUnavailableReason(tasks: tasks), "The task is deleted")
@@ -1471,10 +1513,11 @@ final class TaskLifecycleSliceTests: XCTestCase {
 
     // MARK: Purge through an open session (§ 2.7.2)
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testPurgingADeletedTaskMakesItsClosedNoteOrdinaryInOneTransaction() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
-        XCTAssertTrue(library.deleteTasks([id]).isApplied)
+        XCTAssertTrue(try legacyDeleteTask(id))
         XCTAssertTrue(tasks.purgeDeleted(before: .distantFuture).isEmpty, "the legacy collector leaves a family with a note")
         let report = await TaskNotePurge.run(tasks: tasks, notes: notes, before: .distantFuture)
         XCTAssertTrue(report.removedTaskIDs.contains(id))
@@ -1484,14 +1527,15 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let document = try storedDocument(noteID)
         XCTAssertFalse(document.requires.contains("taskNote"))
         XCTAssertEqual(document.title, "Finalize launch checklist")
-        XCTAssertEqual(document.blocks[4].text, "Everything that has to be true before 1.0 goes out.", "body follows the preserved task summary and two subtasks")
+        XCTAssertEqual(document.blocks[3].text, "Everything that has to be true before 1.0 goes out.", "2026-10-23: body follows the two subtasks")
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testPurgeWhileTheTasksPageIsOpenMergesItsUnsavedWritingAndTheNoteBecomesOrdinary() async throws {
         let id = try seed(.boundary)
         let presenter = try open(id)
         let session = try XCTUnwrap(presenter.session)
-        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(try legacyDeleteTask(id))
         presenter.host.textView.setSelectedRange(NSRange(location: presenter.host.textView.string.utf16.count, length: 0))
         type(" Still writing.", into: presenter.host.textView)
         XCTAssertNotEqual(session.state, .clean, "unsaved writing")
@@ -1511,10 +1555,11 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(try storedDocument(session.noteID).requires.contains("taskNote"))
     }
 
+    // 2026-10-23: legacy independent deletions retain compatibility coverage.
     func testPurgeWaitsWhileTheOpenNoteIsComposing() async throws {
         let id = try seed(.boundary)
         let presenter = try open(id)
-        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(try legacyDeleteTask(id))
         let textView = presenter.host.textView
         textView.window?.makeFirstResponder(textView)
         textView.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))

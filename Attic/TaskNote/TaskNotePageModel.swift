@@ -545,10 +545,10 @@ final class TaskNotePageModel: ObservableObject {
         return applied
     }
 
-    // MARK: Lifecycle (`p3-22`: nothing cascades)
+    // MARK: Whole-item lifecycle (owner decision 2026-10-23)
 
-    /// Delete Task…: the task and its subtasks go to Recently Deleted; its
-    /// note stays, editable (§ 2.7). One step in the page's history.
+    /// Owner decision 2026-10-23: Delete moves the whole item, including
+    /// writing and files, in one step in the retained workspace history.
     @discardableResult
     func deleteTask() -> Bool {
         guard store.listedTask(withID: taskID) != nil else { return report(.taskGone) }
