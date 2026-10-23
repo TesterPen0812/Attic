@@ -397,14 +397,15 @@ final class TaskNotePageModel: ObservableObject {
     /// moment (a new or focused row) without changing how the item opens;
     /// that reveal ends when the page closes. Collapsing keeps the held
     /// order while the list is in use (owner answer 5: rows hold still
-    /// while you work). Returns false when a collapse is refused (see
+    /// while you work). Only an expanded item is stored (collapsed is the
+    /// default). Returns false when a collapse is refused (see
     /// `resolveFieldsBeforeCollapse`).
     @discardableResult
     func setExpanded(_ expanded: Bool, remember: Bool = true) -> Bool {
         if !expanded, isExpanded, !resolveFieldsBeforeCollapse() { return false }
         if remember {
             isRevealedForTheMoment = false
-            defaults?.set(expanded, forKey: Self.expandKey(taskID))
+            if expanded { defaults?.set(true, forKey: Self.expandKey(taskID)) } else { defaults?.removeObject(forKey: Self.expandKey(taskID)) }
         }
         guard expanded != isExpanded else { return true }
         if expanded, !remember { isRevealedForTheMoment = true }

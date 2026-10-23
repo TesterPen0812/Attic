@@ -1804,4 +1804,29 @@ extension TaskNoteComposedHostTests {
         XCTAssertFalse(TaskNotePageModel(taskID: id, store: tasks, library: library, history: model.history, defaults: defaults).isExpanded,
                        "a reveal does not change how the item opens")
     }
+
+    func testOnlyExpandedItemsAreRememberedAndPurgedOnesAreForgotten() throws {
+        let id = try seed(.heavy)
+        let presenter = try open(id)
+        let defaults = freshDefaults()
+        library.presentationDefaults = defaults
+        func model(_ item: UUID) -> TaskNotePageModel {
+            TaskNotePageModel(taskID: item, store: tasks, library: library, history: presenter.model.history, defaults: defaults)
+        }
+        let page = model(id)
+        page.toggleExpanded()
+        XCTAssertEqual(defaults.object(forKey: TaskNotePageModel.expandKey(id)) as? Bool, true)
+        page.toggleExpanded()
+        XCTAssertNil(defaults.object(forKey: TaskNotePageModel.expandKey(id)), "collapsed is the default: nothing is stored")
+        // A task with no note of its own goes through the daily collector.
+        let purged = try XCTUnwrap(library.createTasks([TaskDraft(title: "Purge me", status: .todo)])?.first?.id)
+        let kept = try XCTUnwrap(tasks.subtasks(of: id).first?.id)
+        model(purged).toggleExpanded()
+        model(kept).toggleExpanded()
+        XCTAssertTrue(library.deleteListedTasks([purged]).isApplied)
+        let report = library.emptyRecentlyDeleted(RecentlyDeletedSelection(items: library.recentlyDeleted()))
+        XCTAssertTrue(report.taskIDs.contains(purged))
+        XCTAssertNil(defaults.object(forKey: TaskNotePageModel.expandKey(purged)), "a purged item's entry goes")
+        XCTAssertEqual(defaults.object(forKey: TaskNotePageModel.expandKey(kept)) as? Bool, true)
+    }
 }
