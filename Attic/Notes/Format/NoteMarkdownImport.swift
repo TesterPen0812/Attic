@@ -350,26 +350,27 @@ enum NoteMarkdownImport {
                 parent = value.parent
             }
             let softBreak = forPaste || inContainer || table ? " " : "&#10;"
-            var breaks: [(SourceLocation, SourceLocation, String)] = []
+            var breaks: [(SourceLocation, SourceLocation, String, Bool)] = []
             func visit(_ siblings: [any Markup]) {
                 for (index, node) in siblings.enumerated() {
                     if node is SoftBreak || node is LineBreak {
                         guard index > 0, index + 1 < siblings.count,
                               let lower = siblings[index - 1].range?.upperBound,
                               let upper = siblings[index + 1].range?.lowerBound else { continue }
-                        breaks.append((lower, upper, node is SoftBreak ? softBreak : (table ? "&#10;" : "&#8232;")))
+                        breaks.append((lower, upper, node is SoftBreak ? softBreak : (table ? "&#10;" : "&#8232;"), node is LineBreak))
                     } else { visit(Array(node.children)) }
                 }
             }
             visit(nodes)
             var cursor = start, result = ""
-            for (lower, upper, replacement) in breaks.sorted(by: { $0.0 < $1.0 }) {
+            for (lower, upper, replacement, isHardBreak) in breaks.sorted(by: { $0.0 < $1.0 }) {
                 guard lower >= cursor, upper <= end else { continue }
                 var prefix = rawInline(cursor..<lower, node: nodes[0], table: table)
                 // cmark's preceding text range can include the source's
                 // break spelling even though its Text value excludes it.
+                let hasTrailingSpace = prefix.last == " " || prefix.last == "\t"
                 while prefix.last == " " || prefix.last == "\t" { prefix.removeLast() }
-                if replacement != " ", prefix.last == "\\" { prefix.removeLast() }
+                if isHardBreak, !hasTrailingSpace, prefix.last == "\\" { prefix.removeLast() }
                 result += prefix + replacement
                 cursor = upper
             }

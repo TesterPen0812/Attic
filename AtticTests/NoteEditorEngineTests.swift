@@ -98,6 +98,19 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testB03PairedHTMLKeepsLiteralBackslashBeforeSpaceBreak() throws {
+        for (source, expected, paste) in [
+            ("<u>a\\  \nb</u>", "a\\\u{2028}b", true),
+            ("> <u>a\\  \n> b</u>", "a\\\u{2028}b", true),
+            ("<u>a\\\nb</u>", "a\u{2028}b", true),
+            ("<u>a\\\\\nb</u>", "a\\\\\nb", false)
+        ] {
+            let document = try NoteMarkdownImport.document(source, forPaste: paste)
+            XCTAssertEqual(document.blocks.map(\.text), [expected], source)
+            XCTAssertEqual(document.blocks.first?.marks, [NoteMark(.underline, offset: 0, length: expected.utf16.count)], source)
+        }
+    }
+
     func testPRB12InlineMeasurementsReuseWarmCache() throws {
         let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let today = NoteDay(date: Date())
