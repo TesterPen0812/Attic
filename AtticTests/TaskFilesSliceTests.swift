@@ -570,6 +570,13 @@ extension TaskFilesSliceTests {
 @MainActor
 extension TaskFilesSliceTests {
     func testP3S2F3LaunchWaitsForRecoveryRepair() async throws {
+        // Complete the preceding launch before constructing a next-launch
+        // checkpoint and simulating bytes lost by an older writer. The app has
+        // one recovery controller; a relaunch cannot retain the old writer.
+        await notes.recoverAtLaunchAndWait()
+        await notes.store.waitForAttachmentReconciliation()
+        XCTAssertTrue(notes.launchRecoveryCompleted)
+        XCTAssertTrue(coordinator.startupReconciled)
         let (id, noteID) = try await taskWithOwnNote()
         let bytes = Data("note-owned bytes, outside the legacy manifest".utf8)
         let item = StagedNoteAttachment(id: UUID(), filename: "note-only.txt", contentTypeIdentifier: "public.plain-text",
@@ -595,20 +602,20 @@ extension TaskFilesSliceTests {
         try edit.save()
         let noteStore = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: filesRoot.appendingPathComponent("recovery-files")))
         var began = false
+        let repairStarted = expectation(description: "replacement launch attachment reconciliation")
         var resume: CheckedContinuation<Void, Never>?
         noteStore.attachmentReconciliationWillBegin = {
             guard !began else { return }
             began = true
+            repairStarted.fulfill()
             await withCheckedContinuation { resume = $0 }
         }
         let recovery = NotesPageController(store: noteStore, journal: coordinator.journal, defaults: nil)
-        for _ in 0..<100 where !began { await Task.yield() }
+        await fulfillment(of: [repairStarted], timeout: 5)
         XCTAssertTrue(began)
-        // The launch's offers callback starts this work but does not await
-        // it. Let its startup task reach the attachment drain.
-        for _ in 0..<20 { await Task.yield() }
+        // The held reconciliation is the dependency being tested. Start
+        // migration while it is held, then release the explicit barrier.
         let release = Task { @MainActor in
-            await Task.yield()
             resume?.resume(); resume = nil
         }
         var visited = false
