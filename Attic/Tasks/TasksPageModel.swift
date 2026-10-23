@@ -1549,17 +1549,14 @@ final class TasksPageModel: ObservableObject {
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
         expandedFiles.subtract(live)
-        // § 2.7.1: deleting never takes the note with it, and the toast
-        // says so ("note kept").
-        let kept = live.filter(noteOwners.contains).count
+        // Owner decision 2026-10-23: deletion includes each task's writing.
+        let withWriting = live.filter(noteOwners.contains).count
         if let title {
-            showToast(kept > 0 ? String(localized: "Deleted “\(title)” · note kept")
-                : String(localized: "Deleted “\(title)”"))
-        } else if kept > 0 {
-            showToast(kept == 1 ? String(localized: "Deleted \(live.count) tasks · 1 note kept")
-                : String(localized: "Deleted \(live.count) tasks · \(kept) notes kept"))
+            showToast(String(localized: "“\(title)” deleted"))
+        } else if withWriting > 0 {
+            showToast(String(localized: "\(live.count) tasks deleted, \(withWriting) with writing"))
         } else {
-            showToast(String(localized: "Deleted \(live.count) tasks"))
+            showToast(String(localized: "\(live.count) tasks deleted"))
         }
         return outcome
     }

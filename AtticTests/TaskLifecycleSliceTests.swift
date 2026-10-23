@@ -1069,18 +1069,19 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(model.rows(for: .now).first { $0.id == id }).model.hasPage, "the note left: so does the glyph")
     }
 
-    func testDeletingATaskRowIsInstantAndItsToastSaysTheNoteIsKept() throws {
+    func testDeletingATaskRowIsInstantAndItsToastNamesTheWholeItem() throws {
         let id = try seed(.boundary)
         let other = try XCTUnwrap(tasks.create(title: "No note here"))
         let model = TasksPageModel(library: library)
         model.setNoteOwners([id])
         XCTAssertTrue(model.delete([id]).isApplied, "⌫ on a row never asks (P5)")
-        XCTAssertEqual(model.toasts.current?.message, "Deleted “Finalize launch checklist” · note kept")
+        XCTAssertEqual(model.toasts.current?.message, "“Finalize launch checklist” deleted")
         XCTAssertNil(tasks.task(withID: id))
         XCTAssertFalse(try ownNotes(id).isEmpty, "the note stays")
-        XCTAssertTrue(try ownNotes(id).allSatisfy { $0.deletedAt == nil })
+        // Owner decision 2026-10-23: deletion takes the writing too.
+        XCTAssertTrue(try ownNotes(id).allSatisfy { $0.deletedAt != nil })
         XCTAssertTrue(model.delete([other.id]).isApplied)
-        XCTAssertEqual(model.toasts.current?.message, "Deleted “No note here”", "a task without a note reads as before")
+        XCTAssertEqual(model.toasts.current?.message, "“No note here” deleted", "a task without a note reads as before")
     }
 
     // MARK: A deleted task's note from All notes (§ 2.7.2 row 1)

@@ -20,12 +20,14 @@ struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
         var owners: Set<WorkspaceOwner> = []
         var noteIDs = Set<UUID>()
         if let taskID {
-            owners.insert(.init(entity: .task, id: taskID))
-            scopes.formUnion([.children(taskID), .taskNotes(taskID), .taskAssociations(taskID), .preservations(taskID)])
-            noteIDs.formUnion(try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID })).map(\.id))
+            let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+            let family = Set(tasks.filter { $0.id == taskID || $0.parentID == taskID }.map(\.id)).union([taskID])
+            owners.formUnion(family.map { .init(entity: .task, id: $0) })
+            for id in family { scopes.formUnion([.children(id), .taskNotes(id), .taskAssociations(id), .preservations(id)]) }
+            noteIDs.formUnion(try WorkspaceItemLifecycle.writing(taskIDs: family, in: context).map(\.id))
         }
         if let noteID { noteIDs.insert(noteID); owners.insert(.init(entity: .note, id: noteID)) }
-        for id in noteIDs { scopes.formUnion([.attachments(id), .noteAssociations(id), .proposals(id)]) }
+        for id in noteIDs { scopes.formUnion([.attachments(id), .versions(id), .noteAssociations(id), .proposals(id)]) }
         let scopeTokens = try scopes.map { try WorkspaceScopeToken.read($0, in: context) }
             .sorted { String(describing: $0.scope) < String(describing: $1.scope) }
         owners.formUnion(scopeTokens.flatMap(\.members).map(\.owner))
@@ -39,7 +41,7 @@ struct AgentWorkspaceReadSet: Codable, Equatable, Sendable {
 }
 
 struct AgentWorkspaceIntent: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case make_subtask, make_note_checkbox, make_task_from_note, restore, move_files_into_note }
+    enum Kind: String, Codable, Sendable { case make_subtask, make_note_checkbox, make_task_from_note, restore, move_files_into_note, delete_item, restore_item }
     let kind: Kind
     let taskID: UUID?
     let noteID: UUID?
@@ -52,6 +54,8 @@ struct AgentWorkspaceIntent: Codable, Equatable, Sendable {
         case .make_note_checkbox: "In task \(taskID?.uuidString ?? ""), turn subtask \(subtaskID?.uuidString ?? "") into a note checkbox and move the subtask to Recently Deleted."
         case .make_task_from_note: "Make a task from this note, keeping its writing and files."
         case .restore: "Restore note \(noteID?.uuidString ?? ""). If its task has a newer note, restore it as a separate note."
+        case .delete_item: "Delete the whole item, including its writing, subtasks and files."
+        case .restore_item: "Restore the whole item to its exact previous placement."
         case .move_files_into_note: "Move this task family's Earlier files into its note, creating the note if needed."
         }
     }
@@ -130,7 +134,7 @@ final class AgentWorkspaceCall {
 @MainActor
 extension AgentTaskTools {
     static let asyncToolNames: Set<String> = ["make_subtask", "make_note_checkbox", "make_task_from_note",
-                                              "restore", "move_files_into_note"]
+                                              "restore", "move_files_into_note", "delete_task", "delete_note", "delete_item", "restore_item"]
 
     static let workspaceDefinitions: [[String: Any]] = [
         definition("make_subtask", title: "Make Subtasks from a Task's Note",
@@ -169,6 +173,9 @@ extension AgentTaskTools {
     func callAsync(name: String, arguments: [String: Any]) async throws -> String {
         guard let notes = notesController?() else { throw AgentToolError.notPerformed("Task notes aren't available.") }
         notes.workspaceTaskStore = store
+        if ["delete_task", "delete_note", "delete_item", "restore_item"].contains(name) {
+            return try await wholeItemLifecycle(name: name, arguments: arguments, notes: notes)
+        }
         let intent = try workspaceIntent(name: name, arguments: arguments)
         guard let raw = arguments["base_workspace_token"] as? String, let bytes = Data(base64Encoded: raw),
               let readSet = try? JSONDecoder().decode(AgentWorkspaceReadSet.self, from: bytes),
@@ -208,6 +215,8 @@ extension AgentTaskTools {
             let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
             guard let parent = rows.first?.parentID, rows.allSatisfy({ $0.parentID == parent }) else { throw AgentToolError.notPerformed("The subtask's parent is unavailable or disagrees.") }
             taskID = parent
+        case .delete_item, .restore_item:
+            throw AgentToolError.invalidArguments("Use a whole-item lifecycle alias.")
         case .make_task_from_note, .restore:
             let id = try uuid(arguments, kind == .restore ? "id" : "note_id"); noteID = id
             let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
@@ -222,12 +231,66 @@ extension AgentTaskTools {
         await AgentWorkspaceCall.beforePreparing?()
         #endif
         switch intent.kind {
+        case .delete_item, .restore_item: return try executeWholeItemLifecycle(intent, notes: notes)
         case .make_subtask: return try await makeSubtask(intent.arguments, notes: notes)
         case .make_note_checkbox: return try await makeNoteCheckbox(intent.arguments, notes: notes)
         case .make_task_from_note: return try await makeTaskFromNote(intent.arguments, notes: notes)
         case .restore: return try await restoreNote(intent.arguments, notes: notes)
         case .move_files_into_note: return try await moveFilesIntoNote(intent.arguments)
         }
+    }
+
+    private func wholeItemLifecycle(name: String, arguments: [String: Any], notes: NotesPageController) async throws -> String {
+        if arguments["kind"] as? String == "canvas" { return try call(name: name, arguments: arguments) }
+        let id = try uuid(arguments, "id")
+        let isNote = name == "delete_note" || arguments["kind"] as? String == "note"
+        let context = ModelContext(store.container)
+        let taskID: UUID?
+        if isNote {
+            let replicas = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
+            let owners = Set(replicas.compactMap(\.taskID))
+            guard owners.count <= 1 else { throw AgentToolError.notPerformed("The item's ownership is unclear.") }
+            taskID = owners.first
+        } else { taskID = id }
+        let intent = AgentWorkspaceIntent(kind: name == "restore_item" ? .restore_item : .delete_item,
+            taskID: taskID, noteID: isNote ? id : nil, subtaskID: nil, lines: [], keepOriginal: false)
+        let paired = try taskID.map { !(try WorkspaceItemLifecycle.writing(taskIDs: [$0], in: context)).isEmpty } ?? false
+        guard let raw = arguments["base_workspace_token"] as? String, let data = Data(base64Encoded: raw),
+              let readSet = try? JSONDecoder().decode(AgentWorkspaceReadSet.self, from: data) else {
+            if !paired, !notes.hasAgentWorkspaceEditor(taskID: taskID, noteID: intent.noteID, allowing: nil, session: nil) {
+                return try call(name: name, arguments: arguments)
+            }
+            throw AgentToolError.invalidArguments("Deleting or restoring a whole item requires base_workspace_token from get_task_workspace or list_deleted with include_workspace_token: true.")
+        }
+        guard readSet.taskID == taskID,
+              readSet.noteID == intent.noteID || (isNote && readSet.noteID == nil && readSet.tokens.contains { $0.owner == .init(entity: .note, id: id) }) else {
+            throw AgentToolError.invalidArguments("The workspace token belongs to a different item.")
+        }
+        let call = AgentWorkspaceCall(readSet: readSet, intent: intent, notes: notes)
+        guard try readSet.isCurrent(in: ModelContext(store.container)), call.valid() else {
+            return try await keepWorkspaceProposal(intent, readSet: readSet, notes: notes)
+        }
+        do {
+            return try AgentWorkspaceCall.$current.withValue(call) { try executeWholeItemLifecycle(intent, notes: notes) }
+        } catch {
+            if call.conflicted { return try await keepWorkspaceProposal(intent, readSet: readSet, notes: notes) }
+            throw error
+        }
+    }
+
+    private func executeWholeItemLifecycle(_ intent: AgentWorkspaceIntent, notes: NotesPageController) throws -> String {
+        guard AgentWorkspaceCall.current?.valid() == true else { throw AgentToolError.notPerformed("Review the whole operation first.") }
+        let ref: AtticItemRef
+        if let id = intent.noteID { ref = .init(.note, id) }
+        else if let id = intent.taskID { ref = .init(.task, id) }
+        else { throw AgentToolError.invalidArguments("An item is required.") }
+        let history: UndoHistoryID = intent.taskID.map { .taskWorkspace($0) } ?? .note(ref.id)
+        let succeeded: Bool
+        if intent.kind == .restore_item { succeeded = library.restore(ref, in: history) }
+        else if ref.kind == .task { succeeded = library.deleteListedTasks([ref.id], in: history).isApplied }
+        else { succeeded = library.delete(ref, in: history) }
+        guard succeeded else { throw AgentToolError.notPerformed(library.lastErrorMessage ?? "The whole item couldn't be changed.") }
+        return try encodeJSON(["status": "applied", intent.kind == .restore_item ? "restored" : "deleted": ref.id.uuidString])
     }
 
     private func keepWorkspaceProposal(_ intent: AgentWorkspaceIntent, readSet: AgentWorkspaceReadSet, notes: NotesPageController) async throws -> String {

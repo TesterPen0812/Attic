@@ -18,6 +18,8 @@ final class WorkspaceOperationCoordinator {
         init(steps: [@MainActor (UUID) throws -> Void] = []) { self.steps = steps }
     }
 
+    weak var lifecycleNotes: NotesPageController?
+    weak var lifecycleLibrary: AtticLibrary?
     let container: ModelContainer
     lazy var sessions = WorkspaceSessionRegistry.shared(for: self)
     let ledger: WorkspaceCommitLedger
@@ -705,6 +707,20 @@ final class WorkspaceOperationCoordinator {
     /// a lifecycle/association/import transition as an ordinary autosave.
     func mayUsePlainSave(before: [WorkspaceModelToken], after: [WorkspaceModelToken], in context: ModelContext) throws -> Bool {
         let old = Dictionary(uniqueKeysWithValues: before.map { ($0.owner, $0) })
+        // Whole-item lifecycle always has a durable intent and receipt, even
+        // for a bare task or ordinary note (2026-10-23).
+        for token in before where token.owner.entity == .task || token.owner.entity == .note {
+            if after.first(where: { $0.owner == token.owner })?.replicas.isEmpty != false,
+               token.replicas.contains(where: { $0.fields["deletionGroupID"] != (try? WorkspaceModelFields.encode(UUID?.none)) }) { return false }
+        }
+        for token in after where token.owner.entity == .task || token.owner.entity == .note {
+            let previous = old[token.owner]?.replicas ?? []
+            for row in token.replicas {
+                if let prior = previous.first(where: { $0.physicalID == row.physicalID }),
+                   prior.fields["deletionGroupID"] != row.fields["deletionGroupID"] { return false }
+            }
+        }
+
         // A metadata-only write carries neither an editor draft nor new bytes.
         // Keep mixed note/task transitions journaled, even if their fields are
         // individually metadata, and reject new physical payload rows here.
@@ -1332,7 +1348,7 @@ extension WorkspaceOperationCoordinator {
                 let rootID = record.rootID
                 let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == rootID }))
                 guard before.contains(where: { $0.owner == .init(entity: .task, id: rootID) && !$0.replicas.isEmpty }),
-                      tasks.allSatisfy({ $0.deletedAt == nil }) || record.purgedAt != nil || tasks.isEmpty else {
+                      tasks.allSatisfy({ $0.deletedAt == nil || $0.deletedAt != record.deletedAt }) || record.purgedAt != nil || tasks.isEmpty else {
                     throw WorkspaceFoundationError.protectedOwner
                 }
             }

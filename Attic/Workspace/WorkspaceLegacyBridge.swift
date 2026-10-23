@@ -55,6 +55,7 @@ enum WorkspaceLegacyBridge {
         var captureFailed = false
         let includeCanvas: Bool
         var plainCommit = false
+        var itemLifecycle = false
         var scopeBaseline: ScopeBaseline?
         // Only references and scalar membership from rows presentation already
         // fetched. Owner fingerprints and dependency guards are demand-loaded.
@@ -333,6 +334,9 @@ enum WorkspaceLegacyBridge {
         prepareMutation(row, in: context)
         context.delete(row)
     }
+    static func markItemLifecycle(in source: ModelContext) {
+        (objc_getAssociatedObject(source, &contextKey) as? ContextState)?.itemLifecycle = true
+    }
     static func wasPlainCommit(in source: ModelContext) throws -> Bool {
         guard let state = objc_getAssociatedObject(source, &contextKey) as? ContextState else { throw WorkspaceFoundationError.unknown }
         return state.plainCommit
@@ -365,6 +369,12 @@ enum WorkspaceLegacyBridge {
             throw WorkspaceFoundationError.unknown
         }
         guard !state.captureFailed else { throw WorkspaceFoundationError.unknown }
+        let call = state.itemLifecycle ? AgentWorkspaceCall.current : nil
+        defer { state.itemLifecycle = false }
+        if let call {
+            guard call.valid() else { throw WorkspaceFoundationError.conflict }
+            try call.stageResolution(in: source)
+        }
         let changes = source.insertedModelsArray + source.changedModelsArray + source.deletedModelsArray
         guard let admission = state.coordinator.ownership.tryAcquire(try state.coordinator.admissionIDs(changes, before: Array(state.baseline.values)), kind: .admission) else {
             throw WorkspaceFoundationError.pendingPublication
@@ -427,7 +437,7 @@ enum WorkspaceLegacyBridge {
                 }
             }
         }
-        for token in state.declaredTokens {
+        for token in state.declaredTokens + (call?.readSet.tokens ?? []) {
             if let existing = before[token.owner] {
                 guard existing == token else { throw WorkspaceFoundationError.conflict }
                 // Keep native physical IDs for staging. A Codable round trip
@@ -436,11 +446,12 @@ enum WorkspaceLegacyBridge {
                 // replica removal. The declared token remains an exact guard.
             } else { before[token.owner] = token }
         }
-        for scope in state.declaredScopes { state.scopes[scope.scope] = scope }
+        let declaredScopes = state.declaredScopes + (call?.readSet.scopes ?? [])
+        for scope in declaredScopes { state.scopes[scope.scope] = scope }
         let reads = before.values.sorted { ($0.owner.entity.rawValue, $0.owner.id.uuidString) < ($1.owner.entity.rawValue, $1.owner.id.uuidString) }
         let plain = try state.coordinator.mayUsePlainSave(
             before: writes.map { before[$0]! }, after: writes.map { after[$0]! }, in: source)
-        let requiredScopes = WorkspaceScopeToken.scopes(for: reads).union(state.declaredScopes.map(\.scope))
+        let requiredScopes = WorkspaceScopeToken.scopes(for: reads).union(declaredScopes.map(\.scope))
         if plain {
             var confirmed: [WorkspaceOwner: WorkspaceModelToken] = [:]
             var writeError: Error?

@@ -18,10 +18,10 @@ extension AtticLibrary {
             created = copies
             let newIDs = copies.map(\.id)
             // The copies and the subtasks they were made with.
-            let owned = FamilyOwnership(liveFamilyMembers(of: newIDs))
+            let owned = itemOwnership(liveFamilyMembers(of: newIDs), deleted: false)
             return UndoStep(
                 name: ids.count == 1 ? "Duplicate Task" : "Duplicate \(ids.count) Tasks",
-                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
+                items: { owned.itemRefs },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.deleteFamiliesFromHistory(newIDs, owning: owned)
@@ -79,10 +79,10 @@ extension AtticLibrary {
         let deleted = undo.perform(in: history) {
             guard deleteFamiliesNow(ids, includingDoneLog: true) else { return nil }
             // What this delete took, to keep Redo from taking more.
-            let owned = FamilyOwnership(recordedMembers(of: ids))
+            let owned = itemOwnership(recordedMembers(of: ids), deleted: true)
             return UndoStep(
                 name: ids.count == 1 ? "Delete Task" : "Delete \(ids.count) Tasks",
-                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
+                items: { owned.itemRefs },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.restoreFamiliesFromHistory(ids, owning: owned)

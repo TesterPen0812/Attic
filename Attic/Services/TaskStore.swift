@@ -185,7 +185,7 @@ private struct TaskReplicaSnapshot: Equatable {
 
 /// What a task holds, without when it was last touched or how it was
 /// deleted: two replicas with equal content show the same task.
-private struct TaskContentSnapshot: Equatable {
+struct TaskContentSnapshot: Equatable {
     let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
@@ -254,7 +254,7 @@ struct TaskEditableState: Equatable {
     }
 }
 
-private enum TaskReplicaMutationError: LocalizedError {
+enum TaskReplicaMutationError: LocalizedError {
     case missingReplica(UUID)
     case notRecentlyDeleted(UUID)
     case incompleteRestore(UUID)
@@ -1826,6 +1826,11 @@ final class TaskStore: ObservableObject {
     /// restoring them from Recently Deleted puts them back in the log.
     @discardableResult
     func delete(taskIDs: [UUID], includingDoneLog: Bool = false) -> Bool {
+        let release: () -> Void
+        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: Set(taskIDs), noteID: nil, container: container) }
+        catch { report(error.localizedDescription, owner: taskIDs.first); return false }
+        defer { release() }
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         let visible = taskIDs.compactMap { id in
             tasks.first(where: { $0.id == id }) ?? (includingDoneLog ? listedTask(withID: id) : nil)
         }
@@ -1847,26 +1852,18 @@ final class TaskStore: ObservableObject {
         }
         let timestamp = now()
         var deletedIDs = Set<UUID>()
-        WorkspaceLegacyBridge.prepareMutations(staged.flatMap { $0.rows }, in: context)
-        for (root, rows) in staged {
-            let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
-            for replica in rows {
-                WorkspaceLegacyBridge.prepareMutation(replica, in: context)
-                replica.deletedAt = timestamp
-                replica.deletionRootID = root
-                replica.deletionMembersRaw = members
-                deletedIDs.insert(replica.id)
-            }
-        }
         do {
             for (root, rows) in staged {
-                try WorkspacePurge.stageDeletionCapture(rootID: root, rows: rows, deletedAt: timestamp, in: context)
+                try WorkspaceItemLifecycle.stageDeletion(rootID: root, tasks: rows, timestamp: timestamp, in: context)
+                deletedIDs.formUnion(rows.map(\.id))
             }
         } catch {
             context.rollback(); refresh(); report(error.localizedDescription, owner: owner); return false
         }
         tasks.removeAll { deletedIDs.contains($0.id) }
-        return save(owner: owner)
+        guard save(owner: owner) else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
+        return true
     }
 
     /// The ids of the subtasks a delete of the main task `parentID` would take
@@ -2040,10 +2037,25 @@ final class TaskStore: ObservableObject {
             report(error.localizedDescription, owner: nil)
             return false
         }
-        return save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed")
+        guard save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed") else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
+        return true
     }
 
-    private func stageRestoration(taskIDs: [UUID]) throws {
+    private func stageRestoration(taskIDs: [UUID], includeGroups: Bool = true) throws {
+        if includeGroups {
+            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            var selected: [UUID: UUID] = [:]
+            for id in taskIDs {
+                let candidates = all.filter { $0.id == id && $0.deletedAt != nil }.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
+                if let group = candidates.first?.deletionGroupID { selected[id] = group }
+            }
+            for group in Set(selected.values) { try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context) }
+            let remaining = taskIDs.filter { selected[$0] == nil }
+            if remaining.isEmpty { return }
+            try stageRestoration(taskIDs: remaining, includeGroups: false)
+            return
+        }
         var batches: [UUID: [TaskItem]] = [:]
         for taskID in Set(taskIDs) {
             batches[taskID] = try context.fetch(FetchDescriptor<TaskItem>(
@@ -2123,9 +2135,16 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    static func stageRestoreDeleted(in context: ModelContext, taskIDs: [UUID], timestamp: Date) throws {
+    static func stageRestoreDeleted(in context: ModelContext, taskIDs: [UUID], timestamp: Date, includeGroups: Bool = true) throws {
         let adapter = try TaskStore(staging: context, timestamp: timestamp)
-        try adapter.stageRestoration(taskIDs: taskIDs)
+        try adapter.stageRestoration(taskIDs: taskIDs, includeGroups: includeGroups)
+    }
+
+    static func stageItemDeletion(in context: ModelContext, taskID: UUID, timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        guard let task = adapter.listedTask(withID: taskID),
+              let rows = adapter.deletionFamily(of: task, owner: taskID) else { throw WorkspaceFoundationError.conflict }
+        try WorkspaceItemLifecycle.stageDeletion(rootID: taskID, tasks: rows, timestamp: timestamp, in: context)
     }
 
     static func stageSoftDeletion(in context: ModelContext, taskID: UUID, preservationID: UUID, timestamp: Date) throws {
@@ -2158,7 +2177,7 @@ final class TaskStore: ObservableObject {
         for id in members {
             let family = replicas.filter { $0.id == id }
             guard let row = family.first, family.allSatisfy({
-                $0.deletionRootID == rootID && $0.deletedAt == deletedAt
+                $0.deletionRootID == rootID && $0.deletedAt == deletedAt && $0.deletionGroupID == row.deletionGroupID
                     && $0.deletionMembersRaw == first.deletionMembersRaw
                     && TaskReplicaSnapshot($0) == TaskReplicaSnapshot(row)
                     && $0.associationGeneration == row.associationGeneration

@@ -125,10 +125,10 @@ enum WorkspacePurge {
         return owners
     }
 
-    static func stageRetirement(rootIDs: Set<UUID>, timestamp: Date, purged: Bool = false, in context: ModelContext) throws {
+    static func stageRetirement(rootIDs: Set<UUID>, timestamp: Date, purged: Bool = false, deletedAt: Date? = nil, in context: ModelContext) throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
         let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter {
-            rootIDs.contains($0.rootID) && $0.retiredAt == nil
+            rootIDs.contains($0.rootID) && $0.retiredAt == nil && (deletedAt == nil || $0.deletedAt == deletedAt)
         }
         WorkspaceLegacyBridge.prepareMutations(records, in: context)
         records.forEach {
@@ -167,9 +167,16 @@ enum WorkspacePurge {
                       inventory: () throws -> Inventory?,
                       publication: WorkspaceOperationCoordinator.Publication = .init(),
                       materialize: ((UUID, [WorkspaceMaterializationPatch]) throws -> Void)? = nil) async -> Result {
+        let probe = coordinator.freshContext()
+        if let rows = try? probe.fetch(FetchDescriptor<TaskItem>()),
+           let group = rows.first(where: { $0.id == rootID })?.deletionGroupID {
+            return await WorkspaceItemLifecycle.purge(group: group, before: cutoff, confirmed: confirmed,
+                coordinator: coordinator, files: files, inventory: inventory, publication: publication)
+        }
         var checkpoint: (UUID, NoteRecoveryClaim)?
-        func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict) -> Result {
-            Result(outcome: outcome, operationID: nil, removedIDs: [], preservationID: nil, checkpoint: checkpoint)
+        func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict, line: Int = #line) -> Result {
+            print("LEGACY PURGE REFUSED", line, outcome)
+            return Result(outcome: outcome, operationID: nil, removedIDs: [], preservationID: nil, checkpoint: checkpoint)
         }
         let context = coordinator.freshContext()
         do {

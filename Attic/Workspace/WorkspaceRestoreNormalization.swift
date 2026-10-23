@@ -85,23 +85,15 @@ enum WorkspaceTaskNoteMaterializer {
                 let r = try value("manualOrder", in: right, as: Int64?.self) ?? 0
                 return l == r ? left.id.uuidString < right.id.uuidString : l > r
             }
-        let done = try children.filter { try value("statusRaw", in: $0, as: String.self) == TaskStatus.done.rawValue }.count
-        let status = try value("statusRaw", in: head, as: String.self)
-        var detail = TaskStatus(rawValue: status)?.title.lowercased() ?? status
-        if status == TaskStatus.done.rawValue, let at = try value("completedAt", in: head, as: Date?.self) {
-            let thisWeek = Calendar.autoupdatingCurrent.dateInterval(of: .weekOfYear, for: Date())
-            detail += " " + (thisWeek?.contains(at) == true
-                ? at.formatted(.dateTime.weekday(.abbreviated))
-                : at.formatted(.dateTime.day().month(.wide).year()))
-        }
+        // Owner decision 2026-10-23: Remove from Tasks drops task-only
+        // metadata; only the subtasks become writing, in page order.
         var ordinary = try document.ordinarySnapshot(title: title)
-        let summary = "Was a task · \(detail) · \(done)/\(children.count)"
-        if ordinary.blocks.dropFirst().first?.text.hasPrefix("Was a task · ") != true {
+        if document.requires.contains("taskNote") {
             let boxes = try children.map { child in
                 NoteBlock.checklist(try value("title", in: child, as: String.self),
-                                    checked: try value("statusRaw", in: child, as: String.self) == TaskStatus.done.rawValue)
+                    checked: try value("statusRaw", in: child, as: String.self) == TaskStatus.done.rawValue)
             }
-            ordinary.blocks.insert(contentsOf: [.text(summary)] + boxes, at: min(1, ordinary.blocks.count))
+            ordinary.blocks.insert(contentsOf: boxes, at: min(1, ordinary.blocks.count))
         }
         return Value(document: ordinary, tags: tags)
     }

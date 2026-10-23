@@ -594,9 +594,18 @@ final class AgentTaskTools {
     var notesController: (() -> NotesPageController?)?
 
     var definitions: [[String: Any]] {
-        Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : []) + Self.libraryDefinitions
+        let all = Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : []) + Self.libraryDefinitions
             + (settingsTools != nil ? AgentSettingsTools.definitions : [])
             + (notesController != nil ? Self.workspaceDefinitions : [])
+        return all.map { definition in
+            guard let name = definition["name"] as? String,
+                  ["delete_task", "delete_note", "delete_item", "restore_item"].contains(name),
+                  var schema = definition["inputSchema"] as? [String: Any], var properties = schema["properties"] as? [String: Any] else { return definition }
+            properties["base_workspace_token"] = ["type": "string", "description": "Required for paired task/writing lifecycle changes: workspace_token from get_task_workspace or list_deleted with include_workspace_token: true."]
+            schema["properties"] = properties
+            var result = definition; result["inputSchema"] = schema
+            return result
+        }
     }
 
     func call(name: String, arguments: [String: Any]) throws -> String {
@@ -799,6 +808,7 @@ final class AgentTaskTools {
 
     private func deleteTask(_ arguments: [String: Any]) throws -> String {
         let task = try findTask(arguments, includingDoneLog: true)
+        try requireWholeItemRoute(taskID: task.id)
         let id = task.id.uuidString
         if store.task(withID: task.id) == nil {
             // In the Done log (round 10): with its family, back to the log
@@ -1113,6 +1123,7 @@ final class AgentTaskTools {
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
         guard let noteStore else { throw AgentToolError.unknownTool("delete_note") }
         let note = try findNote(arguments)
+        if let taskID = note.taskID { try requireWholeItemRoute(taskID: taskID) }
         guard let base = arguments["base_revision"] as? String, !base.isEmpty else {
             throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
         }
@@ -1327,12 +1338,23 @@ final class AgentTaskTools {
         return AtticItemRef(kind, id)
     }
 
+    private func requireWholeItemRoute(taskID: UUID) throws {
+        let context = ModelContext(store.container)
+        guard WorkspaceItemLifecycle.has("NoteItem", in: context) else { return }
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        let ids = Set(all.filter { $0.id == taskID || $0.parentID == taskID }.map(\.id)).union([taskID])
+        if !(try WorkspaceItemLifecycle.writing(taskIDs: ids, in: context)).isEmpty {
+            throw AgentToolError.invalidArguments("This changes the whole item. Use base_workspace_token from get_task_workspace or list_deleted with include_workspace_token: true through the workspace lifecycle route.")
+        }
+    }
+
     private func deleteItem(_ arguments: [String: Any]) throws -> String {
         let ref = try itemRef(from: arguments, field: "The item")
         guard library.state(of: ref) == .live else {
             throw AgentToolError.invalidArguments("No \(ref.kind.rawValue) exists with id \(ref.id.uuidString).")
         }
         if ref.kind == .note { return try deleteNote(arguments) }
+        if ref.kind == .task { try requireWholeItemRoute(taskID: ref.id) }
         try performLibrary { library.delete(ref) }
         let restorableUntil = RecentlyDeletedPolicy.expiry(deletedAt: Date(), calendar: .autoupdatingCurrent)
         return try encode([
@@ -1347,6 +1369,7 @@ final class AgentTaskTools {
         guard library.state(of: ref) == .deleted else {
             throw AgentToolError.invalidArguments("No \(ref.kind.rawValue) with id \(ref.id.uuidString) is in Recently Deleted.")
         }
+        if ref.kind == .task { try requireWholeItemRoute(taskID: ref.id) }
         try performLibrary { library.restore(ref) }
         return try encode(["restored": ref.id.uuidString, "kind": ref.kind.rawValue])
     }

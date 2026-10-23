@@ -231,8 +231,9 @@ final class TaskPageSliceTests: XCTestCase {
 
     // MARK: Lifecycle (`p3-22`: nothing cascades)
 
-    func testDeleteTaskKeepsTheNoteAndTheHeadOffersRestore() async throws {
+    func testDeleteTaskDeletesTheWholeItemAndRestoreReturnsItsWriting() async throws {
         let id = try seed(.boundary)
+        await notes.startAndWait() // Deletion must await the existing recovery inventory.
         let presenter = try open(id)
         let model = presenter.model
         let noteID = try XCTUnwrap(presenter.session?.noteID)
@@ -245,10 +246,12 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(model.head.subtasks.total, 2)
         let kept = try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == noteID }
         XCTAssertFalse(kept.isEmpty)
-        XCTAssertTrue(kept.allSatisfy { $0.deletedAt == nil }, "deleting the task never deletes its note")
-        XCTAssertFalse(presenter.host.engine.isReadOnly, "the writing stays editable")
+        // Owner decision 2026-10-23: task and writing have one lifecycle.
+        XCTAssertTrue(kept.allSatisfy { $0.deletedAt != nil }, "the writing goes with the task")
+        XCTAssertTrue(presenter.host.engine.isReadOnly, "deleted writing cannot keep accepting edits")
         XCTAssertTrue(model.restoreTask())
         XCTAssertNotNil(tasks.task(withID: id))
+        XCTAssertFalse(presenter.host.engine.isReadOnly, "Restore returns the writing")
         XCTAssertTrue(model.head.exists)
         XCTAssertEqual(model.rows.count, 2)
     }

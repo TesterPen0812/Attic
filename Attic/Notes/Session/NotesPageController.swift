@@ -108,6 +108,7 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var baseTags: [String] = []
     @Published private(set) var engine: NoteEditorEngine
     @Published fileprivate(set) var workspacePublicationPending = false
+    var isItemDeleted = false
     fileprivate(set) var readOnlyReason: NoteReadOnlyReason?
     /// A readable checkpoint with unavailable placements. Its display ID is
     /// separate from the original owner; it can never replace that saved note.
@@ -721,6 +722,7 @@ final class NotesPageController: ObservableObject {
             }
         }
         attachUndoRoute(undoRoute)
+        (try? WorkspaceLegacyBridge.coordinator(for: store.container))?.lifecycleNotes = self
         purgeSubscription = store.purgedNoteIDs.sink { [weak self] ids in self?.forgetPurgedSnapshots(ids) }
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
@@ -4050,7 +4052,7 @@ extension NotesPageController {
             session.engine.refreshCompositionActivity()
             var snapshot = session.workspacePage?.activitySnapshot ?? WorkspacePurge.SessionSnapshot()
             snapshot.activity = session.engine.activity
-            snapshot.state = session.state
+            snapshot.state = session.isItemDeleted ? .clean : session.state
             snapshot.importing = session.isImporting
             snapshot.proposal = proposalReview?.noteID == id
             if session.engine.textView?.hasMarkedText() == true { snapshot.activity = .composing }
@@ -4188,5 +4190,47 @@ extension NotesPageController {
         guard let session = cache[noteID], session.engine.isBodyOnly, !session.usesWorkspaceBinding else { return }
         session.engine.detachView()
         cache[noteID] = nil
+    }
+}
+
+extension NotesPageController {
+    func wholeItemSessions(noteIDs: Set<UUID>, taskIDs: Set<UUID>) -> [NoteSession] {
+        cache.values.filter { noteIDs.contains($0.noteID) || $0.pendingTaskID.map(taskIDs.contains) == true }
+    }
+    func retireWholeItemRecovery(_ session: NoteSession) -> Bool {
+        retireRecoveryCopy(noteID: session.noteID, session: session)
+    }
+    func publishWholeItemLifecycle() {
+        store.refresh()
+        let context = ModelContext(store.container)
+        guard let rows = try? context.fetch(FetchDescriptor<NoteItem>()),
+              let tasks = try? context.fetch(FetchDescriptor<TaskItem>()) else { return }
+        for session in cache.values {
+            let row = NoteStore.canonicalReplicas(from: rows.filter { $0.id == session.noteID }).first
+            let deleted = row?.deletionGroupID != nil && row?.deletedAt != nil
+                || (session.pendingTaskID.map { id in tasks.contains { $0.id == id && $0.deletedAt != nil && $0.deletionGroupID != nil } } ?? false)
+            if deleted, !session.isItemDeleted {
+                let history = session.engine.history.workspace
+                let document = row?.content.flatMap { NoteContentCodec.decode($0).document } ?? session.engine.checkpointDocument()
+                session.saveTask?.cancel(); session.durabilityTask?.cancel(); session.pauseTask?.cancel()
+                session.isItemDeleted = true
+                session.readOnlyReason = .unreadable("This item is in Recently Deleted.")
+                session.replaceEngine(makeEngine(noteID: session.noteID, document: document, readOnly: true,
+                    tags: row?.tags ?? [], bodyOnly: row?.taskID != nil || session.pendingTaskID != nil))
+                if let history { history.attach(session.engine.history) }
+                session.state = .readOnly
+                wire(session)
+            } else if !deleted, session.isItemDeleted {
+                session.isItemDeleted = false
+                if row != nil { installCommittedTaskNoteForm(session) }
+                else {
+                    let history = session.engine.history.workspace, document = session.engine.checkpointDocument()
+                    session.readOnlyReason = nil
+                    session.replaceEngine(makeEngine(noteID: session.noteID, document: document, readOnly: false, bodyOnly: true))
+                    if let history { history.attach(session.engine.history) }
+                    session.state = .untouched; wire(session)
+                }
+            }
+        }
     }
 }
