@@ -146,15 +146,26 @@ enum WorkspaceCrashFixture {
     static let alternateID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47438")!
     static let removedFileID = UUID(uuidString: "D92AC3EB-5A34-48CE-9882-7F0712F47439")!
     static func seedItem(_ root: URL) async throws {
+        let files = TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles"))
+        let inputs = ["exclusive.txt", "shared.txt"].map { root.appendingPathComponent($0) }
+        for input in inputs { try bytes.write(to: input) }
+        let references = try await files.importAttachments(inputs, existing: [])
+        try JSONEncoder().encode(references).write(to: root.appendingPathComponent("purge-files.json"))
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         let context = ModelContext(container), date = Date(timeIntervalSince1970: 1_700_000_000)
         let document = try PreparedNoteDocument(original)
+        // Replica equality includes the encoded metadata bytes, not only
+        // decoded references; JSON object-key order is unspecified.
+        let exclusiveData = try JSONEncoder().encode([references[0]])
+        let sharedData = try JSONEncoder().encode([references[1]])
         for _ in 0..<2 {
             let parent = TaskItem(id: taskID, title: "Parent", createdAt: date, manualOrder: 42)
             parent.listOrderVersion = TaskItem.currentListOrderVersion
+            parent.imageReferencesData = exclusiveData
             context.insert(parent)
             let child = TaskItem(id: childID, title: "Child", createdAt: date, parentID: taskID)
             child.listOrderVersion = TaskItem.currentListOrderVersion
+            child.imageReferencesData = sharedData
             context.insert(child)
             for id in [noteID, alternateID] {
                 let row = NoteItem(id: id, createdAt: date); row.taskID = taskID
@@ -168,6 +179,15 @@ enum WorkspaceCrashFixture {
                 context.insert(file)
             }
         }
+        let outside = TaskItem(id: alternateID, title: "Shared original owner", createdAt: date)
+        outside.listOrderVersion = TaskItem.currentListOrderVersion
+        outside.imageReferencesData = try JSONEncoder().encode([references[1]])
+        context.insert(outside)
+        context.insert(NoteVersion(id: versionID, noteID: noteID, createdAt: date, reason: .pause,
+            content: document.content, contentFormat: 1, title: document.title, body: document.body,
+            attachmentIDs: original.attachmentIDs, sourceRevisionID: versionID))
+        context.insert(NotePendingEdit(noteID: noteID, baseRevisionToken: "fixture", proposedContent: document.content,
+            agentName: "Crash fixture", createdAt: date, baseVersionID: versionID))
         try context.save()
     }
     static func deleteItem(_ root: URL) throws -> Bool {
@@ -178,13 +198,25 @@ enum WorkspaceCrashFixture {
         withExtendedLifetime(coordinator) { WorkspaceCrashHook.reach("A-delete-published") }
         return result
     }
+    static func restoreItem(_ root: URL) async throws -> Bool {
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+        let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
+        try await coordinator.reconcileStartup()
+        let store = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")))
+        let result = store.restoreDeleted(taskID: taskID)
+        return withExtendedLifetime(coordinator) { result }
+    }
     static func purgeItem(_ root: URL) async throws -> WorkspaceOperationCoordinator.Outcome {
         let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
         let coordinator = try WorkspaceOperationCoordinator(container: container, journal: journal(root))
         try await coordinator.reconcileStartup()
-        return await WorkspacePurge.purge(rootID: taskID, before: .distantFuture, coordinator: coordinator,
+        let result = await WorkspacePurge.purge(rootID: taskID, before: .distantFuture, coordinator: coordinator,
             files: TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")), inventory: { .init(generation: 0) },
-            publication: .init(steps: [{ _ in }])).outcome
+            publication: .init(steps: [{ _ in }]))
+        if result.outcome == .committed {
+            try JSONEncoder().encode(result.retainedByteReasons).write(to: root.appendingPathComponent("retained-reasons.json"))
+        }
+        return result.outcome
     }
 
 }
