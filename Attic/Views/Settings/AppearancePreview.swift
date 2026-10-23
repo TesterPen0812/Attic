@@ -66,12 +66,16 @@ struct SettingsPanelMiniature: View {
         // grows with bigger corners, and the page follows it.
         let layout = PanelPageLayout(cornerSize: cornerSize, panelSize: AtticLayout.panelSize)
         let chrome = layout.chromeInsets.leading
-        let pageInset = max(0, chrome - AtticSpacing.panelMargin)
+        let pageInset = AtticLayout.tasksPageEdge(chromeInset: chrome)
         ZStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: layout.headerBottom + AtticLayout.pageTabsTop)
+                // Top glass, as on the live page: the tabs in their capsule,
+                // the labels where they were.
                 AtticPageTabs(items: Self.tabs, selection: .constant(0))
-                    .padding(.leading, AtticLayout.pageTabsX)
+                    .atticTopLineCapsule()
+                    .frame(height: AtticLayout.pageTabsHeight)
+                    .padding(.leading, AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding)
                     .padding(.bottom, AtticLayout.pageTabsToList)
                 ForEach(Self.rows) { row in
                     AtticTaskRow(model: row, actions: Self.noActions, onToggleExpanded: {})

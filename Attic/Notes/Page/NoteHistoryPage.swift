@@ -41,15 +41,19 @@ struct NoteHistoryPage: View {
                     scrollOverride: browser.scrollOffset - layout.headerBottom - 76)
                     .id(session.id)
                     // Floating controls (owner, 2026-10-14): the preview runs on
-                    // under the version line and the bottom row, visible
-                    // through the variable blur (owner, 2026-10-17).
+                    // under the version line, visible through the variable
+                    // blur (owner, 2026-10-17), and under the bottom row,
+                    // sharp (owner, 2026-10-22).
                     .overlay { AtticFloatingControlsBand(height: Self.bottomControls(layout)) }
                     .accessibilityIdentifier("notes-history-preview")
             }
-            // The variable blur, its own layer under the version line and
-            // the bottom row (never an overlay of the text view).
+            // The variable blur, its own layer under the version line (the
+            // bottom row has none; never an overlay of the text view).
             if browser.preview != nil { AtticEdgeBlurBackdrops(Self.edges(layout)) }
-            VStack(spacing: 6) {
+            // Top glass: the switch is a secondary control, 26 pt as the old
+            // recessed track (owner, 2026-10-22), so the summary keeps its
+            // place 6 pt under it.
+            VStack(spacing: NoteHistoryVersionSwitch.summaryGap) {
                 // U-30: the app's own monochrome selected state (as the
                 // tabs and menus), never the system's blue segment.
                 NoteHistoryVersionSwitch(
@@ -166,20 +170,32 @@ struct NoteHistoryPage: View {
     }
 }
 
-/// History's Current / version switch (U-30): a recessed track with the
-/// selected half in the app's monochrome selected fill and the heading ink,
-/// the other half quiet; hover is a lighter fill. One tab stop; ← → move.
-private struct NoteHistoryVersionSwitch: View {
+/// History's Current / version switch (U-30): the selected half in the
+/// app's monochrome selected fill and the heading ink, the other half
+/// quiet; hover is a lighter fill. One tab stop; ← → move.
+///
+/// Top glass (2026-10-22): the preview scrolls under it, so its track is
+/// the floating glass, as the page switch's capsule: the raised material at
+/// the secondary controls' 26 pt (was a recessed 26 pt track), the halves
+/// 4 pt inside.
+/// Under Reduce Transparency it is the opaque raised surface.
+struct NoteHistoryVersionSwitch: View {
     let choices: [(value: Bool, title: String)]
     @Binding var selection: Bool
 
     @Environment(\.atticDesign) private var design
     @State private var hovered: Bool?
 
+    static let height = AtticTopGlassMetrics.height
+    static let inset = AtticControlSize.capsuleInset
+    /// The summary under it: 6 below the old 26 pt track, less whatever this
+    /// one adds to that height (none at the secondary controls' 26).
+    static let summaryGap: CGFloat = 6 - (height - 26)
+
     var body: some View {
         let tokens = design.tokens
-        let height: CGFloat = 26
-        let inset: CGFloat = 2
+        let height = Self.height
+        let inset = Self.inset
         let outer = AtticRadius.control(height: height)
         let inner = max(0, outer - inset)
         HStack(spacing: 0) {
@@ -203,8 +219,8 @@ private struct NoteHistoryVersionSwitch: View {
             }
         }
         .padding(inset)
-        .background(RoundedRectangle(cornerRadius: outer, style: .continuous).fill(tokens.recessed.color))
         .frame(height: height)
+        .atticRaisedMaterial(cornerRadius: outer, interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Compare version"))
     }

@@ -113,8 +113,8 @@ struct NotesEditorPage: View {
         ZStack(alignment: .bottom) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // The note's variable blur behind the header and the bottom row,
-            // its own layer between the note and the controls (All notes and
+            // The note's variable blur behind the header (none behind the
+            // bottom row, owner 2026-10-22), its own layer between the note and the controls (All notes and
             // history draw theirs under their own controls).
             if showsEditor, controller.historyBrowser == nil { AtticEdgeBlurBackdrops(editorEdges) }
             if showsEditor, controller.proposalReview == nil, controller.historyBrowser == nil {
@@ -296,9 +296,9 @@ struct NotesEditorPage: View {
                                     })
                 .id(ObjectIdentifier(session.engine))
                 // Floating controls (owner, 2026-10-14): the note runs on to
-                // the panel's edges, under the header and the bottom row,
-                // visible through the variable blur behind them (owner,
-                // 2026-10-17: no fade). The scroll insets keep the title's
+                // the panel's edges, under the header, visible through the
+                // variable blur behind it (owner, 2026-10-17: no fade), and
+                // under the bottom row, sharp (owner, 2026-10-22). The scroll insets keep the title's
                 // and the last line's resting places clear. F-13 stays
                 // fixed: the blur (`pageBackdrops`) and the band sit above
                 // the text view and its attachment views, below the controls.

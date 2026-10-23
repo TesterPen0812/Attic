@@ -4,7 +4,8 @@ import XCTest
 @testable import Attic
 
 /// Round O3, the owner's 10-17 decision (O17-01): content scrolls all the
-/// way under every floating control and stays visible through the blur,
+/// way under every floating control and stays visible (through the top
+/// blur; sharp at the bottom since 10-22),
 /// with no fade hiding it, on every surface. Off screen the variable blur
 /// does not draw (it is a window-server backdrop), so these pages show
 /// the content under the controls sharp: what matters here is that nothing

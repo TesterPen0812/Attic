@@ -360,7 +360,9 @@ final class TasksRound9Tests: XCTestCase {
         while y < 300 {
             hosted.model.clearSelection()
             hosted.spin(0.02)
-            hosted.click(y: y)
+            // Between the Later and Done tabs on the tabs' line: spacing B
+            // moved the page 4 left, so 106 is where 110 was.
+            hosted.click(y: y, x: 106)
             hits += hosted.model.selection
             y += 8
         }

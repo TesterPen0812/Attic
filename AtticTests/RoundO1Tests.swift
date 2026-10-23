@@ -30,7 +30,7 @@ final class RoundO1Tests: XCTestCase {
         let bar = AtticControlSize.addBarHeight
         let stacks = [
             ("bar alone", bar),
-            ("date and tags row", bar + AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight),
+            ("date and tags row", bar + AtticPickerMetrics.stripToBar + AtticPickerMetrics.stripHeight),
             ("a grown bar", bar + 3 * 16)
         ]
         for (name, stack) in stacks {
