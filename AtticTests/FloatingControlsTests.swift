@@ -370,10 +370,13 @@ final class TopGlassTests: XCTestCase {
     func testTheTopLineTakesTheFloatingControlsMeasures() {
         XCTAssertEqual(AtticTopGlassMetrics.height, AtticControlSize.secondaryControl, "the secondary controls' height")
         XCTAssertLessThan(AtticTopGlassMetrics.height, AtticControlSize.headerControl, "a step under the corner buttons (owner, 2026-10-22)")
-        XCTAssertEqual(AtticTabsSearchField.height(floating: true), AtticControlSize.headerControl)
+        // The search field, All notes' line and History's switch are
+        // secondary controls too: 26 pt (owner, 2026-10-22, Top controls
+        // on glass: B), not the corner buttons' 30.
+        XCTAssertEqual(AtticTabsSearchField.height(floating: true), AtticControlSize.secondaryControl)
         XCTAssertEqual(AtticTabsSearchField.height(floating: false), AtticControlSize.smallHeight, "the find bar's field is unchanged")
-        XCTAssertEqual(AtticNoteLibraryLine.height, AtticControlSize.headerControl)
-        XCTAssertEqual(NoteHistoryVersionSwitch.height, AtticControlSize.headerControl)
+        XCTAssertEqual(AtticNoteLibraryLine.height, AtticControlSize.secondaryControl)
+        XCTAssertEqual(NoteHistoryVersionSwitch.height, AtticControlSize.secondaryControl)
         // The capsule's edge and the last circle's on the controls' line;
         // the labels stay on the content line (24 pt at the 16 pt chrome).
         let chrome = AtticStyle.chromeMinimumInset
