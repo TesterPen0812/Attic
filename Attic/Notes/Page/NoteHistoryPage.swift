@@ -50,8 +50,9 @@ struct NoteHistoryPage: View {
             // The variable blur, its own layer under the version line (the
             // bottom row has none; never an overlay of the text view).
             if browser.preview != nil { AtticEdgeBlurBackdrops(Self.edges(layout)) }
-            // Top glass: the switch grew 4 pt (26 to 30), so the gap to the
-            // summary shrank by as much and the summary keeps its place.
+            // Top glass: the switch is a secondary control, 26 pt as the old
+            // recessed track (owner, 2026-10-22), so the summary keeps its
+            // place 6 pt under it.
             VStack(spacing: NoteHistoryVersionSwitch.summaryGap) {
                 // U-30: the app's own monochrome selected state (as the
                 // tabs and menus), never the system's blue segment.
@@ -175,7 +176,8 @@ struct NoteHistoryPage: View {
 ///
 /// Top glass (2026-10-22): the preview scrolls under it, so its track is
 /// the floating glass, as the page switch's capsule: the raised material at
-/// the Medium height (was a recessed 26 pt track), the halves 4 pt inside.
+/// the secondary controls' 26 pt (was a recessed 26 pt track), the halves
+/// 4 pt inside.
 /// Under Reduce Transparency it is the opaque raised surface.
 struct NoteHistoryVersionSwitch: View {
     let choices: [(value: Bool, title: String)]
@@ -186,7 +188,8 @@ struct NoteHistoryVersionSwitch: View {
 
     static let height = AtticTopGlassMetrics.height
     static let inset = AtticControlSize.capsuleInset
-    /// The summary under it: 6 below the old 26 pt track, so 2 below this one.
+    /// The summary under it: 6 below the old 26 pt track, less whatever this
+    /// one adds to that height (none at the secondary controls' 26).
     static let summaryGap: CGFloat = 6 - (height - 26)
 
     var body: some View {
