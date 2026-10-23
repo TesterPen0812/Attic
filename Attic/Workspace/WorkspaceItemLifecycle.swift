@@ -311,6 +311,29 @@ extension WorkspaceItemLifecycle {
                     return actual == captured
                 } }) else { return refused() }
             }
+            // Redirect old task endpoints in the already guarded purge. A
+            // detached endpoint needs one proven circle preservation; ambiguous
+            // replicas retain the whole family rather than deleting its links.
+            var redirects: [UUID: UUID] = [:]
+            for association in touchingAssociations where association.detachedAt != nil {
+                guard taskIDs.contains(association.taskID),
+                      let record = preservations.first(where: { $0.id == association.detachedPreservationID }),
+                      record.provenance == "circle removed" else { continue }
+                if let old = redirects[association.taskID], old != association.noteID { return refused() }
+                redirects[association.taskID] = association.noteID
+            }
+            var redirectedLinks: [PersistentIdentifier: (AtticItemRef, AtticItemRef)] = [:]
+            for link in links {
+                guard let source = link.source, let target = link.target else { return refused() }
+                func redirected(_ endpoint: AtticItemRef) -> AtticItemRef {
+                    guard endpoint.kind == .task, let note = redirects[endpoint.id] else { return endpoint }
+                    return .init(.note, note)
+                }
+                let afterSource = redirected(source), afterTarget = redirected(target)
+                if !touching.contains(afterSource), !touching.contains(afterTarget) {
+                    redirectedLinks[link.persistentModelID] = (afterSource, afterTarget)
+                }
+            }
             for other in activePreservations where !preservations.contains(where: { $0.id == other.id }) {
                 let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: other.snapshot)
                 guard !(snapshot.dependencies ?? []).contains(where: { dependency in
@@ -395,6 +418,7 @@ extension WorkspaceItemLifecycle {
             let materializationSteps: [@MainActor (UUID) throws -> Void] = materialize.map { handler in
                 [{ operation in try handler(operation, patches) }]
             } ?? []
+            let linkTimestamp = Date()
             let result = await coordinator.execute(envelope, sessionValid: {
                 guard let current = try? inventory() else { return false }
                 return current.generation == ownership.generation && files.files.validatesCollection(collection, ids: leased)
@@ -418,6 +442,11 @@ extension WorkspaceItemLifecycle {
                             association.taskGeneration += 1; association.noteGeneration += 1
                             association.detachedAt = Date(); association.detachedPreservationID = record.id
                         }
+                    } else if let link = stored as? ItemLink, let endpoints = redirectedLinks[row.persistentModelID] {
+                        link.sourceKindRaw = endpoints.0.kind.rawValue; link.sourceID = endpoints.0.id
+                        link.targetKindRaw = endpoints.1.kind.rawValue; link.targetID = endpoints.1.id
+                        link.updatedAt = linkTimestamp
+                        WorkspaceCrashHook.reach("B-purge-links")
                     } else if let old = stored as? NoteItem, !noteIDs.contains(old.id) {
                         old.taskID = nil; old.associationGeneration += 1
                     } else { commit.delete(stored) }
