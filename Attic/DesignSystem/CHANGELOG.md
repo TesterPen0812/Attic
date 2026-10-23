@@ -7,6 +7,7 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ### 2026-10-23 · Tasks scroll layout and PR #11 verification (Sol)
 
+- Collapsed Now/Later lists set their complete scroll extent from row pitches and footer heights, so recycling rows keeps document bounds stable. Their rows remain lazy; expanded content and row errors use intrinsic sizing.
 - Scroll coverage follows the owner's 2026-10-20/22 decisions: 32/48 pt row pitches, 30/26 pt controls, glass tabs without an underline, slight top blur, and no bottom blur/fade. The superseded N-6 plain-label and bottom-edge fade assertions are replaced by live geometry/hit-target checks; rendered row movement and all four scroll steps remain.
 
 ### 2026-10-20 · Table add-chip cancellation (owner review round PRB1, B7-01)

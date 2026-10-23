@@ -72,12 +72,18 @@ final class ScrollEdgeHangTests: XCTestCase {
         try check(reduceMotion: true, deltas: [-145] + Array(repeating: -1, count: 8) + Array(repeating: 1, count: 8))
     }
 
+    /// 17 single-line rows, three detail rows, the 36 pt completed line,
+    /// and 50 pt trailing clearance: recycling cannot change the document.
+    func testDenseDocumentExtentDoesNotChangeAtTheCIPrefetchBoundary() throws {
+        try check(reduceMotion: true, expectedExtent: 774)
+    }
+
     func testLongDenseListsStillVirtualizeTheirRows() throws {
         try check(reduceMotion: true, deltas: [], extraRows: 500, enablesAccessibility: false)
     }
 
     private func check(reduceMotion: Bool, deltas: [CGFloat] = [-170, 11, 11, 340],
-                       extraRows: Int = 0, enablesAccessibility: Bool = true) throws {
+                       extraRows: Int = 0, enablesAccessibility: Bool = true, expectedExtent: CGFloat? = nil) throws {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(enablesAccessibility, forAttribute: enhanced)
@@ -93,7 +99,8 @@ final class ScrollEdgeHangTests: XCTestCase {
         for index in 0..<extraRows { container.mainContext.insert(TaskItem(title: "Dense row \(index)")) }
         if extraRows > 0 { try container.mainContext.save() }
         let store = TaskStore(container: container)
-        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let services = TasksPageServices(chooseComposerFiles: {})
+        let model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
         // The UI test's panel: 320 × 464, solid, light.
         let size = CGSize(width: 320, height: 464)
         var focused = true
@@ -139,11 +146,16 @@ final class ScrollEdgeHangTests: XCTestCase {
         }
         let stripShown = Self.axFind("composer-date", in: window.contentView as Any, depth: 0)
         XCTAssertTrue(stripShown, "the accessibility snapshot reaches the visible composer strip")
+        XCTAssertTrue(Self.axFind("composer-files", in: window.contentView as Any, depth: 0),
+                      "the fixture includes the app's fourth strip control")
         print("ATTIC_SCROLL_HANG strip_identified=\(stripShown) reduceMotion=\(reduceMotion)")
 
         let lists = window.contentView.map(Self.scrollViews) ?? []
         let list = try XCTUnwrap(lists.max { $0.documentView?.frame.height ?? 0 < $1.documentView?.frame.height ?? 0 },
                                  "the Now list")
+        if let expectedExtent {
+            XCTAssertEqual(list.documentView?.frame.height ?? -1, expectedExtent, accuracy: 0.01, "the collapsed list's initial extent")
+        }
         for (index, delta) in deltas.enumerated() {
             let (_, elapsed) = try watchdog.run("scroll \(index) by \(delta)") {
                 // As the UI test's wheel: at the panel's middle, through the window.
@@ -175,6 +187,10 @@ final class ScrollEdgeHangTests: XCTestCase {
             print("ATTIC_SCROLL_HANG step=\(index) ax_elements=\(count) ax_seconds=\(snapshot)")
             XCTAssertGreaterThan(count, 20, "the snapshot must walk the real SwiftUI rows and controls")
             XCTAssertLessThan(snapshot, 2, "the accessibility snapshot after step \(index) returns: reduceMotion \(reduceMotion)")
+            if let expectedExtent {
+                XCTAssertEqual(list.documentView?.frame.height ?? -1, expectedExtent, accuracy: 0.01,
+                               "recycling rows after scroll \(index) preserves the collapsed list's extent")
+            }
         }
     }
 

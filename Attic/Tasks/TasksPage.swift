@@ -1388,6 +1388,7 @@ struct TasksPage: View {
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
         let query = model.trimmedQuery(for: tab)
+        let extent = collapsedListHeight(sections, tab: tab, filtered: view.filters, query: query)
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -1468,6 +1469,10 @@ struct TasksPage: View {
                         }
                     }
                 }
+                // Collapsed rows have exact pitches. Keep their document
+                // extent independent of LazyVStack's off-screen averages;
+                // recycling a row must not resize the scroll document.
+                .frame(height: extent, alignment: .top)
                 .animation(reorderFade.isEmpty ? travel : nil, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
                 .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, pointer: pointer,
@@ -1517,6 +1522,23 @@ struct TasksPage: View {
                 model.selectOnly(next)
             }
         }
+    }
+
+    /// A collapsed list's complete extent is known without building its
+    /// rows. Expanded content and row errors keep their intrinsic sizing.
+    private func collapsedListHeight(_ sections: TasksSections, tab: TasksTab, filtered: Bool, query: String) -> CGFloat? {
+        guard !sections.open.isEmpty, model.failedSave == nil, model.rowFailure == nil else { return nil }
+        let hasCompleted = tab == .now && !sections.done.isEmpty
+        let shown = sections.open + (hasCompleted && model.completedTodayExpanded ? sections.done : [])
+        guard !shown.contains(where: { model.expanded.contains($0.id) || model.expandedFiles.contains($0.id) }) else { return nil }
+        var height = shown.reduce(CGFloat.zero) { $0 + ($1.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch) }
+        if filtered && query.isEmpty { height += AtticLayout.rowPitch }
+        if !query.isEmpty, model.listSearchCount(for: tab) != nil { height += AtticLayout.rowPitch }
+        if hasCompleted {
+            height += AtticCompletedLineMetrics.top + AtticCompletedLineMetrics.height
+            if model.completedTodayExpanded { height += AtticSpacing.s4 }
+        }
+        return height
     }
 
     // MARK: - Row
