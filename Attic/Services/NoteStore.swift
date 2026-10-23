@@ -425,6 +425,7 @@ final class NoteStore: ObservableObject {
     private var reconciledAttachmentSignature: Int?
     /// Test/diagnostic seam: how many full metadata reconciliations ran.
     private(set) var attachmentReconciliationPasses = 0
+    var attachmentReconciliationLog: (String) -> Void = { NSLog("%@", $0) }
 
     /// Test/diagnostic seam: drain all file work before releasing its root.
     func waitForAttachmentReconciliation() async {
@@ -1583,11 +1584,14 @@ final class NoteStore: ObservableObject {
                         "Attic attachment reconciliation skipped an attachment"
                     )
                 }
+            } catch is CancellationError {
+                if generation == attachmentReconciliationGeneration { reconciledAttachmentSignature = nil }
+                attachmentReconciliationLog("Attic attachment reconciliation cancelled")
             } catch {
-                // Let the next revision try again rather than trusting a
-                // signature whose pass never completed.
-                reconciledAttachmentSignature = nil
-                NSLog("Attic attachment reconciliation failed")
+                // Only this pass owns its signature. An obsolete failure
+                // cannot invalidate a newer pass that is already succeeding.
+                if generation == attachmentReconciliationGeneration { reconciledAttachmentSignature = nil }
+                attachmentReconciliationLog("Attic attachment reconciliation failed")
             }
         }
         attachmentFileTasks[workID] = task

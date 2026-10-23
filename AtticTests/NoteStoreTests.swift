@@ -4,6 +4,29 @@ import XCTest
 
 final class NoteStoreTests: XCTestCase {
     @MainActor
+    func testB04SupersededReconciliationLogsCancellationAndKeepsNewSignature() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        var messages: [String] = []
+        store.attachmentReconciliationLog = { messages.append($0) }
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "Fixture")
+        seed.insert(note)
+        seed.insert(NoteAttachment(noteID: note.id, originalFilename: "fixture.txt", byteCount: 1, sortIndex: 0,
+                                   contentDigest: String(repeating: "a", count: 64)))
+        try seed.save()
+        // Both passes are queued on this actor; refreshing cancels the first
+        // before its checkCancellation, without a timing-dependent sleep.
+        store.refresh()
+        await store.waitForAttachmentReconciliation()
+        XCTAssertEqual(messages, ["Attic attachment reconciliation cancelled"])
+        let passes = store.attachmentReconciliationPasses
+        store.refresh()
+        await store.waitForAttachmentReconciliation()
+        XCTAssertEqual(store.attachmentReconciliationPasses, passes, "the obsolete pass cannot invalidate the newer signature")
+    }
+
+    @MainActor
     func testRepresentativeStoreDirectoryIsRemovedAfterXCTestTeardown() async throws {
         var directory: URL?
         // Registered first, this check runs last: after the helper's actual
