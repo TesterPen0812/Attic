@@ -214,8 +214,8 @@ struct AtticNoteRowModel: Identifiable, Equatable {
     var files = 0
     /// VoiceOver's reading ("Pricing page, edited 09:40, not saved, 1 of 3 checked, 1 image").
     var spoken: String
-    /// A task's own note (Phase 3): its task's circle before the title and
-    /// "Task note" before the preview (`p3-22` row 3). Nil: an ordinary note.
+    /// An item in Tasks: its task's circle before the title (`p3-22` row
+    /// 3; no "Task note" wording since C2). Nil: an ordinary note.
     var taskState: AtticTaskState? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {

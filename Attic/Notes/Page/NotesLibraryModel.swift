@@ -280,7 +280,7 @@ final class NotesLibraryModel: ObservableObject {
                           tag: tagFilter, prepareSummaries: prepareSummaries)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
-        var notes = store.orderedNotes()
+        var notes = oneRowPerItem(store.orderedNotes())
         // One consistent proposal snapshot for every row in this render.
         // A later row must not turn a partially failed read into cacheable rows.
         if !notes.isEmpty, proposalIDs?.revision != store.revision, failedProposalRevision != store.revision {
@@ -479,18 +479,50 @@ final class NotesLibraryModel: ObservableObject {
         if note.taskID.flatMap({ taskMetadata[$0] }) != nil { summary.title = title }
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
-        // A task's own note (Phase 3): its task's circle and "Task note".
+        // An item in Tasks: its task's live title and circle, and no
+        // "Task note" wording (one-item plan, "All notes rows").
         let rowTaskState: AtticTaskState? = note.taskID.map { taskMetadata[$0]?.state ?? self.taskState?($0) ?? AtticTaskState.todo }
-        let taskNote = String(localized: "Task note")
-        let preview = rowTaskState == nil ? summary.preview
-            : (summary.preview.isEmpty ? taskNote : taskNote + " · " + summary.preview)
         let spoken = summary.spoken(time: time, needsAttention: attention.contains(note.id)) + (hasProposal ? ", proposal waiting" : "")
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,
-            preview: preview, checklist: summary.checklist, images: summary.images, files: summary.files,
-            spoken: rowTaskState == nil ? spoken : taskNote + ", " + spoken, taskState: rowTaskState
+            preview: summary.preview, checklist: summary.checklist, images: summary.images, files: summary.files,
+            spoken: spoken, taskState: rowTaskState
         )
     }
+
+    /// One row per item (one-item plan, "All notes rows"). Two live notes
+    /// claiming one task (S10) show once: the note made first, by
+    /// `(createdAt, UUID)` as the item's page chooses; the other stays
+    /// reachable through the page's Review. An item in Tasks with no
+    /// writing is not in All notes (owner answer 2: "Writing makes it a
+    /// note"). Ordinary notes are untouched. Presentation only.
+    private func oneRowPerItem(_ notes: [NoteItem]) -> [NoteItem] {
+        var first: [UUID: NoteItem] = [:]
+        for note in notes {
+            guard let taskID = note.taskID else { continue }
+            if let kept = first[taskID], (kept.createdAt, kept.id.uuidString) <= (note.createdAt, note.id.uuidString) { continue }
+            first[taskID] = note
+        }
+        guard !first.isEmpty else { return notes }
+        return notes.filter { note in
+            guard let taskID = note.taskID else { return true }
+            return first[taskID]?.id == note.id && hasWriting(note)
+        }
+    }
+
+    /// Whether an item's note has writing, kept per stored revision. A
+    /// document this build cannot read keeps its row (never hidden on an
+    /// unknown).
+    private func hasWriting(_ note: NoteItem) -> Bool {
+        // The revision changes with every save; only legacy rows without one
+        // compare their bytes.
+        if let kept = writingKnown[note.id], kept.revision == note.revisionID,
+           note.revisionID != nil || kept.content == note.content { return kept.value }
+        let value = note.content.flatMap { NoteContentCodec.decode($0).document }.map(TaskNoteConversion.documentHasWriting) ?? true
+        writingKnown[note.id] = (note.revisionID, note.revisionID == nil ? note.content : nil, value)
+        return value
+    }
+    private var writingKnown: [UUID: (revision: UUID?, content: Data?, value: Bool)] = [:]
 
     private func body(of note: NoteItem) -> NoteRowSummary.Body {
         if let kept = summaries.bodies[note.id], kept.revision == note.revisionID, kept.content == note.content, kept.plainText == note.plainText { return kept.body }

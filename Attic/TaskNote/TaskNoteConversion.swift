@@ -363,8 +363,15 @@ extension TaskNoteConversion {
               let writing = try? WorkspaceItemLifecycle.writing(taskIDs: [taskID], in: context) else { return false }
         return writing.contains { row in
             guard row.deletedAt == nil, let doc = row.content.flatMap({ NoteContentCodec.decode($0).document }) else { return false }
-            return !NoteDocument(blocks: Array(doc.blocks.dropFirst())).isEmpty
+            return documentHasWriting(doc)
         }
+    }
+
+    /// An item's writing: anything after its title block (text, files,
+    /// objects). The one rule Remove from Tasks and All notes share
+    /// ("Writing makes it a note", owner answer 2).
+    static func documentHasWriting(_ document: NoteDocument) -> Bool {
+        !NoteDocument(blocks: Array(document.blocks.dropFirst())).isEmpty
     }
 
     /// Prove all legacy entries, including removed and child-held files, have

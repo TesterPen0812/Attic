@@ -460,6 +460,8 @@ final class TaskPageSliceTests: XCTestCase {
 
     // MARK: All notes (`p3-22` row 3)
 
+    /// No "Task note" wording any more (one-item plan, "All notes rows",
+    /// under the 2026-10-23 one-item build rules): the row is the item's.
     func testAllNotesShowsATaskNoteWithItsCircleAndTaskNote() throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
@@ -467,8 +469,9 @@ final class TaskPageSliceTests: XCTestCase {
         let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes)
         let row = model.preparedRow(AtticNoteRowModel(id: noteID, title: "", time: "", preview: "", spoken: ""), store: notes.store)
         XCTAssertEqual(row.taskState, .inProgress)
-        XCTAssertTrue(row.preview.hasPrefix("Task note · "), row.preview)
-        XCTAssertTrue(row.spoken.hasPrefix("Task note, "), row.spoken)
+        XCTAssertFalse(row.preview.localizedCaseInsensitiveContains("task note"), row.preview)
+        XCTAssertFalse(row.preview.isEmpty, "the writing's first line")
+        XCTAssertFalse(row.spoken.localizedCaseInsensitiveContains("task note"), row.spoken)
         XCTAssertEqual(row.title, "Finalize launch checklist")
     }
 
@@ -526,7 +529,8 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(uiState.taskNoteReturnRow, id, "the anchor row takes the keyboard again")
     }
 
-    /// ⌘Return, a click on the title and VoiceOver's Open task note open the
+    /// ⌘Return, a click on the title and VoiceOver's Open page (the menu's
+    /// Open Page, owner answer 3 of 2026-10-23) open the
     /// task's page through the host's service; the files list keeps its
     /// own control (the files count) and menu item.
     func testRowOpenCommandOpensTheTaskPage() throws {
@@ -536,7 +540,7 @@ final class TaskPageSliceTests: XCTestCase {
         hosted.model.services.openTaskNote = { opened.append($0) }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first)
         let actions = hosted.page.actions(for: row.id, in: .now)
-        XCTAssertEqual(actions.names.openPage, "Open task note")
+        XCTAssertEqual(actions.names.openPage, "Open page")
         actions.openPage()
         hosted.spin(0.2)
         XCTAssertEqual(opened, [row.id])
@@ -549,7 +553,7 @@ final class TaskPageSliceTests: XCTestCase {
         let hosted = try Hosted(height: 520, keyWindow: false)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first)
-        XCTAssertNotEqual(hosted.page.actions(for: row.id, in: .now).names.openPage, "Open task note")
+        XCTAssertNotEqual(hosted.page.actions(for: row.id, in: .now).names.openPage, "Open page")
     }
 }
 
