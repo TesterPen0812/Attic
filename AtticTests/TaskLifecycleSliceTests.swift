@@ -2305,6 +2305,27 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(notes.active?.engine.history.workspace === history)
     }
 
+    func testC2RefusedOrdinaryMoveToPanelKeepsTheSourceWindowAndBusyDestination() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session), ui = PanelUIState()
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui)
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        let other = UUID()
+        _ = try notes.store.createDocumentNote(id: other, document: NoteDocument(blocks: [.text("Other"), .text("Busy writing")])).get()
+        XCTAssertTrue(notes.open(noteID: other))
+        let destination = try XCTUnwrap(notes.active), view = destination.engine.makeView().1
+        view.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        defer { view.unmarkText() }
+        let window = TaskNoteWindows.shared.window(for: id), lease = presenter.lease
+        let moved = await TaskNoteWindows.shared.moveToPanel(taskID: id)
+        XCTAssertFalse(moved)
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
+        XCTAssertEqual(presenter.lease, lease)
+        XCTAssertTrue(notes.active === destination)
+    }
+
     func testC2LateTaskFieldDraftIsNeverHiddenOrDiscardedByConversion() async throws {
         let id = try seed(.boundary); await notes.startAndWait()
         let presenter = try open(id), session = try XCTUnwrap(presenter.session)
@@ -2328,6 +2349,18 @@ final class TaskLifecycleSliceTests: XCTestCase {
         presenter.model.newSubtaskText = ""
         _ = await presenter.page.history.retryPublication(using: coordinator)
         XCTAssertTrue(presenter.isOrdinary)
+    }
+
+    func testC2NativeFieldRefusesBeforeChangingItsTextOrDraftHistory() throws {
+        var edited = false
+        let actions = AtticTokenFieldActions(submit: { _ in }, dismissChip: { _ in }, multilinePaste: { _ in false },
+            escape: { true }, edited: { _, _ in edited = true }, caretMoved: { _ in }, admitEdit: { false })
+        let field = AtticTokenField(text: .constant("kept"), chips: [], isFocused: .constant(false), accessibilityLabel: "Title", actions: actions)
+        let delegate = field.makeCoordinator(), text = NSTextView()
+        text.string = "kept"
+        XCTAssertFalse(delegate.textView(text, shouldChangeTextIn: NSRange(location: 4, length: 0), replacementString: " refused"))
+        XCTAssertFalse(edited)
+        XCTAssertEqual(text.string, "kept")
     }
 
     func testC2LateFieldKeepsWritingReservedUntilCancellationThenReplaysOnNewProjection() async throws {
@@ -2393,6 +2426,20 @@ final class TaskLifecycleSliceTests: XCTestCase {
         coordinator.save = { try $0.save() }
         XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window, "migration refusal retains the original host")
         XCTAssertNotNil(tasks.task(withID: id))
+        let originalChanged = tasks.fileMigration.onNotesChanged
+        var blocker: (WorkspacePageSession, WorkspacePageSession.Lease)?
+        tasks.fileMigration.onNotesChanged = { [self] in
+            originalChanged?()
+            guard blocker == nil, let page = try? coordinator.sessions.session(for: .task(id), notes: notes),
+                  let lease = try? page.acquire(surfaceID: UUID()) else { return }
+            blocker = (page, lease)
+        }
+        await AtticPanelView.removeFromTasks(id, pages: notes, tasks: tasks, uiState: ui, toasts: nil, moveFilesFirst: true)
+        tasks.fileMigration.onNotesChanged = originalChanged
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window, "a refused remount keeps its Retry surface")
+        XCTAssertNotNil(tasks.task(withID: id), "conversion must wait for the window to remount")
+        XCTAssertEqual(try storedDocument(session.noteID).attachmentIDs, references.map(\.id), "migration remains durable after remount refuses")
+        if let blocker { _ = await blocker.0.close(blocker.1) }
         await AtticPanelView.removeFromTasks(id, pages: notes, tasks: tasks, uiState: ui, toasts: nil, moveFilesFirst: true)
         XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
         XCTAssertEqual(window.frame, frame)
@@ -2642,6 +2689,9 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let presenter = try open(id)
         presenter.restoreViewStateOnMount()
         XCTAssertEqual(presenter.host.textView.selectedRange().location, "Everything that has to be true before 1.0 goes out.".utf16.count + 1)
+        presenter.host.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        presenter.revealSearchResult("Sam owns")
+        XCTAssertEqual(presenter.host.textView.selectedRange().location, "Everything that has to be true before 1.0 goes out.".utf16.count + 1, "selecting the same result again reveals it again")
         notes.libraryQueryAcrossTaskPage = "C2 hidden match"
         for index in 0..<5 { _ = tasks.create(title: index == 4 ? "C2 hidden match" : "C2 child \(index)", parentID: id) }
         presenter.model.refresh()
@@ -2717,9 +2767,9 @@ final class TaskLifecycleSliceTests: XCTestCase {
         context.insert(seeded); try context.save(); tasks.refresh()
         let child = try XCTUnwrap(tasks.doneLogSubtasks(of: id).first)
         XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed child"), 0)
-        XCTAssertTrue(tasks.update(child, title: "C2 changed child"))
+        XCTAssertTrue(tasks.updateListed([child.id], title: "C2 changed child"))
         XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed child"), 1)
-        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.listedTask(withID: child.id)), title: "No longer matches"))
+        XCTAssertTrue(tasks.updateListed([child.id], title: "No longer matches"))
         XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed child"), 0)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
         var writing = try storedDocument(noteID)
