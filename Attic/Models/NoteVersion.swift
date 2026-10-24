@@ -30,6 +30,9 @@ final class NoteVersion {
     var attachmentIDsRaw: String = ""
     /// The note revision this version captured.
     var sourceRevisionID: UUID? = nil
+    /// Historical task head/subtasks for preview only. Old versions have none.
+    /// Writing restoration never applies this snapshot to live task records.
+    var taskSnapshotData: Data? = nil
 
     init(
         id: UUID = UUID(),
@@ -41,7 +44,8 @@ final class NoteVersion {
         title: String,
         body: String,
         attachmentIDs: [UUID],
-        sourceRevisionID: UUID?
+        sourceRevisionID: UUID?,
+        taskSnapshotData: Data? = nil
     ) {
         self.id = id
         self.noteID = noteID
@@ -53,6 +57,7 @@ final class NoteVersion {
         self.body = body
         self.attachmentIDsRaw = NoteVersion.encodeIDs(attachmentIDs)
         self.sourceRevisionID = sourceRevisionID
+        self.taskSnapshotData = taskSnapshotData
     }
 
     var reason: NoteVersionReason? { NoteVersionReason(rawValue: reasonRaw) }

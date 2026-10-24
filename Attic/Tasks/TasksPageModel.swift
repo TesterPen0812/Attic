@@ -614,7 +614,7 @@ final class TasksPageModel: ObservableObject {
             tasks = store.snapshot(for: scope).sections.flatMap { section -> [TaskItem] in
                 if !query.isEmpty {
                     guard section.status != .done else { return [] }
-                    return view.sorted(section.tasks.filter { $0.title.localizedStandardContains(query) })
+                    return view.sorted(section.tasks.filter { store.matchesItemSearch($0, query: query) })
                 }
                 return view.sorted(section.tasks.filter { view.includes($0, today: day) })
             }
@@ -688,7 +688,7 @@ final class TasksPageModel: ObservableObject {
     private func buildDoneDays() -> [TasksDoneDay] {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let today = store.doneTodayTasks()
-        let finished = (today.filter { query.isEmpty || $0.title.localizedStandardContains(query) } + doneLogTasks)
+        let finished = (today.filter { store.matchesItemSearch($0, query: query) } + doneLogTasks)
         let calendar = services.calendar()
         let now = services.now()
         var days: [TasksDoneDay] = []
@@ -732,7 +732,7 @@ final class TasksPageModel: ObservableObject {
         if doneLogFailure == nil {
             let logMatches = store.indexedDoneLogCount(matching: query)
             let logTotal = store.indexedDoneLogCount()
-            count = (today.filter { $0.title.localizedStandardContains(query) }.count + logMatches, today.count + logTotal)
+            count = (today.filter { store.matchesItemSearch($0, query: query) }.count + logMatches, today.count + logTotal)
         }
         doneCountCache = (key, count)
         return count
@@ -1143,7 +1143,7 @@ final class TasksPageModel: ObservableObject {
         if target == .done {
             if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
+            if !query.isEmpty, !store.matchesItemSearch(task, query: query) { doneSearch = "" }
             if parent != nil { doneDetailID = task.id }
             guard revealInDoneLog(task.id) else {
                 // Not loaded: nothing is selected or scrolled to until it is.

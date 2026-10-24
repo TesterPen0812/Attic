@@ -431,6 +431,7 @@ struct AtticTitleEditing {
     var pageUndo: ((_ nativeHasUndo: Bool) -> Bool)? = nil
     var pageRedo: ((_ nativeHasRedo: Bool) -> Bool)? = nil
     var didEdit: (() -> Void)? = nil
+    var admitEdit: (() -> Bool)? = nil
 
     struct Tokens {
         var chips: [AtticTokenChip]
@@ -445,6 +446,7 @@ struct AtticTitleEditing {
         /// ⌘Z past the title's own history: the page's.
         var undoFallback: () -> Void = {}
         var redoFallback: () -> Void = {}
+        var admitEdit: (() -> Bool)? = nil
     }
 }
 
@@ -479,7 +481,8 @@ struct AtticRowTitleEditor: View {
                     redoDraft: tokens.redoDraft,
                     selectionMoved: tokens.selectionMoved,
                     undoFallback: tokens.undoFallback,
-                    redoFallback: tokens.redoFallback
+                    redoFallback: tokens.redoFallback,
+                    admitEdit: tokens.admitEdit
                 ),
                 style: .rowTitle,
                 ink: .heading,
@@ -2734,6 +2737,10 @@ final class AtticSubtaskTextField: NSTextField {
 /// deleting an empty sibling) answers Undo before the older typing.
 final class AtticSubtaskFieldEditor: NSTextView {
     var editing: AtticTitleEditing?
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard editing?.admitEdit?() != false else { return false }
+        return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    }
     /// V-12: grown past its most lines, it scrolls to the insertion point
     /// by whole lines (its clip is whole lines tall).
     override func adjustScroll(_ newVisible: NSRect) -> NSRect {
@@ -2744,11 +2751,11 @@ final class AtticSubtaskFieldEditor: NSTextView {
         return rect
     }
     @objc func undo(_ sender: Any?) {
-        guard !hasMarkedText() else { return }
+        guard !hasMarkedText(), editing?.admitEdit?() != false else { return }
         if editing?.pageUndo?(undoManager?.canUndo == true) != true { undoManager?.undo() }
     }
     @objc func redo(_ sender: Any?) {
-        guard !hasMarkedText() else { return }
+        guard !hasMarkedText(), editing?.admitEdit?() != false else { return }
         if editing?.pageRedo?(undoManager?.canRedo == true) != true { undoManager?.redo() }
     }
     override func keyDown(with event: NSEvent) {

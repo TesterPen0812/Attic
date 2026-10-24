@@ -228,7 +228,13 @@ struct AtticPanelView: View {
     /// Open Task Note and a row's file drop (Phase 3).
     private var taskNoteEntryServices: TaskNoteEntryServices {
         TaskNoteEntryServices(
-            open: { [uiState] id, backTitle in uiState.openTaskNote(id, from: .tasks, row: id, backTitle: backTitle) },
+            open: { [uiState, tasksPageState, store, toasts, weak pages = noteDraft.pages] id, backTitle in
+                let model = tasksPageState.model(for: store, toasts: toasts)
+                let query = model.trimmedQuery(for: model.tab)
+                if TaskNoteWindows.shared.bringForward(id, searchQuery: query) { return }
+                pages?.pendingTaskSearchQuery = query.isEmpty ? nil : query
+                uiState.openTaskNote(id, from: .tasks, row: id, backTitle: backTitle)
+            },
             addFiles: { [noteDraft, store, toasts, uiState] id, staging in
                 TaskNoteFiles.add(staging, to: id, tasks: store, controller: noteDraft.pages, toasts: toasts) {
                     uiState.openTaskNote(id, from: .tasks, row: id, backTitle: nil)
@@ -268,11 +274,13 @@ struct AtticPanelView: View {
                 case let .made(taskID):
                     let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
                     let stepID = pages.undoRoute.undoStepID(in: history.historyID)
-                    uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
+                    if TaskNoteWindows.shared.window(noteID: noteID) == nil {
+                        uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
+                    }
                     toasts.show(String(localized: "Added to Now"), answersUndoKey: false, performingAsync: { [weak pages, weak uiState, weak history] in
                         guard let pages, let uiState, let history, let stepID,
                               history.route.undoStepID(in: history.historyID) == stepID else { return .applied }
-                        if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
+                        if let open = TaskNotePresenter.open(for: taskID), !open.page.retainsAcrossItemChanges, !(await open.close()) {
                             return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
                         }
                         TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
@@ -724,9 +732,13 @@ extension AtticPanelView {
             }
         }
         if moveFilesFirst {
-            if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) { return }
-            TaskNoteWindows.shared.finishHandoff(taskID)
-            let moved = await tasks.fileMigration.moveIntoNote(taskID, tasks: tasks, notes: pages)
+            let moved: TaskAttachmentMigration.Outcome
+            if TaskNoteWindows.shared.window(for: taskID) != nil {
+                moved = await TaskNoteWindows.shared.moveFilesFirst(taskID, tasks: tasks, controller: pages)
+            } else {
+                if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) { return }
+                moved = await tasks.fileMigration.moveIntoNote(taskID, tasks: tasks, notes: pages)
+            }
             switch moved {
             case .migrated, .reconciled, .unchanged: break
             case let .refused(reason): report(reason.reason); return
@@ -745,9 +757,12 @@ extension AtticPanelView {
                     return .failed(CommandFailure(String(localized: "Couldn't undo")))
                 }
                 await pages.retireConvertedNote(noteID, installingCommittedForm: false)
+                if pages.retainsWindowSession(pages.workspaceSessionIfCached(noteID)) { return .applied }
                 uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
                 return .applied
             })
+            // A mini window retains the page already installed by publication.
+            if pages.retainsWindowSession(open?.session) { return }
             // The committed ordinary projection is already installed while
             // input is reserved; durable close preserves any queued writing.
             if let open, !(await open.close()) { return }

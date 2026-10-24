@@ -280,7 +280,7 @@ final class NotesLibraryModel: ObservableObject {
                           tag: tagFilter, prepareSummaries: prepareSummaries)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
-        var notes = oneRowPerItem(store.orderedNotes())
+        var notes = oneRowPerItem(store.orderedNotes(), writingIDs: store.itemWritingIDs)
         // One consistent proposal snapshot for every row in this render.
         // A later row must not turn a partially failed read into cacheable rows.
         if !notes.isEmpty, proposalIDs?.revision != store.revision, failedProposalRevision != store.revision {
@@ -496,17 +496,12 @@ final class NotesLibraryModel: ObservableObject {
     /// reachable through the page's Review. An item in Tasks with no
     /// writing is not in All notes (owner answer 2: "Writing makes it a
     /// note"). Ordinary notes are untouched. Presentation only.
-    private func oneRowPerItem(_ notes: [NoteItem]) -> [NoteItem] {
-        var first: [UUID: NoteItem] = [:]
-        for note in notes {
-            guard let taskID = note.taskID else { continue }
-            if let kept = first[taskID], (kept.createdAt, kept.id.uuidString) <= (note.createdAt, note.id.uuidString) { continue }
-            first[taskID] = note
-        }
-        guard !first.isEmpty else { return notes }
-        return notes.filter { note in
+    private func oneRowPerItem(_ notes: [NoteItem], writingIDs: [UUID: UUID]) -> [NoteItem] {
+        // The registry and search choose using the oldest physical replica's
+        // creation date, even if a newer canonical replica has another date.
+        notes.filter { note in
             guard let taskID = note.taskID else { return true }
-            return first[taskID]?.id == note.id && hasWriting(note)
+            return writingIDs[taskID] == note.id && hasWriting(note)
         }
     }
 

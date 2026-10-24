@@ -269,7 +269,7 @@ enum WorkspaceCrashFixture {
 
     /// Exercise the same history/reservation producer as the app, with an
     /// engine-only session and fixture-owned journal/store/files.
-    static func changeCircle(_ root: URL, adding: Bool, reviewAction: String? = nil) async throws -> Bool {
+    static func changeCircle(_ root: URL, adding: Bool, reviewAction: String? = nil, retainedWindow: Bool = false) async throws -> Bool {
         // Only the reviewed operation receives the kill/save-then-throw;
         // bootstrap its prior committed history in this child first.
         let point = ProcessInfo.processInfo.environment["ATTIC_CRASH_POINT"]
@@ -304,20 +304,52 @@ enum WorkspaceCrashFixture {
         }
         if reviewAction != nil { await notes.recoverAtLaunchAndWait() }
         if reviewAction == "move-review-remove" {
-            guard case .migrated = await tasks.fileMigration.moveIntoNote(taskID, tasks: tasks, notes: notes) else { return false }
+            if retainedWindow {
+                let page = try coordinator.sessions.session(for: .task(taskID), notes: notes)
+                let lease = try page.acquire(surfaceID: UUID())
+                try page.retainAcrossItemChanges(lease: lease)
+                guard await page.close(lease) else { return false }
+                try armReviewedOperation()
+                WorkspaceCrashHook.reach("C2-window-migration-released")
+                // Migration's existing crash matrix owns its durable steps;
+                // this fixture arms just the window release/remount boundaries.
+                unsetenv("ATTIC_CRASH_POINT"); unsetenv("ATTIC_SAVE_THEN_THROW")
+            }
+            let moved = await tasks.fileMigration.moveIntoNote(taskID, tasks: tasks, notes: notes)
+            switch moved {
+            case .migrated, .reconciled, .unchanged: break
+            default: return false
+            }
             await notes.waitForRecoveryWork()
             try armReviewedOperation(); WorkspaceCrashHook.reach("B-move-before-remove")
         }
         // Add is invoked from the ordinary note's active controller session;
         // activating this engine-only session presents no native surface.
         if adding, !notes.open(noteID: noteID) { throw WorkspaceFoundationError.unknown }
-        guard let session = notes.workspaceSession(noteID: noteID) else { throw WorkspaceFoundationError.unknown }
+        let retainedPage: WorkspacePageSession?
+        let retainedLease: WorkspacePageSession.Lease?
+        if retainedWindow {
+            let page = try coordinator.sessions.session(for: adding ? .note(noteID) : .task(taskID), notes: notes)
+            let lease = try page.acquire(surfaceID: UUID())
+            try page.retainAcrossItemChanges(lease: lease)
+            retainedPage = page; retainedLease = lease
+            if reviewAction == "move-review-remove" { WorkspaceCrashHook.reach("C2-window-migration-rebound") }
+        } else { retainedPage = nil; retainedLease = nil }
+        guard let session = retainedPage?.note ?? notes.workspaceSession(noteID: noteID) else { throw WorkspaceFoundationError.unknown }
         var changedTaskID = taskID
         if adding {
             guard case let .made(id) = await TaskNoteConversion.makeTask(fromNote: noteID, notes: notes, tasks: tasks, workspaceSession: session) else { return false }
             changedTaskID = id
         } else {
             guard case .removed = await TaskNoteConversion.removeTask(taskID, notes: notes, tasks: tasks, workspaceSession: session) else { return false }
+        }
+        if let retainedPage {
+            guard retainedPage.activeLease == retainedLease, retainedPage.note === session,
+                  session.usesWorkspaceBinding, session.engine.isBodyOnly == adding,
+                  session.engine.history.workspace === retainedPage.history,
+                  retainedPage.key.workspace == (adding ? .task(changedTaskID) : .note(noteID)) else { return false }
+            let resolved = try coordinator.sessions.session(for: adding ? .task(changedTaskID) : .note(noteID), notes: notes)
+            guard resolved === retainedPage else { return false }
         }
         let history = notes.undoRoute.workspace(for: .taskWorkspace(changedTaskID))
         if reviewAction == "undo-review-add" || reviewAction == "undo-review-remove" {

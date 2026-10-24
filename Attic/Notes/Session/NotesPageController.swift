@@ -501,8 +501,14 @@ final class NotesPageController: ObservableObject {
     }
     /// Library navigation prepares only document bytes. Full byte ownership
     /// hydration remains part of the existing explicit durable-open API.
-    func openFromLibrary(noteID: UUID) async -> Bool {
-        await openDecoded(noteID: noteID)
+    func openFromLibrary(noteID: UUID, searchQuery: String? = nil) async -> Bool {
+        guard await openDecoded(noteID: noteID) else { return false }
+        if let searchQuery, let session = active, session.noteID == noteID,
+           let range = session.engine.searchParagraph(matching: searchQuery) {
+            session.selection = range
+            session.engine.revealSearchParagraph(range)
+        }
+        return true
     }
 
     private func openDecoded(noteID: UUID) async -> Bool {
@@ -1388,6 +1394,7 @@ final class NotesPageController: ObservableObject {
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
     var libraryQueryAcrossTaskPage: String?
+    var pendingTaskSearchQuery: String?
 
     func installFileHistoryState(_ session: NoteSession, rootID: UUID, noteID: UUID, history: WorkspaceHistory) throws {
         guard !session.isImporting,
@@ -1641,6 +1648,10 @@ final class NotesPageController: ObservableObject {
                     session.state = .clean
                 } else if NoteSessionPolicy.hasPendingWork(session.state) { self.scheduleSave(session) }
             }
+        }
+        engine.exportProjection = { [weak self, weak session] document in
+            guard let self, let session else { throw WorkspaceFoundationError.protectedOwner }
+            return try self.taskSnapshot(noteID: session.noteID)?.document(writing: document) ?? document
         }
         session.workspacePublicationPending = engine.history.workspace?.hasPendingPublication == true
         engine.canUndoVersionRestore = { [weak self, weak session] in
@@ -3333,8 +3344,11 @@ extension NotesPageController {
             session.showNotice(NoteNotice(kind: .historyError, detail: "Version history could not be read. Try again. Your note is kept."))
             return false
         }
+        let snapshot: TaskNotePageSnapshot?
+        do { snapshot = try taskSnapshot(noteID: session.noteID) }
+        catch { return false }
         let browser = NoteHistoryBrowser(noteID: session.noteID, current: session.engine.document(),
-            currentRevision: session.baseRevisionID, entries: entries)
+            currentRevision: session.baseRevisionID, entries: entries, currentTaskSnapshot: snapshot)
         if let scroll = session.engine.scrollView {
             browser.scrollOffset = scroll.contentView.bounds.origin.y + scroll.contentInsets.top
         }
@@ -4062,7 +4076,20 @@ extension NotesPageController {
         } else {
             return nil
         }
-        return NoteMarkdownExport.markdown(document) { id in staged[id] ?? self.filename(forAttachment: id) }
+        guard let page = try? taskSnapshot(noteID: noteID)?.document(writing: document) ?? document else { return nil }
+        return NoteMarkdownExport.markdown(page) { id in staged[id] ?? self.filename(forAttachment: id) }
+    }
+
+    func taskSnapshot(noteID: UUID) throws -> TaskNotePageSnapshot? {
+        let context = ModelContext(store.container)
+        let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        if let row = NoteStore.canonicalReplicas(from: rows).first {
+            return try TaskNotePageSnapshot.capture(note: row, in: context)
+        }
+        // A task's writing is a never-saved draft until its first edit.
+        // Read the head directly without creating a compatibility note.
+        if let owner = cache[noteID]?.pendingTaskID { return try TaskNotePageSnapshot.capture(taskID: owner, in: context) }
+        return nil
     }
 
     func copyMarkdown(noteID: UUID) {
@@ -4189,12 +4216,26 @@ extension NotesPageController {
         session.state = reason == nil ? .clean : .readOnly
     }
 
-    func installCommittedTaskNote(_ noteID: UUID, preservingWritingSelection: Bool = false) {
+    @discardableResult
+    func installCommittedTaskNote(_ noteID: UUID, preservingWritingSelection: Bool = false) -> Bool {
+        guard allowsItemProjection(noteID) else { return false }
         store.refresh()
         if let session = cache[noteID] {
             let old = session.engine.textStorage.string
             let selection = session.engine.textView?.selectedRange() ?? session.selection
+            if session.workspacePage?.retainsAcrossItemChanges == true {
+                do {
+                    let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+                    let owner = store.note(withID: noteID)?.taskID
+                    _ = try coordinator.sessions.installRetainedItemIdentity(session, taskID: owner)
+                    TaskNoteWindows.shared.prepareProjection(session: session, taskID: owner)
+                } catch {
+                    session.showNotice(NoteNotice(kind: .didntWork, detail: "The saved item is waiting to update its window."))
+                    return false
+                }
+            }
             installCommittedTaskNoteForm(session)
+            if session.workspacePage?.retainsAcrossItemChanges == true { WorkspaceCrashHook.reach("C2-projection-installed") }
             if preservingWritingSelection {
                 let text = session.engine.textStorage.string
                 if old.hasSuffix(text) || text.hasSuffix(old) {
@@ -4205,6 +4246,12 @@ extension NotesPageController {
                 }
             }
         }
+        return true
+    }
+
+    func allowsItemProjection(_ noteID: UUID) -> Bool {
+        guard let session = cache[noteID] else { return true }
+        return TaskNoteWindows.shared.allowsProjection(session: session)
     }
 
     /// A change written by another owner (a purge's Undo): a clean editor
@@ -4223,12 +4270,23 @@ extension NotesPageController {
         if wasActive { _ = open(noteID: noteID) }
     }
 
+    func retainsWindowSession(_ session: NoteSession?) -> Bool {
+        guard let session, let page = session.workspacePage else { return false }
+        return page.retainsAcrossItemChanges && page.activeLease != nil && page.controller === self
+            && page.note === session && session.usesWorkspaceBinding
+    }
+
     /// Make Task from Note (or its Undo) rewrote `noteID` in the other
     /// form: the editor built for the old form leaves (an ordinary one
     /// can't show a task's note, nor the reverse); the store is re-read.
     func retireConvertedNote(_ noteID: UUID, installingCommittedForm: Bool = true) async {
         store.refresh()
         guard let session = cache[noteID] else { return }
+        if session.workspacePage?.retainsAcrossItemChanges == true, session.workspacePage?.activeLease != nil {
+            // Reserved publication is the sole installer. Its completion has
+            // already released queued typing; reloading here would erase it.
+            return
+        }
         let owner: UUID? = if case let .task(id) = session.workspacePage?.key.workspace { id } else { nil }
         if session.usesWorkspaceBinding {
             if installingCommittedForm { installCommittedTaskNoteForm(session) }

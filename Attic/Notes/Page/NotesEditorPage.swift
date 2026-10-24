@@ -582,16 +582,20 @@ struct NotesEditorPage: View {
 
     private func openFromLibrary(_ id: UUID) {
         // A task's own note opens as its task's page (§ 5.3), over Notes.
-        if let taskID = noteStore.note(withID: id)?.taskID, controller.openTaskPage?(taskID) == true {
-            // The search is kept for Back to All notes.
-            controller.libraryQueryAcrossTaskPage = library.query.isEmpty ? nil : library.query
-            return
+        let query = library.query
+        if TaskNoteWindows.shared.bringForward(noteID: id, searchQuery: query) { return }
+        if let taskID = noteStore.note(withID: id)?.taskID {
+            controller.libraryQueryAcrossTaskPage = query.isEmpty ? nil : query
+            if controller.openTaskPage?(taskID) == true {
+                TaskNotePresenter.open(for: taskID)?.revealSearchResult(query)
+                return
+            }
         }
         if let draft = controller.failedDrafts.first(where: { $0.noteID == id }), noteStore.note(withID: id) == nil {
             controller.openFailedDraft(sessionID: draft.id)
         } else {
             Task { @MainActor in
-                if await controller.openFromLibrary(noteID: id) { controller.dismissLibrary() }
+                if await controller.openFromLibrary(noteID: id, searchQuery: query) { controller.dismissLibrary() }
                 library.clearSearch()
             }
             return

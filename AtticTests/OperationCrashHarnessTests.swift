@@ -122,11 +122,58 @@ final class OperationCrashHarnessTests: XCTestCase {
     /// Engineering rule 2026-10-23: both circle changes are atomic across
     /// replica rows, document projection, retirement/redirect and receipts.
     func testBAddAndRemoveTasksRealKillMatricesReopenTwice() async throws {
+        try await assertCircleCrashMatrices(inWindow: false)
+    }
+
+    func testC2RetainedWindowProjectionCrashMatricesReopenTwice() async throws {
+        try await assertCircleCrashMatrices(inWindow: true)
+    }
+
+    func testC2WindowFileHandoffRealKillsKeepTheWindowPagesDurableStore() async throws {
+        for point in ["C2-window-migration-released", "C2-window-migration-rebound"] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let seeded = try await runChild("seed-review-move", root: root)
+            XCTAssertEqual(seeded, 73)
+            let crashed = try await runChild("window-move-review-remove", root: root, point: point)
+            XCTAssertEqual(crashed, 86, point)
+            guard crashed == 86 else { continue }
+            let expected = try Data(contentsOf: root.appendingPathComponent("review-before-content.json"))
+            for reopen in 0..<2 {
+                let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
+                let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))
+                try await coordinator.reconcileStartup()
+                let context = coordinator.freshContext(), message = "\(point) #\(reopen)"
+                let notes = try context.fetch(FetchDescriptor<NoteItem>())
+                XCTAssertEqual(notes.count, 2, message)
+                XCTAssertTrue(notes.allSatisfy { $0.content == expected && $0.taskID == WorkspaceCrashFixture.taskID && $0.deletedAt == nil }, message)
+                let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+                XCTAssertEqual(tasks.count, 6, message)
+                XCTAssertTrue(tasks.filter { $0.id == WorkspaceCrashFixture.taskID }.allSatisfy { $0.deletedAt == nil && $0.priority == .high && $0.tags == ["kept"] }, message)
+                let files = try context.fetch(FetchDescriptor<NoteAttachment>())
+                XCTAssertEqual(files.count, 6, message)
+                XCTAssertTrue(files.allSatisfy { $0.payload == WorkspaceCrashFixture.bytes }, message)
+                let rebound = point == "C2-window-migration-rebound"
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<OperationReceipt>()), rebound ? 1 : 0, message)
+                XCTAssertEqual(try context.fetchCount(FetchDescriptor<NoteVersion>()), rebound ? 3 : 1, message)
+                XCTAssertTrue(try context.fetch(FetchDescriptor<TaskNoteAssociation>()).allSatisfy { $0.detachedAt == nil }, message)
+                for reference in try JSONDecoder().decode([TaskImageReference].self, from: Data(contentsOf: root.appendingPathComponent("review-files.json"))) {
+                    let original = try await TaskImageFiles(rootURL: root.appendingPathComponent("TaskFiles")).verifiedURL(for: reference)
+                    XCTAssertEqual(try original.map { try Data(contentsOf: $0) }, WorkspaceCrashFixture.bytes, message)
+                }
+            }
+            let finished = try await runChild("window-move-review-remove", root: root)
+            XCTAssertEqual(finished, 73, "retry finishes the same durable migration/removal")
+        }
+    }
+
+    private func assertCircleCrashMatrices(inWindow: Bool) async throws {
         for adding in [true, false] {
-            let mode = adding ? "add-to-tasks" : "remove-from-tasks"
+            let mode = (inWindow ? "window-" : "") + (adding ? "add-to-tasks" : "remove-from-tasks")
             let staged = adding ? "B-add-association" : "B-remove-tasks"
             let points = ["K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", staged,
-                          "K3-note", "K4", "K5", "K6-1", "save-then-throw"] + (adding ? ["K3-task", "B-add-published"] : ["B-remove-writing", "B-remove-published"])
+                          "K3-note", "K4", "K5", "K6-1", "save-then-throw"] + (adding ? ["K3-task", "B-add-published"] : ["B-remove-writing", "B-remove-published"]) + (inWindow ? ["C2-projection-rekeyed", "C2-projection-installed"] : [])
             for point in points {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -137,7 +184,7 @@ final class OperationCrashHarnessTests: XCTestCase {
                 let crashed = try await runChild(mode, root: root, point: point == "save-then-throw" ? nil : point,
                     saveThenThrow: point == "save-then-throw")
                 XCTAssertEqual(crashed, point == "save-then-throw" ? 73 : 86, "\(mode) \(point)")
-                let committed = ["K5", "K6-1", "B-add-published", "B-remove-published", "save-then-throw"].contains(point)
+                let committed = ["K5", "K6-1", "B-add-published", "B-remove-published", "C2-projection-rekeyed", "C2-projection-installed", "save-then-throw"].contains(point)
                 for reopen in 0..<2 {
                     let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
                     let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))

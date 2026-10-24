@@ -1049,7 +1049,7 @@ final class PhaseXHunt1bTests: XCTestCase {
         let opaque = NoteItem(id: id, title: "Newer writer")
         opaque.contentFormat = 2; opaque.content = Data("unsupported bytes".utf8)
         let opaqueID = UUID()
-        store.stageVersion(of: opaque, reason: .beforeAgentEdit, timestamp: Date(), context: store.modelContext, id: opaqueID)
+        try store.stageVersion(of: opaque, reason: .beforeAgentEdit, timestamp: Date(), context: store.modelContext, id: opaqueID)
         try store.modelContext.save()
         let retained = try XCTUnwrap(store.versions(noteID: id).first { $0.id == opaqueID })
         XCTAssertEqual(retained.attachmentIDs, [])

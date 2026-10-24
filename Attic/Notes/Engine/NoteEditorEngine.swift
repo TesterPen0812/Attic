@@ -147,6 +147,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// shown, selected, edited or read as a heading; the head shows the
     /// task's live title instead.
     let isBodyOnly: Bool
+    /// Whole-page export resolves the current structured head on demand.
+    /// Checkpoint/save/Find continue to use writing only.
+    var exportProjection: ((NoteDocument) throws -> NoteDocument)?
     /// A task's page whose note is in Recently Deleted invites a new one
     /// ("Write a new note", § 2.7.2); nil keeps "Write, or drop a file".
     var bodyPlaceholder: String?

@@ -293,13 +293,23 @@ final class TasksRound3StoreTests: XCTestCase {
         store.refresh()
 
         let page = store.doneLogPage(limit: 10, matching: "invoice")
-        XCTAssertEqual(page.tasks.map(\.id), [other.id], "neither the renamed task nor the one now a subtask")
+        XCTAssertEqual(page.tasks.map(\.id), [host.id, other.id],
+                       "C2 searches the shown child under its parent; neither the renamed task nor the child is a separate result")
+        XCTAssertEqual(store.indexedDoneLogPage(limit: 10, matching: "invoice").tasks.map(\.id), [host.id, other.id])
         XCTAssertNil(page.failure)
         XCTAssertEqual(store.doneLogPage(limit: 10, matching: "receipt").tasks.map(\.id), [renamed.id])
         // Ordered by the shown copy's completion: April (early) comes last.
         let all = store.doneLogPage(limit: 10).tasks
         XCTAssertEqual(all.last?.id, other.id)
         XCTAssertEqual(all.map(\.completedAt), all.map(\.completedAt).sorted { ($0 ?? .distantPast) > ($1 ?? .distantPast) })
+
+        // The child's stale matching replica must not keep its parent in
+        // search after the shown child has also been renamed.
+        try editShown(moved.id) { $0.title = "Parts" }
+        try context.save()
+        store.refresh()
+        XCTAssertEqual(store.doneLogPage(limit: 10, matching: "invoice").tasks.map(\.id), [other.id])
+        XCTAssertEqual(store.indexedDoneLogPage(limit: 10, matching: "invoice").tasks.map(\.id), [other.id])
     }
 
     /// An explicit reveal reaches as far into the Done log as it did with

@@ -167,6 +167,22 @@ final class WorkspaceSessionRegistry {
         return (.task(taskID), own.first)
     }
 
+    /// Projection changes reuse the window's lease and history. Only the
+    /// presentation key changes; the conversion already committed durably.
+    func installRetainedItemIdentity(_ note: NoteSession, taskID: UUID?) throws -> Bool {
+        guard let page = note.workspacePage, page.retainsAcrossItemChanges else { return false }
+        guard page.activeLease != nil, page.note === note, note.usesWorkspaceBinding,
+              page.controller != nil, note.engine.history.workspace === page.history,
+              sessions[page.key.workspace] === page else { throw WorkspaceFoundationError.protectedOwner }
+        let destination: Identity = taskID.map(Identity.task) ?? .note(note.noteID)
+        guard sessions[destination] == nil || sessions[destination] === page else { throw WorkspaceFoundationError.protectedOwner }
+        sessions[page.key.workspace] = nil
+        page.key = Key(domain: domain, workspace: destination)
+        sessions[destination] = page
+        WorkspaceCrashHook.reach("C2-projection-rekeyed")
+        return true
+    }
+
     func session(for identity: Identity, notes: NotesPageController) throws -> WorkspacePageSession {
         guard let coordinator else { throw WorkspaceFoundationError.protectedOwner }
         guard notes.store.container === coordinator.container else { throw WorkspaceFoundationError.invalidIdentity }
@@ -193,8 +209,8 @@ final class WorkspaceSessionRegistry {
             try session.attachDraft(taskID: taskID)
         }
         session.onRelease = { [weak self] page in
-            guard self?.sessions[canonical] === page else { return }
-            self?.sessions[canonical] = nil
+            guard self?.sessions[page.key.workspace] === page else { return }
+            self?.sessions[page.key.workspace] = nil
         }
         sessions[canonical] = session
         return session
@@ -249,7 +265,7 @@ final class WorkspacePageSession {
         fileprivate let note: NoteSession.CallbackStamp?
     }
     let id = UUID()
-    let key: WorkspaceSessionRegistry.Key
+    fileprivate(set) var key: WorkspaceSessionRegistry.Key
     private(set) weak var controller: NotesPageController?
     private let route: UndoRoute
     let history: WorkspaceHistory
@@ -260,6 +276,13 @@ final class WorkspacePageSession {
     private var bindingGeneration: UInt64 = 0
     private var closing = false
     private var released = false
+    private(set) var retainsAcrossItemChanges = false
+
+    func retainAcrossItemChanges(lease: Lease) throws {
+        guard activeLease == lease, !closing, !released, note?.workspacePage === self,
+              note?.usesWorkspaceBinding == true else { throw WorkspaceFoundationError.protectedOwner }
+        retainsAcrossItemChanges = true
+    }
     fileprivate var onRelease: ((WorkspacePageSession) -> Void)?
 
     fileprivate init(key: WorkspaceSessionRegistry.Key, controller: NotesPageController,

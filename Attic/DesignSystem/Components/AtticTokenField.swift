@@ -54,6 +54,8 @@ struct AtticTokenFieldActions {
     /// Files dragged over the field (true) or away (false), when it takes
     /// them (`pasteFiles`): the owner shows where they will land.
     var fileDragTargeted: ((Bool) -> Void)? = nil
+    /// Refuses a native edit before the field or its draft history changes.
+    var admitEdit: (() -> Bool)? = nil
 }
 
 /// A recognised piece of typed text (`#tag`, a date, `!`, `!!`) and how it
@@ -245,6 +247,7 @@ struct AtticTokenField: NSViewRepresentable {
         init(_ parent: AtticTokenField) { self.parent = parent }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+            guard isApplyingModel || parent.actions.admitEdit?() != false else { return false }
             guard let replacement = replacementString else { return true }
             // One line: a typed or dropped newline never enters.
             if replacement.rangeOfCharacter(from: .newlines) != nil {
