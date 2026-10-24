@@ -143,16 +143,18 @@ struct AtticTagColouring {
 
     func hue(for tag: String) -> AtticTagHue { palette.hue(for: tag) }
 
-    /// The tag menu's Colour row: the five clear hues and Grey, the
-    /// current one ticked. Empty where colours can't change.
+    /// The tag chip's menu: a "Colour" header and the colours themselves,
+    /// the five clear hues and Grey, the current one ticked, with no
+    /// one-row hop through a Colour › submenu (Dropdown content: answers,
+    /// owner, 2026-10-24, sheet 2). Empty where colours can't change.
     func colourCommands(for tag: String) -> [AtticMenuCommand] {
         guard let setHue else { return [] }
         let current = hue(for: tag).canonical
-        return [.submenu(String(localized: "Colour"), (AtticTagHue.palette + [.grey]).map { hue in
+        return [.header(String(localized: "Colour"))] + (AtticTagHue.palette + [.grey]).map { hue in
             AtticMenuCommand(verbatim: hue.title, state: hue == current ? .on : nil, swatch: hue) {
                 MainActor.assumeIsolated { setHue(tag, hue) }
             }
-        })]
+        }
     }
 }
 

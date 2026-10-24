@@ -303,18 +303,20 @@ struct AtticPanelView: View {
 
     // MARK: Menus
 
-    /// The panel's own right-click menu, with every shortcut shown.
+    /// The panel's own right-click menu, with every shortcut shown. The
+    /// current page is ticked, not greyed (Dropdown content: answers,
+    /// owner, 2026-10-24, sheet 5).
     private var panelMenuCommands: [AtticMenuCommand] {
         var commands = PanelPage.allCases.map { page in
             AtticMenuCommand(
-                String.LocalizationValue(page.title),
+                verbatim: String(localized: String.LocalizationValue(page.title)),
                 systemImage: page.systemName,
                 shortcut: KeyboardShortcut(page.keyEquivalent, modifiers: .command),
-                isDisabled: page == currentPage
+                state: page == currentPage ? .on : nil
             ) { selectPage(page) }
         }
         commands.append(AtticMenuCommand(
-            uiState.isPanelPinned ? "Unpin panel" : "Pin panel",
+            uiState.isPanelPinned ? "Unpin Panel" : "Pin Panel",
             systemImage: uiState.isPanelPinned ? "pin.slash" : "pin",
             shortcut: KeyboardShortcut("p", modifiers: [.command, .shift]),
             startsSection: true

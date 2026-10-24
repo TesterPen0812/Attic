@@ -76,8 +76,9 @@ enum NoteObjectMenu {
         let id = object.objectID
         let children = commands(for: id, engine: engine, run: { run(id, $0) }, chooseApplication: { chooseApplication(id) })
         guard !children.isEmpty else { return nil }
-        var submenu = AtticMenuCommand.submenu(object is NoteImageAttachment ? String(localized: "Image")
-                                               : String(localized: "File"), children)
+        let image = object is NoteImageAttachment
+        var submenu = AtticMenuCommand.submenu(image ? String(localized: "Image") : String(localized: "File"),
+                                               systemImage: image ? "photo" : "doc", children)
         submenu.identifier = identifierPrefix + "submenu"
         return submenu
     }

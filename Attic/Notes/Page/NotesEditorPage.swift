@@ -636,32 +636,24 @@ struct NotesEditorPage: View {
 
     // MARK: Menus
 
-    /// The note's menu (⋯, ⇧⌘I, the header title): Insert and Format as far
-    /// as this slice supports them, then the note's actions. What is not
-    /// built yet is left out.
+    /// The note's menu (⋯, ⇧⌘I, the header title). Page commands first,
+    /// an icon on every row (Dropdown content: answers, owner, 2026-10-24,
+    /// sheet 5): Add to Tasks, Pin to Top, Tags…, Version History │ Copy
+    /// as Markdown, Print…, Duplicate, Save Recovery Copy… │ a selected
+    /// image's or file's own menu, Insert ›, Format › │ Delete. Format › is
+    /// split into short submenus (answer 5 B). What is not built yet is
+    /// left out.
     private func noteMenuCommands() -> [AtticMenuCommand] {
         guard let session = controller.active else { return [] }
         let id = session.noteID
         let engine = session.engine
         let editable = !session.isReadOnly
         var commands: [AtticMenuCommand] = []
-        // A selected image or file: its own commands first (Image ▸ or
-        // File ▸), the same list as its right-click menu.
-        if let objects = chrome.objectControls,
-           let submenu = NoteObjectMenu.selectedObjectSubmenu(engine: engine,
-                run: { [weak objects] id, command in objects?.run(command, objectID: id) },
-                chooseApplication: { [weak objects] id in objects?.chooseApplication(for: id) }) {
-            commands.append(submenu)
-        }
-        if editable {
-            // Insert ▸ and Format ▸: the same command list as the selection
-            // bar, Aa, the right-click menu and the menu bar.
-            let router = chrome.controls?.router ?? NoteCommandRouter(engine: engine)
-            commands += router.menuCommands(from: .noteMenu)
-        }
+        // C2: insert Add to Tasks (or Remove from Tasks) here, first, and
+        // rename Delete Note (last) to Delete.
         let pinned = noteStore.note(withID: id)?.isPinned ?? false
         commands.append(AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: !session.isPersisted && session.isUntouchedDraft,
-                                         startsSection: !commands.isEmpty, identifier: "notes-menu-pin") {
+                                         identifier: "notes-menu-pin") {
             controller.setPinned(!pinned, noteID: id)
         })
         if editable {
@@ -687,9 +679,29 @@ struct NotesEditorPage: View {
         }
         if controller.canSaveRecoveryCopy(session) {
             commands.append(AtticMenuCommand("Save Recovery Copy…", shortcut: Self.saveRecoveryCopyShortcut,
-                                             startsSection: true, identifier: Self.saveRecoveryCopyIdentifier) {
+                                             identifier: Self.saveRecoveryCopyIdentifier) {
                 Task { await controller.saveRecoveryCopy(of: session) }
             })
+        }
+        var editing: [AtticMenuCommand] = []
+        // A selected image or file: its own commands (Image ▸ or File ▸),
+        // the same list as its right-click menu.
+        if let objects = chrome.objectControls,
+           let submenu = NoteObjectMenu.selectedObjectSubmenu(engine: engine,
+                run: { [weak objects] id, command in objects?.run(command, objectID: id) },
+                chooseApplication: { [weak objects] id in objects?.chooseApplication(for: id) }) {
+            editing.append(submenu)
+        }
+        if editable {
+            // Insert ▸ and Format ▸: the same commands as the selection bar,
+            // Aa, the right-click menu and the menu bar.
+            let router = chrome.controls?.router ?? NoteCommandRouter(engine: engine)
+            editing += router.menuCommands(from: .noteMenu)
+        }
+        if var first = editing.first {
+            first.startsSection = true
+            editing[0] = first
+            commands += editing
         }
         commands.append(AtticMenuCommand("Delete Note", isDestructive: true, startsSection: true,
                                          identifier: "notes-menu-delete") { delete(id) })
@@ -702,11 +714,19 @@ struct NotesEditorPage: View {
     /// scope: this is the library row's; `noteMenuCommands` is the open
     /// note's. A command that cannot run is dimmed here, and its key does
     /// nothing.
+    ///
+    /// Its content (Dropdown content: answers, owner, 2026-10-24, sheet 2
+    /// and answer 2 A): Open Page, Add to Tasks │ Pin to Top, Filter by
+    /// Tag › │ Copy as Markdown, Duplicate │ Delete, an icon on every row.
+    /// Undo and Redo leave the row menu: ⌘Z and the Edit menu keep them,
+    /// and the library's background menu (`historyCommands`) still has them.
     private func rowCommands(_ id: UUID) -> [AtticMenuCommand] {
         let stored = noteStore.note(withID: id)
         let pinned = stored?.isPinned ?? false
+        // C2: insert Add to Tasks (or Remove from Tasks) after Open Page,
+        // and rename Delete Note to Delete.
         return [
-            AtticMenuCommand("Open", identifier: "notes-row-open") { openFromLibrary(id) },
+            AtticMenuCommand("Open Page", identifier: "notes-row-open") { openFromLibrary(id) },
             AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: stored == nil, startsSection: true,
                              identifier: "notes-row-pin") {
                 controller.setPinned(!pinned, noteID: id)
@@ -725,14 +745,14 @@ struct NotesEditorPage: View {
             },
             AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
                              isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }
-        ] + Self.historyCommands(for: controller)
+        ]
     }
 
     /// The library's history (pin, duplicate, delete) as commands, named for
-    /// the step each would reverse and dimmed when there is none. They are
-    /// the tail of every row's menu and, on their own, the menu of the
-    /// library's background: with no rows (the last note just deleted) there
-    /// is no row menu, and Undo is still reachable here.
+    /// the step each would reverse and dimmed when there is none: the menu
+    /// of the library's background, so with no rows (the last note just
+    /// deleted) Undo is still reachable here. Row menus no longer repeat
+    /// them (Dropdown content: answers, owner, 2026-10-24, answer 2 A).
     static func historyCommands(for controller: NotesPageController) -> [AtticMenuCommand] {
         [
             AtticMenuCommand("\(historyTitle(String(localized: "Undo"), step: controller.libraryUndoName))",
