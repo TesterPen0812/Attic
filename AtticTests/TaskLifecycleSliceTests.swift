@@ -2244,6 +2244,165 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(resolved === presenter.page)
     }
 
+    func testC2RetainedRetirementKeepsQueuedAndNewerWriting() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        coordinator.afterPreparation = { presenter.host.textView.insertText(" queued", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        let outcome = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        coordinator.afterPreparation = nil
+        XCTAssertEqual(outcome, .removed(noteID: session.noteID))
+        XCTAssertTrue(session.engine.textStorage.string.contains(" queued"))
+        presenter.host.textView.insertText(" newest draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let expected = session.engine.document()
+        await notes.retireConvertedNote(session.noteID)
+        XCTAssertEqual(session.engine.document(), expected, "agent/Undo retirement cannot reload over released queued typing")
+        XCTAssertTrue(session.engine.textStorage.string.contains(" queued"))
+        XCTAssertTrue(session.engine.textStorage.string.contains(" newest draft"))
+    }
+
+    func testC2UndoResumesTaskObservationsAndOrdinaryAppearanceKeepsItsRegions() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        notes.makeTaskFromNote = { _ in }
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let outcome = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(outcome, .removed(noteID: session.noteID))
+        presenter.host.restack()
+        let ordinaryTop = presenter.host.textView.frame.minY
+        var dark = AtticDesignContext.default; dark.mode = .dark
+        presenter.update(design: dark); presenter.host.restack()
+        XCTAssertEqual(presenter.host.textView.frame.minY, ordinaryTop, "appearance preserves the ordinary Add/title projection")
+        let undone = await presenter.page.history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        let updated = expectation(description: "the resumed model observes the live head")
+        let subscription = presenter.model.$head.dropFirst().filter { $0.title == "C2 observed rename" }.prefix(1).sink { _ in updated.fulfill() }
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "C2 observed rename"))
+        await fulfillment(of: [updated], timeout: 1)
+        withExtendedLifetime(subscription) {}
+        XCTAssertEqual(presenter.model.head.title, "C2 observed rename")
+        XCTAssertEqual(session.engine.document().title, "C2 observed rename")
+    }
+
+    func testC2OrdinaryMoveToPanelLeavesTheLibraryAndKeepsHistory() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session), ui = PanelUIState()
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui)
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let history = presenter.page.history
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        notes.showLibrary()
+        XCTAssertTrue(notes.isLibraryPresented)
+        let moved = await TaskNoteWindows.shared.moveToPanel(taskID: id)
+        XCTAssertTrue(moved)
+        XCTAssertNil(presenter.lease)
+        XCTAssertNil(TaskNoteWindows.shared.window(for: id))
+        XCTAssertEqual(notes.active?.noteID, session.noteID)
+        XCTAssertFalse(notes.isLibraryPresented)
+        XCTAssertTrue(notes.active?.engine.history.workspace === history)
+    }
+
+    func testC2LateTaskFieldDraftIsNeverHiddenOrDiscardedByConversion() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        coordinator.save = { context in
+            let converting = context.changedModelsArray.contains { ($0 as? NoteItem)?.id == session.noteID && ($0 as? NoteItem)?.taskID == nil }
+            try context.save()
+            if converting { presenter.model.newSubtaskText = "Late native field draft" }
+        }
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        coordinator.save = { try $0.save() }
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        XCTAssertEqual(presenter.model.newSubtaskText, "Late native field draft")
+        XCTAssertFalse(presenter.isOrdinary, "a field draft must stay visible until explicitly resolved")
+        XCTAssertTrue(presenter.model.showsAddRow, "retirement cannot hide the native draft before publication")
+        XCTAssertTrue(presenter.page.history.hasPendingPublication)
+        let added = await TaskNoteConversion.makeTask(fromNote: session.noteID, notes: notes, tasks: tasks, workspaceSession: session)
+        guard case .refused = added else { return XCTFail("Add must not discard a prior field draft") }
+        XCTAssertEqual(presenter.model.newSubtaskText, "Late native field draft")
+        presenter.model.newSubtaskText = ""
+        _ = await presenter.page.history.retryPublication(using: coordinator)
+        XCTAssertTrue(presenter.isOrdinary)
+    }
+
+    func testC2LateFieldKeepsWritingReservedUntilCancellationThenReplaysOnNewProjection() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: PanelUIState())
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let lease = presenter.lease, history = presenter.page.history
+        coordinator.save = { context in
+            let converting = context.changedModelsArray.contains { ($0 as? NoteItem)?.id == session.noteID && ($0 as? NoteItem)?.taskID == nil }
+            try context.save()
+            if converting { presenter.model.newSubtaskText = "Keep this field" }
+        }
+        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
+        coordinator.save = { try $0.save() }
+        XCTAssertEqual(removed, .removed(noteID: session.noteID))
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertFalse(history.permitsUnsavedDraft, "native drafts retain the reservation until explicitly cancelled")
+        XCTAssertTrue(history.isInputReserved)
+        let writing = session.engine.textStorage.string
+        presenter.host.textView.setSelectedRange(NSRange(location: writing.utf16.count, length: 0))
+        presenter.host.textView.insertText(" fallback writing", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(history.hasQueuedTyping)
+        XCTAssertEqual(session.engine.textStorage.string, writing)
+        let refused = await history.retryPublication(using: coordinator)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(presenter.model.newSubtaskText, "Keep this field")
+        presenter.model.newSubtaskText = ""
+        let retried = await history.retryPublication(using: coordinator)
+        XCTAssertTrue(retried)
+        XCTAssertFalse(history.hasPendingPublication)
+        XCTAssertTrue(presenter.isOrdinary)
+        XCTAssertFalse(session.engine.isBodyOnly)
+        XCTAssertEqual(presenter.lease, lease)
+        XCTAssertEqual(presenter.page.key.workspace, .note(session.noteID))
+        XCTAssertTrue(session.engine.textStorage.string.hasSuffix(writing + " fallback writing"))
+        XCTAssertFalse(history.hasQueuedTyping)
+        XCTAssertFalse(try storedDocument(session.noteID).blocks.contains { $0.text.contains("fallback writing") })
+        let undone = await history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertTrue(session.engine.textStorage.string.hasSuffix(writing))
+        XCTAssertFalse(session.engine.textStorage.string.contains("fallback writing"))
+    }
+
+    func testC2MoveFilesFirstKeepsTheExistingWindowOnRefusalAndSuccess() async throws {
+        let id = try seed(.boundary)
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent("AtticC2-\(UUID()).txt")
+        try Data("C2 legacy bytes".utf8).write(to: input)
+        defer { try? FileManager.default.removeItem(at: input) }
+        let references = try await tasks.taskImageFiles.importAttachments([input], existing: [])
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == id {
+            row.imageReferencesData = try JSONEncoder().encode(references)
+        }
+        try context.save(); tasks.refresh(); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session), ui = PanelUIState()
+        TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store, design: .default, uiState: ui)
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id)), frame = window.frame
+        let history = presenter.page.history
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        await AtticPanelView.removeFromTasks(id, pages: notes, tasks: tasks, uiState: ui, toasts: nil, moveFilesFirst: true)
+        coordinator.save = { try $0.save() }
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window, "migration refusal retains the original host")
+        XCTAssertNotNil(tasks.task(withID: id))
+        await AtticPanelView.removeFromTasks(id, pages: notes, tasks: tasks, uiState: ui, toasts: nil, moveFilesFirst: true)
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
+        XCTAssertEqual(window.frame, frame)
+        XCTAssertNil(tasks.task(withID: id))
+        let retained = try XCTUnwrap(TaskNoteWindows.shared.session(noteID: session.noteID, controller: notes))
+        XCTAssertTrue(retained.engine.history.workspace === history)
+        XCTAssertFalse(retained.engine.isBodyOnly)
+        XCTAssertEqual(try storedDocument(session.noteID).attachmentIDs, references.map(\.id))
+    }
+
     func testBAddPreservesLiteralTitleAndFailureRollsBack() async throws {
         makeStores(); let id = UUID(), title = "Plan  tomorrow !high #literal"
         let original = NoteDocument(blocks: [.text(title), .text("Writing")])
@@ -2363,7 +2522,8 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let task = try XCTUnwrap(tasks.task(withID: taskID))
         XCTAssertEqual(task.title, "Plan the offsite")
         XCTAssertEqual(task.tags, ["team"], "the task takes the note's title and tags")
-        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == taskID && $0.tags.isEmpty }, "same identity; its own tags go to the task")
+        // Engineering rule, one-item-plan Titles and tags: hidden legacy tags remain recoverable.
+        XCTAssertTrue(try rows(noteID).allSatisfy { $0.taskID == taskID && $0.tags == ["team"] }, "same identity and recoverable note tags; live tags belong to TaskItem")
         let stored = try storedDocument(noteID)
         XCTAssertTrue(stored.requires.contains("taskNote"))
         XCTAssertEqual(stored.blocks.dropFirst().map(\.kind), [.text, .checklist], "body checkboxes stay note checkboxes")
@@ -2440,6 +2600,24 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(loggedMatch, [loggedNote])
     }
 
+    func testC2AlternateSearchAndLibraryUseTheRegistrysReplicaCreationOrder() async throws {
+        let ids = try TaskNoteLifecyclePreviewSeed.seed(in: container)
+        makeStores()
+        let taskID = try XCTUnwrap(ids[.alternateNote]), context = ModelContext(container)
+        let own = try ownNotes(taskID).sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
+        let oldest = try XCTUnwrap(own.first), alternate = own[1]
+        let replica = NoteItem(title: "")
+        try WorkspaceModelFields.apply(WorkspaceModelFields.read(oldest), to: replica)
+        replica.createdAt = alternate.createdAt.addingTimeInterval(60)
+        replica.updatedAt = oldest.updatedAt.addingTimeInterval(60)
+        context.insert(replica); try context.save(); notes.store.refresh()
+        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, taskStore: tasks)
+        XCTAssertEqual(model.groups(store: notes.store, drafts: []).flatMap(\.rows).filter { [oldest.id, alternate.id].contains($0.id) }.map(\.id), [oldest.id])
+        let matches = try await notes.store.searchNoteIDs(matching: "library hall")
+        XCTAssertEqual(matches, [oldest.id])
+        XCTAssertEqual(try coordinator.sessions.resolve(.task(taskID)).1, oldest.id)
+    }
+
     func testC2AddKeepsLegacyNoteTagsRecoverableWhileTaskTagsAreEffective() async throws {
         makeStores(); await notes.startAndWait()
         let id = UUID(), document = NoteDocument(blocks: [.text("Tags"), .text("Writing")])
@@ -2489,6 +2667,68 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(engine.find.matches.first?.noteRange.location), 0)
     }
 
+    func testC2OrdinaryFindExcludesTitleAndLibrarySearchOpensAtWriting() async throws {
+        makeStores(); await notes.startAndWait()
+        let id = UUID(), body = "First writing paragraph"
+        _ = try notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Title-only needle"), .text(body), .text("Second writing target")])).get()
+        let opened = await notes.openFromLibrary(noteID: id, searchQuery: "Second writing target")
+        XCTAssertTrue(opened)
+        let session = try XCTUnwrap(notes.active)
+        XCTAssertEqual(session.selection.location, "Title-only needle".utf16.count + body.utf16.count + 2)
+        let view = session.engine.makeView().1
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: panel), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; windows.append(window)
+        window.contentView = session.engine.scrollView
+        session.engine.find.show()
+        session.engine.find.query = "Title-only needle"
+        XCTAssertTrue(session.engine.find.matches.isEmpty)
+        session.engine.find.query = "writing"
+        XCTAssertEqual(session.engine.find.matches.count, 2)
+        _ = view
+    }
+
+    func testC2TasksSearchesWritingChildrenFilenamesAndDoneLogAsOneItem() async throws {
+        let ids = try TaskNoteLifecyclePreviewSeed.seed(in: container); makeStores()
+        library = AtticLibrary(tasks: tasks, notes: notes.store, undo: library.undo)
+        let model = TasksPageModel(library: library)
+        let active = try XCTUnwrap(ids[.makeSubtask])
+        for query in ["Things to turn", "Book the meeting room"] {
+            model.setSearchQuery(query, for: .now)
+            XCTAssertEqual(model.rows(for: .now).map(\.id), [active], query)
+        }
+        model.select(tab: .done)
+        model.doneSearch = "Printed by Print Co."
+        model.loadDoneLogIfNeeded()
+        XCTAssertEqual(model.doneDays().flatMap(\.rows).map(\.id), [try XCTUnwrap(ids[.doneLogged])])
+        let noteID = try XCTUnwrap(try ownNotes(active).first?.id)
+        let context = ModelContext(container)
+        context.insert(NoteAttachment(noteID: noteID, originalFilename: "C2-window-evidence.pdf", byteCount: 1, sortIndex: 0, contentDigest: ""))
+        try context.save(); notes.store.refresh()
+        model.setSearchQuery("C2-window-evidence", for: .now)
+        XCTAssertEqual(model.rows(for: .now).map(\.id), [active])
+    }
+
+    func testC2DoneSearchInvalidatesCachedChildAndWritingTerms() async throws {
+        let ids = try TaskNoteLifecyclePreviewSeed.seed(in: container); makeStores()
+        library = AtticLibrary(tasks: tasks, notes: notes.store, undo: library.undo)
+        let id = try XCTUnwrap(ids[.doneLogged])
+        let context = ModelContext(container), seeded = TaskItem(title: "Searchable logged child", status: .done, parentID: id)
+        seeded.doneLoggedAt = .now
+        context.insert(seeded); try context.save(); tasks.refresh()
+        let child = try XCTUnwrap(tasks.doneLogSubtasks(of: id).first)
+        XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed child"), 0)
+        XCTAssertTrue(tasks.update(child, title: "C2 changed child"))
+        XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed child"), 1)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.listedTask(withID: child.id)), title: "No longer matches"))
+        XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed child"), 0)
+        let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
+        var writing = try storedDocument(noteID)
+        XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed writing"), 0)
+        writing.blocks.append(.text("C2 changed writing"))
+        _ = try notes.store.saveDocument(noteID: noteID, document: writing, baseRevisionID: notes.store.note(withID: noteID)?.revisionID).get()
+        XCTAssertEqual(tasks.indexedDoneLogCount(matching: "C2 changed writing"), 1)
+    }
+
     func testC2MarkdownAndPrintUseLiveHeadDetailsSubtasksThenWriting() async throws {
         let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
         XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "C2 export title", priority: .high, tags: ["export"]))
@@ -2521,7 +2761,8 @@ final class TaskLifecycleSliceTests: XCTestCase {
         let preview = try XCTUnwrap(notes.historyBrowser?.preview?.engine.textStorage.string)
         XCTAssertTrue(preview.contains("High priority"))
         XCTAssertTrue(preview.contains("#historical"))
-        XCTAssertFalse(preview.contains("Low priority"))
+        XCTAssertFalse(preview.components(separatedBy: "\n").contains("Low priority"), "live details may appear only as labelled comparison context")
+        XCTAssertTrue(preview.contains("Not in this version: “Low priority”"))
         let historyRestored = await notes.restoreHistoryVersionDurably()
         XCTAssertTrue(historyRestored)
         XCTAssertEqual(try WorkspaceModelToken.read(.init(entity: .task, id: id), in: ModelContext(container)), taskBefore)
