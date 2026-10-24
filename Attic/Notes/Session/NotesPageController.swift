@@ -1642,6 +1642,10 @@ final class NotesPageController: ObservableObject {
                 } else if NoteSessionPolicy.hasPendingWork(session.state) { self.scheduleSave(session) }
             }
         }
+        engine.exportProjection = { [weak self, weak session] document in
+            guard let self, let session else { throw WorkspaceFoundationError.protectedOwner }
+            return try self.taskSnapshot(noteID: session.noteID)?.document(writing: document) ?? document
+        }
         session.workspacePublicationPending = engine.history.workspace?.hasPendingPublication == true
         engine.canUndoVersionRestore = { [weak self, weak session] in
             guard let self, let session, self.active === session else { return false }
@@ -3333,8 +3337,11 @@ extension NotesPageController {
             session.showNotice(NoteNotice(kind: .historyError, detail: "Version history could not be read. Try again. Your note is kept."))
             return false
         }
+        let snapshot: TaskNotePageSnapshot?
+        do { snapshot = try taskSnapshot(noteID: session.noteID) }
+        catch { return false }
         let browser = NoteHistoryBrowser(noteID: session.noteID, current: session.engine.document(),
-            currentRevision: session.baseRevisionID, entries: entries)
+            currentRevision: session.baseRevisionID, entries: entries, currentTaskSnapshot: snapshot)
         if let scroll = session.engine.scrollView {
             browser.scrollOffset = scroll.contentView.bounds.origin.y + scroll.contentInsets.top
         }
@@ -4062,7 +4069,20 @@ extension NotesPageController {
         } else {
             return nil
         }
-        return NoteMarkdownExport.markdown(document) { id in staged[id] ?? self.filename(forAttachment: id) }
+        guard let page = try? taskSnapshot(noteID: noteID)?.document(writing: document) ?? document else { return nil }
+        return NoteMarkdownExport.markdown(page) { id in staged[id] ?? self.filename(forAttachment: id) }
+    }
+
+    func taskSnapshot(noteID: UUID) throws -> TaskNotePageSnapshot? {
+        let context = ModelContext(store.container)
+        let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        if let row = NoteStore.canonicalReplicas(from: rows).first {
+            return try TaskNotePageSnapshot.capture(note: row, in: context)
+        }
+        // A task's writing is a never-saved draft until its first edit.
+        // Read the head directly without creating a compatibility note.
+        if let owner = cache[noteID]?.pendingTaskID { return try TaskNotePageSnapshot.capture(taskID: owner, in: context) }
+        return nil
     }
 
     func copyMarkdown(noteID: UUID) {

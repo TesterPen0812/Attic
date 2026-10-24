@@ -84,7 +84,13 @@ enum NotePrint {
 @MainActor
 extension NoteEditorEngine {
     func preparedPrintView() async -> NSTextView {
-        let snapshot = checkpointDocument()
+        let snapshot: NoteDocument
+        do { snapshot = try exportProjection?(checkpointDocument()) ?? checkpointDocument() }
+        catch { return NotePrint.printView(document: NoteDocument(blocks: [.text("Couldn't prepare the item for printing")])) }
+        return await preparedPrintView(snapshot: snapshot)
+    }
+
+    private func preparedPrintView(snapshot: NoteDocument) async -> NSTextView {
         var sources: [(UUID, Data)] = []
         for block in snapshot.blocks where block.kind == .image {
             guard let id = block.attachmentID else { continue }
@@ -106,7 +112,13 @@ extension NoteEditorEngine {
     }
 
     func printNote() async -> Bool {
-        let view = await preparedPrintView()
+        let snapshot: NoteDocument
+        do { snapshot = try exportProjection?(checkpointDocument()) ?? checkpointDocument() }
+        catch {
+            onNotice?(NoteNotice(kind: .didntWork, detail: "The item could not be prepared for printing. Try again."))
+            return false
+        }
+        let view = await preparedPrintView(snapshot: snapshot)
         return NotePrint.operation(for: view).run()
     }
 }

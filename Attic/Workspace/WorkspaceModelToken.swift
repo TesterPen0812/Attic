@@ -344,7 +344,8 @@ enum WorkspaceModelFields {
                 WorkspaceField("title", \NoteVersion.title),
                 WorkspaceField("body", \NoteVersion.body),
                 WorkspaceField("attachmentIDsRaw", \NoteVersion.attachmentIDsRaw),
-                WorkspaceField("sourceRevisionID", \NoteVersion.sourceRevisionID)
+                WorkspaceField("sourceRevisionID", \NoteVersion.sourceRevisionID),
+                WorkspaceField("taskSnapshotData", \NoteVersion.taskSnapshotData)
             ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as NotePendingEdit:
             return try record(row, fieldTable(for: row) { [

@@ -8,11 +8,15 @@ struct NoteHistoryEntry: Identifiable {
     let reason: NoteVersionReason?
     let document: NoteDocument
     let canRestore: Bool
+    let taskSnapshot: TaskNotePageSnapshot?
+
+    var previewDocument: NoteDocument { taskSnapshot?.historyDocument(writing: document) ?? document }
 
     @MainActor init(_ version: NoteVersion) {
         id = version.id
         createdAt = version.createdAt
         reason = version.reason
+        taskSnapshot = TaskNotePageSnapshot.decode(version.taskSnapshotData)
         if let data = version.content {
             let decoded = NoteContentCodec.decode(data)
             document = decoded.document ?? NoteDocument(blocks: [.text(version.title), .text("This version’s content cannot be read by this Attic.")])
@@ -120,6 +124,7 @@ final class NoteHistoryBrowser: ObservableObject {
     let noteID: UUID
     let current: NoteDocument
     let currentRevision: UUID?
+    let currentTaskSnapshot: TaskNotePageSnapshot?
     let entries: [NoteHistoryEntry]
     @Published var selectedIndex = 0
     @Published var showsCurrent = false
@@ -129,20 +134,22 @@ final class NoteHistoryBrowser: ObservableObject {
     @Published private(set) var comparison: NoteHistoryComparison
     var scrollOffset: CGFloat = 0
 
-    init(noteID: UUID, current: NoteDocument, currentRevision: UUID?, entries: [NoteHistoryEntry]) {
+    init(noteID: UUID, current: NoteDocument, currentRevision: UUID?, entries: [NoteHistoryEntry], currentTaskSnapshot: TaskNotePageSnapshot? = nil) {
         self.noteID = noteID
         self.current = current
         self.currentRevision = currentRevision
         self.entries = entries
-        comparison = NoteHistoryComparison(shown: entries.first?.document ?? current, other: current,
+        self.currentTaskSnapshot = currentTaskSnapshot
+        comparison = NoteHistoryComparison(shown: entries.first?.previewDocument ?? current, other: currentTaskSnapshot?.historyDocument(writing: current) ?? current,
                                             missingLabel: "Not in this version")
     }
 
     var selected: NoteHistoryEntry? { entries.indices.contains(selectedIndex) ? entries[selectedIndex] : nil }
     func updateComparison() {
-        let version = selected?.document ?? current
-        comparison = NoteHistoryComparison(shown: showsCurrent ? current : version,
-            other: showsCurrent ? version : current,
+        let version = selected?.previewDocument ?? current
+        let present = currentTaskSnapshot?.historyDocument(writing: current) ?? current
+        comparison = NoteHistoryComparison(shown: showsCurrent ? present : version,
+            other: showsCurrent ? version : present,
             missingLabel: showsCurrent ? "Not in Current" : "Not in this version")
     }
 }

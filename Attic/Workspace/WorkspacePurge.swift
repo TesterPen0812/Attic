@@ -415,7 +415,8 @@ enum WorkspacePurge {
                     let old = try PreparedNoteDocument(document), row = notes.first(where: { $0.id == id })!
                     commit.insert(NoteVersion(id: draftVersionIDs[id]!, noteID: id, createdAt: Date(), reason: .replacedByDraft,
                         content: old.content, contentFormat: document.format, title: old.title, body: old.body,
-                        attachmentIDs: document.attachmentIDs, sourceRevisionID: row.revisionID))
+                        attachmentIDs: document.attachmentIDs, sourceRevisionID: row.revisionID,
+                        taskSnapshotData: try TaskNotePageSnapshot.data(note: row, in: commit)))
                 }
                 for (id, document) in documents {
                     try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared[id]!,

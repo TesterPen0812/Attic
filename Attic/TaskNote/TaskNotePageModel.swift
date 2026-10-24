@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import SwiftData
 
 /// A task's own note, the page (UX plan § 2.2, mockups `p3-20` 2b and
 /// `p3-21`; owner's draft B, 2026-10-23): the live task head, the quiet
@@ -908,5 +909,86 @@ final class TaskNotePageModel: ObservableObject {
         }
         if !recorded, outcome.isApplied { field.cancel() }
         return outcome
+    }
+}
+
+/// Read-only page metadata. Version bytes remain the exact writing document;
+/// this optional snapshot is for historical presentation, never restoration.
+struct TaskNotePageSnapshot: Codable, Equatable, Sendable {
+    struct Child: Codable, Equatable, Sendable {
+        let id: UUID
+        let title: String
+        let isDone: Bool
+    }
+    var format = 1
+    let title: String
+    let status: String
+    let priority: String
+    let dueDay: DueDay?
+    let completedAt: Date?
+    let tags: [String]
+    let children: [Child]
+
+    @MainActor
+    static func capture(note: NoteItem, in context: ModelContext) throws -> Self? {
+        guard let owner = note.taskID else { return nil }
+        return try capture(taskID: owner, in: context)
+    }
+
+    @MainActor
+    static func capture(taskID owner: UUID, in context: ModelContext) throws -> Self? {
+        guard context.container.schema.entities.contains(where: { $0.name == "TaskItem" }) else { return nil }
+        let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == owner || $0.parentID == owner }))
+        let canonical = TaskStore.canonicalReplicas(from: rows)
+        guard let task = canonical.first(where: { $0.id == owner }) else { return nil }
+        let children = canonical.filter { $0.parentID == owner && $0.deletedAt == nil }.sorted {
+            if ($0.status == .done) != ($1.status == .done) { return $0.status != .done }
+            if $0.manualOrder != $1.manualOrder { return ($0.manualOrder ?? 0) > ($1.manualOrder ?? 0) }
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        return Self(title: task.title, status: task.statusRaw, priority: task.priorityRaw,
+            dueDay: task.dueDay, completedAt: task.completedAt, tags: task.tags,
+            children: children.map { Child(id: $0.id, title: $0.title, isDone: $0.status == .done) })
+    }
+
+    @MainActor
+    static func data(note: NoteItem, in context: ModelContext) throws -> Data? {
+        try capture(note: note, in: context).map { try WorkspaceModelFields.encode($0) }
+    }
+
+    static func decode(_ data: Data?) -> Self? {
+        guard let data, let value = try? JSONDecoder().decode(Self.self, from: data), value.format == 1 else { return nil }
+        return value
+    }
+
+    /// One title, task details and subtasks, then the unmodified writing.
+    func document(writing: NoteDocument) -> NoteDocument {
+        var page = writing
+        page.requires.removeAll { $0 == "taskNote" }
+        page.blocks = [.text(title)] + detailBlocks + children.map {
+            .checklist($0.title, id: $0.id, checked: $0.isDone)
+        } + writing.blocks.dropFirst()
+        return page
+    }
+
+    /// The history engine retains its body-only projection. A visible title
+    /// belongs to this immutable historical head, not today's task model.
+    func historyDocument(writing: NoteDocument) -> NoteDocument {
+        var page = document(writing: writing)
+        page.blocks.insert(.text(""), at: 0)
+        page.blocks[1].style = "heading"
+        page.blocks[1].level = 1
+        page.requires.append("taskNote")
+        return page
+    }
+
+    private var detailBlocks: [NoteBlock] {
+        var lines = [TaskStatus(rawValue: status)?.title ?? status]
+        if let value = TaskPriority(rawValue: priority), value != .none { lines.append("\(value.title) priority") }
+        if let dueDay { lines.append("Due \(dueDay.rawValue)") }
+        if let completedAt { lines.append("Completed \(completedAt.formatted(.dateTime.day().month(.abbreviated).year()))") }
+        if !tags.isEmpty { lines.append(tags.map { "#" + $0 }.joined(separator: " ")) }
+        return lines.map { .text($0) }
     }
 }
