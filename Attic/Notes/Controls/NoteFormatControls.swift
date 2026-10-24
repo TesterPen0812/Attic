@@ -939,9 +939,9 @@ final class NoteFormatControls: NSObject {
         guard let session = engine.slashSession,
               let anchor = engine.rect(for: NSRange(location: session.range.location, length: 1)) else { return }
         let d = AtticDropdownMetrics.self
-        let wanted = CGFloat(slashModel.items.count) * d.rowHeight + d.inset * 2
-        guard let placed = placeDropdown(slashHost, idealWidth: AtticDropdownLayout.listWidth(titles: slashModel.items.map(\.title),
-                                                                                               match: session.query),
+        let wanted = CGFloat(slashModel.items.count) * d.rowHeight + CGFloat(slashModel.separatorCount) * d.separatorHeight + d.inset * 2
+        // 224 pt, with a field card's width (answer 4 B), whatever is typed.
+        guard let placed = placeDropdown(slashHost, idealWidth: d.fieldCardWidth,
                                          height: wanted, anchor: anchor, current: slashPlacement) else { return }
         // A list that opens anew takes its structure afresh; while it shows,
         // one that has scrolled keeps scrolling (V-07).

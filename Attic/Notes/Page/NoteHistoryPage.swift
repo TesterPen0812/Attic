@@ -135,21 +135,24 @@ struct NoteHistoryPage: View {
 
     private func step(_ delta: Int) { controller.selectHistoryVersion(browser.selectedIndex + delta) }
 
+    /// The day names are real headers and each version is its time, with
+    /// the reason as quiet detail (Dropdown content: answers, owner,
+    /// 2026-10-24, sheet 4).
     private var versionCommands: [AtticMenuCommand] {
         var commands: [AtticMenuCommand] = []
         var lastDay: Date?
         for (index, entry) in browser.entries.enumerated() {
             let day = Calendar.current.startOfDay(for: entry.createdAt)
             if day != lastDay {
-                commands.append(AtticMenuCommand("\(day.formatted(.dateTime.weekday().month().day()))", isDisabled: true,
-                    startsSection: !commands.isEmpty) {})
+                commands.append(.header(day.formatted(.dateTime.weekday().month().day())))
                 lastDay = day
             }
-            let reason = entry.reason == .pause ? "" : " · \(entry.reason?.historyLabel ?? "Saved version")"
-            commands.append(AtticMenuCommand("\(entry.createdAt.formatted(.dateTime.hour().minute()))\(reason)",
+            var version = AtticMenuCommand("\(entry.createdAt.formatted(.dateTime.hour().minute()))",
                 isChecked: index == browser.selectedIndex, identifier: "notes-history-version-\(entry.id)") {
                 controller.selectHistoryVersion(index)
-            })
+            }
+            version.detail = entry.reason == .pause ? nil : (entry.reason?.historyLabel ?? String(localized: "Saved version"))
+            commands.append(version)
         }
         commands.append(AtticMenuCommand("Copy This Version", startsSection: true, identifier: "notes-history-copy") {
             controller.copyHistoryVersion()

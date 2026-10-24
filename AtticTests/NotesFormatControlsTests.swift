@@ -281,7 +281,11 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(menu.map(\.title), ["Insert", "Format"])
         // Notes v2 tables (owner pick Q6): Insert › Table.
         XCTAssertEqual(menu[0].children.map(\.title), ["Image or File…", "Date…", "Divider", "Table"])
-        let format = menu[1].children
+        // Dropdown content: answers (owner, 2026-10-24), answer 5 B: the
+        // note's Format › is split into Paragraph ›, Text ›, Lists ›, Line ›,
+        // then Link… and Remove Link.
+        XCTAssertEqual(menu[1].children.map(\.title), ["Paragraph", "Text", "Lists", "Line", "Link…", "Remove Link"])
+        let format = menu[1].children.flatMap { $0.children.isEmpty ? [$0] : $0.children }
         for command in NoteCommandCatalog.formatSections.flatMap({ $0 }) {
             XCTAssertNotNil(format.first { $0.title == NoteCommandCatalog.menuTitle(command) }, "Format lists \(command)")
         }
@@ -1110,7 +1114,13 @@ final class NotesFormatControlsTests: XCTestCase {
         spin()
         controls.cardModel.linkText = "example.org"
         spin()
+        // Dropdown content: answers (owner, 2026-10-24), sheet 4: the
+        // actions are rows (Update Link, then Remove Link), so each is
+        // scrolled into view in turn.
         for identifier in ["notes-link-remove", "notes-link-apply"] {
+            let row: NSRect = try action(identifier).accessibilityFrame!()
+            document.scrollToVisible(document.convert(window.convertFromScreen(row), from: nil))
+            spin()
             let button = try action(identifier)
             let frame: NSRect = button.accessibilityFrame!()
             let local = host.convert(window.convertFromScreen(frame), from: nil)

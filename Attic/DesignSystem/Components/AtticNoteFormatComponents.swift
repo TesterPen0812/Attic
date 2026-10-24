@@ -340,6 +340,18 @@ enum AtticFormatStyleKind {
         case .mono: .system(size: 12, weight: .regular, design: .monospaced)
         }
     }
+
+    /// The same face for AppKit (the glass menus' Style list).
+    var nsFont: NSFont {
+        switch self {
+        case .title: .systemFont(ofSize: 15, weight: .bold)
+        case .heading: .systemFont(ofSize: 14, weight: .semibold)
+        case .subheading: .systemFont(ofSize: 13.5, weight: .semibold)
+        case .smallHeading: .systemFont(ofSize: 13, weight: .semibold)
+        case .body: .systemFont(ofSize: 13, weight: .regular)
+        case .mono: .monospacedSystemFont(ofSize: 12, weight: .regular)
+        }
+    }
 }
 
 /// The table tools' glyphs in Aa's row (sheet 3, panel 2): a row or column

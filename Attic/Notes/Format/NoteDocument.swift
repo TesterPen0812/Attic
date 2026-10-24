@@ -313,8 +313,10 @@ enum NoteHighlightColour: String, CaseIterable, Sendable {
     /// the owner's October 10 build can still edit the note.
     static let oneClick: NoteHighlightColour = .yellow
 
-    /// The highlighter's menu, the one click's colour first (T-10).
-    static let menuOrder: [NoteHighlightColour] = [.yellow, .grey, .green, .blue, .pink, .purple]
+    /// The highlighter's menu: the tags' colour order, so the one click's
+    /// colour stays first (T-10) and Grey comes last (Dropdown content:
+    /// answers, owner, 2026-10-24, sheet 4).
+    static let menuOrder: [NoteHighlightColour] = [.yellow, .green, .blue, .pink, .purple, .grey]
 
     /// The explicit key written by the colour menu.
     var storedKey: String? { rawValue }
