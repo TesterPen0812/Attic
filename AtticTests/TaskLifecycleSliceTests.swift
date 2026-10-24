@@ -2361,6 +2361,26 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertFalse(delegate.textView(text, shouldChangeTextIn: NSRange(location: 4, length: 0), replacementString: " refused"))
         XCTAssertFalse(edited)
         XCTAssertEqual(text.string, "kept")
+        let add = AtticSubtaskFieldEditor()
+        var editing = AtticTitleEditing(text: .constant("kept"), commit: { false }, cancel: {})
+        editing.admitEdit = { false }
+        add.editing = editing; add.string = "kept"
+        XCTAssertFalse(add.shouldChangeText(in: NSRange(location: 4, length: 0), replacementString: " refused"))
+        add.insertText(" refused", replacementRange: NSRange(location: 4, length: 0))
+        XCTAssertEqual(add.string, "kept", "the Add field refuses before its native text changes too")
+    }
+
+    func testC2AddFieldEndEditingDoesNotClearTheNewTabDestination() throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        var destination: TaskNotePageModel.Region? = .add
+        let binding = Binding(get: { destination == .add }, set: { destination = $0 ? .add : nil })
+        let field = TaskNoteAddField(model: presenter.model, focused: binding, color: .labelColor, submit: {}, tab: { _ in })
+        let delegate = field.makeCoordinator()
+        for next: TaskNotePageModel.Region in [.more, .list, .title, .writing] {
+            destination = next
+            delegate.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
+            XCTAssertEqual(destination, next)
+        }
     }
 
     func testC2LateFieldKeepsWritingReservedUntilCancellationThenReplaysOnNewProjection() async throws {
@@ -2683,6 +2703,21 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(library.title(of: AtticItemRef(.note, id)), "Live title", "references through the writing alias resolve the live item title")
     }
 
+    func testC2AddAndItsUndoKeepTheExactLegacyNoteTagSnapshot() async throws {
+        makeStores(); let id = UUID(), raw = "legacy  team "
+        _ = try notes.store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Tags"), .text("Writing")])).get()
+        let context = ModelContext(container)
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first { $0.id == id })
+        row.tagsRaw = raw; try context.save(); notes.store.refresh()
+        XCTAssertTrue(notes.open(noteID: id))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        XCTAssertEqual(notes.store.note(withID: id)?.tagsRaw, raw)
+        XCTAssertEqual(tasks.task(withID: taskID)?.tags, ["legacy", "team"])
+        let undone = await notes.undoRoute.workspace(for: .taskWorkspace(taskID)).replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertEqual(notes.store.note(withID: id)?.tagsRaw, raw)
+    }
+
     func testC2SearchOpensWritingAtParagraphAndRevealsHiddenChild() throws {
         let id = try seed(.boundary)
         notes.libraryQueryAcrossTaskPage = "Sam owns"
@@ -2794,6 +2829,22 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertTrue(printed.string.contains("High priority"))
         XCTAssertTrue(printed.string.contains(presenter.model.rows[0].title))
         XCTAssertEqual(try storedDocument(session.noteID), storedBefore, "export is a read-only projection")
+    }
+
+    func testC2ExportOfANeverWrittenTaskIncludesItsHeadWithoutCreatingWriting() async throws {
+        let id = try seed(.nonote), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), priority: .high, tags: ["bare-export"]))
+        presenter.model.refresh()
+        XCTAssertTrue(try ownNotes(id).isEmpty)
+        let markdown = try XCTUnwrap(notes.markdown(noteID: session.noteID))
+        XCTAssertTrue(markdown.contains("High priority"))
+        let roundTrip = try NoteMarkdownImport.document(markdown)
+        XCTAssertTrue(roundTrip.blocks.contains { $0.text == "#bare-export" }, "escaped Markdown retains the literal tag")
+        let printView = await session.engine.preparedPrintView()
+        XCTAssertTrue(printView.string.contains("High priority"))
+        XCTAssertTrue(printView.string.contains("#bare-export"))
+        XCTAssertTrue(try ownNotes(id).isEmpty, "read-only export cannot materialize a task draft")
+        XCTAssertFalse(session.isPersisted)
     }
 
     func testC2HistoryPreviewsHistoricalDetailsButRestoreKeepsCurrentTaskFamily() async throws {
