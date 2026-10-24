@@ -565,7 +565,7 @@ final class AppCoordinator: ObservableObject {
                     }
                     // "Attic Task Life" (slice 1): the task pages and one
                     // task for each lifecycle state.
-                    if runtime.bundleIdentifier == TaskNoteLifecyclePreviewSeed.bundleIdentifier {
+                    if TaskNoteLifecyclePreviewSeed.seeds(bundleIdentifier: runtime.bundleIdentifier) {
                         try TaskNotePreviewSeed.seedOwnerPreview(in: container)
                         try TaskNoteLifecyclePreviewSeed.seed(in: container)
                     }
