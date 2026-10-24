@@ -112,8 +112,10 @@ struct TaskMovePickerView: View {
     }
 }
 
-/// Priority as a short list (the strip's Priority): No Priority, ↓ Low,
-/// ! Medium, !! High (follow-up part 2: all four, everywhere).
+/// Priority as a short list (the strip's Priority): None, ↓ Low,
+/// ! Medium, !! High (follow-up part 2: all four, everywhere), under a
+/// "Priority" header as the tag picker has "Tags", 184 pt wide (Dropdown
+/// content: answers, owner, 2026-10-24, sheet 3).
 struct TaskPriorityPickerView: View {
     let current: TaskPriority?
     let onPick: (TaskPriority) -> Void
@@ -128,6 +130,7 @@ struct TaskPriorityPickerView: View {
     var body: some View {
         AtticShortcutHintScope { shown in
             VStack(alignment: .leading, spacing: 0) {
+                AtticDropdownSectionHeader(title: String(localized: "Priority"))
                 ForEach(Array(options.enumerated()), id: \.element) { index, priority in
                     // Its ⌥⌘ key on every row: real commands, learned here (p2-24).
                     AtticDropdownRow(title: priority.choiceTitle,
@@ -142,6 +145,7 @@ struct TaskPriorityPickerView: View {
                                      }, position: index + 1, itemCount: options.count) { onPick(priority) }
                 }
             }
+            .frame(width: AtticDropdownMetrics.commandCardWidth - AtticDropdownMetrics.inset * 2, alignment: .leading)
         }
         .focusable()
         .focused($focused)
@@ -169,6 +173,19 @@ struct TaskPriorityPickerView: View {
             default: return .ignored
             }
         }
+    }
+}
+
+extension AtticMenuCommand {
+    /// A priority as every priority menu offers it (Priority ›, the bulk
+    /// bar's): the picker's row, None, ↓ Low, ! Medium, !! High, with the
+    /// mark in its own column and the ⌥⌘ key (Dropdown content: answers,
+    /// owner, 2026-10-24, sheet 1).
+    static func priorityChoice(_ priority: TaskPriority, isOn: Bool, action: @escaping () -> Void) -> AtticMenuCommand {
+        var command = AtticMenuCommand(verbatim: priority.choiceTitle, shortcut: priority.shortcut, state: isOn ? .on : .off,
+                                       action: action)
+        command.priority = TaskRowPresentation.priority(priority)
+        return command
     }
 }
 

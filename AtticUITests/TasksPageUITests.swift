@@ -720,8 +720,10 @@ final class TasksPageUITests: XCTestCase {
         app.typeKey("i", modifierFlags: [.command, .shift])
         let more = menuItem("More")
         XCTAssertTrue(more.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
-        for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
-                      "Add Subtask", "Copy", "Duplicate", "More", "Delete"] {
+        // Dropdown content: answers (owner, 2026-10-24), answer 1 A: Copy and
+        // Duplicate sit inside More.
+        for title in ["Complete", "Start Working", "Edit Title", "Add Subtask", "Date", "Tags", "Priority", "Move to Later",
+                      "More", "Delete"] {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
@@ -737,7 +739,9 @@ final class TasksPageUITests: XCTestCase {
                 "Move Down moved it one place down")
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
-        XCTAssertTrue(menuItem("Duplicate").waitForExistence(timeout: 3))
+        XCTAssertTrue(menuItem("More").waitForExistence(timeout: 3))
+        openItem("More").hover()
+        XCTAssertTrue(openItem("Duplicate").waitForExistence(timeout: 3), "More holds Duplicate")
         openItem("Duplicate").click()
         waitFor(rows("Email beta testers").count == 2, "Duplicate from the menu makes a copy")
         app.typeKey(.escape, modifierFlags: [])
@@ -764,10 +768,11 @@ final class TasksPageUITests: XCTestCase {
         let merge = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Merge")).firstMatch
         XCTAssertTrue(merge.waitForExistence(timeout: 3), "the quick look lists the subtasks")
         merge.rightClick()
-        XCTAssertTrue(menuItem("Rename").waitForExistence(timeout: 3), "its menu offers Rename")
+        // Dropdown content: answers (owner, 2026-10-24), sheet 2: Edit Title.
+        XCTAssertTrue(menuItem("Edit Title").waitForExistence(timeout: 3), "its menu offers Edit Title")
         XCTAssertTrue(menuItem("Delete").exists)
         XCTAssertTrue(menuItem("Move Up").exists)
-        openItem("Rename").click()
+        openItem("Edit Title").click()
         let field = app.textFields.matching(NSPredicate(format: "label == %@", "Rename subtask")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the title is edited in place")
         field.typeKey("a", modifierFlags: .command)
@@ -843,8 +848,9 @@ final class TasksPageUITests: XCTestCase {
         waitFor(label("Call the plumber").contains("tagged launch"), "the tag is added")
         row("Call the plumber").rightClick()
         menuItem("Date").hover()
-        XCTAssertTrue(menuItem("Remove Date").waitForExistence(timeout: 3))
-        menuItem("Remove Date").click()
+        // Dropdown content: answers (owner, 2026-10-24), sheet 1: Clear Date.
+        XCTAssertTrue(menuItem("Clear Date").waitForExistence(timeout: 3))
+        menuItem("Clear Date").click()
         waitFor(!label("Call the plumber").contains("due"), "Remove Date takes it away")
     }
 

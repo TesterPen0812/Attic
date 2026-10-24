@@ -824,11 +824,13 @@ struct TasksPage: View {
         let priorities: [(TasksViewOptions.Priority, String)] = [(.any, String(localized: "Any Priority")),
                                                                  (.mediumAndHigh, String(localized: "Medium and High")),
                                                                  (.highOnly, String(localized: "High Only"))]
-        list += priorities.enumerated().map { index, entry in
-            AtticMenuCommand(verbatim: entry.1, startsSection: index == 0, state: view.priority == entry.0 ? .on : .off,
-                             action: set { $0.priority = entry.0 })
+        // Show, Priority and Sort By each under a header; choices carry no
+        // icon (Dropdown content: answers, owner, 2026-10-24, sheet 5).
+        list.append(.header(String(localized: "Priority")))
+        list += priorities.map { entry in
+            AtticMenuCommand(verbatim: entry.1, state: view.priority == entry.0 ? .on : .off, action: set { $0.priority = entry.0 })
         }
-        list.append(.header(String(localized: "Sort by")))
+        list.append(.header(String(localized: "Sort By")))
         let sorts: [(TasksViewOptions.Sort, String)] = [(.manual, String(localized: "Manual Order")),
                                                         (.dueDate, String(localized: "Due Date")),
                                                         (.priority, String(localized: "Priority"))]
@@ -2073,7 +2075,7 @@ struct TasksPage: View {
             // On a selection it restores them all, as one step (round 6).
             list.append(AtticMenuCommand(verbatim: single ? String(localized: "Restore to Now")
                                                           : String(localized: "Restore \(targets.count) Tasks to Now"),
-                                         startsSection: single) {
+                                         systemImage: "arrow.uturn.backward.circle", startsSection: single) {
                 menuCommand(key) { [weak model] targets in model?.restoreToNow(targets) ?? .failed(.taskGone) }
             })
             list.append(AtticMenuCommand(verbatim: String(localized: "Mark as Not Done"), shortcut: AtticTaskShortcut.complete) {
@@ -2102,54 +2104,69 @@ struct TasksPage: View {
                 menuCommand(key) { [weak model] targets in model?.toggleWorking(targets) ?? .failed(.taskGone) }
             })
         }
+        // The task menu's content (Dropdown content: answers, owner,
+        // 2026-10-24, answer 1 A): Complete, Start Working │ Open Page, Edit
+        // Title, Add Subtask │ Date ›, Tags ›, Priority › │ Move to Later,
+        // More › │ Remove from Tasks, Delete. Copy and Duplicate live in
+        // More ›, with Show Files and Move Up/Down; a selection, which has
+        // no More ›, keeps them on the root.
+        // C2: insert Open Page here, first in this group.
+        var opensGroup = true
         if single {
             list.append(AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle,
-                                         startsSection: true) {
+                                         startsSection: opensGroup) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
                 let id = menuRowID(key)
                 model.selectOnly(id)
                 model.beginEditingTitle(id)
             })
+            opensGroup = false
+        }
+        if single, tab != .done, unfinished {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: opensGroup) {
+                model.beginAddingSubtask(to: menuRowID(key))
+            })
         }
         // Date, Tags and Priority (owner fixes 3 and 5 D): on the menu's
         // targets, a multi-selection too; one step each. Done's rows too,
         // without changing completion (round 10).
-        list.append(.submenu(String(localized: "Date"), startsSection: !single, dateCommands(key, targets: targets)))
-        list.append(.submenu(String(localized: "Tags"), tagCommands(key, targets: targets)))
+        list.append(.submenu(String(localized: "Date"), startsSection: true, width: AtticMenuMetrics.dateMenuWidth,
+                             dateCommands(key, targets: targets)))
+        list.append(.submenu(String(localized: "Tags"), width: AtticMenuMetrics.wideWidth, tagCommands(key, targets: targets)))
         list.append(.submenu(String(localized: "Priority"), priorityCommands(key, targets: targets)))
         if tab == .backlog {
-            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Now"), shortcut: AtticTaskShortcut.later) {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Now"), shortcut: AtticTaskShortcut.later,
+                                         startsSection: true) {
                 menuCommand(key) { [weak model] targets in model?.moveToNow(targets) ?? .failed(.taskGone) }
             })
         } else if tab == .now {
-            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Later"), shortcut: AtticTaskShortcut.later) {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Later"), shortcut: AtticTaskShortcut.later,
+                                         startsSection: true) {
                 menuCommand(key) { [weak model] targets in model?.moveToBacklog(targets) ?? .failed(.taskGone) }
             })
         }
-        // The common actions stay at the top; the rarer file and reorder
-        // commands sit together under More (follow-up part 2, L5), with
-        // the same keys: the keys run them from this one list wherever
-        // they sit (`AtticMenuCommand.command(for:in:)` reads submenus).
-        if single, tab != .done, unfinished {
-            list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: true) {
-                model.beginAddingSubtask(to: menuRowID(key))
-            })
-        }
-        list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy,
-                                     startsSection: !(single && tab != .done && unfinished)) {
+        // Copy and Duplicate keep their keys (⌘C ⌘D) wherever they sit:
+        // `AtticMenuCommand.command(for:in:)` reads submenus.
+        let copy = AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy, startsSection: true) {
             model.copy(menuTargets(key))
             pointer.endInvocation()
-        })
-        list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
+        }
+        let duplicate = AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
             menuCommand(key) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) }
-        })
-        if single, tab != .done {
-            var more = [AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files") : String(localized: "Show Files"),
-                                         shortcut: AtticTaskShortcut.openPage) {
-                openFiles(menuRowID(key))
-            }]
+        }
+        if single {
+            // More ›: Show Files │ Copy, Duplicate │ Move Up, Move Down.
+            var more: [AtticMenuCommand] = []
+            if tab != .done {
+                more.append(AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files")
+                                                                                       : String(localized: "Show Files"),
+                                             shortcut: AtticTaskShortcut.openPage) {
+                    openFiles(menuRowID(key))
+                })
+            }
+            more += [copy, duplicate]
             // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
-            if unfinished {
+            if tab != .done, unfinished {
                 more.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
                                              isDisabled: !canMove(id, by: -1), startsSection: true) {
                     moveRow(menuRowID(key), by: -1)
@@ -2159,10 +2176,13 @@ struct TasksPage: View {
                     moveRow(menuRowID(key), by: 1)
                 })
             }
-            list.append(.submenu(String(localized: "More"), more))
+            list.append(.submenu(String(localized: "More"), startsSection: tab != .now && tab != .backlog, more))
+        } else {
+            list += [copy, duplicate]
         }
+        // C2: insert Remove from Tasks here, before Delete, in the closing group.
         list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
-                                     shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
+                                     systemImage: "trash", shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
             // A menu's Delete key equivalent never reaches past a field
             // that is typing (round 5, the owner's blocker).
             guard !AtticTextInput.ownsCurrentKey else { return }
@@ -2172,8 +2192,9 @@ struct TasksPage: View {
     }
 
     /// Date ▸: the quick days (one tick for one day: on a Sunday, Tomorrow
-    /// and Next Week are the same Monday; only the first is ticked), Pick
-    /// a Date…, Remove Date.
+    /// and Next Week are the same Monday; only the first is ticked), then
+    /// Pick a Date… and Clear Date in one closing group, worded as the date
+    /// card is (Dropdown content: answers, owner, 2026-10-24, sheet 1).
     private func dateCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         let choices = model.dateChoices
         let current = model.commonDueDay(targets)
@@ -2187,8 +2208,7 @@ struct TasksPage: View {
         list.append(AtticMenuCommand(verbatim: String(localized: "Pick a Date…"), startsSection: true) {
             openMeta(.date, on: menuRowID(key), targets: menuTargets(key))
         })
-        list.append(AtticMenuCommand(verbatim: String(localized: "Remove Date"), isDisabled: targets.allSatisfy { model.dueDay(of: $0) == nil },
-                                     startsSection: true) {
+        list.append(AtticMenuCommand(verbatim: String(localized: "Clear Date"), isDisabled: targets.allSatisfy { model.dueDay(of: $0) == nil }) {
             menuCommand(key) { [weak model] targets in model?.setDueDay(nil, for: targets) ?? .failed(.taskGone) }
         })
         return list
@@ -2209,12 +2229,14 @@ struct TasksPage: View {
         return list
     }
 
-    /// Priority ▸: No Priority, Low, Medium, High with ⌥⌘0–3 (follow-up
-    /// part 2), ticked when every target has it.
+    /// Priority ▸: the priority picker's rows (Dropdown content: answers,
+    /// owner, 2026-10-24, sheet 1): None, ↓ Low, ! Medium, !! High, the
+    /// mark in its own column, with ⌥⌘0–3 (follow-up part 2), ticked when
+    /// every target has it.
     private func priorityCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         let priorities = Set(targets.compactMap { store.listedTask(withID: $0)?.priority })
         return TaskPriority.choices.map { priority in
-            AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut, state: priorities == [priority] ? .on : .off) {
+            AtticMenuCommand.priorityChoice(priority, isOn: priorities == [priority]) {
                 menuCommand(key) { [weak model] targets in model?.setPriority(priority, for: targets) ?? .failed(.taskGone) }
             }
         }
@@ -2232,12 +2254,16 @@ struct TasksPage: View {
         let run: (@escaping () -> CommandOutcome) -> Void = { command in
             model.report(command(), on: parentID, retry: command)
         }
+        // The task menu's words (Dropdown content: answers, owner,
+        // 2026-10-24, sheet 2): Complete and Edit Title, an icon on every
+        // row. Complete, Edit Title │ Move Up, Move Down │ Move to Task…,
+        // Make Standalone Task, Make Checkbox │ Delete.
         return [
-            AtticMenuCommand(verbatim: subtask.isDone ? String(localized: "Mark as Not Done") : String(localized: "Mark as Done"),
+            AtticMenuCommand(verbatim: subtask.isDone ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
                              shortcut: AtticTaskShortcut.complete) {
                 run { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) }
             },
-            AtticMenuCommand(verbatim: String(localized: "Rename"), shortcut: AtticTaskShortcut.editTitle) {
+            AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle) {
                 model.beginRenamingSubtask(subtask.id)
             },
             AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
@@ -2263,6 +2289,7 @@ struct TasksPage: View {
                     return outcome
                 }
             },
+            // C2: insert Make Checkbox (⌥⌘S) here, after Make Standalone Task.
             AtticMenuCommand(verbatim: String(localized: "Delete"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
                              startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
@@ -3091,8 +3118,7 @@ struct TasksPage: View {
                 let priorities = Set(ids.compactMap { store.task(withID: $0)?.priority })
                 // Ticked when every selected task has it, as the tags are.
                 return TaskPriority.choices.map { priority in
-                    AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut,
-                                     state: priorities == [priority] ? .on : .off) {
+                    AtticMenuCommand.priorityChoice(priority, isOn: priorities == [priority]) {
                         run { [weak model] in model?.setPriority(priority, for: ids) ?? .failed(.taskGone) }
                     }
                 }
