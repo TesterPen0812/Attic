@@ -52,6 +52,16 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ### Everywhere
 
+- Search groups an item's title, writing, subtasks and filenames into one
+  result, including completed work. Opening a match reveals its writing
+  paragraph or hidden subtask; in-page Find searches only the writing.
+- In Tasks, the task owns the live title and tags. The note's compatibility
+  title and legacy tags remain recoverable. Print and Markdown show one
+  title, task details and subtasks, then the writing. Historical previews
+  include captured task details; restoring writing does not restore task fields.
+- Item mini windows keep their window, editor lease and history across
+  Add to Tasks and Remove from Tasks. Moving Earlier files uses its durable
+  handoff and remounts in the same window before conversion continues.
 - **Add to Tasks** puts an ordinary note in Now as a fresh task. Its writing,
   files and versions stay on the same note; leading checkboxes stay writing.
   **Remove from Tasks** keeps a task's writing as an ordinary note, with its

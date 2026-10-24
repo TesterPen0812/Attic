@@ -4216,12 +4216,26 @@ extension NotesPageController {
         session.state = reason == nil ? .clean : .readOnly
     }
 
-    func installCommittedTaskNote(_ noteID: UUID, preservingWritingSelection: Bool = false) {
+    @discardableResult
+    func installCommittedTaskNote(_ noteID: UUID, preservingWritingSelection: Bool = false) -> Bool {
+        guard allowsItemProjection(noteID) else { return false }
         store.refresh()
         if let session = cache[noteID] {
             let old = session.engine.textStorage.string
             let selection = session.engine.textView?.selectedRange() ?? session.selection
+            if session.workspacePage?.retainsAcrossItemChanges == true {
+                do {
+                    let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+                    let owner = store.note(withID: noteID)?.taskID
+                    _ = try coordinator.sessions.installRetainedItemIdentity(session, taskID: owner)
+                    TaskNoteWindows.shared.prepareProjection(session: session, taskID: owner)
+                } catch {
+                    session.showNotice(NoteNotice(kind: .didntWork, detail: "The saved item is waiting to update its window."))
+                    return false
+                }
+            }
             installCommittedTaskNoteForm(session)
+            if session.workspacePage?.retainsAcrossItemChanges == true { WorkspaceCrashHook.reach("C2-projection-installed") }
             if preservingWritingSelection {
                 let text = session.engine.textStorage.string
                 if old.hasSuffix(text) || text.hasSuffix(old) {
@@ -4232,6 +4246,12 @@ extension NotesPageController {
                 }
             }
         }
+        return true
+    }
+
+    func allowsItemProjection(_ noteID: UUID) -> Bool {
+        guard let session = cache[noteID] else { return true }
+        return TaskNoteWindows.shared.allowsProjection(session: session)
     }
 
     /// A change written by another owner (a purge's Undo): a clean editor
@@ -4250,12 +4270,23 @@ extension NotesPageController {
         if wasActive { _ = open(noteID: noteID) }
     }
 
+    func retainsWindowSession(_ session: NoteSession?) -> Bool {
+        guard let session, let page = session.workspacePage else { return false }
+        return page.retainsAcrossItemChanges && page.activeLease != nil && page.controller === self
+            && page.note === session && session.usesWorkspaceBinding
+    }
+
     /// Make Task from Note (or its Undo) rewrote `noteID` in the other
     /// form: the editor built for the old form leaves (an ordinary one
     /// can't show a task's note, nor the reverse); the store is re-read.
     func retireConvertedNote(_ noteID: UUID, installingCommittedForm: Bool = true) async {
         store.refresh()
         guard let session = cache[noteID] else { return }
+        if session.workspacePage?.retainsAcrossItemChanges == true, session.workspacePage?.activeLease != nil {
+            // Reserved publication is the sole installer. Its completion has
+            // already released queued typing; reloading here would erase it.
+            return
+        }
         let owner: UUID? = if case let .task(id) = session.workspacePage?.key.workspace { id } else { nil }
         if session.usesWorkspaceBinding {
             if installingCommittedForm { installCommittedTaskNoteForm(session) }

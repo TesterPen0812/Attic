@@ -112,7 +112,7 @@ enum TaskNoteConversion {
 
     static func makeTask(fromNote noteID: UUID, notes: NotesPageController, tasks: TaskStore, workspaceSession: NoteSession? = nil) async -> Outcome {
         let agent = AgentWorkspaceCall.current
-        guard let session = workspaceSession ?? notes.active, session.noteID == noteID, !session.isReadOnly else {
+        guard let session = workspaceSession ?? TaskNoteWindows.shared.session(noteID: noteID, controller: notes) ?? notes.active, session.noteID == noteID, !session.isReadOnly else {
             return .refused(String(localized: "This note can't become a task here"))
         }
         guard notes.settleForWorkspaceOperation(session) else { return .refused(String(localized: "Couldn't save the note first")) }
@@ -138,7 +138,7 @@ enum TaskNoteConversion {
                 historyEffect: WorkspaceModelFields.encode(WorkspaceHistory.ForwardEffect(workspaceID: history.id, entryID: entryID)))
             return .init(entryID: entryID, envelope: change.envelope, sessionValid: { [weak notes, weak session] in
                 guard let notes, let session else { return false }
-                return (notes.active === session || agent?.session === session) && session.accepts(stamp) && (agent?.valid() ?? true)
+                return (notes.active === session || agent?.session === session || notes.retainsWindowSession(session)) && session.accepts(stamp) && (agent?.valid() ?? true)
             }, stage: change.stage, record: { [weak notes, weak tasks, weak coordinator, weak history] operation, entry in
                 guard let notes, let tasks, let coordinator, let history else { return }
                 guard notes.undoRoute.alias(.taskWorkspace(taskID), to: history.historyID) else {
@@ -150,11 +150,12 @@ enum TaskNoteConversion {
             }, publication: .init(steps: [{ [weak notes, weak tasks, weak coordinator, weak history, weak session] _ in
                 guard let coordinator else { return }
                 result.value = try ResultGuard.capture(noteID: noteID, taskID: taskID, using: coordinator)
+                guard notes?.allowsItemProjection(noteID) != false else { throw WorkspaceFoundationError.conflict }
                 if let notes, let history, let session, session.accepts(stamp), !history.hasNewerPublicationDraft {
                     guard session.engine.history.canPrepareWorkspaceCommand, !session.isImporting else {
                         throw WorkspaceFoundationError.conflict
                     }
-                    notes.installCommittedTaskNote(noteID)
+                    guard notes.installCommittedTaskNote(noteID) else { throw WorkspaceFoundationError.conflict }
                 }
                 tasks?.refresh()
                 WorkspaceCrashHook.reach("B-add-published")
@@ -164,7 +165,7 @@ enum TaskNoteConversion {
                 if session?.usesWorkspaceBinding != true, !history.hasQueuedTyping {
                     await notes.retireConvertedNote(noteID, installingCommittedForm: false)
                 }
-                if result.wasPending { _ = notes.openTaskPage?(taskID) }
+                if result.wasPending, !notes.retainsWindowSession(session) { _ = notes.openTaskPage?(taskID) }
             })
         }
         agent?.observe(outcome)
@@ -200,13 +201,14 @@ enum TaskNoteConversion {
                     publication: .init(steps: [{ [weak notes, weak tasks, weak coordinator, weak history] _ in
                         guard let coordinator else { return }
                         result.value = try ResultGuard.capture(noteID: noteID, taskID: taskID, using: coordinator)
+                        guard notes?.allowsItemProjection(noteID) != false else { throw WorkspaceFoundationError.conflict }
                         if history?.hasNewerPublicationDraft != true {
                             if let session = notes?.workspaceSessionIfCached(noteID) {
                                 guard session.engine.history.canPrepareWorkspaceCommand, !session.isImporting else {
                                     throw WorkspaceFoundationError.conflict
                                 }
                             }
-                            notes?.installCommittedTaskNote(noteID)
+                            if let notes, !notes.installCommittedTaskNote(noteID) { throw WorkspaceFoundationError.conflict }
                         }
                         tasks?.refresh()
                     }]), completion: { [weak notes, weak history] in
@@ -502,7 +504,7 @@ extension TaskNoteConversion {
                             completion: { [weak notes, weak history] in
                                 guard let notes, let history, !history.hasNewerPublicationDraft, !history.hasQueuedTyping else { return }
                                 await notes.retireConvertedNote(source.noteID, installingCommittedForm: false)
-                                if !redo { _ = notes.openTaskPage?(source.taskID) }
+                                if !redo, !notes.retainsWindowSession(notes.workspaceSessionIfCached(source.noteID)) { _ = notes.openTaskPage?(source.taskID) }
                             })
                     }
                 }, publication: removalPublication(source, result: result, notes: notes, tasks: tasks, history: history, coordinator: coordinator))
@@ -524,11 +526,12 @@ extension TaskNoteConversion {
         .init(steps: [{ [weak notes, weak tasks, weak history, weak coordinator] _ in
             guard let coordinator else { throw WorkspaceFoundationError.conflict }
             result.value = try ResultGuard.capture(noteID: source.noteID, taskID: source.taskID, using: coordinator)
+            guard notes?.allowsItemProjection(source.noteID) != false else { throw WorkspaceFoundationError.conflict }
             if let notes, let history, !history.hasNewerPublicationDraft {
                 if let session = notes.workspaceSessionIfCached(source.noteID) {
                     guard session.engine.history.canPrepareWorkspaceCommand, !session.isImporting else { throw WorkspaceFoundationError.conflict }
                 }
-                notes.installCommittedTaskNote(source.noteID, preservingWritingSelection: true)
+                guard notes.installCommittedTaskNote(source.noteID, preservingWritingSelection: true) else { throw WorkspaceFoundationError.conflict }
             }
             tasks?.refresh()
             WorkspaceCrashHook.reach("B-remove-published")
