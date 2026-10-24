@@ -139,7 +139,11 @@ struct AtticDateSuggestion: Equatable, Identifiable {
 }
 
 enum AtticDateSuggestions {
-    /// One or two days for what was typed, none when nothing is: the named
+    /// The most suggestions the field offers (the Craft spec: four).
+    static let limit = 4
+
+    /// Up to four days for what was typed (the Craft spec), none when
+    /// nothing is: the named
     /// days the text starts ("t": Today, Tomorrow; "fri": Friday), then
     /// what the host's parser reads in it ("9 oct", "in 3 days"). Each resolves through `parse`,
     /// the same parser that reads typed dates elsewhere.
@@ -168,13 +172,13 @@ enum AtticDateSuggestions {
         }
         // The named days the text starts first, then what the parser reads.
         for phrase in named where phrase.phrase.hasPrefix(query) {
-            guard found.count < 2 else { break }
+            guard found.count < limit else { break }
             if let date = resolve(phrase.phrase, start: start, parse: parse) { add(phrase.title, date, match: typed) }
         }
-        if found.count < 2, let parsed = parse(query) {
+        if found.count < limit, let parsed = parse(query) {
             add(title(for: parsed, start: start, calendar: calendar), parsed, match: nil)
         }
-        return found.prefix(2).enumerated().map { index, item in
+        return found.prefix(limit).enumerated().map { index, item in
             AtticDateSuggestion(id: index, title: item.title, detail: detail(for: item.date, start: start, calendar: calendar),
                                 date: item.date, match: item.match?.trimmingCharacters(in: .whitespaces))
         }
@@ -216,19 +220,29 @@ enum AtticDateCardFormat {
         month.formatted(style(calendar).month(.wide).year())
     }
 
+    /// The card's month title (draft C): "October" in this year,
+    /// "January 2027" in any other.
+    static func monthTitle(_ month: Date, today: Date, calendar: Calendar) -> String {
+        calendar.component(.year, from: month) == calendar.component(.year, from: today)
+            ? month.formatted(style(calendar).month(.wide)) : monthTitle(month, calendar: calendar)
+    }
+
     /// VoiceOver's name for a day: "Friday 9 October".
     static func spoken(_ day: Date, calendar: Calendar) -> String {
         day.formatted(style(calendar).weekday(.wide).day().month(.wide))
     }
 }
 
-/// The month as the card lays it out: whole weeks from the locale's first
-/// weekday, with no day from another month (draft A, "Quiet month").
+/// The month as the card lays it out (draft C): six whole weeks from the
+/// locale's first weekday, the days of the months either side included
+/// (drawn lighter), so the grid never changes height.
 struct AtticDateMonth: Equatable {
     let start: Date
-    /// Seven per week; nil where another month's day would be.
-    let cells: [Date?]
-    /// The weekday initials in column order ("M T W T F S S").
+    /// Seven per week, six weeks.
+    let cells: [Date]
+    /// Which cells are this month's.
+    let inMonth: [Bool]
+    /// Two-letter weekdays in column order ("Mo Tu We Th Fr Sa Su").
     let weekdays: [String]
 
     init(containing day: Date, calendar: Calendar) {
@@ -236,12 +250,11 @@ struct AtticDateMonth: Equatable {
         start = first
         let lead = (calendar.component(.weekday, from: first) - calendar.firstWeekday + 7) % 7
         let count = calendar.range(of: .day, in: .month, for: first)?.count ?? 30
-        var cells: [Date?] = Array(repeating: nil, count: lead)
-        cells += (0..<count).map { calendar.date(byAdding: .day, value: $0, to: first) }
-        while cells.count % 7 != 0 { cells.append(nil) }
-        self.cells = cells
-        let symbols = calendar.veryShortStandaloneWeekdaySymbols
-        weekdays = (0..<7).map { symbols[(calendar.firstWeekday - 1 + $0) % 7] }
+        let cellCount = AtticDropdownMetrics.monthWeeks * 7
+        cells = (0..<cellCount).map { calendar.date(byAdding: .day, value: $0 - lead, to: first) ?? first }
+        inMonth = (0..<cellCount).map { $0 >= lead && $0 < lead + count }
+        let symbols = calendar.shortStandaloneWeekdaySymbols
+        weekdays = (0..<7).map { String(symbols[(calendar.firstWeekday - 1 + $0) % 7].prefix(2)) }
     }
 
     var weeks: Int { cells.count / 7 }
@@ -251,11 +264,26 @@ struct AtticDateMonth: Equatable {
 /// `NSEvent`, ahead of AppKit's menu equivalents and the key-view loop) or
 /// from SwiftUI (`KeyPress`, where no presenter routes keys).
 enum AtticDateCardKey: Equatable {
-    case left, right, up, down, pick, tab(back: Bool), today, month(Int), delete, cancel, text(String)
+    case left, right, up, down, pick, tab(back: Bool), today, month(Int), year(Int), clear, delete, cancel, text(String)
 
+    /// Draft C's keys (the Craft spec): the arrows move by day, Page Up and
+    /// Page Down or ⇧ with an arrow turn the month, ⌥↑ ⌥↓ the year, ⌘⌫
+    /// clears; ⌘[ ⌘] and ⌥T stay.
     init?(_ event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .option, .control])
+        let shift = event.modifierFlags.contains(.shift)
+        if (123...126).contains(event.keyCode) {
+            switch (event.keyCode, flags, shift) {
+            case (123, [], true), (126, [], true): self = .month(-1); return
+            case (124, [], true), (125, [], true): self = .month(1); return
+            case (126, [.option], false): self = .year(-1); return
+            case (125, [.option], false): self = .year(1); return
+            default: break
+            }
+            if shift || !flags.isEmpty { return nil }
+        }
         switch (event.keyCode, flags) {
+        case (51, [.command]): self = .clear
         case (123, []): self = .left
         case (124, []): self = .right
         case (126, []): self = .up
@@ -274,7 +302,13 @@ enum AtticDateCardKey: Equatable {
 
     init?(_ press: KeyPress) {
         let flags = press.modifiers.intersection([.command, .option, .control])
+        let shift = press.modifiers.contains(.shift)
         switch press.key {
+        case .leftArrow where flags.isEmpty && shift, .upArrow where flags.isEmpty && shift: self = .month(-1)
+        case .rightArrow where flags.isEmpty && shift, .downArrow where flags.isEmpty && shift: self = .month(1)
+        case .upArrow where flags == .option: self = .year(-1)
+        case .downArrow where flags == .option: self = .year(1)
+        case .delete where flags == .command: self = .clear
         case .leftArrow where flags.isEmpty: self = .left
         case .rightArrow where flags.isEmpty: self = .right
         case .upArrow where flags.isEmpty: self = .up
@@ -342,6 +376,10 @@ struct AtticDateCardState: Equatable {
             if case let .suggestion(index)? = lit { lit = index + 1 < suggestions ? .suggestion(index + 1) : .day } else { arrow(7, calendar) }
         case let .month(step):
             cursor = calendar.date(byAdding: .month, value: step, to: cursor) ?? cursor
+        case let .year(step):
+            cursor = calendar.date(byAdding: .year, value: step, to: cursor) ?? cursor
+        case .clear:
+            return hasRemove ? .remove : Outcome.nothing
         case let .tab(back):
             var order: [Spot] = (0..<suggestions).map { .suggestion($0) } + [.day, .today]
             if hasRemove { order.append(.remove) }
@@ -414,14 +452,16 @@ struct AtticDateCardState: Equatable {
     }
 }
 
-/// The one date card (owner, 2026-10-05, p2-30 draft 2 on p2-29 draft A):
-/// the month header ("October 2026", a small Today, ‹ ›), then the quiet
-/// month: a light weekday row, no other months' days, rounded-square marks
-/// (the chosen day filled, today alone ringed, the highlight the row
-/// pill). Typing shows one or two suggestions above the month until the
-/// text is cleared. Keys: arrows move the highlight, Return picks, Tab or
-/// ⌥T reach Today, ⌘[ ⌘] (and Page Up/Down) turn the month, Esc closes.
-/// Tasks (the add bar, a row) and Notes (`/date`) use it alike.
+/// The one date card (draft C, owner 2026-10-23, on the Craft spec): the
+/// Date field at the top, where what is typed shows and up to four
+/// suggestions follow it (Return applies the top one); a full-width rule;
+/// the month title with ‹ ⦿ ›; two-letter weekdays; six weeks, other months'
+/// and past days lighter; the chosen day a soft rounded square, today
+/// ringed; then Clear Date, only when there is a date. Keys: the arrows
+/// move the day, Page Up/Down or ⇧ with an arrow turn the month, ⌥↑ ⌥↓ the
+/// year, Return picks, Tab or ⌥T reach Today (⦿), ⌘⌫ clears, Esc closes.
+/// Typing goes to the field. Tasks (the add bar, a row) and Notes (`/date`)
+/// use it alike.
 struct AtticDateCard: View {
     let today: Date
     let selected: Date?
@@ -430,7 +470,7 @@ struct AtticDateCard: View {
     @Binding var typed: String
     /// Reads typed text ("fri", "9 oct").
     var parse: (String) -> Date? = { _ in nil }
-    /// "Remove date" under the month (a task row that has a date).
+    /// "Clear Date" under the month (a task that has a date).
     var removeTitle: String?
     let onPick: (Date) -> Void
     var onRemove: () -> Void = {}
@@ -440,6 +480,8 @@ struct AtticDateCard: View {
     @State private var state: AtticDateCardState?
     /// ‹ (-1) or › (1) under the pointer.
     @State private var hoveredMonthStep: Int?
+    /// The grid's day under the pointer.
+    @State private var hoveredDay: Date?
     @FocusState private var focused: Bool
     @Environment(\.atticDesign) private var design
     @Environment(\.atticDropdownRegisterKeys) private var registerKeys
@@ -454,41 +496,66 @@ struct AtticDateCard: View {
         let typing = !typed.trimmingCharacters(in: .whitespaces).isEmpty
         let suggestions = typing ? self.suggestions : []
         let proposed = state.proposedDay(suggestions)
+        let start = calendar.startOfDay(for: today)
         VStack(alignment: .leading, spacing: 0) {
+            AtticDropdownFieldHeader { field }
             if typing {
                 suggestionRows(suggestions, state: state)
-                AtticDropdownGap(height: d.fieldGap)
+                    .padding(.top, d.inset)
+                AtticDropdownRule(header: true)
+                    .padding(.top, d.inset)
             }
-            header(month, state: state)
-            HStack(spacing: 0) {
-                ForEach(Array(month.weekdays.enumerated()), id: \.offset) { _, symbol in
-                    AtticText(verbatim: symbol, style: .dropdownWeekday, ink: .helper)
-                        .frame(width: d.monthCellWidth, height: d.weekdayHeight)
+            VStack(alignment: .leading, spacing: 0) {
+                header(month, state: state)
+                HStack(spacing: 0) {
+                    ForEach(Array(month.weekdays.enumerated()), id: \.offset) { _, symbol in
+                        AtticText(verbatim: symbol, style: .dropdownWeekday, ink: .helper)
+                            .frame(width: d.monthCellWidth, height: d.weekdayHeight)
+                    }
                 }
-            }
-            .padding(.horizontal, d.monthGridInset)
-            .accessibilityHidden(true)
-            VStack(spacing: 0) {
-                ForEach(0..<month.weeks, id: \.self) { week in
-                    HStack(spacing: 0) {
-                        ForEach(0..<7, id: \.self) { column in
-                            if let day = month.cells[week * 7 + column] {
-                                dayCell(day, state: state, proposed: proposed)
-                            } else {
-                                Color.clear.frame(width: d.monthCellWidth, height: d.monthCellHeight).accessibilityHidden(true)
+                .padding(.top, d.weekdayGap)
+                .accessibilityHidden(true)
+                VStack(spacing: 0) {
+                    ForEach(0..<month.weeks, id: \.self) { week in
+                        HStack(spacing: 0) {
+                            ForEach(0..<7, id: \.self) { column in
+                                let index = week * 7 + column
+                                dayCell(month.cells[index], inMonth: month.inMonth[index], start: start, state: state, proposed: proposed)
                             }
                         }
                     }
                 }
+                // One pointer for the grid (menus fix 1): a press picks the
+                // day under it and the pointer lights it, as 42 buttons with
+                // a hover each did, at a third of the open's cost.
+                .contentShape(Rectangle())
+                .onTapGesture(coordinateSpace: .local) { point in
+                    if let day = Self.day(at: point, in: month) { onPick(day) }
+                }
+                .onContinuousHover(coordinateSpace: .local) { phase in
+                    switch phase {
+                    case let .active(point):
+                        guard AtticListHighlight.isPointerMove(NSApp.currentEvent), let day = Self.day(at: point, in: month) else { return }
+                        if let hovered = hoveredDay, hovered != day { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
+                        hoveredDay = day
+                        if !current.isLit(day, calendar: calendar) { update { $0.hoverDay(day, inside: true, calendar: calendar) } }
+                    case .ended:
+                        if let hovered = hoveredDay { update { $0.hoverDay(hovered, inside: false, calendar: calendar) } }
+                        hoveredDay = nil
+                    }
+                }
+                .preference(key: AtticDropdownHighlightKey.self,
+                            value: state.lit == .day ? Self.dayID(calendar.startOfDay(for: state.cursor)) : nil)
+                if let removeTitle {
+                    clearRow(removeTitle, lit: state.lit == .remove)
+                        .padding(.top, d.clearGap)
+                }
             }
-            .padding(.horizontal, d.monthGridInset)
-            .padding(.bottom, d.monthGridBottom)
-            if let removeTitle {
-                AtticDropdownRow(title: removeTitle, isHighlighted: state.lit == .remove,
-                                 onHover: { inside in update { $0.hover(.remove, inside: inside) } }, action: onRemove)
-            }
+            .padding(.horizontal, d.dateBodyInset - d.inset)
+            .padding(.top, d.dateBodyInset)
+            .padding(.bottom, d.dateBodyInset - d.inset)
         }
-        .frame(width: d.monthCellWidth * 7 + d.monthGridInset * 2)
+        .frame(width: d.dateCardWidth - d.inset * 2)
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
@@ -546,6 +613,36 @@ struct AtticDateCard: View {
         }
     }
 
+    /// The Date field (draft C): the magnifier, then what is typed (or the
+    /// placeholder) with the caret while the card has the keyboard. The
+    /// card's keys type into it, so the arrows keep moving the day.
+    private var field: some View {
+        let d = AtticDropdownMetrics.self
+        let caret = Rectangle().fill(Color(nsColor: .textInsertionPointColor)).frame(width: 1.5, height: 16)
+        return HStack(spacing: 0) {
+            AtticIcon(systemName: "magnifyingglass", size: d.iconSize, ink: .helper)
+                .frame(width: d.iconSlot)
+                .padding(.trailing, d.fieldTextLeading - d.fieldIconLeading - d.iconSlot)
+            if typed.isEmpty {
+                if focused { caret }
+                AtticText(verbatim: String(localized: "Date"), style: .dropdownRow, ink: .placeholder)
+            } else {
+                AtticText(verbatim: typed, style: .dropdownRow, ink: .body, truncates: true)
+                if focused { caret }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, d.fieldIconLeading)
+        .padding(.trailing, d.rowPadding)
+        .frame(height: d.fieldHeight)
+        .background(RoundedRectangle(cornerRadius: d.fieldRadius, style: .continuous).fill(design.tokens.dropdownHighlight.color))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "Date"))
+        .accessibilityValue(typed)
+        .accessibilityAddTraits(.isSearchField)
+        .accessibilityIdentifier("date-field")
+    }
+
     @ViewBuilder
     private func suggestionRows(_ suggestions: [AtticDateSuggestion], state: AtticDateCardState) -> some View {
         if suggestions.isEmpty {
@@ -553,15 +650,17 @@ struct AtticDateCard: View {
                 .padding(.horizontal, AtticDropdownMetrics.rowPadding)
                 .frame(height: AtticDropdownMetrics.rowHeight)
         } else {
-            ForEach(suggestions) { suggestion in
-                AtticDropdownRow(title: suggestion.title, detail: suggestion.detail, match: suggestion.match,
-                                 isHighlighted: state.lit == .suggestion(suggestion.id),
-                                 onHover: { inside in update { $0.hover(.suggestion(suggestion.id), inside: inside) } },
-                                 position: suggestion.id + 1, itemCount: suggestions.count,
-                                 scrollID: "attic.date.suggestion.\(suggestion.id)") {
-                    onPick(suggestion.date)
+            VStack(spacing: 0) {
+                ForEach(suggestions) { suggestion in
+                    AtticDropdownRow(title: suggestion.title, detail: suggestion.detail, match: suggestion.match,
+                                     isHighlighted: state.lit == .suggestion(suggestion.id),
+                                     onHover: { inside in update { $0.hover(.suggestion(suggestion.id), inside: inside) } },
+                                     position: suggestion.id + 1, itemCount: suggestions.count,
+                                     scrollID: "attic.date.suggestion.\(suggestion.id)") {
+                        onPick(suggestion.date)
+                    }
+                    .accessibilityIdentifier("date-suggestion")
                 }
-                .accessibilityIdentifier("date-suggestion")
             }
         }
     }
@@ -569,40 +668,30 @@ struct AtticDateCard: View {
     private func header(_ month: AtticDateMonth, state: AtticDateCardState) -> some View {
         let d = AtticDropdownMetrics.self
         return HStack(spacing: 0) {
-            AtticText(verbatim: AtticDateCardFormat.monthTitle(month.start, calendar: calendar), style: .dropdownHeading, ink: .heading)
+            AtticText(verbatim: AtticDateCardFormat.monthTitle(month.start, today: today, calendar: calendar),
+                      style: .dropdownHeading, ink: .heading)
                 .lineLimit(1)
-                // "September 2026" is a little wider than the room.
                 .minimumScaleFactor(0.85)
+                .accessibilityLabel(AtticDateCardFormat.monthTitle(month.start, calendar: calendar))
                 .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: d.monthTodayGap * 3)
-            todayButton(lit: state.lit == .today)
-            Color.clear.frame(width: d.monthTodayGap, height: 1)
+            Spacer(minLength: d.monthNavWidth)
             monthButton(-1, systemName: "chevron.left", label: String(localized: "Previous month"))
-            Color.clear.frame(width: d.monthNavGap, height: 1)
+            todayButton(lit: state.lit == .today)
             monthButton(1, systemName: "chevron.right", label: String(localized: "Next month"))
         }
-        // On the grid's edges (O14-09): the title starts at the first
-        // column's mark, › ends at the last column's.
         .padding(.leading, d.monthTitleLeading)
-        .padding(.trailing, d.monthHeaderTrailing)
-        .padding(.top, d.monthHeaderTop)
-        .frame(height: d.monthCellHeight + d.monthHeaderTop)
+        .frame(height: d.monthHeaderHeight)
     }
 
+    /// ⦿ (draft C): picks today, as Attic's Today did (⌥T).
     private func todayButton(lit: Bool) -> some View {
         let d = AtticDropdownMetrics.self
-        let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: d.todayRadius, style: .circular)
         return Button { onPick(calendar.startOfDay(for: today)) } label: {
-            // Lit (the pointer or the keyboard) as a day is: the highlight
-            // fill; at rest only its words (O14-09: at rest it wore the
-            // highlight, so it read as hovered).
-            AtticText(verbatim: String(localized: "Today"), style: .shortcut, ink: .body)
-                .fixedSize()
-                .padding(.horizontal, d.todayPadding)
-                .frame(height: d.todayHeight)
-                .background(AtticCalendarMark(radius: d.todayRadius, fill: (lit ? tokens.dropdownHighlight : .clear).color, ring: .clear))
-                .contentShape(shape)
+            AtticIcon(systemName: "smallcircle.filled.circle", size: d.monthChevron + 1, weight: .regular, ink: .icon)
+                .frame(width: d.monthNavWidth - 2, height: d.monthNavWidth - 2)
+                .background { if lit { navMark } }
+                .frame(width: d.monthNavWidth, height: d.monthHeaderHeight)
+                .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusable(false)
@@ -621,16 +710,20 @@ struct AtticDateCard: View {
         .accessibilityValue(AtticDateCardFormat.spoken(today, calendar: calendar))
     }
 
-    /// ‹ or ›: a mark lit under the pointer as a day's is.
+    private var navMark: some View {
+        RoundedRectangle(cornerRadius: AtticDropdownMetrics.monthMarkRadius, style: .continuous)
+            .fill(design.tokens.dropdownHighlight.color)
+    }
+
+    /// ‹ or ›: lit under the pointer as a day is.
     private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
         let d = AtticDropdownMetrics.self
         let lit = hoveredMonthStep == step
         return Button { update { _ = $0.apply(.month(step), calendar: calendar, suggestions: 0, typing: false, hasRemove: false) } } label: {
-            AtticIcon(systemName: systemName, size: d.monthChevron, weight: .regular, ink: .icon)
-                .frame(width: d.monthNavMark, height: d.monthNavMark)
-                .background(AtticCalendarMark(radius: d.monthNavRadius, fill: (lit ? design.tokens.dropdownHighlight : .clear).color,
-                                              ring: .clear))
-                .frame(height: d.monthCellHeight)
+            AtticIcon(systemName: systemName, size: d.monthChevron, weight: .medium, ink: .icon)
+                .frame(width: d.monthNavWidth - 2, height: d.monthNavWidth - 2)
+                .background { if lit { navMark } }
+                .frame(width: d.monthNavWidth, height: d.monthHeaderHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())
@@ -643,40 +736,79 @@ struct AtticDateCard: View {
         .accessibilityLabel(label)
     }
 
-    private func dayCell(_ day: Date, state: AtticDateCardState, proposed: Date?) -> some View {
+    /// Clear Date (draft C): a full-width soft row, 66 % ink at rest.
+    private func clearRow(_ title: String, lit: Bool) -> some View {
+        let d = AtticDropdownMetrics.self
+        let tokens = design.tokens
+        let rest = tokens.dropdownHighlight.withAlpha(tokens.dropdownHighlight.alpha / 2)
+        return Button(action: onRemove) {
+            AtticText(verbatim: title, style: .dropdownRow, ink: lit ? .body : .label)
+                .padding(.horizontal, d.rowPadding)
+                .frame(maxWidth: .infinity, minHeight: d.clearHeight, maxHeight: d.clearHeight, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: d.clearRadius, style: .continuous)
+                    .fill((lit ? tokens.dropdownHighlight : rest).color))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .focusable(false)
+        .focusEffectDisabled()
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                if current.lit != .remove { update { $0.hover(.remove, inside: true) } }
+            case .ended:
+                update { $0.hover(.remove, inside: false) }
+            }
+        }
+        .help(String(localized: "Clear Date (⌘⌫)"))
+        // A menu item, as the rows of every Attic list are.
+        .accessibilityRepresentation {
+            AtticDropdownMenuItem(label: title, selected: lit, action: onRemove)
+        }
+        .accessibilityIdentifier("date-clear")
+    }
+
+    private func dayCell(_ day: Date, inMonth: Bool, start: Date, state: AtticDateCardState, proposed: Date?) -> some View {
         let d = AtticDropdownMetrics.self
         let tokens = design.tokens
         let isSelected = selected.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
         let isToday = calendar.isDate(day, inSameDayAs: today)
         let lit = state.isLit(day, calendar: calendar)
         let isProposed = proposed.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
-        let fill: AtticRGBA = isSelected ? tokens.ink(.inverseFill) : (lit || isProposed ? tokens.dropdownHighlight : .clear)
+        // Draft C: other months' days 25 %, past days 33 %.
+        let quiet: Double = isSelected || isToday ? 1 : (!inMonth ? 0.25 : (day < start ? 0.33 : 1))
+        let fill: AtticRGBA? = isSelected ? tokens.dropdownSelected : (lit || isProposed ? tokens.dropdownHighlight : nil)
+        // Today keeps a ring of its own, so it reads apart from the choice.
+        let ring: AtticRGBA? = isToday ? tokens.ink(.helper) : (isSelected ? tokens.dropdownRule : nil)
         let spokenState = [isToday ? String(localized: "today") : nil, isSelected ? String(localized: "chosen") : nil].compactMap { $0 }
-        return Button { onPick(day) } label: {
-            AtticText(verbatim: "\(calendar.component(.day, from: day))", style: .dropdownDay, ink: isSelected ? .onInverse : .body)
-                .frame(width: d.monthMark, height: d.monthMark)
-                .background(AtticCalendarMark(radius: d.monthMarkRadius, fill: fill.color, ring: isToday && !isSelected ? tokens.ink(.heading).color : .clear))
-                .frame(width: d.monthCellWidth, height: d.monthCellHeight)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        .focusable(false)
-        .focusEffectDisabled()
-        .preference(key: AtticDropdownHighlightKey.self, value: lit ? Self.dayID(day) : nil)
-        .id(Self.dayID(day))
-        // The pointer moves the highlight, as it moves a menu's.
-        .onContinuousHover { phase in
-            switch phase {
-            case .active:
-                guard AtticListHighlight.isPointerMove(NSApp.currentEvent), !current.isLit(day, calendar: calendar) else { return }
-                update { $0.hoverDay(day, inside: true, calendar: calendar) }
-            case .ended:
-                update { $0.hoverDay(day, inside: false, calendar: calendar) }
+        // A plain cell: the grid takes the pointer (`day(at:in:)`), and
+        // VoiceOver presses the cell itself.
+        return AtticText(verbatim: "\(calendar.component(.day, from: day))", style: isSelected || isToday ? .dropdownDaySelected : .dropdownDay,
+                         ink: .body)
+            .opacity(quiet)
+            .frame(width: d.monthMarkWidth, height: d.monthMarkHeight)
+            .background {
+                if fill != nil || ring != nil {
+                    AtticCalendarMark(radius: d.monthMarkRadius, fill: (fill ?? .clear).color, ring: (ring ?? .clear).color)
+                }
             }
-        }
-        .accessibilityLabel(AtticDateCardFormat.spoken(day, calendar: calendar))
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityValue(spokenState.joined(separator: ", "))
+            .frame(width: d.monthCellWidth, height: d.monthCellHeight)
+            .id(Self.dayID(day))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(AtticDateCardFormat.spoken(day, calendar: calendar))
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityValue(spokenState.joined(separator: ", "))
+            .accessibilityAction { onPick(day) }
+    }
+
+    /// The day at `point` in the grid (its own coordinates), if any.
+    static func day(at point: CGPoint, in month: AtticDateMonth) -> Date? {
+        let d = AtticDropdownMetrics.self
+        guard point.x >= 0, point.y >= 0 else { return nil }
+        let column = Int(point.x / d.monthCellWidth), week = Int(point.y / d.monthCellHeight)
+        guard column < 7, week < month.weeks else { return nil }
+        return month.cells[week * 7 + column]
     }
 
     private static func dayID(_ day: Date) -> String { "attic.date.\(Int(day.timeIntervalSinceReferenceDate))" }
@@ -757,34 +889,59 @@ struct AtticTagPicker: View {
     @Environment(\.atticDropdownHeight) private var cardHeight
     @Environment(\.atticTagColouring) private var colouring
 
+    /// Draft C's chrome around the list at rest, the card's insets
+    /// excluded: the field's header and its rule, and "Tags". No foot at
+    /// rest: you type in the field to add (Dropdown content: answers,
+    /// owner, 2026-10-24, answer 3 A).
+    static var chromeHeight: CGFloat {
+        let m = AtticDropdownMetrics.self
+        return (m.fieldHeaderHeight - m.inset) + m.headerRule + m.sectionHeaderHeight
+    }
+
+    /// What a typed new name adds below the list: the rule and the
+    /// "New Tag “#…”" row.
+    static var createHeight: CGFloat {
+        AtticDropdownMetrics.separatorHeight + AtticDropdownMetrics.rowHeight
+    }
+
     var body: some View {
         let m = AtticDropdownMetrics.self
-        let shown = Self.rowCount(tags: tags.count, create: create)
+        let shown = tags.count
         let room = Self.visibleRows(tagCount: listRows ?? shown)
         // A height that holds while typing filters the list, so the card
         // never jumps. Only a list longer than that scrolls: rows that fit
         // are plain rows (nothing to scroll, for the pointer, the keyboard
         // or the UI tests).
         let normalHeight = CGFloat(room) * m.rowHeight
-        let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - m.inset * 2 - m.fieldHeight - m.fieldGap) } ?? normalHeight)
+        let chrome = Self.chromeHeight + (create == nil ? 0 : Self.createHeight)
+        let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - m.inset * 2 - chrome) } ?? normalHeight)
+        let count = Self.rowCount(tags: tags.count, create: create)
         VStack(alignment: .leading, spacing: 0) {
-            AtticDropdownField(text: $query, placeholder: String(localized: "Find or add a tag"),
-                               systemName: "magnifyingglass", focus: focus)
-                .padding(.bottom, m.fieldGap)
-            Group {
-                if shown <= room && listHeight == normalHeight {
-                    rows
-                        .frame(height: normalHeight, alignment: .top)
-                } else {
-                    AtticDropdownViewport(height: listHeight) { rows }
-                }
+            // Draft C: the field in its header, ruled off; "Tags"; the
+            // tags with their dots and trailing ticks; then, for a typed
+            // name no tag has, "New Tag “#…”" (answer 3 A: no foot at rest).
+            AtticDropdownFieldHeader {
+                AtticDropdownField(text: $query, placeholder: String(localized: "Tag"),
+                                   systemName: "magnifyingglass", focus: focus, label: String(localized: "Find or add a tag"))
             }
-            .modifier(AtticOptionalDropdownList(focus: focus, highlighted: onListHighlight, count: shown))
+            AtticDropdownSectionHeader(title: String(localized: "Tags"))
+            VStack(alignment: .leading, spacing: 0) {
+                Group {
+                    if shown <= room && listHeight == normalHeight {
+                        rows
+                            .frame(height: normalHeight, alignment: .top)
+                    } else {
+                        AtticDropdownViewport(height: listHeight) { rows }
+                    }
+                }
+                createRow(count: count)
+            }
+            .modifier(AtticOptionalDropdownList(focus: focus, highlighted: onListHighlight, count: count))
         }
         // In a card cut short the list keeps the field and shortens; the
         // card still measures its natural height: the list's full room.
         .atticDropdownHeightGivenUp(normalHeight - listHeight)
-        // "New tag “#…”" appears as you type: the card widens for it.
+        // 224 pt, fixed (sheet 3): a longer name is cut short.
         .atticDropdownIdealWidth(Self.rowsWidth(tags: tags.map(\.name), create: create, details: tags.compactMap(\.detail)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
@@ -804,37 +961,44 @@ struct AtticTagPicker: View {
                 }
                 .id(index)
             }
-            if let create {
-                // The + sits in the dots' column, so the name starts where
-                // the tags' names do.
-                AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), check: .off, checkGlyph: "plus",
-                                 isHighlighted: highlighted == tags.count, onHover: hover(tags.count), position: tags.count + 1, itemCount: tags.count + 1) {
-                    onCreate(create)
-                }
-                .id(tags.count)
-            }
-            if tags.isEmpty, create == nil {
-                AtticText(verbatim: String(localized: "No tags yet"), style: .dropdownRow, ink: .helper)
+            if tags.isEmpty {
+                AtticText(verbatim: create == nil ? String(localized: "No tags yet") : String(localized: "No tag matches"), style: .dropdownRow, ink: .helper)
                     .padding(.horizontal, AtticDropdownMetrics.rowPadding)
                     .frame(height: AtticDropdownMetrics.rowHeight)
             }
         }
     }
 
+    /// With a name typed that is no tag yet, "New Tag “#…”" under a rule,
+    /// which adds it (the list's last keyboard row). Nothing at rest: you
+    /// type in the field to add (Dropdown content: answers, owner,
+    /// 2026-10-24, answer 3 A; Title Case, rule 5).
+    @ViewBuilder
+    private func createRow(count: Int) -> some View {
+        if let create {
+            AtticDropdownRule()
+            // The + sits in the dots' column, so the name starts where the
+            // tags' names do.
+            AtticDropdownRow(title: Self.createTitle(create), check: .off, checkGlyph: "plus",
+                             isHighlighted: highlighted == tags.count, onHover: hover(tags.count), position: tags.count + 1, itemCount: count) {
+                onCreate(create)
+            }
+            .id(tags.count)
+        }
+    }
+
+    /// The create row's name: "New Tag “#travel”".
+    static func createTitle(_ name: String) -> String { String(localized: "New Tag “#\(name)”") }
+
     private func hover(_ index: Int) -> ((Bool) -> Void)? {
         onHover.map { report in { inside in report(index, inside) } }
     }
 
-    /// The widest row's width (the dot column, the name, then the tick's
-    /// column at the end; the create row's + is in the dot column), the
-    /// card's insets excluded: measured from the names, no layout pass.
+    /// The rows' width, the card's insets excluded: the card is 224 pt
+    /// whatever the names (Dropdown content: answers, owner, 2026-10-24,
+    /// sheet 3: "fixed at 224 pt"); a longer name is cut short.
     static func rowsWidth(tags: [String], create: String?, details: [String] = []) -> CGFloat {
-        let m = AtticDropdownMetrics.self
-        let style = AtticTextStyle.dropdownRow
-        let widestDetail = details.map { AtticTextStyle.shortcut.measuredWidth($0) }.max().map { m.detailGap + $0 } ?? 0
-        let widestTag = (tags.map { style.measuredWidth("#" + $0) }.max() ?? 0) + widestDetail
-        let createRow = create.map { style.measuredWidth(String(localized: "New tag “#\($0)”")) } ?? 0
-        return ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + max(widestTag, createRow) + m.columnGap + m.checkSlot)
+        AtticDropdownMetrics.fieldCardWidth - AtticDropdownMetrics.inset * 2
     }
 }
 
@@ -985,16 +1149,26 @@ enum AtticTagPickerHighlight: Hashable {
 // MARK: - Task picker
 
 /// "Move to Task…" (control audit item 5): the tag picker's pattern for
-/// tasks. "Find a task", then the tasks it can go to, each with where it
-/// is listed ("Now", "Later"); typing filters, the arrows move the one
-/// highlight, Return or a click chooses. Rows are built only as they
+/// tasks. The "Task" field, then the tasks it can go to under where they
+/// are listed (Now, Later), each with a task's circle, 224 pt wide
+/// (Dropdown content: answers, owner, 2026-10-24, sheet 3); typing filters,
+/// the arrows move the one highlight, Return or a click chooses. Rows are built only as they
 /// scroll into view, so a long list costs a screenful per keystroke.
 struct AtticTaskPicker: View {
     struct Choice: Identifiable, Equatable {
         let id: UUID
         let title: String
-        /// Where the task is listed ("Now", "Later").
-        let detail: String?
+        /// A quiet trailing detail.
+        var detail: String? = nil
+        /// Where the task is listed ("Now", "Later"): the header it sits
+        /// under. Choices come grouped.
+        var group: String? = nil
+    }
+
+    /// Whether the choice at `index` opens a group (it gets its header).
+    static func startsGroup(_ choices: [Choice], at index: Int) -> Bool {
+        guard choices.indices.contains(index), choices[index].group != nil else { return false }
+        return index == 0 || choices[index - 1].group != choices[index].group
     }
 
     @Binding var query: String
@@ -1015,20 +1189,27 @@ struct AtticTaskPicker: View {
     var body: some View {
         let m = AtticDropdownMetrics.self
         VStack(alignment: .leading, spacing: 0) {
-            AtticDropdownField(text: $query, placeholder: String(localized: "Find a task"), focus: focus)
-                .padding(.bottom, m.fieldGap)
+            AtticDropdownFieldHeader {
+                AtticDropdownField(text: $query, placeholder: String(localized: "Task"), systemName: "magnifyingglass", focus: focus)
+            }
+            AtticDropdownGap()
             if choices.isEmpty {
                 AtticText(verbatim: query.trimmingCharacters(in: .whitespaces).isEmpty ? emptyText : String(localized: "No task matches"),
                           style: .dropdownRow, ink: .helper)
                     .padding(.horizontal, m.rowPadding)
                     .frame(height: m.rowHeight)
             } else {
-                AtticDropdownViewport(height: CGFloat(choices.count) * m.rowHeight > AtticPickerMetrics.taskListMaxHeight
+                let headers = choices.indices.filter { Self.startsGroup(choices, at: $0) }.count
+                let listHeight = CGFloat(choices.count) * m.rowHeight + CGFloat(headers) * m.sectionHeaderHeight
+                AtticDropdownViewport(height: listHeight > AtticPickerMetrics.taskListMaxHeight
                                       ? AtticPickerMetrics.taskListMaxHeight : nil,
                                       highlighted: highlighted.flatMap { choices.indices.contains($0) ? choices[$0].id.uuidString : nil }) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
-                            AtticDropdownRow(title: choice.title, detail: choice.detail, isHighlighted: highlighted == index,
+                            if Self.startsGroup(choices, at: index), let group = choice.group {
+                                AtticDropdownSectionHeader(title: group)
+                            }
+                            AtticDropdownRow(title: choice.title, systemName: "circle", detail: choice.detail, isHighlighted: highlighted == index,
                                              onHover: hover(index), position: index + 1, itemCount: choices.count, scrollID: choice.id.uuidString) {
                                 onChoose(choice.id)
                             }
@@ -1038,6 +1219,7 @@ struct AtticTaskPicker: View {
                 .modifier(AtticOptionalDropdownList(focus: focus, highlighted: onListHighlight, count: choices.count))
             }
         }
+        .frame(width: m.fieldCardWidth - m.inset * 2, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Move to Task"))
     }

@@ -157,19 +157,24 @@ struct RecentlyDeletedSettingsView: View {
         let targets = model.targets(for: entry)
         // ⌘R and ⌘⌫ act on the selection: shown when the menu does too.
         let onSelection = model.selection.contains(entry.id)
+        // Restore │ Select All │ Delete Permanently…: icons on every row and
+        // the destructive command last (Dropdown content: answers, owner,
+        // 2026-10-24, sheet 5).
         return [
             AtticMenuCommand(verbatim: RecentlyDeletedPresentation.restoreTitle(count: targets.count),
+                             systemImage: "arrow.uturn.backward",
                              shortcut: onSelection ? RecentlyDeletedKeys.restore : nil) {
                 model.restore(targets)
             },
+            AtticMenuCommand(verbatim: String(localized: "Select All"), systemImage: "checklist", shortcut: RecentlyDeletedKeys.selectAll,
+                             isDisabled: model.listedEntries.count < 2, startsSection: true) {
+                model.selectAll()
+            },
             AtticMenuCommand(verbatim: RecentlyDeletedPresentation.deleteTitle(count: targets.count),
+                             systemImage: "trash",
                              shortcut: onSelection ? RecentlyDeletedKeys.delete : nil,
                              isDestructive: true, startsSection: true) {
                 model.requestDelete(targets)
-            },
-            AtticMenuCommand(verbatim: String(localized: "Select All"), shortcut: RecentlyDeletedKeys.selectAll,
-                             isDisabled: model.listedEntries.count < 2, startsSection: true) {
-                model.selectAll()
             }
         ]
     }

@@ -32,6 +32,44 @@ final class RoundF3TableCellTests: RoundF3TestCase {
         return result
     }
 
+    private final class FirstLayoutProbe: NSObject, @preconcurrency NSTextLayoutManagerDelegate {
+        let original: (any NSTextLayoutManagerDelegate)?
+        let content: String
+        var widths: [CGFloat] = []
+
+        init(original: (any NSTextLayoutManagerDelegate)?, content: String) {
+            self.original = original
+            self.content = content
+        }
+
+        func textLayoutManager(_ manager: NSTextLayoutManager, textLayoutFragmentFor location: any NSTextLocation,
+                               in element: NSTextElement) -> NSTextLayoutFragment {
+            if let paragraph = element as? NSTextParagraph, paragraph.attributedString.string.hasPrefix(content),
+               let width = manager.textContainer?.size.width {
+                widths.append(width)
+            }
+            return original?.textLayoutManager?(manager, textLayoutFragmentFor: location, in: element)
+                ?? NSTextLayoutFragment(textElement: element, range: nil)
+        }
+    }
+
+    func testTheFirstCellLayoutUsesItsActualColumnWidth() throws {
+        let content = "A cell long enough to wrap onto more lines"
+        let (engine, _) = editor([.text("Title"), .table(NoteTable(texts: [["H", "x"], [content, "z"]]))])
+        let table = try XCTUnwrap(engine.tableViews().first)
+        let position = NoteTable.Position(row: 1, column: 0)
+        let manager = try XCTUnwrap(table.editor.textLayoutManager)
+        let original = manager.delegate
+        let probe = FirstLayoutProbe(original: original, content: content)
+        manager.delegate = probe
+        defer { manager.delegate = original }
+
+        table.activate(position, caret: .end)
+        let firstWidth = try XCTUnwrap(probe.widths.first, "the real cell text must be typeset")
+        XCTAssertEqual(firstWidth, table.grid.textRect(position).width, accuracy: 0.01,
+                       "first-line geometry must be created in the cell, before it can be cached")
+    }
+
     func testLiveCellAndDrawnCellShareEveryBaselineAndTheCaretIsNatural() throws {
         try requireKeyWindowTests()
         let long = "A cell long enough to wrap onto more lines"

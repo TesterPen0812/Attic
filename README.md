@@ -19,7 +19,8 @@ switched off (see [What is not active](#what-is-not-active)).
 - Reveals from a chosen screen corner after a set delay, or from the global
   shortcut with a new task ready to type.
 - Three pages: **Tasks**, **Notes** and **Canvas**.
-- Content scrolls under the floating controls and stays visible there, blurred.
+- Content scrolls under the floating controls, with a slight blur at the top
+  and each bottom control’s own glass.
 - Glass or solid surfaces, palettes and tint, Light and Dark, and Reduce
   Transparency support.
 - A menu bar app with no Dock icon. Launch at login is optional.

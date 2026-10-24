@@ -293,9 +293,11 @@ final class NoteFormatModel: ObservableObject {
     }
 
     /// The highlighter's menu (N-2 option A: the split button's chevron):
-    /// Yellow (the one click's, T-10), Grey, the other hues, then None; the selection's
-    /// colour ticked after its name. Built as it opens, so the tick is
-    /// always the selection's now.
+    /// the tags' colour order (Yellow, Green, Blue, Pink, Purple, Grey),
+    /// then Clear Highlight, an action greyed when there is nothing to
+    /// clear, like Clear Date (Dropdown content: answers, owner, 2026-10-24,
+    /// sheet 4); the selection's colour ticked after its name. Built as it
+    /// opens, so the tick is always the selection's now.
     func highlightMenu(from surface: NoteCommandSurface) -> [AtticMenuCommand] {
         let highlighted = snapshot.value(.mark(.highlight)) != .off
         let current = highlighted ? router?.engine.highlightColour() : nil
@@ -307,22 +309,26 @@ final class NoteFormatModel: ObservableObject {
             }
         }
         for index in list.indices { list[index].image = NoteHighlightSwatch.image(colours[index]) }
-        list.append(AtticMenuCommand(verbatim: String(localized: "None"), isDisabled: !enabled || !highlighted,
+        list.append(AtticMenuCommand(verbatim: String(localized: "Clear Highlight"), isDisabled: !enabled || !highlighted,
                                      startsSection: true) { [weak self] in
             self?.router?.highlight(nil, from: surface)
         })
         return list
     }
 
-    /// The bar's style menu (Title … Mono, the current one checked).
+    /// The bar's style menu (Body … Code Block, the current one checked),
+    /// each name in its style as Aa's list shows them (Dropdown content:
+    /// answers, owner, 2026-10-24, sheet 4).
     func styleMenu(from surface: NoteCommandSurface) -> [AtticMenuCommand] {
         NoteCommandCatalog.styles.map { command in
-            AtticMenuCommand("\(command.title)", shortcut: NoteCommandCatalog.keyboardShortcut(command),
-                             isDisabled: !snapshot.isEnabled(command),
-                             isChecked: snapshot.value(command) == .on,
-                             identifier: NoteCommandRouter.identifier(command)) { [weak self] in
+            var row = AtticMenuCommand("\(command.title)", shortcut: NoteCommandCatalog.keyboardShortcut(command),
+                                       isDisabled: !snapshot.isEnabled(command),
+                                       isChecked: snapshot.value(command) == .on,
+                                       identifier: NoteCommandRouter.identifier(command)) { [weak self] in
                 self?.router?.run(command, from: surface)
             }
+            row.titleFont = NoteFormatStyleListView.kind(command).nsFont
+            return row
         }
     }
 
@@ -423,6 +429,15 @@ final class NoteSlashListModel: ObservableObject {
     }
 
     var highlightedKind: NoteSlashItem.Kind? { items.indices.contains(highlighted) ? items[highlighted].kind : nil }
+
+    /// A row that opens a new group gets a separator above it (answer 4 B).
+    func startsGroup(at index: Int) -> Bool {
+        index > 0 && items.indices.contains(index)
+            && NoteCommandCatalog.slashGroup(items[index].kind) != NoteCommandCatalog.slashGroup(items[index - 1].kind)
+    }
+
+    /// The separators the rows draw (the list's height counts them).
+    var separatorCount: Int { items.indices.filter(startsGroup(at:)).count }
 }
 
 /// The date card and the link card (one at a time, anchored at the text).

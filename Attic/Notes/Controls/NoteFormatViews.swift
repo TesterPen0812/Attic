@@ -1033,9 +1033,10 @@ struct NoteFormatStyleListView: View {
 
 // MARK: - The / list
 
-/// The flat `/` list at the caret (p2-03; E1, p2-24 D): one row per
-/// engine item, icon and name only (no hint column), the typed filter
-/// emboldened. The keyboard and the pointer move the one highlight. It
+/// The `/` list at the caret (p2-03; E1, p2-24 D): one row per engine
+/// item, icon and name, the Markdown it types quiet and trailing, and a
+/// separator between its groups (Dropdown content: answers, owner,
+/// 2026-10-24, answer 4 B), 224 pt wide; the typed filter emboldened. The keyboard and the pointer move the one highlight. It
 /// opens below the caret when there is room, its left edge on the `/`.
 struct NoteSlashListView: View {
     @ObservedObject var model: NoteSlashListModel
@@ -1063,7 +1064,9 @@ extension NoteSlashListView {
     @ViewBuilder
     fileprivate var rows: some View {
         ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-            AtticDropdownRow(title: item.title, systemName: NoteCommandCatalog.slashSymbol(item.kind), match: model.query,
+            if model.startsGroup(at: index) { AtticDropdownRule() }
+            AtticDropdownRow(title: item.title, systemName: NoteCommandCatalog.slashSymbol(item.kind),
+                             detail: NoteCommandCatalog.slashHint(item.kind), match: model.query,
                              isHighlighted: index == model.highlighted,
                              // D-18: each text style in its own size and weight,
                              // as the Aa style list shows them (unfiltered: a
@@ -1118,8 +1121,11 @@ struct NoteDateCardView: View {
     }
 }
 
-/// The link card (⇧⌘K, the link toggle, Edit Link…): the address and,
-/// for an existing link, Remove. Return applies; Esc cancels.
+/// The link card (⇧⌘K, the link toggle, Edit Link…), with the date card's
+/// field anatomy (Dropdown content: answers, owner, 2026-10-24, sheet 4):
+/// the address in a 40 pt header with the link icon, ruled off, then the
+/// action as a row: ↩ Add Link, or for an existing link Update Link and
+/// Remove Link. Return applies; Esc cancels. 272 pt.
 struct NoteLinkCardView: View {
     @ObservedObject var model: NoteFormatCardModel
     let hasLink: Bool
@@ -1127,27 +1133,30 @@ struct NoteLinkCardView: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
+        let empty = model.linkText.trimmingCharacters(in: .whitespaces).isEmpty
+        let count = hasLink ? 2 : 1
         AtticDropdownCard(width: AtticNoteFormatMetrics.linkCardWidth) {
-            AtticDropdownField(text: $model.linkText, placeholder: String(localized: "Paste or type a link"),
-                               focus: $fieldFocused, label: String(localized: "Link address"), identifier: "notes-link-field",
-                               onSubmit: { model.submitLink() })
-                .onExitCommand { model.onCancel?() }
+            AtticDropdownFieldHeader {
+                AtticDropdownField(text: $model.linkText, placeholder: String(localized: "Paste or type a link"), systemName: "link",
+                                   focus: $fieldFocused, label: String(localized: "Link address"), identifier: "notes-link-field",
+                                   onSubmit: { model.submitLink() })
+                    .onExitCommand { model.onCancel?() }
+            }
             if let error = model.linkError {
                 AtticText(verbatim: error, style: .helper, ink: .helper)
                     .padding(.horizontal, AtticDropdownMetrics.rowPadding)
                     .padding(.top, 4)
             }
             AtticDropdownGap()
-            HStack(spacing: 4) {
-                if hasLink {
-                    AtticSmallButton(systemName: nil, title: "Remove", label: "Remove Link") { model.onRemoveLink?() }
-                        .accessibilityIdentifier("notes-link-remove")
+            AtticDropdownRow(title: hasLink ? String(localized: "Update Link") : String(localized: "Add Link"), systemName: "return",
+                             position: 1, itemCount: count) { model.submitLink() }
+                .disabled(empty)
+                .accessibilityIdentifier("notes-link-apply")
+            if hasLink {
+                AtticDropdownRow(title: String(localized: "Remove Link"), systemName: "xmark.circle", position: 2, itemCount: count) {
+                    model.onRemoveLink?()
                 }
-                Spacer(minLength: 0)
-                AtticSmallButton(systemName: nil, title: hasLink ? "Update" : "Add Link",
-                                 label: hasLink ? "Update Link" : "Add Link") { model.submitLink() }
-                    .disabled(model.linkText.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityIdentifier("notes-link-apply")
+                .accessibilityIdentifier("notes-link-remove")
             }
         }
         .onAppear { fieldFocused = true }

@@ -283,12 +283,19 @@ struct AtticColorTokens: Equatable, Sendable {
     let popoverInnerRim: AtticRGBA
     let popoverOuterRim: AtticRGBA
     let popoverShadow: AtticRGBA
-    /// Attic's own dropdowns (E1): the pill on a solid `popoverFill`
-    /// (#F1F1F1 / #444445) and D's two shadows. The card's edge is
-    /// `popoverOuterRim`, which steps up under Increase Contrast.
+    /// Attic's own dropdowns and menus (draft C, owner 2026-10-23): a soft
+    /// hover fill of the foreground (5 % Light / 10 % Dark) that reads on
+    /// glass and on the solid fallback alike, the card's shadow and contact
+    /// shadow, its light glass rim (white 50 % / 15 %), the hairline rule
+    /// between groups and under a field, and the chosen day's fill (8 % /
+    /// 12 %). Under Reduce Transparency the card is `popoverFill` with
+    /// `popoverOuterRim`; under Increase Contrast every one steps up.
     let dropdownHighlight: AtticRGBA
     let dropdownShadow: AtticRGBA
     let dropdownContactShadow: AtticRGBA
+    let dropdownRim: AtticRGBA
+    let dropdownRule: AtticRGBA
+    let dropdownSelected: AtticRGBA
     let dragShadow: AtticRGBA
 
     // MARK: Inks
@@ -611,7 +618,14 @@ struct AtticColorTokens: Equatable, Sendable {
             inks[ink] = inks[.priorityNone]!.tuned(toContrast: noneOnBase * step, against: [basePanel], lighten: dark)
         }
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
-        inks[.priorityMark] = (dark ? AtticRGBA(0xF0A04E) : AtticRGBA(0xE2711D)).tuned(toContrast: target(.priorityMark), against: meaning, lighten: dark)
+        // High's "!!" also sits in the composer strip's Priority pill: the
+        // recessed fill inside a raised control (the strip on glass, owner
+        // 2026-10-22), lighter in Dark than the rows' fills. Under Increase
+        // Contrast in Dark it starts from the same orange at full chroma, so
+        // reaching 4.5 : 1 there leaves it orange, not peach.
+        let stripValue = [recipes.rest.face.over(basePanel), glassFace.over(panelBase)].map { recessed.over($0) }
+        let highMark = dark ? (ic ? AtticRGBA(0xFF9F40) : AtticRGBA(0xF0A04E)) : AtticRGBA(0xE2711D)
+        inks[.priorityMark] = highMark.tuned(toContrast: target(.priorityMark), against: meaning + stripValue, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
         // The PR #5 coverage was measured with the old faded Done (#C9CBCE /
         // a dim fill, at 3 : 1); it keeps setting the coverage, so the new
@@ -961,9 +975,12 @@ struct AtticColorTokens: Equatable, Sendable {
             popoverInnerRim: dark ? .white(ic ? 0.24 : 0.10) : .white(0.9),
             popoverOuterRim: dark ? (ic ? .white(0.35) : .black(0.55)) : .black(ic ? 0.30 : 0.11),
             popoverShadow: .black(dark ? 0.40 : 0.11),
-            dropdownHighlight: dark ? AtticRGBA(0x444445) : AtticRGBA(0xF1F1F1),
-            dropdownShadow: .black(dark ? 0.42 : 0.12),
-            dropdownContactShadow: .black(dark ? 0.24 : 0.05),
+            dropdownHighlight: dark ? .white(ic ? 0.18 : 0.10) : .black(ic ? 0.12 : 0.05),
+            dropdownShadow: .black(dark ? 0.28 : 0.12),
+            dropdownContactShadow: .black(dark ? 0.30 : 0.05),
+            dropdownRim: .white(dark ? (ic ? 0.35 : 0.15) : 0.5),
+            dropdownRule: dark ? .white(ic ? 0.30 : 0.10) : .black(ic ? 0.28 : 0.08),
+            dropdownSelected: dark ? .white(ic ? 0.22 : 0.12) : .black(ic ? 0.16 : 0.08),
             dragShadow: .black(dark ? 0.45 : 0.16),
             inks: inks
         )

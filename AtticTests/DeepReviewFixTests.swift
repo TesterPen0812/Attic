@@ -234,7 +234,11 @@ final class DeepReviewFixTests: XCTestCase {
                                                      timestamp: ProcessInfo.processInfo.systemUptime,
                                                      windowNumber: hosted.window.windowNumber, context: nil,
                                                      eventNumber: 3, clickCount: 1, pressure: 1))
-        let menu = try XCTUnwrap(content.menu(for: press), "a secondary click on the row has the row's menu")
+        // Draft C (owner, 2026-10-23): the row's right-click menu is a glass
+        // menu built from its commands; the same commands as an NSMenu stand
+        // in for choosing an item here.
+        _ = content
+        let menu = AtticNativeMenu.make(try XCTUnwrap(AtticContextMenus.commands(for: press), "a secondary click on the row has the row's menu"))
         menu.update()
         let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
         more.update()
@@ -258,12 +262,13 @@ final class DeepReviewFixTests: XCTestCase {
                            frame.height, accuracy: 0.5, "the files have collapsed in the rendered cell")
         }
 
-        // ⇧⌘I's menu: down to More (its eleventh item), into it, Return.
+        // ⇧⌘I's menu: down to More (its ninth item since Dropdown content:
+        // answers, owner, 2026-10-24, answer 1 A), into it, Return.
         try closeFilesAndWaitForLayout()
         try hosted.clickRow(row, tab: .now)
         XCTAssertEqual(hosted.model.selection, [row], "the menu's key is sent with its row selected")
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
-        let actionTimers = schedule(Array(repeating: down, count: 11) + [("\u{F703}", 124), ("\r", 36)], in: hosted)
+        let actionTimers = schedule(Array(repeating: down, count: 9) + [("\u{F703}", 124), ("\r", 36)], in: hosted)
         hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
         hosted.spin(1)
         actionTimers.forEach { $0.invalidate() }
@@ -350,7 +355,7 @@ final class DeepReviewFixTests: XCTestCase {
                                                      timestamp: ProcessInfo.processInfo.systemUptime,
                                                      windowNumber: hosted.window.windowNumber, context: nil,
                                                      eventNumber: 3, clickCount: 1, pressure: 1))
-        let contextMenu = try XCTUnwrap(hosted.window.contentView?.menu(for: press))
+        let contextMenu = AtticNativeMenu.make(try XCTUnwrap(AtticContextMenus.commands(for: press)))
         makeCurrent(try keyEvent("\r", keyCode: 36))
         XCTAssertEqual(NSApp.currentEvent?.type, .keyDown, "the Return is the current event")
         try chooseOpenFiles(in: contextMenu)

@@ -581,7 +581,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         }
         suggestions = list
         let m = AtticDropdownMetrics.self
-        let titles = list.map { $0.isNew ? String(localized: "New tag “#\($0.name)”") : "#" + $0.name }
+        let titles = list.map { $0.isNew ? AtticTagPicker.createTitle($0.name) : "#" + $0.name }
         let ideal = zip(titles, list).map { title, suggestion in
             m.inset * 2 + m.rowPadding * 2 + AtticTextStyle.dropdownRow.measuredWidth(title)
                 + (suggestion.isNew ? 0 : m.detailGap + AtticTextStyle.shortcut.measuredWidth("\(suggestion.count)"))

@@ -128,10 +128,12 @@ final class PhaseXPicksTests: XCTestCase {
     /// its name, and a tag row has its colour dot before it.
     func testTheTagPickersRowsHaveTheirDotFirstAndTheirTickLast() {
         let m = AtticDropdownMetrics.self
-        let width = AtticTagPicker.rowsWidth(tags: ["launch"], create: nil)
-        XCTAssertEqual(width, ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth("#launch")
-                                   + m.columnGap + m.checkSlot))
-        XCTAssertEqual(m.dotSize, 7, "N-4's card: a 7 pt dot")
+        // Dropdown content: answers (owner, 2026-10-24), sheet 3: the card
+        // is fixed at 224 pt; a long name is cut short, never widening it.
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: ["launch"], create: nil), m.fieldCardWidth - m.inset * 2)
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: ["launch-october-planning-and-the-rest"], create: nil),
+                       m.fieldCardWidth - m.inset * 2)
+        XCTAssertEqual(m.dotSize, 8, "draft C's 8 pt dot")
     }
 
     /// Native menus of choices draw their tick after the item and no

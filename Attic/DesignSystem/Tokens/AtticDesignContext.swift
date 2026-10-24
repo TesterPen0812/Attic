@@ -181,7 +181,14 @@ private struct AtticSystemDesignModifier: ViewModifier {
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
     func body(content: Content) -> some View {
-        content.environment(\.atticDesign, AtticDesignContext(
+        let context = self.context
+        content.environment(\.atticDesign, context)
+            // The glass menus are AppKit's: they draw with the panel's design.
+            .onChange(of: context, initial: true) { _, now in AtticGlassMenu.design = now }
+    }
+
+    private var context: AtticDesignContext {
+        AtticDesignContext(
             mode: colorScheme == .dark ? .dark : .light,
             palette: palette,
             surface: surface,
@@ -194,7 +201,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
             hapticsEnabled: hapticsEnabled,
             controls: controls,
             motion: motion
-        ))
+        )
     }
 }
 

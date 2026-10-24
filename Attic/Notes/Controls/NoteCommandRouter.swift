@@ -217,10 +217,48 @@ final class NoteCommandRouter {
 
     /// Insert ▸ and Format ▸, as ⋯ shows them.
     func menuCommands(from surface: NoteCommandSurface) -> [AtticMenuCommand] {
-        [
+        // The note's ⋯ splits Format › into short submenus (Dropdown content:
+        // answers, owner, 2026-10-24, answer 5 B); the native menus keep
+        // their one list with separators.
+        let format = surface == .noteMenu ? formatSubmenuCommands(from: surface) : formatMenuCommands(from: surface)
+        return [
             AtticMenuCommand("Insert", identifier: "notes-menu-insert", submenu: insertMenuCommands(from: surface)),
-            AtticMenuCommand("Format", identifier: "notes-menu-format", submenu: formatMenuCommands(from: surface))
+            AtticMenuCommand("Format", identifier: "notes-menu-format", submenu: format)
         ]
+    }
+
+    /// Format › split by its groups (answer 5 B): Paragraph › (the current
+    /// style as its detail), Text ›, Lists ›, Line ›, then Link… and Remove
+    /// Link. The same rows, keys and identifiers as `formatMenuCommands`,
+    /// one level deeper, so every card is short.
+    func formatSubmenuCommands(from surface: NoteCommandSurface) -> [AtticMenuCommand] {
+        let rows = formatMenuCommands(from: surface)
+        let byID = Dictionary(rows.compactMap { row in row.identifier.map { ($0, row) } }, uniquingKeysWith: { first, _ in first })
+        func pick(_ commands: [NoteFormatCommand]) -> [AtticMenuCommand] {
+            commands.enumerated().compactMap { index, command in
+                guard var row = byID[Self.identifier(command)] else { return nil }
+                row.startsSection = false
+                return row
+            }
+        }
+        let styles = pick(NoteCommandCatalog.styles)
+        var paragraph = AtticMenuCommand.submenu(String(localized: "Paragraph"), systemImage: "text.alignleft", styles)
+        paragraph.detail = styles.first { $0.state == .on }?.title
+        paragraph.identifier = "notes-menu-format-paragraph"
+        let groups: [(String, String, String, [NoteFormatCommand])] = [
+            (String(localized: "Text"), "bold", "text", NoteCommandCatalog.formatSections[1]),
+            (String(localized: "Lists"), "list.bullet", "lists", NoteCommandCatalog.lists),
+            (String(localized: "Line"), "increase.indent", "line", [.indent, .outdent] + NoteCommandCatalog.lineActions),
+        ]
+        var result = [paragraph]
+        for (title, symbol, name, commands) in groups {
+            var submenu = AtticMenuCommand.submenu(title, systemImage: symbol, pick(commands))
+            submenu.identifier = "notes-menu-format-\(name)"
+            result.append(submenu)
+        }
+        var link = pick([.mark(.link), .removeLink])
+        if !link.isEmpty { link[0].startsSection = true }
+        return result + link
     }
 
     func insertMenuCommands(from surface: NoteCommandSurface) -> [AtticMenuCommand] {

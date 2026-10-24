@@ -77,9 +77,12 @@ final class PhaseXColourTokenTests: XCTestCase {
         XCTAssertEqual(AtticTagHue.violet.title, AtticTagHue.purple.title)
         var colouring = AtticTagColouring(palette: AtticTagPalette(hues: ["launch": .teal]))
         colouring.setHue = { _, _ in }
-        XCTAssertEqual(colouring.colourCommands(for: "launch").first?.children.map(\.title),
-                       ["Yellow", "Green", "Blue", "Pink", "Purple", "Grey"])
-        XCTAssertEqual(colouring.colourCommands(for: "launch").first?.children.first { $0.state == .on }?.title, "Green")
+        // Dropdown content: answers (owner, 2026-10-24), sheet 2: the chip's
+        // menu is a "Colour" header and the colours, not a one-row Colour ›.
+        XCTAssertEqual(colouring.colourCommands(for: "launch").map(\.title),
+                       ["Colour", "Yellow", "Green", "Blue", "Pink", "Purple", "Grey"])
+        XCTAssertEqual(colouring.colourCommands(for: "launch").first?.isHeader, true)
+        XCTAssertEqual(colouring.colourCommands(for: "launch").first { $0.state == .on }?.title, "Green")
     }
 
     /// 3 : 1 (4.5 : 1 under Increase Contrast) on the surface, the tag's own

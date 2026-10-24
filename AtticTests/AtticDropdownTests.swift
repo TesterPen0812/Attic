@@ -287,7 +287,8 @@ final class AtticDropdownTests: XCTestCase {
     func testTheWidthFitsItsContentNeverUnderTheMinimumNeverPastTheMargin() {
         let m = AtticDropdownMetrics.self
         let available: CGFloat = 320 - m.panelMargin * 2
-        XCTAssertEqual(AtticDropdownLayout.width(ideal: 90, available: available), 144, "never under 144 pt")
+        // Draft C (owner, 2026-10-23): never under 150 pt (E1's was 144).
+        XCTAssertEqual(AtticDropdownLayout.width(ideal: 90, available: available), 150, "never under 150 pt")
         XCTAssertEqual(AtticDropdownLayout.width(ideal: 165, available: available), 165, "fits its content")
         XCTAssertEqual(AtticDropdownLayout.width(ideal: 164.2, available: available), 165, "whole points")
         XCTAssertEqual(AtticDropdownLayout.width(ideal: 400, available: available), 296, "never past the 12 pt margin")
@@ -296,18 +297,20 @@ final class AtticDropdownTests: XCTestCase {
     func testTheSlashListIsAsWideAsItsLongestNameAndShrinksToTheMinimum() {
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let full = AtticDropdownLayout.listWidth(titles: all.map(\.title))
-        // The Compact rows (13 pt names, 9 pt padding) measure 145 pt for the
-        // nine (Numbered List); p2-24 D's 14 pt rows measured 165.
-        XCTAssertEqual(full, 145, accuracy: 4, "the nine rows fit Numbered List")
+        // Draft C's rows (13 pt names, 10 pt padding, a 14 pt icon slot and
+        // an 8 pt gap, 4 pt in; owner 2026-10-23) measure 139 pt for the nine
+        // (Numbered List); E1's Compact rows measured 145.
+        XCTAssertEqual(full, 139, accuracy: 4, "the nine rows fit Numbered List")
         XCTAssertTrue(all.contains { $0.kind == .mono }, "Mono is in the list")
         let date = AtticDropdownLayout.listWidth(titles: ["Date"], match: "da")
-        XCTAssertEqual(AtticDropdownLayout.width(ideal: date, available: 296), 144, "“/da” leaves Date at the minimum")
+        XCTAssertEqual(AtticDropdownLayout.width(ideal: date, available: 296), 150, "“/da” leaves Date at the minimum")
     }
 
     func testTheTagListKeepsItsHeightWhileFiltering() {
         XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 0), 1, "room for No tags yet or New tag")
         XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 5), 5, "p2-24's five tags, no scrolling")
-        XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 30), 7, "seven rows, then it scrolls")
+        // Draft C's 32 pt rows: six rows, then it scrolls (E1's 28 pt rows fit seven).
+        XCTAssertEqual(AtticTagPicker.visibleRows(tagCount: 30), 6, "six rows, then it scrolls")
     }
 
     // MARK: Where it opens
@@ -378,7 +381,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(tooTall.side, .above, "the roomier side when neither holds it")
         XCTAssertEqual(tooTall.heightLimit, 336)
         // The width rule is the same one.
-        XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 90, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 144)
+        XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 90, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 150)
         XCTAssertEqual(AtticDropdownLayout.place(idealWidth: 400, height: 88, anchor: anchor, bounds: bounds, prefer: .below).width, 296)
     }
 
@@ -577,22 +580,29 @@ final class AtticDropdownTests: XCTestCase {
 
     // MARK: The look's values
 
-    func testTheCardTakesE1sValuesInBothModes() {
+    /// Draft C (owner, 2026-10-23) supersedes E1's solid card: glass with a
+    /// soft translucent hover fill and the Craft spec's shadow; the solid
+    /// E1 face stays as the Reduce Transparency fallback.
+    func testTheCardTakesDraftCsValuesInBothModes() {
         let light = AtticDesignContext(mode: .light).tokens
         let dark = AtticDesignContext(mode: .dark).tokens
-        XCTAssertEqual(light.popoverFill, AtticRGBA(0xFEFEFE))
+        XCTAssertEqual(light.popoverFill, AtticRGBA(0xFEFEFE), "the opaque fallback")
         XCTAssertEqual(dark.popoverFill, AtticRGBA(0x363637))
-        XCTAssertEqual(light.dropdownHighlight, AtticRGBA(0xF1F1F1))
-        XCTAssertEqual(dark.dropdownHighlight, AtticRGBA(0x444445))
+        XCTAssertEqual(light.dropdownHighlight, .black(0.05), "the hover fill: 5 % of the ink in Light")
+        XCTAssertEqual(dark.dropdownHighlight, .white(0.10), "10 % in Dark")
+        XCTAssertEqual(light.dropdownSelected, .black(0.08), "the chosen day: 8 %")
+        XCTAssertEqual(dark.dropdownSelected, .white(0.12), "12 %")
+        XCTAssertEqual(light.dropdownRim, .white(0.5), "glass's light rim")
+        XCTAssertEqual(dark.dropdownRim, .white(0.15))
         XCTAssertEqual(light.popoverOuterRim, .black(0.11))
         XCTAssertEqual(dark.popoverOuterRim, .black(0.55))
         XCTAssertEqual(light.dropdownShadow, .black(0.12))
-        XCTAssertEqual(dark.dropdownShadow, .black(0.42))
-        XCTAssertEqual(light.dropdownContactShadow, .black(0.05))
-        XCTAssertEqual(dark.dropdownContactShadow, .black(0.24))
+        XCTAssertEqual(dark.dropdownShadow, .black(0.28))
+        XCTAssertEqual(AtticShadows.dropdown.radius, 8, "CSS 0 6px 16px")
+        XCTAssertEqual(AtticShadows.dropdown.y, 6)
         let m = AtticDropdownMetrics.self
         XCTAssertLessThan(m.highlightRadius, m.cornerRadius - m.inset + 1, "the pill sits inside the corner")
-        XCTAssertEqual(m.rowHeight, 28, "the Compact size (p2-28)")
+        XCTAssertEqual(m.rowHeight, 32, "draft C's rows")
         XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 13)
         // Increase Contrast steps the edge up (the existing rule).
         let contrast = AtticDesignContext(mode: .light, increaseContrast: true).tokens
@@ -894,8 +904,10 @@ final class AtticDropdownTests: XCTestCase {
         defer { presenter.close(restoreFocus: false, immediately: true) }
         let m = AtticDropdownMetrics.self
         let card = try? XCTUnwrap(presenter.host?.contentRect)
-        // The field, its gap and the five rows, 10 pt in.
-        XCTAssertEqual(card?.height ?? 0, m.inset * 2 + m.fieldHeight + m.fieldGap + 5 * m.rowHeight, accuracy: 1)
+        // Draft C: the field's header and rule, "Tags" and the five rows,
+        // 4 pt in; no "New Tag…" foot at rest (Dropdown content: answers,
+        // owner, 2026-10-24, answer 3 A).
+        XCTAssertEqual(card?.height ?? 0, m.inset * 2 + AtticTagPicker.chromeHeight + 5 * m.rowHeight, accuracy: 1)
         XCTAssertGreaterThanOrEqual(card?.width ?? 0, m.minWidth)
     }
 
@@ -1470,6 +1482,54 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(card.maxY, anchorTop - AtticDropdownMetrics.anchorGap, accuracy: 1, "still hanging from the row")
     }
 
+    /// Menus fix 1: a card cut short to fit (a row's six-week date card in
+    /// the panel) is placed once. A scroll that keeps its anchor in view
+    /// moves it with the anchor and re-cuts nothing: re-cutting real glass
+    /// over moving rows on every frame doubled the missed frames.
+    func testACutShortCardMovesWithItsAnchorThroughAScrollWithoutReCutting() throws {
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let window = makeWindow()
+        window.setContentSize(CGSize(width: 320, height: 420))
+        defer { window.close() }
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 320, height: 420))
+        let list = Flipped(frame: NSRect(x: 0, y: 0, width: 320, height: 1600))
+        scroll.documentView = list
+        window.contentView?.addSubview(scroll)
+        // The row 220 pt from the window's top: about 200 pt above it, 155 below.
+        let anchor = NSView(frame: NSRect(x: 40, y: 820, width: 60, height: 28))
+        list.addSubview(anchor)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 600))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let presenter = AtticDropdownPresenter()
+        presenter.design = AtticDesignContext(reduceMotion: true)
+        presenter.contentHasCard = true
+        presenter.contentHeight = 300
+        presenter.content = AnyView(AtticDropdownCard(width: 200) { Color.clear.frame(height: 292) })
+        presenter.present(from: anchor)
+        defer { presenter.close(restoreFocus: false, immediately: true) }
+        spin(0.2)
+        let cut = try XCTUnwrap(presenter.stage.height, "neither side holds the card")
+        XCTAssertEqual(presenter.stage.side, .above, "the roomier side")
+        let host = try XCTUnwrap(presenter.host)
+        let opened = host.frame
+        var heights: [CGFloat?] = []
+        let watch = presenter.stage.$height.dropFirst().sink { heights.append($0) }
+        defer { watch.cancel() }
+        // Twenty 3 pt frames up the list: the row moves 60 pt down, in view.
+        for step in 1...20 {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 600 - CGFloat(step) * 3))
+            spin(0.02)
+        }
+        XCTAssertEqual(heights.count, 0, "no re-cut while the row stays in view: \(heights)")
+        XCTAssertEqual(presenter.stage.height, cut)
+        XCTAssertEqual(host.frame.height, opened.height)
+        XCTAssertEqual(opened.minY - host.frame.minY, 60, accuracy: 1, "the card moved with its row")
+        // The row scrolls out of view: the card is placed again.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        spin(0.1)
+        XCTAssertNotEqual(presenter.stage.height, cut, "placed again once its row left the view")
+    }
+
     private func accessibilityElements(_ root: AnyObject) -> [AnyObject] {
         let children = (root.accessibilityChildren?() ?? nil) ?? []
         return [root] + children.flatMap { accessibilityElements($0 as AnyObject) }
@@ -1485,7 +1545,7 @@ final class AtticDropdownTests: XCTestCase {
             verifyCIAccessibilityMode(previous, phase: "restored after measurement group")
         }
         let window = makeWindow()
-        // Room above the anchor for five weeks of the Compact card, not six.
+        // Too little room above the anchor for six weeks of the card.
         window.setContentSize(CGSize(width: 320, height: 295))
         defer { window.close() }
         let anchor = NSView(frame: CGRect(x: 40, y: 40, width: 60, height: 28))
@@ -1504,21 +1564,23 @@ final class AtticDropdownTests: XCTestCase {
         defer { presenter.close(restoreFocus: false, immediately: true) }
         spin(0.2)
         let host = try XCTUnwrap(presenter.host)
-        let four = host.contentRect.size
-        XCTAssertNil(presenter.stage.height, "February 2021's four weeks fit")
+        // Draft C (owner, 2026-10-23) supersedes the month-by-month height
+        // (2026-10-05's quiet month): every month is six whole weeks, so the
+        // card keeps one height. At this anchor it is constrained, and its
+        // last row must stay interactive.
+        let first = host.contentRect.size
+        XCTAssertNotNil(presenter.stage.height, "six weeks are constrained at this anchor")
         func nextMonth() throws {
             let next = try XCTUnwrap(accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == "Next month" })
             XCTAssertTrue(next.accessibilityPerformPress?() == true)
             spin(0.2)
         }
-        try nextMonth() // March: five weeks
-        XCTAssertEqual(host.contentRect.width, four.width, accuracy: 1)
-        XCTAssertEqual(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight, accuracy: 1)
-        try nextMonth() // April: five weeks
-        try nextMonth() // May: six weeks, constrained at this anchor
-        XCTAssertEqual(host.contentRect.width, four.width, accuracy: 1)
-        XCTAssertNotNil(presenter.stage.height)
-        XCTAssertGreaterThan(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight)
+        try nextMonth() // March
+        XCTAssertEqual(host.contentRect.width, first.width, accuracy: 1)
+        XCTAssertEqual(host.contentRect.height, first.height, accuracy: 1, "the grid never changes height")
+        try nextMonth() // April
+        try nextMonth() // May
+        XCTAssertEqual(host.contentRect.height, first.height, accuracy: 1)
         let inWindow = host.convert(host.contentRect, to: nil)
         XCTAssertGreaterThanOrEqual(inWindow.minY, 12)
         XCTAssertLessThanOrEqual(inWindow.maxY, 283)
@@ -1529,8 +1591,8 @@ final class AtticDropdownTests: XCTestCase {
         let document = try XCTUnwrap(scroll.documentView)
         document.scrollToVisible(CGRect(x: 0, y: document.bounds.maxY - 1, width: 1, height: 1))
         spin(0.2)
-        // The month shows no other month's days: 31 May is its last.
-        let last = DueDay(rawValue: "2021-05-31")!
+        // May 2021's grid ends with June's first week: 6 June is its last day.
+        let last = DueDay(rawValue: "2021-06-06")!
         let label = AtticDateCardFormat.spoken(try XCTUnwrap(last.startDate(in: calendar)), calendar: choices.cardCalendar)
         let day = try XCTUnwrap(accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == label })
         let frame: NSRect = day.accessibilityFrame!()
@@ -1539,13 +1601,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertTrue(host.contentRect.contains(center), "the last calendar row is inside the updated hit bounds after scrolling")
         XCTAssertNotNil(host.hitTest(host.convert(center, to: host.superview)))
         XCTAssertTrue(day.accessibilityPerformPress?() == true)
-        XCTAssertEqual(picked, last, "the bottom day runs the real pick action")
-        // Shrinking removes the viewport instead of retaining the old limit.
-        let previousMonth = try XCTUnwrap(accessibilityElements(host).first { ($0.accessibilityLabel?() ?? nil) == "Previous month" })
-        XCTAssertTrue(previousMonth.accessibilityPerformPress?() == true)
-        spin(0.2)
-        XCTAssertNil(presenter.stage.height)
-        XCTAssertEqual(host.contentRect.height, four.height + AtticDropdownMetrics.monthCellHeight, accuracy: 1)
+        XCTAssertEqual(picked, last, "the bottom day (another month's, drawn lighter) runs the real pick action")
     }
 
     /// The date card on screen (owner, 2026-10-05): no quick rows; the
@@ -1592,7 +1648,7 @@ final class AtticDropdownTests: XCTestCase {
         XCTAssertEqual(value("Monday 5 October"), "today")
         XCTAssertEqual(value("Friday 9 October"), "chosen")
         XCTAssertNil(element("Thursday 1 November"), "no other month's days")
-        XCTAssertNotNil(element("Remove date"), "a row's existing route to remove its date stays")
+        XCTAssertNotNil(element("Clear Date"), "a row's existing route to remove its date stays")
         let resting = host.contentRect.height
 
         func key(_ characters: String, _ keyCode: UInt16) {
@@ -1605,7 +1661,10 @@ final class AtticDropdownTests: XCTestCase {
         key("t", 17)
         XCTAssertNotNil(element("Today, Mon"), "typing suggests")
         XCTAssertNotNil(element("Tomorrow, Tue"))
-        XCTAssertEqual(host.contentRect.height, resting + 2 * AtticDropdownMetrics.rowHeight + AtticDropdownMetrics.fieldGap, accuracy: 1)
+        // Draft C: the suggestions sit under the field, 4 pt in, ruled off
+        // from the month.
+        let m = AtticDropdownMetrics.self
+        XCTAssertEqual(host.contentRect.height, resting + 3 * m.rowHeight + m.inset * 2 + m.headerRule, accuracy: 1)
         key("\u{7f}", 51)
         XCTAssertNil(element("Today, Mon"), "cleared, the suggestions go")
         XCTAssertEqual(host.contentRect.height, resting, accuracy: 1, "and the card is draft 2 again")
@@ -2200,26 +2259,45 @@ final class AtticDateCardTests: XCTestCase {
     /// Monday 5 October 2026, as in the drafts.
     private var today: Date { date(2026, 10, 5) }
 
+    /// Menus fix 1: the grid takes the pointer for its days (one tap and
+    /// one hover, not a button per day); each point answers its own cell,
+    /// edges included, and nothing outside the six weeks.
+    @MainActor func testTheGridFindsTheDayUnderThePointer() {
+        let d = AtticDropdownMetrics.self
+        let month = AtticDateMonth(containing: today, calendar: calendar)
+        // October 2026 starts on a Thursday: the grid opens on Monday 28 September.
+        XCTAssertEqual(AtticDateCard.day(at: CGPoint(x: 1, y: 1), in: month), date(2026, 9, 28))
+        XCTAssertEqual(AtticDateCard.day(at: CGPoint(x: d.monthCellWidth * 3 + 1, y: 1), in: month), date(2026, 10, 1))
+        XCTAssertEqual(AtticDateCard.day(at: CGPoint(x: d.monthCellWidth * 7 - 0.5, y: d.monthCellHeight * 6 - 0.5), in: month),
+                       date(2026, 11, 8), "the last cell: the grid's bottom-right corner")
+        XCTAssertNil(AtticDateCard.day(at: CGPoint(x: d.monthCellWidth * 7, y: 1), in: month))
+        XCTAssertNil(AtticDateCard.day(at: CGPoint(x: 1, y: d.monthCellHeight * 6), in: month))
+        XCTAssertNil(AtticDateCard.day(at: CGPoint(x: -1, y: 1), in: month))
+    }
+
     private func parse(_ text: String) -> Date? {
         NoteDateQuery.parse(text, today: today, calendar: calendar, locale: Locale(identifier: "en_GB"))
     }
 
-    func testTheMonthShowsNoOtherMonthsDays() {
+    /// Draft C (owner, 2026-10-23) supersedes "Quiet month" (2026-10-05):
+    /// six whole weeks with the neighbouring months' days, two-letter
+    /// weekdays.
+    func testTheMonthShowsSixWeeksWithTheNeighbouringDays() {
         let october = AtticDateMonth(containing: date(2026, 10, 9), calendar: calendar)
-        XCTAssertEqual(october.weekdays, ["M", "T", "W", "T", "F", "S", "S"])
-        XCTAssertEqual(october.cells.prefix(3), [nil, nil, nil], "1 Oct is a Thursday: three blank cells lead")
+        XCTAssertEqual(october.weekdays, ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"])
+        XCTAssertEqual(october.inMonth.prefix(4), [false, false, false, true], "1 Oct is a Thursday: three September days lead")
         XCTAssertEqual(october.cells[3], date(2026, 10, 1))
-        XCTAssertEqual(october.cells.compactMap { $0 }.count, 31)
-        XCTAssertEqual(october.cells.count % 7, 0)
-        XCTAssertEqual(october.weeks, 5)
-        XCTAssertNil(october.cells.last ?? nil, "1 November is not shown")
+        XCTAssertEqual(october.inMonth.filter { $0 }.count, 31)
+        XCTAssertEqual(october.cells.count, 42)
+        XCTAssertEqual(october.weeks, 6)
+        XCTAssertEqual(october.cells.last, date(2026, 11, 8), "November's first week is shown")
         XCTAssertEqual(AtticDateCardFormat.monthTitle(october.start, calendar: calendar), "October 2026")
         XCTAssertEqual(AtticDateCardFormat.spoken(date(2026, 10, 9), calendar: calendar), "Friday 9 October")
         var sunday = calendar
         sunday.firstWeekday = 1
         let us = AtticDateMonth(containing: date(2026, 10, 1), calendar: sunday)
-        XCTAssertEqual(us.weekdays.first, "S")
-        XCTAssertEqual(us.cells.prefix(5).filter { $0 == nil }.count, 4)
+        XCTAssertEqual(us.weekdays.first, "Su")
+        XCTAssertEqual(us.inMonth.prefix(5).filter { !$0 }.count, 4)
     }
 
     func testArrowsLightTheCursorFirstThenMoveItAndTheMonthFollows() {
@@ -2295,6 +2373,7 @@ final class AtticDateCardTests: XCTestCase {
         XCTAssertEqual(state.cursor, date(2026, 10, 9), "the next arrow starts where the pointer was")
     }
 
+    /// Draft C (owner, 2026-10-23, the Craft spec): up to four suggestions.
     func testTypingSuggestsOneOrTwoDaysAndClearingRemovesThem() {
         func suggest(_ text: String) -> [AtticDateSuggestion] {
             AtticDateSuggestions.make(text, today: today, calendar: calendar, parse: parse)
@@ -2302,8 +2381,8 @@ final class AtticDateCardTests: XCTestCase {
         XCTAssertEqual(suggest(""), [])
         XCTAssertEqual(suggest("  "), [])
         let t = suggest("t")
-        XCTAssertEqual(t.map(\.title), ["Today", "Tomorrow"])
-        XCTAssertEqual(t.map(\.detail), ["Mon", "Tue"])
+        XCTAssertEqual(t.map(\.title), ["Today", "Tomorrow", "Thursday"])
+        XCTAssertEqual(t.map(\.detail), ["Mon", "Tue", "8 Oct"])
         let fri = suggest("fri")
         XCTAssertEqual(fri.map(\.title), ["Friday"])
         XCTAssertEqual(fri.first?.detail, "9 Oct")
@@ -2331,25 +2410,29 @@ final class AtticDateCardTests: XCTestCase {
                        "typed text that matches nothing picks nothing")
     }
 
-    func testTheCompactSizeTokens() {
+    /// Draft C (owner, 2026-10-23: "the menus look good") supersedes E1's
+    /// Compact size (2026-10-05): the Craft spec sized for the panel.
+    func testDraftCSizeTokens() {
         let m = AtticDropdownMetrics.self
-        XCTAssertEqual(m.rowHeight, 28)
-        XCTAssertEqual(m.cornerRadius, 16)
-        XCTAssertEqual(m.inset, 6)
-        XCTAssertEqual(m.rowPadding, 9)
-        XCTAssertEqual(m.highlightRadius, 8)
-        XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius + 2, "the pill sits inside the corner")
-        XCTAssertEqual(m.fieldHeight, 26)
-        XCTAssertEqual(m.minWidth, 144, "the width rule is unchanged")
+        XCTAssertEqual(m.rowHeight, 32)
+        XCTAssertEqual(m.cornerRadius, 18)
+        XCTAssertEqual(m.inset, 4)
+        XCTAssertEqual(m.rowPadding, 10)
+        XCTAssertEqual(m.highlightRadius, 6)
+        XCTAssertEqual(m.fieldHeight, 30)
+        XCTAssertEqual(m.fieldHeaderHeight, 40)
+        XCTAssertEqual(m.inset + m.fieldInset, 6, "the field 6 pt in from the card's edge")
+        XCTAssertEqual(m.minWidth, 150)
         XCTAssertEqual(m.panelMargin, 12)
         XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 13)
         XCTAssertEqual(AtticTextStyle.dropdownHeading.spec.size, 13)
-        XCTAssertEqual(AtticTextStyle.dropdownDay.spec.size, 12.5)
+        XCTAssertEqual(AtticTextStyle.dropdownHeading.spec.weight, .medium)
+        XCTAssertEqual(AtticTextStyle.dropdownDay.spec.size, 13)
         XCTAssertEqual(AtticTextStyle.dropdownWeekday.spec.size, 10)
-        XCTAssertEqual(m.monthMark, 25)
-        XCTAssertEqual(m.monthMarkRadius, 7)
-        XCTAssertEqual(AtticPickerMetrics.tagListMaxHeight, 7 * m.rowHeight, "seven rows before the tag list scrolls")
-        XCTAssertEqual(m.monthCellWidth * 7 + m.monthGridInset * 2 + m.inset * 2, 221, accuracy: 1, "draft 2's 222 pt card")
+        XCTAssertEqual(AtticTextStyle.dropdownSection.spec.size, 11)
+        XCTAssertEqual(m.monthMarkRadius, 6)
+        XCTAssertEqual(AtticPickerMetrics.tagListMaxHeight, 6 * m.rowHeight + 4, "six rows before the tag list scrolls")
+        XCTAssertEqual(m.monthCellWidth * 7 + m.dateBodyInset * 2, m.dateCardWidth, accuracy: 0.01, "draft C's 224 pt card")
     }
 
     private func keyEvent(_ characters: String, keyCode: UInt16, flags: NSEvent.ModifierFlags) -> NSEvent {
@@ -2409,36 +2492,32 @@ extension AtticDropdownTests {
 
 @MainActor
 extension AtticDropdownTests {
-    /// O14-02: the owner's unfold. The card grows from one row's height,
-    /// fades in, grows from 0.98 and drops 4 pt, on the fast-out curve in
-    /// 180 ms; its contents wait 30 ms, then go from a 5 pt blur to sharp
-    /// in 130 ms. Closing runs back in 120 ms, 3 pt towards the anchor.
+    /// Draft C (owner, 2026-10-23) supersedes O14-02's unfold: the card
+    /// opens as one piece, as it closes (V-11), whole from its first frame,
+    /// fading in from 0.98 and 4 pt towards its anchor on the fast-out
+    /// curve in 180 ms, with no content blur. Closing runs back in 120 ms,
+    /// 3 pt towards the anchor.
     func testR13TheUnfoldGrowsFromARowsHeightAndSharpensItsContentsJustAfter() {
         let r = AtticDropdownReveal.self
         XCTAssertEqual(r.openDuration, 0.18, accuracy: 1e-9)
         XCTAssertEqual(r.closeDuration, 0.12, accuracy: 1e-9)
         XCTAssertEqual(r.curve, AtticCubicBezier(0.16, 1, 0.3, 1))
-        XCTAssertEqual(r.startHeight, 28)
         let shut = r.frame(time: 0, closing: false)
-        XCTAssertEqual(shut.reveal, 0)
+        XCTAssertEqual(shut.reveal, 1, "whole from the first frame: one piece")
         XCTAssertEqual(shut.opacity, 0)
         XCTAssertEqual(shut.scale, 0.98, accuracy: 1e-6)
         XCTAssertEqual(shut.travel, 4, accuracy: 1e-6, "it starts 4 pt towards its anchor and drops into place")
-        XCTAssertEqual(shut.contentBlur, 5, accuracy: 1e-6)
-        XCTAssertEqual(shut.shadow, 0, "the shadow grows with the card")
+        XCTAssertEqual(shut.contentBlur, 0, "no blur: glass is never re-cut")
+        XCTAssertEqual(shut.shadow, 0, "the shadow comes with the card")
         XCTAssertEqual(r.frame(time: 1, closing: false), .rest)
-        let waiting = r.frame(time: CGFloat(0.029 / r.openDuration), closing: false)
-        XCTAssertEqual(waiting.contentBlur, 5, accuracy: 1e-6, "the contents start about 30 ms after the card")
-        XCTAssertGreaterThan(waiting.reveal, 0.5, "fast-out: the card is well on its way by then")
-        XCTAssertEqual(r.frame(time: CGFloat(0.161 / r.openDuration), closing: false).contentBlur, 0, accuracy: 1e-6,
-                       "sharp 30 + 130 ms in")
-        var lastReveal: CGFloat = -1
+        var lastOpacity: CGFloat = -1
         for step in 0...40 {
             let f = r.frame(time: CGFloat(step) / 40, closing: false)
+            XCTAssertEqual(f.reveal, 1, "whole, step \(step)")
             XCTAssertGreaterThanOrEqual(f.scale, 0.98 - 1e-9, "never a zoom from nothing")
             XCTAssertLessThanOrEqual(f.scale, 1 + 1e-9)
-            XCTAssertGreaterThanOrEqual(f.reveal, lastReveal)
-            lastReveal = f.reveal
+            XCTAssertGreaterThanOrEqual(f.opacity, lastOpacity)
+            lastOpacity = f.opacity
         }
         XCTAssertEqual(r.frame(time: 0, closing: true), .rest, "closing starts from the open card")
         let gone = r.frame(time: 1, closing: true)
@@ -2554,22 +2633,23 @@ extension AtticDropdownTests {
         XCTAssertEqual(hidden, shown, accuracy: 0.01)
     }
 
-    /// O14-09: the weekday letters are quieter than the dates, and the
-    /// month sits evenly in its card: the title, Today and ‹ › on the grid's
-    /// columns, the marks as far from every edge, and as far apart across
-    /// as down.
-    func testR13TheCalendarIsQuieterAndEvenlyInset() {
+    /// Draft C (owner, 2026-10-23) on the Craft spec supersedes O14-09's
+    /// square grid: 29.7 x 26.7 cells with no gap, each holding a mark 4 pt
+    /// smaller each way (6 pt corners); the weekdays small, semibold and
+    /// quieter than the days; the month header 28 pt with ‹ ⦿ › in 24 pt
+    /// columns.
+    func testDraftCTheCalendarGrid() {
         let d = AtticDropdownMetrics.self
-        XCTAssertEqual(AtticTextStyle.dropdownWeekday.spec.weight, .regular)
+        XCTAssertEqual(AtticTextStyle.dropdownWeekday.spec.weight, .semibold)
         XCTAssertLessThan(AtticTextStyle.dropdownWeekday.spec.size, AtticTextStyle.dropdownDay.spec.size)
-        let halfGap = (d.monthCellWidth - d.monthMark) / 2
-        let side = d.inset + d.monthGridInset + halfGap
-        XCTAssertEqual(d.inset + d.monthTitleLeading, side, "the month title starts at the first column's mark")
-        XCTAssertEqual(d.inset + d.monthHeaderTrailing, side, "› ends at the last column's mark")
-        XCTAssertEqual(d.todayHeight, d.monthNavMark, "Today and ‹ › are one size")
-        XCTAssertEqual(d.monthCellHeight, d.monthCellWidth, "a square grid: marks as far apart across as down")
-        XCTAssertEqual(d.inset + d.monthHeaderTop + (d.monthCellHeight - d.monthMark) / 2, side, "the header's marks as far from the top")
-        XCTAssertEqual(d.inset + d.monthGridBottom + halfGap, side, "the last week as far from the bottom")
+        XCTAssertEqual(d.monthCellWidth, 29.71, accuracy: 0.01)
+        XCTAssertEqual(d.monthCellHeight, 26.7)
+        XCTAssertEqual(d.monthCellWidth - d.monthMarkWidth, 4, accuracy: 0.001)
+        XCTAssertEqual(d.monthCellHeight - d.monthMarkHeight, 4, accuracy: 0.001)
+        XCTAssertEqual(d.monthHeaderHeight, 28)
+        XCTAssertEqual(d.monthNavWidth, 24)
+        XCTAssertEqual(d.weekdayHeight, 20)
+        XCTAssertEqual(d.clearHeight, 32)
     }
 }
 
@@ -2651,20 +2731,15 @@ extension AtticDropdownTests {
 
 @MainActor
 extension AtticDropdownTests {
-    /// U-41: mid-unfold the card is already opaque, so the rows under it
-    /// never show through; its height still grows and its contents still
-    /// sharpen. Shut and gone stay clear.
+    /// U-41, under draft C's one-piece opening (owner, 2026-10-23): the
+    /// card is opaque early in its fade (30 % of the curve), so the rows
+    /// under it never show through for long. Shut and gone stay clear.
     func testU41TheUnfoldingCardIsOpaqueOnceItIsUnderway() {
         let r = AtticDropdownReveal.self
         XCTAssertEqual(r.frame(time: 0, closing: false).opacity, 0)
         XCTAssertEqual(r.frame(time: 1, closing: true).opacity, 0)
         let frozen = r.frame(time: 0.3, closing: false)
-        XCTAssertLessThan(frozen.reveal, 1, "still unfolding")
         XCTAssertEqual(frozen.opacity, 1, "the review's 30 % still: opaque")
-        for step in 1...40 {
-            let open = r.frame(time: CGFloat(step) / 40, closing: false)
-            if open.reveal >= r.opaqueBy { XCTAssertEqual(open.opacity, 1, accuracy: 1e-9, "opening, step \(step)") }
-        }
         XCTAssertEqual(r.opacity(progress: 0.15), 0.5, accuracy: 1e-9)
     }
 

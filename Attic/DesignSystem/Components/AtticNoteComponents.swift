@@ -441,7 +441,7 @@ struct AtticTagSuggestionList: View {
     var body: some View {
         AtticDropdownCard() {
             ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
-                AtticDropdownRow(title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
+                AtticDropdownRow(title: suggestion.isNew ? AtticTagPicker.createTitle(suggestion.name) : "#" + suggestion.name,
                                 dot: suggestion.isNew ? nil : colouring.hue(for: suggestion.name).ink,
                                 checkGlyph: suggestion.isNew ? "plus" : nil,
                                 detail: suggestion.isNew ? nil : "\(suggestion.count)",

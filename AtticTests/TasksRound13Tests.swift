@@ -179,7 +179,10 @@ final class TasksRound13Tests: XCTestCase {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
-        let row = try openActionsMenu(hosted, on: "Call the plumber", keys: Array(repeating: down, count: 8) + [("\r", 36)])
+        // Dropdown content: answers (owner, 2026-10-24), answer 1 A: Complete,
+        // Start Working, Edit Title, Add Subtask (4th), Date (5th), Tags,
+        // Priority, Move to Later, More (9th), Delete.
+        let row = try openActionsMenu(hosted, on: "Call the plumber", keys: Array(repeating: down, count: 4) + [("\r", 36)])
         XCTAssertEqual(hosted.model.newSubtaskParentID, row, "Return ran Add Subtask")
         XCTAssertNil(hosted.model.editingTitleID, "and did not edit the parent's title")
     }
@@ -193,7 +196,7 @@ final class TasksRound13Tests: XCTestCase {
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let row = try openActionsMenu(hosted, on: "Call the plumber",
-                                     keys: Array(repeating: down, count: 8) + [("\r", 36)],
+                                     keys: Array(repeating: down, count: 4) + [("\r", 36)], // Add Subtask is 4th (answer 1 A)
                                      coreGraphicsReturn: true)
         XCTAssertEqual(hosted.model.newSubtaskParentID, row, "the highlighted Add Subtask owns Return")
         XCTAssertNil(hosted.model.editingTitleID, "the key never edits the parent")
@@ -205,7 +208,7 @@ final class TasksRound13Tests: XCTestCase {
         defer { hosted.close() }
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let row = try openActionsMenu(hosted, on: "Call the plumber",
-                                     keys: Array(repeating: down, count: 4) + [("\r", 36), down, ("\r", 36)],
+                                     keys: Array(repeating: down, count: 5) + [("\r", 36), down, ("\r", 36)], // Date is 5th (answer 1 A)
                                      coreGraphicsReturn: true)
         XCTAssertNotNil(hosted.model.dueDay(of: row), "Return opens Date, then runs its highlighted quick day")
         XCTAssertNil(hosted.model.editingTitleID)
