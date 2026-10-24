@@ -2200,18 +2200,48 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(try storedDocument(session.noteID), changed)
     }
 
-    func testBRetiringConvertedPageReleasesTheMinimalWindowHost() async throws {
-        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+    // C2 replaces B's temporary close-and-handoff with an in-place projection.
+    func testC2WindowConversionKeepsWindowLeaseAndHistoryInPlace() async throws {
+        let id = try seed(.boundary); await notes.startAndWait()
+        let presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        let ui = PanelUIState(), beforeActive = notes.active
         TaskNoteWindows.shared.open(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
-            design: .default, uiState: PanelUIState())
-        let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id))
-        defer { window.delegate = nil; window.close() }
-        let removed = await TaskNoteConversion.removeTask(id, notes: notes, tasks: tasks, workspaceSession: session)
-        XCTAssertEqual(removed, .removed(noteID: session.noteID))
-        await notes.retireConvertedNote(session.noteID, installingCommittedForm: false)
-        XCTAssertNil(presenter.lease)
-        XCTAssertNil(TaskNoteWindows.shared.window(for: id), "a closed task editor cannot remain mounted in its old window")
-        XCTAssertNil(window.contentViewController)
+            design: .default, uiState: ui)
+        let window = try XCTUnwrap(TaskNoteWindows.shared.window(for: id)), frame = window.frame
+        defer { TaskNoteWindows.shared.finishHandoff(id) }
+        let lease = presenter.lease, history = presenter.page.history
+        let before = try storedDocument(session.noteID)
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        await AtticPanelView.removeFromTasks(id, pages: notes, tasks: tasks, uiState: ui, toasts: nil)
+        coordinator.save = { try $0.save() }
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
+        XCTAssertEqual(presenter.lease, lease)
+        XCTAssertEqual(try storedDocument(session.noteID), before)
+        await AtticPanelView.removeFromTasks(id, pages: notes, tasks: tasks, uiState: ui, toasts: nil)
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
+        XCTAssertEqual(window.frame, frame)
+        XCTAssertEqual(presenter.lease, lease)
+        XCTAssertTrue(session.usesWorkspaceBinding)
+        XCTAssertFalse(session.engine.isBodyOnly)
+        XCTAssertTrue(notes.active === beforeActive)
+        XCTAssertTrue(session.engine.history.workspace === history)
+        let undone = await history.replay(redo: false)
+        XCTAssertEqual(undone, .applied)
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: id) === window)
+        XCTAssertEqual(presenter.lease, lease)
+        XCTAssertTrue(session.engine.isBodyOnly)
+        let redone = await history.replay(redo: true)
+        XCTAssertEqual(redone, .applied)
+        guard case let .made(newTask) = await TaskNoteConversion.makeTask(fromNote: session.noteID, notes: notes, tasks: tasks, workspaceSession: session) else { return XCTFail("Add must use the window's leased ordinary session") }
+        XCTAssertNotEqual(newTask, id)
+        XCTAssertTrue(TaskNoteWindows.shared.window(for: newTask) === window)
+        XCTAssertTrue(session.engine.history.workspace === history)
+        XCTAssertEqual(presenter.lease, lease)
+        XCTAssertEqual(presenter.taskID, newTask)
+        XCTAssertTrue(session.engine.isBodyOnly)
+        XCTAssertFalse(notes.open(noteID: session.noteID), "the panel cannot steal the window's editor")
+        let resolved = try coordinator.sessions.session(for: .task(newTask), notes: notes)
+        XCTAssertTrue(resolved === presenter.page)
     }
 
     func testBAddPreservesLiteralTitleAndFailureRollsBack() async throws {
@@ -2366,6 +2396,136 @@ final class TaskLifecycleSliceTests: XCTestCase {
         guard case let .made(taskID) = outcome else { return XCTFail("\(outcome)") }
         XCTAssertTrue(try rows(untitled).allSatisfy { $0.taskID == taskID })
         XCTAssertEqual(tasks.task(withID: taskID)?.title, "")
+    }
+
+    // Engineering contract: C2 surface parity, one-item-plan Surface table.
+    func testC2SearchGroupsAlternateWritingButKeepsReferencingNotesSeparate() async throws {
+        let ids = try TaskNoteLifecyclePreviewSeed.seed(in: container)
+        makeStores()
+        let taskID = try XCTUnwrap(ids[.alternateNote])
+        let own = try ownNotes(taskID).sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
+        XCTAssertEqual(own.count, 2)
+        let canonical = try XCTUnwrap(own.first?.id)
+        let reference = UUID()
+        _ = try notes.store.createDocumentNote(id: reference, document: NoteDocument(blocks: [.text("Venue shortlist reference"), .text("Venue shortlist")])).get()
+        let links = ModelContext(container)
+        links.insert(ItemLink(source: AtticItemRef(.note, reference), target: AtticItemRef(.task, taskID), kind: .reference))
+        try links.save()
+        let model = NotesLibraryModel(search: { [notes] in try await notes!.store.searchNoteIDs(matching: $0) }, store: notes.store, taskStore: tasks)
+        XCTAssertEqual(model.groups(store: notes.store, drafts: []).flatMap(\.rows).filter { own.map(\.id).contains($0.id) }.map(\.id), [canonical])
+        for query in ["Venue shortlist", "library hall"] {
+            let matches = try await notes.store.searchNoteIDs(matching: query)
+            XCTAssertTrue(matches.contains(canonical), query)
+            XCTAssertFalse(matches.contains(own[1].id), "alternate writing is Review on the same result")
+            if query == "Venue shortlist" { XCTAssertTrue(matches.contains(reference)) }
+        }
+    }
+
+    func testC2SearchIncludesCompletedSubtasksAndLegacyFilenames() async throws {
+        let ids = try TaskNoteLifecyclePreviewSeed.seed(in: container)
+        makeStores()
+        let taskID = try XCTUnwrap(ids[.doneToday])
+        let noteID = try XCTUnwrap(try ownNotes(taskID).first?.id)
+        let child = try XCTUnwrap(tasks.subtasks(of: taskID).first)
+        let childMatch = try await notes.store.searchNoteIDs(matching: child.title)
+        XCTAssertEqual(childMatch, [noteID])
+        let context = ModelContext(container)
+        let row = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>()).first { $0.id == taskID })
+        row.imageReferencesData = try JSONEncoder().encode([TaskImageReference(id: UUID(), filename: "C2-evidence.pdf", digest: "digest", contentTypeIdentifier: "com.adobe.pdf", byteCount: 7)])
+        try context.save()
+        let fileMatch = try await notes.store.searchNoteIDs(matching: "C2-evidence")
+        XCTAssertEqual(fileMatch, [noteID])
+        let logged = try XCTUnwrap(ids[.doneLogged]), loggedNote = try XCTUnwrap(try ownNotes(logged).first?.id)
+        let loggedMatch = try await notes.store.searchNoteIDs(matching: "Order the banner")
+        XCTAssertEqual(loggedMatch, [loggedNote])
+    }
+
+    func testC2AddKeepsLegacyNoteTagsRecoverableWhileTaskTagsAreEffective() async throws {
+        makeStores(); await notes.startAndWait()
+        let id = UUID(), document = NoteDocument(blocks: [.text("Tags"), .text("Writing")])
+        _ = try notes.store.createDocumentNote(id: id, document: document, tags: ["legacy"]).get()
+        XCTAssertTrue(notes.open(noteID: id))
+        guard case let .made(taskID) = await TaskNoteConversion.makeTask(fromNote: id, notes: notes, tasks: tasks) else { return XCTFail() }
+        XCTAssertEqual(notes.store.note(withID: id)?.tags, ["legacy"], "hidden compatibility tags remain recoverable after restart")
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "Live title", tags: ["effective"]))
+        let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, taskStore: tasks)
+        XCTAssertEqual(model.recentTags(store: notes.store), ["effective"])
+        model.tagFilter = "legacy"
+        XCTAssertTrue(model.groups(store: notes.store, drafts: []).isEmpty)
+        model.tagFilter = "effective"
+        XCTAssertEqual(model.groups(store: notes.store, drafts: []).flatMap(\.rows).map(\.id), [id])
+        XCTAssertEqual(try storedDocument(id).title, "Tags", "rename does not rewrite compatibility bytes")
+        XCTAssertEqual(library.title(of: AtticItemRef(.note, id)), "Live title", "references through the writing alias resolve the live item title")
+    }
+
+    func testC2SearchOpensWritingAtParagraphAndRevealsHiddenChild() throws {
+        let id = try seed(.boundary)
+        notes.libraryQueryAcrossTaskPage = "Sam owns"
+        let presenter = try open(id)
+        presenter.restoreViewStateOnMount()
+        XCTAssertEqual(presenter.host.textView.selectedRange().location, "Everything that has to be true before 1.0 goes out.".utf16.count + 1)
+        notes.libraryQueryAcrossTaskPage = "C2 hidden match"
+        for index in 0..<5 { _ = tasks.create(title: index == 4 ? "C2 hidden match" : "C2 child \(index)", parentID: id) }
+        presenter.model.refresh()
+        presenter.model.setExpanded(false)
+        let match = try XCTUnwrap(presenter.model.rows.first { $0.title == "C2 hidden match" })
+        // A fresh opening consumes the search request and reveals the match.
+        presenter.restoreViewStateOnMount()
+        XCTAssertTrue(presenter.model.isVisible(match.id))
+        XCTAssertEqual(presenter.model.focusedRowID, match.id)
+        XCTAssertTrue(presenter.model.isRevealedForTheMoment)
+    }
+
+    func testC2InPageFindSearchesOnlyWritingAndNeverStructuredFields() throws {
+        let id = try seed(.boundary), presenter = try open(id)
+        let engine = try XCTUnwrap(presenter.session?.engine)
+        engine.find.show()
+        for query in [presenter.model.head.title, presenter.model.rows[0].title, "#launch"] {
+            engine.find.query = query
+            XCTAssertTrue(engine.find.matches.isEmpty, query)
+        }
+        engine.find.query = "Sam owns"
+        XCTAssertEqual(engine.find.matches.count, 1)
+        XCTAssertGreaterThan(try XCTUnwrap(engine.find.matches.first?.noteRange.location), 0)
+    }
+
+    func testC2MarkdownAndPrintUseLiveHeadDetailsSubtasksThenWriting() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "C2 export title", priority: .high, tags: ["export"]))
+        presenter.model.refresh()
+        let storedBefore = try storedDocument(session.noteID)
+        let markdown = try XCTUnwrap(notes.markdown(noteID: session.noteID))
+        XCTAssertTrue(markdown.hasPrefix("# C2 export title"))
+        XCTAssertTrue(markdown.contains("High priority"))
+        for row in presenter.model.rows { XCTAssertTrue(markdown.contains(row.title), row.title) }
+        XCTAssertLessThan(try XCTUnwrap(markdown.range(of: presenter.model.rows[0].title)?.lowerBound), try XCTUnwrap(markdown.range(of: "Everything that has")?.lowerBound))
+        let printed = await session.engine.preparedPrintView()
+        XCTAssertTrue(printed.string.hasPrefix("C2 export title"))
+        XCTAssertTrue(printed.string.contains("High priority"))
+        XCTAssertTrue(printed.string.contains(presenter.model.rows[0].title))
+        XCTAssertEqual(try storedDocument(session.noteID), storedBefore, "export is a read-only projection")
+    }
+
+    func testC2HistoryPreviewsHistoricalDetailsButRestoreKeepsCurrentTaskFamily() async throws {
+        let id = try seed(.boundary), presenter = try open(id), session = try XCTUnwrap(presenter.session)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), priority: .high, tags: ["historical"]))
+        XCTAssertTrue(notes.store.recordVersion(noteID: session.noteID, reason: .pause))
+        let version = try XCTUnwrap(notes.store.versions(noteID: session.noteID).first)
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: id)), title: "C2 current head", priority: .low, tags: ["current"]))
+        let taskBefore = try WorkspaceModelToken.read(.init(entity: .task, id: id), in: ModelContext(container))
+        let associationBefore = try WorkspaceScopeToken.read(.taskAssociations(id), in: ModelContext(container))
+        let historyOpened = await notes.openHistoryDurably(workspace: session)
+        XCTAssertTrue(historyOpened)
+        let browser = try XCTUnwrap(notes.historyBrowser)
+        notes.selectHistoryVersion(try XCTUnwrap(browser.entries.firstIndex { $0.id == version.id }))
+        let preview = try XCTUnwrap(notes.historyBrowser?.preview?.engine.textStorage.string)
+        XCTAssertTrue(preview.contains("High priority"))
+        XCTAssertTrue(preview.contains("#historical"))
+        XCTAssertFalse(preview.contains("Low priority"))
+        let historyRestored = await notes.restoreHistoryVersionDurably()
+        XCTAssertTrue(historyRestored)
+        XCTAssertEqual(try WorkspaceModelToken.read(.init(entity: .task, id: id), in: ModelContext(container)), taskBefore)
+        XCTAssertEqual(try WorkspaceScopeToken.read(.taskAssociations(id), in: ModelContext(container)), associationBefore)
     }
 
     // MARK: Version History of a task's note (S4, § 2.10)

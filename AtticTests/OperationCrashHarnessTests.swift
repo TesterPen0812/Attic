@@ -122,11 +122,19 @@ final class OperationCrashHarnessTests: XCTestCase {
     /// Engineering rule 2026-10-23: both circle changes are atomic across
     /// replica rows, document projection, retirement/redirect and receipts.
     func testBAddAndRemoveTasksRealKillMatricesReopenTwice() async throws {
+        try await assertCircleCrashMatrices(inWindow: false)
+    }
+
+    func testC2RetainedWindowProjectionCrashMatricesReopenTwice() async throws {
+        try await assertCircleCrashMatrices(inWindow: true)
+    }
+
+    private func assertCircleCrashMatrices(inWindow: Bool) async throws {
         for adding in [true, false] {
-            let mode = adding ? "add-to-tasks" : "remove-from-tasks"
+            let mode = (inWindow ? "window-" : "") + (adding ? "add-to-tasks" : "remove-from-tasks")
             let staged = adding ? "B-add-association" : "B-remove-tasks"
             let points = ["K-pre-intent", "K-intent-synced", "K1", "K2", "K3-validation", staged,
-                          "K3-note", "K4", "K5", "K6-1", "save-then-throw"] + (adding ? ["K3-task", "B-add-published"] : ["B-remove-writing", "B-remove-published"])
+                          "K3-note", "K4", "K5", "K6-1", "save-then-throw"] + (adding ? ["K3-task", "B-add-published"] : ["B-remove-writing", "B-remove-published"]) + (inWindow ? ["C2-projection-rekeyed", "C2-projection-installed"] : [])
             for point in points {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOperationCrash-\(UUID())")
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -137,7 +145,7 @@ final class OperationCrashHarnessTests: XCTestCase {
                 let crashed = try await runChild(mode, root: root, point: point == "save-then-throw" ? nil : point,
                     saveThenThrow: point == "save-then-throw")
                 XCTAssertEqual(crashed, point == "save-then-throw" ? 73 : 86, "\(mode) \(point)")
-                let committed = ["K5", "K6-1", "B-add-published", "B-remove-published", "save-then-throw"].contains(point)
+                let committed = ["K5", "K6-1", "B-add-published", "B-remove-published", "C2-projection-rekeyed", "C2-projection-installed", "save-then-throw"].contains(point)
                 for reopen in 0..<2 {
                     let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: root)
                     let coordinator = try WorkspaceOperationCoordinator(container: container, journal: WorkspaceCrashFixture.journal(root))
