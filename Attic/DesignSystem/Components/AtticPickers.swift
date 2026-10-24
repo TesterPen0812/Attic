@@ -889,12 +889,19 @@ struct AtticTagPicker: View {
     @Environment(\.atticDropdownHeight) private var cardHeight
     @Environment(\.atticTagColouring) private var colouring
 
-    /// Draft C's chrome around the list, the card's insets excluded: the
-    /// field's header and its rule, "Tags", and the rule and row of the
-    /// "New Tag…" foot.
+    /// Draft C's chrome around the list at rest, the card's insets
+    /// excluded: the field's header and its rule, and "Tags". No foot at
+    /// rest: you type in the field to add (Dropdown content: answers,
+    /// owner, 2026-10-24, answer 3 A).
     static var chromeHeight: CGFloat {
         let m = AtticDropdownMetrics.self
-        return (m.fieldHeaderHeight - m.inset) + m.headerRule + m.sectionHeaderHeight + m.separatorHeight + m.rowHeight
+        return (m.fieldHeaderHeight - m.inset) + m.headerRule + m.sectionHeaderHeight
+    }
+
+    /// What a typed new name adds below the list: the rule and the
+    /// "New Tag “#…”" row.
+    static var createHeight: CGFloat {
+        AtticDropdownMetrics.separatorHeight + AtticDropdownMetrics.rowHeight
     }
 
     var body: some View {
@@ -906,11 +913,13 @@ struct AtticTagPicker: View {
         // are plain rows (nothing to scroll, for the pointer, the keyboard
         // or the UI tests).
         let normalHeight = CGFloat(room) * m.rowHeight
-        let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - m.inset * 2 - Self.chromeHeight) } ?? normalHeight)
+        let chrome = Self.chromeHeight + (create == nil ? 0 : Self.createHeight)
+        let listHeight = min(normalHeight, cardHeight.map { max(0, $0 - m.inset * 2 - chrome) } ?? normalHeight)
         let count = Self.rowCount(tags: tags.count, create: create)
         VStack(alignment: .leading, spacing: 0) {
             // Draft C: the field in its header, ruled off; "Tags"; the
-            // tags with their dots and trailing ticks; then "New Tag…".
+            // tags with their dots and trailing ticks; then, for a typed
+            // name no tag has, "New Tag “#…”" (answer 3 A: no foot at rest).
             AtticDropdownFieldHeader {
                 AtticDropdownField(text: $query, placeholder: String(localized: "Tag"),
                                    systemName: "magnifyingglass", focus: focus, label: String(localized: "Find or add a tag"))
@@ -925,7 +934,6 @@ struct AtticTagPicker: View {
                         AtticDropdownViewport(height: listHeight) { rows }
                     }
                 }
-                AtticDropdownRule()
                 createRow(count: count)
             }
             .modifier(AtticOptionalDropdownList(focus: focus, highlighted: onListHighlight, count: count))
@@ -933,7 +941,7 @@ struct AtticTagPicker: View {
         // In a card cut short the list keeps the field and shortens; the
         // card still measures its natural height: the list's full room.
         .atticDropdownHeightGivenUp(normalHeight - listHeight)
-        // "New tag “#…”" appears as you type: the card widens for it.
+        // 224 pt, fixed (sheet 3): a longer name is cut short.
         .atticDropdownIdealWidth(Self.rowsWidth(tags: tags.map(\.name), create: create, details: tags.compactMap(\.detail)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
@@ -961,72 +969,36 @@ struct AtticTagPicker: View {
         }
     }
 
-    /// The foot (draft C): "+ New Tag…", which puts the keyboard in the
-    /// field; with a name typed that is no tag yet, "New tag “#…”", which
-    /// adds it (the list's last keyboard row).
+    /// With a name typed that is no tag yet, "New Tag “#…”" under a rule,
+    /// which adds it (the list's last keyboard row). Nothing at rest: you
+    /// type in the field to add (Dropdown content: answers, owner,
+    /// 2026-10-24, answer 3 A; Title Case, rule 5).
     @ViewBuilder
     private func createRow(count: Int) -> some View {
         if let create {
+            AtticDropdownRule()
             // The + sits in the dots' column, so the name starts where the
             // tags' names do.
-            AtticDropdownRow(title: String(localized: "New tag “#\(create)”"), check: .off, checkGlyph: "plus",
+            AtticDropdownRow(title: Self.createTitle(create), check: .off, checkGlyph: "plus",
                              isHighlighted: highlighted == tags.count, onHover: hover(tags.count), position: tags.count + 1, itemCount: count) {
                 onCreate(create)
             }
             .id(tags.count)
-        } else {
-            AtticTagPickerFoot { focus.wrappedValue = .field }
         }
     }
+
+    /// The create row's name: "New Tag “#travel”".
+    static func createTitle(_ name: String) -> String { String(localized: "New Tag “#\(name)”") }
 
     private func hover(_ index: Int) -> ((Bool) -> Void)? {
         onHover.map { report in { inside in report(index, inside) } }
     }
 
-    /// The widest row's width (the dot column, the name, then the tick's
-    /// column at the end; the create row's + is in the dot column), the
-    /// card's insets excluded: measured from the names, no layout pass.
+    /// The rows' width, the card's insets excluded: the card is 224 pt
+    /// whatever the names (Dropdown content: answers, owner, 2026-10-24,
+    /// sheet 3: "fixed at 224 pt"); a longer name is cut short.
     static func rowsWidth(tags: [String], create: String?, details: [String] = []) -> CGFloat {
-        let m = AtticDropdownMetrics.self
-        let style = AtticTextStyle.dropdownRow
-        let widestDetail = details.map { AtticTextStyle.shortcut.measuredWidth($0) }.max().map { m.detailGap + $0 } ?? 0
-        let widestTag = (tags.map { style.measuredWidth("#" + $0) }.max() ?? 0) + widestDetail
-        let createRow = create.map { style.measuredWidth(String(localized: "New tag “#\($0)”")) } ?? 0
-        // Never narrower than draft C's 224 pt card.
-        return max(m.dateCardWidth - m.inset * 2,
-                   ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + max(widestTag, createRow) + m.columnGap + m.checkSlot))
-    }
-}
-
-/// The tag picker's resting foot (draft C): "+ New Tag…", which puts the
-/// keyboard in the field. A plain button with its own hover fill, kept
-/// lighter than a list row (no menu-item stand-in), since it is not one of
-/// the list's choices and the picker's open cost is gated.
-private struct AtticTagPickerFoot: View {
-    let action: () -> Void
-    @State private var hovered = false
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        let m = AtticDropdownMetrics.self
-        Button(action: action) {
-            HStack(spacing: m.columnGap) {
-                AtticIcon(systemName: "plus", size: m.checkSize, weight: .medium, ink: .icon)
-                    .frame(width: m.dotSlot)
-                AtticText(verbatim: String(localized: "New Tag…"), style: .dropdownRow, ink: .label)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, m.rowPadding)
-            .frame(height: m.rowHeight)
-            .background(RoundedRectangle(cornerRadius: m.highlightRadius, style: .continuous)
-                .fill((hovered ? design.tokens.dropdownHighlight : .clear).color))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        .focusable(false)
-        .focusEffectDisabled()
-        .onHover { hovered = $0 }
-        .accessibilityLabel(String(localized: "New Tag…"))
+        AtticDropdownMetrics.fieldCardWidth - AtticDropdownMetrics.inset * 2
     }
 }
 
@@ -1177,16 +1149,26 @@ enum AtticTagPickerHighlight: Hashable {
 // MARK: - Task picker
 
 /// "Move to Task…" (control audit item 5): the tag picker's pattern for
-/// tasks. "Find a task", then the tasks it can go to, each with where it
-/// is listed ("Now", "Later"); typing filters, the arrows move the one
-/// highlight, Return or a click chooses. Rows are built only as they
+/// tasks. The "Task" field, then the tasks it can go to under where they
+/// are listed (Now, Later), each with a task's circle, 224 pt wide
+/// (Dropdown content: answers, owner, 2026-10-24, sheet 3); typing filters,
+/// the arrows move the one highlight, Return or a click chooses. Rows are built only as they
 /// scroll into view, so a long list costs a screenful per keystroke.
 struct AtticTaskPicker: View {
     struct Choice: Identifiable, Equatable {
         let id: UUID
         let title: String
-        /// Where the task is listed ("Now", "Later").
-        let detail: String?
+        /// A quiet trailing detail.
+        var detail: String? = nil
+        /// Where the task is listed ("Now", "Later"): the header it sits
+        /// under. Choices come grouped.
+        var group: String? = nil
+    }
+
+    /// Whether the choice at `index` opens a group (it gets its header).
+    static func startsGroup(_ choices: [Choice], at index: Int) -> Bool {
+        guard choices.indices.contains(index), choices[index].group != nil else { return false }
+        return index == 0 || choices[index - 1].group != choices[index].group
     }
 
     @Binding var query: String
@@ -1208,7 +1190,7 @@ struct AtticTaskPicker: View {
         let m = AtticDropdownMetrics.self
         VStack(alignment: .leading, spacing: 0) {
             AtticDropdownFieldHeader {
-                AtticDropdownField(text: $query, placeholder: String(localized: "Find a task"), systemName: "magnifyingglass", focus: focus)
+                AtticDropdownField(text: $query, placeholder: String(localized: "Task"), systemName: "magnifyingglass", focus: focus)
             }
             AtticDropdownGap()
             if choices.isEmpty {
@@ -1217,12 +1199,17 @@ struct AtticTaskPicker: View {
                     .padding(.horizontal, m.rowPadding)
                     .frame(height: m.rowHeight)
             } else {
-                AtticDropdownViewport(height: CGFloat(choices.count) * m.rowHeight > AtticPickerMetrics.taskListMaxHeight
+                let headers = choices.indices.filter { Self.startsGroup(choices, at: $0) }.count
+                let listHeight = CGFloat(choices.count) * m.rowHeight + CGFloat(headers) * m.sectionHeaderHeight
+                AtticDropdownViewport(height: listHeight > AtticPickerMetrics.taskListMaxHeight
                                       ? AtticPickerMetrics.taskListMaxHeight : nil,
                                       highlighted: highlighted.flatMap { choices.indices.contains($0) ? choices[$0].id.uuidString : nil }) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
-                            AtticDropdownRow(title: choice.title, detail: choice.detail, isHighlighted: highlighted == index,
+                            if Self.startsGroup(choices, at: index), let group = choice.group {
+                                AtticDropdownSectionHeader(title: group)
+                            }
+                            AtticDropdownRow(title: choice.title, systemName: "circle", detail: choice.detail, isHighlighted: highlighted == index,
                                              onHover: hover(index), position: index + 1, itemCount: choices.count, scrollID: choice.id.uuidString) {
                                 onChoose(choice.id)
                             }
@@ -1232,6 +1219,7 @@ struct AtticTaskPicker: View {
                 .modifier(AtticOptionalDropdownList(focus: focus, highlighted: onListHighlight, count: choices.count))
             }
         }
+        .frame(width: m.fieldCardWidth - m.inset * 2, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Move to Task"))
     }

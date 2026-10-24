@@ -219,13 +219,14 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertEqual(summary.preview, "Section Alpha Bullet one, Bullet two, Number one A quote let x = 1 Milk Plain line")
     }
 
-    // MARK: P3-03: the tag picker's create row is never cut short
+    // MARK: The tag picker's typed add (Dropdown content: answers, owner, 2026-10-24)
 
-    /// The card opens at its rows' width; typing "cu2-planning" adds "New
-    /// tag “#cu2-planning”", wider than the card: the card grows for it (CU
-    /// pass 2, capture 51: "New tag “#c…" in a half-empty card). A20: the +
-    /// sits in the check column, so "New tag “#cu2”" alone now fits the card.
-    func testTheTagPickerGrowsForItsCreateRow() throws {
+    /// Answer 3 A: no "New Tag…" foot at rest; you type in the field to
+    /// add. Sheet 3: the card is fixed at 224 pt, and a typed name no tag
+    /// has shows "New Tag “#…”" (Title Case) under a rule.
+    /// This replaces P3-03's growing card (the card no longer widens; a
+    /// longer name is cut short).
+    func testTheTagPickerHasNoFootAtRestAndTypingAddsTheNewTagRowAt224() throws {
         let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 340, height: 560),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -242,23 +243,18 @@ final class CombinedFixRoundTests: XCTestCase {
         presenter.present(from: anchor)
         defer { presenter.close(restoreFocus: false, immediately: true) }
         spin(0.3)
-        let opened = presenter.cardWidth
         let m = AtticDropdownMetrics.self
-        XCTAssertGreaterThanOrEqual(opened + 0.5, AtticTagPicker.rowsWidth(tags: tags, create: nil) + m.inset * 2,
-                                    "the rows fit as it opens")
+        XCTAssertEqual(presenter.cardWidth, m.fieldCardWidth, accuracy: 0.5, "224 pt at rest")
+        let rest = try XCTUnwrap(presenter.host?.contentRect)
+        XCTAssertEqual(rest.height, m.inset * 2 + AtticTagPicker.chromeHeight + 2 * m.rowHeight, accuracy: 1,
+                       "the field, \"Tags\" and the rows: no foot at rest")
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
         editor.insertText("cu2-planning-october", replacementRange: NSRange(location: NSNotFound, length: 0))
         spin(0.3)
-        // Draft C's card opens 224 pt wide: a longer name outgrows it.
-        let needed = AtticTagPicker.rowsWidth(tags: [], create: "cu2-planning-october") + m.inset * 2
-        XCTAssertGreaterThan(needed, opened, "the create row is wider than the card it opened as")
-        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed, "the card grew for “New tag “#cu2-planning-october””")
-        let host = try XCTUnwrap(presenter.host)
-        XCTAssertEqual(host.contentRect.width, presenter.cardWidth, accuracy: 1)
-        // Filtering back to fewer, shorter rows never narrows it while open.
-        editor.deleteBackward(nil)
-        spin(0.3)
-        XCTAssertGreaterThanOrEqual(presenter.cardWidth + 0.5, needed)
+        XCTAssertEqual(presenter.cardWidth, m.fieldCardWidth, accuracy: 0.5, "still 224 pt: a long name is cut short")
+        let typed = try XCTUnwrap(presenter.host?.contentRect)
+        XCTAssertEqual(typed.height, rest.height + AtticTagPicker.createHeight, accuracy: 1, "the rule and the New Tag row")
+        XCTAssertEqual(AtticTagPicker.createTitle("cu2-planning-october"), "New Tag “#cu2-planning-october”")
     }
 
     // MARK: P2-03: Notes ⋯ → Tags… is the shared E1 tag picker
@@ -760,7 +756,8 @@ final class CombinedFixRoundTests: XCTestCase {
         XCTAssertEqual(items().compactMap { $0.accessibilityLabel() }.first, "#launch, 2", "the rows reordered")
         XCTAssertEqual(lit(), ["#launch, 2"], "the highlight followed its tag, not its row number")
         try setQuery("launch-oct")
-        XCTAssertEqual(lit(), ["New tag “#launch-oct”"], "a prefix lights what was typed, never the first match")
+        // Dropdown content: answers (owner, 2026-10-24), rule 5: Title Case.
+        XCTAssertEqual(lit(), ["New Tag “#launch-oct”"], "a prefix lights what was typed, never the first match")
         try setQuery("")
         XCTAssertEqual(lit(), [], "an empty field lights nothing")
     }

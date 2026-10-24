@@ -7,14 +7,13 @@ import SwiftUI
 extension TasksPageModel {
     /// Move to Task…'s list: every unfinished main task in Now and Later
     /// except the subtask's own, in list order, each with where it is.
+    /// Grouped under Now, then Later (Dropdown content: answers, owner,
+    /// 2026-10-24, sheet 3), each group in the store's order.
     func moveChoices(forSubtask id: UUID) -> [AtticTaskPicker.Choice] {
-        store.moveTargets(forSubtask: id).map { task in
-            AtticTaskPicker.Choice(
-                id: task.id,
-                title: task.title,
-                detail: task.status == .backlog ? String(localized: "Later") : String(localized: "Now")
-            )
-        }
+        let targets = store.moveTargets(forSubtask: id)
+        let now = targets.filter { $0.status != .backlog }, later = targets.filter { $0.status == .backlog }
+        return now.map { AtticTaskPicker.Choice(id: $0.id, title: $0.title, group: String(localized: "Now")) }
+            + later.map { AtticTaskPicker.Choice(id: $0.id, title: $0.title, group: String(localized: "Later")) }
     }
 
     /// Chosen in Move to Task…: the subtask goes to the end of that task's

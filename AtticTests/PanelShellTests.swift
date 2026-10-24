@@ -152,12 +152,10 @@ final class PanelShellTests: XCTestCase {
     /// name starts where the tags' names do; the tick's column is at the end.
     func testTheNewTagRowsPlusSitsInTheDotColumn() {
         let m = AtticDropdownMetrics.self
-        let name = String(localized: "New tag “#plan”")
-        // Draft C (owner, 2026-10-23): never narrower than its 224 pt card.
-        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: [], create: "plan"),
-                       max(m.dateCardWidth - m.inset * 2,
-                           ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth(name)
-                                + m.columnGap + m.checkSlot)))
+        // Dropdown content: answers (owner, 2026-10-24), sheet 3: the card
+        // is fixed at 224 pt, whatever the create row says.
+        XCTAssertEqual(AtticTagPicker.createTitle("plan"), "New Tag “#plan”")
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: [], create: "plan"), m.fieldCardWidth - m.inset * 2)
     }
 
     func testSectionsMapToThreePagesAndTasksAlwaysOpensOnNow() {

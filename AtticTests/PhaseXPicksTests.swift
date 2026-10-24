@@ -128,16 +128,11 @@ final class PhaseXPicksTests: XCTestCase {
     /// its name, and a tag row has its colour dot before it.
     func testTheTagPickersRowsHaveTheirDotFirstAndTheirTickLast() {
         let m = AtticDropdownMetrics.self
-        let width = AtticTagPicker.rowsWidth(tags: ["launch"], create: nil)
-        // Draft C (owner, 2026-10-23): never narrower than its 224 pt card,
-        // and an 8 pt dot (N-4's was 7).
-        XCTAssertEqual(width, max(m.dateCardWidth - m.inset * 2,
-                                  ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth("#launch")
-                                       + m.columnGap + m.checkSlot)))
-        let long = "launch-october-planning-and-the-rest"
-        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: [long], create: nil),
-                       ceil(m.rowPadding * 2 + m.dotSlot + m.columnGap + AtticTextStyle.dropdownRow.measuredWidth("#" + long)
-                            + m.columnGap + m.checkSlot), "the dot first, the tick's column last")
+        // Dropdown content: answers (owner, 2026-10-24), sheet 3: the card
+        // is fixed at 224 pt; a long name is cut short, never widening it.
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: ["launch"], create: nil), m.fieldCardWidth - m.inset * 2)
+        XCTAssertEqual(AtticTagPicker.rowsWidth(tags: ["launch-october-planning-and-the-rest"], create: nil),
+                       m.fieldCardWidth - m.inset * 2)
         XCTAssertEqual(m.dotSize, 8, "draft C's 8 pt dot")
     }
 

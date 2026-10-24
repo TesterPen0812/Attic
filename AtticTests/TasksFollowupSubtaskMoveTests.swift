@@ -157,8 +157,12 @@ final class TasksFollowupSubtaskMoveTests: XCTestCase {
         XCTAssertTrue(library.updateTask(finished.id, status: .done).isApplied)
         let choices = model.moveChoices(forSubtask: book.id)
         XCTAssertEqual(Set(choices.map(\.title)), ["Party", "Someday trip"])
-        XCTAssertEqual(choices.first { $0.title == "Someday trip" }?.detail, "Later")
-        XCTAssertEqual(choices.first { $0.title == "Party" }?.detail, "Now")
+        // Dropdown content: answers (owner, 2026-10-24), sheet 3: grouped
+        // under Now, then Later, headers instead of a detail.
+        XCTAssertEqual(choices.map(\.title), ["Party", "Someday trip"])
+        XCTAssertEqual(choices.first { $0.title == "Someday trip" }?.group, "Later")
+        XCTAssertEqual(choices.first { $0.title == "Party" }?.group, "Now")
+        XCTAssertEqual(choices.indices.filter { AtticTaskPicker.startsGroup(choices, at: $0) }, [0, 1], "each group gets its header")
         XCTAssertEqual(TaskMovePickerView.filter(choices, query: " TRIP ").map(\.title), ["Someday trip"])
         XCTAssertEqual(TaskMovePickerView.filter(choices, query: "").count, 2)
         XCTAssertTrue(model.moveChoices(forSubtask: trip.id).isEmpty, "a main task has no Move to Task…")

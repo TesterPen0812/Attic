@@ -904,8 +904,9 @@ final class AtticDropdownTests: XCTestCase {
         defer { presenter.close(restoreFocus: false, immediately: true) }
         let m = AtticDropdownMetrics.self
         let card = try? XCTUnwrap(presenter.host?.contentRect)
-        // Draft C: the field's header and rule, "Tags", the five rows, then
-        // the rule and "New Tag…", 4 pt in.
+        // Draft C: the field's header and rule, "Tags" and the five rows,
+        // 4 pt in; no "New Tag…" foot at rest (Dropdown content: answers,
+        // owner, 2026-10-24, answer 3 A).
         XCTAssertEqual(card?.height ?? 0, m.inset * 2 + AtticTagPicker.chromeHeight + 5 * m.rowHeight, accuracy: 1)
         XCTAssertGreaterThanOrEqual(card?.width ?? 0, m.minWidth)
     }
