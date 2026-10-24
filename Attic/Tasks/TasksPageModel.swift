@@ -60,6 +60,11 @@ struct TasksPageServices {
     var chooseFilesForNote: ((UUID) -> Void)?
     var removeFromTasks: ((UUID) -> Void)?
     var canRemoveFromTasks: ((UUID) -> Bool)?
+    /// Make Checkbox on a subtask row (One item: owner answers,
+    /// 2026-10-23, answer 3): the subtask goes into its item's writing
+    /// through the page's producer. Nil where the host has no task pages:
+    /// the command is hidden.
+    var makeCheckbox: ((UUID) -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent

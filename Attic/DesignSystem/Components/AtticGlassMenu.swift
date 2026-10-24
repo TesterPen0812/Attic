@@ -619,6 +619,9 @@ enum AtticMenuSymbols {
             ("Move to Task…", "arrow.turn.up.right"), ("Make Standalone Task", "arrow.up.left.square"),
             ("Open Page", "doc.text"), ("Pin to Top", "pin"), ("Unpin from Top", "pin.slash"),
             ("Filter by Tag", "line.3.horizontal.decrease"), ("Copy as Markdown", "doc.on.doc"), ("Delete Note", "trash"),
+            // The one-item commands (sheets 1, 2 and 5; C2).
+            ("Add to Tasks", "checkmark.circle"), ("Remove from Tasks", "minus.circle"),
+            ("Make Checkbox", "checkmark.square"), ("Add Files…", "doc.badge.plus"),
             // The note's ⋯ (sheet 5).
             ("Tags…", "tag"), ("Version History", "clock.arrow.circlepath"), ("Print…", "printer"),
             ("Save Recovery Copy…", "square.and.arrow.down"), ("Insert", "plus"), ("Format", "textformat"),
@@ -1163,6 +1166,7 @@ final class AtticGlassMenuItemElement: NSAccessibilityElement {
         }
         if command.state == .mixed { setAccessibilityValue(String(localized: "some selected tasks")) }
         if let detail = command.detail { setAccessibilityHelp(detail) }
+        if command.isDisabled, let reason = command.disabledReason { setAccessibilityHelp(reason) }
     }
 
     override func accessibilityPerformPress() -> Bool {

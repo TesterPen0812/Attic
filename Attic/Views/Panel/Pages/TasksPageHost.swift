@@ -84,6 +84,7 @@ struct TasksPageHost: View {
         model.services.addFilesToTaskNote = taskNotes.addFiles
         model.services.removeFromTasks = taskNotes.removeFromTasks
         model.services.canRemoveFromTasks = taskNotes.canRemoveFromTasks
+        model.services.makeCheckbox = taskNotes.makeCheckbox
         // The row glyph follows the note store (owned by the model, outside
         // view updates).
         model.observeNoteOwners(taskNotes.noteOwners)

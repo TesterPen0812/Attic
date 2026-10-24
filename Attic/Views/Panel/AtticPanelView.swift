@@ -239,6 +239,10 @@ struct AtticPanelView: View {
                 guard let store else { return false }
                 return TaskNoteConversion.hasWriting(id, in: ModelContext(store.container))
             },
+            makeCheckbox: { [weak pages = noteDraft.pages, weak store, weak toasts] id in
+                guard let pages, let store else { return }
+                Task { @MainActor in await Self.makeCheckbox(subtaskID: id, pages: pages, tasks: store, toasts: toasts) }
+            },
             noteOwners: noteDraft.pages.store.$notes
                 .map { Set($0.compactMap(\.taskID)) }
                 .removeDuplicates()
@@ -659,6 +663,57 @@ struct PanelRootLayout: Layout {
 
 
 extension AtticPanelView {
+    /// Make Checkbox from a subtask row (C2): the page's own producer,
+    /// `TaskNotePresenter.makeNoteCheckbox`, through the write gate,
+    /// journal and the item's retained history. On the item's open page
+    /// when there is one, else on a headless page closed straight after
+    /// (as the agent's tool does). The toast's Undo is the history's step.
+    @MainActor static func makeCheckbox(subtaskID: UUID, pages: NotesPageController, tasks: TaskStore,
+                                        toasts: PanelToastCenter?) async {
+        func report(_ reason: String) {
+            toasts?.show(reason, actionTitle: String(localized: "Retry"), answersUndoKey: false) { [weak pages, weak tasks, weak toasts] in
+                guard let pages, let tasks else { return }
+                Task { @MainActor in await Self.makeCheckbox(subtaskID: subtaskID, pages: pages, tasks: tasks, toasts: toasts) }
+            }
+        }
+        guard let parentID = tasks.task(withID: subtaskID)?.parentID,
+              let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return }
+        await coordinator.sessions.retryHeadlessClosures()
+        let presenter: TaskNotePresenter
+        let headless: Bool
+        if let open = TaskNotePresenter.open(for: parentID) {
+            presenter = open
+            headless = false
+        } else {
+            let library = tasks.commandLibrary ?? AtticLibrary(tasks: tasks)
+            guard let made = try? TaskNotePresenter(taskID: parentID, tasks: tasks, library: library, notes: pages,
+                                                    design: .default, columnInset: AtticNoteMetrics.columnInset, defaults: nil) else {
+                report(String(localized: "Couldn't make the note checkbox"))
+                return
+            }
+            presenter = made
+            headless = true
+        }
+        let result = await presenter.makeNoteCheckbox(subtaskID: subtaskID, tasks: tasks, notes: pages)
+        if headless, !(await presenter.close()), let lease = presenter.lease {
+            _ = await coordinator.sessions.closeHeadless(presenter.page, lease: lease)
+        }
+        switch result {
+        case let .madeCheckbox(entryID, recovery):
+            let history = pages.undoRoute.workspace(for: .taskWorkspace(parentID))
+            let message = recovery.map { String(localized: "Made note checkbox") + " · " + $0 } ?? String(localized: "Made note checkbox")
+            toasts?.show(message, answersUndoKey: false, performingAsync: { [weak history] in
+                guard let history, history.route.undoStepID(in: history.historyID) == entryID else { return .applied }
+                return await history.undoLatest(stepID: entryID) == .applied ? .applied
+                    : .failed(CommandFailure(String(localized: "Can't undo: the line was edited since")))
+            })
+        case let .refused(reason):
+            report(reason)
+        case .made:
+            break
+        }
+    }
+
     @MainActor static func removeFromTasks(_ taskID: UUID, pages: NotesPageController,
         tasks: TaskStore, uiState: PanelUIState, toasts: PanelToastCenter?, moveFilesFirst: Bool = false) async {
         func report(_ reason: String) {

@@ -1346,6 +1346,10 @@ struct AtticMenuCommand: Identifiable {
     /// A submenu's card width when it is not the command width: Tags ›
     /// (224 pt) and Date › (200 pt), per `AtticMenuMetrics`.
     var menuWidth: CGFloat?
+    /// Why a dimmed command can't run now (one-item plan, "Menus and
+    /// keyboard": disabled commands explain why). VoiceOver reads it as the
+    /// row's help; nothing changes in how the row looks.
+    var disabledReason: String?
     let action: () -> Void
 
     init(
@@ -1457,6 +1461,28 @@ struct AtticMenuCommand: Identifiable {
             if let found = Self.command(for: shortcut, in: command.children) { return found }
         }
         return nil
+    }
+
+    /// The command a key belongs to, enabled or not (a disabled command
+    /// consumes its key: it does nothing rather than letting the key fall
+    /// through to something else).
+    static func keyOwner(for shortcut: KeyboardShortcut, in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+        for command in commands {
+            if !command.isHeader, command.children.isEmpty,
+               let own = command.shortcut, own.key == shortcut.key, own.modifiers == shortcut.modifiers {
+                return command
+            }
+            if let found = Self.keyOwner(for: shortcut, in: command.children) { return found }
+        }
+        return nil
+    }
+
+    /// The same command, dimmed, with the reason it can't run now.
+    func disabled(because reason: String?) -> AtticMenuCommand {
+        var copy = self
+        copy.isDisabled = true
+        copy.disabledReason = reason
+        return copy
     }
 
     /// The command a key press runs (a subtask's keys, round 10): the

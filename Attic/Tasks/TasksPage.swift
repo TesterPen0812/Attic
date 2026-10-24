@@ -1157,8 +1157,10 @@ struct TasksPage: View {
             showActions(for: current, anchor: nil, tab: model.tab)
             return true
         }
-        guard let command = AtticMenuCommand.command(for: shortcut, in: taskCommands(current, tab: model.tab)) else { return false }
-        command.action()
+        // A dimmed command still owns its key: nothing runs, nothing else
+        // gets it (one-item plan, "Menus and keyboard").
+        guard let command = AtticMenuCommand.keyOwner(for: shortcut, in: taskCommands(current, tab: model.tab)) else { return false }
+        if !command.isDisabled { command.action() }
         return true
     }
 
@@ -1991,7 +1993,7 @@ struct TasksPage: View {
             duplicate: { runCommand(on: id) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) } },
             changePriority: { showPriority(for: id) },
             showActions: { showActions(for: id, anchor: nil, tab: tab) },
-            names: .init(openPage: opensTaskNotes ? String(localized: "Open task note") : filesActionName(for: id))
+            names: .init(openPage: opensTaskNotes ? String(localized: "Open page") : filesActionName(for: id))
         )
     }
 
@@ -2142,8 +2144,16 @@ struct TasksPage: View {
         // More › │ Remove from Tasks, Delete. Copy and Duplicate live in
         // More ›, with Show Files and Move Up/Down; a selection, which has
         // no More ›, keeps them on the root.
-        // C2: insert Open Page here, first in this group.
         var opensGroup = true
+        if single, tab != .done, opensTaskNotes {
+            // Open Page (One item: owner answers, 2026-10-23, answer 3):
+            // ⌘Return, a title click and VoiceOver open the same page.
+            list.append(AtticMenuCommand(verbatim: String(localized: "Open Page"), shortcut: AtticTaskShortcut.openPage,
+                                         startsSection: opensGroup) {
+                openTaskNote(menuRowID(key))
+            })
+            opensGroup = false
+        }
         if single {
             list.append(AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle,
                                          startsSection: opensGroup) {
@@ -2186,25 +2196,10 @@ struct TasksPage: View {
         let duplicate = AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
             menuCommand(key) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) }
         }
-        if single, tab != .done, opensTaskNotes {
-            // Phase 3: ⌘Return opens the task's page (`p3-22` row 5).
-            list.append(AtticMenuCommand(verbatim: String(localized: "Open Task Note"), shortcut: AtticTaskShortcut.openPage,
-                                         startsSection: true) {
-                openTaskNote(menuRowID(key))
-            })
-            // § 2.4: a task's files are its note's (D4).
-            if let choose = model.services.chooseFilesForNote {
-                list.append(AtticMenuCommand(verbatim: String(localized: "Add Files to Note…")) {
-                    choose(menuRowID(key))
-                })
-            }
-        }
-        if single, model.services.canRemoveFromTasks?(id) == true, let remove = model.services.removeFromTasks {
-            list += TaskNoteConversion.commands(taskID: id, hasWriting: true,
-                isSubtask: store.listedTask(withID: id)?.parentID != nil, add: {}, remove: { remove(id) })
-        }
         if single {
-            // More ›: Show Files │ Copy, Duplicate │ Move Up, Move Down.
+            // More ›: Show Files, Add Files… │ Copy, Duplicate │ Move Up,
+            // Move Down. Add Files… is the plan's menu word for § 2.4's
+            // picker: a task's files are its writing's.
             var more: [AtticMenuCommand] = []
             if tab != .done {
                 more.append(AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files")
@@ -2212,26 +2207,43 @@ struct TasksPage: View {
                                              shortcut: opensTaskNotes ? nil : AtticTaskShortcut.openPage) {
                     openFiles(menuRowID(key))
                 })
+                if opensTaskNotes, let choose = model.services.chooseFilesForNote {
+                    more.append(AtticMenuCommand(verbatim: String(localized: "Add Files…")) {
+                        choose(menuRowID(key))
+                    })
+                }
             }
             more += [copy, duplicate]
             // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
             if tab != .done, unfinished {
-                more.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
-                                             isDisabled: !canMove(id, by: -1), startsSection: true) {
+                var up = AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
+                                          startsSection: true) {
                     moveRow(menuRowID(key), by: -1)
-                })
-                more.append(AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
-                                             isDisabled: !canMove(id, by: 1)) {
+                }
+                if !canMove(id, by: -1) { up = up.disabled(because: String(localized: "Already at the top")) }
+                var down = AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown) {
                     moveRow(menuRowID(key), by: 1)
-                })
+                }
+                if !canMove(id, by: 1) { down = down.disabled(because: String(localized: "Already at the bottom")) }
+                more += [up, down]
             }
             list.append(.submenu(String(localized: "More"), startsSection: tab != .now && tab != .backlog, more))
         } else {
             list += [copy, duplicate]
         }
-        // C2: insert Remove from Tasks here, before Delete, in the closing group.
+        // Remove from Tasks, then Delete, in the closing group. The shared
+        // producer hides it for subtasks and bare tasks (no writing): the
+        // build rules hide those commands rather than dim them.
+        var closing: [AtticMenuCommand] = []
+        if single, model.services.canRemoveFromTasks?(id) == true, let remove = model.services.removeFromTasks {
+            closing = TaskNoteConversion.commands(taskID: id, hasWriting: true,
+                isSubtask: store.listedTask(withID: id)?.parentID != nil, add: {}, remove: { remove(id) })
+        }
+        if !closing.isEmpty { closing[0].startsSection = true }
+        list += closing
         list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
-                                     systemImage: "trash", shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
+                                     systemImage: "trash", shortcut: AtticTaskShortcut.delete, isDestructive: true,
+                                     startsSection: closing.isEmpty) {
             // A menu's Delete key equivalent never reaches past a field
             // that is typing (round 5, the owner's blocker).
             guard !AtticTextInput.ownsCurrentKey else { return }
@@ -2303,6 +2315,17 @@ struct TasksPage: View {
         let run: (@escaping () -> CommandOutcome) -> Void = { command in
             model.report(command(), on: parentID, retry: command)
         }
+        // Make Checkbox (One item: owner answers, 2026-10-23, answer 3)
+        // mirrors Make Subtask: the subtask goes into its item's writing.
+        // No key of its own; ⌥⌘S stays Make Subtask's. Hidden where the
+        // host has no task pages.
+        var makeCheckbox: [AtticMenuCommand] = []
+        if let make = model.services.makeCheckbox {
+            makeCheckbox.append(AtticMenuCommand(verbatim: String(localized: "Make Checkbox")) {
+                guard !AtticTextInput.ownsCurrentKey else { return }
+                make(subtask.id)
+            })
+        }
         // The task menu's words (Dropdown content: answers, owner,
         // 2026-10-24, sheet 2): Complete and Edit Title, an icon on every
         // row. Complete, Edit Title │ Move Up, Move Down │ Move to Task…,
@@ -2315,14 +2338,20 @@ struct TasksPage: View {
             AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle) {
                 model.beginRenamingSubtask(subtask.id)
             },
-            AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
-                             isDisabled: (index ?? 0) == 0, startsSection: true) {
-                run { [weak model] in model?.moveSubtask(subtask.id, by: -1) ?? .failed(.taskGone) }
-            },
-            AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
-                             isDisabled: index.map { $0 + 1 >= siblings.count } ?? true) {
-                run { [weak model] in model?.moveSubtask(subtask.id, by: 1) ?? .failed(.taskGone) }
-            },
+            {
+                let up = AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
+                                          startsSection: true) {
+                    run { [weak model] in model?.moveSubtask(subtask.id, by: -1) ?? .failed(.taskGone) }
+                }
+                return (index ?? 0) == 0 ? up.disabled(because: String(localized: "Already at the top")) : up
+            }(),
+            {
+                let down = AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown) {
+                    run { [weak model] in model?.moveSubtask(subtask.id, by: 1) ?? .failed(.taskGone) }
+                }
+                return index.map { $0 + 1 >= siblings.count } ?? true
+                    ? down.disabled(because: String(localized: "Already at the bottom")) : down
+            }(),
             // Control audit item 5: to another task, or a task of its own.
             AtticMenuCommand(verbatim: String(localized: "Move to Task…"), startsSection: true) {
                 openMeta(.move, on: parentID, targets: [subtask.id])
@@ -2338,7 +2367,7 @@ struct TasksPage: View {
                     return outcome
                 }
             },
-            // C2: insert Make Checkbox (⌥⌘S) here, after Make Standalone Task.
+        ] + makeCheckbox + [
             AtticMenuCommand(verbatim: String(localized: "Delete"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
                              startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
