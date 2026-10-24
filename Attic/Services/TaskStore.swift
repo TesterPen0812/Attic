@@ -2488,13 +2488,14 @@ final class TaskStore: ObservableObject {
         excluding shown: Set<UUID> = []
     ) -> DoneLogPage {
         let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let supplemental = additionalItemIDs(query: trimmed)
         func descriptor(offset: Int, limit: Int) -> FetchDescriptor<TaskItem> {
             let order = [SortDescriptor(\TaskItem.completedAt, order: .reverse),
                          SortDescriptor(\TaskItem.createdAt, order: .reverse)]
             var descriptor = trimmed.isEmpty
                 ? FetchDescriptor<TaskItem>(predicate: #Predicate { $0.doneLoggedAt != nil && $0.parentID == nil }, sortBy: order)
                 : FetchDescriptor<TaskItem>(predicate: #Predicate {
-                    $0.doneLoggedAt != nil && $0.parentID == nil && $0.title.localizedStandardContains(trimmed)
+                    $0.doneLoggedAt != nil && $0.parentID == nil && ($0.title.localizedStandardContains(trimmed) || supplemental.contains($0.id))
                 }, sortBy: order)
             descriptor.fetchOffset = offset
             descriptor.fetchLimit = limit
@@ -2526,7 +2527,7 @@ final class TaskStore: ObservableObject {
                     guard let winner = winners[row.id], winner.persistentModelID == row.persistentModelID,
                           winner.doneLoggedAt != nil, winner.deletedAt == nil,
                           winner.parentID == nil,
-                          trimmed.isEmpty || winner.title.localizedStandardContains(trimmed),
+                          trimmed.isEmpty || matchesItemSearch(winner, query: trimmed),
                           seen.insert(row.id).inserted else { continue }
                     result.append(winner)
                     if result.count == limit { break walk }
@@ -2561,10 +2562,80 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    // Extra item terms are copied on publication, never fetched per key.
+    // A root remains one result even when its writing or a child matches.
+    private var itemTaskParts: [UUID: (root: UUID, text: String)] = [:]
+    private var itemTaskTerms: [UUID: NSString] = [:]
+    private var itemWritingTerms: [UUID: NSString] = [:]
+    private var itemWritingObservation: AnyCancellable?
+
+    func observeItemWriting(_ notes: NoteStore) {
+        refreshItemWriting(notes)
+        itemWritingObservation = notes.$revision.dropFirst().sink { [weak self, weak notes] _ in
+            guard let self, let notes else { return }
+            self.refreshItemWriting(notes)
+        }
+    }
+
+    private func refreshItemWriting(_ notes: NoteStore) {
+        var terms: [UUID: [String]] = [:]
+        for note in notes.notes.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            guard let owner = note.taskID else { continue }
+            if !note.body.isEmpty { terms[owner, default: []].append(note.body) }
+            for file in notes.attachmentsByNoteID[note.id] ?? [] where file.deletedAt == nil {
+                terms[owner, default: []].append(file.originalFilename)
+            }
+        }
+        let next = terms.mapValues { $0.joined(separator: "\n") as NSString }
+        guard next != itemWritingTerms else { return }
+        itemWritingTerms = next
+        doneSearchMatches = nil
+        // This is a presentation invalidation; it writes no model rows.
+        revision &+= 1
+        familyIndexCache?.revision = revision
+    }
+
+    private func indexItemTasks(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
+        var changed = Set<UUID>()
+        if let ids {
+            for id in ids { if let old = itemTaskParts.removeValue(forKey: id) { changed.insert(old.root) } }
+        } else {
+            itemTaskParts.removeAll(keepingCapacity: true)
+            itemTaskTerms.removeAll(keepingCapacity: true)
+        }
+        for task in winners where task.deletedAt == nil {
+            let root = task.parentID ?? task.id
+            let text = ([task.parentID == nil ? "" : task.title, task.tagsRaw] + task.attachments.map(\.filename))
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+            if !text.isEmpty { itemTaskParts[task.id] = (root, text); changed.insert(root) }
+        }
+        var grouped: [UUID: [String]] = [:]
+        for (_, part) in itemTaskParts.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where ids == nil || changed.contains(part.root) {
+            grouped[part.root, default: []].append(part.text)
+        }
+        for root in changed { itemTaskTerms[root] = grouped[root].map { $0.joined(separator: "\n") as NSString } }
+    }
+
+    func matchesItemSearch(_ task: TaskItem, query: String) -> Bool {
+        query.isEmpty || task.title.localizedStandardContains(query) || additionalItemMatch(task.id, query: query)
+    }
+
+    private func additionalItemMatch(_ id: UUID, query: String) -> Bool {
+        let tagOrText = query.hasPrefix("#") ? String(query.dropFirst()) : query
+        guard !tagOrText.isEmpty else { return false }
+        return itemTaskTerms[id]?.localizedStandardContains(tagOrText) == true
+            || itemWritingTerms[id]?.localizedStandardContains(query) == true
+    }
+
+    private func additionalItemIDs(query: String) -> [UUID] {
+        Set(itemTaskTerms.keys).union(itemWritingTerms.keys).filter { additionalItemMatch($0, query: query) }
+    }
+
     private var doneSearchEntries: [DoneSearchEntry] = []
     private var doneSearchMatches: (query: String, locale: String, ids: [UUID])?
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
+        indexItemTasks(winners, replacing: ids)
         updateDoneSearch(winners.filter {
             $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
         }.map(DoneSearchEntry.init), replacing: ids)
@@ -2592,7 +2663,7 @@ final class TaskStore: ObservableObject {
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
         let ids = doneSearchEntries.compactMap {
-            query.isEmpty || $0.title.localizedStandardContains(query) ? $0.id : nil
+            query.isEmpty || $0.title.localizedStandardContains(query) || additionalItemMatch($0.id, query: query) ? $0.id : nil
         }
         doneSearchMatches = (query, locale, ids)
         return ids
@@ -2714,6 +2785,7 @@ final class TaskStore: ObservableObject {
     /// failed.
     func doneLogTaskCount(matching query: String = "") -> Int? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let supplemental = additionalItemIDs(query: trimmed)
         let noDate: Date? = nil
         let noParent: UUID? = nil
         var descriptor = trimmed.isEmpty
@@ -2722,7 +2794,7 @@ final class TaskStore: ObservableObject {
             })
             : FetchDescriptor<TaskItem>(predicate: #Predicate<TaskItem> { item in
                 item.doneLoggedAt != noDate && item.parentID == noParent && item.deletedAt == noDate
-                    && item.title.localizedStandardContains(trimmed)
+                    && (item.title.localizedStandardContains(trimmed) || supplemental.contains(item.id))
             })
         descriptor.propertiesToFetch = [\.id]
         guard let rows = try? context.fetch(descriptor) else { return nil }
@@ -3693,7 +3765,9 @@ final class TaskStore: ObservableObject {
                     changedRows = try context.fetch(
                         FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
                     #endif
-                    let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
+                    let changedWinners = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
+                    indexItemTasks(changedWinners, replacing: changedIDs)
+                    let changedEntries = changedWinners
                         .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
                         .map(DoneSearchEntry.init)
                     updateDoneSearch(changedEntries, replacing: changedIDs)

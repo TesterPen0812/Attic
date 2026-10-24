@@ -470,6 +470,15 @@ final class TaskNotePageModel: ObservableObject {
         setExpanded(true, remember: false)
     }
 
+    /// A search reveal is transient, and never changes held row order.
+    func revealSearchMatch(_ id: UUID) {
+        guard rows.contains(where: { $0.id == id }) else { return }
+        if !isVisible(id) { revealAll() }
+        requestFocus(.list)
+        focusedRowID = id
+        lastFocusedRowID = id
+    }
+
     // MARK: Subtask commands
 
     @discardableResult

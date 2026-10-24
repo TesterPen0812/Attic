@@ -323,6 +323,12 @@ final class TaskNoteComposedHost: NSObject {
         updateMinimumTextHeight()
     }
 
+    func revealSubtask(at index: Int, notices: Int) {
+        let y = blockController.view.frame.minY + TaskNoteMetrics.blockHeader
+            + CGFloat(notices) * TaskNoteMetrics.noticeHeight + CGFloat(index) * TaskNoteMetrics.rowHeight
+        documentView.scrollToVisible(NSRect(x: 0, y: y, width: 1, height: TaskNoteMetrics.rowHeight))
+    }
+
     var headRootView: AnyView {
         get { headController.rootView }
         set { headController.rootView = newValue; headNeedsMeasurement = true }

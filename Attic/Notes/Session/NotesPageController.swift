@@ -501,8 +501,14 @@ final class NotesPageController: ObservableObject {
     }
     /// Library navigation prepares only document bytes. Full byte ownership
     /// hydration remains part of the existing explicit durable-open API.
-    func openFromLibrary(noteID: UUID) async -> Bool {
-        await openDecoded(noteID: noteID)
+    func openFromLibrary(noteID: UUID, searchQuery: String? = nil) async -> Bool {
+        guard await openDecoded(noteID: noteID) else { return false }
+        if let searchQuery, let session = active, session.noteID == noteID,
+           let range = session.engine.searchParagraph(matching: searchQuery) {
+            session.selection = range
+            session.engine.revealSearchParagraph(range)
+        }
+        return true
     }
 
     private func openDecoded(noteID: UUID) async -> Bool {
@@ -1388,6 +1394,7 @@ final class NotesPageController: ObservableObject {
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
     var libraryQueryAcrossTaskPage: String?
+    var pendingTaskSearchQuery: String?
 
     func installFileHistoryState(_ session: NoteSession, rootID: UUID, noteID: UUID, history: WorkspaceHistory) throws {
         guard !session.isImporting,

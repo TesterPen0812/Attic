@@ -466,10 +466,19 @@ extension NoteStore {
                 }))
                 let owners = Array(Set(linked.compactMap(\.taskID)))
                 if !owners.isEmpty {
-                    let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { owners.contains($0.id) }))
+                    let roots = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { owners.contains($0.id) }))
+                    // SQLCore cannot translate IN over a coalesced optional
+                    // UUID. Filter child ownership on this background context.
+                    let ownerSet = Set(owners)
+                    let children = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID != nil && $0.deletedAt == nil }))
+                        .filter { $0.parentID.map(ownerSet.contains) == true }
+                    let rows = roots + children
                     let matching = Set(TaskStore.canonicalReplicas(from: rows).filter {
-                        $0.title.localizedStandardContains(text) || (!tagText.isEmpty && $0.tagsRaw.localizedStandardContains(tagText))
-                    }.map(\.id))
+                        ($0.parentID == nil || $0.deletedAt == nil) &&
+                        ($0.title.localizedStandardContains(text)
+                            || ($0.parentID == nil && !tagText.isEmpty && $0.tagsRaw.localizedStandardContains(tagText))
+                            || $0.attachments.contains { $0.filename.localizedStandardContains(text) })
+                    }.map { $0.parentID ?? $0.id })
                     ids.formUnion(linked.filter { $0.taskID.map(matching.contains) == true }.map(\.id))
                 }
             }
@@ -477,7 +486,16 @@ extension NoteStore {
                 attachment.deletedAt == nil && attachment.originalFilename.localizedStandardContains(text)
             }))
             ids.formUnion(files.map(\.noteID))
-            return ids
+            // S10 is one result even when the match is in alternate writing.
+            // Keep all records/bytes; only the presented UUID is canonical.
+            let physical = try context.fetch(FetchDescriptor<NoteItem>())
+            let canonical = NoteStore.itemWritingIDs(from: physical)
+            let all = NoteStore.canonicalReplicas(from: physical).filter { $0.deletedAt == nil }
+            let byID = Dictionary(all.map { ($0.id, $0.taskID) }, uniquingKeysWith: { first, _ in first })
+            return Set(ids.compactMap { id in
+                guard let owner = byID[id] else { return nil }
+                return owner.flatMap { canonical[$0] } ?? id
+            })
         }.value
     }
 

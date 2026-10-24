@@ -68,6 +68,7 @@ final class AtticLibrary {
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
         notes?.commandLibrary = self
+        if let notes { tasks.observeItemWriting(notes) }
         (try? WorkspaceLegacyBridge.coordinator(for: container))?.lifecycleLibrary = self
         if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) { coordinator.registerHistory(self.undo) }
         let inventory = tags
@@ -186,6 +187,9 @@ final class AtticLibrary {
         case .note:
             guard let note = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })))
                 .flatMap({ NoteStore.canonicalReplicas(from: $0).first }) else { return nil }
+            // Both aliases address the same live title. References store UUIDs,
+            // so a task rename never rewrites the referring documents.
+            if let owner = note.taskID, let title = title(of: AtticItemRef(.task, owner)) { return title }
             return note.title.isEmpty ? String(note.body.split(whereSeparator: \.isNewline).first ?? "") : note.title
         case .canvas:
             guard let rows = try? context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })),

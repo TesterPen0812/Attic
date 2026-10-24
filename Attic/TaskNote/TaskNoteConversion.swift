@@ -252,7 +252,7 @@ enum TaskNoteConversion {
                 try TaskStore.stageRestoreDeleted(in: commit, taskIDs: [taskID], timestamp: Date())
             }
             try NoteStore.stageDocument(in: commit, noteID: noteID, document: document, prepared: prepared,
-                                        revisionID: UUID(), versionIDs: versions, tags: [], timestamp: Date())
+                                        revisionID: UUID(), versionIDs: versions, timestamp: Date())
             let task = try commit.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
             let notes = try commit.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
             guard !task.isEmpty else { throw WorkspaceFoundationError.conflict }
@@ -294,7 +294,7 @@ enum TaskNoteConversion {
                                                    writes: writes, inverseGuards: expected.tokens, scopes: expected.scopes, afterDocuments: [noteID: prepared.content], historyEffect: historyEffect, replayOf: replayOf)
         return Change(envelope: envelope, stage: { commit in
             try NoteStore.stageDocument(in: commit, noteID: noteID, document: before, prepared: prepared,
-                                        revisionID: UUID(), versionIDs: versions, tags: tags, timestamp: Date())
+                                        revisionID: UUID(), versionIDs: versions, timestamp: Date())
             for row in try commit.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })) {
                 row.taskID = nil; row.associationGeneration += 1
             }

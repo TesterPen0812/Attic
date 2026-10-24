@@ -280,7 +280,9 @@ final class NotesLibraryModel: ObservableObject {
                           tag: tagFilter, prepareSummaries: prepareSummaries)
         if let cache, cache.key == key, unsaved.isEmpty { return cache.groups }
 
-        var notes = store.orderedNotes()
+        // S10: oldest writing is the one page; alternates remain in Review.
+        let shown = Set(store.itemWritingIDs.values)
+        var notes = store.orderedNotes().filter { $0.taskID == nil || shown.contains($0.id) }
         // One consistent proposal snapshot for every row in this render.
         // A later row must not turn a partially failed read into cacheable rows.
         if !notes.isEmpty, proposalIDs?.revision != store.revision, failedProposalRevision != store.revision {

@@ -124,6 +124,9 @@ private enum NotePersistenceRefreshOutcome {
 /// `LSUIElement` Mac app does not nap while Core Data is mirroring.
 @MainActor
 final class NoteStore: ObservableObject {
+    /// S10 chooses the same oldest physical creation date as the registry.
+    /// Keep this with the published snapshot, rather than fetching per row.
+    private(set) var itemWritingIDs: [UUID: UUID] = [:]
     @Published private(set) var notes: [NoteItem] = [] {
         didSet { presentationIndex = nil; presentationByID = nil; tagInventory = nil; tagInventoryDidRefresh() }
     }
@@ -1499,6 +1502,7 @@ final class NoteStore: ObservableObject {
         documentReplicaCapabilityCache.removeAll()
         try? WorkspaceLegacyBridge.establishScopeBaseline(sourceContext, roots: presentation.notes + presentation.attachments, entities: [.note, .attachment])
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
+        itemWritingIDs = Self.itemWritingIDs(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
         // A deleted note's attachments stay stored (and their files stay
         // reconciled below) but are not presented.
@@ -1572,6 +1576,7 @@ final class NoteStore: ObservableObject {
         context = sourceContext
         if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
         documentReplicaCapabilityCache.removeAll()
+        itemWritingIDs = Self.itemWritingIDs(from: fetchedNotes)
         notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
         revision &+= 1
     }
@@ -1588,7 +1593,7 @@ final class NoteStore: ObservableObject {
     /// The one replica per id that presentation shows, in fetch order. Every
     /// question about a logical note (shown, in Recently Deleted, tagged) is
     /// answered from it after all of the id's replicas were read.
-    static func canonicalReplicas(from fetched: [NoteItem]) -> [NoteItem] {
+    nonisolated static func canonicalReplicas(from fetched: [NoteItem]) -> [NoteItem] {
         var newestByID: [UUID: NoteItem] = [:]
 
         for note in fetched {
@@ -1608,6 +1613,17 @@ final class NoteStore: ObservableObject {
         return fetched.filter { note in
             newestByID[note.id] === note
         }
+    }
+
+    nonisolated static func itemWritingIDs(from physical: [NoteItem]) -> [UUID: UUID] {
+        let created = Dictionary(grouping: physical, by: \.id).mapValues { $0.map(\.createdAt).min()! }
+        var result: [UUID: UUID] = [:]
+        for note in canonicalReplicas(from: physical) where note.deletedAt == nil {
+            guard let owner = note.taskID else { continue }
+            if let old = result[owner], (created[old]!, old.uuidString) <= (created[note.id]!, note.id.uuidString) { continue }
+            result[owner] = note.id
+        }
+        return result
     }
 
     private func storedNotes(
@@ -1964,7 +1980,7 @@ final class NoteStore: ObservableObject {
         !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private static func tieBreakKey(for note: NoteItem) -> String {
+    nonisolated private static func tieBreakKey(for note: NoteItem) -> String {
         [
             note.title,
             note.body,
