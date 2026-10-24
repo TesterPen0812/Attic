@@ -425,6 +425,13 @@ enum AtticDropdownMetrics {
     /// The width rule: fits its content, never under 150 pt, never past
     /// the panel's 12 pt margin.
     static let minWidth: CGFloat = 150
+    /// The two card widths (Dropdown content: answers, owner, 2026-10-24,
+    /// rule 1): 184 pt for a list of commands or choices without a field
+    /// (the priority picker), 224 pt for a card with a field (the date
+    /// card's: the tag picker, Move to Task…) and the `/` list. The link
+    /// card stays 272 pt (`AtticNoteFormatMetrics.linkCardWidth`).
+    static let commandCardWidth: CGFloat = 184
+    static let fieldCardWidth: CGFloat = 224
     static let panelMargin: CGFloat = 12
     /// From the anchor (the caret's line, a strip button) to the card.
     static let anchorGap: CGFloat = 6
@@ -463,8 +470,14 @@ enum AtticDropdownMetrics {
 /// the row that opened them; they open after 180 ms of hover and keep
 /// 250 ms of grace for a pointer on its way to them (the Craft spec).
 enum AtticMenuMetrics {
-    static let minWidth: CGFloat = 150
-    static let maxWidth: CGFloat = 320
+    /// Two widths instead of content-fit (Dropdown content: answers, owner,
+    /// 2026-10-24, rule 1): 184 pt for a command menu (draft C's), 224 pt
+    /// (the date card's) for a list whose rows need it, such as Tags ›.
+    /// Date › is 200 pt (its detail and the tick). A row wider than 224 pt
+    /// is cut short with an ellipsis, never widening the card.
+    static let commandWidth: CGFloat = 184
+    static let wideWidth: CGFloat = AtticDropdownMetrics.fieldCardWidth
+    static let dateMenuWidth: CGFloat = 200
     static let trailingGap: CGFloat = 16
     static let chevronSize: CGFloat = 10
     static let submenuGap: CGFloat = 4

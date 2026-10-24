@@ -1338,6 +1338,14 @@ struct AtticMenuCommand: Identifiable {
     var swatch: AtticTagHue?
     /// Any other image before the title (the highlighter's colours).
     var image: NSImage?
+    /// A priority's mark before the title (↓ ! !!), as the priority
+    /// picker draws it; `.none` keeps the column empty.
+    var priority: AtticPriority?
+    /// The title's own face (a style list's names in their styles).
+    var titleFont: NSFont?
+    /// A submenu's card width when it is not the command width: Tags ›
+    /// (224 pt) and Date › (200 pt), per `AtticMenuMetrics`.
+    var menuWidth: CGFloat?
     let action: () -> Void
 
     init(
@@ -1390,10 +1398,11 @@ struct AtticMenuCommand: Identifiable {
 
     /// A submenu.
     static func submenu(_ title: String, systemImage: String? = nil, startsSection: Bool = false,
-                        isDisabled: Bool = false, _ children: [AtticMenuCommand]) -> AtticMenuCommand {
+                        isDisabled: Bool = false, width: CGFloat? = nil, _ children: [AtticMenuCommand]) -> AtticMenuCommand {
         var command = AtticMenuCommand(verbatim: title, systemImage: systemImage, isDisabled: isDisabled || children.isEmpty,
                                        startsSection: startsSection) {}
         command.children = children
+        command.menuWidth = width
         return command
     }
 

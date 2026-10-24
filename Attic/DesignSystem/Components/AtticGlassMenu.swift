@@ -496,7 +496,8 @@ final class AtticGlassMenu {
         cancelSubmenuTimer()
         closeCards(after: index)
         let parent = cards[index]
-        let child = AtticGlassMenuCard(commands: command.children, menu: self, level: index + 1, title: command.title)
+        let child = AtticGlassMenuCard(commands: command.children, menu: self, level: index + 1, title: command.title,
+                                       width: command.menuWidth)
         child.parentRow = row
         let rowTop = parent.screenTop(ofRow: row)
         child.place(Self.submenuFrame(size: child.size, parent: parent.window.frame, rowTop: rowTop,
@@ -583,22 +584,50 @@ final class AtticGlassMenu {
 
 /// Draft C's leading icons for the commands that do not name their own
 /// (the row menus were built for native menus, which drew none): looked up
-/// by the command's localized title, so only these commands get one and a
-/// submenu of choices (Today, Tomorrow…) keeps its plain rows, as drawn.
+/// by the command's localized title. One icon family, on every row of a
+/// command menu or on none (Dropdown content: answers, owner, 2026-10-24,
+/// rule 2): a choice (a row with a tick state: dates, priorities, sorts)
+/// never takes one from this table, so a choice list carries only its own
+/// marks (a dot, ↓ ! !!) or nothing, and View Options' "Priority" sort is
+/// not given the Priority command's flag.
 enum AtticMenuSymbols {
     static func symbol(for command: AtticMenuCommand) -> String? {
-        command.systemImage ?? (command.isHeader ? nil : table[command.title])
+        if let name = command.systemImage { return name }
+        guard !command.isHeader, command.state == nil else { return nil }
+        return table[command.title]
+    }
+
+    /// The rows of a command menu that draw no icon, mark or dot: empty
+    /// when the menu keeps the one-family rule (tests read it).
+    static func rowsWithoutIcons(_ commands: [AtticMenuCommand]) -> [String] {
+        commands.filter { !$0.isHeader && symbol(for: $0) == nil && $0.image == nil && $0.swatch == nil && $0.priority == nil }
+            .map(\.title)
     }
 
     private static let table: [String: String] = {
         let pairs: [(String.LocalizationValue, String)] = [
+            // The task menu (sheet 1).
             ("Complete", "checkmark.circle"), ("Mark as Not Done", "circle"), ("Restore to Now", "arrow.uturn.backward.circle"),
             ("Start Working", "play.circle"), ("Stop Working", "stop.circle"), ("Edit Title", "pencil"),
+            ("Show Details", "info.circle"), ("Close Details", "info.circle"),
             ("Date", "calendar"), ("Tags", "tag"), ("Priority", "flag"),
-            ("Move to Later", "clock"), ("Move to Now", "sun.max"), ("Add Subtask", "plus.square"),
-            ("Copy", "doc.on.doc"), ("Duplicate", "plus.square.on.square"), ("More", "ellipsis"),
+            ("Move to Later", "clock"), ("Move to Now", "sun.max"), ("Add Subtask", "plus"),
+            ("Copy", "doc.on.doc"), ("Duplicate", "plus.square.on.square"), ("More", "ellipsis.circle"),
             ("Delete", "trash"), ("Show Files", "paperclip"), ("Hide Files", "paperclip"),
             ("Move Up", "arrow.up"), ("Move Down", "arrow.down"), ("Rename", "pencil"), ("Pin", "pin"), ("Unpin", "pin.slash"),
+            // The subtask and note row menus (sheet 2).
+            ("Move to Task…", "arrow.turn.up.right"), ("Make Standalone Task", "arrow.up.left.square"),
+            ("Open Page", "doc.text"), ("Pin to Top", "pin"), ("Unpin from Top", "pin.slash"),
+            ("Filter by Tag", "line.3.horizontal.decrease"), ("Copy as Markdown", "doc.on.doc"), ("Delete Note", "trash"),
+            // The note's ⋯ (sheet 5).
+            ("Tags…", "tag"), ("Version History", "clock.arrow.circlepath"), ("Print…", "printer"),
+            ("Save Recovery Copy…", "square.and.arrow.down"), ("Insert", "plus"), ("Format", "textformat"),
+            ("Paragraph", "text.alignleft"), ("Text", "bold"), ("Lists", "list.bullet"), ("Line", "increase.indent"),
+            // The panel and Recently Deleted (sheet 5).
+            ("Pin Panel", "pin"), ("Unpin Panel", "pin.slash"), ("Settings…", "gearshape"),
+            ("Restore", "arrow.uturn.backward"), ("Select All", "checklist"), ("Delete Permanently…", "trash"),
+            // History (sheet 4).
+            ("Copy This Version", "doc.on.doc"),
         ]
         return Dictionary(pairs.map { (String(localized: $0.0), $0.1) }, uniquingKeysWith: { first, _ in first })
     }()
@@ -690,10 +719,10 @@ final class AtticGlassMenuCard {
     private(set) var scrollOffset: CGFloat = 0
     unowned let menu: AtticGlassMenu
 
-    init(commands: [AtticMenuCommand], menu: AtticGlassMenu, level: Int, title: String? = nil) {
+    init(commands: [AtticMenuCommand], menu: AtticGlassMenu, level: Int, title: String? = nil, width: CGFloat? = nil) {
         self.menu = menu
         self.level = level
-        let layout = Self.layout(commands)
+        let layout = Self.layout(commands, width: width)
         entries = layout.entries
         size = layout.size
         contentHeight = layout.size.height
@@ -725,11 +754,15 @@ final class AtticGlassMenuCard {
 
     /// Draft C's layout: rows 32 pt, 4 pt in; a separator (0.5 pt with 4 pt
     /// above and below) before each new section; a header row (26 pt) for
-    /// a titled section; as wide as the widest row (never under 150 pt,
-    /// never over 320 pt).
-    static func layout(_ commands: [AtticMenuCommand]) -> Layout {
+    /// a titled section. Two widths, not content-fit (Dropdown content:
+    /// answers, owner, 2026-10-24, rule 1): `width` when the menu names one
+    /// (Tags ›, Date ›), else 184 pt, or 224 pt when a row needs more; a
+    /// longer row is cut short.
+    static func layout(_ commands: [AtticMenuCommand], width declared: CGFloat? = nil) -> Layout {
         let m = AtticDropdownMetrics.self
-        let hasIcons = commands.contains { AtticMenuSymbols.symbol(for: $0) != nil || $0.image != nil || $0.swatch != nil }
+        let hasIcons = commands.contains {
+            AtticMenuSymbols.symbol(for: $0) != nil || $0.image != nil || $0.swatch != nil || $0.priority != nil
+        }
         let leading = m.rowPadding + (hasIcons ? m.iconSlot + m.columnGap : 0)
         var widest: CGFloat = 0
         var kinds: [Entry.Kind] = []
@@ -742,11 +775,13 @@ final class AtticGlassMenuCard {
             }
             if command.startsSection, index > 0, !(commands[index - 1].isHeader) { kinds.append(.separator) }
             kinds.append(.item(command))
-            widest = max(widest, leading + ceil(measure(command.title, AtticGlassMenuStyle.titleFont)) + trailingWidth(command) + m.rowPadding)
+            widest = max(widest, leading + ceil(measure(command.title, command.titleFont ?? AtticGlassMenuStyle.titleFont))
+                         + trailingWidth(command) + m.rowPadding)
         }
         var y = m.inset
         var entries: [Entry] = []
-        let width = min(AtticMenuMetrics.maxWidth, max(AtticMenuMetrics.minWidth, ceil(widest + m.inset * 2)))
+        let width = declared ?? (ceil(widest + m.inset * 2) <= AtticMenuMetrics.commandWidth
+                                 ? AtticMenuMetrics.commandWidth : AtticMenuMetrics.wideWidth)
         for kind in kinds {
             let height: CGFloat
             switch kind {
@@ -1004,6 +1039,8 @@ final class AtticGlassMenuView: NSView {
                 drawImage(AtticGlassMenuStyle.symbol(name, size: m.iconSize, color: iconInk), centeredIn: slot)
             } else if let image = command.image {
                 drawImage(image, centeredIn: slot)
+            } else if let priority = command.priority {
+                drawPriority(priority, in: slot, disabled: command.isDisabled, style: style)
             } else if let swatch = command.swatch {
                 let dot = NSRect(x: slot.midX - m.dotSize / 2, y: slot.midY - m.dotSize / 2, width: m.dotSize, height: m.dotSize)
                 style.tokens.tagInk(swatch).nsColor.setFill()
@@ -1031,9 +1068,26 @@ final class AtticGlassMenuView: NSView {
                                         height: font.ascender - font.descender), font: font, color: style.detail)
             trailing -= width + m.detailGap
         }
-        let font = AtticGlassMenuStyle.titleFont
+        let font = command.titleFont ?? AtticGlassMenuStyle.titleFont
         drawText(command.title, in: NSRect(x: x, y: frame.midY - (font.ascender - font.descender) / 2, width: max(0, trailing - x),
                                            height: font.ascender - font.descender), font: font, color: ink)
+    }
+
+    /// A priority's mark in the icon column, as the priority picker draws
+    /// it: High in its own ink, Low and Medium quiet, None empty.
+    private func drawPriority(_ priority: AtticPriority, in slot: NSRect, disabled: Bool, style: AtticGlassMenuStyle) {
+        let text: String
+        switch priority {
+        case .none: return
+        case .low: text = "↓"
+        case .medium: text = "!"
+        case .high: text = "!!"
+        }
+        let ink = disabled ? style.disabled : (priority == .high ? style.tokens.ink(.priorityMark).nsColor : style.detail)
+        let font = AtticTextStyle.priorityMark.nsFont
+        let width = ceil(AtticGlassMenuCard.measure(text, font))
+        let height = font.ascender - font.descender
+        drawText(text, in: NSRect(x: slot.midX - width / 2, y: slot.midY - height / 2, width: width, height: height), font: font, color: ink)
     }
 
     private func drawText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor) {

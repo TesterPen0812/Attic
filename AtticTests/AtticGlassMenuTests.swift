@@ -83,7 +83,7 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(layout.entries[0].frame.height, 32, "32 pt rows")
         XCTAssertEqual(layout.entries[0].frame.minY, 4, "rows 4 pt in")
         XCTAssertEqual(layout.entries[3].frame.height, 8.5, "a 0.5 pt hairline with 4 pt above and below")
-        XCTAssertGreaterThanOrEqual(layout.size.width, AtticMenuMetrics.minWidth)
+        XCTAssertEqual(layout.size.width, AtticMenuMetrics.commandWidth, "a command menu is 184 pt")
         let submenu = AtticGlassMenuCard.layout(commands()[2].children)
         XCTAssertEqual(submenu.entries.first.map { if case .header = $0.kind { true } else { false } }, true, "a titled section's header")
         XCTAssertEqual(submenu.entries.first?.frame.height, 26)
@@ -92,6 +92,67 @@ final class AtticGlassMenuTests: XCTestCase {
         let hinted = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title here",
                                                                  shortcut: KeyboardShortcut("d", modifiers: [.command, .option])) {}])
         XCTAssertEqual(plain.size, hinted.size, "shortcut hints are not drawn (draft C), so they take no room")
+    }
+
+    // MARK: Content rules (Dropdown content: answers, owner, 2026-10-24)
+
+    private func kinds(_ layout: AtticGlassMenuCard.Layout) -> [String] {
+        layout.entries.map { entry -> String in
+            switch entry.kind {
+            case let .item(command): command.title
+            case let .header(title): "[\(title)]"
+            case .separator: "—"
+            }
+        }
+    }
+
+    /// Rule 1: two widths instead of content-fit. 184 pt for a command
+    /// menu, 224 pt when a row needs more, a menu's own width when it names
+    /// one (Date › 200 pt); a row longer than 224 pt is cut short.
+    func testMenusHaveTwoWidthsNotContentFit() {
+        XCTAssertEqual(AtticMenuMetrics.commandWidth, 184)
+        XCTAssertEqual(AtticMenuMetrics.wideWidth, 224)
+        XCTAssertEqual(AtticMenuMetrics.dateMenuWidth, 200)
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Copy") {}]).size.width, 184)
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A rather long command title, longer") {}]).size.width, 224)
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: String(repeating: "Very long ", count: 12)) {}]).size.width,
+                       224, "never wider: the row is cut short")
+        XCTAssertEqual(AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "Today") {}], width: 200).size.width, 200)
+        // A submenu's card takes its command's width.
+        let date = AtticMenuCommand.submenu("Date", width: AtticMenuMetrics.dateMenuWidth, [AtticMenuCommand(verbatim: "Today") {}])
+        let menu = open([date])
+        defer { menu.close(animated: false) }
+        menu.handle(key(125))
+        menu.handle(key(36, "\r"))
+        XCTAssertEqual(menu.cards.count, 2, "Return opens Date ›")
+        XCTAssertEqual(menu.cards[1].size.width, 200)
+    }
+
+    /// Rule 2: one icon family. A choice (a row with a tick state) never
+    /// takes a command's icon from the table, so View Options' "Priority"
+    /// sort has no flag while Priority › keeps it; a priority's mark sits
+    /// in the icon column.
+    func testChoicesTakeNoCommandIconAndPriorityMarksSitInTheIconColumn() {
+        XCTAssertEqual(AtticMenuSymbols.symbol(for: AtticMenuCommand(verbatim: "Priority") {}), "flag")
+        XCTAssertNil(AtticMenuSymbols.symbol(for: AtticMenuCommand(verbatim: "Priority", state: .off) {}), "a sort choice")
+        XCTAssertNil(AtticMenuSymbols.symbol(for: .header("Priority")))
+        XCTAssertEqual(AtticMenuSymbols.symbol(for: AtticMenuCommand(verbatim: "Tasks", systemImage: "checkmark.circle", state: .on) {}),
+                       "checkmark.circle", "a named icon always draws")
+        let choices = [AtticMenuCommand(verbatim: "Manual Order", state: .on) {}, AtticMenuCommand(verbatim: "Priority", state: .off) {}]
+        XCTAssertFalse(AtticGlassMenuCard.layout(choices).hasIcons, "a choice list without marks has no icon column")
+        var low = AtticMenuCommand(verbatim: "Low", state: .off) {}
+        low.priority = .low
+        XCTAssertTrue(AtticGlassMenuCard.layout([low]).hasIcons, "the mark column")
+        XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons([low, AtticMenuCommand(verbatim: "Copy") {}]), [])
+        XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons([AtticMenuCommand(verbatim: "Unlisted") {}]), ["Unlisted"])
+    }
+
+    /// Rule 4: a header row for a group of choices, drawn as a header, not
+    /// a greyed command (the tag chip's Colour, History's days).
+    func testAHeaderIsAHeaderNotARow() {
+        let layout = AtticGlassMenuCard.layout([.header("Colour"), AtticMenuCommand(verbatim: "Yellow", state: .on, swatch: .yellow) {}])
+        XCTAssertEqual(kinds(layout), ["[Colour]", "Yellow"])
+        XCTAssertEqual(layout.entries.filter(\.isSelectable).count, 1)
     }
 
     // MARK: Placement
