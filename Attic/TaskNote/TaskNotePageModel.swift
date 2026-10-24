@@ -70,7 +70,9 @@ final class TaskNotePageModel: ObservableObject {
     @Published private(set) var isExpanded: Bool
     /// The row the list's ring is on (arrows move it).
     @Published var focusedRowID: UUID?
-    @Published private(set) var renamingID: UUID?
+    @Published private(set) var renamingID: UUID? {
+        didSet { if renamingID == nil, history.hasPendingPublication { history.requestPublicationRetry() } }
+    }
     /// The rename field's draft (plain text: its pieces are never parsed).
     @Published var renameEdit = TaskAddBarText()
     var renameText: String {
@@ -93,9 +95,14 @@ final class TaskNotePageModel: ObservableObject {
     var titleEditSelection: NSRange?
     /// Reduce Motion: the held rows settle at once (review P2-4).
     var reduceMotion = false
-    @Published var newSubtaskText = ""
+    @Published var newSubtaskText = "" {
+        didSet { if newSubtaskText.isEmpty, history.hasPendingPublication { history.requestPublicationRetry() } }
+    }
     @Published private(set) var isEditingTitle = false {
-        didSet { if isEditingTitle != oldValue { onGeometryChange?() } }
+        didSet {
+            if isEditingTitle != oldValue { onGeometryChange?() }
+            if !isEditingTitle, history.hasPendingPublication { history.requestPublicationRetry() }
+        }
     }
     @Published var titleEdit = TaskAddBarText()
     @Published var titleEditCaret: Int?
@@ -198,10 +205,32 @@ final class TaskNotePageModel: ObservableObject {
 
     var historyID: UndoHistoryID { history.historyID }
 
+    var hasFieldDrafts: Bool {
+        isEditingTitle || renamingID != nil || !newSubtaskText.isEmpty || isFieldComposing?() == true
+    }
+
+    /// Pending publication may have released the writing as a fallback
+    /// draft. Starting a new native field then would strand that draft on
+    /// the retired head. Cancellation/clearing always remains available.
+    func admitFieldInput() -> Bool {
+        guard !history.isInputReserved, !history.hasPendingPublication else {
+            return report(CommandFailure(String(localized: "Finish updating this item before editing its fields.")))
+        }
+        return true
+    }
+
+    func editNewSubtask(_ value: String) {
+        guard value.isEmpty || admitFieldInput() else { return }
+        newSubtaskText = value
+    }
+
+    func cancelNewSubtask() { newSubtaskText = "" }
+
     // MARK: Reading the store
 
     /// Re-reads the task and its subtasks. Publishes only what changed.
     func refresh(animated: Bool = false) {
+        guard !history.hasPendingPublication || !hasFieldDrafts else { return }
         // A task moved to the Done log still has its page (`p3-22` row 3).
         let task = store.listedTask(withID: taskID)
         // Next-day cleanup moved the family to the Done log (§ 2.6): its
@@ -463,7 +492,7 @@ final class TaskNotePageModel: ObservableObject {
     func commitNewSubtask() -> Bool {
         let title = TaskDraftBuilder.collapsed(newSubtaskText)
         guard !title.isEmpty else {
-            newSubtaskText = ""
+            cancelNewSubtask()
             focusWriting(atTop: true)
             return true
         }
@@ -479,7 +508,7 @@ final class TaskNotePageModel: ObservableObject {
             }
         }
         clearFailure()
-        newSubtaskText = ""
+        cancelNewSubtask()
         refresh()
         // The new row and the field stay in sight (draft B: Add subtask
         // shows with 0–3 rows, so a fourth row expands the list).
@@ -488,6 +517,7 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func beginRename(_ id: UUID, undoManager: UndoManager? = nil) {
+        guard admitFieldInput() else { return }
         guard rows.contains(where: { $0.id == id }), let task = store.listedTask(withID: id) else { return }
         if renamingID != nil, renamingID != id { cancelRename() }
         guard renamingID != id else { return }
@@ -500,17 +530,20 @@ final class TaskNotePageModel: ObservableObject {
 
     /// The rename field replaced `range` with `replacement` (a draft step).
     func renameEdited(_ range: NSRange, replacement: String) {
+        guard admitFieldInput() else { return }
         renameHistory.willEdit(renameEdit, selection: nil, range: range, replacement: replacement)
         renameEdit.edited(range, replacement: replacement)
     }
 
     func undoRenameDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = renameHistory.undo(current: renameEdit, selection: nil) else { return nil }
         renameEdit = entry.text
         return (entry.text.text, entry.selection)
     }
 
     func redoRenameDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = renameHistory.redo(current: renameEdit, selection: nil) else { return nil }
         renameEdit = entry.text
         return (entry.text.text, entry.selection)
@@ -628,6 +661,7 @@ final class TaskNotePageModel: ObservableObject {
     // MARK: The head's title (Tasks' title editor and its shorthand)
 
     func beginEditingTitle(undoManager: UndoManager? = nil) {
+        guard admitFieldInput() else { return }
         guard let task = store.listedTask(withID: taskID), !isEditingTitle else { return }
         titleBase = (task.title, task.priority, task.dueDay)
         titleHistory.reset()
@@ -644,17 +678,20 @@ final class TaskNotePageModel: ObservableObject {
 
     /// The title field replaced `range` with `replacement` (a draft step).
     func titleEdited(_ range: NSRange, replacement: String) {
+        guard admitFieldInput() else { return }
         titleHistory.willEdit(titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret),
                               range: range, replacement: replacement)
         titleEdit.edited(range, replacement: replacement)
     }
 
     func dismissTitleChip(_ range: NSRange) {
+        guard admitFieldInput() else { return }
         titleHistory.checkpoint(titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
         titleEdit.dismiss(range)
     }
 
     func undoTitleDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = titleHistory.undo(current: titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
         else { return nil }
         applyTitleDraft(entry)
@@ -662,6 +699,7 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func redoTitleDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = titleHistory.redo(current: titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
         else { return nil }
         applyTitleDraft(entry)
