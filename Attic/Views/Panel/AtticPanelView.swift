@@ -252,6 +252,17 @@ struct AtticPanelView: View {
             noteOwners: noteDraft.pages.store.$notes
                 .map { Set($0.compactMap(\.taskID)) }
                 .removeDuplicates()
+                .eraseToAnyPublisher(),
+            notePreviews: noteDraft.pages.store.$notes
+                .map { notes in
+                    var previews: [UUID: String] = [:]
+                    for note in notes where note.deletedAt == nil {
+                        guard let id = note.taskID, let preview = RemindersReplicaText.notesPreview(plainText: note.plainText) else { continue }
+                        previews[id] = preview
+                    }
+                    return previews
+                }
+                .removeDuplicates()
                 .eraseToAnyPublisher())
     }
 
@@ -378,6 +389,7 @@ struct AtticPanelView: View {
             .environment(\.atticPanelToasts, toasts)
             .environment(\.atticPageSwitcherPresence, switcherPresence)
             .environment(\.atticColouredTagsInLists, settings.colouredTagsInLists)
+            .environment(\.atticTasksListStyle, settings.tasksListStyle)
             .atticTagColours(store.commandLibrary)
             .tint(panelAccentColor)
             .accentColor(panelAccentColor)

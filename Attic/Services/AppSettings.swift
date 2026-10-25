@@ -82,6 +82,7 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
         static let colouredTagsInLists = "colouredTagsInLists"
+        static let tasksListStyle = "tasksListStyle"
         static let animations = "animations"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
@@ -198,6 +199,13 @@ final class AppSettings: ObservableObject {
     /// by default.
     @Published var colouredTagsInLists: Bool {
         didSet { defaults.set(colouredTagsInLists, forKey: Key.colouredTagsInLists) }
+    }
+
+    /// List Style (Reminders replica first, then adapt; owner, 2026-10-25):
+    /// Attic, the default, or the Reminders replica. Not written until
+    /// changed.
+    @Published var tasksListStyle: TasksListStyle {
+        didSet { defaults.set(tasksListStyle.rawValue, forKey: Key.tasksListStyle) }
     }
 
     /// Lively (the default) or Subtle springs, or Reduced motion (round 9,
@@ -360,6 +368,7 @@ final class AppSettings: ObservableObject {
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
         colouredTagsInLists = defaults.bool(forKey: Key.colouredTagsInLists)
+        tasksListStyle = defaults.string(forKey: Key.tasksListStyle).flatMap(TasksListStyle.init(rawValue:)) ?? .attic
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
         revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true
         revealModifier = RevealModifier(rawValue: defaults.string(forKey: Key.revealModifier) ?? "") ?? .none

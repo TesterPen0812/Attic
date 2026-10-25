@@ -88,6 +88,7 @@ struct TasksPageHost: View {
         // The row glyph follows the note store (owned by the model, outside
         // view updates).
         model.observeNoteOwners(taskNotes.noteOwners)
+        model.notePreviewSource = taskNotes.notePreviews
     }
 
     /// The host's callbacks, also exercised without the Tasks page's own

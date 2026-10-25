@@ -106,4 +106,7 @@ struct TaskNoteEntryServices {
     /// page or a headless one.
     var makeCheckbox: ((UUID) -> Void)?
     var noteOwners: AnyPublisher<Set<UUID>, Never> = Just([]).eraseToAnyPublisher()
+    /// Each task's writing as a row preview (the Reminders replica only
+    /// subscribes while it draws).
+    var notePreviews: AnyPublisher<[UUID: String], Never> = Just([:]).eraseToAnyPublisher()
 }

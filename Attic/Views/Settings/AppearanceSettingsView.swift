@@ -140,6 +140,14 @@ struct AppearanceSettingsView: View {
                 identifier: "setting-coloured-tags"
             )
             .help(String(localized: "Show each task’s tags in their colours instead of grey"))
+            AtticGroupDivider()
+            AtticPopUpRow(
+                label: String(localized: "List Style"),
+                choices: TasksListStyle.allCases.map { ($0, $0.title) },
+                selection: $settings.tasksListStyle,
+                identifier: "setting-list-style"
+            )
+            .help(String(localized: "Draw Tasks’ lists as Attic does, or as a replica of Reminders for comparison"))
         }
     }
 

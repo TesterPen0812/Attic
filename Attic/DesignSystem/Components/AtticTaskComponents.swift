@@ -283,7 +283,7 @@ enum AtticTaskKeys {
     }
 }
 
-private extension View {
+extension View {
     /// Keyboard focus for a task row or card: focusable, the system focus
     /// effect replaced by Attic's 2 pt ring (drawn by the caller from
     /// `isFocused`), and the task keys. Captures (`ImageRenderer`) have no
@@ -1098,6 +1098,9 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
     /// A search the title matches: its matches are highlighted (the Done
     /// search, owner item 17).
     var titleMatch: String?
+    /// The item's writing as a preview (only while the Reminders replica
+    /// draws the list; nil otherwise).
+    var notes: String?
 
     /// Round 11: a list skips redrawing a row whose model is unchanged
     /// (the subtask counts are a tuple, compared by hand).
@@ -1106,6 +1109,7 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
             && lhs.due == rhs.due && lhs.tags == rhs.tags && lhs.attachments == rhs.attachments && lhs.links == rhs.links
             && lhs.subtasks?.done == rhs.subtasks?.done && lhs.subtasks?.total == rhs.subtasks?.total
             && lhs.inWindow == rhs.inWindow && lhs.hasPage == rhs.hasPage && lhs.titleMatch == rhs.titleMatch
+            && lhs.notes == rhs.notes
     }
 
     /// Where `titleMatch` occurs in the title (as the search reads it:

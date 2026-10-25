@@ -91,6 +91,7 @@ struct TasksListRow: Identifiable, Equatable {
             && lhs.model.attachments == rhs.model.attachments && lhs.model.titleMatch == rhs.model.titleMatch
             // Phase 3: the note glyph (a list skips rows that compare equal).
             && lhs.model.hasPage == rhs.model.hasPage
+            && lhs.model.notes == rhs.model.notes
             && lhs.model.subtasks?.done == rhs.model.subtasks?.done
             && lhs.model.subtasks?.total == rhs.model.subtasks?.total
             && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
@@ -208,7 +209,13 @@ final class TasksPageModel: ObservableObject {
 
     @Published var tab: TasksTab = .now {
         // Remembered across relaunch (L7), where the page has a memory.
-        didSet { if tab != oldValue { memory?.savePage(tab) } }
+        didSet {
+            if tab != oldValue {
+                memory?.savePage(tab)
+                // Navigating refreshes the replica's lists: completed rows leave.
+                releaseReplicaHolds()
+            }
+        }
     }
     @Published private(set) var selection: Set<UUID> = [] {
         didSet { if selection != oldValue { selectionRevision += 1 } }
@@ -507,6 +514,8 @@ final class TasksPageModel: ObservableObject {
         if let match, !match.isEmpty { model.titleMatch = match }
         // Phase 3 (`p3-06`, D11): the note glyph after the subtask count.
         model.hasPage = noteOwners.contains(task.id)
+        // The Reminders replica previews the item's writing under its title.
+        if listStyle.isReplica { model.notes = notePreviews[task.id] }
         // Slice 2 (§ 2.4, D11): a family whose files are in its note shows
         // no paperclip, unless Earlier files remain; others as on main.
         let files = store.fileMigration.rowFiles(for: task)
@@ -524,6 +533,7 @@ final class TasksPageModel: ObservableObject {
         let tab: TasksTab
         let revision: UInt64
         let noteOwners: UInt64
+        let replica: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
         let expandedFiles: Set<UUID>
@@ -541,6 +551,7 @@ final class TasksPageModel: ObservableObject {
         let tab: TasksTab
         let revision: UInt64
         let noteOwners: UInt64
+        let replica: UInt64
         let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
         let expandedFiles: Set<UUID>
@@ -558,7 +569,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func pageToken(_ tab: TasksTab) -> PageToken {
-        PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, replica: replicaRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), owner: self.tab == tab && isPageShown)
@@ -583,7 +594,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
-        let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+        let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, replica: replicaRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
@@ -830,6 +841,7 @@ final class TasksPageModel: ObservableObject {
     /// Retry", and the page stays where that row is.
     func resetForReveal() {
         isHidden = false
+        releaseReplicaHolds()
         // The page is on its tab at once, never sliding in (round 10); the
         // pages beside it are built once it is idle (round 11).
         defer {
@@ -853,6 +865,26 @@ final class TasksPageModel: ObservableObject {
     /// the note glyph, and deleting one says the note is kept (§ 2.7.1).
     @Published private(set) var noteOwners: Set<UUID> = []
     private(set) var noteOwnersRevision: UInt64 = 0
+
+    // MARK: Reminders replica (R1)
+
+    /// The lists' style (Settings › Appearance › Lists › List Style).
+    private(set) var listStyle: TasksListStyle = .attic
+    /// Bumped when what the replica's rows show changes (the style, the
+    /// writing previews): the rows are rebuilt.
+    private(set) var replicaRevision: UInt64 = 0
+    /// Each item's writing as a preview, only while the replica draws.
+    private(set) var notePreviews: [UUID: String] = [:]
+    /// Where the previews come from (the note store), subscribed to only
+    /// while the replica is on.
+    var notePreviewSource: AnyPublisher<[UUID: String], Never>?
+    private var notePreviewsObservation: AnyCancellable?
+    /// The new-reminder row's text; only that row observes it.
+    let replicaDraft = RemindersReplicaDraftState()
+    /// The new-reminder row is open (⌘N, or a click below the rows).
+    @Published private(set) var replicaRowActive = false
+    /// Asks the new-reminder row's field to take the keyboard.
+    @Published private(set) var replicaRowFocusRequest: UInt64 = 0
 
     private var noteOwnersObservation: AnyCancellable?
 
@@ -1053,6 +1085,7 @@ final class TasksPageModel: ObservableObject {
                 warmPager()
             } else {
                 suspendPager()
+                releaseReplicaHolds()
             }
         }
     }
@@ -1433,6 +1466,13 @@ final class TasksPageModel: ObservableObject {
     private func hold(_ id: UUID, tab: TasksTab, at index: Int) {
         held[id] = HeldPlace(tab: tab, index: index)
         holdTasks[id]?.cancel()
+        // The replica keeps a completed row in its allowlist until the list
+        // is refreshed or left (C, R3-049/050: `ShowCompletedContext`), not
+        // for a set time.
+        if listStyle.isReplica {
+            holdTasks[id] = nil
+            return
+        }
         let delay = services.doneHold
         holdTasks[id] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: delay)
@@ -2079,5 +2119,107 @@ final class TasksPageModel: ObservableObject {
             subtasks: children.map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) },
             files: store.fileMigration.rowFiles(for: task)
         )
+    }
+}
+
+// MARK: - Reminders replica (R1)
+
+/// The new-reminder row's draft. Only that row observes it, so typing never
+/// redraws the page.
+@MainActor
+final class RemindersReplicaDraftState: ObservableObject {
+    @Published var draft = RemindersReplicaDraft()
+}
+
+extension TasksPageModel {
+    /// The style changed (Settings): rows are rebuilt; leaving the replica
+    /// lets its kept completed rows go and closes its new-reminder row.
+    func setListStyle(_ style: TasksListStyle) {
+        guard style != listStyle else { return }
+        listStyle = style
+        if style.isReplica {
+            notePreviewsObservation = notePreviewSource?.receive(on: DispatchQueue.main)
+                .sink { [weak self] in self?.setNotePreviews($0) }
+        } else {
+            notePreviewsObservation = nil
+            notePreviews = [:]
+            releaseReplicaHolds(evenWhenAttic: true)
+            if replicaRowActive { replicaRowActive = false }
+            replicaDraft.draft = RemindersReplicaDraft()
+        }
+        replicaRevision &+= 1
+        objectWillChange.send()
+    }
+
+    func setNotePreviews(_ previews: [UUID: String]) {
+        guard previews != notePreviews else { return }
+        notePreviews = previews
+        replicaRevision &+= 1
+        objectWillChange.send()
+    }
+
+    /// The replica's lists were refreshed or left: every completed row it
+    /// kept leaves now (the allowlist is cleared).
+    func releaseReplicaHolds(evenWhenAttic: Bool = false) {
+        guard listStyle.isReplica || evenWhenAttic, !held.isEmpty else { return }
+        for id in Array(held.keys) where holdTasks[id] == nil { releaseHold(id) }
+    }
+
+    /// ⌘N or a click below the rows: the new-reminder row opens with the
+    /// keyboard in it.
+    func beginReplicaRow() {
+        guard listStyle.isReplica, tab != .done else { return }
+        if !replicaRowActive { replicaRowActive = true }
+        replicaRowFocusRequest &+= 1
+    }
+
+    /// Return in the new-reminder row (C + M, R3-008/011, CUA2-01/03): a
+    /// title is saved as a new task below the rows and a fresh row takes
+    /// the keyboard right below it; an empty row is reused (no task, no
+    /// second row). Returns the new task.
+    @discardableResult
+    func submitReplicaRow() -> UUID? {
+        guard let draft = replicaDraft.draft.taskDraft(parser: parser, status: addStatus) else {
+            replicaRowFocusRequest &+= 1
+            return nil
+        }
+        guard let task = library.createTasks([draft])?.first else { return nil }
+        replicaDraft.draft = RemindersReplicaDraft()
+        addedRequest = ScrollRequest(id: task.id)
+        replicaRowFocusRequest &+= 1
+        return task.id
+    }
+
+    /// Escape, or the keyboard leaving the row. A blank row is dropped
+    /// (M, CUA2-01/04); words are kept as a task (Reminders' non-blank
+    /// cancel is not established, so nothing typed is lost).
+    func endReplicaRow() {
+        guard replicaRowActive else { return }
+        if !replicaDraft.draft.isBlank { _ = submitReplicaRow() }
+        replicaDraft.draft = RemindersReplicaDraft()
+        replicaRowActive = false
+    }
+
+    /// The suggested date accepted: the date is set on the draft and its
+    /// words leave the title.
+    @discardableResult
+    func acceptReplicaDate() -> Bool {
+        replicaDraft.draft.acceptDate(parser: parser) != nil
+    }
+}
+
+extension TasksPageModel {
+    /// A replica row's date line (M: below the title; Today, Tomorrow,
+    /// Yesterday or the numeric date; overdue in red).
+    func replicaDateLine(for id: UUID) -> (text: String, tone: RemindersReplicaText.DateTone)? {
+        guard let day = store.listedTask(withID: id)?.dueDay ?? doneLogTasks.first(where: { $0.id == id })?.dueDay else { return nil }
+        return RemindersReplicaText.dateLine(day, today: DueDay(date: services.now(), calendar: services.calendar()),
+                                             calendar: services.calendar(), locale: services.locale)
+    }
+
+    /// A day as the date line says it (the suggestion's words).
+    func replicaDateText(_ day: DueDay) -> String {
+        RemindersReplicaText.dateLine(day, today: DueDay(date: services.now(), calendar: services.calendar()),
+                                      calendar: services.calendar(), locale: services.locale).text
     }
 }

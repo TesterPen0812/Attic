@@ -16,6 +16,9 @@ struct TaskDraft: Equatable {
     /// Files already copied into private storage by a composer; bound in the
     /// same save as the task.
     var attachments: [TaskImageReference]
+    /// A main task goes below its group's tasks instead of on top (the
+    /// Reminders replica's new-reminder row, R1). Off everywhere else.
+    var placesAtEnd = false
 
     init(
         title: String,

@@ -33,6 +33,7 @@ struct TasksPage: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var tagColouring
+    @Environment(\.atticTasksListStyle) private var listStyle
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     /// The subtask lines' and strip buttons' own focus, reached by the
     /// page's Tab order (A10). Not observed.
@@ -315,7 +316,8 @@ struct TasksPage: View {
             eventMonitors.add(matching: .keyDown) { event in
                 TasksDragCancellation.consumeEscape(event)
                     || findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
-                    || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || taskShortcutPressed(event)
+                    || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || replicaShortcutPressed(event)
+                    || taskShortcutPressed(event)
                     || tabPressed(event)
                     ? nil : event
             }
@@ -458,6 +460,8 @@ struct TasksPage: View {
             // after the press, when the current event may have moved on).
             pointer.menuBegan(with: (note.userInfo?[AtticGlassMenu.openerKey] as? NSEvent) ?? NSApp.currentEvent)
         }
+        // Settings › Appearance › Lists › List Style.
+        .onChange(of: listStyle, initial: true) { _, style in model.setListStyle(style) }
         .onChange(of: model.tab) { _, _ in
             cancelTransientState()
             // Each page keeps its own query; the field lets the keyboard go
@@ -1427,6 +1431,9 @@ struct TasksPage: View {
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
                     }
+                    if model.listStyle.isReplica, tab != .done, query.isEmpty {
+                        replicaNewRow(tab: tab)
+                    }
                     if !query.isEmpty {
                         // Find's quiet count, or that nothing matches (as on
                         // Done).
@@ -1597,7 +1604,25 @@ struct TasksPage: View {
             // row always redraws it (they show live state).
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
                                               isFilesExpanded: isFilesExpanded, isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
-                                              layout: layout, isLive: editing || live.metaPopover != nil)) {
+                                              layout: layout, isLive: editing || live.metaPopover != nil,
+                                              replica: model.listStyle.isReplica ? (listHasKeyboard ? 1 : 2) : 0)) {
+                let replicaRow = {
+                    RemindersReplicaRow(
+                        model: row.model,
+                        isSelected: isSelected,
+                        selectionRun: run,
+                        listHasKeyboard: listHasKeyboard,
+                        isExpanded: isExpanded,
+                        actions: actions(for: id, in: tab),
+                        onToggleExpanded: { toggleExpanded(id) },
+                        onSelect: { rowClicked(id, tab: tab) },
+                        onInfo: tab != .done ? { opensTaskNotes ? openTaskNote(id) : actions(for: id, in: tab).openPage() } : nil,
+                        focus: live.focus,
+                        titleEditing: editing ? titleEditing(for: id) : nil,
+                        dateLine: model.replicaDateLine(for: id)
+                    )
+                    .atticContextMenu { model.isPageShown && model.tab == tab ? replicaTaskCommands(row.id, tab: tab) : [] }
+                }
                 let drawRow = {
                     AtticTaskRow(
                         model: row.model,
@@ -1622,7 +1647,13 @@ struct TasksPage: View {
                     // A kept page that is not shown opens no menu.
                     .atticContextMenu { model.isPageShown && model.tab == tab ? taskCommands(row.id, tab: tab) : [] }
                 }
-                if editing {
+                if model.listStyle.isReplica {
+                    if editing {
+                        TasksTitleDraftView(draft: model.titleDraft, content: replicaRow)
+                    } else {
+                        replicaRow()
+                    }
+                } else if editing {
                     TasksTitleDraftView(draft: model.titleDraft, content: drawRow)
                 } else {
                     drawRow()
@@ -1666,7 +1697,15 @@ struct TasksPage: View {
                     .padding(.leading, AtticLayout.textX)
                     .accessibilityIdentifier("tasks-row-failure")
             }
-            if expanded() {
+            if expanded(), model.listStyle.isReplica {
+                // The replica's children: indented rows under the parent.
+                ForEach(row.subtasks) { subtask in
+                    RemindersReplicaChildRow(subtask: subtask) {
+                        model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) }
+                    }
+                    .atticContextMenu { model.isPageShown && model.tab == tab ? subtaskCommands(subtask, of: id, in: row.subtasks) : [] }
+                }
+            } else if expanded() {
                 TasksSubtaskDraftView(draft: active && (model.newSubtaskParentID == id || model.renamingSubtaskParentID == id)
                                       ? model.subtaskDraft : .quiet) {
                     AtticQuickLook(
@@ -2741,6 +2780,15 @@ struct TasksPage: View {
 
     private func estimatedHeight(_ row: TasksListRow) -> CGFloat {
         let id = row.id
+        if model.listStyle.isReplica {
+            let m = RemindersReplicaMetrics.self
+            var height = m.rowHeight(titleLines: 1, notesLines: row.model.notes == nil ? 0 : 1,
+                                     hasDateLine: row.model.due != nil || row.model.attachments > 0 || row.model.links > 0)
+            if model.expanded.contains(id), row.status != .done {
+                height += CGFloat(row.subtasks.count) * m.rowHeight(titleLines: 1, notesLines: 0, hasDateLine: false)
+            }
+            return height
+        }
         let pitch = row.model.showsDetailsLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         var height = pitch
         if model.expanded.contains(id), row.status != .done {
@@ -4561,11 +4609,14 @@ struct TasksRowKey: Equatable {
     let layout: PanelPageLayout
     /// A title editor or a picker is open on the row: it always redraws.
     let isLive: Bool
+    /// The Reminders replica draws the row (0: Attic; 1 and 2: the replica
+    /// with the list holding the keyboard or not).
+    var replica = 0
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
             && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isFilesExpanded == rhs.isFilesExpanded && lhs.isDropTarget == rhs.isDropTarget
-            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab
+            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab && lhs.replica == rhs.replica
             // Native layout resizes the row. Its controls and callbacks
             // change only when the chrome insets change, not every pixel
             // of the panel size (owner F-14).
@@ -5106,4 +5157,148 @@ private struct TasksSubtaskDraftView<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View { content() }
+}
+
+// MARK: - Reminders replica (R1)
+
+extension TasksPage {
+    /// Whether the list holds the keyboard (the replica's focused
+    /// selection fill) rather than Find, the add bar or the new row.
+    var listHasKeyboard: Bool {
+        !searchFocused && !addBarFocused && !model.replicaRowActive
+    }
+
+    /// The new-reminder row at the end of the open rows; until it is open,
+    /// a quiet row's height that opens it when clicked.
+    @ViewBuilder
+    func replicaNewRow(tab: TasksTab) -> some View {
+        if model.replicaRowActive, tab == model.tab {
+            RemindersReplicaNewRow(
+                state: model.replicaDraft,
+                parser: model.parser,
+                focusRequest: model.replicaRowFocusRequest,
+                dateText: { day in model.replicaDateText(day) },
+                onSubmit: { _ = model.submitReplicaRow() },
+                onEnd: { model.endReplicaRow() },
+                onAcceptDate: { _ = model.acceptReplicaDate() }
+            )
+            .id("replica-new-row")
+        } else {
+            Color.clear
+                .frame(height: RemindersReplicaMetrics.rowHeight(titleLines: 1, notesLines: 0, hasDateLine: false))
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.clearSelection()
+                    model.beginReplicaRow()
+                }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(String(localized: "New reminder"))
+                .accessibilityIdentifier("replica-new-row-opener")
+        }
+    }
+
+    /// The row's right-click menu in Reminders' measured order (M,
+    /// CUA2-10, R2-07), with Attic's commands; items Attic cannot do are
+    /// left out (`RemindersReplicaMenu.leftOut`).
+    func replicaTaskCommands(_ rowID: UUID, tab: TasksTab) -> [AtticMenuCommand] {
+        let key = TasksRowID(tab: tab, id: rowID)
+        let id = menuRowID(key)
+        let targets = menuTargets(key)
+        let single = targets.count == 1
+        let listed = targets.compactMap { store.listedTask(withID: $0) }
+        let allDone = !listed.isEmpty && listed.allSatisfy { $0.status == .done }
+        let canRemove = single && model.services.canRemoveFromTasks?(id) == true && model.services.removeFromTasks != nil
+            && store.listedTask(withID: id)?.parentID == nil
+        var list: [AtticMenuCommand] = []
+        if !single { list.append(.header(String(localized: "\(targets.count) Tasks"))) }
+        for command in RemindersReplicaMenu.commands(removeFromTasks: canRemove) {
+            switch command {
+            case .complete:
+                if tab == .done {
+                    list.append(AtticMenuCommand(verbatim: String(localized: "Restore to Now")) {
+                        menuCommand(key) { [weak model] targets in model?.restoreToNow(targets) ?? .failed(.taskGone) }
+                    })
+                } else {
+                    list.append(AtticMenuCommand(verbatim: allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
+                                                 shortcut: KeyboardShortcut("c", modifiers: [.command, .shift])) {
+                        menuCommand(key) { [weak model] targets in model?.toggleDone(targets) ?? .failed(.taskGone) }
+                    })
+                }
+            case .date:
+                list.append(.submenu(String(localized: "Date"), startsSection: true, width: AtticMenuMetrics.dateMenuWidth,
+                                     dateCommands(key, targets: targets)))
+            case .priority:
+                list.append(.submenu(String(localized: "Priority"), startsSection: true, priorityCommands(key, targets: targets)))
+            case .list:
+                // Attic's lists are Now and Later.
+                guard tab != .done else { continue }
+                list.append(.submenu(String(localized: "List"), [
+                    AtticMenuCommand(verbatim: TasksTab.now.title, state: tab == .now ? .on : .off) {
+                        guard tab != .now else { return }
+                        menuCommand(key) { [weak model] targets in model?.moveToNow(targets) ?? .failed(.taskGone) }
+                    },
+                    AtticMenuCommand(verbatim: TasksTab.backlog.title, state: tab == .backlog ? .on : .off) {
+                        guard tab != .backlog else { return }
+                        menuCommand(key) { [weak model] targets in model?.moveToBacklog(targets) ?? .failed(.taskGone) }
+                    },
+                ]))
+            case .tags:
+                list.append(.submenu(String(localized: "Tags"), width: AtticMenuMetrics.wideWidth, tagCommands(key, targets: targets)))
+            case .copy:
+                list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy, startsSection: true) {
+                    model.copy(menuTargets(key))
+                    pointer.endInvocation()
+                })
+            case .removeFromTasks:
+                if let remove = model.services.removeFromTasks {
+                    list += TaskNoteConversion.commands(taskID: id, hasWriting: true, isSubtask: false, add: {}, remove: { remove(id) })
+                }
+            case .delete:
+                list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
+                                             systemImage: "trash", shortcut: AtticTaskShortcut.delete, isDestructive: true) {
+                    guard !AtticTextInput.ownsCurrentKey else { return }
+                    deleteAndMoveFocus(menuTargets(key))
+                })
+            }
+        }
+        return list
+    }
+
+    /// The confirmed Reminders keys while the replica draws (C,
+    /// RES-IB-007/008): ⌘N new reminder, ⌘I the item's page, ⇧⌘C
+    /// complete, ⇧⌘T tags. Never while a field is typing.
+    func replicaShortcutPressed(_ event: NSEvent) -> Bool {
+        guard model.listStyle.isReplica, event.type == .keyDown, model.isPageShown,
+              let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
+              let command = RemindersReplicaKeys.command(characters: event.charactersIgnoringModifiers,
+                                                         keyCode: event.keyCode, modifiers: event.modifierFlags)
+        else { return false }
+        if command == .newReminder {
+            guard model.tab != .done, model.editingTitleID == nil else { return false }
+            addBarFocused = false
+            searchFocused = false
+            focusedRow = nil
+            model.clearSelection()
+            model.beginReplicaRow()
+            return true
+        }
+        guard !AtticTextInput.hasKeyboard, !addBarFocused, !searchFocused, model.editingTitleID == nil, metaPopover == nil else { return false }
+        let visible = visibleIDs()
+        guard let current = model.shortcutRow(focusedRow: keyboardRow(visible: visible), visible: Set(visible)) else { return false }
+        pointer.endInvocation()
+        switch command {
+        case .newReminder:
+            return false
+        case .showInfo:
+            guard model.tab != .done else { return false }
+            if opensTaskNotes { openTaskNote(current) } else { actions(for: current, in: model.tab).openPage() }
+        case .complete:
+            menuCommand(TasksRowID(tab: model.tab, id: current)) { [weak model] targets in model?.toggleDone(targets) ?? .failed(.taskGone) }
+        case .addTag:
+            openMeta(.tags, on: current, targets: commandTargets(for: current), newTag: true)
+        }
+        return true
+    }
 }

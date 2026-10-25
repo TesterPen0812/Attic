@@ -825,6 +825,8 @@ final class TaskStore: ObservableObject {
                 // share one timestamp, keep the drafts' order.
                 let manualOrder = draft.parentID != nil
                     ? try endManualOrder(status: draft.status, parentID: draft.parentID, batch: drafts.count > 1, updatedAt: timestamp)
+                    : draft.placesAtEnd
+                    ? try rootEndManualOrder(status: draft.status, updatedAt: timestamp)
                     : try nextManualOrder(
                         status: draft.status,
                         parentID: draft.parentID,
@@ -4119,6 +4121,24 @@ final class TaskStore: ObservableObject {
                 ($0.status == .done) == isDone && $0.parentID == parentID
             }
             try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
+            return 0
+        }
+        return lowest - Self.manualOrderStride
+    }
+
+    /// A main task's order below every task in its state (the Reminders
+    /// replica's new-reminder row). Ordered tasks list before unordered
+    /// ones, so an unordered group is first given the orders it shows in.
+    private func rootEndManualOrder(status: TaskStatus, updatedAt: Date) throws -> Int64 {
+        var group = tasks.filter { $0.status == status && $0.parentID == nil }
+        if group.contains(where: { $0.manualOrder == nil }) {
+            group = orderedTasks(for: status).filter { $0.parentID == nil }
+            try assignSpacedManualOrders(to: group, updatedAt: updatedAt)
+        }
+        guard let lowest = group.compactMap(\.manualOrder).min() else { return Self.manualOrderStride }
+        guard lowest >= .min + Self.manualOrderStride else {
+            let ordered = orderedTasks(for: status).filter { $0.parentID == nil }
+            try assignSpacedManualOrders(to: ordered, updatedAt: updatedAt)
             return 0
         }
         return lowest - Self.manualOrderStride

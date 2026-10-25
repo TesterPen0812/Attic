@@ -144,6 +144,10 @@ struct AtticTokenField: NSViewRepresentable {
     /// the bar's faces); a title being edited on its row takes the row's
     /// secondary grey.
     var pieceInk: AtticInk = .placeholder
+    /// Exact colours for the pieces and `.high` pieces where a look needs
+    /// its own (the Reminders replica's blue date words and tag tokens).
+    var pieceColor: NSColor? = nil
+    var highColor: NSColor? = nil
     /// Edits made as typing (strip picks, suggestions).
     var editor: AtticTokenFieldEditor?
     /// For UI tests and automation.
@@ -185,8 +189,8 @@ struct AtticTokenField: NSViewRepresentable {
         view.apply(style: AtticTokenFieldView.Style(
             font: style.nsFont,
             text: NSColor(tokens.color(isEnabled ? ink : .disabledText)),
-            piece: NSColor(tokens.color(isEnabled ? pieceInk : .disabledText)),
-            high: NSColor(tokens.color(isEnabled ? .priorityMark : .disabledText)),
+            piece: isEnabled ? pieceColor ?? NSColor(tokens.color(pieceInk)) : NSColor(tokens.color(.disabledText)),
+            high: isEnabled ? highColor ?? NSColor(tokens.color(.priorityMark)) : NSColor(tokens.color(.disabledText)),
             caret: NSColor(tokens.color(.heading)),
             reduceMotion: design.reduceMotion
         ))
