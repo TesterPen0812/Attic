@@ -79,8 +79,14 @@ final class AtticDesignSystemTests: XCTestCase {
         let m = AtticTaskRowMetrics.self
         XCTAssertEqual(m.titleTop(twoLine: false), 7, "18 pt title centred in 32")
         XCTAssertEqual(m.titleTop(twoLine: true), 5, "spacing B: 3 into the 44 pt pill (D-13 had 8)")
-        XCTAssertEqual(m.circleCentreY(twoLine: false), 16)
-        XCTAssertEqual(m.circleCentreY(twoLine: true), 14)
+        // Owner, 2026-10-25 ("not level"): centred on the title's capitals,
+        // which sit ~0.36 pt below the 18 pt line's centre, to the half point.
+        XCTAssertEqual(m.circleCentreY(twoLine: false), 16.5)
+        XCTAssertEqual(m.circleCentreY(twoLine: true), 14.5)
+        for twoLine in [false, true] {
+            XCTAssertEqual(m.circleCentreY(twoLine: twoLine), m.titleTop(twoLine: twoLine) + m.titleCapCentre, accuracy: 0.25,
+                           "the circle's centre is the capitals' centre")
+        }
     }
 
     /// Round 9 (owner item 26): springy by default, pages firm (never a

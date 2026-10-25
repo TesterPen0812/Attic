@@ -150,8 +150,22 @@ enum AtticTaskRowMetrics {
         let block = titleLineHeight + (twoLine ? titleToDetails + detailsLineHeight : 0)
         return ((twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch) - block) / 2
     }
-    /// The circle's centre below the row's top: the title line's centre.
-    static func circleCentreY(twoLine: Bool) -> CGFloat { titleTop(twoLine: twoLine) + titleLineHeight / 2 }
+    /// The circle's centre below the row's top: the middle of the title's
+    /// capitals, not of its line box (owner, 2026-10-25: "not level"). The
+    /// font's ascender is taller than its descender, so the capitals sit
+    /// lower in the 18 pt line than its centre (about 0.36 pt at 14 pt);
+    /// rounded to the half point so the ring stays on whole pixels at 2x.
+    static func circleCentreY(twoLine: Bool) -> CGFloat {
+        (2 * (titleTop(twoLine: twoLine) + titleCapCentre)).rounded() / 2
+    }
+    /// The middle of the title's capitals below its line's top, for the
+    /// title font laid out centred in `titleLineHeight`.
+    static var titleCapCentre: CGFloat {
+        let font = AtticTextStyle.rowTitle.nsFont
+        let lineHeight = font.ascender - font.descender + font.leading
+        let baseline = (titleLineHeight - lineHeight) / 2 + font.ascender
+        return baseline - font.capHeight / 2
+    }
     /// The highlight sits 2 pt below the row's top (2 pt clear above and
     /// below, owner 2026-09-26).
     static var pitchTopInset: CGFloat { (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2 }
