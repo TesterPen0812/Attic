@@ -27,7 +27,7 @@ final class RemindersReplicaRenderTests: XCTestCase {
         Sample(title: "Call the dentist", date: ("Today", .quiet)),
         Sample(title: "Book flights for the conference", priority: .medium, date: ("Tomorrow", .quiet)),
         Sample(title: "Draft the quarterly report", date: ("01/11/2026", .quiet),
-               notes: "Sections: revenue, hiring, roadmap.\nAsk Sam for the churn numbers.", tags: ["Ghiuggtg"]),
+               notes: "Sections: revenue, hiring, roadmap.\nAsk Sam for the churn numbers.", tags: ["planning"]),
         Sample(title: "Compare three venues for the launch party, checking capacity, catering, accessibility and transport links before Friday",
                date: ("27/10/2026", .quiet)),
         Sample(title: "🎂 Order the birthday cake", date: ("30/10/2026", .quiet)),
