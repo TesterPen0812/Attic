@@ -167,6 +167,10 @@ enum AtticTaskRowMetrics {
     static let metaPillOutset: CGFloat = 5
     /// The date at the right end sits this far inside the highlight.
     static let dateInset: CGFloat = 8
+    /// An overdue date's flag (owner, 2026-10-25): a 9 pt glyph 3 pt before
+    /// the date, in the overdue red.
+    static let overdueFlagSize: CGFloat = 9
+    static let overdueFlagGap: CGFloat = 3
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").

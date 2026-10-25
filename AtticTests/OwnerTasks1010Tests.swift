@@ -681,4 +681,36 @@ final class OwnerTasks1010Tests: XCTestCase {
         func scrolls(_ view: NSView) -> [NSScrollView] { (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrolls) }
         XCTAssertTrue(scrolls(host).contains { ($0.documentView?.frame.height ?? 0) > $0.contentView.bounds.height + 1 }, "the limited dropdown scrolls its full contents internally")
     }
+
+    /// Owner, 2026-10-25: the count hides where the circle already shows the
+    /// progress (pie or done disc), comes back on hover, focus or an open
+    /// quick look, and stays when it is the details line's only item.
+    func testRowCountHidesWhereTheCircleShowsProgress() {
+        var pie = AtticTaskRowModel(title: "Pie", state: .inProgress)
+        pie.subtasks = (1, 2)
+        pie.tags = ["launch"]
+        XCTAssertFalse(AtticTaskDetails.showsCount(pie, reveals: false), "the pie already says 1 of 2")
+        XCTAssertTrue(AtticTaskDetails.showsCount(pie, reveals: true), "hover or focus brings the control back")
+
+        var working = pie
+        working.subtasks = (0, 2)
+        XCTAssertTrue(AtticTaskDetails.showsCount(working, reveals: false), "the centre dot shows no progress")
+
+        var todo = pie
+        todo.state = .todo
+        XCTAssertTrue(AtticTaskDetails.showsCount(todo, reveals: false), "an empty ring shows no progress")
+
+        var done = pie
+        done.state = .done
+        done.subtasks = (2, 2)
+        XCTAssertFalse(AtticTaskDetails.showsCount(done, reveals: false), "the done disc says it")
+
+        var alone = pie
+        alone.tags = []
+        XCTAssertTrue(AtticTaskDetails.showsCount(alone, reveals: false), "the line's only item stays")
+
+        var none = pie
+        none.subtasks = nil
+        XCTAssertFalse(AtticTaskDetails.showsCount(none, reveals: true))
+    }
 }

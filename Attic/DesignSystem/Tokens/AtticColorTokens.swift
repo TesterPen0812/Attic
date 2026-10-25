@@ -1240,7 +1240,8 @@ enum Calm {
     static func openRing(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x959595) : AtticRGBA(0x838383) }
     static func rowHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x383838) : AtticRGBA(0xF1F1F1) }
     static func rowSelection(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x454545) : AtticRGBA(0xE7E7E7) }
-    static func highPriority(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xD9A16C) : AtticRGBA(0xB35D27) }
+    /// High's "!!": a clean orange, not a brown (owner, 2026-10-25).
+    static func highPriority(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xF0A04E) : AtticRGBA(0xC2570C) }
 }
 
 // MARK: - Code (Notes R14)

@@ -1286,7 +1286,7 @@ struct AtticTaskRow: View {
                         // edge as a baseline, lifting the date while its own
                         // NSTextView draws the title lower (F-09).
                         AtticText(verbatim: model.title,
-                                  style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
+                                  style: .rowTitle,
                                   ink: .heading, truncates: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .hidden()
@@ -1299,9 +1299,9 @@ struct AtticTaskRow: View {
                         HStack(alignment: .firstTextBaseline, spacing: AtticPriorityMarkMetrics.titleGap) {
                             AtticText(
                                 verbatim: model.title,
-                                // Phase 0's qualities: SF Pro Rounded, medium
-                                // while in progress, in the primary ink.
-                                style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
+                                // One title weight in every state (owner,
+                                // 2026-10-25): the circle carries the state.
+                                style: .rowTitle,
                                 // T-06 B (owner, 2026-10-15): a done title is
                                 // the secondary grey; the filled mark stays.
                                 ink: Self.titleInk(done: done, disabled: disabled),
@@ -1344,7 +1344,8 @@ struct AtticTaskRow: View {
                                      onTags: capture == nil ? meta?.onTags : nil,
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
-                                     })
+                                     },
+                                     revealsCount: state == .hover || showsFocusRing || isExpanded)
                         .frame(height: m.rowDetailsLineHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1576,8 +1577,9 @@ struct AtticRowMeta {
     let tagPicker: () -> AnyView
 }
 
-/// A due date as rows and cards show it: overdue red, today the body
-/// colour in medium weight, the rest the quiet secondary grey.
+/// A due date as rows and cards show it: the quiet secondary grey, Today
+/// included, so the title leads (owner, 2026-10-25). Only overdue speaks,
+/// in red with a small flag.
 struct AtticDueText: View {
     let due: AtticTaskRowModel.Due
     var disabled = false
@@ -1585,19 +1587,24 @@ struct AtticDueText: View {
     var body: some View {
         switch due.tone {
         case .overdue:
-            AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : .dueText)
-        case .today:
-            AtticText(verbatim: due.text, style: .rowMetaEmphasis, ink: disabled ? .disabledText : .body)
-        case .quiet:
+            HStack(alignment: .center, spacing: AtticTaskRowMetrics.overdueFlagGap) {
+                AtticIcon(systemName: "flag.fill", size: AtticTaskRowMetrics.overdueFlagSize, weight: .regular,
+                          ink: disabled ? .disabledIcon : .dueText)
+                    .accessibilityHidden(true)
+                AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : .dueText)
+            }
+        case .today, .quiet:
             AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : .helper)
         }
     }
 }
 
-/// The details line: tags, then the subtask checklist (a control: it opens
-/// the quick look), then a page, files and links, only when present. No
-/// separators (owner fix 2, between v16's 4a and 4b): items sit 14 pt
-/// apart, each small icon 5 pt before its label.
+/// The details line: tags as quiet grey text, then files and links, then
+/// the subtask checklist (a control: it opens the quick look) where the
+/// circle doesn't already show it, and the page glyph at the line's right
+/// end (owner, 2026-10-25). Only what is present. No separators (owner
+/// fix 2, between v16's 4a and 4b): items sit 14 pt apart, each small icon
+/// 5 pt before its label.
 ///
 /// Overflow (review 13): everything but the tags keeps its natural width,
 /// so the checklist control always stays on the line; the tags take what
@@ -1617,6 +1624,21 @@ struct AtticTaskDetails: View {
     /// The row's tag popover, anchored to the tags themselves so its arrow
     /// points at what was clicked (round 5, the owner's item 3).
     var tagsPopover: AtticAnchoredPopover? = nil
+    /// The pointer or the keyboard is on the row (or its quick look is
+    /// open): the subtask count shows even where the circle's pie says it.
+    var revealsCount = false
+
+    /// The subtask count at rest (owner, 2026-10-25): hidden where the
+    /// circle already shows the progress (its pie, or the done disc), and
+    /// shown on hover, keyboard focus or an open quick look so it stays a
+    /// control. It stays when it is the line's only detail.
+    static func showsCount(_ model: AtticTaskRowModel, reveals: Bool) -> Bool {
+        guard model.subtasks != nil else { return false }
+        let circleShowsIt = model.state == .done
+            || (model.state == .inProgress && AtticStatusCircle.pieShare(model.subtasks) != nil)
+        let otherDetails = model.inWindow || !model.tags.isEmpty || model.hasPage || model.attachments > 0 || model.links > 0
+        return !circleShowsIt || reveals || !otherDetails
+    }
 
     var body: some View {
         let m = AtticTaskRowMetrics.self
@@ -1633,27 +1655,6 @@ struct AtticTaskDetails: View {
             }
             if !model.tags.isEmpty {
                 AtticDetailsTags(tags: model.tags, disabled: disabled, onTags: onTags, popover: tagsPopover)
-            }
-            if let subtasks = model.subtasks {
-                AtticDetailsCountButton(
-                    systemName: "checkmark.square", count: "\(subtasks.done)/\(subtasks.total)",
-                    isExpanded: isExpanded, disabled: disabled,
-                    help: (String(localized: "Hide subtasks"), String(localized: "Show subtasks")),
-                    spokenLabel: String(localized: "\(subtasks.done) of \(subtasks.total) subtasks"),
-                    hint: (String(localized: "Collapses the quick look"), String(localized: "Expands the quick look")),
-                    action: onToggleExpanded
-                )
-                .fixedSize()
-                .layoutPriority(1)
-            }
-            if model.hasPage {
-                // Phase 3 (`p3-06`, D11): the task has a note of its own. The
-                // glyph has no count; files keep the paperclip and theirs.
-                AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon)
-                    .help(String(localized: "Has a note"))
-                    .accessibilityLabel(String(localized: "Has a note"))
-                    .fixedSize()
-                    .layoutPriority(1)
             }
             if model.attachments > 0 {
                 if let onToggleFiles {
@@ -1683,6 +1684,31 @@ struct AtticTaskDetails: View {
                     .fixedSize()
                     .layoutPriority(1)
             }
+            // Last on the line, so its appearing on hover moves nothing.
+            if let subtasks = model.subtasks, Self.showsCount(model, reveals: revealsCount) {
+                AtticDetailsCountButton(
+                    systemName: "checkmark.square", count: "\(subtasks.done)/\(subtasks.total)",
+                    isExpanded: isExpanded, disabled: disabled,
+                    help: (String(localized: "Hide subtasks"), String(localized: "Show subtasks")),
+                    spokenLabel: String(localized: "\(subtasks.done) of \(subtasks.total) subtasks"),
+                    hint: (String(localized: "Collapses the quick look"), String(localized: "Expands the quick look")),
+                    action: onToggleExpanded
+                )
+                .fixedSize()
+                .layoutPriority(1)
+            }
+            if model.hasPage {
+                // Phase 3 (`p3-06`, D11): the task has a note of its own. The
+                // glyph has no count; files keep the paperclip and theirs.
+                // It sits at one fixed spot, the line's right end, under the
+                // date (owner, 2026-10-25).
+                Spacer(minLength: 0)
+                AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon)
+                    .help(String(localized: "Has a note"))
+                    .accessibilityLabel(String(localized: "Has a note"))
+                    .fixedSize()
+                    .layoutPriority(1)
+            }
         }
         .lineLimit(1)
     }
@@ -1701,18 +1727,19 @@ private struct AtticDetailsTags: View {
     @State private var hovered = false
 
     var body: some View {
-        // Each tag in its own colour (colour pass, owner 2026-10-10).
+        // Quiet grey text on the row (owner, 2026-10-25); tags keep their
+        // colours in the picker, the filter and the page.
         let content = ViewThatFits(in: .horizontal) {
             all()
             if tags.count > 1 {
                 HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                    AtticTagLabel(name: tags[0], disabled: disabled).fixedSize()
+                    AtticDetailsTagText(name: tags[0], disabled: disabled).fixedSize()
                         .atticTagColourMenu(tags[0])
                     more()
                 }
             }
             HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                AtticTagLabel(name: tags[0], disabled: disabled, truncates: true)
+                AtticDetailsTagText(name: tags[0], disabled: disabled, truncates: true)
                     .atticTagColourMenu(tags[0])
                 if tags.count > 1 { more() }
             }
@@ -1740,7 +1767,7 @@ private struct AtticDetailsTags: View {
         HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
             ForEach(tags, id: \.self) { tag in
                 // A right-click on a tag: its Colour ▸ (owner's call, 10-11).
-                AtticTagLabel(name: tag, disabled: disabled).fixedSize()
+                AtticDetailsTagText(name: tag, disabled: disabled).fixedSize()
                     .atticTagColourMenu(tag)
             }
         }
@@ -1749,6 +1776,18 @@ private struct AtticDetailsTags: View {
     private func more() -> some View {
         AtticText(verbatim: "+\(tags.count - 1)", style: .rowMeta, ink: disabled ? .disabledText : .helper)
             .fixedSize()
+    }
+}
+
+/// A tag on a task row's details line: `#name` in the details line's quiet
+/// grey, with no fill or colour (owner, 2026-10-25).
+private struct AtticDetailsTagText: View {
+    let name: String
+    var disabled = false
+    var truncates = false
+
+    var body: some View {
+        AtticText(verbatim: "#" + name, style: .rowMeta, ink: disabled ? .disabledText : .helper, truncates: truncates)
     }
 }
 

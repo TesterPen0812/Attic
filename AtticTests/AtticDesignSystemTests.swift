@@ -120,7 +120,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.ink(.body).hexString, "#4B4B4B")
         XCTAssertEqual(light.ink(.helper).hexString, "#737373", "T-16 B (owner, 2026-10-15): 4.74 : 1 on white")
         XCTAssertEqual(light.ink(.priorityNone).hexString, "#838383")
-        XCTAssertEqual(light.ink(.priorityMark).hexString, "#B35D27")
+        XCTAssertEqual(light.ink(.priorityMark).hexString, "#C2570C")
         // Done (owner, 2026-10-10): the title's ink, the tick its inverse.
         XCTAssertEqual(light.ink(.doneFill).hexString, "#272727")
         XCTAssertEqual(light.ink(.onDone).hexString, "#FFFFFF")
@@ -136,7 +136,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(dark.ink(.body).hexString, "#DFDFDF")
         XCTAssertEqual(dark.ink(.helper).hexString, "#A4A4A4")
         XCTAssertEqual(dark.ink(.priorityNone).hexString, "#959595")
-        XCTAssertEqual(dark.ink(.priorityMark).hexString, "#D9A16C")
+        XCTAssertEqual(dark.ink(.priorityMark).hexString, "#F0A04E")
         XCTAssertEqual(dark.ink(.doneFill).hexString, "#F1F1F1")
         XCTAssertEqual(dark.ink(.onDone).hexString, "#1E1E1F")
         XCTAssertEqual(dark.hover.over(dark.panel.base).hexString, "#383838")
