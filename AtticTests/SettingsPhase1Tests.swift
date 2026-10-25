@@ -348,6 +348,21 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertFalse(AppSettings(defaults: defaults).hapticsEnabled)
     }
 
+    /// "Coloured Tags in Lists" (owner, 2026-10-25: list round 2): off for
+    /// fresh installs (grey tags), and remembered.
+    func testColouredTagsInListsIsOffForFreshInstallsAndRemembered() throws {
+        let suite = "SettingsPhase1Tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        XCTAssertFalse(settings.colouredTagsInLists)
+        XCTAssertNil(defaults.object(forKey: "colouredTagsInLists"), "the default is not written")
+        settings.colouredTagsInLists = true
+        XCTAssertTrue(AppSettings(defaults: defaults).colouredTagsInLists)
+        settings.colouredTagsInLists = false
+        XCTAssertFalse(AppSettings(defaults: defaults).colouredTagsInLists)
+    }
+
     // MARK: - Agent tools
 
     private func makeSettingsTools(launchAtLogin: (() -> Bool)? = nil, undo: UndoRoute? = nil) throws -> (AgentSettingsTools, AppSettings, () -> Void) {

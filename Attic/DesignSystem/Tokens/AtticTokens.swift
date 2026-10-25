@@ -305,8 +305,11 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         switch self {
         case .noteTitle: Spec(size: AtticNoteType.title.size, weight: .bold, italic: false, monospacedDigits: false)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
-        case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
-        case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
+        case .body, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
+        // A task title leads its details (owner, 2026-10-25: list round 2):
+        // 14 pt in the 18 pt title line, the details 11.5.
+        case .rowTitle: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
+        case .rowTitleActive: Spec(size: 14, weight: .medium, italic: false, monospacedDigits: false)
         case .noteRowTitle: Spec(size: 12, weight: .medium, italic: false, monospacedDigits: false)
         case .noteRowMeta: Spec(size: 10.5, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: AtticNoteType.body.size, weight: .regular, italic: false, monospacedDigits: false)

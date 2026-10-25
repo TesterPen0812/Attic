@@ -81,6 +81,7 @@ final class AppSettings: ObservableObject {
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
+        static let colouredTagsInLists = "colouredTagsInLists"
         static let animations = "animations"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
@@ -190,6 +191,13 @@ final class AppSettings: ObservableObject {
     /// snaps into place (spec § Touch and sound). On by default.
     @Published var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
+    }
+
+    /// "Coloured Tags in Lists" (owner, 2026-10-25: list round 2): a task
+    /// row's tags as coloured chips instead of quiet grey `#tag` text. Off
+    /// by default.
+    @Published var colouredTagsInLists: Bool {
+        didSet { defaults.set(colouredTagsInLists, forKey: Key.colouredTagsInLists) }
     }
 
     /// Lively (the default) or Subtle springs, or Reduced motion (round 9,
@@ -351,6 +359,7 @@ final class AppSettings: ObservableObject {
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
+        colouredTagsInLists = defaults.bool(forKey: Key.colouredTagsInLists)
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
         revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true
         revealModifier = RevealModifier(rawValue: defaults.string(forKey: Key.revealModifier) ?? "") ?? .none

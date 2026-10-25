@@ -33,8 +33,10 @@ final class RoundF5bTests: XCTestCase {
         return (field, try XCTUnwrap(field.currentEditor() as? NSTextView))
     }
 
+    /// The subtask entry's own face, `listBody` (it shared 13 pt with the
+    /// task title until owner, 2026-10-25: list round 2 made titles 14).
     private func height(_ text: String, width: CGFloat = 260) -> CGFloat {
-        AtticSubtaskTitleField.height(of: text, width: width, font: AtticTextStyle.rowTitle.nsFont)
+        AtticSubtaskTitleField.height(of: text, width: width, font: AtticTextStyle.listBody.nsFont)
     }
 
     /// The text lines the field shows, in the field's space: each line the
@@ -69,7 +71,7 @@ final class RoundF5bTests: XCTestCase {
     func testV12ASubtaskEditorShowsWholeLinesAndTheCaretPastSixLines() throws {
         let text = words(100)
         let (field, editor) = try editingField(text)
-        let line = AtticLineSnap.lineHeight(of: AtticTextStyle.rowTitle.nsFont)
+        let line = AtticLineSnap.lineHeight(of: AtticTextStyle.listBody.nsFont)
         let most = CGFloat(AtticComposerMetrics.maxLines)
         for (place, location) in [("end", (text as NSString).length), ("start", 0)] {
             editor.setSelectedRange(NSRange(location: location, length: 0))
@@ -93,7 +95,7 @@ final class RoundF5bTests: XCTestCase {
     /// last words and caret stay in view, in whole lines, all the way.
     func testV12TypingPastSixLinesKeepsTheCaretInWholeLines() throws {
         let (field, editor) = try editingField("")
-        let line = AtticLineSnap.lineHeight(of: AtticTextStyle.rowTitle.nsFont)
+        let line = AtticLineSnap.lineHeight(of: AtticTextStyle.listBody.nsFont)
         for count in 1...100 {
             editor.insertText((count == 1 ? "" : " ") + String(format: "word%02d", count - 1), replacementRange: editor.selectedRange())
             field.setFrameSize(NSSize(width: field.frame.width, height: height(editor.string)))

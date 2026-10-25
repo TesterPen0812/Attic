@@ -688,23 +688,25 @@ final class AtticDesignSystemTests: XCTestCase {
 
     // MARK: Status circle
 
-    /// Direction A with Phase 0's confident circles: every open ring is one
-    /// ink (the task title's primary ink) at one weight, 1.6 pt (2 under Increase
-    /// Contrast); priority is a mark after the title. High's "!!" is an
-    /// orange at least as readable as secondary text, and red is left to
-    /// overdue dates.
+    /// Direction A: every state's ring is the one quiet open ring at one
+    /// weight, 1.6 pt (2 under Increase Contrast), and the state inside it
+    /// (the centre dot, the pie, the done disc) is the task title's primary
+    /// ink (owner, 2026-10-25: list round 2, superseding the confident
+    /// in-progress ring); priority is a mark after the title. High's "!!"
+    /// is an orange at least as readable as secondary text, and red is left
+    /// to overdue dates.
     func testStatusRingIsOneInkAndPriorityIsAMark() {
         let m = AtticStatusCircleMetrics.self
         XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.6)
         XCTAssertEqual(m.ringWidth(increaseContrast: true), 2)
-        // The task title's primary ink (Phase 0's qualities, item 6).
-        XCTAssertEqual(AtticStatusCircle.ringInk, .heading)
-        XCTAssertEqual(AtticStatusCircle.activeInk, .heading)
+        // The state inside the ring is the title's ink (owner, 2026-10-25:
+        // list round 2); the ring is the quiet open ring (`OpenRingException`).
+        XCTAssertEqual(AtticStatusCircle.stateInk, .heading)
         for context in AtticAppearanceCheck.allContexts() {
             let tokens = context.tokens
             let base = tokens.panel.base
-            let ring = tokens.ink(AtticStatusCircle.ringInk).contrast(on: base)
-            XCTAssertGreaterThanOrEqual(ring, 4.5, "a confident ring · \(context.caption)")
+            let state = tokens.ink(AtticStatusCircle.stateInk).contrast(on: base)
+            XCTAssertGreaterThanOrEqual(state, 4.5, "a confident dot, pie and disc · \(context.caption)")
             let mark = tokens.ink(.priorityMark)
             XCTAssertGreaterThanOrEqual(mark.contrast(on: base), context.increaseContrast ? 4.5 : 3, context.caption)
             XCTAssertGreaterThan(mark.saturation, 0.3, "High's mark is orange · \(context.caption)")
@@ -725,7 +727,8 @@ final class AtticDesignSystemTests: XCTestCase {
         for style in [AtticTextStyle.chipLabel, .controlLabel, .body, .menuRow, .groupLabel, .groupValue, .pageTitle, .sidebarRow] {
             XCTAssertFalse(style.spec.rounded, "\(style) stays SF Pro")
         }
-        XCTAssertEqual(AtticTextStyle.rowTitle.spec.size, 13)
+        XCTAssertEqual(AtticTextStyle.rowTitle.spec.size, 14, "owner, 2026-10-25: list round 2")
+        XCTAssertEqual(AtticTextStyle.body.spec.size, 13, "the other 13 pt styles stay")
         XCTAssertEqual(AtticTextStyle.rowTitleActive.spec.weight, .medium)
         XCTAssertNotEqual(AtticTextStyle.listBody.nsFont.fontName, AtticTextStyle.body.nsFont.fontName, "the rounded face is a different font")
     }
@@ -866,14 +869,15 @@ enum Phase0TranslucentException {
 }
 
 /// The third named contrast exception (owner fix 1, 2026-09-27; the owner
-/// decides): an open task's ring (to do, and Later's dashed ring) is the
+/// decides): an open task's ring (to do, and Later's dashed ring; since
+/// owner, 2026-10-25: list round 2, every state draws that ring) is the
 /// primary ink at low opacity, the owner's reference grey (v15 card B,
 /// about 1.6 : 1 on white), below the 3 : 1 icon floor on purpose, so the
 /// title carries the row. Only that ring, and never under Increase
 /// Contrast, where it is the primary ink and keeps 3 : 1. Hover and
 /// keyboard focus step it up; a disabled ring keeps the disabled icon's
-/// 3 : 1; the subtask checkbox, the working ring and the done check keep
-/// the rule.
+/// 3 : 1; the subtask checkbox, the working dot and pie and the done
+/// check keep the rule.
 enum OpenRingException {
     static let name = "Owner fix 1: the quiet open task ring"
 

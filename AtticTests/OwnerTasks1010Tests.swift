@@ -682,35 +682,56 @@ final class OwnerTasks1010Tests: XCTestCase {
         XCTAssertTrue(scrolls(host).contains { ($0.documentView?.frame.height ?? 0) > $0.contentView.bounds.height + 1 }, "the limited dropdown scrolls its full contents internally")
     }
 
-    /// Owner, 2026-10-25: the count hides where the circle already shows the
-    /// progress (pie or done disc), comes back on hover, focus or an open
-    /// quick look, and stays when it is the details line's only item.
+    /// Owner, 2026-10-25: list round 2 (superseding round 1's "the count
+    /// stays when it is the line's only detail"): the details line holds
+    /// the count only where the circle can't show the progress; where the
+    /// pie shows it, the count and the page glyph wait in the title line's
+    /// hover cluster, and a row with nothing else is one line.
     func testRowCountHidesWhereTheCircleShowsProgress() {
         var pie = AtticTaskRowModel(title: "Pie", state: .inProgress)
         pie.subtasks = (1, 2)
         pie.tags = ["launch"]
-        XCTAssertFalse(AtticTaskDetails.showsCount(pie, reveals: false), "the pie already says 1 of 2")
-        XCTAssertTrue(AtticTaskDetails.showsCount(pie, reveals: true), "hover or focus brings the control back")
+        XCTAssertFalse(pie.countOnDetails, "the pie already says 1 of 2")
+        XCTAssertTrue(pie.hoverCluster.count, "hover or focus brings the control back, on the title line")
+        XCTAssertTrue(pie.showsDetailsLine, "the tags keep the line")
 
         var working = pie
         working.subtasks = (0, 2)
-        XCTAssertTrue(AtticTaskDetails.showsCount(working, reveals: false), "the centre dot shows no progress")
+        XCTAssertTrue(working.countOnDetails, "the centre dot shows no progress")
+        XCTAssertFalse(working.hoverCluster.count)
 
         var todo = pie
         todo.state = .todo
-        XCTAssertTrue(AtticTaskDetails.showsCount(todo, reveals: false), "an empty ring shows no progress")
+        XCTAssertTrue(todo.countOnDetails, "an empty ring shows no progress")
+
+        var later = pie
+        later.state = .backlog
+        XCTAssertTrue(later.countOnDetails, "Later's dashed ring shows no progress")
 
         var done = pie
         done.state = .done
         done.subtasks = (2, 2)
-        XCTAssertFalse(AtticTaskDetails.showsCount(done, reveals: false), "the done disc says it")
+        XCTAssertFalse(done.countOnDetails, "the done disc says it")
+        XCTAssertFalse(done.showsDetailsLine)
+        XCTAssertFalse(done.hoverCluster.count)
 
         var alone = pie
         alone.tags = []
-        XCTAssertTrue(AtticTaskDetails.showsCount(alone, reveals: false), "the line's only item stays")
+        XCTAssertFalse(alone.countOnDetails, "the pie says it even with nothing else on the line")
+        XCTAssertFalse(alone.showsDetailsLine, "so the row is one line")
+        XCTAssertTrue(alone.hoverCluster.count)
+
+        var page = AtticTaskRowModel(title: "Page")
+        page.hasPage = true
+        XCTAssertFalse(page.showsDetailsLine, "the page glyph left the details line")
+        XCTAssertTrue(page.hoverCluster.page, "it shows on hover or focus, before the date")
+        page.tags = ["launch"]
+        XCTAssertTrue(page.showsDetailsLine)
+        XCTAssertTrue(page.hoverCluster.page)
 
         var none = pie
         none.subtasks = nil
-        XCTAssertFalse(AtticTaskDetails.showsCount(none, reveals: true))
+        XCTAssertFalse(none.countOnDetails)
+        XCTAssertFalse(none.hoverCluster.count)
     }
 }

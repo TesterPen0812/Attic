@@ -8,7 +8,10 @@ enum PanelSurfaceStyle: String, CaseIterable, Identifiable, Sendable {
     case glass
     case frosted
 
-    static let defaultStyle: PanelSurfaceStyle = .glass
+    /// Paper under the list (owner, 2026-10-25: list round 2): Solid for
+    /// a fresh install; Glass and Frosted stay in Settings. A stored choice
+    /// is never rewritten.
+    static let defaultStyle: PanelSurfaceStyle = .solid
 
     var id: String { rawValue }
 

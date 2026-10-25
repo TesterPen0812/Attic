@@ -562,17 +562,23 @@ struct AtticRowTitleEditor: View {
 /// 2026-09-26: the circle is for completion; priority is a mark after the
 /// title):
 ///
-/// - **To do:** one confident ring (16 pt, 1.6 pt, the task text's ink),
-///   whatever the priority.
-/// - **In progress:** the same ring with a 5 pt filled centre dot
-///   ("working on it") until a subtask is ticked; then a true pie of the
-///   share ticked, with no minimum (owner, 2026-09-26), capped at 92 % so
-///   all subtasks ticked still leaves a sliver of ring and never reads as
-///   done. A task not started keeps its empty ring whatever its subtasks
-///   say (its "☑ n/m" shows it).
-/// - **Done:** a filled disc in the same ink with its tick in the inverse
-///   (owner, 2026-10-10): only done is filled and ticked.
-/// - **Backlog (Later):** the same ring, dashed.
+/// One quiet ring for every state (owner, 2026-10-25: list round 2,
+/// superseding the confident in-progress ring of 2026-09-26): each state
+/// draws the to-do ring (16 pt, 1.6 pt, the quiet open ring's ink), and the
+/// state goes inside it in the title's ink (`stateInk`).
+///
+/// - **To do:** the ring alone, whatever the priority.
+/// - **In progress:** a 5 pt filled centre dot ("working on it") until a
+///   subtask is ticked; then a true pie of the share ticked, with no
+///   minimum (owner, 2026-09-26), capped at 92 % so all subtasks ticked
+///   still leaves a sliver of ring and never reads as done. A task not
+///   started keeps its empty ring whatever its subtasks say (its "☑ n/m"
+///   shows it).
+/// - **Done:** a filled disc in the title's ink with its tick in the
+///   inverse (owner, 2026-10-10): only done is filled and ticked.
+/// - **Backlog (Later):** the ring dashed, in the same light ink.
+///
+/// Hovered or keyboard-focused, the ring firms up in every state.
 ///
 /// Completing: the done disc sweeps in from 12 o'clock, then the check
 /// draws and the haptic tick lands (springs, so a change of mind mid-way
@@ -600,19 +606,19 @@ struct AtticStatusCircle: View {
     @State private var probeID = UUID()
     @State private var checkProbeID = UUID()
 
-    /// Phase 0's confident circles: the ring is the task title's primary
-    /// ink, open or working (the working one adds its centre dot).
-    static let ringInk: AtticInk = .heading
-    static let activeInk: AtticInk = .heading
+    /// The state inside the quiet ring (the centre dot, the pie, the done
+    /// disc): the task title's ink (owner, 2026-10-25: list round 2).
+    static let stateInk: AtticInk = .heading
     /// The appearance check's name for an open (to do or Later) ring.
     static let openRingProbeName = "open status ring"
 
     var body: some View {
         let tokens = design.tokens
         let m = AtticStatusCircleMetrics.self
-        let ringInk: AtticInk = isDisabled ? .disabledIcon : (state == .inProgress ? Self.activeInk : Self.ringInk)
+        let ringInk: AtticInk = isDisabled ? .disabledIcon : Self.stateInk
         let colour = tokens.color(ringInk)
-        // An open ring (to do, Later) is the quiet ring of owner fix 1.
+        // Every state's ring is the quiet open ring of owner fix 1 (owner,
+        // 2026-10-25: list round 2); the state inside is `colour`.
         let openColour = isDisabled ? colour : tokens.openRing(emphasised: isEmphasised).color
         let openForeground = isDisabled ? tokens.ink(ringInk) : tokens.openRing(emphasised: isEmphasised)
         let width = m.ringWidth(increaseContrast: design.increaseContrast)
@@ -624,20 +630,26 @@ struct AtticStatusCircle: View {
                 Circle().inset(by: m.edgeInset + width / 2).stroke(openColour, lineWidth: width)
                     .atticOpenRingProbe(id: probeID, ink: ringInk, foreground: openForeground, disabled: isDisabled)
             case .inProgress:
-                Circle().inset(by: m.edgeInset + width / 2).stroke(colour, lineWidth: width)
-                    .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
-                if let share = Self.pieShare(subtasks) {
-                    AtticWedge(sweep: share, inset: m.wedgeInset(ringWidth: width))
-                        .fill(colour)
-                        .animation(motion, value: share)
-                } else {
-                    Circle().fill(colour)
-                        .frame(width: m.activeDotDiameter, height: m.activeDotDiameter)
+                Circle().inset(by: m.edgeInset + width / 2).stroke(openColour, lineWidth: width)
+                // The dot or pie is what the appearance check reads here, in
+                // the circle's frame (the ring is the to-do ring's, measured
+                // there): its pixels are the frame's strongest.
+                ZStack {
+                    if let share = Self.pieShare(subtasks) {
+                        AtticWedge(sweep: share, inset: m.wedgeInset(ringWidth: width))
+                            .fill(colour)
+                            .animation(motion, value: share)
+                    } else {
+                        Circle().fill(colour)
+                            .frame(width: m.activeDotDiameter, height: m.activeDotDiameter)
+                    }
                 }
+                .frame(width: size, height: size)
+                .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
             case .done:
                 AtticCompletionMark(
                     completion: completionProgress ?? completion,
-                    ring: tokens.color(isDisabled ? .disabledIcon : Self.ringInk), ringWidth: width,
+                    ring: openColour, ringWidth: width,
                     disc: tokens.color(isDisabled ? .disabledIcon : .doneFill)
                 )
                 .opacity(discOpacity)
@@ -649,7 +661,7 @@ struct AtticStatusCircle: View {
                     .opacity(discOpacity)
             case .backlog:
                 let dashed = design.increaseContrast ? m.backlogLineWidthIncreased : m.backlogLineWidth
-                let backlogInk: AtticInk = isDisabled ? .disabledIcon : Self.ringInk
+                let backlogInk: AtticInk = isDisabled ? .disabledIcon : Self.stateInk
                 Circle().inset(by: m.edgeInset + dashed / 2)
                     .stroke(openColour, style: StrokeStyle(lineWidth: dashed, dash: m.backlogDash))
                     .atticOpenRingProbe(id: probeID, ink: backlogInk, foreground: openForeground, disabled: isDisabled)
@@ -1117,6 +1129,36 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
         state != .done && (!tags.isEmpty || subtasks != nil || hasPage || attachments > 0 || links > 0 || inWindow)
     }
 
+    /// The subtask count sits on the details line only where the circle
+    /// can't show the progress: to do, Later, or in progress with nothing
+    /// ticked (owner, 2026-10-25: list round 2). Where the pie shows it, the
+    /// count waits in the title line's hover cluster.
+    var countOnDetails: Bool {
+        guard subtasks != nil else { return false }
+        switch state {
+        case .todo, .backlog: return true
+        case .inProgress: return AtticStatusCircle.pieShare(subtasks) == nil
+        case .done: return false
+        }
+    }
+
+    /// A task row's second line (owner, 2026-10-25: list round 2): only for
+    /// what isn't shown elsewhere (tags, files, links, "In window", and the
+    /// count where the circle can't show it); otherwise a one-line row.
+    /// The page glyph and the pie's count are in `hoverCluster`. Done rows
+    /// never have one.
+    var showsDetailsLine: Bool {
+        state != .done && (!tags.isEmpty || attachments > 0 || links > 0 || inWindow || countOnDetails)
+    }
+
+    /// What the title line shows just before the date on hover, keyboard
+    /// focus or an open quick look (owner, 2026-10-25: list round 2): the
+    /// subtask count where the pie already shows it, and the page glyph.
+    var hoverCluster: (count: Bool, page: Bool) {
+        guard state != .done else { return (false, false) }
+        return (subtasks != nil && !countOnDetails, hasPage)
+    }
+
     /// The due date at the right end of the title line (none once done).
     var trailingDue: Due? {
         state == .done ? nil : due
@@ -1236,7 +1278,7 @@ struct AtticTaskRow: View {
         // The ring shows only while the keyboard drives (a click shows none).
         let rowFocused = focus?.isFocused ?? focused
         let showsFocusRing = forced == .focused || (forced == nil && isEnabled && rowFocused && keyboardFocusVisible && titleEditing == nil)
-        let twoLine = model.hasDetails
+        let twoLine = model.showsDetailsLine
         let highlightHeight = twoLine ? AtticLayout.detailRowHighlightHeight : AtticLayout.rowHighlightHeight
         let pitch = twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         let fill: AtticRGBA? = if state == .pressed {
@@ -1290,9 +1332,15 @@ struct AtticTaskRow: View {
                                   ink: .heading, truncates: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .hidden()
-                            .overlay(alignment: .leading) {
+                            // Baseline to baseline (list round 2's 14 pt
+                            // title leaves an odd point in the 18 pt line,
+                            // so centring no longer lines them up): the
+                            // field's text sits its centring inset plus the
+                            // ascender below its top.
+                            .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
                                 AtticRowTitleEditor(editing: titleEditing)
                                     .frame(height: m.titleLineHeight)
+                                    .alignmentGuide(.firstTextBaseline) { d in Self.editorBaseline(height: d.height) }
                             }
                             .layoutPriority(-1)
                     } else {
@@ -1321,6 +1369,14 @@ struct AtticTaskRow: View {
                         }
                     }
                     Spacer(minLength: m.trailingMinGap)
+                    // One fixed spot for the page glyph and the pie's count,
+                    // one-line and two-line rows alike: shown on hover,
+                    // keyboard focus or an open quick look, it takes its room
+                    // from the title, so the date never moves.
+                    if dropLabel == nil, titleEditing == nil,
+                       state == .hover || showsFocusRing || isExpanded {
+                        hoverCluster(disabled: disabled)
+                    }
                     trailing(disabled: disabled)
                     if let onActions, capture == nil, !disabled, titleEditing == nil,
                        AtticTaskRow.showsActionsButton(forced: forced, keyboardFocused: showsFocusRing) {
@@ -1344,8 +1400,7 @@ struct AtticTaskRow: View {
                                      onTags: capture == nil ? meta?.onTags : nil,
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
-                                     },
-                                     revealsCount: state == .hover || showsFocusRing || isExpanded)
+                                     })
                         .frame(height: m.rowDetailsLineHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1408,6 +1463,46 @@ struct AtticTaskRow: View {
         )
     }
 
+    /// The title editor's baseline below its top: the token field centres
+    /// its whole-point line in the frame, and draws the baseline an ascender
+    /// below the line's top.
+    static func editorBaseline(height: CGFloat) -> CGFloat {
+        let font = AtticTextStyle.rowTitle.nsFont
+        return max(0, (height - AtticLineSnap.lineHeight(of: font)) / 2) + font.ascender
+    }
+
+    /// The title line's hover cluster, just before the date: the subtask
+    /// count (still the quick look's control, with its label and target)
+    /// where the circle's pie shows the progress, then the page glyph.
+    @ViewBuilder
+    private func hoverCluster(disabled: Bool) -> some View {
+        let cluster = model.hoverCluster
+        if cluster.count || cluster.page {
+            HStack(alignment: .firstTextBaseline, spacing: AtticTaskRowMetrics.hoverClusterSpacing) {
+                if cluster.count, let subtasks = model.subtasks {
+                    AtticDetailsCountButton(
+                        systemName: "checkmark.square", count: "\(subtasks.done)/\(subtasks.total)",
+                        isExpanded: isExpanded, disabled: disabled,
+                        help: (String(localized: "Hide subtasks"), String(localized: "Show subtasks")),
+                        spokenLabel: String(localized: "\(subtasks.done) of \(subtasks.total) subtasks"),
+                        hint: (String(localized: "Collapses the quick look"), String(localized: "Expands the quick look")),
+                        action: onToggleExpanded
+                    )
+                }
+                if cluster.page {
+                    // Phase 3 (`p3-06`, D11): the task has a note of its own.
+                    AtticIcon(systemName: "doc.text", size: AtticTaskRowMetrics.detailsIconSize, weight: .light,
+                              ink: disabled ? .disabledIcon : .icon)
+                        .help(String(localized: "Has a note"))
+                        .accessibilityLabel(String(localized: "Has a note"))
+                }
+            }
+            .fixedSize()
+            .padding(.trailing, model.trailingDue == nil ? 0 : AtticTaskRowMetrics.hoverClusterToDate)
+            .transition(.opacity)
+        }
+    }
+
     /// The right-hand meta: the due date, always here, on the title's
     /// baseline (or "Add to page" while a file hovers over the row).
     @ViewBuilder
@@ -1448,7 +1543,7 @@ struct AtticTaskRow: View {
     /// the details line, or under the title when there are none.
     private func tagsPresented(twoLine attachedToDetails: Bool) -> Binding<Bool> {
         guard let meta, capture == nil else { return .constant(false) }
-        let hasTagsLine = model.hasDetails && !model.tags.isEmpty
+        let hasTagsLine = model.showsDetailsLine && !model.tags.isEmpty
         guard attachedToDetails == hasTagsLine else { return .constant(false) }
         return meta.tagsPresented
     }
@@ -1599,10 +1694,12 @@ struct AtticDueText: View {
     }
 }
 
-/// The details line: tags as quiet grey text, then files and links, then
-/// the subtask checklist (a control: it opens the quick look) where the
-/// circle doesn't already show it, and the page glyph at the line's right
-/// end (owner, 2026-10-25). Only what is present. No separators (owner
+/// The details line: tags (quiet grey text, or coloured chips with
+/// "Coloured Tags in Lists"), then files and links, then the subtask
+/// checklist (a control: it opens the quick look) only where the circle
+/// can't show the progress; the page glyph and the pie's count are in the
+/// title line's hover cluster (owner, 2026-10-25: list round 2). Only what
+/// is present. No separators (owner
 /// fix 2, between v16's 4a and 4b): items sit 14 pt apart, each small icon
 /// 5 pt before its label.
 ///
@@ -1624,21 +1721,6 @@ struct AtticTaskDetails: View {
     /// The row's tag popover, anchored to the tags themselves so its arrow
     /// points at what was clicked (round 5, the owner's item 3).
     var tagsPopover: AtticAnchoredPopover? = nil
-    /// The pointer or the keyboard is on the row (or its quick look is
-    /// open): the subtask count shows even where the circle's pie says it.
-    var revealsCount = false
-
-    /// The subtask count at rest (owner, 2026-10-25): hidden where the
-    /// circle already shows the progress (its pie, or the done disc), and
-    /// shown on hover, keyboard focus or an open quick look so it stays a
-    /// control. It stays when it is the line's only detail.
-    static func showsCount(_ model: AtticTaskRowModel, reveals: Bool) -> Bool {
-        guard model.subtasks != nil else { return false }
-        let circleShowsIt = model.state == .done
-            || (model.state == .inProgress && AtticStatusCircle.pieShare(model.subtasks) != nil)
-        let otherDetails = model.inWindow || !model.tags.isEmpty || model.hasPage || model.attachments > 0 || model.links > 0
-        return !circleShowsIt || reveals || !otherDetails
-    }
 
     var body: some View {
         let m = AtticTaskRowMetrics.self
@@ -1684,8 +1766,7 @@ struct AtticTaskDetails: View {
                     .fixedSize()
                     .layoutPriority(1)
             }
-            // Last on the line, so its appearing on hover moves nothing.
-            if let subtasks = model.subtasks, Self.showsCount(model, reveals: revealsCount) {
+            if let subtasks = model.subtasks, model.countOnDetails {
                 AtticDetailsCountButton(
                     systemName: "checkmark.square", count: "\(subtasks.done)/\(subtasks.total)",
                     isExpanded: isExpanded, disabled: disabled,
@@ -1696,18 +1777,6 @@ struct AtticTaskDetails: View {
                 )
                 .fixedSize()
                 .layoutPriority(1)
-            }
-            if model.hasPage {
-                // Phase 3 (`p3-06`, D11): the task has a note of its own. The
-                // glyph has no count; files keep the paperclip and theirs.
-                // It sits at one fixed spot, the line's right end, under the
-                // date (owner, 2026-10-25).
-                Spacer(minLength: 0)
-                AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon)
-                    .help(String(localized: "Has a note"))
-                    .accessibilityLabel(String(localized: "Has a note"))
-                    .fixedSize()
-                    .layoutPriority(1)
             }
         }
         .lineLimit(1)
@@ -1780,14 +1849,21 @@ private struct AtticDetailsTags: View {
 }
 
 /// A tag on a task row's details line: `#name` in the details line's quiet
-/// grey, with no fill or colour (owner, 2026-10-25).
+/// grey, with no fill or colour (owner, 2026-10-25), or, with "Coloured
+/// Tags in Lists" on, the coloured chip (owner, 2026-10-25: list round 2).
 private struct AtticDetailsTagText: View {
     let name: String
     var disabled = false
     var truncates = false
 
+    @Environment(\.atticColouredTagsInLists) private var coloured
+
     var body: some View {
-        AtticText(verbatim: "#" + name, style: .rowMeta, ink: disabled ? .disabledText : .helper, truncates: truncates)
+        if coloured {
+            AtticTagLabel(name: name, disabled: disabled, truncates: truncates)
+        } else {
+            AtticText(verbatim: "#" + name, style: .rowMeta, ink: disabled ? .disabledText : .helper, truncates: truncates)
+        }
     }
 }
 
@@ -2610,7 +2686,8 @@ struct AtticSubtaskTitleField: NSViewRepresentable {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = AtticTextStyle.rowTitle.nsFont
+        // The subtask rows' own face (13 pt), not the 14 pt task title.
+        field.font = AtticTextStyle.listBody.nsFont
         return field
     }
     /// As tall as its wrapped text, from one line up to the composers'
@@ -2618,7 +2695,7 @@ struct AtticSubtaskTitleField: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView field: NSTextField, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         return CGSize(width: width, height: Self.height(of: editing.text.wrappedValue, width: width,
-                                                       font: field.font ?? AtticTextStyle.rowTitle.nsFont))
+                                                       font: field.font ?? AtticTextStyle.listBody.nsFont))
     }
 
     /// The field's height for `text` wrapped at `width` (pure, tested).
@@ -2724,7 +2801,7 @@ final class AtticSubtaskTitleCell: NSTextFieldCell {
     /// exactly that many, never half a line at its bottom or a sliver of
     /// the line above at its top.
     static func textRect(forBounds rect: NSRect, font: NSFont?) -> NSRect {
-        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.rowTitle.nsFont)
+        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.listBody.nsFont)
         guard line > 0, rect.height > line else { return rect }
         let whole = (rect.height / line).rounded(.down) * line
         return rect.insetBy(dx: 0, dy: (rect.height - whole) / 2)
@@ -2784,7 +2861,7 @@ final class AtticSubtaskFieldEditor: NSTextView {
     /// by whole lines (its clip is whole lines tall).
     override func adjustScroll(_ newVisible: NSRect) -> NSRect {
         var rect = super.adjustScroll(newVisible)
-        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.rowTitle.nsFont)
+        let line = AtticLineSnap.lineHeight(of: font ?? AtticTextStyle.listBody.nsFont)
         rect.origin.y = AtticLineSnap.offset(rect.origin.y - textContainerOrigin.y, line: line,
                                              limit: frame.height - rect.height - textContainerOrigin.y) + textContainerOrigin.y
         return rect

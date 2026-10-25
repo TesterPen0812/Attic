@@ -200,7 +200,7 @@ final class PhaseXColourTokenTests: XCTestCase {
     func testDoneMarkIsTheTitleInkWithAReadableTick() {
         for context in Self.matrix {
             let tokens = context.tokens
-            XCTAssertEqual(tokens.ink(.doneFill), tokens.ink(AtticStatusCircle.ringInk), context.caption)
+            XCTAssertEqual(tokens.ink(.doneFill), tokens.ink(AtticStatusCircle.stateInk), context.caption)
             let tick = tokens.ink(.onDone).contrast(on: tokens.ink(.doneFill))
             XCTAssertGreaterThanOrEqual(tick, context.increaseContrast ? 4.5 : 3, "\(context.caption) tick \(tick)")
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.disabledIcon)), 3, context.caption)

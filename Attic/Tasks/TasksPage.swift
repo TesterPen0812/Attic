@@ -2741,7 +2741,7 @@ struct TasksPage: View {
 
     private func estimatedHeight(_ row: TasksListRow) -> CGFloat {
         let id = row.id
-        let pitch = row.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
+        let pitch = row.model.showsDetailsLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         var height = pitch
         if model.expanded.contains(id), row.status != .done {
             height += CGFloat(row.subtasks.count + 1) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding

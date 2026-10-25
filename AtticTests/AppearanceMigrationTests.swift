@@ -19,9 +19,9 @@ final class AppearanceMigrationTests: XCTestCase {
 
     // MARK: Pure mapping
 
-    func testFreshInstallGetsGlassAndNoTint() {
+    func testFreshInstallGetsSolidAndNoTint() {
         XCTAssertEqual(AppearanceMigration.resolve(Legacy()), AppearanceMigration.freshInstall)
-        XCTAssertEqual(AppearanceMigration.freshInstall, Resolved(surface: .glass, tint: .off))
+        XCTAssertEqual(AppearanceMigration.freshInstall, Resolved(surface: .solid, tint: .off), "paper under the list (owner, 2026-10-25: list round 2)")
     }
 
     func testAnyStoredAppearanceKeyMeansAnExistingInstall() {
@@ -204,14 +204,14 @@ final class AppearanceMigrationTests: XCTestCase {
         XCTAssertNil(AppearanceMigration.migrateIfNeeded(defaults))
     }
 
-    func testFreshInstallThroughAppSettingsStartsOnGlass() throws {
+    func testFreshInstallThroughAppSettingsStartsOnSolid() throws {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = try MainActor.assumeIsolated { AppSettings(defaults: defaults) }
         MainActor.assumeIsolated {
             XCTAssertEqual(settings.panelTheme, .original)
             XCTAssertEqual(settings.appearance, .system)
-            XCTAssertEqual(settings.panelSurfaceStyle, .glass)
+            XCTAssertEqual(settings.panelSurfaceStyle, .solid, "owner, 2026-10-25: list round 2")
             XCTAssertEqual(settings.panelTint, .off)
             XCTAssertEqual(settings.panelTintLength, PanelTintLength.defaultValue)
         }
@@ -220,7 +220,7 @@ final class AppearanceMigrationTests: XCTestCase {
         // A relaunch is still the same install.
         let relaunched = try MainActor.assumeIsolated { AppSettings(defaults: defaults) }
         MainActor.assumeIsolated {
-            XCTAssertEqual(relaunched.panelSurfaceStyle, .glass)
+            XCTAssertEqual(relaunched.panelSurfaceStyle, .solid, "owner, 2026-10-25: list round 2")
         }
     }
 
@@ -373,7 +373,7 @@ final class AppearanceMigrationTests: XCTestCase {
         defaults.set("future-tint", forKey: "panelTint")
         MainActor.assumeIsolated {
             let restored = AppSettings(defaults: defaults)
-            XCTAssertEqual(restored.panelSurfaceStyle, .glass)
+            XCTAssertEqual(restored.panelSurfaceStyle, .solid, "the default (owner, 2026-10-25: list round 2)")
             XCTAssertEqual(restored.panelTint, .off)
         }
         XCTAssertEqual(defaults.string(forKey: "panelSurfaceStyle"), "future-surface",
@@ -386,7 +386,7 @@ final class AppearanceMigrationTests: XCTestCase {
         XCTAssertEqual(PanelTintLevel.allCases.map(\.rawValue), ["off", "subtle", "vivid", "bold"])
         XCTAssertEqual(PanelTintLevel.allCases.map(\.title), ["Off", "Subtle", "Vivid", "Bold"])
         XCTAssertEqual(PanelTintLevel.allCases.map(\.targetColorDifference), [nil, 3, 7, 12])
-        XCTAssertEqual(PanelSurfaceStyle.defaultStyle, .glass)
+        XCTAssertEqual(PanelSurfaceStyle.defaultStyle, .solid, "owner, 2026-10-25: list round 2")
         XCTAssertEqual(PanelTintLevel.defaultLevel, .off)
         XCTAssertEqual(AppearanceMigration.currentSchemaVersion, 2)
         for style in PanelSurfaceStyle.allCases {

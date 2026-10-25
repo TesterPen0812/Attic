@@ -61,7 +61,7 @@ enum AppearanceMigration {
         var tintLength: Double = PanelTintLength.defaultValue
     }
 
-    static let freshInstall = Resolved(surface: .glass, tint: .off)
+    static let freshInstall = Resolved(surface: PanelSurfaceStyle.defaultStyle, tint: .off)
 
     static func read(from defaults: UserDefaults) -> Legacy {
         var legacy = Legacy()

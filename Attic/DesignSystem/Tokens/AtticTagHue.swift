@@ -160,6 +160,9 @@ struct AtticTagColouring {
 
 extension EnvironmentValues {
     @Entry var atticTagColouring = AtticTagColouring()
+    /// "Coloured Tags in Lists": a task row's tags as coloured chips
+    /// (`AtticTagLabel`) rather than quiet grey text (the default).
+    @Entry var atticColouredTagsInLists = false
 }
 
 /// A tag colour's dot for menus (native and SwiftUI): drawn when the menu

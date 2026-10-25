@@ -101,6 +101,8 @@ struct AppearanceSettingsView: View {
                 )
                 .disabled(settings.panelTint == .off)
             }
+
+            listsSection
         }
     }
 
@@ -125,6 +127,19 @@ struct AppearanceSettingsView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(String(localized: "Palette"))
             .accessibilityIdentifier(AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier)
+        }
+    }
+
+    /// How the lists draw (owner, 2026-10-25: list round 2): tags in quiet
+    /// grey by default, or in their colours.
+    private var listsSection: some View {
+        SettingsGroup(title: String(localized: "Lists")) {
+            AtticSwitchRow(
+                title: String(localized: "Coloured Tags in Lists"),
+                isOn: $settings.colouredTagsInLists,
+                identifier: "setting-coloured-tags"
+            )
+            .help(String(localized: "Show each task’s tags in their colours instead of grey"))
         }
     }
 

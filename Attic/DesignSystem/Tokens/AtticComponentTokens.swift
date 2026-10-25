@@ -171,6 +171,10 @@ enum AtticTaskRowMetrics {
     /// the date, in the overdue red.
     static let overdueFlagSize: CGFloat = 9
     static let overdueFlagGap: CGFloat = 3
+    /// The title line's hover cluster (owner, 2026-10-25: list round 2):
+    /// the pie's count and the page glyph 8 pt apart, 8 pt before the date.
+    static let hoverClusterSpacing: CGFloat = 8
+    static let hoverClusterToDate: CGFloat = 8
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").

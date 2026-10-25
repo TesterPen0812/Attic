@@ -377,6 +377,7 @@ struct AtticPanelView: View {
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
             .environment(\.atticPanelToasts, toasts)
             .environment(\.atticPageSwitcherPresence, switcherPresence)
+            .environment(\.atticColouredTagsInLists, settings.colouredTagsInLists)
             .atticTagColours(store.commandLibrary)
             .tint(panelAccentColor)
             .accentColor(panelAccentColor)
