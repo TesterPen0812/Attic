@@ -63,30 +63,51 @@ enum RemindersReplicaMetrics {
     static let bottomInset: CGFloat = 7
     /// C: the notes field's minimum height 16 pt (RES-IB-002).
     static let notesMinHeight: CGFloat = 16
-    /// E: a notes line's pitch, from a 12 pt Rounded line (no isolated
-    /// notes-line measurement).
+    /// M: the notes box is 15 pt a line plus 2, at least 18 (one line 18,
+    /// two 32, four 62, five 77, eight 122: UI-GEO-01 rows 20, 12, 6, 21,
+    /// 22); notes start 1 pt inside the title's box.
+    static let notesFirstLine: CGFloat = 18
     static let notesLinePitch: CGFloat = 15
-    /// E: at most three notes lines (no universal cap established; run 1
-    /// measured rich-notes groups of 79, 108 and 169 pt).
-    static let notesLineLimit = 3
+    /// E: at most eight notes lines (no cap established; the tallest
+    /// measured notes box is 122 pt, about eight lines, UI-GEO-01 row 22).
+    static let notesLineLimit = 8
 
     // Horizontal (UI-ROW-04, RES-IB-003).
     /// M: the title 45 pt in from the row's start (x 265 against x 220).
     static let titleX: CGFloat = 45
     /// C: the completion control's frame 15 × 15 pt (RES-IB-001).
     static let circleFrame: CGFloat = 15
-    /// E: the drawn ring about 16–17 pt across, 1–2 pt ink (R2-F01).
-    static let circleDiameter: CGFloat = 16
-    static let circleStroke: CGFloat = 1.5
+    /// M (capture pixels, IMG-INITIAL and run2-16 at 1x): the ring 16.5 pt
+    /// across its outer edge, its centre 25.25 pt from the row's start and
+    /// 15.5 pt below its top; a completed circle's solid centre 11.5 pt
+    /// across inside a 1 pt light gap. E: the ring's ink 1.25 pt (from its
+    /// edge coverage; R2-F01 says 1–2 pt).
+    static let circleDiameter: CGFloat = 16.5
+    static let circleStroke: CGFloat = 1.25
+    static let completedFill: CGFloat = 11.5
+    static let circleCentreX: CGFloat = 25.25
+    static let circleCentreY: CGFloat = 15.5
     /// C: 10 pt from the control's trailing edge to the text stack
-    /// (RES-IB-003), so the control's leading edge is 45 − 10 − 15.
+    /// (RES-IB-003).
     static let circleToText: CGFloat = 10
-    static var circleX: CGFloat { titleX - circleToText - circleFrame }
+    static var circleX: CGFloat { circleCentreX - circleFrame / 2 }
+    /// M (capture pixels): the text's ink starts 1 pt inside its field
+    /// (title, notes and date at 46 against the field's 45).
+    static let textInset: CGFloat = 1
     /// M: a child's circle and title 30 pt further in (UI-ROW-04; the
     /// archive's 20 pt outline indent, RES-IB-004, is not the live offset).
     static let childIndent: CGFloat = 30
     /// C: 9 pt trailing spacing (RES-IB-003).
     static let trailingInset: CGFloat = 9
+    /// M: the title stops 49 pt before the row's end (room for the info
+    /// button), notes and the date line 14 pt before it; the info button's
+    /// 22 pt region ends 14 pt before it (UI-GEO-01 rows 7–22).
+    static let titleTrailing: CGFloat = 49
+    static let notesTrailing: CGFloat = 14
+    static let infoTrailing: CGFloat = 14
+    static let infoRegion: CGFloat = 22
+    /// M: a tag on the date line 6 pt after the date (UI-GEO-01 row 12).
+    static let dateToTag: CGFloat = 6
     /// E: the gap from a priority mark to the title (one space).
     static let priorityGap = " "
 
@@ -116,10 +137,14 @@ enum RemindersReplicaMetrics {
     static func rowHeight(titleLines: Int, notesLines: Int, hasDateLine: Bool) -> CGFloat {
         var height = titleTop + titleFirstLine + CGFloat(max(titleLines, 1) - 1) * titleLinePitch
         if notesLines > 0 {
-            height += max(notesMinHeight, CGFloat(notesLines) * notesLinePitch) - dateOverlap
+            height += notesBox(lines: notesLines) - dateOverlap
         }
         if hasDateLine { height += dateLineHeight - dateOverlap }
         return height + bottomInset
+    }
+
+    static func notesBox(lines: Int) -> CGFloat {
+        max(notesFirstLine, CGFloat(lines) * notesLinePitch + 2)
     }
 
     static var titleFont: NSFont { rounded(size: titleSize, weight: .regular) }

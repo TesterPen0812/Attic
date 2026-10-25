@@ -258,7 +258,9 @@ final class RemindersReplicaR1Tests: XCTestCase {
         XCTAssertEqual(m.rowHeight(titleLines: 1, notesLines: 0, hasDateLine: true), 48)
         XCTAssertEqual(m.rowHeight(titleLines: 2, notesLines: 0, hasDateLine: true), 64)
         XCTAssertEqual(m.titleX, 45)
-        XCTAssertEqual(m.circleX + m.circleFrame + m.circleToText, m.titleX)
+        XCTAssertEqual(m.circleX + m.circleFrame / 2, 25.25, "the circle's measured centre")
+        XCTAssertEqual(m.rowHeight(titleLines: 1, notesLines: 2, hasDateLine: true), 79, "notes and a date (UI-GEO-01 row 12)")
+        XCTAssertEqual(m.rowHeight(titleLines: 1, notesLines: 8, hasDateLine: true), 169, "eight notes lines (row 22)")
     }
 
     func testPriorityMarksAndDateLine() throws {

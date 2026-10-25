@@ -31,19 +31,24 @@ struct RemindersReplicaCircle: View {
 
     var body: some View {
         let m = RemindersReplicaMetrics.self
-        Image(systemName: done ? "largecircle.fill.circle" : "circle")
-            .resizable()
-            .fontWeight(.regular)
-            .foregroundStyle(done ? m.listBlue : (emphasised ? Color(nsColor: .secondaryLabelColor) : m.openRing))
-            .frame(width: m.circleDiameter, height: m.circleDiameter)
-            .frame(width: m.circleFrame, height: m.circleFrame)
-            .accessibilityHidden(true)
+        ZStack {
+            Circle()
+                .strokeBorder(done ? m.listBlue : (emphasised ? Color(nsColor: .secondaryLabelColor) : m.openRing),
+                              lineWidth: m.circleStroke)
+                .frame(width: m.circleDiameter, height: m.circleDiameter)
+            if done {
+                Circle()
+                    .fill(m.listBlue)
+                    .frame(width: m.completedFill, height: m.completedFill)
+            }
+        }
+        .frame(width: m.circleFrame, height: m.circleFrame)
+        .accessibilityHidden(true)
     }
 }
 
-/// The title as one wrapping text: the priority mark before it (M,
-/// UI-ROW-06), the tags as blue tokens after it (M, R2-04; Attic keeps
-/// tags beside the title, so they follow it).
+/// The title as one wrapping text, the priority mark before it (M,
+/// UI-ROW-06). Tags go on the date line (M, UI-GEO-01 row 12).
 enum RemindersReplicaTitle {
     static func text(_ model: AtticTaskRowModel, done: Bool, parent: Bool) -> Text {
         let m = RemindersReplicaMetrics.self
@@ -54,9 +59,6 @@ enum RemindersReplicaTitle {
             result = Text(mark).foregroundColor(done ? ink : m.listBlue) + Text(verbatim: m.priorityGap)
         }
         result = result + Text(verbatim: model.title).foregroundColor(ink)
-        for tag in model.tags {
-            result = result + Text(verbatim: " #" + tag).foregroundColor(m.tagInk)
-        }
         return result.font(font)
     }
 
@@ -109,7 +111,7 @@ struct RemindersReplicaRow: View {
         let rowFocused = focus?.isFocused ?? focused
         let ring = capture == nil && isEnabled && rowFocused && keyboardFocusVisible && titleEditing == nil
 
-        HStack(alignment: .top, spacing: 0) {
+        ZStack(alignment: .topLeading) {
             Button(action: actions.toggleDone) {
                 RemindersReplicaCircle(done: done, emphasised: hovered || ring)
                     .frame(width: 24, height: 24)
@@ -117,19 +119,20 @@ struct RemindersReplicaRow: View {
             }
             .buttonStyle(.plain)
             .padding(.leading, m.circleX - (24 - m.circleFrame) / 2)
-            // The circle's centre on the first title line's centre (C: the
-            // button's and title's first baselines are tied, RES-IB-003).
-            .padding(.top, m.titleTop + m.titleFirstLine / 2 - 12)
+            // M: the circle's centre 15.5 pt below the row's top.
+            .padding(.top, m.circleCentreY - 12)
             .accessibilityLabel(done ? String(localized: "Mark as not done") : String(localized: "Complete"))
 
             VStack(alignment: .leading, spacing: 0) {
                 titleView(done: done, parent: parent)
+                    .padding(.trailing, m.titleTrailing - m.notesTrailing)
                 if let notes = model.notes {
                     Text(verbatim: notes)
                         .font(.system(size: m.notesSize, design: .rounded))
                         .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                         .lineLimit(m.notesLineLimit)
-                        .frame(minHeight: m.notesMinHeight, alignment: .topLeading)
+                        .padding(.vertical, 1)
+                        .frame(minHeight: m.notesFirstLine, alignment: .topLeading)
                         .padding(.top, -m.dateOverlap)
                 }
                 if let line = detailsLine {
@@ -140,12 +143,14 @@ struct RemindersReplicaRow: View {
             }
             .padding(.top, m.titleTop)
             .padding(.bottom, m.bottomInset)
-            .padding(.leading, m.circleToText - (24 - m.circleFrame) / 2)
+            .padding(.leading, m.titleX + m.textInset)
+            .padding(.trailing, m.notesTrailing)
             .frame(maxWidth: .infinity, alignment: .leading)
-
+        }
+        .overlay(alignment: .topTrailing) {
             trailing(parent: parent)
                 .padding(.top, m.titleTop)
-                .padding(.trailing, m.trailingInset + m.selectionInset)
+                .padding(.trailing, m.infoTrailing)
         }
         .background(alignment: .top) {
             if isSelected {
@@ -187,14 +192,21 @@ struct RemindersReplicaRow: View {
     /// The date line, with the link and file markers where Attic has them.
     private var detailsLine: AnyView? {
         let markers = model.links > 0 || model.attachments > 0
-        guard dateLine != nil || markers else { return nil }
+        guard dateLine != nil || markers || !model.tags.isEmpty else { return nil }
         let m = RemindersReplicaMetrics.self
         let font = Font.system(size: m.dateSize, design: .rounded)
-        return AnyView(HStack(spacing: 6) {
+        return AnyView(HStack(spacing: m.dateToTag) {
             if let dateLine {
                 Text(verbatim: dateLine.text)
                     .font(font)
                     .foregroundStyle(dateLine.tone == .overdue ? Color(nsColor: .systemRed) : Color(nsColor: .secondaryLabelColor))
+            }
+            // M: a tag sits on the date line after the date (UI-GEO-01 row 12).
+            if !model.tags.isEmpty {
+                Text(verbatim: model.tags.map { "#" + $0 }.joined(separator: " "))
+                    .font(font)
+                    .foregroundStyle(m.tagInk)
+                    .lineLimit(1)
             }
             if model.links > 0 {
                 Image(systemName: "link").font(font).foregroundStyle(Color(nsColor: .secondaryLabelColor))
@@ -208,7 +220,10 @@ struct RemindersReplicaRow: View {
     @ViewBuilder
     private func trailing(parent: Bool) -> some View {
         let m = RemindersReplicaMetrics.self
-        HStack(spacing: 6) {
+        // M: the info region 22 pt wide ends 14 pt before the row's end; a
+        // parent's disclosure (15 pt) takes that place and the info moves
+        // 13 pt further in (UI-GEO-01 rows 7 and 15).
+        HStack(spacing: 13) {
             // M: info shows on the selected row too, not only on hover
             // (R2-F09); C: `info.circle` (R3-020..028).
             if let onInfo, capture == nil, titleEditing == nil, hovered || isSelected {
@@ -216,6 +231,8 @@ struct RemindersReplicaRow: View {
                     Image(systemName: "info.circle")
                         .font(.system(size: m.infoSize))
                         .foregroundStyle(m.listBlue)
+                        .frame(width: m.infoRegion, height: m.titleFirstLine)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(String(localized: "Open Page"))
@@ -227,7 +244,7 @@ struct RemindersReplicaRow: View {
                         .font(.system(size: m.disclosureSize, weight: .semibold))
                         .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .frame(width: 16, height: 16)
+                        .frame(width: 15, height: m.titleFirstLine)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -255,7 +272,7 @@ struct RemindersReplicaChildRow: View {
             }
             .buttonStyle(.plain)
             .padding(.leading, m.circleX + m.childIndent - (24 - m.circleFrame) / 2)
-            .padding(.top, m.titleTop + m.titleFirstLine / 2 - 12)
+            .padding(.top, m.circleCentreY - 12)
             .accessibilityLabel(subtask.isDone ? String(localized: "Mark as not done") : String(localized: "Complete"))
             Text(verbatim: subtask.title)
                 .font(.system(size: m.titleSize, design: .rounded))
@@ -265,8 +282,8 @@ struct RemindersReplicaChildRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, m.titleTop)
                 .padding(.bottom, m.bottomInset)
-                .padding(.leading, m.circleToText - (24 - m.circleFrame) / 2)
-                .padding(.trailing, m.trailingInset + m.selectionInset)
+                .padding(.leading, m.titleX + m.childIndent + m.textInset - (m.circleX + m.childIndent - (24 - m.circleFrame) / 2) - 24)
+                .padding(.trailing, m.notesTrailing)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
@@ -298,7 +315,7 @@ struct RemindersReplicaNewRow: View {
             HStack(alignment: .top, spacing: 0) {
                 RemindersReplicaCircle(done: false)
                     .padding(.leading, m.circleX)
-                    .padding(.top, m.titleTop + m.titleFirstLine / 2 - m.circleFrame / 2)
+                    .padding(.top, m.circleCentreY - m.circleFrame / 2)
                 AtticTokenField(
                     text: Binding(get: { state.draft.text }, set: { newValue in
                         guard newValue != state.draft.text else { return }
@@ -335,8 +352,8 @@ struct RemindersReplicaNewRow: View {
                 )
                 .frame(height: m.titleFirstLine)
                 .padding(.top, m.titleTop)
-                .padding(.leading, m.circleToText)
-                .padding(.trailing, m.trailingInset + m.selectionInset)
+                .padding(.leading, m.titleX - m.circleX - m.circleFrame)
+                .padding(.trailing, m.notesTrailing)
             }
             .frame(height: m.rowHeight(titleLines: 1, notesLines: 0, hasDateLine: false), alignment: .top)
             if let offered {
