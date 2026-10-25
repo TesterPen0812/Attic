@@ -126,9 +126,10 @@ enum AtticControlSize {
     /// How far a control smaller than the minimum target reaches past its
     /// drawn edge on each side, so it still answers a 28 pt target.
     static func hitOutset(for side: CGFloat) -> CGFloat { max(0, (minimumHitTarget - side) / 2) }
-    /// 15 pt (control size Medium, owner 2026-10-20; Phase 0's confident
-    /// circles were 16). The hit area stays 28.
-    static let statusCircle: CGFloat = 15
+    /// 14 pt (owner, 2026-10-25: circle 14 pt; 15 at control size Medium,
+    /// owner 2026-10-20; Phase 0's confident circles were 16). The hit area
+    /// stays 28.
+    static let statusCircle: CGFloat = 14
     /// 13 pt (Medium; it was 14). The hit area stays 28.
     static let subtaskCheckbox: CGFloat = 13
     static let glyph: CGFloat = 14

@@ -78,25 +78,27 @@ enum AtticStatusCircleMetrics {
     /// The ring's outer edge is the frame's edge (the stroke is inward).
     static let edgeInset: CGFloat = 0
     /// Every open ring is one ink at one weight (Direction A): 1.6 pt,
-    /// 2 pt under Increase Contrast.
+    /// 2 pt under Increase Contrast. Kept at the 14 pt circle (owner,
+    /// 2026-10-25: circle 14 pt), so the quiet ring still reads; the marks
+    /// inside scale by 14 / 15.
     static func ringWidth(increaseContrast: Bool) -> CGFloat {
         increaseContrast ? 2 : 1.6
     }
     /// In progress: the ring with a filled 5 pt centre dot ("working on
     /// it"), never a share of anything.
-    static let activeDotDiameter: CGFloat = 5
+    static let activeDotDiameter: CGFloat = 4.7
     /// Completing: the done disc sweeps in from 12 o'clock, starting this
     /// far inside the frame, and the least gap it keeps inside the ring.
-    static let wedgeInset: CGFloat = 3.2
-    static let wedgeGap: CGFloat = 0.7
+    static let wedgeInset: CGFloat = 3
+    static let wedgeGap: CGFloat = 0.65
     /// The done check (the 16 pt disc's, as before visual A).
-    static let checkLineWidth: CGFloat = 1.6
+    static let checkLineWidth: CGFloat = 1.5
     /// Inset of the check inside the done disc.
-    static let checkInset: CGFloat = 4.25
+    static let checkInset: CGFloat = 4
     /// Later's dashed ring: weight and dash / gap.
     static let backlogLineWidth: CGFloat = 1.6
     static let backlogLineWidthIncreased: CGFloat = 2
-    static let backlogDash: [CGFloat] = [2.2, 2.2]
+    static let backlogDash: [CGFloat] = [2.05, 2.05]
 
     static func wedgeInset(ringWidth: CGFloat) -> CGFloat {
         max(wedgeInset, edgeInset + ringWidth + wedgeGap)

@@ -74,7 +74,7 @@ final class AtticDesignSystemTests: XCTestCase {
         // Spacing B (owner, 2026-10-20): rows 32 / 48, highlights 28 / 44.
         XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [32, 28, 48, 44])
         XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 2)
-        XCTAssertEqual(AtticControlSize.statusCircle, 15)
+        XCTAssertEqual(AtticControlSize.statusCircle, 14, "owner, 2026-10-25: circle 14 pt")
         XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 8)
         let m = AtticTaskRowMetrics.self
         XCTAssertEqual(m.titleTop(twoLine: false), 7, "18 pt title centred in 32")

@@ -54,7 +54,9 @@ final class NotesV2ChromeTests: XCTestCase {
         XCTAssertEqual(tasksPageEdge + AtticLayout.circleX, 24, "the Tasks circles")
         let plusCentre = layout.chromeInsets.leading + AtticAddBarMetrics.leadingPadding + AtticAddBarMetrics.iconSlot / 2
         XCTAssertEqual(plusCentre, 24 + AtticControlSize.statusCircle / 2, "the plus on the circles' centre line")
-        XCTAssertEqual(plusCentre + AtticAddBarMetrics.iconSlot / 2 + AtticAddBarMetrics.gap, 47, "the text on the titles' line")
+        // 46 since the 14 pt circle (owner, 2026-10-25: circle 14 pt; 47 at 15).
+        XCTAssertEqual(plusCentre + AtticAddBarMetrics.iconSlot / 2 + AtticAddBarMetrics.gap, 46, "the text on the titles' line")
+        XCTAssertEqual(tasksPageEdge + AtticLayout.textX, 46, "the task titles")
         // The draft (v2-04): the title's first line at 64, the last line 12
         // above the bottom row (whose top is 48 from the bottom). Medium's
         // 30 pt controls make them 62 and 58 (46 from the bottom).
