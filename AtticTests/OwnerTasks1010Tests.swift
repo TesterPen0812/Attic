@@ -487,6 +487,26 @@ final class OwnerTasks1010Tests: XCTestCase {
     /// A native text view has no SwiftUI first-text baseline. Replacing the
     /// title with it must not change the date's actual control frame.
     func testRenameKeepsTheDateAndDetailsInPlace() throws {
+        try assertRenameKeepsTheDateAndDetailsInPlace(scale: nil)
+    }
+
+    /// CI's runners draw at 1x (fast-lane run 40237971200): the 14 pt title
+    /// leaves an odd point in its 18 pt line, so a half-point inset rounds
+    /// one way for the drawn title and the other for the rename field.
+    func testRenameKeepsTheTitleInPlaceAt1x() throws {
+        try assertRenameKeepsTheDateAndDetailsInPlace(scale: 1)
+    }
+
+    func testRenameKeepsTheTitleInPlaceAt2x() throws {
+        try assertRenameKeepsTheDateAndDetailsInPlace(scale: 2)
+    }
+
+    private final class ScaledWindow: NSWindow {
+        var scale: CGFloat = 2
+        override var backingScaleFactor: CGFloat { scale }
+    }
+
+    private func assertRenameKeepsTheDateAndDetailsInPlace(scale: CGFloat?) throws {
         final class State: ObservableObject {
             @Published var editing = false
             var title = "HHHHHH"
@@ -514,14 +534,25 @@ final class OwnerTasks1010Tests: XCTestCase {
             }
         }
         let state = State()
-        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 48),
+        let window: NSWindow
+        if let scale {
+            let scaled = ScaledWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 48),
+                                      styleMask: [.borderless], backing: .buffered, defer: false)
+            scaled.scale = scale
+            window = scaled
+        } else {
+            window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 340, height: 48),
                               styleMask: [.borderless], backing: .buffered, defer: false)
+        }
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: Scene(state: state))
         window.contentView = host
         defer { window.contentView = nil; window.close() }
         spin()
         let before = try bitmap(host)
+        if let scale {
+            XCTAssertEqual(CGFloat(before.pixelsWide), 340 * scale, "the row must draw at \(scale)x")
+        }
         let originalFrames = state.frames
         XCTAssertFalse(originalFrames.isEmpty)
         try capture(before, name: "rename-idle.png")
