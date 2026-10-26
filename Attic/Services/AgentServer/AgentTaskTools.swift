@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import SwiftData
 
 enum AgentToolError: Error {
@@ -105,7 +106,7 @@ final class AgentTaskTools {
         [
             "name": "create_task",
             "title": "Create Attic Task",
-            "description": "Create a task directly in Attic. Supply parent_id to create a subtask of an unfinished main task. One level only. Completing all subtasks does not automatically complete the parent. Use backlog for ideas. Optional tags, due date and priority. The title is used as given.",
+            "description": "Create a task directly in Attic. Supply parent_id to create a subtask of an unfinished main task. One level only. Completing all subtasks does not automatically complete the parent. Use backlog for ideas. Optional tags, due date, priority, is_flagged and url. The title is used as given.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -138,6 +139,8 @@ final class AgentTaskTools {
                         "type": "string",
                         "description": "Optional unfinished main task UUID. Creates an indented subtask."
                     ],
+                    "is_flagged": ["type": "boolean", "description": "Flag this task or subtask."],
+                    "url": ["type": ["string", "null"], "description": "Absolute HTTP(S) URL; trimmed and normalized, never fetched. Null or blank clears it."],
                     "tags": tagsSchema,
                     "due": [
                         "type": "string",
@@ -151,7 +154,7 @@ final class AgentTaskTools {
         [
             "name": "update_task",
             "title": "Update Attic Task",
-            "description": "Update a main task or subtask. Change title, status (state), priority, tags (replaces the list) or due date (null or an empty string clears it). backlog moves a task to Backlog; todo brings it back to Now. Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual. A task in the Done log (include_done_log in list_tasks) comes back to Now as to do when its status is set to todo, inProgress or backlog.",
+            "description": "Update a main task or subtask. Change title, status (state), priority, is_flagged, url, tags (replaces the list) or due date (null or an empty string clears it). backlog moves a task to Backlog; todo brings it back to Now. Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual. A task in the Done log (include_done_log in list_tasks) comes back to Now as to do when its status is set to todo, inProgress or backlog.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -179,6 +182,8 @@ final class AgentTaskTools {
                         "type": "string",
                         "enum": TaskPriority.allCases.map(\.rawValue)
                     ],
+                    "is_flagged": ["type": "boolean", "description": "Flag this task or subtask."],
+                    "url": ["type": ["string", "null"], "description": "Absolute HTTP(S) URL; trimmed and normalized, never fetched. Null or blank clears it."],
                     "tags": tagsSchema,
                     "due": [
                         "type": ["string", "null"],
@@ -214,7 +219,7 @@ final class AgentTaskTools {
         [
             "name": "duplicate_task",
             "title": "Duplicate Attic Task",
-            "description": "Make an unfinished copy of a main task, as the person's Duplicate (⌘D) does: the same title, priority, tags and due date, and a copy of every subtask (unfinished, new ids); files stay with the original. A copy of a Later task stays in Later, any other goes to Now as to do, right below the original when it can. Works on Done log tasks too. One undoable step. Returns the copy.",
+            "description": "Make an unfinished copy of a main task, as the person's Duplicate (⌘D) does: the same title, priority, tags, due date, flag and URL, and a copy of every subtask (unfinished, new ids); files stay with the original. A copy of a Later task stays in Later, any other goes to Now as to do, right below the original when it can. Works on Done log tasks too. One undoable step. Returns the copy.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -675,7 +680,7 @@ final class AgentTaskTools {
         if let raw = arguments["text"] {
             guard let text = raw as? String else { throw AgentToolError.invalidArguments("text must be a string.") }
             let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !needle.isEmpty { tasks = tasks.filter { $0.title.localizedStandardContains(needle) } }
+            if !needle.isEmpty { tasks = tasks.filter { $0.title.localizedStandardContains(needle) || $0.url?.localizedStandardContains(needle) == true } }
         }
         return try encode(["count": tasks.count, "tasks": tasks.map(serialize)])
     }
@@ -747,7 +752,7 @@ final class AgentTaskTools {
         let due = try dueDay(from: arguments, allowingClear: false) ?? nil
         // The title is kept literally (agents' titles are not shorthand); the
         // draft step applies the same creation rules as every other path.
-        let draft = TaskDraft(
+        var draft = TaskDraft(
             title: title,
             tags: tags,
             dueDay: due,
@@ -755,6 +760,8 @@ final class AgentTaskTools {
             status: status,
             parentID: parentID
         )
+        draft.isFlagged = try flag(from: arguments) ?? false
+        draft.url = try taskURL(from: arguments) ?? nil
         guard let task = library.createTasks([draft])?.first else {
             throw AgentToolError.storeFailure(store.lastErrorMessage ?? "Unknown error.")
         }
@@ -780,6 +787,8 @@ final class AgentTaskTools {
             : try status(from: arguments, allowed: TaskStatus.allCases)
         let newTags = try tags(from: arguments)
         let newDue = try dueDay(from: arguments, allowingClear: true)
+        let newFlag = try flag(from: arguments)
+        let newURL = try taskURL(from: arguments)
 
         // Returning from the Done log and applying the requested fields
         // must be one durable operation, including the family's membership.
@@ -789,7 +798,7 @@ final class AgentTaskTools {
             }
             try perform {
                 library.restoreAndUpdateTask(task.id, title: newTitle, priority: newPriority,
-                                             status: newStatus, tags: newTags, dueDay: newDue)
+                                             status: newStatus, tags: newTags, isFlagged: newFlag, url: newURL, dueDay: newDue)
             }
         } else {
             try perform {
@@ -799,6 +808,8 @@ final class AgentTaskTools {
                     priority: newPriority,
                     status: newStatus,
                     tags: newTags,
+                    isFlagged: newFlag,
+                    url: newURL,
                     dueDay: newDue
                 )
             }
@@ -1284,6 +1295,8 @@ final class AgentTaskTools {
             "title": task.title,
             "status": task.status.rawValue,
             "priority": task.priority.rawValue,
+            "is_flagged": task.isFlagged,
+            "url": task.url as Any? ?? NSNull(),
             "createdAt": Self.dateFormatter.string(from: task.createdAt),
             "updatedAt": Self.dateFormatter.string(from: task.updatedAt)
         ]
@@ -1295,6 +1308,22 @@ final class AgentTaskTools {
         if let due = task.dueDay { payload["due"] = due.rawValue }
         if let logged = task.doneLoggedAt { payload["done_logged_at"] = Self.dateFormatter.string(from: logged) }
         return payload
+    }
+
+    private func flag(from arguments: [String: Any]) throws -> Bool? {
+        guard let raw = arguments["is_flagged"] else { return nil }
+        guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            throw AgentToolError.invalidArguments("is_flagged must be true or false.")
+        }
+        return number.boolValue
+    }
+
+    private func taskURL(from arguments: [String: Any]) throws -> String?? {
+        guard let raw = arguments["url"] else { return nil }
+        if raw is NSNull { return .some(nil) }
+        guard let text = raw as? String else { throw AgentToolError.invalidArguments("url must be an HTTP(S) URL string or null.") }
+        do { return .some(try TaskStore.normalizedTaskURL(text)) }
+        catch { throw AgentToolError.invalidArguments(error.localizedDescription) }
     }
 
     // MARK: - Tags and dates

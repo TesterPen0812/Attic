@@ -966,6 +966,7 @@ struct TaskNotePageSnapshot: Codable, Equatable, Sendable {
         let id: UUID
         let title: String
         let isDone: Bool
+        var url: String? = nil
     }
     var format = 1
     let title: String
@@ -975,6 +976,8 @@ struct TaskNotePageSnapshot: Codable, Equatable, Sendable {
     let completedAt: Date?
     let tags: [String]
     let children: [Child]
+    var isFlagged: Bool? = nil
+    var url: String? = nil
 
     @MainActor
     static func capture(note: NoteItem, in context: ModelContext) throws -> Self? {
@@ -996,7 +999,8 @@ struct TaskNotePageSnapshot: Codable, Equatable, Sendable {
         }
         return Self(title: task.title, status: task.statusRaw, priority: task.priorityRaw,
             dueDay: task.dueDay, completedAt: task.completedAt, tags: task.tags,
-            children: children.map { Child(id: $0.id, title: $0.title, isDone: $0.status == .done) })
+            children: children.map { Child(id: $0.id, title: $0.title, isDone: $0.status == .done, url: $0.url) },
+            isFlagged: task.isFlagged, url: task.url)
     }
 
     @MainActor
@@ -1014,7 +1018,7 @@ struct TaskNotePageSnapshot: Codable, Equatable, Sendable {
         var page = writing
         page.requires.removeAll { $0 == "taskNote" }
         page.blocks = [.text(title)] + detailBlocks + children.map {
-            .checklist($0.title, id: $0.id, checked: $0.isDone)
+            .checklist($0.title + ($0.url.map { " · " + $0 } ?? ""), id: $0.id, checked: $0.isDone)
         } + writing.blocks.dropFirst()
         return page
     }
@@ -1033,6 +1037,7 @@ struct TaskNotePageSnapshot: Codable, Equatable, Sendable {
     private var detailBlocks: [NoteBlock] {
         var lines = [TaskStatus(rawValue: status)?.title ?? status]
         if let value = TaskPriority(rawValue: priority), value != .none { lines.append("\(value.title) priority") }
+        if let url { lines.append(url) }
         if let dueDay { lines.append("Due \(dueDay.rawValue)") }
         if let completedAt { lines.append("Completed \(completedAt.formatted(.dateTime.day().month(.abbreviated).year()))") }
         if !tags.isEmpty { lines.append(tags.map { "#" + $0 }.joined(separator: " ")) }

@@ -476,6 +476,7 @@ extension NoteStore {
                     let matching = Set(TaskStore.canonicalReplicas(from: rows).filter {
                         ($0.parentID == nil || $0.deletedAt == nil) &&
                         ($0.title.localizedStandardContains(text)
+                            || $0.url?.localizedStandardContains(text) == true
                             || ($0.parentID == nil && !tagText.isEmpty && $0.tagsRaw.localizedStandardContains(tagText))
                             || $0.attachments.contains { $0.filename.localizedStandardContains(text) })
                     }.map { $0.parentID ?? $0.id })

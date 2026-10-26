@@ -26,7 +26,8 @@ extension TasksPageModel {
                 due: task.dueDay.map { dueText($0) },
                 tags: task.tags,
                 priority: task.priority == .none ? nil : TasksTextExport.priorityName(task.priority),
-                subtasks: subtasks.map { .init(title: $0.title, isDone: $0.status == .done) },
+                url: task.url,
+                subtasks: subtasks.map { .init(title: $0.title, isDone: $0.status == .done, url: $0.url) },
                 files: task.attachments
             ))
         }

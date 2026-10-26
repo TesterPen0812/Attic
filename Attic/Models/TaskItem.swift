@@ -10,6 +10,9 @@ final class TaskItem {
     var associationGeneration: Int64 = 0
     var title: String = ""
     var statusRaw: String = TaskStatus.todo.rawValue
+    var isFlagged: Bool = false
+    /// Absolute HTTP(S) URL, validated by TaskStore; never fetched.
+    var url: String? = nil
     var priorityRaw: String = TaskPriority.none.rawValue
     var createdAt: Date = Date()
     var updatedAt: Date = Date()

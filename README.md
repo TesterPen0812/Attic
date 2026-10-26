@@ -30,7 +30,8 @@ switched off (see [What is not active](#what-is-not-active)).
 - Three tabs: **Now**, **Later** and **Done**. A task in Now is To do or In
   Progress.
 - Priorities, due dates, tags, subtasks one level deep, and file and image
-  attachments.
+  attachments. Tasks and subtasks also store a flag and an optional HTTP(S)
+  link, available through the task engine and agent tools.
 - Composers that grow as you type and accept attachments.
 - Drag to reorder, drag tasks and files out to other apps.
 - Finished tasks collect in Done, which has its own search.
@@ -66,7 +67,7 @@ switched off (see [What is not active](#what-is-not-active)).
 - **Add to Tasks** puts an ordinary note in Now as a fresh task. Its writing,
   files and versions stay on the same note; leading checkboxes stay writing.
   **Remove from Tasks** keeps a task's writing as an ordinary note, with its
-  subtasks as leading checkboxes in page order. Task dates, priority and
+  subtasks as leading checkboxes in page order. Task dates, priority, flag, URL and
   completion details are dropped; Undo restores the exact family. Retired
   task records stay hidden from Recently Deleted and expire after 30 days.
   Unproven Earlier files must first use **Move Files into Note**. Earlier-deleted

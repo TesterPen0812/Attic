@@ -237,24 +237,32 @@ final class AtticLibrary {
         priority: TaskPriority? = nil,
         status: TaskStatus? = nil,
         tags newTags: [String]? = nil,
+        isFlagged: Bool? = nil,
+        url: String?? = nil,
         dueDay: DueDay?? = nil,
         allowingUnfinishedSubtasks: Bool = false,
         in history: UndoHistoryID = .tasks
     ) -> CommandOutcome {
+        func capture() -> TaskEditableState? {
+            isFlagged != nil || url != nil ? tasks.reminderEditableState(of: id) : tasks.editableState(of: id)
+        }
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
-            guard let task = tasks.task(withID: id), let before = tasks.editableState(of: id),
+            guard let task = tasks.task(withID: id), let before = capture(),
                   tasks.update(
                     task,
                     title: title,
                     priority: priority,
                     status: status,
                     tags: newTags,
+                    isFlagged: isFlagged,
+                    url: url,
                     dueDay: dueDay,
                     allowingUnfinishedSubtasks: allowingUnfinishedSubtasks
                   ),
-                  let after = tasks.editableState(of: id) else { return nil }
+                  let scalar = tasks.editableState(of: id) else { return nil }
+            let after = scalar.withReminderReplicas(from: before, editingFlag: isFlagged != nil, editingURL: url != nil)
             succeeded = true
             guard before != after else { return nil }
             let name = status != nil && status?.rawValue != before.statusRaw ? "Change Task State" : "Edit Task"
@@ -272,20 +280,27 @@ final class AtticLibrary {
         priority: TaskPriority? = nil,
         status: TaskStatus,
         tags: [String]? = nil,
+        isFlagged: Bool? = nil,
+        url: String?? = nil,
         dueDay: DueDay?? = nil,
         in history: UndoHistoryID = .tasks
     ) -> CommandOutcome {
+        func capture(listed: Bool) -> TaskEditableState? {
+            if isFlagged != nil || url != nil { return tasks.reminderEditableState(of: id, listed: listed) }
+            return listed ? tasks.listedEditableState(of: id) : tasks.editableState(of: id)
+        }
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
-            guard let before = tasks.listedEditableState(of: id),
+            guard let before = capture(listed: true),
                   let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt,
                   tasks.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
-                                             tags: tags, dueDay: dueDay) else { return nil }
+                                             tags: tags, isFlagged: isFlagged, url: url, dueDay: dueDay) else { return nil }
             // The save has committed even if the subsequent list refresh
             // failed. Missing presentation state can only omit history.
             succeeded = true
-            guard let after = tasks.editableState(of: id) else { return nil }
+            guard let scalar = tasks.editableState(of: id) else { return nil }
+            let after = scalar.withReminderReplicas(from: before, editingFlag: isFlagged != nil, editingURL: url != nil)
             let store = self.tasks
             return UndoStep(
                 name: "Change Task State",
@@ -296,7 +311,7 @@ final class AtticLibrary {
                     // live. That compound restoration no longer applies.
                     guard store.listedTask(withID: id)?.doneLoggedAt != nil else { return .obsolete }
                     return store.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
-                                                      tags: tags, dueDay: dueDay) ? .applied : .failed
+                                                      tags: tags, isFlagged: isFlagged, url: url, dueDay: dueDay) ? .applied : .failed
                 }
             )
         }
