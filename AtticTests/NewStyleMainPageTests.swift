@@ -211,6 +211,26 @@ final class NewStyleMainPageTests: XCTestCase {
         XCTAssertEqual(store.task(withID: a)?.title, "Old title", "the replica's Escape still cancels")
     }
 
+    func testEscapeInTheListsFieldsKeepsWhatWasTyped() throws {
+        let a = try add("Draft")
+        model.selectOnly(a)
+        model.beginEditingTitle(a)
+        model.editingTitle = "Final"
+        XCTAssertTrue(model.newEscapeEditing())
+        XCTAssertNil(model.editingTitleID)
+        XCTAssertEqual(store.task(withID: a)?.title, "Final", "a rename is kept")
+
+        model.beginAddingSubtask(to: a)
+        model.newSubtaskTitle = "Step one"
+        XCTAssertTrue(model.newEscapeEditing())
+        XCTAssertNil(model.newSubtaskParentID, "the field closes")
+        XCTAssertEqual(store.subtasks(of: a).map(\.title), ["Step one"], "the typed subtask is kept")
+
+        model.beginAddingSubtask(to: a)
+        XCTAssertTrue(model.newEscapeEditing())
+        XCTAssertEqual(store.subtasks(of: a).count, 1, "an empty field adds nothing")
+    }
+
     // MARK: Tab and ⇧Tab (§ 2.14)
 
     func testTabIndentsUnderTheTaskAboveAndShiftTabOutdents() throws {

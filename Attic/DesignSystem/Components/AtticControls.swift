@@ -636,6 +636,7 @@ struct AtticAddBar: View {
     @State private var hovered = false
     @State private var probeID = UUID()
     @State private var fieldProbeID = UUID()
+    @Environment(\.atticAddBarGrid) private var addBarGrid
     /// The live field's height: one line, or more as it wraps (O17-05).
     @State private var fieldHeight = AtticTokenFieldMetrics.height
 
@@ -689,7 +690,7 @@ struct AtticAddBar: View {
         // button rest on the last line (the bar grows upward, so they never
         // move while typing).
         let grown = max(0, fieldHeight - AtticTokenFieldMetrics.height)
-        HStack(alignment: .bottom, spacing: m.gap) {
+        HStack(alignment: .bottom, spacing: addBarGrid?.gap ?? m.gap) {
             AtticIcon(systemName: systemImage, size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
                 .frame(width: m.iconSlot, height: height)
             field(disabled: state == .disabled)
@@ -715,7 +716,7 @@ struct AtticAddBar: View {
             .frame(width: send.width, height: send.height)
             .padding(.vertical, (height - send.height) / 2)
         }
-        .padding(.leading, m.leadingPadding)
+        .padding(.leading, addBarGrid?.leading ?? m.leadingPadding)
         .padding(.trailing, AtticControlSize.sendInset)
         .frame(height: height + grown)
         .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
@@ -743,9 +744,17 @@ struct AtticAddBar: View {
             )
             .overlay(alignment: .leading) {
                 if text.isEmpty {
-                    AtticText(verbatim: placeholder, style: .listBody, ink: disabled ? .disabledText : .placeholder)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                    if let grid = addBarGrid, !disabled {
+                        // List Style: New (FINAL § 2.11): a grey placeholder.
+                        AtticText(verbatim: placeholder, style: .listBody, ink: .placeholder)
+                            .foregroundStyle(grid.placeholder)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    } else {
+                        AtticText(verbatim: placeholder, style: .listBody, ink: disabled ? .disabledText : .placeholder)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2225,4 +2234,17 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
             return true
         }
     }
+}
+
+/// List Style: New puts the add bar on the row grid (FINAL § 2.11): the
+/// plus centred on the rings' line and the text on the titles' line, with
+/// a grey placeholder. Nil: Attic's own bar.
+struct AtticAddBarGrid {
+    var leading: CGFloat
+    var gap: CGFloat
+    var placeholder: Color
+}
+
+extension EnvironmentValues {
+    @Entry var atticAddBarGrid: AtticAddBarGrid? = nil
 }

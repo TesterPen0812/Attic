@@ -110,6 +110,26 @@ extension TasksPageModel {
         }
     }
 
+    // MARK: Esc (§ 2.13)
+
+    /// Esc in a field while New draws: leave and keep what was typed. A
+    /// renamed title or subtask is saved, a typed new subtask is added
+    /// (an empty one adds nothing); ⌘Z undoes. Returns false when a save
+    /// failed (the field stays open with its text and Retry).
+    @discardableResult
+    func newEscapeEditing() -> Bool {
+        if editingTitleID != nil { return commitTitle() }
+        if newSubtaskParentID != nil {
+            if !newSubtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                guard commitNewSubtask() else { return false }
+            }
+            cancelEditing()
+            return true
+        }
+        if renamingSubtaskID != nil { return commitSubtaskRename() }
+        return true
+    }
+
     // MARK: Honest states (§ 2.16)
 
     /// What an empty list says: "Nothing in Now" is not the same as a

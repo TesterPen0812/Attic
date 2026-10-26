@@ -941,6 +941,12 @@ struct TasksPage: View {
         guard event.keyCode == 53, event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
               model.isPageShown, !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window,
               !Self.isComposing(window.firstResponder), (window.firstResponder as? NSTextView)?.isFieldEditor == true else { return false }
+        if model.listStyle.isNew, model.newSubtaskParentID != nil || model.renamingSubtaskID != nil {
+            // § 2.13: leave and keep.
+            let parent = model.newSubtaskParentID
+            if model.newEscapeEditing(), let parent { setFocus(parent) }
+            return true
+        }
         if let parent = model.newSubtaskParentID {
             model.cancelEditing()
             setFocus(parent)
@@ -1913,7 +1919,14 @@ struct TasksPage: View {
                 if saved { setFocus(id) }
                 return saved
             },
-            cancel: { model.cancelEditing(); setFocus(id) },
+            // New (§ 2.13): Esc leaves and keeps the new title.
+            cancel: {
+                if model.listStyle.isNew {
+                    if model.newEscapeEditing() { setFocus(id) }
+                } else {
+                    model.cancelEditing(); setFocus(id)
+                }
+            },
             tokens: AtticTitleEditing.Tokens(
                 chips: model.titleEdit.tokenChips(parser: model.parser, caret: model.titleEditCaret),
                 dismissChip: { range in
@@ -2875,7 +2888,7 @@ struct TasksPage: View {
         let id = row.id
         if model.listStyle.isNew {
             let r = row.model
-            var height = TasksNewMetrics.rowHeight(titleLines: 1, hasDetails: r.state != .done && (!r.tags.isEmpty || r.subtasks != nil
+            var height = TasksNewMetrics.rowHeight(titleLines: 1, hasDetails: (r.state != .done || model.isKeptDone(id)) && (!r.tags.isEmpty || r.subtasks != nil
                 || r.hasPage || r.photos > 0 || r.attachments > 0 || r.flagged || r.linkHost != nil || r.links > 0))
             if model.expanded.contains(id), row.status != .done {
                 height += CGFloat(row.subtasks.count) * AtticLayout.rowPitch
@@ -3326,6 +3339,17 @@ struct TasksPage: View {
                     showsStrip: model.pasteOffer == nil, dropTargeted: composerDropTargeted,
                     pickerOpen: $composerPickerOpen, leave: leaveAddBar,
                     added: { _ in })
+            .environment(\.atticAddBarGrid, newAddBarGrid)
+    }
+
+    /// New (§ 2.11): the plus centred at panel x 26, the text at x 46.
+    private var newAddBarGrid: AtticAddBarGrid? {
+        guard model.listStyle.isNew else { return nil }
+        let barX = max(AtticSpacing.panelMargin, layout.chromeInsets.leading)
+        let slot = AtticAddBarMetrics.iconSlot
+        let leading = max(0, TasksNewMetrics.addPlusCentreX - barX - slot / 2)
+        let gap = max(0, TasksNewMetrics.addTextX - barX - leading - slot)
+        return AtticAddBarGrid(leading: leading, gap: gap, placeholder: TasksNewInk.secondary)
     }
 
 

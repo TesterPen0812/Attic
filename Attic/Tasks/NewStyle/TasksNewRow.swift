@@ -86,7 +86,8 @@ struct TasksNewRow: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 titleLine(done: done)
-                if let details = detailsLine(done: done) {
+                // A kept tick keeps its line 2: nothing moves (4A).
+                if let details = detailsLine(done: done && !isKept) {
                     details
                         .frame(height: M.detailsLine, alignment: .leading)
                         .padding(.top, M.detailsTop - M.titleTop - M.titleLine)
