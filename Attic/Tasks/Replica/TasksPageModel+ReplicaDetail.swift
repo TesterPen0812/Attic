@@ -27,12 +27,16 @@ extension TasksPageModel {
     func closeReplicaDetail() -> CommandOutcome {
         guard let detail = replicaDetail else { return .applied }
         replicaDetail = nil
+        if !detail.cancelled, let problem = detail.draft.urlProblem {
+            showToast(String(localized: "Link not saved: \(problem)"))
+        }
         guard let patch = detail.patch else { return .applied }
         let id = detail.taskID
         let save: () -> CommandOutcome = { [weak self] in
             guard let self else { return .failed(.taskGone) }
             return library.updateTask(id, title: patch.title, priority: patch.priority, status: patch.status,
-                                      tags: patch.tags, dueDay: patch.dueDay, allowingUnfinishedSubtasks: true)
+                                      tags: patch.tags, isFlagged: patch.isFlagged, url: patch.url, dueDay: patch.dueDay,
+                                      allowingUnfinishedSubtasks: true)
         }
         return report(save(), on: id, retry: save)
     }
@@ -41,6 +45,17 @@ extension TasksPageModel {
     func cancelReplicaDetail() {
         replicaDetail?.cancel()
         closeReplicaDetail()
+    }
+
+    // MARK: Flag
+
+    /// Flag or Unflag from the row's menu: one Edit Task step.
+    @discardableResult
+    func setReplicaFlag(_ flagged: Bool, for id: UUID) -> CommandOutcome {
+        let change: () -> CommandOutcome = { [weak self] in
+            self?.library.updateTask(id, isFlagged: flagged) ?? .failed(.taskGone)
+        }
+        return report(change(), on: id, retry: change)
     }
 
     // MARK: Tags

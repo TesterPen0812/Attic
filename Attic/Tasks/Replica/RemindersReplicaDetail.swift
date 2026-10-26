@@ -156,20 +156,39 @@ struct RemindersReplicaDetailDraft: Equatable {
     var priority: TaskPriority
     var list: List
     var tags: [String]
+    /// M: the Flag switch (R2-08, its own card with Priority).
+    var isFlagged: Bool
+    /// M: the link field, a plain URL under Notes (R2-F07); blank clears.
+    var url: String
     /// A finished task keeps its list (moving it would reopen it).
     var isDone = false
 
-    init(title: String, dueDay: DueDay?, priority: TaskPriority, status: TaskStatus, tags: [String]) {
+    init(title: String, dueDay: DueDay?, priority: TaskPriority, status: TaskStatus, tags: [String],
+         isFlagged: Bool = false, url: String? = nil) {
         self.title = title
         self.dueDay = dueDay
         self.priority = priority
         self.list = status == .backlog ? .later : .now
         self.tags = tags
+        self.isFlagged = isFlagged
+        self.url = url ?? ""
         self.isDone = status == .done
     }
 
     init(task: TaskItem) {
-        self.init(title: task.title, dueDay: task.dueDay, priority: task.priority, status: task.status, tags: task.tags)
+        self.init(title: task.title, dueDay: task.dueDay, priority: task.priority, status: task.status, tags: task.tags,
+                  isFlagged: task.isFlagged, url: task.url)
+    }
+
+    /// Why the typed link can't be saved (Attic's own refusal), or nil.
+    @MainActor var urlProblem: String? {
+        do { _ = try TaskStore.normalizedTaskURL(url); return nil } catch { return error.localizedDescription }
+    }
+
+    /// The link's host, for the chip (nil when blank or invalid).
+    @MainActor var urlHost: String? {
+        guard let normalised = try? TaskStore.normalizedTaskURL(url) else { return nil }
+        return URL(string: normalised)?.host()
     }
 
     /// What one Edit Task step changes; nil when nothing does.
@@ -179,9 +198,12 @@ struct RemindersReplicaDetailDraft: Equatable {
         var priority: TaskPriority?
         var status: TaskStatus?
         var tags: [String]?
+        var isFlagged: Bool?
+        /// `.some(nil)` clears the link.
+        var url: String??
     }
 
-    func patch(from original: Self) -> Patch? {
+    @MainActor func patch(from original: Self) -> Patch? {
         var patch = Patch()
         let title = TaskDraftBuilder.collapsed(self.title)
         // An emptied title keeps the one it had (Attic never saves a blank).
@@ -191,6 +213,11 @@ struct RemindersReplicaDetailDraft: Equatable {
         if list != original.list, !isDone { patch.status = list == .later ? .backlog : .todo }
         let tags = AtticTag.normalizedSet(self.tags)
         if Set(tags.map { $0.lowercased() }) != Set(AtticTag.normalizedSet(original.tags).map { $0.lowercased() }) { patch.tags = tags }
+        if isFlagged != original.isFlagged { patch.isFlagged = isFlagged }
+        // A link Attic refuses is not saved; the rest is (the toast says why).
+        let typed: String?? = { do { return .some(try TaskStore.normalizedTaskURL(url)) } catch { return nil } }()
+        let before: String? = try? TaskStore.normalizedTaskURL(original.url)
+        if let typed, typed != before { patch.url = .some(typed) }
         return patch == Patch() ? nil : patch
     }
 

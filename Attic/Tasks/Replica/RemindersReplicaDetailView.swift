@@ -150,6 +150,8 @@ struct RemindersReplicaDetailView: View {
                 }
                 .padding(M.cardInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                separator
+                urlField
             } else {
                 Button {
                     state.notesExpanded = true
@@ -166,6 +168,33 @@ struct RemindersReplicaDetailView: View {
                 .accessibilityIdentifier("replica-detail-notes-expander")
             }
         }
+    }
+
+    /// M: the link field, a plain editable URL under Notes (R2-F07), with
+    /// its domain chip (E: about 109 × 28 pt). Never fetched.
+    private var urlField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField(String(localized: "URL"), text: $state.draft.url)
+                .textFieldStyle(.plain)
+                .font(.system(size: M.labelSize))
+                .accessibilityIdentifier("replica-detail-url")
+            if let problem = state.draft.urlProblem {
+                Text(problem)
+                    .font(.system(size: M.subtitleSize))
+                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let host = state.draft.urlHost {
+                Label(host, systemImage: "safari")
+                    .font(.system(size: M.subtitleSize))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+                    .frame(height: M.linkChipHeight)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(M.cardFill))
+                    .accessibilityIdentifier("replica-detail-url-chip")
+            }
+        }
+        .padding(M.cardInset)
     }
 
     private var dateCard: some View {
@@ -318,8 +347,17 @@ struct RemindersReplicaDetailView: View {
         .accessibilityLabel(label)
     }
 
+    /// M: Flag and Priority share their own card (R2-08).
     private var priorityCard: some View {
         card {
+            row("flag", String(localized: "Flag")) {
+                Toggle("", isOn: $state.draft.isFlagged)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .accessibilityLabel(String(localized: "Flag"))
+            }
+            separator
             row("exclamationmark", String(localized: "Priority")) {
                 valueMenu(TaskPriority.allCases, selection: $state.draft.priority, title: \.title,
                           label: String(localized: "Priority"))

@@ -280,9 +280,69 @@ final class RemindersReplicaR2Tests: XCTestCase {
         XCTAssertEqual(store.task(withID: child)?.parentID, above)
     }
 
+    // MARK: Flag and link (on the storage branch's fields)
+
+    func testThePanelSavesTheFlagAndLinkWithTheRest() throws {
+        let a = try add("Flag me")
+        model.openReplicaDetail(a)
+        let detail = try XCTUnwrap(model.replicaDetail)
+        XCTAssertFalse(detail.draft.isFlagged)
+        detail.draft.isFlagged = true
+        detail.draft.url = "  HTTPS://Example.com/study-r2 "
+        detail.draft.priority = .low
+        XCTAssertEqual(detail.draft.urlHost, "example.com", "the chip's domain")
+        XCTAssertTrue(model.closeReplicaDetail().isApplied)
+        let task = try XCTUnwrap(store.task(withID: a))
+        XCTAssertTrue(task.isFlagged)
+        XCTAssertEqual(task.url, "https://example.com/study-r2")
+        let row = try XCTUnwrap(model.rows(for: .now).first { $0.id == a })
+        XCTAssertTrue(row.model.flagged, "the row's flag")
+        XCTAssertEqual(row.model.linkHost, "example.com", "the row's link marker")
+        XCTAssertTrue(model.undo().isApplied)
+        let undone = try XCTUnwrap(store.task(withID: a))
+        XCTAssertFalse(undone.isFlagged, "one Undo, flag and link included")
+        XCTAssertNil(undone.url)
+        XCTAssertEqual(undone.priority, .none)
+    }
+
+    func testARefusedLinkIsNotSavedButTheRestIs() throws {
+        let a = try add("Bad link")
+        model.openReplicaDetail(a)
+        let detail = try XCTUnwrap(model.replicaDetail)
+        detail.draft.url = "ftp://example.com/file"
+        detail.draft.title = "Bad link kept"
+        XCTAssertNotNil(detail.draft.urlProblem, "Attic's own refusal shows under the field")
+        XCTAssertTrue(model.closeReplicaDetail().isApplied)
+        XCTAssertEqual(store.task(withID: a)?.title, "Bad link kept")
+        XCTAssertNil(store.task(withID: a)?.url)
+        XCTAssertNotNil(model.toasts.current, "the toast says the link was not saved")
+    }
+
+    func testClearingTheLinkRemovesIt() throws {
+        let a = try add("Linked")
+        XCTAssertTrue(library.updateTask(a, url: .some("https://example.com")).isApplied)
+        model.openReplicaDetail(a)
+        model.replicaDetail?.draft.url = "  "
+        model.closeReplicaDetail()
+        XCTAssertNil(store.task(withID: a)?.url)
+    }
+
+    func testFlagFromTheMenuIsOneStepAndOnlyWhileOn() throws {
+        let a = try add("Menu flag")
+        XCTAssertTrue(model.setReplicaFlag(true, for: a).isApplied)
+        XCTAssertEqual(store.task(withID: a)?.isFlagged, true)
+        XCTAssertTrue(model.undo().isApplied)
+        XCTAssertEqual(store.task(withID: a)?.isFlagged, false)
+        XCTAssertTrue(model.setReplicaFlag(true, for: a).isApplied)
+        model.setListStyle(.attic)
+        XCTAssertFalse(model.rows(for: .now).first { $0.id == a }?.model.flagged ?? true, "Attic's rows are unchanged")
+    }
+
     // MARK: Menu
 
     func testShowInfoHeadsTheReplicaMenu() {
-        XCTAssertEqual(RemindersReplicaMenu.commands(removeFromTasks: false).first, .showInfo)
+        XCTAssertEqual(RemindersReplicaMenu.commands(removeFromTasks: false),
+                       [.showInfo, .complete, .date, .flag, .priority, .list, .tags, .copy, .delete],
+                       "Flag in its measured place (CUA2-10)")
     }
 }

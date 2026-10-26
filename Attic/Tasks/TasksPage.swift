@@ -5246,6 +5246,14 @@ extension TasksPage {
             case .date:
                 list.append(.submenu(String(localized: "Date"), startsSection: true, width: AtticMenuMetrics.dateMenuWidth,
                                      dateCommands(key, targets: targets)))
+            case .flag:
+                // M: Flag after the date items (CUA2-10); one task at a time.
+                guard single, tab != .done, let task = store.task(withID: id) else { continue }
+                let flagged = task.isFlagged
+                list.append(AtticMenuCommand(verbatim: flagged ? String(localized: "Unflag") : String(localized: "Flag"),
+                                             startsSection: true) {
+                    model.setReplicaFlag(!flagged, for: id)
+                })
             case .priority:
                 list.append(.submenu(String(localized: "Priority"), startsSection: true, priorityCommands(key, targets: targets)))
             case .list:

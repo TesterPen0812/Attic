@@ -199,7 +199,7 @@ struct RemindersReplicaRow: View {
 
     /// The date line, with the link and file markers where Attic has them.
     private var detailsLine: AnyView? {
-        let markers = model.links > 0 || model.attachments > 0 || model.photos > 0
+        let markers = model.links > 0 || model.attachments > 0 || model.photos > 0 || model.linkHost != nil
         guard dateLine != nil || markers || !model.tags.isEmpty else { return nil }
         let m = RemindersReplicaMetrics.self
         let font = Font.system(size: m.dateSize, design: .rounded)
@@ -216,7 +216,15 @@ struct RemindersReplicaRow: View {
                     .foregroundStyle(m.tagInk)
                     .lineLimit(1)
             }
-            if model.links > 0 {
+            if let host = model.linkHost {
+                // The link field's marker: its host (Reminders draws a chip
+                // below, R2-F07; E).
+                Label(host, systemImage: "link")
+                    .labelStyle(.titleAndIcon)
+                    .font(font)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .lineLimit(1)
+            } else if model.links > 0 {
                 Image(systemName: "link").font(font).foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
             if model.attachments > 0 || model.photos > 0 {
@@ -245,6 +253,15 @@ struct RemindersReplicaRow: View {
                 .buttonStyle(.plain)
                 .help(String(localized: "Show Info"))
                 .accessibilityLabel(String(localized: "Show Info"))
+            }
+            // The flag at the trailing edge (M: orange, R2-F01/R2-12; E:
+            // the system orange and its size).
+            if model.flagged {
+                Image(systemName: "flag.fill")
+                    .font(.system(size: m.infoSize - 3))
+                    .foregroundStyle(Color(nsColor: .systemOrange))
+                    .frame(height: m.titleFirstLine)
+                    .accessibilityLabel(String(localized: "Flagged"))
             }
             if parent {
                 Button(action: onToggleExpanded) {

@@ -527,6 +527,8 @@ final class TasksPageModel: ObservableObject {
         if listStyle.isReplica {
             model.notes = notePreviews[task.id]
             model.photos = notePhotoCounts[task.id] ?? 0
+            model.flagged = task.isFlagged
+            model.linkHost = task.url.flatMap { URL(string: $0)?.host() }
         }
         // Slice 2 (§ 2.4, D11): a family whose files are in its note shows
         // no paperclip, unless Earlier files remain; others as on main.

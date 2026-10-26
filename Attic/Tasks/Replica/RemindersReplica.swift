@@ -306,7 +306,7 @@ enum RemindersReplicaMenu {
 
     /// Attic's commands, as the replica's menu offers them.
     enum Command: String, Equatable, CaseIterable {
-        case showInfo, complete, date, priority, list, tags, copy, removeFromTasks, delete
+        case showInfo, complete, date, flag, priority, list, tags, copy, removeFromTasks, delete
     }
 
     /// What each measured item becomes; nil: left out, with the reason.
@@ -319,7 +319,7 @@ enum RemindersReplicaMenu {
         case .indent: (nil, "Indent: Attic has no command that makes a task another's subtask (Tab says so)")
         case .outdent: (nil, "Outdent: disabled for a task in Reminders too; ⇧Tab makes a clicked subtask a task (Make Standalone Task)")
         case .newSection, .newSectionWithSelection, .editSections: (nil, "Sections: Attic has no storage for them")
-        case .flag: (nil, "Flag: Attic has no storage for it")
+        case .flag: (.flag, nil)
         case .priority: (.priority, nil)
         case .list: (.list, nil)
         case .tags: (.tags, nil)
@@ -376,7 +376,7 @@ enum RemindersReplicaKeys {
         Entry(keys: "⌘Z / ⇧⌘Z", meaning: "Undo / Redo", command: nil, note: "Already Attic's history: kept"),
         Entry(keys: "⌘A", meaning: "Select All", command: nil, note: "Already Attic's: kept"),
         Entry(keys: "⌘] / ⌘[", meaning: "Indent / Outdent", command: nil, note: "Left out: Tab and ⇧Tab do what Attic can (R2)"),
-        Entry(keys: "⇧⌘F", meaning: "Flag", command: nil, note: "Clash: Attic's Search Done Tasks; and no flag storage"),
+        Entry(keys: "⇧⌘F", meaning: "Flag", command: nil, note: "Clash: Attic's Search Done Tasks (kept); Flag is in the menu and the panel"),
         Entry(keys: "⇧⌘H", meaning: "Show Completed", command: nil, note: "Left out of R1 (lists are R4)"),
         Entry(keys: "⌥⌘N / ⌃⌘N", meaning: "New Section / with Selection", command: nil, note: "Left out: no sections"),
     ]

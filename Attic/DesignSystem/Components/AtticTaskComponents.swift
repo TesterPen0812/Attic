@@ -1107,6 +1107,10 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
     /// Photos in the item's writing (only while the Reminders replica
     /// draws: its image marker).
     var photos = 0
+    /// The task's flag and its link's host (the replica's flag and link
+    /// marker; false and nil otherwise).
+    var flagged = false
+    var linkHost: String?
 
     /// Round 11: a list skips redrawing a row whose model is unchanged
     /// (the subtask counts are a tuple, compared by hand).
@@ -1115,7 +1119,7 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
             && lhs.due == rhs.due && lhs.tags == rhs.tags && lhs.attachments == rhs.attachments && lhs.links == rhs.links
             && lhs.subtasks?.done == rhs.subtasks?.done && lhs.subtasks?.total == rhs.subtasks?.total
             && lhs.inWindow == rhs.inWindow && lhs.hasPage == rhs.hasPage && lhs.titleMatch == rhs.titleMatch
-            && lhs.notes == rhs.notes && lhs.photos == rhs.photos
+            && lhs.notes == rhs.notes && lhs.photos == rhs.photos && lhs.flagged == rhs.flagged && lhs.linkHost == rhs.linkHost
     }
 
     /// Where `titleMatch` occurs in the title (as the search reads it:
