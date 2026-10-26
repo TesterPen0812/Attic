@@ -454,6 +454,9 @@ struct AtticTitleEditing {
 /// With `tokens`, the add bar's native chip field (owner fix 4).
 struct AtticRowTitleEditor: View {
     let editing: AtticTitleEditing
+    /// The token field's height. A task row's rename field passes the
+    /// title font's own whole-point line so the field draws at its top.
+    var lineHeight: CGFloat = AtticTaskRowMetrics.titleLineHeight
 
     @Environment(\.atticDesign) private var design
     @FocusState private var focused: Bool
@@ -490,7 +493,7 @@ struct AtticRowTitleEditor: View {
                 pieceInk: .helper,
                 accessibilityIdentifier: "AtticTitleField"
             )
-            .frame(height: AtticTaskRowMetrics.titleLineHeight)
+            .frame(height: lineHeight)
             .onAppear { tokenFocused = true }
             .onChange(of: tokenFocused) { _, now in lost(now) { tokenFocused = true } }
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
@@ -1338,13 +1341,14 @@ struct AtticTaskRow: View {
                             .hidden()
                             // Baseline to baseline (list round 2's 14 pt
                             // title leaves an odd point in the 18 pt line,
-                            // so centring no longer lines them up): the
-                            // field's text sits its centring inset plus the
-                            // ascender below its top.
+                            // so centring no longer lines them up). The
+                            // field is exactly its whole-point line tall, so
+                            // its line starts at its top, and its guide is
+                            // the baseline it really draws.
                             .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
-                                AtticRowTitleEditor(editing: titleEditing)
-                                    .frame(height: m.titleLineHeight)
-                                    .alignmentGuide(.firstTextBaseline) { d in Self.editorBaseline(height: d.height) }
+                                AtticRowTitleEditor(editing: titleEditing, lineHeight: Self.editorLineHeight)
+                                    .frame(height: Self.editorLineHeight)
+                                    .alignmentGuide(.firstTextBaseline) { _ in Self.editorBaseline }
                             }
                             .layoutPriority(-1)
                     } else {
@@ -1467,12 +1471,22 @@ struct AtticTaskRow: View {
         )
     }
 
-    /// The title editor's baseline below its top: the token field centres
-    /// its whole-point line in the frame, and draws the baseline an ascender
-    /// below the line's top.
-    static func editorBaseline(height: CGFloat) -> CGFloat {
-        let font = AtticTextStyle.rowTitle.nsFont
-        return max(0, (height - AtticLineSnap.lineHeight(of: font)) / 2) + font.ascender
+    /// The rename field's height: the title font's whole-point line, so
+    /// the field's centring inset is zero and its text never sits on a
+    /// half point that 1x has to round.
+    static var editorLineHeight: CGFloat {
+        AtticLineSnap.lineHeight(of: AtticTextStyle.rowTitle.nsFont)
+    }
+
+    /// The rename field's baseline below its top: NSLayoutManager's own
+    /// baseline in its whole-point line (14 for the 14 pt title), not the
+    /// font's fractional ascender plus a centring inset (13.54 + 0.5).
+    /// That sum put the field's top exactly on a half point, a tie 2x can
+    /// draw but 1x rounds down, a pixel above the drawn title (CI run
+    /// 40237971200); with the real baseline the field snaps to the pixel
+    /// nearest the title's at either scale.
+    static var editorBaseline: CGFloat {
+        NSLayoutManager().defaultBaselineOffset(for: AtticTextStyle.rowTitle.nsFont)
     }
 
     /// The title line's hover cluster, just before the date: the subtask
