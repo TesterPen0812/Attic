@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 /// Tasks as text for other apps (owner-approved, 2026-10-01): what Copy (⌘C)
 /// and dragging tasks out of the panel give. Each task is its title, then
-/// its date, tags and priority, then its subtasks as a "- [ ]" list; in plain
+/// its date, tags, priority and URL, then its subtasks as a "- [ ]" list; in plain
 /// text, Markdown and RTF. Pure, tested directly.
 ///
 /// ⌘C's plain text stays the titles alone, one per line (round 10: it pastes
@@ -14,6 +14,9 @@ struct TasksTextExport: Equatable {
         struct Subtask: Equatable {
             var title: String
             var isDone: Bool
+            var url: String? = nil
+
+            var text: String { title + (url.map { " · " + $0 } ?? "") }
         }
 
         var title: String
@@ -23,14 +26,15 @@ struct TasksTextExport: Equatable {
         var tags: [String] = []
         /// The priority's name, or nil for none.
         var priority: String?
+        var url: String? = nil
         var subtasks: [Subtask] = []
         /// The task's files (O17-15): a drag out carries them beside the
         /// text, as file promises; the text itself never names them.
         var files: [TaskImageReference] = []
 
-        /// Date, tags and priority, in that order, as one line.
+        /// Date, tags, priority and URL, in that order, as one line.
         var details: String? {
-            let parts = [due].compactMap { $0 } + tags.map { "#\($0)" } + [priority].compactMap { $0 }
+            let parts = [due].compactMap { $0 } + tags.map { "#\($0)" } + [priority, url].compactMap { $0 }
             return parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
 
@@ -51,7 +55,7 @@ struct TasksTextExport: Equatable {
         return items.map { item in
             var lines = [item.title]
             if let details = item.details { lines.append(details) }
-            lines += item.subtasks.map { "- [\($0.isDone ? "x" : " ")] \($0.title)" }
+            lines += item.subtasks.map { "- [\($0.isDone ? "x" : " ")] \($0.text)" }
             return lines.joined(separator: "\n")
         }.joined(separator: "\n\n")
     }
@@ -62,7 +66,7 @@ struct TasksTextExport: Equatable {
         items.map { item in
             var line = "- [\(item.isDone ? "x" : " ")] **\(Self.escaped(item.title))**"
             if let details = item.details { line += " · \(Self.escaped(details))" }
-            let subtasks = item.subtasks.map { "  - [\($0.isDone ? "x" : " ")] \(Self.escaped($0.title))" }
+            let subtasks = item.subtasks.map { "  - [\($0.isDone ? "x" : " ")] \(Self.escaped($0.text))" }
             return ([line] + subtasks).joined(separator: "\n")
         }.joined(separator: "\n")
     }
@@ -80,7 +84,7 @@ struct TasksTextExport: Equatable {
                 text.append(NSAttributedString(string: "\n" + details, attributes: [.font: body, .foregroundColor: NSColor.secondaryLabelColor]))
             }
             for subtask in item.subtasks {
-                text.append(NSAttributedString(string: "\n\(subtask.isDone ? "☑" : "☐") \(subtask.title)", attributes: [.font: body]))
+                text.append(NSAttributedString(string: "\n\(subtask.isDone ? "☑" : "☐") \(subtask.text)", attributes: [.font: body]))
             }
         }
         return try? text.data(from: NSRange(location: 0, length: text.length),
