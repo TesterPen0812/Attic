@@ -429,7 +429,8 @@ final class NotesPageRenderTests: XCTestCase {
                 spin()
                 XCTAssertEqual(scroll.scrollerStyle, .overlay)
                 let table = try XCTUnwrap(engine.tableViews().first, "the table is hosted in the page")
-                XCTAssertEqual(table.frame.width, 264, accuracy: 0.5)
+                // The 320 pt panel's column: 24 in on each side (it was 28 and 264).
+                XCTAssertEqual(table.frame.width, 272, accuracy: 0.5)
                 let suffix = mode == .dark ? "dark" : "light"
                 if wide {
                     table.setScrollOffset(table.grid.columnX(1) + 60)

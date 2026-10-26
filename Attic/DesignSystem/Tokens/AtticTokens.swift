@@ -86,15 +86,23 @@ enum AtticControlSize {
     /// header's square, radius 13.5 by the 42 % rule.
     static let panelButton = CGSize(width: headerControl, height: headerControl)
     /// Chrome B (Notes v2, owner 2026-10-08): every corner control in Notes
-    /// and Tasks is 32 pt (it was 36), 16 pt from the panel's edges
+    /// and Tasks, 16 pt from the panel's edges
     /// (`AtticStyle.chromeMinimumInset`), the page switch's capsule height.
-    static let headerControl: CGFloat = 32
+    /// Control size Medium (owner, 2026-10-20): 30 pt (it was 32, and 36
+    /// before chrome B); radius 12.5 by the 42 % rule.
+    static let headerControl: CGFloat = 30
+    /// The secondary floating controls, one step under the corner controls
+    /// and the add bar (owner, 2026-10-22: "too big compared to everything
+    /// else"): the tabs capsule, Find and View Options, the composer strip.
+    /// Their hit areas stay larger than what is drawn.
+    static let secondaryControl: CGFloat = 26
     static let settingsHeaderHeight: CGFloat = 34
-    /// The page switch: 32 tall (visual A), chips 24 inside a 4 pt inset.
-    static let capsuleHeight: CGFloat = 32
+    /// The page switch: the corner controls' height (30, Medium), chips 22
+    /// inside a 4 pt inset.
+    static let capsuleHeight: CGFloat = headerControl
     static let capsuleInset: CGFloat = 4
     /// An icon-only chip, 24 tall and 1.15 × as wide (28).
-    /// The add bar matches the corner controls (chrome B: 32, was 36).
+    /// The add bar matches the corner controls (Medium: 30; chrome B 32, was 36).
     static let addBarHeight: CGFloat = headerControl
     /// The send button: 24 × 24 (chrome B; 28 × 28 in the 36 pt bar),
     /// nested **inside** the add bar.
@@ -104,7 +112,7 @@ enum AtticControlSize {
     /// rule outranks it: "the send button lives inside the add bar and
     /// appears only when there is text". Inside the 36 pt bar it is nested
     /// `sendInset` (4 pt) from the top, bottom and trailing edges, so it is
-    /// 32 − 2 × 4 = 24 pt square (chrome B), with the nested radius 13.5 − 4 = 9.5
+    /// 30 − 2 × 4 = 22 pt square (Medium), with the nested radius 12.5 − 4 = 8.5
     /// (corner rule 3: nesting for gaps of 6 pt or less). Kept at 28 × 28
     /// by the owner on 2026-09-24; a test holds the arithmetic.
     static let sendButton = CGSize(width: addBarHeight - 2 * sendInset, height: addBarHeight - 2 * sendInset)
@@ -118,13 +126,15 @@ enum AtticControlSize {
     /// How far a control smaller than the minimum target reaches past its
     /// drawn edge on each side, so it still answers a 28 pt target.
     static func hitOutset(for side: CGFloat) -> CGFloat { max(0, (minimumHitTarget - side) / 2) }
-    /// 16 pt (Phase 0's confident circles; the hit area stays 28).
-    static let statusCircle: CGFloat = 16
-    static let subtaskCheckbox: CGFloat = 14
+    /// 15 pt (control size Medium, owner 2026-10-20; Phase 0's confident
+    /// circles were 16). The hit area stays 28.
+    static let statusCircle: CGFloat = 15
+    /// 13 pt (Medium; it was 14). The hit area stays 28.
+    static let subtaskCheckbox: CGFloat = 13
     static let glyph: CGFloat = 14
     /// Icon-only raised buttons: the page switch's icon size (v9), so the
-    /// pin and the switch read as one row.
-    static let raisedGlyph: CGFloat = 13
+    /// pin and the switch read as one row. Medium: 12.2 (it was 13).
+    static let raisedGlyph: CGFloat = 12.2
 }
 
 /// Row and panel layout (spec § Proportions and spacing).
@@ -134,8 +144,10 @@ enum AtticLayout {
     /// highlight is 2 pt shorter than the pitch (1 pt inset top and bottom).
     /// Owner, 2026-09-26 (compact round, then tighter): 34 pt, 48 with a
     /// second line; highlights 30 / 44, 2 pt clear above and below.
-    static let rowPitch: CGFloat = 34
-    static let rowHighlightHeight: CGFloat = 30
+    /// Spacing B, "dense 4/8" (owner, 2026-10-20): 32 pt, pill 28; two-line
+    /// rows keep 48 / 44. The clear space between pills stays 2 + 2.
+    static let rowPitch: CGFloat = 32
+    static let rowHighlightHeight: CGFloat = 28
     static let detailRowPitch: CGFloat = 48
     static let detailRowHighlightHeight: CGFloat = 44
     /// The panel's lines (v9): row highlights 12 from the panel's edges,
@@ -154,12 +166,30 @@ enum AtticLayout {
     /// 12 inside the panel's 24 pt margin, so circles' left edge is at 28
     /// (16 in the page, centre 36) and titles at 56 (44); highlights 20
     /// from the panel's edges; dates 28 from the right.
+    /// Spacing B (owner, 2026-10-20): the page sits 8 inside the panel, so
+    /// the pill's outer edge (8 into the page) is on the chrome's 16 pt
+    /// line, the circles' left edge on the content line at 24, titles 8
+    /// after the circle (47 from the panel's edge) and dates 24 from the
+    /// right.
     static let circleX: CGFloat = 16
-    static let textX: CGFloat = 44
-    /// The content line (the Tasks circles, the note's text column) sits
-    /// 12 inside the corner controls' line: 28 from the panel's edge at the
-    /// chrome's 16 pt inset (chrome B, Notes v2), moving inward with it.
-    static let contentFromChrome: CGFloat = 12
+    /// Circle to title (spacing B: 8, it was 12): the same as the pill's
+    /// inner padding.
+    static let circleToTitle: CGFloat = 8
+    static let textX: CGFloat = circleX + AtticControlSize.statusCircle + circleToTitle
+    /// The content line, shared by both pages: the Tasks circles and the
+    /// tabs' "Now", the note's title and body, and All notes' row text sit
+    /// 8 inside the corner controls' line (24 from the panel's edge at the
+    /// chrome's 16 pt inset), moving inward with it. Spacing B (owner,
+    /// 2026-10-20) moved Tasks from 12 to 8, so the row pill's edge is on
+    /// the controls' line itself; Notes followed (owner, 2026-10-21) so the
+    /// pages line up when switching.
+    static let contentFromChrome: CGFloat = 8
+    /// The Tasks page's edge in the panel at a chrome inset (8 at the
+    /// default corner): the circles (16 in the page) land on the content
+    /// line. The live page and the Appearance preview share it.
+    static func tasksPageEdge(chromeInset: CGFloat) -> CGFloat {
+        max(0, chromeInset + contentFromChrome - circleX)
+    }
     /// Settings' sidebar keeps its own highlight inset.
     static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28
@@ -766,8 +796,20 @@ enum AtticMotionPreference {
 
     /// Reduced in Settings, or Reduce Motion on in macOS.
     static var reducesMotion: Bool {
-        level.reducesMotion(systemReduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        #if DEBUG
+        let system = systemReduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #else
+        let system = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #endif
+        return level.reducesMotion(systemReduceMotion: system)
     }
+
+    #if DEBUG
+    /// Tests only: stands in for macOS Reduce Motion, which GitHub's macOS
+    /// runner images turn on (`configure-system.sh`), so panel-motion tests
+    /// can state the setting they test instead of inheriting the machine's.
+    static var systemReduceMotionOverride: Bool?
+    #endif
 }
 
 // MARK: - Touch

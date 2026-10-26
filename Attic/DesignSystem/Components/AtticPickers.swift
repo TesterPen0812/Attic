@@ -1075,9 +1075,18 @@ struct AtticStripFocusID: Hashable {
 }
 
 /// The labelled buttons above the add bar (owner fix 5 A2, v17a): Date ·
-/// Tag · Priority, 28 tall, 8 above the bar, the first icon on the circles'
+/// Tag · Priority, 8 above the bar, the first icon on the circles'
 /// line. The host shows it for a non-empty draft and keeps it while one of
 /// its pickers is open.
+///
+/// Each button floats on its own glass, as the corner buttons, Aa and New
+/// note do (owner B, 2026-10-22): with no bottom blur, rows scroll sharp
+/// under the strip, and the glass keeps its labels readable over them.
+/// One pill per button, never one capsule behind the row (it would read as
+/// a second bar); the paperclip alone is a glass circle. 30 tall, the
+/// floating controls' Medium height. Under Reduce Transparency, and
+/// wherever the controls are not live glass, they take the same opaque
+/// surface as the other raised controls.
 ///
 /// Each button shows what the new task will get, typed or picked (owner
 /// item 18, v19): its value on a filled pill (`Tomorrow`, `#home +1`,
@@ -1128,43 +1137,47 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
         // P3: "#cuqa" showed as "#c…" beside "Priority").
         let iconOnly = Self.iconOnlyButtons(faces, available: available, fixed: attachIconOnly)
         let compact = Self.needsCompactGaps(faces, available: available, iconOnly: iconOnly)
-        HStack(spacing: AtticPickerMetrics.stripSpacing) {
-            AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
-                             identifier: "composer-date", compact: compact, showsTitle: !iconOnly.contains(0),
-                             keepsPrefix: 5, keptPrefixWidth: AtticPickerMetrics.stripDatePrefix,
-                             clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
-                // With all three set, a long date gives way after the tag
-                // (never below its first words).
-                .layoutPriority(-0.5)
-                .atticDropdown(isPresented: $datePresented, prefer: .above, label: String(localized: "Date")) {
-                    datePicker()
-                }
-            AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
-                             identifier: "composer-tag", compact: compact, showsTitle: !iconOnly.contains(1),
-                             keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
-                             clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
-                .layoutPriority(-1)
-                .atticDropdown(isPresented: $tagsPresented, prefer: .above, label: String(localized: "Tags")) {
-                    tagPicker()
-                }
-            AtticStripButton(systemName: "exclamationmark", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
-                             identifier: "composer-priority", compact: compact, showsTitle: !iconOnly.contains(2),
-                             clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
-                .fixedSize(horizontal: true, vertical: false)
-                .atticDropdown(isPresented: $priorityPresented, prefer: .above, label: String(localized: "Priority"),
-                               contentHeight: AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4) {
-                    priorityPicker()
-                }
-            if let onAttach {
-                AtticStripButton(systemName: "paperclip", title: String(localized: "Attach"), value: files, isOpen: false,
-                                 identifier: "composer-files", compact: compact, showsTitle: !iconOnly.contains(3),
+        // One glass container for the four pills (as the header's pair):
+        // one backdrop, and their shapes never flow into each other.
+        AtticControlGroup {
+            HStack(spacing: AtticPickerMetrics.stripSpacing) {
+                AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
+                                 identifier: "composer-date", compact: compact, showsTitle: !iconOnly.contains(0),
+                                 keepsPrefix: 5, keptPrefixWidth: AtticPickerMetrics.stripDatePrefix,
+                                 clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
+                    // With all three set, a long date gives way after the tag
+                    // (never below its first words).
+                    .layoutPriority(-0.5)
+                    .atticDropdown(isPresented: $datePresented, prefer: .above, label: String(localized: "Date")) {
+                        datePicker()
+                    }
+                AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
+                                 identifier: "composer-tag", compact: compact, showsTitle: !iconOnly.contains(1),
                                  keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
-                                 clearLabel: String(localized: "Remove files"), open: onAttach, clear: onClearFiles)
-                    // A long file name gives way first.
-                    .layoutPriority(-1.5)
+                                 clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
+                    .layoutPriority(-1)
+                    .atticDropdown(isPresented: $tagsPresented, prefer: .above, label: String(localized: "Tags")) {
+                        tagPicker()
+                    }
+                AtticStripButton(systemName: "exclamationmark", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
+                                 identifier: "composer-priority", compact: compact, showsTitle: !iconOnly.contains(2),
+                                 clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .atticDropdown(isPresented: $priorityPresented, prefer: .above, label: String(localized: "Priority"),
+                                   contentHeight: AtticDropdownMetrics.inset * 2 + AtticDropdownMetrics.rowHeight * 4) {
+                        priorityPicker()
+                    }
+                if let onAttach {
+                    AtticStripButton(systemName: "paperclip", title: String(localized: "Attach"), value: files, isOpen: false,
+                                     identifier: "composer-files", compact: compact, showsTitle: !iconOnly.contains(3),
+                                     keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
+                                     clearLabel: String(localized: "Remove files"), open: onAttach, clear: onClearFiles)
+                        // A long file name gives way first.
+                        .layoutPriority(-1.5)
+                }
             }
         }
-        .frame(height: AtticControlSize.smallHeight)
+        .frame(height: AtticPickerMetrics.stripHeight)
         // The room it has: the bar's width, whatever the buttons take.
         .frame(maxWidth: .infinity, alignment: .leading)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
@@ -1182,7 +1195,7 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
         let m = AtticSmallControlMetrics.self
         let buttons = faces.enumerated().map { index, face -> CGFloat in
             guard let value = face.value else {
-                guard !iconOnly.contains(index) else { return max(AtticControlSize.smallMinWidth, m.labelPadding * 2 + m.iconSize) }
+                guard !iconOnly.contains(index) else { return AtticPickerMetrics.stripHeight }
                 let name = AtticTextStyle.controlLabel.measuredWidth(face.title)
                 return max(AtticControlSize.smallMinWidth, m.labelPadding * 2 + m.iconSize + m.iconLabelGap + name)
             }
@@ -1227,8 +1240,10 @@ struct AtticStripValue: Equatable {
 }
 
 /// One strip button: the small button's face (icon, then its name) until
-/// it has a value; then the value on a filled pill, with a clear × at its
-/// end (v19: 9 pt before the icon, 7 after the ×).
+/// it has a value; then the value with a clear × at its end (v19: 9 pt
+/// before the icon, 7 after the ×). Always on the raised material (live
+/// glass, or its opaque stand-in): a set value adds the recessed fill
+/// inside it, as before the glass, and an open picker the selected chip.
 private struct AtticStripButton: View {
     let systemName: String
     let title: String
@@ -1255,6 +1270,7 @@ private struct AtticStripButton: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
+    @State private var pressed = false
     @State private var clearHovered = false
     /// The button's own keyboard focus (a Tab stop while keyboard
     /// navigation is on), which a page's Tab order can ask for (A10).
@@ -1277,7 +1293,7 @@ private struct AtticStripButton: View {
     /// the first characters of a long one (then "…").
     private var labelFloor: CGFloat {
         let m = AtticSmallControlMetrics.self
-        guard let value else { return AtticControlSize.smallMinWidth }
+        guard let value else { return iconOnly ? AtticPickerMetrics.stripHeight : AtticControlSize.smallMinWidth }
         // A short value (a tag like "#a33") is never squeezed: it keeps its
         // whole text, so a date or a long tag gives way first (A39 F12; it
         // showed as "#…" beside a date and a priority).
@@ -1285,6 +1301,16 @@ private struct AtticStripButton: View {
             return m.labelPadding + m.iconSize + iconLabelGap + value.style.measuredWidth(value.text) + clearGap
         }
         return m.labelPadding + m.iconSize + iconLabelGap + keptPrefixWidth + clearGap
+    }
+
+    /// Unset and nameless: a glass circle around its icon.
+    private var iconOnly: Bool { value == nil && !showsTitle }
+
+    /// What the material shows: hover, press and the disabled ghost.
+    private var state: AtticControlState {
+        if !isEnabled { return .disabled }
+        if pressed { return .pressed }
+        return hovered ? .hover : .rest
     }
 
     private var iconLabelGap: CGFloat {
@@ -1297,17 +1323,14 @@ private struct AtticStripButton: View {
 
     var body: some View {
         let m = AtticSmallControlMetrics.self
-        let height = AtticControlSize.smallHeight
+        let height = AtticPickerMetrics.stripHeight
         let radius = AtticRadius.control(height: height)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         let tokens = design.tokens
-        let fill: AtticRGBA = if isOpen {
-            tokens.chipSelected
-        } else if value != nil {
-            hovered ? tokens.chipHover.over(tokens.recessed) : tokens.recessed
-        } else {
-            hovered ? tokens.chipHover : .clear
-        }
+        // Inside the glass (whose own fill shows hover and press): an open
+        // picker's selected chip; a set value's recessed fill, so it still
+        // reads as set; nothing for an empty button.
+        let fill: AtticRGBA? = isOpen ? tokens.chipSelected : (value == nil ? nil : tokens.recessed)
         HStack(spacing: 0) {
             Button(action: open) {
                 HStack(spacing: iconLabelGap) {
@@ -1318,15 +1341,15 @@ private struct AtticStripButton: View {
                         // bar's width); the full value is the tooltip.
                         AtticText(verbatim: value.text, style: value.style, ink: isEnabled ? value.ink : .disabledText, truncates: true)
                     } else if showsTitle {
-                        AtticText(verbatim: title, style: .controlLabel, ink: isEnabled ? .heading : .disabledText)
+                        AtticText(verbatim: title, style: .rowMetaEmphasis, ink: isEnabled ? .heading : .disabledText)
                     }
                 }
-                .padding(.leading, m.labelPadding)
-                .padding(.trailing, value == nil ? m.labelPadding : clearGap)
-                .frame(minWidth: labelFloor, minHeight: height, maxHeight: height)
+                .padding(.leading, iconOnly ? 0 : m.labelPadding)
+                .padding(.trailing, iconOnly ? 0 : (value == nil ? m.labelPadding : clearGap))
+                .frame(minWidth: labelFloor, maxWidth: iconOnly ? height : nil, minHeight: height, maxHeight: height)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AtticPressReportingButtonStyle(isPressed: $pressed))
             .focused($focused)
             .atticFocusRequestTarget(AtticStripFocusID(identifier: identifier), focused: $focused)
             .focusEffectDisabled()
@@ -1359,10 +1382,22 @@ private struct AtticStripButton: View {
             }
         }
         .frame(height: height)
-        .background(shape.fill(fill.color))
+        .background { if let fill { shape.fill(fill.color) } }
+        .atticRaisedMaterial(cornerRadius: radius, state: state, interactive: state != .disabled)
         .contentShape(shape)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: value != nil), value: value)
+    }
+}
+
+/// A plain button that tells its host when it is held down, so the host's
+/// own surface (the strip pill's material) can show the press.
+private struct AtticPressReportingButtonStyle: ButtonStyle {
+    @Binding var isPressed: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { _, pressed in isPressed = pressed }
     }
 }
 

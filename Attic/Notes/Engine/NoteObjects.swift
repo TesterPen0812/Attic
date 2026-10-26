@@ -48,8 +48,10 @@ final class NoteChecklistAttachment: NoteObjectAttachment {
         super.init(objectID: objectID)
     }
 
-    /// The box plus the gap before the line's text.
-    static let boxSize: CGFloat = AtticControlSize.subtaskCheckbox
+    /// The box plus the gap before the line's text. Notes keeps the 14 pt
+    /// box: control size Medium (owner, 2026-10-20) shrank only Tasks'
+    /// subtask boxes to 13.
+    static let boxSize: CGFloat = 14
     static let trailingGap: CGFloat = 6
 
     override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
@@ -338,7 +340,7 @@ final class NoteObjectRenderer {
         // is that wide too, so the box is never stretched.
         let size = CGSize(width: NoteChecklistAttachment.boxSize + NoteChecklistAttachment.trailingGap,
                           height: NoteChecklistAttachment.boxSize)
-        let image = render(AtticSubtaskCheckbox(isDone: checked).frame(width: size.width, height: size.height, alignment: .leading))
+        let image = render(AtticSubtaskCheckbox(isDone: checked, size: NoteChecklistAttachment.boxSize).frame(width: size.width, height: size.height, alignment: .leading))
             ?? NSImage(size: size)
         checkboxes[checked] = image
         return image
