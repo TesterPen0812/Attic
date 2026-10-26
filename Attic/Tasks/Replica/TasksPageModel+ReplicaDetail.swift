@@ -9,7 +9,7 @@ extension TasksPageModel {
 
     /// ⓘ, ⌘I or Show Info: the panel opens on a task of Now or Later.
     func openReplicaDetail(_ id: UUID) {
-        guard listStyle.isReplica, tab != .done, let task = store.task(withID: id), task.parentID == nil else { return }
+        guard listStyle.usesReplicaMachinery, tab != .done, let task = store.task(withID: id), task.parentID == nil else { return }
         if let open = replicaDetail {
             if open.taskID == id { return }
             closeReplicaDetail()
@@ -41,9 +41,11 @@ extension TasksPageModel {
         return report(save(), on: id, retry: save)
     }
 
-    /// Escape in the panel (M, R2-F05): the staged edits are dropped.
+    /// Escape in the panel (M, R2-F05): the staged edits are dropped. In
+    /// New, Escape means "leave and keep what I did" (FINAL § 2.13): the
+    /// panel closes and saves, and ⌘Z undoes.
     func cancelReplicaDetail() {
-        replicaDetail?.cancel()
+        if !listStyle.isNew { replicaDetail?.cancel() }
         closeReplicaDetail()
     }
 

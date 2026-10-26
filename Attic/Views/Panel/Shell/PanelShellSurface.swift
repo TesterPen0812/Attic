@@ -9,11 +9,21 @@ struct PanelShellSurface: ViewModifier {
     let cornerSize: CGFloat
     /// The exterior shadow, when the native window leaves room for it.
     let elevation: AtticPanelSurfaceElevation?
+    /// Settings › Appearance › Glass tint (pick 5): one static layer over
+    /// the glass, under the content. Never per row.
+    var glassTint = false
 
     func body(content: Content) -> some View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         content
-            .background { AtticPanelStageSurface(cornerSize: cornerSize) }
+            .background {
+                AtticPanelStageSurface(cornerSize: cornerSize)
+                    .overlay {
+                        if glassTint {
+                            shape.fill(PanelGlassTint.color).allowsHitTesting(false)
+                        }
+                    }
+            }
             // The window server routes a click on this transparent panel
             // only where SwiftUI draws something hit-testable, and the design
             // system draws the surface with hit testing off. Without this
@@ -35,4 +45,15 @@ struct PanelShellSurface: ViewModifier {
                 }
             }
     }
+}
+
+/// The Glass tint (owner, 2026-10-26, pick 5): 22 % white in light mode,
+/// 22 % black in dark, so the desktop still shows through. Static.
+enum PanelGlassTint {
+    static let opacity: CGFloat = 0.22
+
+    static let color = Color(nsColor: NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(white: dark ? 0 : 1, alpha: opacity)
+    })
 }

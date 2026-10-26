@@ -14,6 +14,9 @@ import SwiftUI
 enum TasksListStyle: String, CaseIterable, Identifiable, Sendable {
     case attic
     case reminders
+    /// The council's main page (D2's row and header, owner 2026-10-26):
+    /// built on the replica's machinery, drawn and behaving as FINAL.md says.
+    case new
 
     var id: String { rawValue }
 
@@ -21,10 +24,17 @@ enum TasksListStyle: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .attic: String(localized: "Attic")
         case .reminders: String(localized: "Reminders (replica)")
+        case .new: String(localized: "New")
         }
     }
 
+    /// The Reminders replica exactly (its rows, new-reminder row, keys).
     var isReplica: Bool { self == .reminders }
+    /// The council's New style.
+    var isNew: Bool { self == .new }
+    /// Reminders or New: the machinery New builds on (a ticked row kept
+    /// until the list changes, the detail panel, photo counts).
+    var usesReplicaMachinery: Bool { self != .attic }
 }
 
 extension EnvironmentValues {

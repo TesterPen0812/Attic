@@ -83,6 +83,7 @@ final class AppSettings: ObservableObject {
         static let hapticsEnabled = "hapticsEnabled"
         static let colouredTagsInLists = "colouredTagsInLists"
         static let tasksListStyle = "tasksListStyle"
+        static let panelGlassTint = "panelGlassTint"
         static let animations = "animations"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
@@ -206,6 +207,13 @@ final class AppSettings: ObservableObject {
     /// changed.
     @Published var tasksListStyle: TasksListStyle {
         didSet { defaults.set(tasksListStyle.rawValue, forKey: Key.tasksListStyle) }
+    }
+
+    /// Glass tint (owner, 2026-10-26, pick 5: "try both in the real app"):
+    /// a static 22 % white (light) or black (dark) layer on the panel's
+    /// glass. Off by default; not written until changed.
+    @Published var panelGlassTint: Bool {
+        didSet { defaults.set(panelGlassTint, forKey: Key.panelGlassTint) }
     }
 
     /// Lively (the default) or Subtle springs, or Reduced motion (round 9,
@@ -369,6 +377,7 @@ final class AppSettings: ObservableObject {
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
         colouredTagsInLists = defaults.bool(forKey: Key.colouredTagsInLists)
         tasksListStyle = defaults.string(forKey: Key.tasksListStyle).flatMap(TasksListStyle.init(rawValue:)) ?? .attic
+        panelGlassTint = defaults.bool(forKey: Key.panelGlassTint)
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
         revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true
         revealModifier = RevealModifier(rawValue: defaults.string(forKey: Key.revealModifier) ?? "") ?? .none

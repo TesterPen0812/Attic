@@ -524,8 +524,9 @@ final class TasksPageModel: ObservableObject {
         // Phase 3 (`p3-06`, D11): the note glyph after the subtask count.
         model.hasPage = noteOwners.contains(task.id)
         // The Reminders replica previews the item's writing under its title.
-        if listStyle.isReplica {
-            model.notes = notePreviews[task.id]
+        if listStyle.usesReplicaMachinery {
+            // New shows no preview lines, only marks (FINAL § 2.1).
+            if listStyle.isReplica { model.notes = notePreviews[task.id] }
             model.photos = notePhotoCounts[task.id] ?? 0
             model.flagged = task.isFlagged
             model.linkHost = task.url.flatMap { URL(string: $0)?.host() }
@@ -884,6 +885,9 @@ final class TasksPageModel: ObservableObject {
 
     /// The lists' style (Settings › Appearance › Lists › List Style).
     private(set) var listStyle: TasksListStyle = .attic
+    /// New (§ 2.12): ⌘N, the hotkey and a click below the list ask the
+    /// add bar for the keyboard by bumping this.
+    @Published var newAddBarRequest: UInt64 = 0
     /// Bumped when what the replica's rows show changes (the style, the
     /// writing previews): the rows are rebuilt.
     private(set) var replicaRevision: UInt64 = 0
@@ -1491,8 +1495,9 @@ final class TasksPageModel: ObservableObject {
         holdTasks[id]?.cancel()
         // The replica keeps a completed row in its allowlist until the list
         // is refreshed or left (C, R3-049/050: `ShowCompletedContext`), not
-        // for a set time.
-        if listStyle.isReplica {
+        // for a set time. New keeps it the same way (4A: until the panel
+        // closes or the list changes).
+        if listStyle.usesReplicaMachinery {
             holdTasks[id] = nil
             return
         }
@@ -2159,20 +2164,32 @@ extension TasksPageModel {
     /// lets its kept completed rows go and closes its new-reminder row.
     func setListStyle(_ style: TasksListStyle) {
         guard style != listStyle else { return }
+        let previous = listStyle
         listStyle = style
         if style.isReplica {
             notePreviewsObservation = notePreviewSource?.receive(on: DispatchQueue.main)
                 .sink { [weak self] in self?.setNotePreviews($0) }
-            notePhotoCountsObservation = notePhotoCountSource?.receive(on: DispatchQueue.main)
-                .sink { [weak self] in self?.setNotePhotoCounts($0) }
         } else {
             notePreviewsObservation = nil
             notePreviews = [:]
+        }
+        if style.usesReplicaMachinery {
+            if notePhotoCountsObservation == nil {
+                notePhotoCountsObservation = notePhotoCountSource?.receive(on: DispatchQueue.main)
+                    .sink { [weak self] in self?.setNotePhotoCounts($0) }
+            }
+        } else {
             notePhotoCountsObservation = nil
             notePhotoCounts = [:]
+        }
+        if previous.usesReplicaMachinery {
+            // Leaving a style lets its kept completed rows go and closes
+            // what belonged to it.
             if replicaDetail != nil { closeReplicaDetail() }
             replicaSubtaskSelection = nil
             releaseReplicaHolds(evenWhenAttic: true)
+        }
+        if !style.isReplica {
             if replicaRowActive { replicaRowActive = false }
             replicaDraft.draft = RemindersReplicaDraft()
         }
@@ -2197,7 +2214,7 @@ extension TasksPageModel {
     /// The replica's lists were refreshed or left: every completed row it
     /// kept leaves now (the allowlist is cleared).
     func releaseReplicaHolds(evenWhenAttic: Bool = false) {
-        guard listStyle.isReplica || evenWhenAttic, !held.isEmpty else { return }
+        guard listStyle.usesReplicaMachinery || evenWhenAttic, !held.isEmpty else { return }
         for id in Array(held.keys) where holdTasks[id] == nil { releaseHold(id) }
     }
 

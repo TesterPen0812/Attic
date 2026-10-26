@@ -65,7 +65,7 @@ final class RemindersReplicaR1Tests: XCTestCase {
         XCTAssertEqual(AppSettings(defaults: defaults).tasksListStyle, .reminders)
         settings.tasksListStyle = .attic
         XCTAssertEqual(AppSettings(defaults: defaults).tasksListStyle, .attic)
-        XCTAssertEqual(TasksListStyle.allCases.map(\.title), ["Attic", "Reminders (replica)"])
+        XCTAssertEqual(TasksListStyle.allCases.map(\.title), ["Attic", "Reminders (replica)", "New"])
     }
 
     func testAModelStartsInAtticStyleWithNoReplicaState() {

@@ -147,7 +147,7 @@ struct AppearanceSettingsView: View {
                 selection: $settings.tasksListStyle,
                 identifier: "setting-list-style"
             )
-            .help(String(localized: "Draw Tasks’ lists as Attic does, or as a replica of Reminders for comparison"))
+            .help(String(localized: "Draw Tasks’ lists as Attic does, as a replica of Reminders, or in the New main-page style"))
         }
     }
 
@@ -173,6 +173,13 @@ struct AppearanceSettingsView: View {
                 identifier: "setting-panel-tint"
             )
             .help(settings.panelTint.detail(neutral: settings.panelTheme.usesNeutralTint))
+            AtticGroupDivider()
+            AtticSwitchRow(
+                title: String(localized: "Glass tint"),
+                isOn: $settings.panelGlassTint,
+                identifier: "setting-glass-tint"
+            )
+            .help(String(localized: "A light layer over the glass: white in light mode, black in dark"))
         }
     }
 

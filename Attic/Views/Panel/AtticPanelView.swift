@@ -373,7 +373,9 @@ struct AtticPanelView: View {
             .environment(\.controlActiveState, .key)
             .modifier(PanelShellSurface(
                 cornerSize: cornerRadius,
-                elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil
+                elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil,
+                // Reduce Transparency keeps its own opaque surface.
+                glassTint: settings.panelGlassTint && !reduceTransparency
             ))
             .atticContextMenu { panelMenuCommands }
     }
