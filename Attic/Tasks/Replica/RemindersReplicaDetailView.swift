@@ -14,6 +14,9 @@ struct RemindersReplicaDetailView: View {
     let openPage: () -> Void
 
     @State private var newTag = ""
+    /// The Tags page's own staged tags while it is open (M: a drill-in
+    /// with Cancel and Done, R2-08/CUA2-07).
+    @State private var tagsEditing: [String]?
     @State private var photos: [RemindersReplicaPhoto] = []
     @State private var subtasksRevision = 0
     @State private var showsCalendar = false
@@ -22,6 +25,26 @@ struct RemindersReplicaDetailView: View {
 
     var body: some View {
         ScrollView(.vertical) {
+            if let editing = tagsEditing {
+                tagsPage(editing)
+                    .padding(M.outerInset)
+                    .frame(width: M.panelWidth, alignment: .leading)
+            } else {
+                fields
+            }
+        }
+        .frame(width: M.panelWidth)
+        .frame(maxHeight: M.maxHeight)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(RemindersReplicaEscapeCatcher {
+            // Escape on the Tags page is its Cancel; on the panel it cancels the panel.
+            if tagsEditing != nil { tagsEditing = nil } else { model.cancelReplicaDetail() }
+        })
+        .onAppear { photos = model.replicaPhotos(for: state.taskID) }
+        .accessibilityIdentifier("replica-detail")
+    }
+
+    private var fields: some View {
             VStack(alignment: .leading, spacing: 0) {
                 titleCard
                 gap
@@ -41,13 +64,6 @@ struct RemindersReplicaDetailView: View {
             }
             .padding(M.outerInset)
             .frame(width: M.panelWidth, alignment: .leading)
-        }
-        .frame(width: M.panelWidth)
-        .frame(maxHeight: M.maxHeight)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(RemindersReplicaEscapeCatcher { model.cancelReplicaDetail() })
-        .onAppear { photos = model.replicaPhotos(for: state.taskID) }
-        .accessibilityIdentifier("replica-detail")
     }
 
     // MARK: Cards
@@ -115,27 +131,7 @@ struct RemindersReplicaDetailView: View {
     /// here with its links clickable and edited on the item's page.
     private var notesCard: some View {
         card {
-            Button {
-                state.notesExpanded.toggle()
-            } label: {
-                HStack {
-                    Text(String(localized: "Notes"))
-                        .font(.system(size: M.labelSize))
-                        .foregroundStyle(state.notesExpanded ? .primary : .secondary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(state.notesExpanded ? 90 : 0))
-                }
-                .padding(.horizontal, M.cardInset)
-                .frame(height: M.rowHeight)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("replica-detail-notes-expander")
             if state.notesExpanded {
-                separator
                 VStack(alignment: .leading, spacing: 6) {
                     if let notes = model.notePreviews[state.taskID] {
                         Text(RemindersReplicaText.linkedNotes(notes))
@@ -144,15 +140,30 @@ struct RemindersReplicaDetailView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("replica-detail-notes")
                     } else {
-                        Text(String(localized: "No writing yet"))
+                        Text(String(localized: "Notes"))
                             .font(.system(size: M.labelSize))
                             .foregroundStyle(.tertiary)
                     }
-                    Button(String(localized: "Open Page"), action: openPage)
+                    Button(String(localized: "Edit on the Item's Page"), action: openPage)
                         .buttonStyle(.link)
                         .font(.system(size: M.subtitleSize))
                 }
                 .padding(M.cardInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Button {
+                    state.notesExpanded = true
+                } label: {
+                    Text(String(localized: "Notes"))
+                        .font(.system(size: M.labelSize))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, M.cardInset)
+                        .frame(maxWidth: .infinity, minHeight: M.rowHeight, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Show Notes"))
+                .accessibilityIdentifier("replica-detail-notes-expander")
             }
         }
     }
@@ -188,87 +199,130 @@ struct RemindersReplicaDetailView: View {
     private var organisationCard: some View {
         card {
             row("list.bullet", String(localized: "List")) {
-                Picker("", selection: $state.draft.list) {
-                    ForEach(RemindersReplicaDetailDraft.List.allCases, id: \.self) { list in
-                        Text(list.title).tag(list)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
-                .disabled(state.draft.isDone)
-                .accessibilityLabel(String(localized: "List"))
+                valueMenu(RemindersReplicaDetailDraft.List.allCases, selection: $state.draft.list, title: \.title,
+                          label: String(localized: "List"))
+                    .disabled(state.draft.isDone)
             }
             separator
             tagsRow
         }
     }
 
-    /// The tags as chips: a click filters the list by one (Attic's Find),
-    /// × removes it; a new one is typed at the end.
+    /// M: Tags drills in (R2-08). The task's tags show under the row; a
+    /// click on one filters the list by it (Attic's Find).
     private var tagsRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 0) {
-                Image(systemName: "number")
-                    .font(.system(size: M.labelSize))
-                    .foregroundStyle(.secondary)
-                    .frame(width: M.iconCentre * 2)
-                Text(String(localized: "Tags"))
-                    .font(.system(size: M.labelSize))
-                    .padding(.leading, M.labelX - M.iconCentre * 2)
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                newTag = ""
+                tagsEditing = state.draft.tags
+            } label: {
+                row("number", String(localized: "Tags")) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
             }
-            .frame(height: M.rowHeight)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("replica-detail-tags")
             if !state.draft.tags.isEmpty {
                 RemindersReplicaWrap(spacing: 6) {
                     ForEach(state.draft.tags, id: \.self) { tag in
-                        HStack(spacing: 3) {
-                            Button("#" + tag) { model.filterReplicaByTag(tag) }
-                                .buttonStyle(.plain)
-                                .help(String(localized: "Show tasks tagged #\(tag)"))
-                            Button {
-                                state.draft.removeTag(tag)
-                            } label: {
-                                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                            }
+                        Button("#" + tag) { model.filterReplicaByTag(tag) }
                             .buttonStyle(.plain)
-                            .accessibilityLabel(String(localized: "Remove #\(tag)"))
-                        }
-                        .font(.system(size: M.subtitleSize))
-                        .foregroundStyle(RemindersReplicaMetrics.tagInk)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(RemindersReplicaMetrics.tagInk.opacity(0.12)))
+                            .font(.system(size: M.subtitleSize))
+                            .foregroundStyle(RemindersReplicaMetrics.tagInk)
+                            .help(String(localized: "Show tasks tagged #\(tag)"))
                     }
                 }
                 .padding(.leading, M.labelX)
                 .padding(.trailing, M.cardInset)
-            }
-            TextField(String(localized: "Add Tag"), text: $newTag)
-                .textFieldStyle(.plain)
-                .font(.system(size: M.labelSize))
-                .onSubmit {
-                    if state.draft.addTag(newTag) { newTag = "" }
-                }
-                .padding(.leading, M.labelX)
-                .padding(.trailing, M.cardInset)
+                .padding(.top, -8)
                 .padding(.bottom, 10)
-                .accessibilityIdentifier("replica-detail-new-tag")
+            }
         }
+    }
+
+    /// The Tags page: every tag Attic knows as a chip (on when the task
+    /// has it), Add New Tag, then Cancel or Done (M, CUA2-07).
+    private func tagsPage(_ editing: [String]) -> some View {
+        let known = AtticTag.normalizedSet(model.allTags + editing)
+        let has: (String) -> Bool = { tag in editing.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }
+        return VStack(alignment: .leading, spacing: M.cardGap) {
+            HStack {
+                Button(String(localized: "Cancel")) { tagsEditing = nil }
+                Spacer()
+                Text(String(localized: "Tags")).font(.system(size: M.labelSize, weight: .semibold))
+                Spacer()
+                Button(String(localized: "Done")) {
+                    state.draft.tags = editing
+                    tagsEditing = nil
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .controlSize(.small)
+            card {
+                if !known.isEmpty {
+                    RemindersReplicaWrap(spacing: 6) {
+                        ForEach(known, id: \.self) { tag in
+                            Button {
+                                var next = RemindersReplicaDetailDraft(title: "", dueDay: nil, priority: .none, status: .todo, tags: editing)
+                                if has(tag) { next.removeTag(tag) } else { next.addTag(tag) }
+                                tagsEditing = next.tags
+                            } label: {
+                                Text("#" + tag)
+                                    .font(.system(size: M.subtitleSize))
+                                    .foregroundStyle(has(tag) ? Color.white : RemindersReplicaMetrics.tagInk)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Capsule().fill(has(tag) ? RemindersReplicaMetrics.tagInk : RemindersReplicaMetrics.tagInk.opacity(0.12)))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(has(tag) ? .isSelected : [])
+                        }
+                    }
+                    .padding(M.cardInset)
+                    separator
+                }
+                TextField(String(localized: "Add New Tag"), text: $newTag)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: M.labelSize))
+                    .onSubmit {
+                        var next = RemindersReplicaDetailDraft(title: "", dueDay: nil, priority: .none, status: .todo, tags: editing)
+                        if next.addTag(newTag) { tagsEditing = next.tags; newTag = "" }
+                    }
+                    .padding(.horizontal, M.cardInset)
+                    .frame(height: M.rowHeight)
+                    .accessibilityIdentifier("replica-detail-new-tag")
+            }
+        }
+    }
+
+    /// A popup's value and its up-down chevrons, without a bezel (M: the
+    /// List and Priority popups, R2-08).
+    private func valueMenu<Value: Hashable>(_ values: [Value], selection: Binding<Value>, title: @escaping (Value) -> String,
+                                            label: String) -> some View {
+        Menu {
+            ForEach(values, id: \.self) { value in
+                Button(title(value)) { selection.wrappedValue = value }
+            }
+        } label: {
+            // One text, so the menu keeps the chevrons after the value.
+            Text("\(title(selection.wrappedValue))  \(Image(systemName: "chevron.up.chevron.down"))")
+                .font(.system(size: M.labelSize))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(label)
     }
 
     private var priorityCard: some View {
         card {
             row("exclamationmark", String(localized: "Priority")) {
-                Picker("", selection: $state.draft.priority) {
-                    ForEach(TaskPriority.allCases) { priority in
-                        Text(priority.title).tag(priority)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
-                .accessibilityLabel(String(localized: "Priority"))
+                valueMenu(TaskPriority.allCases, selection: $state.draft.priority, title: \.title,
+                          label: String(localized: "Priority"))
             }
         }
     }
