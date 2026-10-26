@@ -43,6 +43,8 @@ extension AtticLibrary {
         title: String? = nil,
         priority: TaskPriority? = nil,
         tags: [String]? = nil,
+        isFlagged: Bool? = nil,
+        url: String?? = nil,
         dueDay: DueDay?? = nil,
         addingTag: String? = nil,
         removingTag: String? = nil,
@@ -51,15 +53,22 @@ extension AtticLibrary {
         let requested = ids
         let ids = ids.filter { tasks.listedTask(withID: $0) != nil }
         guard !ids.isEmpty else { return taskOutcome(false, since: tasks.errorSerial, ids: requested) }
+        func capture(_ id: UUID) -> TaskEditableState? {
+            isFlagged != nil || url != nil ? tasks.reminderEditableState(of: id, listed: true) : tasks.listedEditableState(of: id)
+        }
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
-            let before = ids.compactMap(tasks.listedEditableState(of:))
-            guard tasks.updateListed(ids, title: title, priority: priority, tags: tags, dueDay: dueDay,
+            let before = ids.compactMap(capture)
+            guard before.count == ids.count, tasks.updateListed(ids, title: title, priority: priority, tags: tags, isFlagged: isFlagged, url: url, dueDay: dueDay,
                                      addingTag: addingTag, removingTag: removingTag) else { return nil }
             succeeded = true
-            let after = ids.compactMap(tasks.listedEditableState(of:))
-            guard before != after else { return nil }
+            let beforeByID = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let after = ids.compactMap { id -> TaskEditableState? in
+                guard let scalar = tasks.listedEditableState(of: id), let old = beforeByID[id] else { return nil }
+                return scalar.withReminderReplicas(from: old, editingFlag: isFlagged != nil, editingURL: url != nil)
+            }
+            guard after.count == ids.count, before != after else { return nil }
             return UndoStep(
                 name: ids.count == 1 ? "Edit Task" : "Edit Tasks",
                 items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },

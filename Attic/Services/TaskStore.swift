@@ -137,6 +137,8 @@ private struct TaskReplicaSnapshot: Equatable {
     let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
+    let isFlagged: Bool
+    let url: String?
     let createdAt: Date
     let updatedAt: Date
     let completedAt: Date?
@@ -165,6 +167,8 @@ private struct TaskReplicaSnapshot: Equatable {
         title = Array(task.title.utf16)
         statusRaw = task.statusRaw
         priorityRaw = task.priorityRaw
+        isFlagged = task.isFlagged
+        url = task.url
         createdAt = task.createdAt
         updatedAt = task.updatedAt
         completedAt = task.completedAt
@@ -189,6 +193,8 @@ struct TaskContentSnapshot: Equatable {
     let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
+    let isFlagged: Bool
+    let url: String?
     let createdAt: Date
     let completedAt: Date?
     let manualOrder: Int64?
@@ -205,6 +211,8 @@ struct TaskContentSnapshot: Equatable {
         title = Array(task.title.utf16)
         statusRaw = task.statusRaw
         priorityRaw = task.priorityRaw
+        isFlagged = task.isFlagged
+        url = task.url
         createdAt = task.createdAt
         completedAt = task.completedAt
         manualOrder = task.manualOrder
@@ -222,10 +230,20 @@ struct TaskContentSnapshot: Equatable {
 /// The fields an undo step puts back on a task: everything a person can
 /// edit in the list, plus the ordering and completion time they imply.
 struct TaskEditableState: Equatable {
+    struct ReminderReplica: Equatable {
+        let isFlagged: Bool
+        let url: String?
+    }
+    /// Only reminder edits pay for physical snapshots. This also records a
+    /// change confined to a non-presented copy and restores its own values.
+    var reminderReplicas: [PersistentIdentifier: ReminderReplica]? = nil
+
     let id: UUID
     let title: String
     let statusRaw: String
     let priorityRaw: String
+    let isFlagged: Bool
+    let url: String?
     let completedAt: Date?
     let manualOrder: Int64?
     let tagsRaw: String
@@ -244,6 +262,8 @@ struct TaskEditableState: Equatable {
         title = task.title
         statusRaw = task.statusRaw
         priorityRaw = task.priorityRaw
+        isFlagged = task.isFlagged
+        url = task.url
         completedAt = task.completedAt
         manualOrder = task.manualOrder
         tagsRaw = task.tagsRaw
@@ -251,6 +271,18 @@ struct TaskEditableState: Equatable {
         completedFromRaw = task.completedFromRaw
         completedFromOrder = task.completedFromOrder
         parentID = task.parentID
+    }
+
+    /// The confirmed scalar result plus the pre-edit physical values prove
+    /// the exact result of this all-replica write. No fallible post-save
+    /// fetch may discard the successful command's Undo evidence.
+    func withReminderReplicas(from before: Self, editingFlag: Bool, editingURL: Bool) -> Self {
+        var result = self
+        result.reminderReplicas = before.reminderReplicas?.mapValues {
+            ReminderReplica(isFlagged: editingFlag ? isFlagged : $0.isFlagged,
+                            url: editingURL ? url : $0.url)
+        }
+        return result
     }
 }
 
@@ -844,6 +876,8 @@ final class TaskStore: ObservableObject {
                 )
                 task.tags = draft.tags
                 task.dueDay = draft.dueDay
+                task.isFlagged = draft.isFlagged
+                task.url = try Self.normalizedTaskURL(draft.url)
                 task.listOrderVersion = TaskItem.currentListOrderVersion
                 // References the composer already imported are bound in this
                 // same save, so a new task never exists without them (or they
@@ -892,7 +926,9 @@ final class TaskStore: ObservableObject {
         for state in expected {
             let id = state.id
             let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-            guard !replicas.isEmpty, replicas.allSatisfy({ TaskEditableState($0) == state }) else {
+            var scalar = state
+            scalar.reminderReplicas = nil
+            guard !replicas.isEmpty, replicas.allSatisfy({ TaskEditableState($0) == scalar }) else {
                 throw WorkspaceFoundationError.conflict
             }
         }
@@ -907,6 +943,25 @@ final class TaskStore: ObservableObject {
     func rename(_ task: TaskItem, to title: String) -> Bool {
         update(task, title: title)
     }
+
+    @discardableResult
+    func setFlag(_ flagged: Bool, for task: TaskItem) -> Bool {
+        if let commandLibrary { return commandLibrary.updateTask(task.id, isFlagged: flagged).isApplied }
+        return update(task, isFlagged: flagged)
+    }
+
+    @discardableResult
+    func setURL(_ url: String?, for task: TaskItem) -> Bool {
+        if let commandLibrary { return commandLibrary.updateTask(task.id, url: .some(url)).isApplied }
+        return update(task, url: .some(url))
+    }
+
+    /// One row per logical live, unfinished task, including subtasks and Later.
+    /// Completed, Done-log and Recently Deleted rows do not belong to Flagged.
+    func flaggedTasks() -> [TaskItem] {
+        tasks.filter { $0.isFlagged && $0.status != .done && $0.deletedAt == nil && $0.doneLoggedAt == nil }
+    }
+    var flaggedTaskCount: Int { flaggedTasks().count }
 
     @discardableResult
     func setPriority(_ priority: TaskPriority, for task: TaskItem) -> Bool {
@@ -927,6 +982,8 @@ final class TaskStore: ObservableObject {
         priority: TaskPriority? = nil,
         status: TaskStatus? = nil,
         tags: [String]? = nil,
+        isFlagged: Bool? = nil,
+        url: String?? = nil,
         dueDay: DueDay?? = nil,
         allowingUnfinishedSubtasks: Bool = false
     ) -> Bool {
@@ -939,7 +996,7 @@ final class TaskStore: ObservableObject {
         let changed: Bool
         do {
             changed = try stageUpdate(task, title: title, priority: priority, status: status, tags: tags,
-                                      dueDay: dueDay, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
+                                      isFlagged: isFlagged, url: url, dueDay: dueDay, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
         } catch {
             context.rollback()
             report(error, owner: owner)
@@ -964,10 +1021,13 @@ final class TaskStore: ObservableObject {
         priority: TaskPriority? = nil,
         status: TaskStatus? = nil,
         tags: [String]? = nil,
+        isFlagged: Bool? = nil,
+        url: String?? = nil,
         dueDay: DueDay?? = nil,
         allowingUnfinishedSubtasks: Bool = false,
         at fixedTimestamp: Date? = nil
     ) throws -> Bool {
+        let normalizedURL = try url.map { try Self.normalizedTaskURL($0) }
         let normalizedTitle = title.map(Self.normalized)
         if let normalizedTitle, normalizedTitle.isEmpty { throw TaskEditRefusal("A task needs a title.") }
         // A family fetch can refresh resident values after another writer's
@@ -1014,7 +1074,9 @@ final class TaskStore: ObservableObject {
         let statusChanged = destinationStatus != task.status
         let tagsChanged = destinationTagsRaw != task.tagsRaw
         let dueChanged = destinationDueDayRaw != task.dueDayRaw
-        guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged else {
+        let flagChanged = isFlagged.map { value in replicas.contains { $0.isFlagged != value } } ?? false
+        let urlChanged = normalizedURL.map { value in replicas.contains { $0.url != value } } ?? false
+        guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged || flagChanged || urlChanged else {
             return false
         }
 
@@ -1060,6 +1122,8 @@ final class TaskStore: ObservableObject {
                 }
             }
             if tagsChanged { replica.tagsRaw = destinationTagsRaw }
+            if flagChanged, let isFlagged { replica.isFlagged = isFlagged }
+            if urlChanged, let normalizedURL { replica.url = normalizedURL }
             if dueChanged { replica.dueDayRaw = destinationDueDayRaw }
             if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
         }
@@ -1142,6 +1206,30 @@ final class TaskStore: ObservableObject {
     /// The editable fields of a visible task, for an undo step.
     func editableState(of id: UUID) -> TaskEditableState? {
         task(withID: id).map(TaskEditableState.init)
+    }
+
+    /// Test seam for a transient pre-edit physical-snapshot read failure.
+    var reminderSnapshotReadsToSkipBeforeFailing: Int?
+
+    func reminderEditableState(of id: UUID, listed: Bool = false) -> TaskEditableState? {
+        guard let task = listed ? listedTask(withID: id) : task(withID: id) else { return nil }
+        do {
+            if let skip = reminderSnapshotReadsToSkipBeforeFailing {
+                if skip == 0 {
+                    reminderSnapshotReadsToSkipBeforeFailing = nil
+                    throw TaskReplicaMutationError.missingReplica(id)
+                }
+                reminderSnapshotReadsToSkipBeforeFailing = skip - 1
+            }
+            var state = TaskEditableState(task)
+            state.reminderReplicas = try Dictionary(uniqueKeysWithValues: storedTasks(matching: id).map {
+                ($0.persistentModelID, TaskEditableState.ReminderReplica(isFlagged: $0.isFlagged, url: $0.url))
+            })
+            return state
+        } catch {
+            report(error, owner: familyOwner(of: task))
+            return nil
+        }
     }
 
     /// Moves tasks from the editable state an undo step recorded (`expected`)
@@ -1235,6 +1323,14 @@ final class TaskStore: ObservableObject {
             }
             winners[state.id] = winner
         }
+        for state in target {
+            if let before = expectedByID[state.id]?.reminderReplicas, let after = state.reminderReplicas {
+                let physicalIDs = Set((groups[state.id] ?? []).map(\.persistentModelID))
+                guard Set(before.keys) == physicalIDs, Set(after.keys) == physicalIDs else {
+                    return .obsolete("The task's copies changed since this edit.")
+                }
+            }
+        }
         // A step that puts a task back under a main task (undoing Make
         // Standalone Task, or either side of Move to Task…) applies only
         // while that main task can still hold it: live, a main task, not
@@ -1289,6 +1385,28 @@ final class TaskStore: ObservableObject {
             }
             field({ $0.title }, from.title, state.title) { $0.title = state.title }
             field({ $0.priorityRaw }, from.priorityRaw, state.priorityRaw) { $0.priorityRaw = state.priorityRaw }
+            if let old = from.reminderReplicas, let new = state.reminderReplicas {
+                func replicaField<Value: Equatable>(_ saved: KeyPath<TaskEditableState.ReminderReplica, Value>,
+                                                    _ live: ReferenceWritableKeyPath<TaskItem, Value>) {
+                    var patches: [PersistentIdentifier: Value] = [:]
+                    for replica in replicas {
+                        let id = replica.persistentModelID
+                        guard let was = old[id]?[keyPath: saved], let becomes = new[id]?[keyPath: saved], was != becomes else { continue }
+                        if replica[keyPath: live] == was { patches[id] = becomes }
+                        else if replica[keyPath: live] != becomes { conflicted = true }
+                    }
+                    if !patches.isEmpty {
+                        edits.append { replica in
+                            if let value = patches[replica.persistentModelID] { replica[keyPath: live] = value }
+                        }
+                    }
+                }
+                replicaField(\.isFlagged, \.isFlagged)
+                replicaField(\.url, \.url)
+            } else {
+                field({ $0.isFlagged }, from.isFlagged, state.isFlagged) { $0.isFlagged = state.isFlagged }
+                field({ $0.url }, from.url, state.url) { $0.url = state.url }
+            }
             field({ Self.completionKey($0) }, Self.completionKey(from), Self.completionKey(state)) {
                 $0.statusRaw = state.statusRaw
                 $0.completedAt = state.completedAt
@@ -2607,7 +2725,7 @@ final class TaskStore: ObservableObject {
         }
         for task in winners where task.deletedAt == nil {
             let root = task.parentID ?? task.id
-            let text = ([task.parentID == nil ? "" : task.title, task.tagsRaw] + task.attachments.map(\.filename))
+            let text = ([task.parentID == nil ? "" : task.title, task.tagsRaw, task.url ?? ""] + task.attachments.map(\.filename))
                 .filter { !$0.isEmpty }.joined(separator: "\n")
             if !text.isEmpty { itemTaskParts[task.id] = (root, text); changed.insert(root) }
         }
@@ -2946,6 +3064,8 @@ final class TaskStore: ObservableObject {
         priority: TaskPriority? = nil,
         status: TaskStatus,
         tags: [String]? = nil,
+        isFlagged: Bool? = nil,
+        url: String?? = nil,
         dueDay: DueDay?? = nil
     ) -> Bool {
         do {
@@ -2953,7 +3073,7 @@ final class TaskStore: ObservableObject {
                 throw TaskEditRefusal("The task must be in the Done log and reopen to an unfinished state.")
             }
             _ = try stageUpdate(logged, title: title, priority: priority, status: status,
-                                tags: tags, dueDay: dueDay)
+                                tags: tags, isFlagged: isFlagged, url: url, dueDay: dueDay)
             try returnFamiliesFromDoneLog([logged.parentID ?? id])
         } catch {
             context.rollback()
@@ -3226,6 +3346,8 @@ final class TaskStore: ObservableObject {
                                     completedAt: nil, manualOrder: order, parentID: nil)
                 copy.tags = source.tags
                 copy.dueDay = source.dueDay
+                copy.isFlagged = source.isFlagged
+                copy.url = source.url
                 copy.listOrderVersion = TaskItem.currentListOrderVersion
                 context.insert(copy)
                 tasks.append(copy)
@@ -3239,6 +3361,8 @@ final class TaskStore: ObservableObject {
                                         parentID: copy.id)
                     item.tags = child.tags
                     item.dueDay = child.dueDay
+                    item.isFlagged = child.isFlagged
+                    item.url = child.url
                     item.listOrderVersion = TaskItem.currentListOrderVersion
                     context.insert(item)
                     tasks.append(item)
@@ -3265,6 +3389,8 @@ final class TaskStore: ObservableObject {
         title: String? = nil,
         priority: TaskPriority? = nil,
         tags: [String]? = nil,
+        isFlagged: Bool? = nil,
+        url: String?? = nil,
         dueDay: DueDay?? = nil,
         addingTag: String? = nil,
         removingTag: String? = nil
@@ -3279,7 +3405,7 @@ final class TaskStore: ObservableObject {
                 if let removingTag {
                     newTags = (newTags ?? task.tags).filter { $0.caseInsensitiveCompare(removingTag) != .orderedSame }
                 }
-                changed = try stageUpdate(task, title: title, priority: priority, tags: newTags, dueDay: dueDay,
+                changed = try stageUpdate(task, title: title, priority: priority, tags: newTags, isFlagged: isFlagged, url: url, dueDay: dueDay,
                                           allowingUnfinishedSubtasks: true) || changed
             }
         } catch {
@@ -4217,6 +4343,25 @@ final class TaskStore: ObservableObject {
         return message
     }
 
+    static func normalizedTaskURL(_ input: String?) throws -> String? {
+        guard let input else { return nil }
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        guard !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+              var parts = URLComponents(string: text),
+              let scheme = parts.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = parts.host, !host.isEmpty,
+              host.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+            throw TaskEditRefusal("The link must be an absolute http:// or https:// URL with a host.")
+        }
+        parts.scheme = scheme
+        parts.host = host.lowercased()
+        guard let result = parts.url?.absoluteString else {
+            throw TaskEditRefusal("The link must be a valid http:// or https:// URL.")
+        }
+        return result
+    }
+
     private static func normalized(_ title: String) -> String {
         title
             .components(separatedBy: .whitespacesAndNewlines)
@@ -4236,6 +4381,8 @@ final class TaskStore: ObservableObject {
         parts.append(task.title)
         parts.append(task.statusRaw)
         parts.append(task.priorityRaw)
+        parts.append(task.isFlagged ? "1" : "0")
+        parts.append(task.url ?? "")
         parts.append(bits(task.createdAt))
         parts.append(bits(task.completedAt))
         parts.append(task.manualOrder.map { String($0) } ?? "")

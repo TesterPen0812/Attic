@@ -73,8 +73,15 @@ enum WorkspacePurge {
     /// may drift before Restore or destructive collection.
     static func matchesTaskCapture(_ fields: [String: Data], _ captured: [String: Data]) -> Bool {
         let tagFields: Set<String> = ["tagsRaw", "updatedAt"]
-        return fields.filter { !tagFields.contains($0.key) }
-            == captured.filter { !tagFields.contains($0.key) }
+        // Pre-Reminders captures lack these additive attributes. Missing is
+        // equivalent only to the migration defaults, never a changed value.
+        func withDefaults(_ value: [String: Data]) -> [String: Data] {
+            var result = value.filter { !tagFields.contains($0.key) }
+            if result["isFlagged"] == nil { result["isFlagged"] = Data("false".utf8) }
+            if result["url"] == nil { result["url"] = Data("null".utf8) }
+            return result
+        }
+        return withDefaults(fields) == withDefaults(captured)
     }
 
     static func hasOwnNotesOrAssociations(_ taskIDs: Set<UUID>, in context: ModelContext) throws -> Bool {

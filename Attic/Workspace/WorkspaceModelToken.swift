@@ -254,6 +254,8 @@ enum WorkspaceModelFields {
                 WorkspaceField("title", \TaskItem.title),
                 WorkspaceField("statusRaw", \TaskItem.statusRaw),
                 WorkspaceField("priorityRaw", \TaskItem.priorityRaw),
+                WorkspaceField("isFlagged", \TaskItem.isFlagged),
+                WorkspaceField("url", \TaskItem.url),
                 WorkspaceField("createdAt", \TaskItem.createdAt),
                 WorkspaceField("updatedAt", \TaskItem.updatedAt),
                 WorkspaceField("completedAt", \TaskItem.completedAt),

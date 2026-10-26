@@ -6,6 +6,8 @@ import Foundation
 /// batch into real tasks in one save, so all creation shares one set of rules.
 struct TaskDraft: Equatable {
     var title: String
+    var isFlagged = false
+    var url: String? = nil
     var tags: [String]
     var dueDay: DueDay?
     var priority: TaskPriority
