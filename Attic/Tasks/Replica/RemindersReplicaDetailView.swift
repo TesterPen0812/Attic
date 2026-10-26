@@ -12,6 +12,9 @@ struct RemindersReplicaDetailView: View {
     let model: TasksPageModel
     /// Open the item's own page (its writing is edited there).
     let openPage: () -> Void
+    /// New (FINAL § 2.14): Add Subtask in the panel. The panel closes,
+    /// keeping its edits, and the list opens the new-subtask field.
+    var addSubtask: (() -> Void)? = nil
 
     @State private var newTag = ""
     /// The Tags page's own staged tags while it is open (M: a drill-in
@@ -55,7 +58,7 @@ struct RemindersReplicaDetailView: View {
                 organisationCard
                 gap
                 priorityCard
-                if !subtasks.isEmpty {
+                if !subtasks.isEmpty || addSubtask != nil {
                     heading(String(localized: "Subtasks"))
                     subtasksCard
                 }
@@ -395,6 +398,26 @@ struct RemindersReplicaDetailView: View {
                     Spacer(minLength: M.cardInset)
                 }
                 .frame(minHeight: M.rowHeight)
+            }
+            if let addSubtask {
+                if !subtasks.isEmpty { separator }
+                Button(action: addSubtask) {
+                    HStack(spacing: 0) {
+                        Image(systemName: "plus")
+                            .font(.system(size: M.labelSize, weight: .medium))
+                            .foregroundStyle(TasksNewInk.accent)
+                            .frame(width: M.iconCentre * 2, height: M.rowHeight)
+                        Text("Add Subtask")
+                            .font(.system(size: M.labelSize))
+                            .foregroundStyle(TasksNewInk.accent)
+                            .padding(.leading, M.labelX - M.iconCentre * 2)
+                        Spacer(minLength: M.cardInset)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(String(localized: "Add Subtask (⌥⌘N)"))
+                .accessibilityIdentifier("replica-detail-add-subtask")
             }
         }
     }

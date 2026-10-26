@@ -159,7 +159,8 @@ struct AtticPanelView: View {
             page: currentPage,
             onTogglePin: { uiState.isPanelPinned.toggle() },
             onSelectPage: selectPage,
-            onApproachPageSwitch: prepareOtherPages
+            onApproachPageSwitch: prepareOtherPages,
+            oneLine: settings.tasksListStyle.isNew && currentPage == .tasks
         )
         .padding(.horizontal, chromeInsets.leading)
         .padding(.top, chromeInsets.top)

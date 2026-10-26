@@ -29,6 +29,10 @@ struct PanelHeader: View {
     /// ⇧⌘N and ⇧⌘F (round 10).
     var onNewNote: () -> Void = { AppCoordinator.shared?.showNewNote() }
     var onSearch: () -> Void = { AppCoordinator.shared?.showSearch() }
+    /// List Style: New on Tasks (pick 1A): the pin and the page switch sit
+    /// on Tasks' one 28 pt line, the switch's Tasks glyph is `checklist`,
+    /// and a pinned pin takes an accent tint.
+    var oneLine = false
 
     @Environment(\.atticDesign) private var design
 
@@ -52,6 +56,8 @@ struct PanelHeader: View {
                 AtticRaisedButton(
                     systemName: "pin",
                     label: isPinned ? "Unpin panel" : "Pin panel",
+                    size: oneLine ? CGSize(width: PanelHeaderLayout.oneLineHeight, height: PanelHeaderLayout.oneLineHeight)
+                                  : PanelHeaderLayout.pinSize,
                     help: isPinned ? String(localized: "Unpin (⇧⌘P)") : String(localized: "Pin (⇧⌘P)"),
                     isSelected: isPinned,
                     glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
@@ -61,6 +67,7 @@ struct PanelHeader: View {
                     selectedHoverSystemName: AtticRaisedButtonMetrics.unpinSymbol,
                     action: onTogglePin
                 )
+                .modifier(OneLinePin(oneLine: oneLine, isPinned: isPinned))
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .accessibilityIdentifier("panel-pin-button")
                 // The menu bar menu's New note and Search Done Tasks keys,
@@ -78,14 +85,37 @@ struct PanelHeader: View {
                 }
                 Spacer(minLength: AtticSpacing.betweenControls)
                 AtticPageButton(
-                    items: PanelPage.switchItems,
+                    items: oneLine ? PanelPage.oneLineSwitchItems : PanelPage.switchItems,
                     selection: Binding(get: { page }, set: onSelectPage),
                     onApproach: onApproachPageSwitch,
                     flat: flat
                 )
                 .accessibilityIdentifier("panel-section-picker")
+                // 28 pt in the one-line header: the switch keeps its own
+                // proportions (the glass, the chips), drawn at 28/30.
+                .scaleEffect(oneLine ? PanelHeaderLayout.oneLineHeight / PanelHeaderLayout.height : 1, anchor: .topTrailing)
             }
         }
-        .frame(height: PanelHeaderLayout.height)
+        .frame(height: oneLine ? PanelHeaderLayout.oneLineHeight : PanelHeaderLayout.height, alignment: .top)
+    }
+}
+
+/// The one-line header's pin (pick 1A): 28 pt, and an accent tint while
+/// pinned (FINAL § 2.10).
+private struct OneLinePin: ViewModifier {
+    let oneLine: Bool
+    let isPinned: Bool
+
+    func body(content: Content) -> some View {
+        if oneLine {
+            content
+                .overlay {
+                    if isPinned {
+                        Circle().fill(TasksNewInk.pinTint).allowsHitTesting(false)
+                    }
+                }
+        } else {
+            content
+        }
     }
 }

@@ -949,6 +949,9 @@ extension EnvironmentValues {
     /// Set by `atticTopLineCapsule()`: the tabs sit on the top line's glass,
     /// so the selected page shows no underline.
     @Entry var atticPageTabsOnGlass = false
+    /// List Style: New (FINAL § 2.10): the selected tab sits on a thumb,
+    /// white in light mode and a dark one in dark mode.
+    @Entry var atticPageTabsThumb = false
 }
 
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
@@ -987,6 +990,7 @@ struct AtticPageTabs<Page: Hashable>: View {
     @Environment(\.atticForcedState) private var forced
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @Environment(\.atticPageTabsOnGlass) private var onGlass
+    @Environment(\.atticPageTabsThumb) private var thumb
     @FocusState private var focused: Bool
     @State private var hoveredPage: Page?
     @Namespace private var underline
@@ -1012,6 +1016,18 @@ struct AtticPageTabs<Page: Hashable>: View {
                             .fixedSize()
                     }
                         .frame(height: AtticLayout.pageTabsHeight)
+                        .background {
+                            if thumb, isSelected {
+                                Capsule()
+                                    .fill(AtticPageTabsThumb.fill)
+                                    .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
+                                    .frame(height: AtticPageTabsThumb.height)
+                                    .padding(.horizontal, -AtticPageTabsThumb.outset)
+                                    .matchedGeometryEffect(id: "thumb", in: underline)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
+                        }
                         .background {
                             if ringed {
                                 Color.clear
@@ -2934,4 +2950,15 @@ struct AtticTitleOpenTap: ViewModifier {
             content
         }
     }
+}
+
+/// The New style's tab thumb (FINAL § 2.10; the draft's 22 pt capsule,
+/// white at 92 %, dark mode white at 22 %).
+enum AtticPageTabsThumb {
+    static let height: CGFloat = 22
+    static let outset: CGFloat = 7
+    static let fill = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.22) : NSColor(white: 1, alpha: 0.92)
+    })
 }

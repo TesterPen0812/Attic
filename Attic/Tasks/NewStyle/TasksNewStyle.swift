@@ -9,32 +9,34 @@ import SwiftUI
 
 // MARK: - Metrics
 
-/// The New row's geometry, measured from the row's leading edge (the
-/// panel's edge, as the replica's are). Draft values unless noted.
+/// The New row's geometry, measured from the row's leading edge. The list
+/// keeps Attic's page edge (`AtticLayout.tasksPageEdge`, 8 pt at the
+/// default corner size), so the row starts where the draft's 8 pt row
+/// margin does and these are the draft's own row values.
 enum TasksNewMetrics {
-    /// The fills sit 8 pt in from the list's edges, 2 pt in from the row's
-    /// top and bottom (2 pt gaps between neighbours), radius 10 (§ 2.9).
-    static let fillInsetX: CGFloat = 8
+    /// The fills fill the row's width, 2 pt in from its top and bottom
+    /// (2 pt gaps between neighbours), radius 10 (§ 2.9).
+    static let fillInsetX: CGFloat = 0
     static let fillInsetY: CGFloat = 2
     static let fillRadius: CGFloat = 10
     /// Keyboard focus: a 1.5 pt outline (§ 2.9).
     static let focusWidth: CGFloat = 1.5
 
-    /// The ring: 18 pt, 1.5 pt stroke, a 24 pt hit area, its centre 26 pt
-    /// in and 16 pt down (§ 2.7; the draft's 8 + 9 + 9).
+    /// The ring: 18 pt, 1.5 pt stroke, a 24 pt hit area, its centre 18 pt
+    /// in and 16 pt down (§ 2.7; panel x 26).
     static let ringSize: CGFloat = 18
     static let ringStroke: CGFloat = 1.5
     static let ringHit: CGFloat = 24
-    static let ringCentreX: CGFloat = 26
+    static let ringCentreX: CGFloat = 18
     static let ringCentreY: CGFloat = 16
     /// The in-progress centre dot (the draft's 0.18 of the ring's size as a
     /// radius).
     static let progressDot: CGFloat = 6.5
 
-    /// The title: 13 pt SF Pro Regular, its box 46 pt in and 7 pt down,
+    /// The title: 13 pt SF Pro Regular, its box 38 pt in (panel x 46) and 7 pt down,
     /// 18 pt a line (§ 2.2); a further line adds 16.
     static let titleSize: CGFloat = 13
-    static let titleX: CGFloat = 46
+    static let titleX: CGFloat = 38
     static let titleTop: CGFloat = 7
     static let titleLine: CGFloat = 18
     static let titleLinePitch: CGFloat = 16
@@ -56,10 +58,10 @@ enum TasksNewMetrics {
     static let tagLimit = 2
 
     /// The column that takes turns (D1): 72 pt, reserved on every row,
-    /// ending 16 pt before the row's end, 5 pt down, 24 pt tall. Titles
-    /// stop 8 pt before it.
+    /// ending 8 pt before the row's end (panel x 304), 5 pt down, 24 pt
+    /// tall. Titles stop 8 pt before it.
     static let columnWidth: CGFloat = 72
-    static let columnTrailing: CGFloat = 16
+    static let columnTrailing: CGFloat = 8
     static let columnTop: CGFloat = 5
     static let columnHeight: CGFloat = 24
     static let columnGap: CGFloat = 8

@@ -66,6 +66,17 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 
     static let switchItems = allCases.map(\.switchItem)
 
+    /// The one-line header's switch (List Style: New, FINAL § 2.10): Tasks
+    /// shows `checklist`, which nobody misreads as "complete".
+    static let oneLineSwitchItems = allCases.map { page in
+        var item = page.switchItem
+        if page == .tasks {
+            item = AtticPageButton.Item(page: page, systemName: "checklist", title: item.title, shortcut: item.shortcut,
+                                        keyEquivalent: item.keyEquivalent, accessibilityIdentifier: item.accessibilityIdentifier)
+        }
+        return item
+    }
+
     /// Which side of `other` this page sits on in the switch's order
     /// (Tasks, Notes, Canvas): -1 before it, 1 after it, 0 if it is `other`.
     func side(from other: PanelPage) -> CGFloat {
@@ -126,6 +137,8 @@ struct PanelPageSwitch: Equatable {
 enum PanelHeaderLayout {
     /// The header's controls are one row, 36 tall.
     static let height = AtticControlSize.headerControl
+    /// List Style: New's one-line header on Tasks (pick 1A): 28 pt.
+    static let oneLineHeight = TasksNewMetrics.headerControl
     static let pinSize = AtticControlSize.panelButton
 
     /// The page button's width when open (the region its controls may

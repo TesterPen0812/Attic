@@ -1087,6 +1087,7 @@ struct AtticSearchFieldBacking: ViewModifier {
 /// A 28 pt control (radius 12) for the selection bar and other tight spots.
 /// Flat inside its raised container: hover and press are fills.
 struct AtticSmallButton: View {
+    @Environment(\.atticTopGlassHeight) private var topGlassHeight
     let systemName: String?
     let title: String?
     let accessibilityLabel: String
@@ -1120,7 +1121,7 @@ struct AtticSmallButton: View {
     }
 
     var body: some View {
-        let height = floating ? AtticTopGlassMetrics.height : AtticControlSize.smallHeight
+        let height = floating ? topGlassHeight : AtticControlSize.smallHeight
         let radius = AtticRadius.control(height: height)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Button(action: action) {
@@ -1134,7 +1135,7 @@ struct AtticSmallButton: View {
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
         .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius,
-                           expectedRadius: floating ? AtticRadius.control(height: AtticTopGlassMetrics.height) : 12)
+                           expectedRadius: floating ? AtticRadius.control(height: topGlassHeight) : 12)
     }
 }
 
@@ -1211,10 +1212,11 @@ private struct AtticSmallButtonFace: View {
 private struct AtticSmallButtonFrame: ViewModifier {
     let floating: Bool
     let iconOnly: Bool
+    @Environment(\.atticTopGlassHeight) private var topGlassHeight
 
     func body(content: Content) -> some View {
         if floating {
-            let height = AtticTopGlassMetrics.height
+            let height = topGlassHeight
             content.frame(minWidth: height, maxWidth: iconOnly ? height : nil, minHeight: height, maxHeight: height)
         } else {
             content.frame(minWidth: AtticControlSize.smallMinWidth, minHeight: AtticControlSize.smallHeight,

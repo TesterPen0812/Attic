@@ -154,7 +154,21 @@ struct TasksPage: View {
 
     /// The tabs sit 14 below the header, which moves inward with larger
     /// corners, so the gap under the header stays the same.
-    private var tabsTop: CGFloat { layout.headerBottom + AtticLayout.pageTabsTop }
+    private var tabsTop: CGFloat {
+        // New (pick 1A): the tabs share the header's one 28 pt line; their
+        // 16 pt label line sits centred in it.
+        if listStyle.isNew { return layout.chromeInsets.top + (TasksNewMetrics.headerControl - AtticLayout.pageTabsHeight) / 2 }
+        return layout.headerBottom + AtticLayout.pageTabsTop
+    }
+
+    /// New's one line: between the pin and the page switch.
+    private var tabsLeading: CGFloat {
+        listStyle.isNew ? layout.chromeInsets.leading + TasksNewMetrics.headerControl + TasksNewMetrics.headerSpacing : cornerInset
+    }
+
+    private var tabsTrailing: CGFloat {
+        listStyle.isNew ? layout.chromeInsets.trailing + TasksNewMetrics.headerControl + TasksNewMetrics.headerSpacing : cornerInset
+    }
 
     /// Room under the list for the add bar and its margins.
     static let footerZone: CGFloat = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
@@ -316,7 +330,7 @@ struct TasksPage: View {
             eventMonitors.add(matching: .keyDown) { event in
                 TasksDragCancellation.consumeEscape(event)
                     || findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
-                    || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || replicaShortcutPressed(event) || replicaIndentPressed(event)
+                    || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || replicaShortcutPressed(event) || replicaIndentPressed(event) || newShortcutPressed(event)
                     || taskShortcutPressed(event)
                     || tabPressed(event)
                     ? nil : event
@@ -462,6 +476,7 @@ struct TasksPage: View {
         }
         // Settings › Appearance › Lists › List Style.
         .onChange(of: listStyle, initial: true) { _, style in model.setListStyle(style) }
+        .onChange(of: model.newAddBarRequest) { _, _ in addBarFocused = true }
         .onChange(of: model.tab) { _, _ in
             cancelTransientState()
             // Each page keeps its own query; the field lets the keyboard go
@@ -707,7 +722,7 @@ struct TasksPage: View {
             // anchor with it (GPT-6.1's review: the key did nothing then).
             AtticMenuAnchor(holder: viewOptionsAnchor)
                 .frame(width: AtticTopGlassMetrics.height, height: AtticTopGlassMetrics.height)
-                .padding(.trailing, lineEndInset)
+                .padding(.trailing, listStyle.isNew ? 0 : lineEndInset)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.top, tabsTop + (AtticLayout.pageTabsHeight - AtticTopGlassMetrics.height) / 2)
                 .allowsHitTesting(false)
@@ -748,8 +763,8 @@ struct TasksPage: View {
                         .accessibilityIdentifier("tasks-page-tabs")
                         .atticTopLineCapsule()
                         // The labels stay on the content line, the capsule's
-                        // edge on the controls' line.
-                        .padding(.leading, AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding)
+                        // edge on the controls' line (New: right after the pin).
+                        .padding(.leading, listStyle.isNew ? 0 : AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding)
                         Spacer(minLength: AtticTopGlassMetrics.spacing)
                         // Find (⌘F) on every page: Done's magnifier.
                         // Quiet icons (D-10): the labels' own grey, primary only when on.
@@ -762,8 +777,9 @@ struct TasksPage: View {
                             // Fixed slots (D-20): Done keeps View Options' place
                             // empty, so the magnifier never moves.
                             Color.clear
-                                .frame(width: AtticTopGlassMetrics.height, height: AtticTopGlassMetrics.height)
-                                .padding(.trailing, lineEndInset)
+                                .frame(width: listStyle.isNew ? TasksNewMetrics.headerControl : AtticTopGlassMetrics.height,
+                                       height: AtticTopGlassMetrics.height)
+                                .padding(.trailing, listStyle.isNew ? 0 : lineEndInset)
                                 .accessibilityHidden(true)
                         } else {
                             // View Options (⌥⌘V): a second quiet icon, its dot
@@ -774,7 +790,7 @@ struct TasksPage: View {
                                             showsDot: view.filters, value: view.spokenValue,
                                             quietIcon: !view.filters, floating: true)
                                 .accessibilityIdentifier("tasks-view-options")
-                                .padding(.trailing, lineEndInset)
+                                .padding(.trailing, listStyle.isNew ? 0 : lineEndInset)
                                 // It pops in where it sits (a fade in Calm).
                                 .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
                         }
@@ -785,8 +801,12 @@ struct TasksPage: View {
                 .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: .leading))
             }
         }
-        .padding(.horizontal, cornerInset)
+        .padding(.leading, tabsLeading)
+        .padding(.trailing, tabsTrailing)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // New (pick 1A): every control on the line is 28 pt.
+        .environment(\.atticTopGlassHeight, listStyle.isNew ? TasksNewMetrics.headerControl : AtticTopGlassMetrics.height)
+        .environment(\.atticPageTabsThumb, listStyle.isNew)
         // The search springs in and leaves at once (its field lets the
         // keyboard go with it).
         .animation(searchShown ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)
@@ -1294,7 +1314,11 @@ struct TasksPage: View {
     }
 
     /// Where the lists' first row rests: under the tabs, as before.
-    private var listTop: CGFloat { TasksViewport.listTop(tabsTop: tabsTop) }
+    private var listTop: CGFloat {
+        // New: 10 pt under the one 28 pt line (the draft's 52).
+        if listStyle.isNew { return layout.chromeInsets.top + TasksNewMetrics.headerControl + TasksNewMetrics.headerToList }
+        return TasksViewport.listTop(tabsTop: tabsTop)
+    }
 
 
     /// The viewport ends below the tallest control on the tabs line (the
@@ -1434,7 +1458,34 @@ struct TasksPage: View {
                     if model.listStyle.isReplica, tab != .done, query.isEmpty {
                         replicaNewRow(tab: tab)
                     }
-                    if !query.isEmpty {
+                    let newNoMatches = model.listStyle.isNew && sections.open.isEmpty && model.narrows(tab)
+                    if newNoMatches {
+                        // § 2.16: a filtered or searched list that shows
+                        // nothing says so, with the way out.
+                        HStack(spacing: AtticSpacing.s8) {
+                            AtticEmptyLine(text: String(localized: "No matches"))
+                            AtticQuietAction(systemName: nil, title: String(localized: "Clear filters"), emphasised: true) {
+                                model.setSearchQuery("", for: tab)
+                                model.showAll(on: tab)
+                            }
+                        }
+                        .accessibilityIdentifier("tasks-no-matches")
+                    }
+                    if model.listStyle.isNew, tab != .done {
+                        // § 2.12: a click below the rows goes to the add bar
+                        // (no hidden row of its own).
+                        Color.clear
+                            .frame(height: TasksNewMetrics.rowHeight(titleLines: 1, hasDetails: false))
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                searchFocused = false
+                                model.beginCapture()
+                                addBarFocused = true
+                            }
+                            .accessibilityHidden(true)
+                    }
+                    if !query.isEmpty, !newNoMatches {
                         // Find's quiet count, or that nothing matches (as on
                         // Done).
                         if sections.open.isEmpty {
@@ -1450,7 +1501,7 @@ struct TasksPage: View {
                                 .padding(.leading, AtticLayout.textX)
                                 .accessibilityIdentifier("tasks-find-count")
                         }
-                    } else if sections.open.isEmpty, view.filters {
+                    } else if sections.open.isEmpty, view.filters, !newNoMatches {
                         AtticEmptyLine(text: String(localized: "Nothing in this view."))
                             .accessibilityIdentifier("tasks-empty-line")
                     } else if sections.open.isEmpty, let message = model.emptyMessage[tab] {
@@ -1605,7 +1656,8 @@ struct TasksPage: View {
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
                                               isFilesExpanded: isFilesExpanded, isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
                                               layout: layout, isLive: editing || live.metaPopover != nil || model.replicaDetail?.taskID == id,
-                                              replica: model.listStyle.isReplica ? (listHasKeyboard ? 1 : 2) : 0)) {
+                                              replica: model.listStyle.isReplica ? (listHasKeyboard ? 1 : 2)
+                                                  : model.listStyle.isNew ? (listHasKeyboard ? 3 : 4) + (model.isKeptDone(id) ? 2 : 0) : 0)) {
                 let replicaRow = {
                     RemindersReplicaRow(
                         model: row.model,
@@ -1654,7 +1706,37 @@ struct TasksPage: View {
                     // A kept page that is not shown opens no menu.
                     .atticContextMenu { model.isPageShown && model.tab == tab ? taskCommands(row.id, tab: tab) : [] }
                 }
-                if model.listStyle.isReplica {
+                let newRow = {
+                    TasksNewRow(
+                        model: row.model,
+                        isSelected: isSelected,
+                        listHasKeyboard: listHasKeyboard,
+                        isExpanded: isExpanded,
+                        actions: actions(for: id, in: tab),
+                        onToggleExpanded: { toggleExpanded(id) },
+                        onSelect: { rowClicked(id, tab: tab) },
+                        focus: live.focus,
+                        titleEditing: editing ? titleEditing(for: id) : nil,
+                        date: model.newDate(for: id),
+                        isKept: model.isKeptDone(id),
+                        actionsAvailable: tab != .done,
+                        moveToNow: tab == .backlog,
+                        onDate: { openMeta(.date, on: id, targets: commandTargets(for: id)) },
+                        onMove: { newMove(id, tab: tab) },
+                        onInfo: tab != .done ? { model.openReplicaDetail(id) } : nil,
+                        onUndo: { model.report(model.undoKeptTick(id), on: id) { [weak model] in model?.undoKeptTick(id) ?? .failed(.taskGone) } },
+                        meta: rowMeta(for: id, open: live.metaPopover)
+                    )
+                    .overlay(alignment: .topTrailing) { newDetailAnchor(id, active: live.isActive) }
+                    .atticContextMenu { model.isPageShown && model.tab == tab ? newTaskCommands(row.id, tab: tab) : [] }
+                }
+                if model.listStyle.isNew {
+                    if editing {
+                        TasksTitleDraftView(draft: model.titleDraft, content: newRow)
+                    } else {
+                        newRow()
+                    }
+                } else if model.listStyle.isReplica {
                     if editing {
                         TasksTitleDraftView(draft: model.titleDraft, content: replicaRow)
                     } else {
@@ -2791,6 +2873,15 @@ struct TasksPage: View {
 
     private func estimatedHeight(_ row: TasksListRow) -> CGFloat {
         let id = row.id
+        if model.listStyle.isNew {
+            let r = row.model
+            var height = TasksNewMetrics.rowHeight(titleLines: 1, hasDetails: r.state != .done && (!r.tags.isEmpty || r.subtasks != nil
+                || r.hasPage || r.photos > 0 || r.attachments > 0 || r.flagged || r.linkHost != nil || r.links > 0))
+            if model.expanded.contains(id), row.status != .done {
+                height += CGFloat(row.subtasks.count) * AtticLayout.rowPitch
+            }
+            return height
+        }
         if model.listStyle.isReplica {
             let m = RemindersReplicaMetrics.self
             var height = m.rowHeight(titleLines: 1, notesLines: row.model.notes == nil ? 0 : 1,
@@ -3174,12 +3265,41 @@ struct TasksPage: View {
                 pasteOfferBar(offer)
                     .frame(maxWidth: .infinity)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
-            } else if model.selection.count > 1, model.tab != .done, !addBarFocused {
+            } else if !model.listStyle.isNew, model.selection.count > 1, model.tab != .done, !addBarFocused {
                 selectionBar
                     .frame(maxWidth: .infinity)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
-            addBar
+            if model.listStyle.isNew {
+                // New (§ 2.15, 6B): the add bar, the selection bar and the
+                // key strip take turns in one place. The add bar stays
+                // built underneath, so its draft and editor survive.
+                let bottom = newBottom
+                addBar
+                    .opacity(bottom == .addBar ? 1 : 0)
+                    .allowsHitTesting(bottom == .addBar)
+                    .accessibilityHidden(bottom != .addBar)
+                    .overlay(alignment: .bottom) {
+                        switch bottom {
+                        case .addBar:
+                            EmptyView()
+                        case .selectionBar:
+                            selectionBar
+                                .frame(maxWidth: .infinity)
+                                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                        case .keyStrip:
+                            TasksNewKeyStrip {
+                                searchFocused = false
+                                model.beginCapture()
+                                addBarFocused = true
+                            }
+                            .transition(.opacity)
+                        }
+                    }
+                    .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: bottom != .addBar), value: bottom)
+            } else {
+                addBar
+            }
         }
         // The lists' clearance changes only past the room always kept for
         // the strip (a selection bar, a paste offer): the strip appearing
@@ -5374,5 +5494,203 @@ extension TasksPage {
             openMeta(.tags, on: current, targets: commandTargets(for: current), newTag: true)
         }
         return true
+    }
+}
+
+// MARK: - List Style: New (Build A)
+
+extension TasksPage {
+    /// Move in a New row's column (L): to Later, or to Now from Later.
+    func newMove(_ id: UUID, tab: TasksTab) {
+        let targets = commandTargets(for: id)
+        menuCommand(TasksRowID(tab: tab, id: id)) { [weak model] _ in
+            guard let model else { return .failed(.taskGone) }
+            return tab == .backlog ? model.moveToNow(targets) : model.moveToBacklog(targets)
+        }
+    }
+
+    /// Add Subtask (⌥⌘N, the menu, the detail panel): the row opens with
+    /// the new-subtask field.
+    func newAddSubtask(_ id: UUID) {
+        if model.replicaDetail != nil { model.closeReplicaDetail() }
+        model.beginAddingSubtask(to: id)
+    }
+
+    /// The detail panel points from the ⓘ in the column (Build B replaces
+    /// the panel with the in-place card).
+    func newDetailAnchor(_ id: UUID, active: Bool) -> some View {
+        let m = TasksNewMetrics.self
+        return Color.clear
+            .frame(width: m.slotButton, height: m.columnHeight)
+            .padding(.top, m.columnTop)
+            .padding(.trailing, m.columnTrailing)
+            .allowsHitTesting(false)
+            .atticPopover(isPresented: Binding(
+                get: { active && model.replicaDetail?.taskID == id },
+                set: { open in if !open, model.replicaDetail?.taskID == id { model.closeReplicaDetail() } }
+            ), arrowEdge: .trailing) {
+                if let detail = model.replicaDetail, detail.taskID == id {
+                    RemindersReplicaDetailView(state: detail, model: model, openPage: { [weak model] in
+                        model?.closeReplicaDetail()
+                        if opensTaskNotes { openTaskNote(id) } else { actions(for: id, in: model?.tab ?? .now).openPage() }
+                    }, addSubtask: store.listedTask(withID: id)?.status == .done ? nil : { newAddSubtask(id) })
+                }
+            }
+    }
+
+    /// The New row's menu (FINAL § 2.14): Complete, Move, Date, Priority
+    /// and Add Subtask first, every shortcut shown; then Tags, Show Info,
+    /// Edit Title, Flag, Copy, Duplicate, Remove from Tasks and Delete.
+    func newTaskCommands(_ rowID: UUID, tab: TasksTab) -> [AtticMenuCommand] {
+        let key = TasksRowID(tab: tab, id: rowID)
+        let id = menuRowID(key)
+        let targets = menuTargets(key)
+        let single = targets.count == 1
+        let listed = targets.compactMap { store.listedTask(withID: $0) }
+        let allDone = !listed.isEmpty && listed.allSatisfy { $0.status == .done }
+        var list: [AtticMenuCommand] = []
+        if !single { list.append(.header(String(localized: "\(targets.count) Tasks"))) }
+        if tab == .done {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Restore to Now")) {
+                menuCommand(key) { [weak model] targets in model?.restoreToNow(targets) ?? .failed(.taskGone) }
+            })
+        } else {
+            list.append(AtticMenuCommand(verbatim: allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
+                                         shortcut: KeyboardShortcut(.space, modifiers: [])) {
+                menuCommand(key) { [weak model] targets in model?.toggleDone(targets) ?? .failed(.taskGone) }
+            })
+            list.append(AtticMenuCommand(verbatim: tab == .backlog ? String(localized: "Move to Now") : String(localized: "Move to Later"),
+                                         shortcut: KeyboardShortcut("l", modifiers: [])) {
+                menuCommand(key) { [weak model] targets in
+                    guard let model else { return .failed(.taskGone) }
+                    return tab == .backlog ? model.moveToNow(targets) : model.moveToBacklog(targets)
+                }
+            })
+        }
+        var date = AtticMenuCommand.submenu(String(localized: "Date"), width: AtticMenuMetrics.dateMenuWidth, dateCommands(key, targets: targets))
+        date.shortcut = KeyboardShortcut("d", modifiers: [])
+        list.append(date)
+        var priority = AtticMenuCommand.submenu(String(localized: "Priority"), priorityCommands(key, targets: targets))
+        priority.detail = "1–3"
+        list.append(priority)
+        if single, tab != .done, !allDone, store.listedTask(withID: id)?.parentID == nil {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"),
+                                         shortcut: KeyboardShortcut("n", modifiers: [.command, .option])) {
+                newAddSubtask(menuRowID(key))
+            })
+        }
+        var tags = AtticMenuCommand.submenu(String(localized: "Tags"), startsSection: true, width: AtticMenuMetrics.wideWidth,
+                                            tagCommands(key, targets: targets))
+        tags.shortcut = KeyboardShortcut("t", modifiers: [])
+        list.append(tags)
+        if single, tab != .done {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Show Info"), shortcut: KeyboardShortcut("i", modifiers: .command)) {
+                model.openReplicaDetail(id)
+            })
+        }
+        if single {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle) {
+                guard !AtticTextInput.ownsCurrentKey else { return }
+                let id = menuRowID(key)
+                model.selectOnly(id)
+                model.beginEditingTitle(id)
+            })
+        }
+        if single, tab != .done, let task = store.task(withID: id) {
+            let flagged = task.isFlagged
+            list.append(AtticMenuCommand(verbatim: flagged ? String(localized: "Unflag") : String(localized: "Flag")) {
+                model.setReplicaFlag(!flagged, for: id)
+            })
+        }
+        list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy, startsSection: true) {
+            model.copy(menuTargets(key))
+            pointer.endInvocation()
+        })
+        list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
+            menuCommand(key) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) }
+        })
+        var closing: [AtticMenuCommand] = []
+        if single, model.services.canRemoveFromTasks?(id) == true, let remove = model.services.removeFromTasks {
+            closing = TaskNoteConversion.commands(taskID: id, hasWriting: true,
+                                                  isSubtask: store.listedTask(withID: id)?.parentID != nil, add: {}, remove: { remove(id) })
+        }
+        if !closing.isEmpty { closing[0].startsSection = true }
+        list += closing
+        list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
+                                     systemImage: "trash", shortcut: AtticTaskShortcut.delete, isDestructive: true,
+                                     startsSection: closing.isEmpty) {
+            guard !AtticTextInput.ownsCurrentKey else { return }
+            deleteAndMoveFocus(menuTargets(key))
+        })
+        return list
+    }
+
+    /// New's keys (6B and § 2.12–2.14). ⌘N: the add bar. ⌘I: the detail
+    /// panel. ⌥⌘N: Add Subtask. Tab / ⇧Tab: indent / outdent. Space, D,
+    /// L, 1–3, T on the selected task while the list has the keyboard.
+    /// Never while a field types, an input method composes or a popover
+    /// is open.
+    func newShortcutPressed(_ event: NSEvent) -> Bool {
+        guard model.listStyle.isNew, event.type == .keyDown, model.isPageShown,
+              let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder) else { return false }
+        let relevant = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if relevant == .command, key == "n" || event.keyCode == 45 {
+            guard model.editingTitleID == nil else { return false }
+            searchFocused = false
+            focusedRow = nil
+            model.beginCapture()
+            addBarFocused = true
+            return true
+        }
+        // The rest act on the list: never while something types.
+        guard !AtticTextInput.hasKeyboard, !addBarFocused, !searchFocused, model.editingTitleID == nil, metaPopover == nil,
+              model.tab != .done else { return false }
+        let visible = visibleIDs()
+        if let indent = RemindersReplicaIndent.command(keyCode: event.keyCode, modifiers: event.modifierFlags) {
+            let row = model.focusedSubtaskID == nil ? model.shortcutRow(focusedRow: keyboardRow(visible: visible), visible: Set(visible)) : nil
+            if row == nil, model.focusedSubtaskID == nil { return false }
+            let rows = model.rows(for: model.tab).map(\.id)
+            let above = row.flatMap { current in rows.firstIndex(of: current).flatMap { $0 > 0 ? rows[$0 - 1] : nil } }
+            guard model.newIndent(indent, row: row, above: above) != nil else { return false }
+            pointer.endInvocation()
+            return true
+        }
+        guard let current = model.shortcutRow(focusedRow: keyboardRow(visible: visible), visible: Set(visible)) else { return false }
+        if relevant == .command, key == "i" || event.keyCode == 34 {
+            pointer.endInvocation()
+            model.openReplicaDetail(current)
+            return true
+        }
+        if relevant == [.command, .option], event.keyCode == 45 {
+            pointer.endInvocation()
+            newAddSubtask(current)
+            return true
+        }
+        guard !model.selection.isEmpty || keyboardRow(visible: visible) != nil,
+              let command = TasksNewKey.command(characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
+                                                modifiers: event.modifierFlags) else { return false }
+        pointer.endInvocation()
+        let targets = commandTargets(for: current)
+        switch command {
+        case .date:
+            openMeta(.date, on: current, targets: targets)
+        case .tags:
+            openMeta(.tags, on: current, targets: targets)
+        case .complete, .move, .priority:
+            menuCommand(TasksRowID(tab: model.tab, id: current)) { [weak model] targets in
+                model?.newKey(command, on: targets) ?? .failed(.taskGone)
+            }
+        }
+        return true
+    }
+
+    /// New's bottom (§ 2.15, 6B): the add bar, the selection bar or the
+    /// key strip, one at a time in the same place.
+    var newBottom: TasksNewBottom {
+        TasksNewBottom.resolve(selectionCount: model.selection.count,
+                               listHasKeyboard: listHasKeyboard && model.isPageShown && model.editingTitleID == nil && metaPopover == nil,
+                               addBarFocused: addBarFocused, onDone: model.tab == .done)
     }
 }

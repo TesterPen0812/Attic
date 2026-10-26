@@ -367,8 +367,21 @@ extension View {
     /// Reduce Transparency, Craft or a capture it is the opaque raised
     /// surface; under Increase Contrast it has the controls' edge.
     func atticTopLineCapsule() -> some View {
-        let height = AtticTopGlassMetrics.height
-        return environment(\.atticPageTabsOnGlass, true)
+        modifier(AtticTopLineCapsule())
+    }
+}
+
+extension EnvironmentValues {
+    /// The top line's glass controls' height: the Medium height, or 28 pt
+    /// in List Style: New's one-line header (pick 1A).
+    @Entry var atticTopGlassHeight: CGFloat = AtticTopGlassMetrics.height
+}
+
+private struct AtticTopLineCapsule: ViewModifier {
+    @Environment(\.atticTopGlassHeight) private var height
+
+    func body(content: Content) -> some View {
+        content.environment(\.atticPageTabsOnGlass, true)
             .padding(.horizontal, AtticTopGlassMetrics.capsulePadding)
             .frame(height: height)
             .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
