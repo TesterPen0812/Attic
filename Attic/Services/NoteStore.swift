@@ -425,6 +425,7 @@ final class NoteStore: ObservableObject {
     private var reconciledAttachmentSignature: Int?
     /// Test/diagnostic seam: how many full metadata reconciliations ran.
     private(set) var attachmentReconciliationPasses = 0
+    var attachmentReconciliationLog: (String) -> Void = { NSLog("%@", $0) }
 
     /// Test/diagnostic seam: drain all file work before releasing its root.
     func waitForAttachmentReconciliation() async {
@@ -809,15 +810,41 @@ final class NoteStore: ObservableObject {
         }
         let timestamp = now()
         do {
-            for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
+            let notes = try storedNotesIfPresent(matching: noteID)
+            let preferred = Self.canonicalReplicas(from: notes).first
+            for note in notes { note.updatedAt = timestamp }
+            if let preferred, notes.contains(where: {
+                NoteReplicaSnapshot($0) != NoteReplicaSnapshot(preferred)
+                    || $0.pinnedAt != preferred.pinnedAt
+                    || $0.externalEditorName != preferred.externalEditorName
+                    || $0.externalEditedAt != preferred.externalEditedAt
+            }) {
+                for note in notes where note !== preferred {
+                    note.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextDown)
+                }
+            }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
             return false
         }
+        // Include removed rows: a stale removal must preserve the same
+        // winner too. This is the presentation comparator before staging.
+        let preferred = replicas.max {
+            if $0.updatedAt != $1.updatedAt { return $0.updatedAt < $1.updatedAt }
+            return String(reflecting: $0.persistentModelID) < String(reflecting: $1.persistentModelID)
+        }
         for replica in replicas {
             replica.deletedAt = timestamp
             replica.updatedAt = timestamp
+        }
+        if let preferred {
+            let snapshot = NoteAttachmentReplicaSnapshot(preferred)
+            if replicas.contains(where: { NoteAttachmentReplicaSnapshot($0) != snapshot }) {
+                for replica in replicas where replica !== preferred {
+                    replica.updatedAt = Date(timeIntervalSinceReferenceDate: timestamp.timeIntervalSinceReferenceDate.nextDown)
+                }
+            }
         }
         for noteID in attachmentsByNoteID.keys {
             attachmentsByNoteID[noteID]?.removeAll { $0.id == attachment.id }
@@ -1583,11 +1610,14 @@ final class NoteStore: ObservableObject {
                         "Attic attachment reconciliation skipped an attachment"
                     )
                 }
+            } catch is CancellationError {
+                if generation == attachmentReconciliationGeneration { reconciledAttachmentSignature = nil }
+                attachmentReconciliationLog("Attic attachment reconciliation cancelled")
             } catch {
-                // Let the next revision try again rather than trusting a
-                // signature whose pass never completed.
-                reconciledAttachmentSignature = nil
-                NSLog("Attic attachment reconciliation failed")
+                // Only this pass owns its signature. An obsolete failure
+                // cannot invalidate a newer pass that is already succeeding.
+                if generation == attachmentReconciliationGeneration { reconciledAttachmentSignature = nil }
+                attachmentReconciliationLog("Attic attachment reconciliation failed")
             }
         }
         attachmentFileTasks[workID] = task

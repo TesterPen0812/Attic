@@ -549,6 +549,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// block, a callout, an empty last line's box): the view is made tall
     /// enough for the block's whole fragment and what it paints (O18-01).
     override func setFrameSize(_ newSize: NSSize) {
+        let phase = PerformanceSignposts.beginNoteWork("NoteSetFrameSize")
+        defer { PerformanceSignposts.endNoteWork("NoteSetFrameSize", phase) }
         var size = newSize
         if isVerticallyResizable, !isSizingForTrailingBlock, let engine {
             isSizingForTrailingBlock = true
@@ -867,6 +869,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override func keyDown(with event: NSEvent) {
+        let phase = PerformanceSignposts.beginNoteWork("NoteKeyDispatch")
+        defer { PerformanceSignposts.endNoteWork("NoteKeyDispatch", phase) }
         handleHiddenForTyping = true
         hideBlockHandle()
         if marquee?.isEmpty == false {
@@ -909,6 +913,8 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     /// the marker closes after the view's own layout or pre-draw pass,
     /// where TextKit 2 lays out the viewport.
     override func layout() {
+        let phase = PerformanceSignposts.beginNoteWork("NoteViewportLayout")
+        defer { PerformanceSignposts.endNoteWork("NoteViewportLayout", phase) }
         // The accessories and overlays placed from here move at once but
         // join or leave a parent only after this pass (P1-01 hypothesis).
         AtticOverlayHierarchy.layoutPass {

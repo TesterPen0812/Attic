@@ -1,0 +1,162 @@
+{
+  "schema": 1,
+  "window": {
+    "width": 376.0,
+    "height": 520.0
+  },
+  "observation": "posthoc-glyphs-no-ax",
+  "machine": "Tahas-MacBook-Air",
+  "os": "26.4.1",
+  "fixture": "ordinary-note-320x460-100x-110ms-no-ax",
+  "typing_pattern": "x",
+  "launch_seed": "default",
+  "optimized": true,
+  "executable_sha256": "06e83c2180e8d39f59c05149bc7eaa089ceebefc1365201a4540e79d728b7ce8",
+  "runs": [
+    {
+      "run": 1,
+      "window": {
+        "width": 376.0,
+        "height": 520.0
+      },
+      "observation": "posthoc-glyphs-no-ax",
+      "wrap_to_draw_ms": [
+        20.2329158782959,
+        16.388893127441406
+      ],
+      "wrap_to_layout_ms": [
+        9.885072708129883,
+        7.632970809936523
+      ],
+      "ordinary_to_draw_median_ms": 19.473910331726074,
+      "ordinary_to_layout_median_ms": 10.219454765319824,
+      "wrap_phases_ms": {},
+      "wrap_key_indices": [
+        41,
+        81
+      ]
+    },
+    {
+      "run": 2,
+      "window": {
+        "width": 376.0,
+        "height": 520.0
+      },
+      "observation": "posthoc-glyphs-no-ax",
+      "wrap_to_draw_ms": [
+        19.82712745666504,
+        19.197940826416016
+      ],
+      "wrap_to_layout_ms": [
+        9.93800163269043,
+        10.245084762573242
+      ],
+      "ordinary_to_draw_median_ms": 19.35100555419922,
+      "ordinary_to_layout_median_ms": 10.239958763122559,
+      "wrap_phases_ms": {},
+      "wrap_key_indices": [
+        41,
+        81
+      ]
+    },
+    {
+      "run": 3,
+      "window": {
+        "width": 376.0,
+        "height": 520.0
+      },
+      "observation": "posthoc-glyphs-no-ax",
+      "wrap_to_draw_ms": [
+        20.764827728271484,
+        22.633075714111328
+      ],
+      "wrap_to_layout_ms": [
+        10.818004608154297,
+        11.986970901489258
+      ],
+      "ordinary_to_draw_median_ms": 19.377589225769043,
+      "ordinary_to_layout_median_ms": 10.002374649047852,
+      "wrap_phases_ms": {},
+      "wrap_key_indices": [
+        41,
+        81
+      ]
+    },
+    {
+      "run": 4,
+      "window": {
+        "width": 376.0,
+        "height": 520.0
+      },
+      "observation": "posthoc-glyphs-no-ax",
+      "wrap_to_draw_ms": [
+        17.772197723388672,
+        20.599842071533203
+      ],
+      "wrap_to_layout_ms": [
+        9.539127349853516,
+        10.902881622314453
+      ],
+      "ordinary_to_draw_median_ms": 19.093036651611328,
+      "ordinary_to_layout_median_ms": 10.056018829345703,
+      "wrap_phases_ms": {},
+      "wrap_key_indices": [
+        41,
+        81
+      ]
+    },
+    {
+      "run": 5,
+      "window": {
+        "width": 376.0,
+        "height": 520.0
+      },
+      "observation": "posthoc-glyphs-no-ax",
+      "wrap_to_draw_ms": [
+        20.19476890563965,
+        19.733905792236328
+      ],
+      "wrap_to_layout_ms": [
+        10.588884353637695,
+        10.035991668701172
+      ],
+      "ordinary_to_draw_median_ms": 18.85843276977539,
+      "ordinary_to_layout_median_ms": 9.898543357849121,
+      "wrap_phases_ms": {},
+      "wrap_key_indices": [
+        41,
+        81
+      ]
+    },
+    {
+      "run": 6,
+      "window": {
+        "width": 376.0,
+        "height": 520.0
+      },
+      "observation": "posthoc-glyphs-no-ax",
+      "wrap_to_draw_ms": [
+        18.390893936157227,
+        19.647836685180664
+      ],
+      "wrap_to_layout_ms": [
+        9.663820266723633,
+        10.802030563354492
+      ],
+      "ordinary_to_draw_median_ms": 18.421053886413574,
+      "ordinary_to_layout_median_ms": 9.834527969360352,
+      "wrap_phases_ms": {},
+      "wrap_key_indices": [
+        41,
+        81
+      ]
+    }
+  ],
+  "reference_commit": "281eb1e4f556f4a58902b7bd64bf15759b87efae",
+  "hardware_model": "Mac14,2",
+  "os_build": "25E253",
+  "recorded_date": "2026-10-23",
+  "key_event_route": "CGEvent.postToPid; UTF-16 text; virtual key 7",
+  "key_pause_ms": 110,
+  "note": "Exact-main app source; Local -O whole-module optimization, ATTIC_LOCAL_ONLY, ad hoc signed, in-memory fixture. No AX reads between keys; unbroken x wrap positions mapped from glyph bounds after typing. Existing transaction-completion/viewport markers. Historical 55\u201366 ms case remains unconfirmed."
+}

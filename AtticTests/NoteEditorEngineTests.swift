@@ -10,6 +10,132 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testB02RichCopyPreservesNumberedListStartsAndRestarts() throws {
+        var first = NoteBlock.text("first", style: "number"); first.start = 7
+        var restart = NoteBlock.text("restart", style: "number"); restart.start = 12
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), first, .text("second", style: "number"), restart, .text("last", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        for offset in [2, location(of: "second", in: engine)] {
+            XCTAssertTrue(engine.writeSelection(NSRange(location: offset, length: engine.textStorage.length - offset), to: board, types: [.rtf]))
+            let data = try XCTUnwrap(board.data(forType: .rtf))
+            let copied = try NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
+            var starts: [Int] = []
+            var previous: NSTextList?
+            (copied.string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: copied.length), options: .byParagraphs) { _, range, _, _ in
+                let list = (copied.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.textLists.last
+                XCTAssertNotNil(list)
+                if let list, list !== previous { starts.append(list.startingItemNumber) }
+                previous = list
+            }
+            XCTAssertEqual(starts, offset == 2 ? [7, 12] : [8, 12])
+        }
+    }
+
+    func testB02InAppCopyContinuesNumbering() async throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("a", style: "number"), .text("b", style: "number"), .text("c", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: 3), to: board,
+                                             types: [NoteEditorEngine.fragmentType, .string, TasksTextExport.markdownType, .rtf]))
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        let didPaste = await engine.pasteDurably(fragmentData: try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType)), at: view.selectedRange())
+        XCTAssertTrue(didPaste)
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["a", "b", "c", "a", "b"])
+        let pasted = location(of: "c", in: engine) + 2
+        XCTAssertEqual(engine.listMarker(at: pasted), .number("4."))
+        XCTAssertEqual(engine.listMarker(at: pasted + 2), .number("5."))
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.start == nil })
+    }
+
+    func testB02InAppCutToReorderContinuesNumbering() async throws {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("a", style: "number"), .text("b", style: "number"), .text("c", style: "number")]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        let moved = NSRange(location: location(of: "b", in: engine), length: 2)
+        // The cut path writes the same selection before deleting it. A unique
+        // board exercises those operations without replacing the user's clipboard.
+        XCTAssertTrue(engine.writeSelection(moved, to: board,
+                                             types: [NoteEditorEngine.fragmentType, .string, TasksTextExport.markdownType, .rtf]))
+        XCTAssertEqual(board.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), "1. b")
+        XCTAssertEqual(board.string(forType: TasksTextExport.markdownType)?.trimmingCharacters(in: .whitespacesAndNewlines), "1. b\n\n<br>")
+        view.setSelectedRange(moved)
+        view.deleteBackward(nil)
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        let didPaste = await engine.pasteDurably(fragmentData: try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType)), at: view.selectedRange())
+        XCTAssertTrue(didPaste)
+        XCTAssertEqual(engine.document().blocks.dropFirst().map(\.text), ["a", "c", "b", ""])
+        XCTAssertEqual(engine.listMarker(at: location(of: "b", in: engine)), .number("3."))
+        XCTAssertTrue(engine.document().blocks.dropFirst().allSatisfy { $0.start == nil })
+    }
+
+    func testB03PairedInlineHTMLAcrossExternalContinuations() throws {
+        for (source, expected, style, mark) in [
+            ("<u>first\nsecond</u>", "first second", nil, NoteMark.Kind.underline),
+            ("> <u>first\n> second</u>", "first second", "quote", .underline),
+            ("- <u>first\n  second</u>", "first second", "bullet", .underline),
+            ("<strong>first\nsecond</strong>", "first second", nil, .bold),
+            ("> <u>first  \n> second</u>", "first\u{2028}second", "quote", .underline),
+            ("> <strong>é **literal**\n> second</strong>", "é **literal** second", "quote", .bold),
+            ("> <u>first\r\n> second</u>", "first second", "quote", .underline)
+        ] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("Target"), .text("")]))
+            defer { engine.detachView() }
+            let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+            board.setString(source, forType: .string)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            let before = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.handlePaste(board), source)
+            let blocks = Array(engine.document().blocks.dropFirst())
+            XCTAssertEqual(blocks.map(\.text), [expected], source)
+            XCTAssertEqual(blocks.first?.style, style, source)
+            XCTAssertEqual(blocks.first?.marks, [NoteMark(mark, offset: 0, length: expected.utf16.count)], source)
+            let after = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), after)
+        }
+    }
+
+    func testB03PairedHTMLKeepsLiteralBackslashBeforeSpaceBreak() throws {
+        for (source, expected, paste) in [
+            ("<u>a\\  \nb</u>", "a\\\u{2028}b", true),
+            ("> <u>a\\  \n> b</u>", "a\\\u{2028}b", true),
+            ("<u>a\\\nb</u>", "a\u{2028}b", true),
+            ("<u>a\\\\\nb</u>", "a\\\\\nb", false)
+        ] {
+            let document = try NoteMarkdownImport.document(source, forPaste: paste)
+            XCTAssertEqual(document.blocks.map(\.text), [expected], source)
+            XCTAssertEqual(document.blocks.first?.marks, [NoteMark(.underline, offset: 0, length: expected.utf16.count)], source)
+        }
+    }
+
+    func testB03PairedHTMLMultilineLeavesDiscardQuotePrefixes() throws {
+        for (content, expected) in [
+            ("`a\n> b`", "`a b`"),
+            ("<span\n> title=\"x\">a</span>", "<span title=\"x\">a</span>"),
+            ("[\n> a](https://example.com)", "[ a](https://example.com)"),
+            ("`é\r\n> b`", "`é b`")
+        ] {
+            let source = "> <u>" + content + "</u>"
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("Target"), .text("")]))
+            defer { engine.detachView() }
+            let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+            board.setString(source, forType: .string)
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            let before = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.handlePaste(board), source)
+            let blocks = Array(engine.document().blocks.dropFirst())
+            XCTAssertEqual(blocks.map(\.text), [expected], source)
+            XCTAssertEqual(blocks.first?.style, "quote", source)
+            XCTAssertEqual(blocks.first?.marks, [NoteMark(.underline, offset: 0, length: expected.utf16.count)], source)
+            let after = try NoteContentCodec.encode(engine.document())
+            XCTAssertTrue(engine.history.undo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), before)
+            XCTAssertTrue(engine.history.redo()); XCTAssertEqual(try NoteContentCodec.encode(engine.document()), after)
+        }
+    }
+
     func testPRB12InlineMeasurementsReuseWarmCache() throws {
         let style = NoteTextStyle(), renderer = NoteObjectRenderer(design: NoteTextStyle().design)
         let today = NoteDay(date: Date())

@@ -543,6 +543,8 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
     /// the text at the list's own indent (22 pt), the marker drawn by
     /// `NoteBlockLayoutFragment`.
     func textContentStorage(_ textContentStorage: NSTextContentStorage, textParagraphWith range: NSRange) -> NSTextParagraph? {
+        let phase = PerformanceSignposts.beginNoteWork("NoteParagraph")
+        defer { PerformanceSignposts.endNoteWork("NoteParagraph", phase) }
         guard range.length > 0, NSMaxRange(range) <= textStorage.length,
               let style = textStorage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle else { return nil }
         let structured = !style.textLists.isEmpty || textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading"
@@ -966,6 +968,8 @@ extension NoteEditorEngine {
     /// line only, so a final callout's or code block's padding was cut off).
     /// One fragment; nil when nothing is laid out.
     func trailingBlockBottom() -> CGFloat? {
+        let phase = PerformanceSignposts.beginNoteWork("NoteTrailingBlock")
+        defer { PerformanceSignposts.endNoteWork("NoteTrailingBlock", phase) }
         guard let layoutManager, textStorage.length > 0 else { return nil }
         let last = paragraphRange(at: textStorage.length - 1)
         guard let range = textRange(for: NSRange(location: last.location, length: 0)),

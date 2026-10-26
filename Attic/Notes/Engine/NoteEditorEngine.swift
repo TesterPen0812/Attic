@@ -2022,6 +2022,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textDidChange(_ notification: Notification) {
+        let phase = PerformanceSignposts.beginNoteWork("NoteTextDidChange")
+        defer { PerformanceSignposts.endNoteWork("NoteTextDidChange", phase) }
         refreshRestoredEmptyParagraphView()
         textView?.marquee?.textChanged()
         history.didChange()
@@ -2515,12 +2517,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func writeSelection(_ range: NSRange, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard range.length > 0, rangeIsInStorage(range) else { return false }
-        return writeSelection(textStorage.attributedSubstring(from: range), to: pasteboard, types: types)
+        let selected = textStorage.attributedSubstring(from: range)
+        // Only public RTF needs the visible ordinal. Private fragments keep
+        // implicit starts so copies and moves continue the destination's list.
+        let rtfVisibleStart: Int?
+        if case let .number(marker) = listMarker(at: range.location) {
+            rtfVisibleStart = Int(marker.dropLast())
+        } else { rtfVisibleStart = nil }
+        return writeSelection(selected, to: pasteboard, types: types, rtfVisibleStart: rtfVisibleStart)
     }
 
     /// Also accepts a discontiguous block selection assembled in document
     /// order, preserving the same private fragment, table and RTF routes.
-    func writeSelection(_ text: NSAttributedString, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+    func writeSelection(_ text: NSAttributedString, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType], rtfVisibleStart: Int? = nil) -> Bool {
         guard text.length > 0 else { return false }
         var fragment = NoteTextCodec.document(from: text, template: NoteDocument(blocks: []), firstBlockIsTitle: false)
         fragment.extras = ["sourceNoteID": .string(noteID.uuidString)]
@@ -2548,6 +2557,33 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 wrote = pasteboard.setString(NoteMarkdownExport.markdown(body), forType: type) || wrote
             case .rtf:
                 let selected = NSMutableAttributedString(attributedString: text)
+                if let rtfVisibleStart {
+                    let first = (selected.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+                    selected.addAttribute(.noteListStart, value: rtfVisibleStart, range: first)
+                }
+                // Native export reads NSTextList, not Attic's marker metadata.
+                // Build run identities for explicit starts/restarts at each depth.
+                var lists: [NSTextList] = []
+                let string = selected.string as NSString
+                var position = 0
+                while position < selected.length {
+                    let paragraph = string.paragraphRange(for: NSRange(location: position, length: 0))
+                    let attrs = selected.attributes(at: position, effectiveRange: nil)
+                    if let kind = attrs[.noteBlockStyle] as? String, ["number", "bullet"].contains(kind) {
+                        let depth = min(2, max(0, attrs[.noteBlockIndent] as? Int ?? 0))
+                        let marker: NSTextList.MarkerFormat = kind == "number" ? .decimal : .disc
+                        if lists.count > depth + 1 { lists = Array(lists.prefix(depth + 1)) }
+                        while lists.count <= depth { lists.append(NSTextList(markerFormat: marker, options: 0)) }
+                        if lists[depth].markerFormat != marker || attrs[.noteListStart] != nil {
+                            lists[depth] = NSTextList(markerFormat: marker, options: 0)
+                            lists[depth].startingItemNumber = attrs[.noteListStart] as? Int ?? 1
+                        }
+                        let style = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                        style.textLists = lists
+                        selected.addAttribute(.paragraphStyle, value: style, range: paragraph)
+                    } else { lists.removeAll() }
+                    position = NSMaxRange(paragraph)
+                }
                 // Tables read as their rows of tab-separated text in rich text.
                 var tables: [(NSRange, NoteTable)] = []
                 selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, part, _ in
@@ -4650,7 +4686,7 @@ extension NoteEditorEngine {
 
     @discardableResult func pasteMarkdown(_ text: String, at selection: NSRange) -> Bool {
         guard paragraphStyle(at: selection.location)?.isCode != true, activeTableView == nil,
-              var fragment = try? NoteMarkdownImport.document(text) else { return false }
+              var fragment = try? NoteMarkdownImport.document(text, forPaste: true) else { return false }
         if let icon = paragraphStyle(at: selection.location)?.calloutIcon {
             fragment.blocks = NoteMarkdownImport.calloutParagraphs(fragment.blocks, icon: icon)
         }
