@@ -3607,6 +3607,108 @@ final class TaskStore: ObservableObject {
         return save(owner: owner)
     }
 
+    /// The tasks `nestTask(_:under:)` may write, read before it runs so an
+    /// undo step can record them: the task, and the family it joins, whose
+    /// orders a placement can re-space.
+    func nestScope(of id: UUID, under parentID: UUID) -> [UUID] {
+        [id] + subtasks(of: parentID).map(\.id)
+    }
+
+    /// Makes a main task a subtask of another main task (`parentID`), in one
+    /// save on every replica: Tab's indent. It keeps its id, title, priority,
+    /// tags, date and files, and goes to the end of its new family's open
+    /// subtasks. A Later task becomes an open (To Do) subtask, as a Later
+    /// task's other subtasks are; To Do and In Progress keep their state.
+    ///
+    /// Refused (nothing written, not retryable): a task that is not a live,
+    /// unfinished main task; one with subtasks of its own (one level); a
+    /// destination that is not a different, live, unfinished main task; a
+    /// task with writing on its page (writing makes it a note, which a
+    /// subtask cannot hold); or copies that disagree about where the task
+    /// belongs or whether it is finished.
+    @discardableResult
+    func nestTask(_ id: UUID, under parentID: UUID) -> Bool {
+        guard let task = tasks.first(where: { $0.id == id }), task.parentID == nil,
+              task.deletedAt == nil, task.doneLoggedAt == nil, task.status != .done else {
+            report("Only an unfinished main task can become a subtask.", owner: nil, retryable: false)
+            return false
+        }
+        let owner = parentID
+        let timestamp = now()
+        // A refusal is decided before anything is written: only a failure
+        // after the first write needs the list reloaded.
+        var wrote = false
+        do {
+            WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
+            let replicas = try storedTasks(matching: id)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+            guard Set(replicas.map(\.parentID)).count == 1 else {
+                throw TaskEditRefusal("This task’s copies disagree about where it belongs. Refresh and try again.")
+            }
+            // Nesting may change the state (Later becomes To Do), so every
+            // copy must agree about its completion before any is written.
+            let shownCompletion = Self.completionKey(task)
+            guard replicas.allSatisfy({ Self.completionKey($0) == shownCompletion }) else {
+                throw TaskEditRefusal("This task’s copies disagree about whether it is finished. Refresh and try again.")
+            }
+            guard replicas.allSatisfy({ $0.parentID == nil && $0.deletedAt == nil && $0.doneLoggedAt == nil }) else {
+                throw TaskEditRefusal("Only an unfinished main task can become a subtask.")
+            }
+            if hasSubtasks(id) {
+                throw TaskEditRefusal("A task with subtasks can’t become a subtask.")
+            }
+            // A different, live, unfinished main task on every copy, and no
+            // stored subtask under the task (one level deep).
+            guard try canHoldSubtask(id, under: parentID, isOpen: true) else {
+                throw TaskEditRefusal("A task can only become a subtask of an unfinished main task.")
+            }
+            if try hasPageWriting(id) {
+                throw TaskEditRefusal("A task with writing can’t become a subtask.")
+            }
+            // Decided before anything is written (see `reparentSubtask`).
+            let shown = TaskContentSnapshot(task)
+            let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }.map(\.persistentModelID))
+            let status: TaskStatus = task.status == .backlog ? .todo : task.status
+            let changesStatus = status != task.status
+            let group = subtasks(of: parentID).filter { $0.status != .done }
+            let placed = group + [task]
+            var order = sparseManualOrder(at: placed.count - 1, in: placed)
+            if order == nil {
+                wrote = true
+                try assignSpacedManualOrders(to: placed, updatedAt: timestamp)
+                order = Self.manualOrderStride
+            }
+            wrote = true
+            for replica in replicas {
+                if replica.parentID != parentID { replica.parentID = parentID }
+                if changesStatus, replica.status != status { replica.status = status }
+                if replica.manualOrder != order { replica.manualOrder = order }
+                if replica.listOrderVersion != TaskItem.currentListOrderVersion {
+                    replica.listOrderVersion = TaskItem.currentListOrderVersion
+                }
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
+            }
+        } catch {
+            context.rollback()
+            if wrote { try? reloadTasks() }
+            report(error, owner: owner)
+            return false
+        }
+        return save(owner: owner)
+    }
+
+    /// Whether a task's page holds writing (anything after its title block),
+    /// by the rule Remove from Tasks and All notes share
+    /// (`TaskNoteConversion.documentHasWriting`). Throws when its pages
+    /// can't be read or their ownership is inconsistent, so a nesting
+    /// refuses rather than guesses.
+    private func hasPageWriting(_ id: UUID) throws -> Bool {
+        try WorkspaceItemLifecycle.writing(taskIDs: [id], in: context).contains { row in
+            guard row.deletedAt == nil, let document = row.content.flatMap({ NoteContentCodec.decode($0).document }) else { return false }
+            return TaskNoteConversion.documentHasWriting(document)
+        }
+    }
+
     /// A task's state of completion, as one comparable value.
     private struct CompletionKey: Equatable {
         let statusRaw: String

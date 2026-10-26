@@ -55,6 +55,53 @@ extension AtticLibrary {
         return taskOutcome(succeeded, since: serial, ids: [id])
     }
 
+    // MARK: - Tab: Indent
+
+    /// Makes a main task a subtask of `parentID` (the task above it), as one
+    /// step (`TaskStore.nestTask` says where it lands, what state it takes
+    /// and what it refuses). Undo makes it a main task again in its old
+    /// state and place; redo indents it again. Both refuse, changing
+    /// nothing, once what they need is gone or changed.
+    @discardableResult
+    func indentTask(_ id: UUID, under parentID: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        var succeeded = false
+        let serial = tasks.errorSerial
+        undo.perform(in: history) {
+            guard tasks.task(withID: id) != nil else { return nil }
+            let scope = Array(Set(tasks.nestScope(of: id, under: parentID) + [id]))
+            let scopeBefore = scope.compactMap(tasks.editableState(of:))
+            guard tasks.nestTask(id, under: parentID) else { return nil }
+            succeeded = true
+            let scopeAfter = scope.compactMap(tasks.editableState(of:))
+            subtaskOrderChanges.send(parentID)
+            // Only what the indent changed belongs to the step (see
+            // `moveSubtask`).
+            let beforeByID = Dictionary(scopeBefore.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let afterByID = Dictionary(scopeAfter.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let changed = Set(beforeByID.keys).union(afterByID.keys).filter { beforeByID[$0] != afterByID[$0] }
+            guard !changed.isEmpty else { return nil }
+            let before = scopeBefore.filter { changed.contains($0.id) }
+            let after = scopeAfter.filter { changed.contains($0.id) }
+            return UndoStep(
+                name: "Indent",
+                items: { Set((before + after).map { AtticItemRef(.task, $0.id) }) },
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    let outcome = self.tasks.applyEditableTransition(from: after, to: before)
+                    if outcome == .applied { self.subtaskOrderChanges.send(parentID) }
+                    return outcome
+                },
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    let outcome = self.tasks.applyEditableTransition(from: before, to: after)
+                    if outcome == .applied { self.subtaskOrderChanges.send(parentID) }
+                    return outcome
+                }
+            )
+        }
+        return taskOutcome(succeeded, since: serial, ids: [id])
+    }
+
     // MARK: - Item 11: Restore Selected
 
     /// What Restore Selected did: how many came back, and each one that
