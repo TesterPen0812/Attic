@@ -1715,7 +1715,21 @@ extension PhaseXHunt5Tests {
         for identifier in ["Europe/London", "America/New_York", "Pacific/Auckland", "Asia/Kathmandu"] {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = try XCTUnwrap(TimeZone(identifier: identifier))
-            var now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 23, minute: 30)))
+            // Foundation timers use real wall time, even with an injected
+            // cleanup clock. Keep the Oct 24 Saturday / Oct 25 DST weekend,
+            // but place it in the future so it cannot fire during an await.
+            let realYear = calendar.component(.year, from: Date())
+            let fixtureYear = try XCTUnwrap(((realYear + 1)...(realYear + 28)).first { year in
+                guard let day = calendar.date(from: DateComponents(year: year, month: 10, day: 24)) else { return false }
+                return calendar.component(.weekday, from: day) == 7
+            })
+            var now = try XCTUnwrap(calendar.date(from: DateComponents(year: fixtureYear, month: 10, day: 24, hour: 23, minute: 30)))
+            XCTAssertGreaterThan(now, Date())
+            XCTAssertEqual(calendar.component(.weekday, from: now), 7)
+            if identifier == "Europe/London" {
+                let followingDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: now))
+                XCTAssertNotEqual(calendar.timeZone.secondsFromGMT(for: now), calendar.timeZone.secondsFromGMT(for: followingDay))
+            }
             let store = try makeTestStore(now: { now })
             let task = try XCTUnwrap(store.create(title: "Done")); XCTAssertTrue(store.markDone(task))
             let service = DailyCleanupService(store: store, now: { now }, calendar: { calendar })
@@ -1738,7 +1752,8 @@ extension PhaseXHunt5Tests {
                 XCTAssertFalse(oldTimer.isValid)
                 let current: Timer = try field("timer", in: service)
                 let next = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)))
-                XCTAssertEqual(current.fireDate, next)
+                XCTAssertEqual(current.fireDate, next,
+                    "zone=\(identifier), step=\(step), valid=\(current.isValid), fixtureNow=\(now), realNow=\(Date())")
                 XCTAssertLessThanOrEqual(store.doneLog().count, 1)
             }
             XCTAssertEqual(store.doneLog().map(\.id), [task.id])
