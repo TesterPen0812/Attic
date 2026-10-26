@@ -14,6 +14,7 @@ import SwiftUI
 enum TasksListStyle: String, CaseIterable, Identifiable, Sendable {
     case attic
     case reminders
+    case new // TEMP-B: Build A owns this case; dropped before merging A.
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum TasksListStyle: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .attic: String(localized: "Attic")
         case .reminders: String(localized: "Reminders (replica)")
+        case .new: "New" // TEMP-B
         }
     }
 
