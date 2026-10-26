@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// State the Tasks page keeps while another page is showing. The shell owns
 /// one instance for the panel's lifetime, so switching to Notes and back never
@@ -89,6 +90,10 @@ struct TasksPageHost: View {
         // view updates).
         model.observeNoteOwners(taskNotes.noteOwners)
         model.notePreviewSource = taskNotes.notePreviews
+        model.notePhotoCountSource = taskNotes.notePhotoCounts
+        model.services.notePhotos = taskNotes.notePhotos
+        model.services.notePhotoURL = taskNotes.notePhotoURL
+        model.services.removeNotePhoto = taskNotes.removeNotePhoto
     }
 
     /// The host's callbacks, also exercised without the Tasks page's own
@@ -175,6 +180,17 @@ struct TasksPageHost: View {
                 guard !TaskAttachmentPicker.isPresenting(uiState), model?.services.addFilesToTaskNote != nil else { return }
                 uiState.taskAttachmentPickerOwnerID = id
                 TaskAttachmentPickerSession.present(owner: id) { urls in
+                    if uiState.taskAttachmentPickerOwnerID == id { uiState.taskAttachmentPickerOwnerID = nil }
+                    guard !urls.isEmpty else { return }
+                    model?.services.addFilesToTaskNote?(id, TaskAttachmentStaging(urls: urls))
+                }
+            }
+            // Add Photo… in the replica's panel (R2): the same picker and
+            // path into the task's note, for images.
+            model.services.chooseImagesForNote = { [uiState, weak model] id in
+                guard !TaskAttachmentPicker.isPresenting(uiState), model?.services.addFilesToTaskNote != nil else { return }
+                uiState.taskAttachmentPickerOwnerID = id
+                TaskAttachmentPickerSession.present(owner: id, allowedTypes: [.image]) { urls in
                     if uiState.taskAttachmentPickerOwnerID == id { uiState.taskAttachmentPickerOwnerID = nil }
                     guard !urls.isEmpty else { return }
                     model?.services.addFilesToTaskNote?(id, TaskAttachmentStaging(urls: urls))

@@ -49,6 +49,42 @@ enum TaskNoteFiles {
         return added && closed
     }
 
+    /// Removes one image or file from the task's writing (the Reminders
+    /// replica's panel): the note's own Delete Attachment edit, on the
+    /// open page's session or, as `importFiles` does, a headless one that
+    /// lets go durably. Its Undo is the note's.
+    static func removeAttachment(_ attachmentID: UUID, from taskID: UUID, tasks: TaskStore,
+                                 controller: NotesPageController) async -> Bool {
+        guard let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return false }
+        await coordinator.sessions.retryHeadlessClosures()
+        if let presenter = TaskNotePresenter.open(for: taskID) {
+            guard let session = presenter.session, !session.isReadOnly else { return false }
+            return await deleteObject(holding: attachmentID, in: session)
+        }
+        guard let page = try? coordinator.sessions.session(for: .task(taskID), notes: controller),
+              let lease = try? page.acquire(surfaceID: UUID()) else { return false }
+        guard let session = page.note, !session.isReadOnly else {
+            _ = await coordinator.sessions.closeHeadless(page, lease: lease)
+            return false
+        }
+        let removed = await deleteObject(holding: attachmentID, in: session)
+        let closed = await coordinator.sessions.closeHeadless(page, lease: lease)
+        return removed && closed
+    }
+
+    private static func deleteObject(holding attachmentID: UUID, in session: NoteSession) async -> Bool {
+        let engine = session.engine
+        let objectID = engine.objectIDs().first { id in
+            switch engine.objectPlacement(id)?.0 {
+            case let image as NoteImageAttachment: image.attachmentID == attachmentID
+            case let file as NoteFileAttachment: file.attachmentID == attachmentID
+            default: false
+            }
+        }
+        guard let objectID else { return false }
+        return await engine.perform(.delete, objectID: objectID)
+    }
+
     private static func run(_ urls: [URL], into session: NoteSession, controller: NotesPageController) async -> Bool {
         let end = NSRange(location: session.engine.textStorage.length, length: 0)
         let objectsBefore = session.engine.objectIDs().count

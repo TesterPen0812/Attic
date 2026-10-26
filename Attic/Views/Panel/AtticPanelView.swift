@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 import SwiftData
 
 /// The panel's shell: the surface, the header (Pin and the page switch), the
@@ -263,7 +264,40 @@ struct AtticPanelView: View {
                     return previews
                 }
                 .removeDuplicates()
-                .eraseToAnyPublisher())
+                .eraseToAnyPublisher(),
+            notePhotoCounts: noteDraft.pages.store.$notes
+                .map { notes in
+                    var counts: [UUID: Int] = [:]
+                    for note in notes where note.deletedAt == nil && note.imageCount > 0 {
+                        guard let id = note.taskID else { continue }
+                        counts[id, default: 0] += note.imageCount
+                    }
+                    return counts
+                }
+                .removeDuplicates()
+                .eraseToAnyPublisher(),
+            notePhotos: { [weak notes = noteDraft.pages.store] taskID in
+                guard let notes else { return [] }
+                return notes.notes.filter { $0.taskID == taskID && $0.deletedAt == nil }.flatMap { note in
+                    notes.attachments(for: note.id)
+                        .filter { $0.deletedAt == nil && (UTType($0.contentTypeIdentifier)?.conforms(to: .image) ?? false) }
+                        .sorted { $0.sortIndex < $1.sortIndex }
+                        .map { RemindersReplicaPhoto(id: $0.id, filename: $0.originalFilename, source: .note($0.id)) }
+                }
+            },
+            notePhotoURL: { [weak notes = noteDraft.pages.store] attachmentID in
+                guard let notes else { return nil }
+                for note in notes.notes where note.taskID != nil {
+                    if let attachment = notes.attachments(for: note.id).first(where: { $0.id == attachmentID }) {
+                        return await notes.materializedURL(for: attachment)
+                    }
+                }
+                return nil
+            },
+            removeNotePhoto: { [weak pages = noteDraft.pages, weak store] taskID, attachmentID in
+                guard let pages, let store else { return false }
+                return await TaskNoteFiles.removeAttachment(attachmentID, from: taskID, tasks: store, controller: pages)
+            })
     }
 
     /// A purge made an open task's note ordinary (§ 2.7.2): its page leaves

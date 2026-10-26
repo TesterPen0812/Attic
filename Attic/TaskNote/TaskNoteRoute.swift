@@ -109,4 +109,10 @@ struct TaskNoteEntryServices {
     /// Each task's writing as a row preview (the Reminders replica only
     /// subscribes while it draws).
     var notePreviews: AnyPublisher<[UUID: String], Never> = Just([:]).eraseToAnyPublisher()
+    /// The replica's photos (R2): how many images each task's writing
+    /// holds, the images themselves, a file for one, and removing one.
+    var notePhotoCounts: AnyPublisher<[UUID: Int], Never> = Just([:]).eraseToAnyPublisher()
+    var notePhotos: ((UUID) -> [RemindersReplicaPhoto])?
+    var notePhotoURL: ((UUID) async -> URL?)?
+    var removeNotePhoto: ((_ taskID: UUID, _ attachmentID: UUID) async -> Bool)?
 }
