@@ -65,6 +65,15 @@ struct TasksPageServices {
     /// through the page's producer. Nil where the host has no task pages:
     /// the command is hidden.
     var makeCheckbox: ((UUID) -> Void)?
+    /// The Reminders replica's photos (R2): the images in an item's
+    /// writing, a file URL for Quick Look, removal through the note's own
+    /// Delete Attachment edit, and Add Photo… (Add Files…' picker for
+    /// images, then `addFilesToTaskNote`). Nil where there are no task
+    /// pages: only Earlier files show.
+    var notePhotos: ((UUID) -> [RemindersReplicaPhoto])?
+    var notePhotoURL: ((UUID) async -> URL?)?
+    var removeNotePhoto: ((_ taskID: UUID, _ attachmentID: UUID) async -> Bool)?
+    var chooseImagesForNote: ((UUID) -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -515,7 +524,10 @@ final class TasksPageModel: ObservableObject {
         // Phase 3 (`p3-06`, D11): the note glyph after the subtask count.
         model.hasPage = noteOwners.contains(task.id)
         // The Reminders replica previews the item's writing under its title.
-        if listStyle.isReplica { model.notes = notePreviews[task.id] }
+        if listStyle.isReplica {
+            model.notes = notePreviews[task.id]
+            model.photos = notePhotoCounts[task.id] ?? 0
+        }
         // Slice 2 (§ 2.4, D11): a family whose files are in its note shows
         // no paperclip, unless Earlier files remain; others as on main.
         let files = store.fileMigration.rowFiles(for: task)
@@ -885,6 +897,15 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var replicaRowActive = false
     /// Asks the new-reminder row's field to take the keyboard.
     @Published private(set) var replicaRowFocusRequest: UInt64 = 0
+    /// The replica's detail panel, while open (R2).
+    @Published var replicaDetail: RemindersReplicaDetailState?
+    /// The subtask row clicked in the replica (⇧Tab makes it a task).
+    @Published var replicaSubtaskSelection: UUID?
+    /// How many photos each item's writing holds (the row's image marker),
+    /// only while the replica draws.
+    private(set) var notePhotoCounts: [UUID: Int] = [:]
+    var notePhotoCountSource: AnyPublisher<[UUID: Int], Never>?
+    var notePhotoCountsObservation: AnyCancellable?
 
     private var noteOwnersObservation: AnyCancellable?
 
@@ -2140,9 +2161,15 @@ extension TasksPageModel {
         if style.isReplica {
             notePreviewsObservation = notePreviewSource?.receive(on: DispatchQueue.main)
                 .sink { [weak self] in self?.setNotePreviews($0) }
+            notePhotoCountsObservation = notePhotoCountSource?.receive(on: DispatchQueue.main)
+                .sink { [weak self] in self?.setNotePhotoCounts($0) }
         } else {
             notePreviewsObservation = nil
             notePreviews = [:]
+            notePhotoCountsObservation = nil
+            notePhotoCounts = [:]
+            if replicaDetail != nil { closeReplicaDetail() }
+            replicaSubtaskSelection = nil
             releaseReplicaHolds(evenWhenAttic: true)
             if replicaRowActive { replicaRowActive = false }
             replicaDraft.draft = RemindersReplicaDraft()
@@ -2154,6 +2181,13 @@ extension TasksPageModel {
     func setNotePreviews(_ previews: [UUID: String]) {
         guard previews != notePreviews else { return }
         notePreviews = previews
+        replicaRevision &+= 1
+        objectWillChange.send()
+    }
+
+    func setNotePhotoCounts(_ counts: [UUID: Int]) {
+        guard counts != notePhotoCounts else { return }
+        notePhotoCounts = counts
         replicaRevision &+= 1
         objectWillChange.send()
     }

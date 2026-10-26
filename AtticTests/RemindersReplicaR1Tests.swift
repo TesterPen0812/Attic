@@ -183,9 +183,9 @@ final class RemindersReplicaR1Tests: XCTestCase {
 
     func testMenuFollowsRemindersMeasuredOrder() {
         XCTAssertEqual(RemindersReplicaMenu.commands(removeFromTasks: true),
-                       [.complete, .date, .priority, .list, .tags, .copy, .removeFromTasks, .delete])
+                       [.showInfo, .complete, .date, .priority, .list, .tags, .copy, .removeFromTasks, .delete])
         XCTAssertEqual(RemindersReplicaMenu.commands(removeFromTasks: false),
-                       [.complete, .date, .priority, .list, .tags, .copy, .delete])
+                       [.showInfo, .complete, .date, .priority, .list, .tags, .copy, .delete])
         let leftOut = RemindersReplicaMenu.leftOut.map(\.0)
         XCTAssertEqual(leftOut, [.askSiri, .markUrgent, .indent, .outdent, .newSection, .newSectionWithSelection,
                                  .editSections, .flag, .cut, .paste])

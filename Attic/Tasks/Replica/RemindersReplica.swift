@@ -306,7 +306,7 @@ enum RemindersReplicaMenu {
 
     /// Attic's commands, as the replica's menu offers them.
     enum Command: String, Equatable, CaseIterable {
-        case complete, date, priority, list, tags, copy, removeFromTasks, delete
+        case showInfo, complete, date, priority, list, tags, copy, removeFromTasks, delete
     }
 
     /// What each measured item becomes; nil: left out, with the reason.
@@ -316,8 +316,8 @@ enum RemindersReplicaMenu {
         case .markCompleted: (.complete, nil)
         case .deadline: (.date, nil)
         case .markUrgent: (nil, "Urgent: Attic has no storage for it")
-        case .indent: (nil, "Indent: Attic has no command that makes a task another's subtask")
-        case .outdent: (nil, "Outdent: as Indent")
+        case .indent: (nil, "Indent: Attic has no command that makes a task another's subtask (Tab says so)")
+        case .outdent: (nil, "Outdent: disabled for a task in Reminders too; ⇧Tab makes a clicked subtask a task (Make Standalone Task)")
         case .newSection, .newSectionWithSelection, .editSections: (nil, "Sections: Attic has no storage for them")
         case .flag: (nil, "Flag: Attic has no storage for it")
         case .priority: (.priority, nil)
@@ -333,7 +333,9 @@ enum RemindersReplicaMenu {
     /// The replica's menu in order. Phase 3's Remove from Tasks goes just
     /// before Delete, where Attic's own menu keeps it.
     static func commands(removeFromTasks: Bool) -> [Command] {
-        var list: [Command] = []
+        // R2: Show Info first (Reminders keeps it in its File menu, R2-05;
+        // Attic has no menu bar).
+        var list: [Command] = [.showInfo]
         for item in Measured.allCases {
             guard let command = mapping(item).command else { continue }
             if command == .delete, removeFromTasks { list.append(.removeFromTasks) }
@@ -373,7 +375,7 @@ enum RemindersReplicaKeys {
         Entry(keys: "⌘F", meaning: "Search", command: nil, note: "Already Attic's Find on Now and Later: kept"),
         Entry(keys: "⌘Z / ⇧⌘Z", meaning: "Undo / Redo", command: nil, note: "Already Attic's history: kept"),
         Entry(keys: "⌘A", meaning: "Select All", command: nil, note: "Already Attic's: kept"),
-        Entry(keys: "⌘] / ⌘[", meaning: "Indent / Outdent", command: nil, note: "Left out: Attic cannot make a task another's subtask"),
+        Entry(keys: "⌘] / ⌘[", meaning: "Indent / Outdent", command: nil, note: "Left out: Tab and ⇧Tab do what Attic can (R2)"),
         Entry(keys: "⇧⌘F", meaning: "Flag", command: nil, note: "Clash: Attic's Search Done Tasks; and no flag storage"),
         Entry(keys: "⇧⌘H", meaning: "Show Completed", command: nil, note: "Left out of R1 (lists are R4)"),
         Entry(keys: "⌥⌘N / ⌃⌘N", meaning: "New Section / with Selection", command: nil, note: "Left out: no sections"),

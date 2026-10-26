@@ -316,7 +316,7 @@ struct TasksPage: View {
             eventMonitors.add(matching: .keyDown) { event in
                 TasksDragCancellation.consumeEscape(event)
                     || findPressed(event) || viewOptionsPressed(event) || searchEscapePressed(event) || searchDownPressed(event)
-                    || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || replicaShortcutPressed(event)
+                    || editorEscapePressed(event) || pageEscapePressed(event) || undoPressed(event) || replicaShortcutPressed(event) || replicaIndentPressed(event)
                     || taskShortcutPressed(event)
                     || tabPressed(event)
                     ? nil : event
@@ -1604,7 +1604,7 @@ struct TasksPage: View {
             // row always redraws it (they show live state).
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
                                               isFilesExpanded: isFilesExpanded, isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
-                                              layout: layout, isLive: editing || live.metaPopover != nil,
+                                              layout: layout, isLive: editing || live.metaPopover != nil || model.replicaDetail?.taskID == id,
                                               replica: model.listStyle.isReplica ? (listHasKeyboard ? 1 : 2) : 0)) {
                 let replicaRow = {
                     RemindersReplicaRow(
@@ -1615,12 +1615,19 @@ struct TasksPage: View {
                         isExpanded: isExpanded,
                         actions: actions(for: id, in: tab),
                         onToggleExpanded: { toggleExpanded(id) },
-                        onSelect: { rowClicked(id, tab: tab) },
-                        onInfo: tab != .done ? { opensTaskNotes ? openTaskNote(id) : actions(for: id, in: tab).openPage() } : nil,
+                        onSelect: {
+                            if model.replicaSubtaskSelection != nil { model.replicaSubtaskSelection = nil }
+                            rowClicked(id, tab: tab)
+                        },
+                        // R2: ⓘ opens the replica's detail panel.
+                        onInfo: tab != .done ? { model.openReplicaDetail(id) } : nil,
+                        // R2: a click on the title edits it in place.
+                        onEditTitle: tab != .done ? { replicaTitleClicked(id, tab: tab) } : nil,
                         focus: live.focus,
                         titleEditing: editing ? titleEditing(for: id) : nil,
                         dateLine: model.replicaDateLine(for: id)
                     )
+                    .overlay(alignment: .topTrailing) { replicaDetailAnchor(id, active: live.isActive) }
                     .atticContextMenu { model.isPageShown && model.tab == tab ? replicaTaskCommands(row.id, tab: tab) : [] }
                 }
                 let drawRow = {
@@ -1700,7 +1707,11 @@ struct TasksPage: View {
             if expanded(), model.listStyle.isReplica {
                 // The replica's children: indented rows under the parent.
                 ForEach(row.subtasks) { subtask in
-                    RemindersReplicaChildRow(subtask: subtask) {
+                    RemindersReplicaChildRow(subtask: subtask, isSelected: model.replicaSubtaskSelection == subtask.id,
+                                             onSelect: {
+                                                 model.clearSelection()
+                                                 model.replicaSubtaskSelection = subtask.id
+                                             }) {
                         model.report(model.toggleSubtask(subtask.id), on: id) { [weak model] in model?.toggleSubtask(subtask.id) ?? .failed(.taskGone) }
                     }
                     .atticContextMenu { model.isPageShown && model.tab == tab ? subtaskCommands(subtask, of: id, in: row.subtasks) : [] }
@@ -5214,6 +5225,13 @@ extension TasksPage {
         if !single { list.append(.header(String(localized: "\(targets.count) Tasks"))) }
         for command in RemindersReplicaMenu.commands(removeFromTasks: canRemove) {
             switch command {
+            case .showInfo:
+                // Reminders' Show Reminder Info is in its File menu (R2-05);
+                // Attic has no menu bar, so it heads the row's menu.
+                guard single, tab != .done else { continue }
+                list.append(AtticMenuCommand(verbatim: String(localized: "Show Info"), shortcut: KeyboardShortcut("i", modifiers: .command)) {
+                    model.openReplicaDetail(id)
+                })
             case .complete:
                 if tab == .done {
                     list.append(AtticMenuCommand(verbatim: String(localized: "Restore to Now")) {
@@ -5265,6 +5283,54 @@ extension TasksPage {
         return list
     }
 
+    /// Tab and ⇧Tab on the replica's list (R2): ⇧Tab makes the clicked
+    /// subtask a task again; Tab says why Attic can't nest. Only while the
+    /// list holds the keyboard; otherwise Tab moves focus as before.
+    func replicaIndentPressed(_ event: NSEvent) -> Bool {
+        guard model.listStyle.isReplica, event.type == .keyDown, model.isPageShown, model.tab != .done,
+              let command = RemindersReplicaIndent.command(keyCode: event.keyCode, modifiers: event.modifierFlags),
+              let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              !AtticTextInput.isPopoverOpen, !AtticTextInput.hasKeyboard, !Self.isComposing(window.firstResponder),
+              !addBarFocused, !searchFocused, !model.replicaRowActive, model.editingTitleID == nil, metaPopover == nil
+        else { return false }
+        let visible = visibleIDs()
+        let row = model.replicaSubtaskSelection == nil
+            ? model.shortcutRow(focusedRow: keyboardRow(visible: visible), visible: Set(visible)) : nil
+        guard model.replicaIndent(command, row: row) != nil else { return false }
+        pointer.endInvocation()
+        return true
+    }
+
+    /// A click on a replica row's title (R2): it edits in place; with ⌘ or
+    /// ⇧ held it selects, as a click on the row does.
+    func replicaTitleClicked(_ id: UUID, tab: TasksTab) {
+        let modifiers = (NSApp.currentEvent?.modifierFlags ?? []).intersection([.command, .shift])
+        guard modifiers.isEmpty, model.tab == tab else { rowClicked(id, tab: tab); return }
+        if model.editReplicaTitle(id) { setFocus(id) }
+    }
+
+    /// Where the detail panel points from: the row's info region at its
+    /// trailing edge (M, R2-F04: anchored to the row's info).
+    func replicaDetailAnchor(_ id: UUID, active: Bool) -> some View {
+        let m = RemindersReplicaMetrics.self
+        return Color.clear
+            .frame(width: m.infoRegion, height: m.titleFirstLine)
+            .padding(.top, m.titleTop)
+            .padding(.trailing, m.infoTrailing)
+            .allowsHitTesting(false)
+            .atticPopover(isPresented: Binding(
+                get: { active && model.replicaDetail?.taskID == id },
+                set: { open in if !open, model.replicaDetail?.taskID == id { model.closeReplicaDetail() } }
+            ), arrowEdge: .trailing) {
+                if let detail = model.replicaDetail, detail.taskID == id {
+                    RemindersReplicaDetailView(state: detail, model: model, openPage: { [weak model] in
+                        model?.closeReplicaDetail()
+                        if opensTaskNotes { openTaskNote(id) } else { actions(for: id, in: model?.tab ?? .now).openPage() }
+                    })
+                }
+            }
+    }
+
     /// The confirmed Reminders keys while the replica draws (C,
     /// RES-IB-007/008): ⌘N new reminder, ⌘I the item's page, ⇧⌘C
     /// complete, ⇧⌘T tags. Never while a field is typing.
@@ -5293,7 +5359,7 @@ extension TasksPage {
             return false
         case .showInfo:
             guard model.tab != .done else { return false }
-            if opensTaskNotes { openTaskNote(current) } else { actions(for: current, in: model.tab).openPage() }
+            model.openReplicaDetail(current)
         case .complete:
             menuCommand(TasksRowID(tab: model.tab, id: current)) { [weak model] targets in model?.toggleDone(targets) ?? .failed(.taskGone) }
         case .addTag:

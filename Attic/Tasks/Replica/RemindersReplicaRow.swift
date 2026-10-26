@@ -88,8 +88,10 @@ struct RemindersReplicaRow: View {
     let actions: AtticTaskActions
     let onToggleExpanded: () -> Void
     var onSelect: (() -> Void)? = nil
-    /// The trailing ⓘ: Attic's item page for now (R3 builds the panel).
+    /// The trailing ⓘ: the detail panel (R2).
     var onInfo: (() -> Void)? = nil
+    /// A click on the title's text: it edits in place (R2).
+    var onEditTitle: (() -> Void)? = nil
     var focus: AtticRowFocus? = nil
     var titleEditing: AtticTitleEditing? = nil
     /// Today, for the date line (the page's own clock and calendar).
@@ -127,7 +129,9 @@ struct RemindersReplicaRow: View {
                 titleView(done: done, parent: parent)
                     .padding(.trailing, m.titleTrailing - m.notesTrailing)
                 if let notes = model.notes {
-                    Text(verbatim: notes)
+                    // M: a link in the writing is blue, underlined and
+                    // clickable (R2-F06).
+                    Text(RemindersReplicaText.linkedNotes(notes))
                         .font(.system(size: m.notesSize, design: .rounded))
                         .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                         .lineLimit(m.notesLineLimit)
@@ -186,12 +190,16 @@ struct RemindersReplicaRow: View {
                 .padding(.vertical, RemindersReplicaTitle.firstLinePadding)
                 .fixedSize(horizontal: false, vertical: true)
                 .help(model.title)
+                .onTapGesture {
+                    guard isEnabled, capture == nil else { return }
+                    (onEditTitle ?? onSelect ?? actions.openPage)()
+                }
         }
     }
 
     /// The date line, with the link and file markers where Attic has them.
     private var detailsLine: AnyView? {
-        let markers = model.links > 0 || model.attachments > 0
+        let markers = model.links > 0 || model.attachments > 0 || model.photos > 0
         guard dateLine != nil || markers || !model.tags.isEmpty else { return nil }
         let m = RemindersReplicaMetrics.self
         let font = Font.system(size: m.dateSize, design: .rounded)
@@ -211,7 +219,7 @@ struct RemindersReplicaRow: View {
             if model.links > 0 {
                 Image(systemName: "link").font(font).foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
-            if model.attachments > 0 {
+            if model.attachments > 0 || model.photos > 0 {
                 Image(systemName: "photo").font(font).foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
         })
@@ -235,8 +243,8 @@ struct RemindersReplicaRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(String(localized: "Open Page"))
-                .accessibilityLabel(String(localized: "Open Page"))
+                .help(String(localized: "Show Info"))
+                .accessibilityLabel(String(localized: "Show Info"))
             }
             if parent {
                 Button(action: onToggleExpanded) {
@@ -259,6 +267,9 @@ struct RemindersReplicaRow: View {
 /// (M, UI-ROW-04).
 struct RemindersReplicaChildRow: View {
     let subtask: AtticSubtaskModel
+    /// Clicked (R2): ⇧Tab makes it a task again.
+    var isSelected = false
+    var onSelect: (() -> Void)? = nil
     let onToggle: () -> Void
 
     var body: some View {
@@ -286,7 +297,17 @@ struct RemindersReplicaChildRow: View {
                 .padding(.trailing, m.notesTrailing)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(alignment: .top) {
+            if isSelected {
+                AtticHighlight(fill: RemindersReplicaMetrics.focusedSelection, cornerRadius: m.selectionRadius,
+                               run: .single, joinOverlap: 0)
+                    .padding(.horizontal, m.selectionInset)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect?() }
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("replica-subtask-row")
     }
 }
