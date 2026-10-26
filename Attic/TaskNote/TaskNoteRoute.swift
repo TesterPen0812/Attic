@@ -115,4 +115,7 @@ struct TaskNoteEntryServices {
     var notePhotos: ((UUID) -> [RemindersReplicaPhoto])?
     var notePhotoURL: ((UUID) async -> URL?)?
     var removeNotePhoto: ((_ taskID: UUID, _ attachmentID: UUID) async -> Bool)?
+    /// The New style's card: the writing read and written in place.
+    var readWriting: ((UUID) async -> TaskNoteWriting.Snapshot?)?
+    var writeWriting: ((UUID, String) async -> Bool)?
 }

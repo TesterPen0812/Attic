@@ -94,6 +94,8 @@ struct TasksPageHost: View {
         model.services.notePhotos = taskNotes.notePhotos
         model.services.notePhotoURL = taskNotes.notePhotoURL
         model.services.removeNotePhoto = taskNotes.removeNotePhoto
+        model.services.readWriting = taskNotes.readWriting
+        model.services.writeWriting = taskNotes.writeWriting
     }
 
     /// The host's callbacks, also exercised without the Tasks page's own

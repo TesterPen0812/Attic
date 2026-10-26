@@ -297,6 +297,14 @@ struct AtticPanelView: View {
             removeNotePhoto: { [weak pages = noteDraft.pages, weak store] taskID, attachmentID in
                 guard let pages, let store else { return false }
                 return await TaskNoteFiles.removeAttachment(attachmentID, from: taskID, tasks: store, controller: pages)
+            },
+            readWriting: { [weak pages = noteDraft.pages, weak store] taskID in
+                guard let pages, let store else { return nil }
+                return await TaskNoteWriting.read(taskID, tasks: store, controller: pages)
+            },
+            writeWriting: { [weak pages = noteDraft.pages, weak store] taskID, text in
+                guard let pages, let store else { return false }
+                return await TaskNoteWriting.write(text, to: taskID, tasks: store, controller: pages)
             })
     }
 

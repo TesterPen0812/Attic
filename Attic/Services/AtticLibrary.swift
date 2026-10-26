@@ -398,6 +398,26 @@ final class AtticLibrary {
         return taskOutcome(succeeded, since: serial, ids: ids)
     }
 
+    /// Pick your Now (D2): the tasks picked from Later join the end of Now,
+    /// in the order they were picked, as one step ("Pick for Now").
+    @discardableResult
+    func pickIntoNow(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        let requested = ids
+        let ids = ids.filter { tasks.task(withID: $0)?.status == .backlog }
+        guard !ids.isEmpty else { return taskOutcome(false, since: tasks.errorSerial, ids: requested) }
+        var succeeded = false
+        let serial = tasks.errorSerial
+        undo.perform(in: history) {
+            let before = ids.compactMap(tasks.editableState(of:))
+            guard tasks.updateBatch(ids, status: .todo, placingAtEnd: true) else { return nil }
+            succeeded = true
+            let after = ids.compactMap(tasks.editableState(of:))
+            guard before != after else { return nil }
+            return editStep("Pick for Now", before: before, after: after)
+        }
+        return taskOutcome(succeeded, since: serial, ids: ids)
+    }
+
     /// Moves several tasks to Recently Deleted as one step (the selection
     /// bar, Delete on a multi-selection). Undo brings them all back.
     @discardableResult

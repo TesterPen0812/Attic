@@ -74,6 +74,11 @@ struct TasksPageServices {
     var notePhotoURL: ((UUID) async -> URL?)?
     var removeNotePhoto: ((_ taskID: UUID, _ attachmentID: UUID) async -> Bool)?
     var chooseImagesForNote: ((UUID) -> Void)?
+    /// The New style's card (D2, 3A): an item's writing, read and written
+    /// in place as its note (`TaskNoteWriting`). Nil where there are no
+    /// task notes: the card shows no writing.
+    var readWriting: ((UUID) async -> TaskNoteWriting.Snapshot?)?
+    var writeWriting: ((UUID, String) async -> Bool)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -617,6 +622,8 @@ final class TasksPageModel: ObservableObject {
         for row in all {
             if row.status == .done, held[row.id]?.tab != tab { sections.done.append(row) } else { sections.open.append(row) }
         }
+        // D2: Now shows no "Completed today" in the New style.
+        if tab == .now, isNewMainPage { sections.done = [] }
         let rows = key.completedExpanded ? sections.open + sections.done : sections.open
         let entry = (key, sections, rows)
         rowsCache[tab] = entry
@@ -901,6 +908,8 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var replicaRowFocusRequest: UInt64 = 0
     /// The replica's detail panel, while open (R2).
     @Published var replicaDetail: RemindersReplicaDetailState?
+    /// The New style's card, picking, Due line and Find (Build B).
+    let mainPage = TasksMainPageState()
     /// The subtask row clicked in the replica (⇧Tab makes it a task).
     @Published var replicaSubtaskSelection: UUID?
     /// How many photos each item's writing holds (the row's image marker),
@@ -1874,10 +1883,15 @@ final class TasksPageModel: ObservableObject {
 
     /// The add bar always adds (Direction A): to Later on Later, to Now on
     /// Now and on Done.
-    var addStatus: TaskStatus { tab == .backlog ? .backlog : .todo }
+    var addStatus: TaskStatus {
+        // D2: the quick-capture hotkey files into Later in the New style.
+        if mainPage.captureIntoLater { return .backlog }
+        return tab == .backlog ? .backlog : .todo
+    }
 
     var addPlaceholder: String {
-        switch tab {
+        if mainPage.captureIntoLater { return String(localized: "Add to later") }
+        return switch tab {
         case .now, .done: String(localized: "Add a task")
         case .backlog: String(localized: "Add to later")
         }
@@ -1913,7 +1927,8 @@ final class TasksPageModel: ObservableObject {
         addedRequest = ScrollRequest(id: task.id)
         // A requested reveal can be blocked by another unsaved edit. Only
         // suppress the out-of-view feedback once the task is actually shown.
-        if tab == .done, !revealed { showToast(String(localized: "Added to Now")) }
+        if mainPage.captureIntoLater, tab != .backlog { showToast(String(localized: "Added to Later")) }
+        else if tab == .done, !revealed { showToast(String(localized: "Added to Now")) }
         // Added where the view or a Find hides it (item 6): say so.
         else if !revealed, narrows(tab), !rows(for: tab).contains(where: { $0.id == task.id }) {
             showToast(String(localized: "Added · hidden by this view"))

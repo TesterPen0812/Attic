@@ -1025,6 +1025,7 @@ final class TaskStore: ObservableObject {
         url: String?? = nil,
         dueDay: DueDay?? = nil,
         allowingUnfinishedSubtasks: Bool = false,
+        placingAtEnd: Bool = false,
         at fixedTimestamp: Date? = nil
     ) throws -> Bool {
         let normalizedURL = try url.map { try Self.normalizedTaskURL($0) }
@@ -1084,7 +1085,15 @@ final class TaskStore: ObservableObject {
         // A state change moves the task to the top of its new group (a done
         // task lands at the top of the done group); nothing else moves it.
         var destinationManualOrder: Int64?
-        if statusChanged {
+        if statusChanged, placingAtEnd {
+            // Pick your Now (D2): a picked task joins the end of Now.
+            destinationManualOrder = try endManualOrder(
+                status: destinationStatus,
+                parentID: task.parentID,
+                excluding: task.id,
+                updatedAt: timestamp
+            )
+        } else if statusChanged {
             destinationManualOrder = try nextManualOrder(
                 status: destinationStatus,
                 parentID: task.parentID,
@@ -1140,7 +1149,8 @@ final class TaskStore: ObservableObject {
         _ ids: [UUID],
         priority: TaskPriority? = nil,
         status: TaskStatus? = nil,
-        addingTag: String? = nil
+        addingTag: String? = nil,
+        placingAtEnd: Bool = false
     ) -> Bool {
         guard !ids.isEmpty else { return false }
         var changed = false
@@ -1153,7 +1163,8 @@ final class TaskStore: ObservableObject {
                     changed = try stageUpdate(
                         task, priority: priority, status: status,
                         tags: addingTag.map { AtticTag.normalizedSet(task.tags + [$0]) },
-                        allowingUnfinishedSubtasks: true
+                        allowingUnfinishedSubtasks: true,
+                        placingAtEnd: placingAtEnd
                     ) || changed
                 }
             }
@@ -4208,6 +4219,30 @@ final class TaskStore: ObservableObject {
     /// a subtask in a group nothing ordered yet (subtasks keep their
     /// creation order until someone reorders them). A main task always gets
     /// one, so renaming or retagging it never moves it.
+    /// A place after every task of the group (higher orders come first),
+    /// for a task that joins the end of its new group: Pick for Now.
+    private func endManualOrder(
+        status: TaskStatus,
+        parentID: UUID?,
+        excluding excludedID: UUID?,
+        updatedAt: Date
+    ) throws -> Int64? {
+        let group = tasks.filter {
+            $0.id != excludedID && $0.status == status && $0.parentID == parentID
+        }
+        guard let minimum = group.compactMap(\.manualOrder).min() else {
+            return parentID == nil ? Self.manualOrderStride : nil
+        }
+        guard minimum >= .min + Self.manualOrderStride else {
+            let orderedGroup = (parentID.map(subtasks(of:)) ?? orderedTasks(for: status)).filter {
+                $0.id != excludedID && $0.status == status && $0.parentID == parentID
+            }
+            try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
+            return Self.manualOrderStride / 2
+        }
+        return minimum - Self.manualOrderStride
+    }
+
     private func nextManualOrder(
         status: TaskStatus,
         parentID: UUID? = nil,
