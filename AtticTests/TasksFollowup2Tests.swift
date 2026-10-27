@@ -187,8 +187,11 @@ final class TasksViewOptionsTests: XCTestCase {
         try make("B overdue", .medium, due: -2)
         try make("A plain")
         try make("Later one", status: .backlog)
+        // The owner's panel design: the rows are drawn in date groups
+        // (Overdue · Tomorrow · each later day · No date), the manual order
+        // kept inside each.
         let manual = titles()
-        XCTAssertEqual(manual, ["A plain", "B overdue", "C tomorrow", "D low next week", "E high"])
+        XCTAssertEqual(manual, ["B overdue", "C tomorrow", "D low next week", "A plain", "E high"])
         var view = TasksViewOptions()
         view.show = .dueOrOverdue
         model.setViewOptions(view, for: .now)
@@ -210,7 +213,8 @@ final class TasksViewOptionsTests: XCTestCase {
         XCTAssertEqual(titles(), ["B overdue", "C tomorrow", "D low next week", "A plain", "E high"],
                        "earliest first, undated after, ties in manual order")
         model.setViewOptions(TasksViewOptions(sort: .priority), for: .now)
-        XCTAssertEqual(titles(), ["C tomorrow", "E high", "B overdue", "D low next week", "A plain"])
+        XCTAssertEqual(titles(), ["B overdue", "C tomorrow", "D low next week", "E high", "A plain"],
+                       "by priority inside each date group")
         XCTAssertFalse(model.reorders(on: .now), "a sorted list does not reorder")
         model.setViewOptions(TasksViewOptions(), for: .now)
         XCTAssertEqual(titles(), manual, "Manual Order shows the order as it was")
@@ -223,7 +227,10 @@ final class TasksViewOptionsTests: XCTestCase {
         let started = try make("Started late", due: 9)
         XCTAssertTrue(model.library.updateTask(started.id, status: .inProgress).isApplied)
         model.setViewOptions(TasksViewOptions(sort: .dueDate), for: .now)
-        XCTAssertEqual(titles(), ["Started late", "Todo soon"])
+        // The owner's panel design: the date groups come first; inside a
+        // group started tasks stay on top.
+        XCTAssertEqual(titles(), ["Todo soon", "Started late"])
+        XCTAssertEqual(model.sections(for: .now).groups.count, 2)
     }
 
     /// Now's "Completed today" is never filtered; rows the view hides leave
@@ -237,7 +244,8 @@ final class TasksViewOptionsTests: XCTestCase {
         model.selectCopies([plain.id, dated.id])
         model.setViewOptions(TasksViewOptions(show: .dueOrOverdue, sort: .priority), for: .now)
         XCTAssertEqual(model.sections(for: .now).open.map(\.id), [dated.id])
-        XCTAssertEqual(model.sections(for: .now).done.map(\.id), [done.id], "Completed today stays whole")
+        // The owner's panel design: a finished task lives in Done only.
+        XCTAssertTrue(model.sections(for: .now).done.isEmpty, "Now has no Completed today")
         XCTAssertEqual(model.selection, [dated.id], "a hidden row leaves the selection")
         model.showAll(on: .now)
         XCTAssertEqual(model.viewOptions(for: .now), TasksViewOptions(sort: .priority), "Show All keeps the order")

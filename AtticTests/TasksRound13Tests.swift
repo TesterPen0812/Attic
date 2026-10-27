@@ -417,7 +417,9 @@ final class TasksRound13Tests: XCTestCase {
         let model = hosted.model
         let rows = model.rows(for: .now)
         // Two neighbours in one group (started and not started stay apart).
-        let at = try XCTUnwrap(rows.indices.dropLast().first { rows[$0].status == rows[$0 + 1].status && rows[$0].status != .done })
+        // (and, in the owner's panel design, in one date group).
+        let at = try XCTUnwrap(rows.indices.dropLast().first { rows[$0].status == rows[$0 + 1].status && rows[$0].status != .done
+            && model.groupKey(of: rows[$0].id, on: .now) == model.groupKey(of: rows[$0 + 1].id, on: .now) })
         let pair = [rows[at], rows[at + 1]]
         let first = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: pair[0].id)])
         let second = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: pair[1].id)])

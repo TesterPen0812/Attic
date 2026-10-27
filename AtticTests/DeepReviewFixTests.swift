@@ -804,7 +804,7 @@ final class DeepReviewFixTests: XCTestCase {
         let next = try XCTUnwrap(hosted.pointer.keyboardRow?.id)
         let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: next)])
         let list = try shownList(hosted)
-        let listTop = TasksViewport.listTop(tabsTop: layout(hosted).headerBottom + AtticLayout.pageTabsTop)
+        let listTop = TasksViewport.listTop(tabsTop: layout(hosted).headerBottom)
         let clip = list.contentView
         clip.scroll(to: CGPoint(x: 0, y: clip.bounds.origin.y + frame.minY - listTop))
         list.reflectScrolledClipView(clip)

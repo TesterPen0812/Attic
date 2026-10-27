@@ -114,8 +114,7 @@ final class TasksRound8Tests: XCTestCase {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.go(to: .done)
-        let listTop = TasksViewport.listTop(tabsTop: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520)).headerBottom
-            + AtticLayout.pageTabsTop)
+        let listTop = TasksViewport.listTop(tabsTop: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520)).headerBottom)
         var y = listTop + 4
         while hosted.model.selection.isEmpty, y < listTop + 160 {
             hosted.click(y: y)

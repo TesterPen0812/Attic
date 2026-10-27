@@ -819,7 +819,7 @@ struct AtticAddBar: View {
     private func plusCircle(disabled: Bool) -> some View {
         let tokens = design.tokens
         let active = hasText && !disabled
-        let disc = active ? tokens.ink(.inverseFill) : tokens.ink(.heading).withAlpha(0.1)
+        let disc = active ? tokens.ink(.inverseFill) : tokens.ink(.heading).withAlpha(disabled ? 0.04 : 0.1)
         let glyph = active ? tokens.ink(.onInverse) : tokens.ink(disabled ? .disabledIcon : .icon)
         let mark = ZStack {
             Circle().fill(disc.color)

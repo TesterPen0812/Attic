@@ -141,7 +141,9 @@ final class TasksRound12Tests: XCTestCase {
         defer { hosted.close() }
         let model = hosted.model
         let rows = model.rows(for: .now).map(\.model.title)
-        let stale = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
+        // A row on screen (the owner's panel design groups by date, so the
+        // undated "Call the plumber" is further down).
+        let stale = try XCTUnwrap(model.rows(for: .now).dropFirst(3).first?.id)
         try hosted.clickRow(stale, tab: .now)
         XCTAssertEqual(model.selection.count, 1, "a click selects one row and focuses it")
         // The actions menu picks a row far from the focused one.
@@ -319,6 +321,7 @@ final class TasksRound12Tests: XCTestCase {
     /// keyboard and is visible; an unrelated store update leaves it alone; a
     /// tab switch closes it and the other page's copy never opens one.
     func testOnlyTheActivePageHoldsTheEditor() throws {
+        throw XCTSkip("The owner's panel design (2026-10-27): Now has no Completed today copy; a finished task lives in Done only.")
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -355,6 +358,7 @@ final class TasksRound12Tests: XCTestCase {
     /// ⌘D on the selected row acts once, on the page shown, though the task
     /// has a row on two pages; ⌘C and the actions menu key belong to it too.
     func testKeysActOnceOnTheActivePageWhenATaskIsListedTwice() throws {
+        throw XCTSkip("The owner's panel design (2026-10-27): Now has no Completed today copy; a finished task lives in Done only.")
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
@@ -785,8 +789,9 @@ final class TasksRound12Tests: XCTestCase {
             return total == 0 ? 1 : Double(differing) / Double(total)
         }
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: height))
-        let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
-        let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
+        // The owner's panel design: the top controls end at the header.
+        let tabsTop = layout.headerBottom - AtticControlSize.headerControl
+        let tabsBottom = layout.headerBottom
         let bottomInset = max(AtticSpacing.panelMargin, layout.chromeInsets.bottom)
         let barTop = height - bottomInset - AtticControlSize.addBarHeight
         // The negative control: the bands covered by an opaque view.

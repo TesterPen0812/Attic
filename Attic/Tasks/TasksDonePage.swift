@@ -285,7 +285,7 @@ struct TasksDoneSearchField: View {
     var header = false
 
     var body: some View {
-        AtticTabsSearchField(placeholder: header ? String(localized: "Search") : model.searchPlaceholder(for: .done),
+        AtticTabsSearchField(placeholder: model.searchPlaceholder(for: .done),
                              text: Binding(get: { input.text }, set: { model.typeDoneSearch($0, nativeEdit: true) }),
                              isFocused: isFocused, nativeInputIdentifier: "tasks-done-search", floating: true, onEscape: onEscape,
                              header: header)

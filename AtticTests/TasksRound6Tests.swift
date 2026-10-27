@@ -115,21 +115,24 @@ final class TasksRound6Tests: XCTestCase {
     /// the field takes the tabs' line and the keyboard (CI run 1).
     func testTheMagnifierGivesTheSearchTheKeyboard() throws {
         try requireKeyWindowTests()
-        let hosted = try Hosted(height: 520, addBarFocused: true)
+        // The owner's panel design: the tabs are at the footer's left (they
+        // fold away while the add field has the keyboard, so it starts
+        // without it), the magnifier on the header's line.
+        let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
-        let y = layout.headerBottom + AtticLayout.pageTabsTop + AtticLayout.pageTabsHeight / 2
-        // A click on the Done tab, as a person arrives there (the tabs take
-        // the keyboard's focus, and they leave when the field comes).
+        let tabsY = 520 - max(AtticSpacing.panelMargin, layout.chromeInsets.bottom) - AtticControlSize.addBarHeight / 2
+        // A click on the Done tab, as a person arrives there.
         var tabX: CGFloat = 60
-        while tabX < 200, hosted.model.tab != .done {
-            hosted.click(y: y, x: tabX)
-            tabX += 6
+        while tabX < 120, hosted.model.tab != .done {
+            hosted.click(y: tabsY, x: tabX)
+            tabX += 4
         }
         XCTAssertEqual(hosted.model.tab, .done)
         hosted.spin(1)
-        var x = AtticLayout.panelSize.width - 12
-        while x > AtticLayout.panelSize.width - 80, !hosted.searchFieldShown {
+        let y = layout.headerBottom - AtticControlSize.headerControl / 2
+        var x = AtticLayout.panelSize.width - 50
+        while x > AtticLayout.panelSize.width - 120, !hosted.searchFieldShown {
             hosted.click(y: y, x: x)
             x -= 4
         }

@@ -324,7 +324,12 @@ final class OwnerFindingsReorderTests: XCTestCase {
         hosted.spin(1)
         let rows = hosted.model.rows(for: .now).filter { $0.status == .todo }
         XCTAssertGreaterThanOrEqual(rows.count, 3)
-        let first = try XCTUnwrap(rows.first)
+        // The owner's panel design: a row moves within its date group, so
+        // the dragged row is the first of a group with another below it.
+        let first = try XCTUnwrap(rows.first { row in
+            let group = hosted.model.shownGroup(of: row.id, status: .todo, on: .now)
+            return group.count >= 2 && group.first == row.id
+        })
         let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: first.id)])
         let start = CGPoint(x: 200, y: frame.midY)
         let window = hosted.window
@@ -361,7 +366,7 @@ final class OwnerFindingsReorderTests: XCTestCase {
         XCTAssertEqual(card.card, card.pointer, accuracy: 0.5, "the card is exactly under the pointer")
         XCTAssertTrue(hiddenRowSeen)
         XCTAssertNil(hosted.pointer.liftedCard.lift, "the card goes once it has landed")
-        let order = hosted.model.rows(for: .now).filter { $0.status == .todo }.map(\.id)
+        let order = hosted.model.shownGroup(of: first.id, status: .todo, on: .now)
         XCTAssertNotEqual(order.first, first.id, "the row moved down")
     }
 }

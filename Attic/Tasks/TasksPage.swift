@@ -726,7 +726,7 @@ struct TasksPage: View {
                             TasksDoneSearchField(model: model, input: model.doneSearchInput,
                                                  isFocused: $searchFocused, onEscape: endSearch, header: true)
                         } else {
-                            AtticTabsSearchField(placeholder: String(localized: "Search"),
+                            AtticTabsSearchField(placeholder: model.searchPlaceholder(for: model.tab),
                                                  text: Binding(get: { model.searchQuery(for: model.tab) },
                                                                set: { model.setSearchQuery($0, for: model.tab) }),
                                                  isFocused: $searchFocused, floating: true, onEscape: endSearch,

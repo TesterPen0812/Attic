@@ -230,17 +230,16 @@ final class TasksRound7HostedTests: XCTestCase {
         hosted.press("e", keyCode: 14)
         XCTAssertEqual(hosted.model.doneSearch, "e")
         // Click a result: the list's first rows, from under the tabs.
-        let listTop = TasksViewport.listTop(tabsTop: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520)).headerBottom
-            + AtticLayout.pageTabsTop)
+        let listTop = TasksViewport.listTop(tabsTop: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520)).headerBottom)
         var y = listTop + 4
         while hosted.model.selection.isEmpty, y < listTop + 160 {
             hosted.click(y: y)
             y += 8
         }
         XCTAssertEqual(hosted.model.selection.count, 1, "a click selects a result")
-        // Back into the search field on the tabs' line.
+        // Back into the search field on the header's line (the owner's panel design).
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
-        hosted.click(y: layout.headerBottom + AtticLayout.pageTabsTop + AtticLayout.pageTabsHeight / 2, x: 150)
+        hosted.click(y: layout.headerBottom - AtticControlSize.headerControl / 2, x: 150)
         XCTAssertTrue(hosted.model.selection.isEmpty, "back in the search, no row stays lit")
         XCTAssertEqual(hosted.model.doneSearch, "e", "the query stays")
     }
