@@ -775,6 +775,15 @@ struct TasksPage: View {
         .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
     }
 
+    /// Whether `x` is on the search's stretch of the header's line (not the
+    /// shell's pin or page switch).
+    private func searchLineContains(x: CGFloat) -> Bool {
+        let leading = layout.chromeInsets.leading + AtticControlSize.headerControl + TasksDesignMetrics.searchFromPin
+        let trailing = layout.panelSize.width - layout.chromeInsets.trailing
+            - AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count) - TasksDesignMetrics.headerGap
+        return x >= leading && x <= trailing
+    }
+
     /// Clear filters (the design's empty state): the search ends and the
     /// filters return to All; the sort is kept.
     private func clearFilters(on tab: TasksTab) {
@@ -2561,7 +2570,9 @@ struct TasksPage: View {
         if searchShown, event.type == .leftMouseDown,
            event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty,
            let point = pointer.location(of: event), point.y < viewportTop,
-           point.y > layout.headerBottom {
+           // The owner's panel design: the search shares the header's line,
+           // between the pin and the page switch (the shell's own controls).
+           point.y > layout.chromeInsets.top, searchLineContains(x: point.x) {
             if !model.selection.isEmpty { model.clearSelection() }
             if focusedRow != nil {
                 if Self.isOnSearchField(event, in: window, placeholder: model.searchPlaceholder(for: model.tab)) {
