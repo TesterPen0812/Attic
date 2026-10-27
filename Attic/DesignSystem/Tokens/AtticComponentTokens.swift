@@ -1049,6 +1049,8 @@ enum TasksRowDesign {
     static let tile: CGFloat = 28
     static let tilesTop: CGFloat = 4
     static let tilesBottom: CGFloat = 1
+    /// The date button's own padding (11 px): its text ends 5.5 inside.
+    static let dateInset: CGFloat = 5.5
 
     static func height(twoLine: Bool, tiles: Bool) -> CGFloat {
         var height = paddingY * 2 + line

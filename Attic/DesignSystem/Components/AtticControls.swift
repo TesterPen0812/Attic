@@ -149,6 +149,8 @@ struct AtticRaisedButton: View {
                 .offset(x: glyphOffsetX, y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
+                // A 27 pt header control still answers a 28 pt target.
+                .contentShape(Rectangle().inset(by: -AtticControlSize.hitOutset(for: size.height)))
                 .background {
                     if chip, !flat {
                         AtticSelectedChip(outerHeight: size.height)

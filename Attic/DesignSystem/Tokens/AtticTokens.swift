@@ -195,8 +195,13 @@ enum AtticLayout {
     /// default corner): the circles (16 in the page) land on the content
     /// line. The live page and the Appearance preview share it.
     static func tasksPageEdge(chromeInset: CGFloat) -> CGFloat {
-        max(0, chromeInset + contentFromChrome - circleX)
+        // The owner's panel design (2026-10-27): the rows' highlight 10 from
+        // the panel's edge (chrome − 6, 20 px at 2×), so the page edge sits
+        // a highlight inset outside it (2 at the default corner).
+        max(0, chromeInset - tasksListFromChrome - rowHighlightInset)
     }
+    /// The design's list inset, inside the controls' line.
+    static let tasksListFromChrome: CGFloat = 6
     /// Settings' sidebar keeps its own highlight inset.
     static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28

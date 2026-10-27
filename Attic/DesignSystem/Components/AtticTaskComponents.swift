@@ -1359,7 +1359,8 @@ struct AtticTaskRow: View {
                 }
             }
             .padding(.leading, AtticLayout.textX)
-            .padding(.trailing, AtticLayout.rowHighlightInset + d.paddingX)
+            // The date's text ends where the design's capsule text does.
+            .padding(.trailing, AtticLayout.rowHighlightInset + d.paddingX + d.dateInset)
             .padding(.top, d.paddingY)
             // "New Tag…" on a row with no tags: the list opens from the start
             // of the text (the details line's start), never the row's centre.

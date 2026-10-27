@@ -59,7 +59,9 @@ final class FloatingControlsTests: XCTestCase {
     /// longer gone above its lower edge).
     func testAPlainTopLineIsPartOfTheTopControls() {
         let tabsTop: CGFloat = 80
-        XCTAssertGreaterThanOrEqual(TasksViewport.topEdges(tabsTop: tabsTop).top, TasksViewport.plainLine(tabsTop: tabsTop).upperBound)
+        // The owner's panel design: Tasks has no tabs line; its top controls
+        // end at `tabsTop` (the header, and the chips when open).
+        XCTAssertGreaterThanOrEqual(TasksViewport.topEdges(tabsTop: tabsTop).top, tabsTop)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 520))
         XCTAssertGreaterThanOrEqual(NoteHistoryPage.edges(layout).top, NoteHistoryPage.versionLine(layout).upperBound)
     }
@@ -95,12 +97,10 @@ final class FloatingControlsTests: XCTestCase {
         let tabsTop: CGFloat = 80
         let top = TasksViewport.topEdges(tabsTop: tabsTop)
         XCTAssertEqual(top.top, TasksViewport.controlsBottom(tabsTop: tabsTop))
-        XCTAssertEqual(TasksViewport.plainLine(tabsTop: tabsTop).upperBound,
-                       tabsTop + AtticLayout.pageTabsHeight + AtticPageTabsMetrics.underlineHeight + AtticPageTabsMetrics.underlineGap,
-                       "the underline is part of the line")
-        XCTAssertGreaterThanOrEqual(top.top, TasksViewport.plainLine(tabsTop: tabsTop).upperBound)
-        XCTAssertGreaterThan(TasksViewport.listTop(tabsTop: tabsTop), TasksViewport.plainLine(tabsTop: tabsTop).upperBound,
-                             "a resting row is clear of the line")
+        // The owner's panel design: no tabs line; a resting row is 2 under
+        // the top controls.
+        XCTAssertGreaterThanOrEqual(top.top, tabsTop)
+        XCTAssertEqual(TasksViewport.listTop(tabsTop: tabsTop), tabsTop + 2, "a resting row is clear of the controls")
 
         let inset: CGFloat = 12
         let idle = TasksViewport.bottomEdges(stack: TasksViewport.reservedStack - AtticPickerMetrics.stripHeight, bottomInset: inset)
@@ -380,11 +380,13 @@ final class TopGlassTests: XCTestCase {
         // The capsule's edge and the last circle's on the controls' line;
         // the labels stay on the content line (24 pt at the 16 pt chrome).
         let chrome = AtticStyle.chromeMinimumInset
+        // The owner's panel design (2026-10-27): Tasks has no tabs line; its
+        // rows' highlight sits 6 inside the controls' line (10 from the
+        // panel's edge). Notes keeps its own line.
         let pageEdge = AtticLayout.tasksPageEdge(chromeInset: chrome)
-        XCTAssertEqual(pageEdge + AtticLayout.pageTabsX, chrome + AtticLayout.contentFromChrome, "the labels where they were")
-        XCTAssertEqual(pageEdge + AtticLayout.pageTabsX - AtticTopGlassMetrics.capsulePadding, chrome, "the capsule's leading edge")
-        XCTAssertEqual(pageEdge + AtticTopGlassMetrics.lineEndInset, chrome, "the last circle's trailing edge")
-        XCTAssertEqual(AtticNoteMetrics.libraryPageEdge(chromeInset: chrome), pageEdge, "Notes' line on the same edges")
+        XCTAssertEqual(pageEdge + AtticLayout.rowHighlightInset, chrome - AtticLayout.tasksListFromChrome, "the rows' highlight")
+        XCTAssertEqual(AtticNoteMetrics.libraryPageEdge(chromeInset: chrome), chrome + AtticLayout.contentFromChrome - AtticLayout.circleX,
+                       "Notes' line where it was")
     }
 
     func testTheTopLinesControlsAreFloatingGlass() {
