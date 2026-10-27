@@ -330,7 +330,7 @@ final class TasksRound3Tests: XCTestCase {
     // MARK: - The list viewport (owner fix 8, review 9)
 
     func testTheViewportKeepsTheRestingRowAndClearsTheMeasuredBottomStack() {
-        XCTAssertEqual(TasksViewport.listTop(tabsTop: 80), 110, "the tabs (16) and 14 under them")
+        XCTAssertEqual(TasksViewport.listTop(tabsTop: 80), 82, "the panel design: 2 under the header (no tabs line)")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36, bottomInset: 24), 76)
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 36 + 8 + 28, bottomInset: 24), 112, "the strip adds its room")
         XCTAssertEqual(TasksViewport.bottomClearance(stackHeight: 0, bottomInset: 12),

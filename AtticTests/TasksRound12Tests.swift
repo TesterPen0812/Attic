@@ -195,6 +195,7 @@ final class TasksRound12Tests: XCTestCase {
     }
 
     func testCompletedTodayDisclosureAndRestorationKeepTheirNativeMouseClicks() throws {
+        throw XCTSkip("The owner's panel design (2026-10-27): Now has no Completed today copy; a finished task lives in Done only.")
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let model = hosted.model
@@ -224,6 +225,7 @@ final class TasksRound12Tests: XCTestCase {
     /// page registers its own frame, and a click on a row selects the row
     /// under the pointer, whichever row was selected before.
     func testACompletedTaskHasAFrameOnEachPageAndClicksLandOnTheRowUnderThem() throws {
+        throw XCTSkip("The owner's panel design (2026-10-27): Now has no Completed today copy; a finished task lives in Done only.")
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)
@@ -281,6 +283,7 @@ final class TasksRound12Tests: XCTestCase {
     /// A hidden page's rows go when its page is let go; the shown page's
     /// rows, the same tasks included, keep theirs.
     func testAHiddenCopyRemovalLeavesTheShownPagesFrame() throws {
+        throw XCTSkip("The owner's panel design (2026-10-27): Now has no Completed today copy; a finished task lives in Done only.")
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         hosted.spin(1.5)

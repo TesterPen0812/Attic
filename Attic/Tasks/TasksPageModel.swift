@@ -1192,7 +1192,9 @@ final class TasksPageModel: ObservableObject {
         let parent = found.parentID.flatMap { store.listedTask(withID: $0) }
         let task = parent ?? found
         let archived = store.task(withID: task.id) == nil
-        let target: TasksTab = task.status == .backlog ? .backlog : (archived ? .done : .now)
+        // The owner's panel design: a task finished today lives in Done too.
+        let finishedToday = !archived && task.status == .done && held[task.id] == nil
+        let target: TasksTab = task.status == .backlog ? .backlog : (archived || finishedToday ? .done : .now)
         // An edit that can't be saved keeps the page where it is: the
         // request is deferred (review 2) and the caller keeps it.
         guard finishEditing() else { return .blocked }
@@ -1203,7 +1205,13 @@ final class TasksPageModel: ObservableObject {
         // 4): an open Completed today, no Done search that hides it, its
         // page of the Done log loaded, its parent's quick look or details.
         if target == .now, task.status == .done { completedTodayExpanded = true }
-        if target == .done {
+        if target == .done, finishedToday {
+            if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
+            let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
+            if parent != nil { doneDetailID = task.id }
+            unfoldDoneDay(of: task.id)
+        } else if target == .done {
             if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
@@ -1223,8 +1231,21 @@ final class TasksPageModel: ObservableObject {
             setSearchQuery("", for: target)
             showAll(on: target)
         }
+        // A folded date group opens to show it (the owner's panel design).
+        if target != .done, let key = groupKey(of: task.id, on: target), folded(on: target).contains(key) {
+            toggleGroup(key, on: target)
+        }
+        if target == .done { unfoldDoneDay(of: task.id) }
         reveal(task.id)
         return .shown
+    }
+
+    /// Opens the folded Done day that holds `id` (a `show`).
+    private func unfoldDoneDay(of id: UUID) {
+        guard !folded(on: .done).isEmpty,
+              let task = store.listedTask(withID: id), let finished = task.completedAt ?? Optional(task.updatedAt) else { return }
+        let key = TasksPanelDesign.GroupKind.finished(services.calendar().startOfDay(for: finished)).key
+        if folded(on: .done).contains(key) { toggleGroup(key, on: .done) }
     }
 
     private func reveal(_ id: UUID) {

@@ -104,17 +104,18 @@ final class PhaseXDesign1Tests: XCTestCase {
     }
 
     func testEveryNoticeHeadlineFitsTheSlotAt320() {
-        XCTAssertEqual(slotAt320, 168)
+        // The owner's panel design's 27 pt header controls leave the pill 176.
+        XCTAssertEqual(slotAt320, 176)
         for headline in NoteStatusPresentation.allNoticeHeadlines {
             let item = AtticStatusItem(id: "notice", systemName: "info.circle", title: headline, tone: .normal)
             let pending = AtticStatusItem(id: "pending", systemName: nil, title: headline, tone: .quiet)
             // A notice has its ✕; a second state adds "+N"; progress has a spinner.
             for (name, width, natural) in [
-                ("with ✕", pillWidth(item, closable: true, room: slotAt320), pillWidth(item, closable: true, room: 176)),
+                ("with ✕", pillWidth(item, closable: true, room: slotAt320), pillWidth(item, closable: true, room: 200)),
                 ("with +1", pillWidth(item, more: 1, closable: false, room: slotAt320),
-                 pillWidth(item, more: 1, closable: false, room: 176)),
+                 pillWidth(item, more: 1, closable: false, room: 200)),
                 ("progress", pillWidth(pending, closable: false, room: slotAt320),
-                 pillWidth(pending, closable: false, room: 176))
+                 pillWidth(pending, closable: false, room: 200))
             ] {
                 // Not cut: the pill is as wide at 162 as when it is given
                 // every point the slot could ever have.
@@ -126,8 +127,9 @@ final class PhaseXDesign1Tests: XCTestCase {
 
     /// The test above is only worth something if it can fail.
     func testTheFitCheckSeesALongSentenceBeingCut() {
-        let sentence = AtticStatusItem(id: "notice", systemName: "info.circle", title: Self.approvedSentences[0], tone: .normal)
-        let cut = pillWidth(sentence, closable: true, room: slotAt320)
+        let sentence = AtticStatusItem(id: "notice", systemName: "info.circle", title: Self.approvedSentences[0] + " " + Self.approvedSentences[0], tone: .normal)
+        // The slot is now the pill's own cap (176); a narrower room shows the cut.
+        let cut = pillWidth(sentence, closable: true, room: slotAt320 - 8)
         let natural = pillWidth(sentence, closable: true, room: 4000)
         XCTAssertLessThan(cut, natural)
     }
@@ -164,7 +166,7 @@ final class PhaseXDesign1Tests: XCTestCase {
     func testTheFixedStatusWordsFitTheSlotAt320() {
         for label in ["Only in memory", "Not saved", "Deleted elsewhere", "Adding files", "Read only"] {
             let item = AtticStatusItem(id: label, systemName: "lock", title: label, tone: .quiet)
-            XCTAssertEqual(pillWidth(item, closable: false, room: slotAt320), pillWidth(item, closable: false, room: 176),
+            XCTAssertEqual(pillWidth(item, closable: false, room: slotAt320), pillWidth(item, closable: false, room: 200),
                            accuracy: 0.5, "“\(label)” is cut at 320")
         }
     }

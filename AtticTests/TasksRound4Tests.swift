@@ -442,11 +442,12 @@ final class TasksRound4Tests: XCTestCase {
     func testShowOpensCompletedTodayAndClearsAnExcludingDoneSearch() throws {
         let done = try XCTUnwrap(store.create(title: "Renew domain"))
         XCTAssertTrue(library.completeTask(done.id).isApplied)
-        XCTAssertFalse(model.completedTodayExpanded)
         XCTAssertEqual(model.show(done.id), .shown)
-        XCTAssertEqual(model.tab, .now)
-        XCTAssertTrue(model.completedTodayExpanded, "Completed today opens to show it")
-        XCTAssertTrue(model.rows(for: .now).contains { $0.id == done.id })
+        // The owner's panel design (2026-10-27): a task finished today lives
+        // in Done, which shows it (Now has no Completed today).
+        XCTAssertEqual(model.tab, .done)
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).contains { $0.id == done.id })
+        XCTAssertEqual(model.selection, [done.id])
 
         // A Done log task behind a search that excludes it, beyond the
         // first loaded page.

@@ -463,9 +463,9 @@ final class TasksRound13Tests: XCTestCase {
     /// first row's words rest below it.
     func testTheFirstRowsWordsRestBelowTheTabsLine() {
         let rest = TasksViewport.listTop(tabsTop: 80) + AtticTaskRowMetrics.titleTop(twoLine: false)
-        XCTAssertGreaterThan(rest, TasksViewport.plainLine(tabsTop: 80).upperBound)
-        XCTAssertGreaterThanOrEqual(TasksViewport.topEdges(tabsTop: 80).top, TasksViewport.plainLine(tabsTop: 80).upperBound,
-                                    "the blur covers the whole line")
+        // The owner's panel design: the controls end at `tabsTop` (no tabs line).
+        XCTAssertGreaterThan(rest, 80)
+        XCTAssertGreaterThanOrEqual(TasksViewport.topEdges(tabsTop: 80).top, 80, "the blur covers the header's controls")
     }
 
     // MARK: - Item 6: the new-subtask field says what it is

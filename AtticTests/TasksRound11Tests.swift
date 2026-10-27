@@ -129,8 +129,9 @@ final class TasksRound11Tests: XCTestCase {
     func testRowsRunOnUnderTheTabsAndRestClearOfThem() {
         let top = TasksViewport.topEdges(tabsTop: 80)
         XCTAssertEqual(top.top, TasksViewport.controlsBottom(tabsTop: 80), "the blur covers the tabs line")
-        XCTAssertGreaterThan(TasksViewport.listTop(tabsTop: 80), TasksViewport.plainLine(tabsTop: 80).upperBound,
-                             "the first row rests below the tab labels")
+        // The owner's panel design: no tabs line; `tabsTop` is the bottom
+        // of the header (and the chips), and the first row rests 2 below it.
+        XCTAssertEqual(TasksViewport.listTop(tabsTop: 80), 82, "the first row rests below the header's controls")
     }
 
     /// Files over the page land on the row under them, never on another.

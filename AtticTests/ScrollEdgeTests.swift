@@ -82,14 +82,14 @@ final class ScrollEdgeTests: XCTestCase {
         defer { hosted.close() }
         let list = try shownList(hosted)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
-        let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
+        let tabsTop = layout.headerBottom
         let listTop = TasksViewport.listTop(tabsTop: tabsTop)
         let content = try XCTUnwrap(hosted.window.contentView)
         let frame = list.convert(list.bounds, to: content)
         XCTAssertEqual(frame.minY, 0, accuracy: 0.5)
         XCTAssertEqual(list.contentInsets.top, listTop, accuracy: 0.5)
         let first = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
-        XCTAssertEqual(try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: first)]).minY, listTop, accuracy: 0.5,
+        XCTAssertEqual(try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: first)]).minY, listTop + TasksDesignMetrics.groupHeaderHeight, accuracy: 0.5,
                        "the first row keeps its Clean cut resting place")
         XCTAssertTrue(Self.pockets(in: list).isEmpty, "a former soft choice cannot enable native edges")
         list.contentView.scroll(to: CGPoint(x: 0, y: 400))
@@ -107,7 +107,7 @@ final class ScrollEdgeTests: XCTestCase {
         defer { hosted.close() }
         let list = try shownList(hosted)
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
-        XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: layout.headerBottom + AtticLayout.pageTabsTop),
+        XCTAssertEqual(list.contentInsets.top, TasksViewport.listTop(tabsTop: layout.headerBottom),
                        accuracy: 0.5)
         list.contentView.scroll(to: CGPoint(x: 0, y: 400))
         list.reflectScrolledClipView(list.contentView)

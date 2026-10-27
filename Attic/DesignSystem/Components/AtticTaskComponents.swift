@@ -451,6 +451,8 @@ struct AtticTitleEditing {
 /// The title editor: the row's title style, in place, focused on appear.
 /// With `tokens`, the add bar's native chip field (owner fix 4).
 struct AtticRowTitleEditor: View {
+    /// A task row's title is the panel design's 12 pt medium; subtasks keep theirs.
+    var style: AtticTextStyle = .rowTitle
     let editing: AtticTitleEditing
 
     @Environment(\.atticDesign) private var design
@@ -481,7 +483,7 @@ struct AtticRowTitleEditor: View {
                     undoFallback: tokens.undoFallback,
                     redoFallback: tokens.redoFallback
                 ),
-                style: .rowTitle,
+                style: style,
                 ink: .heading,
                 // On its row (selected while edited): the row's secondary grey.
                 pieceInk: .helper,
@@ -499,7 +501,7 @@ struct AtticRowTitleEditor: View {
             TextField("", text: editing.text,
                       prompt: editing.placeholder.map { Text($0).foregroundStyle(design.tokens.color(.placeholder)) })
                 .textFieldStyle(.plain)
-                .font(AtticTextStyle.rowTitle.font)
+                .font(style.font)
                 .foregroundStyle(design.tokens.color(.heading))
                 .focused($focused)
                 .onSubmit { finish(commit: true) }
@@ -1296,8 +1298,11 @@ struct AtticTaskRow: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .hidden()
                             .overlay(alignment: .leading) {
-                                AtticRowTitleEditor(editing: titleEditing)
+                                AtticRowTitleEditor(style: .taskTitle, editing: titleEditing)
                                     .frame(height: m.titleLineHeight)
+                                    // The field's 12 pt text sits a point high
+                                    // in its line: on the label's glyphs.
+                                    .offset(y: 0.5)
                             }
                             .layoutPriority(-1)
                     } else {

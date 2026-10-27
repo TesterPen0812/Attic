@@ -371,11 +371,12 @@ struct AtticPageButton<Page: Hashable>: View {
             }
             // The owner's panel design: shut, a small chevron after the
             // current page says it opens.
-            AtticIcon(systemName: "chevron.down", size: 7, weight: .semibold, ink: .chevron)
-                .frame(width: open ? 0 : M.chevronWidth, height: M.segment)
-                .opacity(open ? 0 : 1)
-                .clipped()
-                .accessibilityHidden(true)
+            if !open {
+                AtticIcon(systemName: "chevron.down", size: 7, weight: .semibold, ink: .chevron)
+                    .frame(width: M.chevronWidth, height: M.segment)
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(M.inset)
         .frame(height: size)
