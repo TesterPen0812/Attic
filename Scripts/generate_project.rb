@@ -55,6 +55,11 @@ ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
+# Isolated, store-free Canvas measurement lab; no shipping target dependency.
+canvas_lab = project.new_target(:application, 'CanvasLab', :osx, '26.0')
+canvas_driver = project.new_target(:command_line_tool, 'CanvasLabDriver', :osx, '26.0')
+canvas_recorder = project.new_target(:command_line_tool, 'CanvasLabRecorder', :osx, '26.0')
+canvas_tests = project.new_target(:command_line_tool, 'CanvasLabTests', :osx, '26.0')
 # Exact released parser dependency; the app, invisible unit host and crash
 # helper compile NoteMarkdownImport. Test bundles consume the host's adapter.
 markdown_package = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
@@ -88,6 +93,38 @@ def add_swift_sources(project, target, group_name, directory)
   group
 end
 
+lab_core = add_swift_sources(project, canvas_lab, 'CanvasLab/Core', 'CanvasLab/Core')
+add_swift_sources(project, canvas_lab, 'CanvasLab/App', 'CanvasLab/App')
+add_swift_sources(project, canvas_driver, 'CanvasLab/Driver', 'CanvasLab/Driver')
+add_swift_sources(project, canvas_recorder, 'CanvasLab/Recorder', 'CanvasLab/Recorder')
+add_swift_sources(project, canvas_tests, 'CanvasLab/Tests', 'CanvasLab/Tests')
+lab_core.files.each { |ref| canvas_tests.source_build_phase.add_file_reference(ref) }
+canvas_driver.source_build_phase.add_file_reference(lab_core.files.find { |ref| ref.path == 'Clock.swift' })
+[canvas_lab, canvas_driver, canvas_recorder, canvas_tests].each do |target|
+  target.build_configurations.each do |config|
+    settings = config.build_settings
+    settings['SWIFT_VERSION'] = '5.0'
+    settings['SWIFT_STRICT_CONCURRENCY'] = 'complete'
+    settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+    settings['SWIFT_OPTIMIZATION_LEVEL'] = '-O'
+    settings['PRODUCT_BUNDLE_IDENTIFIER'] = "com.taha.Attic.lab.canvas-#{target.name.downcase}"
+    settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+    settings['CODE_SIGN_STYLE'] = 'Manual'
+    settings['CODE_SIGN_IDENTITY'] = '-'
+    settings['DEVELOPMENT_TEAM'] = ''
+    settings['ENABLE_HARDENED_RUNTIME'] = 'NO'
+    settings['ENABLE_DEBUG_DYLIB'] = 'NO'
+  end
+end
+canvas_tests.build_configurations.each do |config|
+  config.build_settings['FRAMEWORK_SEARCH_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks'
+  config.build_settings['LD_RUNPATH_SEARCH_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks $(PLATFORM_DIR)/Developer/usr/lib'
+  config.build_settings['LIBRARY_SEARCH_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/usr/lib'
+  config.build_settings['SWIFT_INCLUDE_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/usr/lib'
+end
+canvas_lab.build_configurations.each do |config|
+  config.build_settings['INFOPLIST_KEY_LSUIElement'] = 'YES'
+end
 app_group = add_swift_sources(project, app, 'Attic', 'Attic')
 add_swift_sources(
   project,
@@ -466,6 +503,12 @@ mobile_scheme.test_action.environment_variables = Xcodeproj::XCScheme::Environme
 ])
 mobile_scheme.save_as(staged_project_path, 'AtticMobile', true)
 
+lab_scheme = Xcodeproj::XCScheme.new
+[canvas_lab, canvas_driver, canvas_recorder, canvas_tests].each { |target| lab_scheme.add_build_target(target) }
+lab_scheme.set_launch_target(canvas_lab)
+lab_scheme.launch_action.build_configuration = 'Local'
+lab_scheme.save_as(staged_project_path, 'CanvasLab', true)
+
 # Keep target UUIDs stable when the macOS source graph changes. The checked-in
 # schemes are part of the generated project contract, and changing only the
 # macOS target's source list must not churn their buildable references.
@@ -478,7 +521,11 @@ stable_target_uuids = {
   ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',
   mobile_app => '6A9C0775F09BF19B3C70496EEC4AF237',
   mobile_tests => 'A7E2FBB4FDEEC93FE643B32D6940915E',
-  mobile_ui_tests => '1BD194A0EE08899209C8473CFFD68DA0'
+  mobile_ui_tests => '1BD194A0EE08899209C8473CFFD68DA0',
+  canvas_lab => 'CA440000000000000000000000000001',
+  canvas_driver => 'CA440000000000000000000000000002',
+  canvas_recorder => 'CA440000000000000000000000000003',
+  canvas_tests => 'CA440000000000000000000000000004'
 }.freeze
 
 project.save
@@ -493,7 +540,7 @@ project_contents.gsub!(/^\s*minimizedProjectReferenceProxies = 0;\n/, '')
 project_contents.gsub!(/^\s*preferredProjectObjectVersion = 77;\n/, '')
 File.write(project_file, project_contents)
 
-['Attic', 'AtticUI', 'AtticMobile', 'AtticRoundTrips'].each do |scheme_name|
+['Attic', 'AtticUI', 'AtticMobile', 'AtticRoundTrips', 'CanvasLab'].each do |scheme_name|
   scheme_file = File.join(
     staged_project_path,
     'xcshareddata',
