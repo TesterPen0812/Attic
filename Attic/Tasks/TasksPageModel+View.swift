@@ -196,6 +196,22 @@ extension TasksPageModel {
     /// `shown` (its state's rows as the page shows them), among all of
     /// them. The hidden ones keep their places around it.
     @discardableResult
+    /// The date group a row is drawn in (nil for a done row under
+    /// "Completed today").
+    func groupKey(of id: UUID, on tab: TasksTab) -> String? {
+        sections(for: tab).groups.first { $0.ids.contains(id) }?.key
+    }
+
+    /// The rows of one state in `id`'s date group, as drawn: where a
+    /// keyboard or drag reorder can take it.
+    func shownGroup(of id: UUID, status: TaskStatus, on tab: TasksTab) -> [UUID] {
+        let sections = sections(for: tab)
+        guard let key = groupKey(of: id, on: tab) else {
+            return rows(for: tab).filter { $0.status == status }.map(\.id)
+        }
+        return (sections.groupRows[key] ?? []).filter { $0.status == status }.map(\.id)
+    }
+
     func moveVisible(_ id: UUID, toShownIndex index: Int, in shown: [UUID]) -> CommandOutcome {
         guard let task = store.task(withID: id) else { return .failed(.taskGone) }
         guard shown.indices.contains(index), shown[index] != id else { return .applied }

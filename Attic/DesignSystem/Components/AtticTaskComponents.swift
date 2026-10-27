@@ -621,7 +621,8 @@ struct AtticStatusCircle: View {
                 Circle().inset(by: m.edgeInset + width / 2).stroke(openColour, lineWidth: width)
                     .atticOpenRingProbe(id: probeID, ink: ringInk, foreground: openForeground, disabled: isDisabled)
             case .inProgress:
-                Circle().inset(by: m.edgeInset + width / 2).stroke(colour, lineWidth: width)
+                let active = m.activeRingWidth(increaseContrast: design.increaseContrast)
+                Circle().inset(by: m.edgeInset + active / 2).stroke(colour, lineWidth: active)
                     .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
                 if let share = Self.pieShare(subtasks) {
                     AtticWedge(sweep: share, inset: m.wedgeInset(ringWidth: width))
@@ -1083,6 +1084,9 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
     /// A search the title matches: its matches are highlighted (the Done
     /// search, owner item 17).
     var titleMatch: String?
+    /// The files drawn as tiles under the meta line (the owner's panel
+    /// design): the first few of the task's own files.
+    var tileFiles: [TaskImageReference] = []
 
     /// Round 11: a list skips redrawing a row whose model is unchanged
     /// (the subtask counts are a tuple, compared by hand).
@@ -1091,6 +1095,7 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
             && lhs.due == rhs.due && lhs.tags == rhs.tags && lhs.attachments == rhs.attachments && lhs.links == rhs.links
             && lhs.subtasks?.done == rhs.subtasks?.done && lhs.subtasks?.total == rhs.subtasks?.total
             && lhs.inWindow == rhs.inWindow && lhs.hasPage == rhs.hasPage && lhs.titleMatch == rhs.titleMatch
+            && lhs.tileFiles == rhs.tileFiles
     }
 
     /// Where `titleMatch` occurs in the title (as the search reads it:
@@ -1214,6 +1219,10 @@ struct AtticTaskRow: View {
     /// the row or the keyboard is on it, it opens the task's whole menu
     /// under itself (the view it passes). nil draws none.
     var onActions: ((NSView?) -> Void)? = nil
+    /// The task's files as tiles under the meta line (the owner's panel
+    /// design); nil draws none. The page supplies them (thumbnails are the
+    /// app's).
+    var attachmentTiles: AnyView? = nil
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
@@ -1234,8 +1243,14 @@ struct AtticTaskRow: View {
         let rowFocused = focus?.isFocused ?? focused
         let showsFocusRing = forced == .focused || (forced == nil && isEnabled && rowFocused && keyboardFocusVisible && titleEditing == nil)
         let twoLine = model.hasDetails
-        let highlightHeight = twoLine ? AtticLayout.detailRowHighlightHeight : AtticLayout.rowHighlightHeight
-        let pitch = twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
+        // The owner's panel design (2026-10-27): the row is its own
+        // highlight (7 above and below the 15 pt lines, no gap between
+        // rows), radius 12; files add a line of tiles.
+        let d = TasksRowDesign.self
+        let done = model.state == .done
+        let hasTiles = attachmentTiles != nil && !done
+        let pitch = d.height(twoLine: twoLine, tiles: hasTiles)
+        let highlightHeight = pitch
         let fill: AtticRGBA? = if state == .pressed {
             tokens.pressed
         } else if isSelected, showsFocusRing {
@@ -1243,18 +1258,16 @@ struct AtticTaskRow: View {
             tokens.hover
         } else if isSelected {
             tokens.selected
-        } else if state == .hover {
-            tokens.hover
         } else {
+            // The design has no hover fill.
             nil
         }
         let disabled = state == .disabled
-        let done = model.state == .done
 
         ZStack(alignment: .topLeading) {
             Group {
                 if let fill {
-                    AtticHighlight(fill: fill, run: isSelected ? selectionRun : .single)
+                    AtticHighlight(fill: fill, cornerRadius: d.radius, run: isSelected ? selectionRun : .single, joinOverlap: 0)
                 }
                 if dropLabel != nil {
                     AtticDropOutline()
@@ -1264,27 +1277,22 @@ struct AtticTaskRow: View {
             .padding(.horizontal, AtticLayout.rowHighlightInset)
             .animation(.linear(duration: isSelected ? 0.08 : 0.06), value: isSelected)
 
-            // The circle, centred on the title line (row top + 16, or 14),
-            // its 28 pt hit area around the 15 pt drawing.
+            // The circle, centred on the title line, its 28 pt hit area
+            // around the 14 pt ring.
             AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false,
                               isEmphasised: showsFocusRing, onToggle: actions.toggleDone)
                 .atticForcedState(nil)
                 .atticRowControl()
                 .padding(.leading, AtticLayout.circleX + AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2)
-                .padding(.top, m.circleCentreY(twoLine: twoLine) - m.pitchTopInset - AtticControlSize.minimumHitTarget / 2)
+                .padding(.top, d.paddingY + d.line / 2 - AtticControlSize.minimumHitTarget / 2)
 
-            // The title line (title, priority mark, and the date on the
-            // title's baseline), then the details line.
-            VStack(alignment: .leading, spacing: m.titleToDetails) {
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
+            // The title line (title, priority mark, and the date in the
+            // right column), the meta line, then the files' tiles.
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 0) {
                     if let titleEditing, capture == nil {
-                        // Keep the title's real text baseline in layout. An
-                        // NSViewRepresentable otherwise contributes its bottom
-                        // edge as a baseline, lifting the date while its own
-                        // NSTextView draws the title lower (F-09).
-                        AtticText(verbatim: model.title,
-                                  style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
-                                  ink: .heading, truncates: true)
+                        // Keep the title's real text baseline in layout (F-09).
+                        AtticText(verbatim: model.title, style: .taskTitle, ink: .heading, truncates: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .hidden()
                             .overlay(alignment: .leading) {
@@ -1296,18 +1304,14 @@ struct AtticTaskRow: View {
                         HStack(alignment: .firstTextBaseline, spacing: AtticPriorityMarkMetrics.titleGap) {
                             AtticText(
                                 verbatim: model.title,
-                                // Phase 0's qualities: SF Pro Rounded, medium
-                                // while in progress, in the primary ink.
-                                style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
-                                // T-06 B (owner, 2026-10-15): a done title is
-                                // the secondary grey; the filled mark stays.
+                                // The design's 12 pt medium title, in the
+                                // primary ink (the secondary grey once done).
+                                style: .taskTitle,
                                 ink: Self.titleInk(done: done, disabled: disabled),
                                 truncates: true,
                                 highlights: model.titleMatchRanges
                             )
-                            // The title gives way first (review 13): the
-                            // mark and the date keep their room; the full
-                            // title is the tooltip (and VoiceOver's label).
+                            // The title gives way first (review 13).
                             .layoutPriority(-1)
                             .help(model.title)
                             .modifier(AtticTitleOpenTap(open: capture == nil && !disabled ? onOpenTitle : nil,
@@ -1321,34 +1325,37 @@ struct AtticTaskRow: View {
                     trailing(disabled: disabled)
                     if let onActions, capture == nil, !disabled, titleEditing == nil,
                        AtticTaskRow.showsActionsButton(forced: forced, keyboardFocused: showsFocusRing) {
-                        // Only for the row the keyboard is on (the date steps
-                        // aside for it). Hover is a soft tint only (owner,
-                        // 2026-10-01: rows "perked up" as the pointer passed);
-                        // the pointer has the row's right-click menu.
+                        // Only for the row the keyboard is on (round 10).
                         AtticRowActionsButton(action: onActions)
                             .padding(.leading, AtticRowActionsMetrics.gap)
                             .transition(.opacity)
                     }
                 }
-                .frame(height: m.titleLineHeight)
+                .frame(height: d.line)
                 .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false),
                            value: showsFocusRing)
                 if twoLine {
-                    // The tag popover points at the tags that were clicked
-                    // (round 5), not the middle of the line.
                     AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded,
                                      isFilesExpanded: isFilesExpanded, onToggleFiles: capture == nil ? onToggleFiles : nil,
                                      onTags: capture == nil ? meta?.onTags : nil,
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
                                      })
-                        .frame(height: m.rowDetailsLineHeight)
+                        .frame(height: d.line)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, d.metaTop)
+                }
+                if hasTiles, let attachmentTiles {
+                    attachmentTiles
+                        .frame(height: d.tile, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .clipped()
+                        .padding(.top, d.tilesTop)
                 }
             }
             .padding(.leading, AtticLayout.textX)
-            .padding(.trailing, AtticLayout.rowHighlightInset + m.dateInset)
-            .padding(.top, m.titleTop(twoLine: twoLine) - m.pitchTopInset)
+            .padding(.trailing, AtticLayout.rowHighlightInset + d.paddingX)
+            .padding(.top, d.paddingY)
             // "New Tag…" on a row with no tags: the list opens from the start
             // of the text (the details line's start), never the row's centre.
             .background(alignment: .bottomLeading) {
@@ -1359,20 +1366,15 @@ struct AtticTaskRow: View {
                 }
             }
         }
-        // The highlight and the content sit 1 pt below the row's top; the
-        // row is exactly its pitch (no half-point centring).
-        .frame(height: pitch - m.pitchTopInset, alignment: .top)
-        .padding(.top, m.pitchTopInset)
+        .frame(height: pitch, alignment: .top)
         .overlay(alignment: .top) {
             if showsFocusRing {
-                // L2: one 1 pt line on the highlight's own edge (the ring
-                // draws outside the shape it is given: a shape one line
-                // width inside puts the line exactly on the edge).
+                // L2: one 1 pt line on the highlight's own edge.
                 let line = AtticRingMetrics.rowLineWidth
-                AtticFocusRing(cornerRadius: AtticRadius.highlight - line, gap: 0, width: line)
+                AtticFocusRing(cornerRadius: d.radius - line, gap: 0, width: line)
                     .frame(height: highlightHeight - line * 2)
                     .padding(.horizontal, AtticLayout.rowHighlightInset + line)
-                    .padding(.top, m.pitchTopInset + line)
+                    .padding(.top, line)
             }
         }
         .contentShape(Rectangle())
@@ -1400,7 +1402,7 @@ struct AtticTaskRow: View {
         .coordinateSpace(Self.space)
         .atticControlProbe(
             twoLine ? "Task row (details)" : "Task row", id: probeID,
-            expectedSize: CGSize(width: 0, height: pitch), radius: AtticRadius.highlight, expectedRadius: 10
+            expectedSize: CGSize(width: 0, height: pitch), radius: TasksRowDesign.radius, expectedRadius: TasksRowDesign.radius
         )
     }
 
@@ -1573,13 +1575,13 @@ struct AtticDueText: View {
     var disabled = false
 
     var body: some View {
+        // The owner's panel design: 10 pt tabular digits, the date grey,
+        // red when overdue (today reads like any other date).
         switch due.tone {
         case .overdue:
-            AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : .dueText)
-        case .today:
-            AtticText(verbatim: due.text, style: .rowMetaEmphasis, ink: disabled ? .disabledText : .body)
-        case .quiet:
-            AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : .helper)
+            AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .dueText)
+        case .today, .quiet:
+            AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .helper)
         }
     }
 }
@@ -1616,7 +1618,7 @@ struct AtticTaskDetails: View {
             if model.inWindow {
                 HStack(spacing: m.detailsIconGap) {
                     AtticIcon(systemName: "macwindow", size: m.detailsIconSize, weight: .light, ink: icon)
-                    AtticText("In window", style: .rowMeta, ink: text)
+                    AtticText("In window", style: .taskMeta, ink: text)
                 }
                 .fixedSize()
                 .layoutPriority(1)
@@ -1662,14 +1664,14 @@ struct AtticTaskDetails: View {
                 } else {
                     HStack(spacing: m.detailsIconGap) {
                         AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
-                        AtticText(verbatim: "\(model.attachments)", style: .rowMeta, ink: text)
+                        AtticText(verbatim: "\(model.attachments)", style: .taskMeta, ink: text)
                     }
                     .fixedSize()
                     .layoutPriority(1)
                 }
             }
             if model.links > 0 {
-                AtticText(verbatim: String(localized: "\(model.links) links"), style: .rowMeta, ink: text)
+                AtticText(verbatim: String(localized: "\(model.links) links"), style: .taskMeta, ink: text)
                     .fixedSize()
                     .layoutPriority(1)
             }
@@ -1696,13 +1698,13 @@ private struct AtticDetailsTags: View {
             all()
             if tags.count > 1 {
                 HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                    AtticTagLabel(name: tags[0], disabled: disabled).fixedSize()
+                    AtticTagLabel(name: tags[0], style: .taskTag, disabled: disabled, pill: true).fixedSize()
                         .atticTagColourMenu(tags[0])
                     more()
                 }
             }
             HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                AtticTagLabel(name: tags[0], disabled: disabled, truncates: true)
+                AtticTagLabel(name: tags[0], style: .taskTag, disabled: disabled, truncates: true, pill: true)
                     .atticTagColourMenu(tags[0])
                 if tags.count > 1 { more() }
             }
@@ -1730,14 +1732,14 @@ private struct AtticDetailsTags: View {
         HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
             ForEach(tags, id: \.self) { tag in
                 // A right-click on a tag: its Colour ▸ (owner's call, 10-11).
-                AtticTagLabel(name: tag, disabled: disabled).fixedSize()
+                AtticTagLabel(name: tag, style: .taskTag, disabled: disabled, pill: true).fixedSize()
                     .atticTagColourMenu(tag)
             }
         }
     }
 
     private func more() -> some View {
-        AtticText(verbatim: "+\(tags.count - 1)", style: .rowMeta, ink: disabled ? .disabledText : .helper)
+        AtticText(verbatim: "+\(tags.count - 1)", style: .taskMeta, ink: disabled ? .disabledText : .helper)
             .fixedSize()
     }
 }
@@ -2449,6 +2451,9 @@ struct AtticTagLabel: View {
     var disabled = false
     var hovered = false
     var truncates = false
+    /// The owner's panel design: a tinted pill, 15 tall, its text and fill
+    /// the design's oklch pair in the tag's own hue.
+    var pill = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var colouring
@@ -2456,6 +2461,26 @@ struct AtticTagLabel: View {
     var body: some View {
         let tokens = design.tokens
         let hue = colouring.hue(for: name)
+        if pill {
+            let colours = TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: hue), dark: design.mode == .dark)
+            Text(verbatim: "#" + name)
+                .font(.system(size: AtticTextStyle.taskTag.spec.size))
+                .foregroundStyle((disabled ? tokens.ink(.disabledText) : colours.text).color)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, TasksDesignMetrics.tagPaddingX)
+                .frame(height: TasksDesignMetrics.tagHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: TasksDesignMetrics.tagRadius, style: .continuous)
+                        .fill((disabled ? .clear : (hovered ? tokens.hover.over(colours.fill) : colours.fill)).color)
+                )
+        } else {
+            inline(tokens: tokens, hue: hue)
+        }
+    }
+
+    @ViewBuilder
+    private func inline(tokens: AtticColorTokens, hue: AtticTagHue) -> some View {
         let fill: AtticRGBA = disabled ? .clear : (hovered ? tokens.hover.over(tokens.tagFill(hue)) : tokens.tagFill(hue))
         AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
             .background(

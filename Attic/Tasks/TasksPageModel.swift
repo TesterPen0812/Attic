@@ -76,6 +76,8 @@ struct TasksListRow: Identifiable, Equatable {
     /// The task's stored files, only when its files list is open (A1: the
     /// files count opens them inline, apart from the subtasks).
     var files: [TaskImageReference] = []
+    /// The task's due day (the date groups, owner's panel design).
+    var due: DueDay? = nil
 
     static func == (lhs: TasksListRow, rhs: TasksListRow) -> Bool {
         lhs.id == rhs.id && lhs.status == rhs.status && lhs.model.title == rhs.model.title
@@ -89,7 +91,7 @@ struct TasksListRow: Identifiable, Equatable {
             && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
             && lhs.subtasks.map(\.isDone) == rhs.subtasks.map(\.isDone)
             && lhs.subtasks.map(\.title) == rhs.subtasks.map(\.title)
-            && lhs.files == rhs.files
+            && lhs.files == rhs.files && lhs.due == rhs.due && lhs.model.tileFiles == rhs.model.tileFiles
     }
 }
 
@@ -99,13 +101,26 @@ struct TasksListRow: Identifiable, Equatable {
 struct TasksSections: Equatable {
     var open: [TasksListRow] = []
     var done: [TasksListRow] = []
+    /// The open rows' date groups, in the order drawn (owner's panel
+    /// design): every group, folded ones included (their rows are left out
+    /// of `open`).
+    var groups: [TasksPanelDesign.Group] = []
+    /// Each group's rows as drawn (none while it is folded).
+    var groupRows: [String: [TasksListRow]] = [:]
 }
 
 /// A day of the Done log.
 struct TasksDoneDay: Identifiable, Equatable {
     let id: Date
     let title: String
+    /// None while the day is folded.
     let rows: [TasksListRow]
+    /// The day's tasks, folded or not.
+    var total: Int = 0
+    var folded = false
+
+    /// The fold's key (the owner's panel design).
+    var key: String { TasksPanelDesign.GroupKind.finished(id).key }
 }
 
 /// A signal a task row's cell redraws on (see `TasksPageModel.cellUpdates`).
@@ -324,6 +339,17 @@ final class TasksPageModel: ObservableObject {
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
     @Published var completedTodayExpanded = false
+    /// The date groups folded, per page (the owner's panel design: a
+    /// header's click folds or unfolds its group).
+    @Published private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
+
+    func folded(on tab: TasksTab) -> Set<String> { foldedGroups[tab] ?? [] }
+
+    func toggleGroup(_ key: String, on tab: TasksTab) {
+        var set = foldedGroups[tab] ?? []
+        if set.contains(key) { set.remove(key) } else { set.insert(key) }
+        foldedGroups[tab] = set
+    }
     /// Search (the menu-bar item) asked for the Done page's search field;
     /// the page puts the keyboard there and clears it.
     @Published var pendingSearchFocus = false
@@ -504,12 +530,15 @@ final class TasksPageModel: ObservableObject {
         // no paperclip, unless Earlier files remain; others as on main.
         let files = store.fileMigration.rowFiles(for: task)
         model.attachments = files.count
+        // The owner's panel design: the files as tiles (at most six).
+        model.tileFiles = Array(files.prefix(TasksPanelDesign.maxTiles))
         return TasksListRow(
             id: task.id,
             model: model,
             status: task.status,
             subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : [],
-            files: filesOpen ? files : []
+            files: filesOpen ? files : [],
+            due: task.dueDay
         )
     }
 
@@ -525,6 +554,7 @@ final class TasksPageModel: ObservableObject {
         let dateEnvironment: DatePresentationEnvironment
         let view: TasksViewOptions
         let search: String
+        let folded: Set<String>
     }
 
     /// What a page kept built but not drawn shows (round 11): while it is
@@ -544,6 +574,8 @@ final class TasksPageModel: ObservableObject {
         let search: String
         /// Now's and Later's view (item 6).
         let view: TasksViewOptions
+        /// The date groups folded on this page.
+        let folded: Set<String>
         /// Whether this page is the one that answers the user (the tab
         /// shown, on screen): it gains and loses editors, focus and popovers
         /// with it (round 12).
@@ -554,7 +586,7 @@ final class TasksPageModel: ObservableObject {
         PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
-                  view: viewOptions(for: tab), owner: self.tab == tab && isPageShown)
+                  view: viewOptions(for: tab), folded: folded(on: tab), owner: self.tab == tab && isPageShown)
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -578,13 +610,46 @@ final class TasksPageModel: ObservableObject {
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
         let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
-                          view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab))
+                          view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), folded: folded(on: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
         var sections = TasksSections()
+        var open: [TasksListRow] = []
         for row in all {
-            if row.status == .done, held[row.id]?.tab != tab { sections.done.append(row) } else { sections.open.append(row) }
+            if row.status == .done, held[row.id]?.tab != tab {
+                // The owner's panel design (2026-10-27): a finished task
+                // leaves Now once its hold ends and lives in Done; Now has
+                // no "Completed today".
+                if tab != .now { sections.done.append(row) }
+            } else {
+                open.append(row)
+            }
         }
+        // The date groups (owner's panel design): Overdue · Today · each
+        // later day · No date, the list's order kept inside each. Built
+        // here, so only when the rows change (or the day does: `today` is
+        // in the key). A folded group's rows are left out of the list.
+        let groups = TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, today: key.today,
+                                             calendar: services.calendar(), locale: services.locale)
+        let byID = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for group in groups where !key.folded.contains(group.key) {
+            var drawn: [TasksListRow] = []
+            defer { sections.groupRows[group.key] = drawn }
+            for id in group.ids {
+                guard var row = byID[id] else { continue }
+                // Under a day header a row shows only its time (Attic's
+                // tasks have none): the date is the header's.
+                if !group.rowsShowDate, row.model.due != nil {
+                    var model = row.model
+                    model.due = nil
+                    row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks,
+                                       files: row.files, due: row.due)
+                }
+                sections.open.append(row)
+                drawn.append(row)
+            }
+        }
+        sections.groups = groups
         let rows = key.completedExpanded ? sections.open + sections.done : sections.open
         let entry = (key, sections, rows)
         rowsCache[tab] = entry
@@ -661,9 +726,13 @@ final class TasksPageModel: ObservableObject {
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
         let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch,
-                          today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment)
+                          today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment,
+                          folded: folded(on: .done))
         if let doneCache, doneCache.key == key { return doneCache.days }
-        let days = buildDoneDays()
+        let days = buildDoneDays().map { day in
+            let folded = key.folded.contains(day.key)
+            return TasksDoneDay(id: day.id, title: day.title, rows: folded ? [] : day.rows, total: day.rows.count, folded: folded)
+        }
         doneCache = (key, days)
         return days
     }
@@ -674,6 +743,7 @@ final class TasksPageModel: ObservableObject {
         let search: String
         let today: DueDay
         let dateEnvironment: DatePresentationEnvironment
+        let folded: Set<String>
     }
 
     private var doneCache: (key: DoneKey, days: [TasksDoneDay])?
@@ -699,14 +769,14 @@ final class TasksPageModel: ObservableObject {
                 current?.rows.append(row)
             } else {
                 if let current {
-                    days.append(TasksDoneDay(id: current.day, title: TaskRowPresentation.doneDayTitle(
+                    days.append(TasksDoneDay(id: current.day, title: TasksPanelDesign.doneDayTitle(
                         current.day, today: now, calendar: calendar, locale: services.locale), rows: current.rows))
                 }
                 current = (day, [row])
             }
         }
         if let current {
-            days.append(TasksDoneDay(id: current.day, title: TaskRowPresentation.doneDayTitle(
+            days.append(TasksDoneDay(id: current.day, title: TasksPanelDesign.doneDayTitle(
                 current.day, today: now, calendar: calendar, locale: services.locale), rows: current.rows))
         }
         return days

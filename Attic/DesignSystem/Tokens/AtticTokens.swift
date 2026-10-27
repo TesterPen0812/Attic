@@ -260,6 +260,10 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     // Notes v2: All notes' rows in the note's own SF Pro (a 13 medium
     // title over 11.5 regular meta), so the list and the note read as one.
     case noteRowTitle, noteRowMeta
+    // The owner's panel design (2026-10-27, drawn at 2×, in points): a
+    // task's 12 medium title, its 11 meta line, the 10 date and tag, the
+    // 11 bold priority mark, the 11 group header, the 13 add field.
+    case taskTitle, taskMeta, taskDate, taskTag, taskPriority, groupHeader, addField
     case controlLabel, chipLabel, menuRow, shortcut, toast, tag, count, dropLabel
     // Attic's own dropdowns (E1, p2-24 D; Compact size, p2-28): 13 pt
     // names (SF Pro), the date card's month title, its days and its light
@@ -305,6 +309,12 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
         case .noteRowTitle: Spec(size: 12, weight: .medium, italic: false, monospacedDigits: false)
+        case .taskTitle: Spec(size: 12, weight: .medium, italic: false, monospacedDigits: false)
+        case .taskMeta, .groupHeader: Spec(size: 11, weight: .regular, italic: false, monospacedDigits: true)
+        case .taskDate: Spec(size: 10, weight: .regular, italic: false, monospacedDigits: true)
+        case .taskTag: Spec(size: 10, weight: .regular, italic: false, monospacedDigits: false)
+        case .taskPriority: Spec(size: 11, weight: .bold, italic: false, monospacedDigits: false)
+        case .addField: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .noteRowMeta: Spec(size: 10.5, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: AtticNoteType.body.size, weight: .regular, italic: false, monospacedDigits: false)
         case .dropdownRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
@@ -316,7 +326,7 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .rowMeta, .helper: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
         case .rowMetaEmphasis: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
-        case .priorityMark: Spec(size: 11, weight: .semibold, italic: false, monospacedDigits: false)
+        case .priorityMark: Spec(size: 11, weight: .bold, italic: false, monospacedDigits: false)
         // Quiet labels, 11.5 medium; the selected page semibold, so the
         // selection reads on glass where the two greys are close (owner,
         // 2026-09-27).

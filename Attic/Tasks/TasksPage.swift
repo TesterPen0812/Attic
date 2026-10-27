@@ -613,7 +613,7 @@ struct TasksPage: View {
         var top: CGFloat = 0
         if tab == .done {
             for day in model.doneDays() {
-                top += AtticLayout.rowPitch
+                top += TasksDesignMetrics.groupHeaderHeight
                 for row in day.rows {
                     let height = pointer.frames[TasksRowID(tab: .done, id: row.id)]?.height ?? AtticLayout.rowPitch
                     if row.id == id { return (top, height) }
@@ -624,9 +624,13 @@ struct TasksPage: View {
         }
         let sections = model.sections(for: tab)
         if model.viewOptions(for: tab).filters, model.trimmedQuery(for: tab).isEmpty { top += AtticLayout.rowPitch }
-        for row in sections.open {
-            if row.id == id { return (top, rowHeight(id, in: tab)) }
-            top += rowHeight(row.id, in: tab)
+        // Each date group's header, then its rows (none while folded).
+        for group in sections.groups {
+            top += TasksDesignMetrics.groupHeaderHeight
+            for row in sections.groupRows[group.key] ?? [] {
+                if row.id == id { return (top, rowHeight(id, in: tab)) }
+                top += rowHeight(row.id, in: tab)
+            }
         }
         guard tab == .now, !sections.done.isEmpty else { return nil }
         top += AtticCompletedLineMetrics.top + AtticCompletedLineMetrics.height + AtticSpacing.s4
@@ -1411,8 +1415,20 @@ struct TasksPage: View {
                         }
                         .accessibilityIdentifier("tasks-view-line")
                     }
-                    ForEach(sections.open) { row in
-                        cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
+                    // The date groups (the owner's panel design): a header
+                    // folds or unfolds its rows.
+                    ForEach(sections.groups, id: \.key) { dateGroup in
+                        let folded = model.folded(on: tab).contains(dateGroup.key)
+                        TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
+                                         overdue: dateGroup.isOverdue) {
+                            withAnimation(travel) { model.toggleGroup(dateGroup.key, on: tab) }
+                        }
+                        .id("group:" + dateGroup.key)
+                        .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
+                        let drawnRows = sections.groupRows[dateGroup.key] ?? []
+                        let byStatus = Dictionary(grouping: drawnRows, by: \.status).mapValues { $0.map(\.id) }
+                        ForEach(drawnRows) { row in
+                        cell(row, tab: tab, group: byStatus[row.status] ?? [], drawn: drawn)
                             .id(row.id)
                             .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
                             // A moved row pops back in with the feel (1, none, in Calm).
@@ -1420,6 +1436,7 @@ struct TasksPage: View {
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
+                        }
                     }
                     if !query.isEmpty {
                         // Find's quiet count, or that nothing matches (as on
@@ -1611,7 +1628,8 @@ struct TasksPage: View {
                         // Every row, done ones too (round 10): a finished task shows
                         // no date or tags, but its pickers open from its row.
                         meta: rowMeta(for: id, open: live.metaPopover),
-                        onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) }
+                        onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) },
+                        attachmentTiles: row.model.tileFiles.isEmpty ? nil : AnyView(TasksFileTiles(files: row.model.tileFiles))
                     )
                     .contextMenu { rowMenu(row, tab: tab) }
                 }
@@ -2344,15 +2362,11 @@ struct TasksPage: View {
     /// Whether ⌘↑ (-1) or ⌘↓ (1) can move the row within its group.
     private func canMove(_ id: UUID, by step: Int) -> Bool {
         guard model.reorders(on: model.tab), let task = store.task(withID: id), task.status != .done else { return false }
-        // A narrowed view moves among what it shows (item 6).
-        if model.narrows(model.tab) {
-            let shown = shownGroup(of: task)
-            guard let index = shown.firstIndex(of: id) else { return false }
-            return shown.indices.contains(index + step)
-        }
-        let group = store.orderGroup(of: task)
-        guard let index = group.firstIndex(where: { $0.id == id }) else { return false }
-        return group.indices.contains(index + step)
+        // A task moves among what its date group shows (item 6; the
+        // owner's panel design groups by date).
+        let shown = shownGroup(of: task)
+        guard let index = shown.firstIndex(of: id) else { return false }
+        return shown.indices.contains(index + step)
     }
 
     /// ⌘↑ ⌘↓, Move Up and Move Down, VoiceOver's "Move up" and "Move
@@ -2369,8 +2383,9 @@ struct TasksPage: View {
         }
         if atGroupEdge(id, step: step) {
             showBoundaryHint()
-        } else if model.narrows(model.tab), let task = store.task(withID: id) {
-            // A filter or Find: one place among the tasks shown.
+        } else if let task = store.task(withID: id) {
+            // One place among the tasks its date group shows (a filter or
+            // Find narrows it further).
             let shown = shownGroup(of: task)
             guard let index = shown.firstIndex(of: id), shown.indices.contains(index + step) else { return }
             let move = { [weak model] in
@@ -2385,9 +2400,10 @@ struct TasksPage: View {
         }
     }
 
-    /// The rows of `task`'s state as the page shows them (item 6).
+    /// The rows of `task`'s state in its date group, as the page shows
+    /// them (item 6, the owner's panel design).
     private func shownGroup(of task: TaskItem) -> [UUID] {
-        model.rows(for: model.tab).filter { $0.status == task.status }.map(\.id)
+        model.shownGroup(of: task.id, status: task.status, on: model.tab)
     }
 
     /// Full animation: two rows that exchange places by sliding past each
@@ -2683,8 +2699,8 @@ struct TasksPage: View {
 
     private func estimatedHeight(_ row: TasksListRow) -> CGFloat {
         let id = row.id
-        let pitch = row.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
-        var height = pitch
+        var height = TasksRowDesign.height(twoLine: row.model.hasDetails,
+                                           tiles: !row.model.tileFiles.isEmpty && row.status != .done)
         if model.expanded.contains(id), row.status != .done {
             height += CGFloat(row.subtasks.count + 1) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
         }
@@ -2899,7 +2915,8 @@ struct TasksPage: View {
                 pointer.liftedCard.end()
                 if finished.targetIndex != finished.startIndex {
                     // A filter or Find: among the rows shown (item 6).
-                    let narrowed = model.narrows(model.tab)
+                    // Among the rows shown: a filter, Find or a date group (item 6).
+                    let narrowed = true
                     let move = { [weak model] in
                         guard let model else { return CommandOutcome.failed(.taskGone) }
                         return narrowed ? model.moveVisible(finished.id, toShownIndex: finished.targetIndex, in: finished.group)
@@ -2937,6 +2954,8 @@ struct TasksPage: View {
         guard let index = rows.firstIndex(where: { $0.id == id }) else { return false }
         let neighbour = index + step
         guard rows.indices.contains(neighbour) else { return false }
+        // A date group's edge is an edge too (the owner's panel design).
+        if model.groupKey(of: rows[neighbour].id, on: model.tab) != model.groupKey(of: id, on: model.tab) { return true }
         return rows[neighbour].status != rows[index].status && rows[neighbour].status != .done && rows[index].status != .done
     }
 

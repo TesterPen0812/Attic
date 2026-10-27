@@ -54,6 +54,8 @@ struct TasksDonePage<Cell: View>: View {
 
     static var space: NamedCoordinateSpace { .named("AtticTasksDone") }
 
+    @Environment(\.atticDesign) private var design
+
     var body: some View {
         let lines = slots.lines(for: model.doneDays(), query: model.trimmedQuery(for: .done),
                                 interchangeable: rowsAreInterchangeable)
@@ -79,15 +81,14 @@ struct TasksDonePage<Cell: View>: View {
                 // view (`TasksDoneSlots`); a row is scrolled to by its slot.
                 ForEach(lines) { line in
                     switch line.content {
-                    case let .heading(title):
-                        // A day heading takes one row's pitch, its text on
-                        // the rows' title line, so the log keeps the 34 / 48
-                        // rhythm of the rows under it.
-                        AtticText(verbatim: title, style: .rowMeta, ink: .helper)
-                            .frame(height: AtticTaskRowMetrics.titleLineHeight)
-                            .frame(height: AtticLayout.rowPitch)
-                            .padding(.leading, AtticLayout.circleX)
-                            .accessibilityAddTraits(.isHeader)
+                    case let .heading(day):
+                        // The owner's panel design: the day's header folds
+                        // or unfolds its tasks.
+                        TasksGroupHeader(title: day.title, count: day.total, folded: day.folded) {
+                            withAnimation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)) {
+                                model.toggleGroup(day.key, on: .done)
+                            }
+                        }
                     case let .row(row):
                         cell(row)
                     }
@@ -144,7 +145,8 @@ struct TasksDonePage<Cell: View>: View {
 /// A line of the Done log: a day's heading or a task's row.
 struct TasksDoneLine: Identifiable {
     enum Content {
-        case heading(String)
+        /// A day's header: its title, key, task count and whether folded.
+        case heading(TasksDoneDay)
         case row(TasksListRow)
     }
 
@@ -192,7 +194,7 @@ final class TasksDoneSlots {
             if heading == nil || headingOrder.contains(heading!) { heading = fresh() }
             headings[day.id] = heading
             headingOrder.append(heading!)
-            lines.append(TasksDoneLine(id: TasksDoneLineID(heading: true, slot: heading!), content: .heading(day.title)))
+            lines.append(TasksDoneLine(id: TasksDoneLineID(heading: true, slot: heading!), content: .heading(day)))
             for row in day.rows {
                 var slot = positional ? self.rowOrder[safe: rowOrder.count] : self.rows[row.id]
                 if slot == nil || rows[row.id] != nil { slot = fresh() }

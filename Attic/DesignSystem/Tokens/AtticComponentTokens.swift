@@ -74,11 +74,18 @@ enum AtticHairline {
 /// The status circle (Phase 0's confident circles, 2026-09-26): 16 pt.
 enum AtticStatusCircleMetrics {
     /// The ring's outer edge is the frame's edge (the stroke is inward).
-    static let edgeInset: CGFloat = 0
+    /// The 14 pt ring inside the 15 pt circle (the owner's panel design).
+    static let edgeInset: CGFloat = 0.5
     /// Every open ring is one ink at one weight (Direction A): 1.6 pt,
     /// 2 pt under Increase Contrast.
+    /// The owner's panel design: a hairline ring (0.8), 2 with Increase
+    /// Contrast as before.
     static func ringWidth(increaseContrast: Bool) -> CGFloat {
-        increaseContrast ? 2 : 1.6
+        increaseContrast ? 2 : 0.8
+    }
+    /// A started task's firmer ring (the design's subtasks ring, 1.2).
+    static func activeRingWidth(increaseContrast: Bool) -> CGFloat {
+        increaseContrast ? 2 : 1.2
     }
     /// In progress: the ring with a filled 5 pt centre dot ("working on
     /// it"), never a share of anything.
@@ -158,11 +165,11 @@ enum AtticTaskRowMetrics {
     /// Owner fix 2 (2026-09-27): an icon 5 pt before its label (the
     /// paperclip's too), items 14 pt apart with no " · " between them.
     static let detailsIconGap: CGFloat = 5
-    static let detailsItemSpacing: CGFloat = 14
+    static let detailsItemSpacing: CGFloat = 7
     /// The hover pill behind a clickable date or tags (owner fix 5 C):
     /// 18 tall, reaching 5 pt past the text on each side.
-    static let metaPillHeight: CGFloat = 18
-    static let metaPillOutset: CGFloat = 5
+    static let metaPillHeight: CGFloat = 16
+    static let metaPillOutset: CGFloat = 5.5
     /// The date at the right end sits this far inside the highlight.
     static let dateInset: CGFloat = 8
 }
@@ -303,7 +310,8 @@ enum AtticPageTabsMetrics {
 
 /// The row's priority mark ("!!" High, "!" Medium) after the title.
 enum AtticPriorityMarkMetrics {
-    static let titleGap: CGFloat = 6
+    /// The owner's panel design: 4.5 after the title.
+    static let titleGap: CGFloat = 4.5
 }
 
 /// The subtask count on a row's details line: a checklist glyph and
@@ -1019,4 +1027,27 @@ enum AtticPickerMetrics {
     static let stripCompactIconGap: CGFloat = 3
     static let stripCompactClearGap: CGFloat = 3
     static let stripCompactValueTrailing: CGFloat = 4
+}
+
+// MARK: - The owner's panel design (2026-10-27)
+
+/// A task row as the owner's panel design draws it (drawn at 2×; points
+/// here): 7 above and below 15 pt lines, a 1.5 gap before the meta line,
+/// files as 28 pt tiles 4 below it; the row is its own highlight, radius 12.
+enum TasksRowDesign {
+    static let paddingY: CGFloat = 7
+    static let paddingX: CGFloat = 9
+    static let line: CGFloat = 15
+    static let metaTop: CGFloat = 1.5
+    static let radius: CGFloat = 12
+    static let tile: CGFloat = 28
+    static let tilesTop: CGFloat = 4
+    static let tilesBottom: CGFloat = 1
+
+    static func height(twoLine: Bool, tiles: Bool) -> CGFloat {
+        var height = paddingY * 2 + line
+        if twoLine { height += metaTop + line }
+        if tiles { height += tilesTop + tile + tilesBottom }
+        return height
+    }
 }
