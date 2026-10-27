@@ -646,6 +646,11 @@ struct AtticAddBar: View {
     /// Live only: the native field that draws recognised pieces as chips.
     /// Captures (and the gallery) keep the plain field.
     var tokens: Tokens?
+    /// The bar is changing width around a still field (the panel design's
+    /// footer tabs folding away or returning): the native field keeps the
+    /// width it had and takes the new one once this is false again, so the
+    /// turn never re-lays out its text frame by frame (fix round 1).
+    var holdsFieldWidth = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -658,6 +663,8 @@ struct AtticAddBar: View {
     @State private var fieldProbeID = UUID()
     /// The live field's height: one line, or more as it wraps (O17-05).
     @State private var fieldHeight = AtticTokenFieldMetrics.height
+    /// The room the field has, and the width it keeps while held.
+    @State private var widthHold = AtticFieldWidthHold()
 
     init(placeholder: String.LocalizationValue, text: Binding<String>, onSubmit: @escaping () -> Void) {
         self.placeholder = String(localized: placeholder)
@@ -669,7 +676,8 @@ struct AtticAddBar: View {
     /// The live page's bar: a placeholder chosen at run time, the chip
     /// field, and a glyph for the bar's job.
     init(placeholder: String, text: Binding<String>, systemImage: String = "plus", showsSend: Bool = true,
-         tokens: Tokens?, onSubmit: @escaping () -> Void) {
+         tokens: Tokens?, holdsFieldWidth: Bool = false, onSubmit: @escaping () -> Void) {
+        self.holdsFieldWidth = holdsFieldWidth
         self.placeholder = placeholder
         self.text = text.wrappedValue
         self.fieldText = { text }
@@ -717,21 +725,14 @@ struct AtticAddBar: View {
                 .frame(width: m.iconSlot, height: height)
             field(disabled: state == .disabled)
                 .frame(height: AtticTokenFieldMetrics.height + grown)
+                .frame(width: widthHold.width(holding: holdsFieldWidth), alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { [widthHold] width in widthHold.room = width }
                 .padding(.vertical, (height - AtticTokenFieldMetrics.height) / 2)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             // Built with the bar and only shown when there is text: the
             // first keystroke changes an opacity and an offset instead of
             // building the button (spec: one frame per keystroke).
-            // While the empty field has the keyboard, a quiet "!!!" says
-            // how to set a priority.
-            if isFieldFocused, text.isEmpty, capture == nil {
-                Text(verbatim: "!!!")
-                    .font(.system(size: 10))
-                    .foregroundStyle(design.tokens.color(.placeholder))
-                    .frame(height: height)
-                    .help(String(localized: "Type !!! while adding to set priority"))
-                    .accessibilityHidden(true)
-            }
             ZStack {
                 if showsSend, !Self.plusAdds {
                     let shown = hasText
@@ -750,6 +751,20 @@ struct AtticAddBar: View {
         }
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, Self.plusAdds ? m.leadingPadding : AtticControlSize.sendInset)
+        // While the empty field has the keyboard, a quiet "!!!" at the
+        // bar's end says how to set a priority. Over the field (whose text
+        // is empty while it shows), so it never changes the field's width.
+        .overlay(alignment: .bottomTrailing) {
+            if isFieldFocused, text.isEmpty, capture == nil {
+                Text(verbatim: "!!!")
+                    .font(.system(size: 10))
+                    .foregroundStyle(design.tokens.color(.placeholder))
+                    .frame(height: height)
+                    .padding(.trailing, Self.plusAdds ? m.leadingPadding : AtticControlSize.sendInset)
+                    .help(String(localized: "Type !!! while adding to set priority"))
+                    .accessibilityHidden(true)
+            }
+        }
         .frame(height: height + grown)
         .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
@@ -2282,6 +2297,25 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
 }
 
 /// The add field's plus (the owner's panel design: two 1.7 px strokes).
+/// The add field's width while its bar changes width around it (see
+/// `AtticAddBar.holdsFieldWidth`): the room it was last given, kept from
+/// the moment the hold starts until it ends. A reference, so noting the
+/// room never redraws the bar.
+@MainActor
+final class AtticFieldWidthHold {
+    var room: CGFloat = 0
+    private var held: CGFloat?
+
+    func width(holding: Bool) -> CGFloat? {
+        if !holding {
+            held = nil
+        } else if held == nil, room > 0 {
+            held = room
+        }
+        return held
+    }
+}
+
 struct AtticPlusGlyph: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()

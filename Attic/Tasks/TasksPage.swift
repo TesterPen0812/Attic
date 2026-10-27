@@ -101,6 +101,9 @@ struct TasksPage: View {
     @State private var searchFocused = false
     /// The filter button turned the chips row on (the owner's panel design).
     @State private var chipsOpen = false
+    /// The date group being folded or unfolded, while it turns (fix round 1).
+    @State private var foldMotion: TasksFoldMotion?
+    @State private var foldGeneration = 0
     /// The page the search field was opened on: moving to another page
     /// lets it go (each page keeps its own query).
     @State private var searchTab: TasksTab = .done
@@ -163,7 +166,8 @@ struct TasksPage: View {
     /// The filter chips show while the filter button is on, or while a
     /// filter hides tasks (the design's `chipOpen`); never on Done.
     private var chipsShown: Bool {
-        model.tab != .done && (chipsOpen || model.viewOptions(for: model.tab).filters)
+        TasksPanelDesign.chipsShown(tab: model.tab, chipsOpen: chipsOpen, searchShown: searchShown,
+                                    filtering: model.viewOptions(for: model.tab).filters)
     }
 
     /// Room under the list for the add bar and its margins.
@@ -772,7 +776,13 @@ struct TasksPage: View {
         .animation(design.reduceMotion ? .easeOut(duration: 0.15) : (shown ? TasksDesignMetrics.curve(0.24) : .easeOut(duration: 0.12)),
                    value: shown)
         .animation(design.reduceMotion ? .easeOut(duration: 0.15) : TasksDesignMetrics.curve(0.26), value: chipsShown)
-        .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
+        .onChange(of: searchShown) { _, shown in
+            PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35)
+            // The chips belong to the open search (the design's Escape and
+            // blur end `filterOn`): closing it puts them away, unless a
+            // filter still hides tasks (fix round 1: they stayed up).
+            if !shown, chipsOpen { chipsOpen = false }
+        }
     }
 
     /// Whether `x` is on the search's stretch of the header's line (not the
@@ -794,6 +804,42 @@ struct TasksPage: View {
         view.show = .all
         view.priority = .any
         model.setViewOptions(view, for: tab)
+    }
+
+    /// A date group's header was clicked: it folds or unfolds. While it
+    /// turns, its rows are cut off at the next header (fix round 1: they
+    /// faded over it). A leaving row keeps the transition it was last drawn
+    /// with, so the group's rows take the fold's first, and the fold itself
+    /// follows on the next turn of the run loop. Under Reduce Motion it
+    /// changes at once.
+    private func toggleGroup(_ key: String, on tab: TasksTab, animation: Animation?) {
+        guard let animation else {
+            model.toggleGroup(key, on: tab)
+            return
+        }
+        foldGeneration += 1
+        let motion = TasksFoldMotion(tab: tab, key: key, generation: foldGeneration)
+        foldMotion = motion
+        DispatchQueue.main.async { [model] in
+            withAnimation(animation, completionCriteria: .removed) {
+                model.toggleGroup(key, on: tab)
+            } completion: {
+                if foldMotion == motion { foldMotion = nil }
+            }
+        }
+    }
+
+    /// Each drawn row's place in its turning group (heights as measured,
+    /// or as estimated before the row was ever drawn).
+    private func foldPlaces(_ rows: [TasksListRow], in tab: TasksTab) -> [UUID: TasksFoldPlace] {
+        var tops: [(UUID, CGFloat)] = []
+        var top: CGFloat = 0
+        for row in rows {
+            tops.append((row.id, top))
+            let measured = pointer.frames[TasksRowID(tab: tab, id: row.id)]?.height ?? 0
+            top += measured > 0 ? measured : estimatedHeight(row)
+        }
+        return Dictionary(uniqueKeysWithValues: tops.map { ($0.0, TasksFoldPlace(top: $0.1, total: top)) })
     }
 
     /// The filter button inside the search field (Now and Later): it shows
@@ -1492,12 +1538,13 @@ struct TasksPage: View {
                         let folded = model.folded(on: tab).contains(dateGroup.key)
                         TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
                                          overdue: dateGroup.isOverdue) {
-                            withAnimation(travel) { model.toggleGroup(dateGroup.key, on: tab) }
+                            toggleGroup(dateGroup.key, on: tab, animation: travel)
                         }
                         .id("group:" + dateGroup.key)
                         .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                         let drawnRows = sections.groupRows[dateGroup.key] ?? []
                         let byStatus = Dictionary(grouping: drawnRows, by: \.status).mapValues { $0.map(\.id) }
+                        let fold = foldMotion?.tab == tab && foldMotion?.key == dateGroup.key ? foldPlaces(drawnRows, in: tab) : [:]
                         ForEach(drawnRows) { row in
                         cell(row, tab: tab, group: byStatus[row.status] ?? [], drawn: drawn)
                             .id(row.id)
@@ -1505,8 +1552,10 @@ struct TasksPage: View {
                             // A moved row pops back in with the feel (1, none, in Calm).
                             .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
                             // A row added or leaving drops into or rises
-                            // out of its place (round 9).
-                            .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
+                            // out of its place (round 9); a folding group's
+                            // rows are cut off at the next header (fix 1).
+                            .transition(fold[row.id].map { AnyTransition(TasksFoldTransition(place: $0)) }
+                                ?? AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
                         }
                     }
                     if !query.isEmpty, !sections.open.isEmpty, let count = model.listSearchCount(for: tab) {
@@ -3419,6 +3468,11 @@ private struct TasksAddBar: View {
     @State private var priorityPresented = false
     /// Files dragged over the field itself (its text view takes the drag).
     @State private var fieldDropTargeted = false
+    /// Whether the footer's tabs were folded when the bar last settled
+    /// (the panel design's turn): while it differs from now, the tabs are
+    /// folding or returning and the field keeps its width (fix round 1).
+    @State private var settledFolded: Bool?
+    @State private var foldTurn = 0
 
     private var hasDraft: Bool { !text.text.text.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -3448,6 +3502,9 @@ private struct TasksAddBar: View {
         // What the new task will get, typed or picked (owner item 18): the
         // strip's buttons show it, and its pickers tick it.
         let parts = text.text.parts(parser: model.parser)
+        let folded = TasksPanelDesign.footerFolded(addFocused: isFocused,
+                                                   hasDraft: !text.text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        let turning = settledFolded.map { $0 != folded } ?? false
         VStack(alignment: .leading, spacing: AtticPickerMetrics.stripToBar) {
                 AtticComposerStrip(
                     datePresented: $datePresented,
@@ -3558,6 +3615,7 @@ private struct TasksAddBar: View {
                     ),
                     editor: editor
                 ),
+                holdsFieldWidth: turning,
                 onSubmit: { submit(openingPage: false) }
             )
             .atticFocusRing(dropTargeted || fieldDropTargeted, cornerRadius: AtticRadius.control(height: AtticControlSize.addBarHeight))
@@ -3577,6 +3635,16 @@ private struct TasksAddBar: View {
         }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: stripShown), value: stripShown)
         .onChange(of: stripShown) { _, _ in PerformanceSignposts.watchFrames("StripMotion", seconds: 0.35) }
+        // The tabs' turn takes 260 ms (150 under Reduce Motion): the field
+        // takes its new width once they have settled.
+        .onChange(of: folded, initial: true) { _, now in
+            guard settledFolded != nil else { settledFolded = now; return }
+            foldTurn += 1
+            let turn = foldTurn
+            DispatchQueue.main.asyncAfter(deadline: .now() + TasksPanelDesign.footerTurnSeconds) {
+                if foldTurn == turn { settledFolded = now }
+            }
+        }
         .onChange(of: datePresented || tagsPresented || priorityPresented) { _, open in
             pickerOpen = open
             // A closed picker hands the keyboard back to the draft, where

@@ -214,4 +214,14 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(TasksDesignMetrics.tabCell * 3 + TasksDesignMetrics.tabsGap * 2 + TasksDesignMetrics.tabsPadding * 2, 85.5)
         XCTAssertEqual(TasksPanelDesign.tileLabel("Last invoice.pdf"), "PDF")
     }
+
+    /// Fix round 1: the chips belong to the open search; after it closes
+    /// they stay only while a filter hides tasks.
+    func testTheChipsLeaveWithTheSearchUnlessAFilterHidesTasks() {
+        XCTAssertTrue(TasksPanelDesign.chipsShown(tab: .now, chipsOpen: true, searchShown: true, filtering: false))
+        XCTAssertFalse(TasksPanelDesign.chipsShown(tab: .now, chipsOpen: true, searchShown: false, filtering: false),
+                       "the filter button's chips outlived the search")
+        XCTAssertTrue(TasksPanelDesign.chipsShown(tab: .backlog, chipsOpen: false, searchShown: false, filtering: true))
+        XCTAssertFalse(TasksPanelDesign.chipsShown(tab: .done, chipsOpen: true, searchShown: true, filtering: true))
+    }
 }

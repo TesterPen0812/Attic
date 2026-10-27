@@ -284,12 +284,9 @@ struct TasksFooterTabs: View {
                         .frame(width: m.tabCell, height: m.tabCell)
                         .background {
                             if on {
-                                Circle()
-                                    .fill(dark ? AtticRGBA(red: 1, green: 1, blue: 1, alpha: 0.16).color : Color.white)
-                                    .overlay(Circle().strokeBorder(
-                                        AtticRGBA(red: 185 / 255, green: 189 / 255, blue: 191 / 255, alpha: dark ? 0.25 : 0.6).color,
-                                        lineWidth: 0.5))
-                                    .shadow(color: AtticRGBA(red: 0.5, green: 0.5, blue: 0.5, alpha: 0.12).color, radius: 1.5, y: 1)
+                                Image(nsImage: TasksThumbImage.image(diameter: m.tabCell, dark: dark))
+                                    .frame(width: m.tabCell + TasksThumbImage.pad * 2, height: m.tabCell + TasksThumbImage.pad * 2)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .contentShape(Circle())
@@ -322,6 +319,49 @@ struct TasksFooterTabs: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .accessibilityIdentifier("tasks-page-tabs")
+    }
+}
+
+/// The white thumb under the footer's current tab (the owner's panel
+/// design): a white disc (16 % white in dark), a 0.5 pt grey edge and the
+/// soft grey shadow, drawn once into a bitmap. Drawn as SwiftUI shapes
+/// over the glass each part was a masked layer, and the `.shadow` a layer
+/// shadow without a path: offscreen passes every frame the footer was
+/// composited, as the list scrolled under it (fix round 1, measured in the
+/// panel census). The image is one plain layer.
+enum TasksThumbImage {
+    static let shadowRadius: CGFloat = 1.5
+    static let shadowY: CGFloat = 1
+    /// Room around the disc for the shadow.
+    static let pad: CGFloat = 4
+
+    @MainActor private static var cache: [String: NSImage] = [:]
+
+    @MainActor
+    static func image(diameter: CGFloat, dark: Bool) -> NSImage {
+        let key = "\(diameter)-\(dark)"
+        if let cached = cache[key] { return cached }
+        let side = diameter + pad * 2
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { _ in
+            let disc = NSRect(x: pad, y: pad, width: diameter, height: diameter)
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor(white: 0.5, alpha: 0.12)
+            shadow.shadowBlurRadius = shadowRadius * 2
+            // Flipped: a positive height moves the shadow down.
+            shadow.shadowOffset = NSSize(width: 0, height: shadowY)
+            shadow.set()
+            (dark ? NSColor(white: 1, alpha: 0.16) : NSColor.white).setFill()
+            NSBezierPath(ovalIn: disc).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            NSColor(red: 185 / 255, green: 189 / 255, blue: 191 / 255, alpha: dark ? 0.25 : 0.6).setStroke()
+            let edge = NSBezierPath(ovalIn: disc.insetBy(dx: 0.25, dy: 0.25))
+            edge.lineWidth = 0.5
+            edge.stroke()
+            return true
+        }
+        cache[key] = image
+        return image
     }
 }
 
@@ -391,4 +431,66 @@ private struct TasksInk: ViewModifier {
     @Environment(\.atticDesign) private var design
     init(_ ink: AtticInk) { self.ink = ink }
     func body(content: Content) -> some View { content.foregroundStyle(design.tokens.color(ink)) }
+}
+
+/// A date group folding or unfolding (fix round 1 of the owner's panel
+/// design): the group's rows stay where they are and are cut off at the
+/// line where the next header is drawn, as the design's `overflow: hidden`
+/// group body does, so a row never draws over the header that rises over
+/// it (the Air's check: fading Overdue rows crossed the Today header).
+/// Only the rows of the group being turned carry it, and only for the turn.
+struct TasksFoldMotion: Equatable {
+    let tab: TasksTab
+    let key: String
+    let generation: Int
+}
+
+/// Where a row of a turning group sits in it: its top in the group's rows,
+/// and the height of all of them.
+struct TasksFoldPlace: Equatable {
+    let top: CGFloat
+    let total: CGFloat
+}
+
+struct TasksFoldTransition: Transition {
+    let place: TasksFoldPlace
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content.modifier(TasksFoldReveal(progress: phase.isIdentity ? 1 : 0, place: place))
+    }
+}
+
+/// The row's part above the fold line: the group's rows shrink to (or grow
+/// from) nothing with the same animation that moves the next header, so
+/// the line is always the next header's top. The row fades with it.
+struct TasksFoldReveal: ViewModifier, Animatable {
+    var progress: CGFloat
+    let place: TasksFoldPlace
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    /// How much of the row is drawn at `progress` (1 open, 0 folded): the
+    /// rows above it take the group's shrunken height first.
+    static func visibleHeight(progress: CGFloat, place: TasksFoldPlace) -> CGFloat {
+        max(0, place.total * progress - place.top)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .clipShape(TasksFoldClip(visible: Self.visibleHeight(progress: progress, place: place)))
+            .opacity(Double(min(1, max(0, progress))))
+    }
+}
+
+/// Everything above `visible` points under the row's top (sideways and
+/// upwards unbounded, so a ring or shadow at the row's edge is kept).
+struct TasksFoldClip: Shape {
+    var visible: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX - 1_000, y: rect.minY - 1_000, width: rect.width + 2_000, height: 1_000 + visible))
+    }
 }
