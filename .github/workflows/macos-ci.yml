@@ -1181,3 +1181,39 @@ jobs:
           test "$PROJECT_VERIFY" = success
           test "$IPHONE_BUILD" = success
           test "$FINAL_STATE" = success
+
+  canvas-lab:
+    needs: validate-inputs
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    name: Canvas lab headless renderer and analysis
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate and verify the isolated lab scheme
+        run: |
+          export BUNDLE_PATH="$RUNNER_TEMP/CanvasLabBundle"
+          bundle install --jobs 4 --retry 3
+          bundle exec ruby Scripts/generate_project.rb
+          bundle exec ruby Scripts/verify_project_generation.rb
+      - name: Build lab, guarded driver and window recorder without launching them
+        run: |
+          Scripts/xcodebuild_locked.sh build -project Attic.xcodeproj -scheme CanvasLab \
+            -configuration Local -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/CanvasLab" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_HARDENED_RUNTIME=NO OTHER_CODE_SIGN_FLAGS=
+      - name: Run only the windowless test executable and analysis negative controls
+        run: |
+          "$RUNNER_TEMP/CanvasLab/Build/Products/Local/CanvasLabTests"
+          python3 -m pip install -r CanvasLab/Analysis/requirements.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s CanvasLab/Analysis -p 'test_*.py' -v
+          git diff --exit-code -- Attic.xcodeproj
