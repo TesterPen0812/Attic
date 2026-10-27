@@ -279,9 +279,8 @@ struct TasksFooterTabs: View {
             ForEach(tabs) { tab in
                 let on = tab == selection
                 Button { selection = tab } label: {
-                    Image(systemName: Self.symbol(tab))
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(tokens.color(on || hovered == tab ? .heading : .icon))
+                    AtticIcon(systemName: Self.symbol(tab), size: 11.5, weight: .medium,
+                              ink: on || hovered == tab ? .heading : .icon)
                         .frame(width: m.tabCell, height: m.tabCell)
                         .background {
                             if on {
@@ -307,7 +306,8 @@ struct TasksFooterTabs: View {
             }
         }
         .padding(m.tabsPadding)
-        .atticRaisedMaterial(cornerRadius: m.footerRadius, interactive: false)
+        // The glass behind the cells, never over them.
+        .background(Color.clear.atticRaisedMaterial(cornerRadius: m.footerRadius, interactive: false))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: m.footerRadius)
         .animation(design.reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
         .focusable(capture == nil)

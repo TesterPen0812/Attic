@@ -89,7 +89,9 @@ final class DeepReviewFixTests: XCTestCase {
         let list = try shownList(hosted)
         scrollToEnd(list, hosted)
         let layout = layout(hosted)
-        let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
+        // The owner's panel design: no tabs line; the list starts under the
+        // header (the filter chips are shut).
+        let tabsTop = layout.headerBottom
         let bottomInset = max(AtticSpacing.panelMargin, layout.chromeInsets.bottom)
         let idle = TasksViewport.bottomMargin(bottomInset: bottomInset)
         func frame() -> CGRect {

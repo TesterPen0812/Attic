@@ -283,7 +283,10 @@ enum AtticAppearanceCheck {
                 }
                 if controlRuleNames.contains(name) {
                     let rule = AtticRadius.control(height: probe.frame.height)
-                    if abs(radius - rule) > 0.26 {
+                    // The owner's panel design (2026-10-27) draws the header's
+                    // controls and the add field round.
+                    let round = Self.roundAllowedNames.contains(name) && abs(radius - probe.frame.height / 2) <= 0.26
+                    if abs(radius - rule) > 0.26, !round {
                         fail(.radius, String(format: "%@ radius %.2f on %.1f tall, rule %.2f", name, radius, probe.frame.height, rule))
                     }
                 }
@@ -412,6 +415,9 @@ enum AtticAppearanceCheck {
         "Single button", "Label button", "Page button", "Add bar", "Small control",
         "Selection bar", "Toast", "Pop-over row", "Title menu", "Tag"
     ]
+
+    /// Controls the owner's panel design draws round (radius half the height).
+    static let roundAllowedNames: Set<String> = ["Single button", "Page button", "Add bar"]
 
     /// "Family / Caption#id" → "Caption".
     static func displayName(_ specimen: String) -> String {

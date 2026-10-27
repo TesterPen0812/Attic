@@ -52,7 +52,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.control(height: 36), 15)
         XCTAssertEqual(AtticRadius.control(height: 28), 12)
         XCTAssertEqual(AtticRadius.control(height: 18), 7.5)
-        XCTAssertEqual(AtticRadius.nestedChip, 8.5, "Nested chips: outer radius minus the inset (12.5 − 4, Medium; visual A had 13.5 − 4)")
+        XCTAssertEqual(AtticRadius.nestedChip, 7.5, "Nested chips: outer radius minus the inset (11.5 − 4 on the panel design's 27 pt header; Medium had 12.5 − 4)")
         XCTAssertEqual(AtticRadius.nested(outer: 13.5, gap: 4), 9.5)
         XCTAssertNil(AtticRadius.nested(outer: 20, gap: 12), "Nesting only applies to gaps of 6 pt or less")
         XCTAssertEqual(AtticRadius.ring(around: 10, offset: 4), 14)
@@ -66,11 +66,14 @@ final class AtticDesignSystemTests: XCTestCase {
     /// at 56 (12 apart).
     func testControlSizesFollowPhase0Room() {
         // Control size Medium (owner, 2026-10-20; chrome B was 32 pt, radius 13.5): 30 pt, radius 12.5.
-        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 30, height: 30))
-        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 12.5)
+        // The owner's panel design (2026-10-27): 27 pt header controls, drawn
+        // round; the page switch 36 shut (glyph and chevron), 75 open.
+        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 27, height: 27))
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 11.5)
+        XCTAssertEqual(AtticRadius.header, 13.5)
         XCTAssertEqual(AtticControlSize.settingsHeaderHeight, 34)
-        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 30)
-        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 78)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 36)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 75)
         // Spacing B (owner, 2026-10-20): rows 32 / 48, highlights 28 / 44.
         XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [32, 28, 48, 44])
         XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 2)
@@ -490,9 +493,11 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testSendButtonNestsInsideTheAddBar() {
         let send = AtticControlSize.sendButton
-        XCTAssertEqual(send, CGSize(width: 22, height: 22), "Medium: 30 − 2 × 4 inside the bar")
+        // The owner's panel design: the 30.5 pt add field's plus circle adds
+        // (`plusAdds`); the send button's slot stays sized for it.
+        XCTAssertEqual(send, CGSize(width: 22.5, height: 22.5), "30.5 − 2 × 4 inside the bar")
         XCTAssertEqual(send.height, AtticControlSize.addBarHeight - 2 * AtticControlSize.sendInset)
-        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 8.5)
+        XCTAssertTrue(AtticAddBar.plusAdds)
     }
 
     /// Astra 19: one definition of what a row can do. VoiceOver offers
@@ -554,7 +559,7 @@ final class AtticDesignSystemTests: XCTestCase {
                 .atticDesign(.default))
             tabSizes.insert("\(tabs.fittingSize)")
         }
-        XCTAssertEqual(buttonSizes, ["\(CGSize(width: AtticControlSize.headerControl, height: AtticControlSize.headerControl))"])
+        XCTAssertEqual(buttonSizes, ["\(CGSize(width: AtticPageButton<Int>.width(open: false, count: AtticGallerySamples.pages.count), height: AtticControlSize.headerControl))"])
         XCTAssertEqual(tabSizes.count, 1, "The tabs keep their width whichever page is selected: \(tabSizes)")
         XCTAssertEqual(AtticTextStyle.pageTabSelected.spec.weight, .semibold)
         XCTAssertEqual(AtticTextStyle.pageTab.spec.weight, .medium)
@@ -695,7 +700,7 @@ final class AtticDesignSystemTests: XCTestCase {
     /// overdue dates.
     func testStatusRingIsOneInkAndPriorityIsAMark() {
         let m = AtticStatusCircleMetrics.self
-        XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.6)
+        XCTAssertEqual(m.ringWidth(increaseContrast: false), 0.8, "the owner's panel design: a hairline ring")
         XCTAssertEqual(m.ringWidth(increaseContrast: true), 2)
         // The task title's primary ink (Phase 0's qualities, item 6).
         XCTAssertEqual(AtticStatusCircle.ringInk, .heading)
