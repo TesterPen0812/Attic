@@ -110,10 +110,9 @@ struct TasksDonePage<Cell: View>: View {
                     let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
                     // A no-match line sits on the search's text column, as
                     // its count does (U-12).
-                    AtticEmptyLine(text: query.isEmpty
-                        ? String(localized: "Finished tasks collect here.")
-                        : String(localized: "No finished tasks match “\(query)”."),
-                        leading: query.isEmpty ? AtticLayout.pageTabsX : AtticLayout.textX)
+                    // The owner's panel design's empty state.
+                    TasksEmptyState(empty: TasksPanelDesign.empty(tab: .done, query: query, filtered: false),
+                                    clear: { model.typeDoneSearch("") })
                 } else if let count = model.doneSearchCount() {
                     // A quiet line under the results (v22 card B).
                     AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) done tasks"), style: .rowMeta, ink: .helper)
@@ -282,10 +281,13 @@ struct TasksDoneSearchField: View {
     @ObservedObject var input: TasksDoneSearchInput
     let isFocused: Binding<Bool>
     let onEscape: () -> Void
+    /// The owner's panel design: the header's field.
+    var header = false
 
     var body: some View {
-        AtticTabsSearchField(placeholder: model.searchPlaceholder(for: .done),
+        AtticTabsSearchField(placeholder: header ? String(localized: "Search") : model.searchPlaceholder(for: .done),
                              text: Binding(get: { input.text }, set: { model.typeDoneSearch($0, nativeEdit: true) }),
-                             isFocused: isFocused, nativeInputIdentifier: "tasks-done-search", floating: true, onEscape: onEscape)
+                             isFocused: isFocused, nativeInputIdentifier: "tasks-done-search", floating: true, onEscape: onEscape,
+                             header: header)
     }
 }

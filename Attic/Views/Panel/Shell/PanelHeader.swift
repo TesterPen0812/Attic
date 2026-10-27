@@ -49,16 +49,19 @@ struct PanelHeader: View {
                 // pinned, and under the pointer a pinned pin shows what a
                 // click does (the pin with a slash), cross-faded. No chip:
                 // the fill says "on". At the switch's icon size.
+                // The owner's panel design (2026-10-27): the filled pin,
+                // leaning 30° until pinned, upright once pinned; round.
                 AtticRaisedButton(
-                    systemName: "pin",
+                    systemName: "pin.fill",
                     label: isPinned ? "Unpin panel" : "Pin panel",
                     help: isPinned ? String(localized: "Unpin (⇧⌘P)") : String(localized: "Pin (⇧⌘P)"),
                     isSelected: isPinned,
                     glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
                     emphasisedGlyph: true,
                     flat: flat,
-                    selectedSystemName: AtticRaisedButtonMetrics.pinnedSymbol,
-                    selectedHoverSystemName: AtticRaisedButtonMetrics.unpinSymbol,
+                    selectedSystemName: "pin.fill",
+                    cornerRadius: AtticRadius.header,
+                    glyphRotation: isPinned ? 0 : 30,
                     action: onTogglePin
                 )
                 .keyboardShortcut("p", modifiers: [.command, .shift])

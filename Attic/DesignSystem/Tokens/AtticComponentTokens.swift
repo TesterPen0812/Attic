@@ -250,9 +250,13 @@ enum AtticRaisedButtonMetrics {
 /// The header's page button (Phase 0's mode dock): 30 pt (Medium), inset
 /// 4, 22 pt segments 2 apart (30 shut, 78 open), the raised glyph's size.
 enum AtticPageButtonMetrics {
-    static let inset: CGFloat = 4
+    /// The owner's panel design: 3 inset, 21 pt segments 3 apart, and a
+    /// 9 pt chevron after the current page's glyph while shut (36 shut,
+    /// 75 open).
+    static let inset: CGFloat = 3
     static let segment: CGFloat = AtticControlSize.headerControl - 2 * inset
-    static let gap: CGFloat = 2
+    static let gap: CGFloat = 3
+    static let chevronWidth: CGFloat = 9
     static let iconSize: CGFloat = AtticControlSize.raisedGlyph
     /// Phase 0's hairline around an accented current page.
     static let accentStrokeWidth: CGFloat = 0.75
@@ -273,10 +277,12 @@ enum AtticAddBarMetrics {
     /// titles' line (47 = 16 + 8 + 15 + 8). Spacing B (owner, 2026-10-20)
     /// moved both lines; the bar's contents follow them (they were 36 and
     /// 56, with a 24 pt slot).
-    static let leadingPadding: CGFloat = AtticLayout.contentFromChrome
-    static let iconSlot: CGFloat = AtticControlSize.statusCircle
-    static let gap: CGFloat = AtticLayout.circleToTitle
-    static let plusSize: CGFloat = 12.5
+    /// The owner's panel design: 9 in (18 px), the 14 pt plus circle, 7.5
+    /// to the text (15 px).
+    static let leadingPadding: CGFloat = 9
+    static let iconSlot: CGFloat = 14
+    static let gap: CGFloat = 7.5
+    static let plusSize: CGFloat = 8
     static let sendGlyphSize: CGFloat = 12
 }
 

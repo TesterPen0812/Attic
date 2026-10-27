@@ -94,6 +94,11 @@ struct AtticRaisedButton: View {
     /// inner chip or selected fill: the filled glyph is the state.
     var selectedSystemName: String?
     var selectedHoverSystemName: String?
+    /// A corner radius of its own (the owner's panel design draws the
+    /// header's controls round); nil follows the 42 % rule.
+    var cornerRadius: CGFloat?
+    /// The glyph's turn in degrees (the design's pin leans 30° until pinned).
+    var glyphRotation: Double = 0
     let action: () -> Void
 
     @State private var probeID = UUID()
@@ -102,7 +107,10 @@ struct AtticRaisedButton: View {
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
          isSelected: Bool = false, glyphOffsetY: CGFloat = 0, glyphOffsetX: CGFloat = 0, emphasisedGlyph: Bool = false,
          flat: Bool = false, selectedSystemName: String? = nil, selectedHoverSystemName: String? = nil,
+         cornerRadius: CGFloat? = nil, glyphRotation: Double = 0,
          action: @escaping () -> Void) {
+        self.cornerRadius = cornerRadius
+        self.glyphRotation = glyphRotation
         self.flat = flat
         self.selectedSystemName = selectedSystemName
         self.selectedHoverSystemName = selectedHoverSystemName
@@ -130,13 +138,14 @@ struct AtticRaisedButton: View {
     }
 
     var body: some View {
-        let radius = AtticRadius.control(height: size.height)
+        let radius = cornerRadius ?? AtticRadius.control(height: size.height)
         // A toggle whose glyph says "on" draws no chip (O14-05).
         let chip = isSelected && selectedSystemName == nil
         Button(action: action) {
             AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph,
                                    onSystemName: isSelected ? selectedSystemName : nil,
                                    onHoverSystemName: isSelected ? selectedHoverSystemName : nil)
+                .rotationEffect(.degrees(glyphRotation))
                 .offset(x: glyphOffsetX, y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
@@ -156,7 +165,7 @@ struct AtticRaisedButton: View {
             id: probeID,
             expectedSize: title == nil ? size : nil,
             radius: radius,
-            expectedRadius: AtticRadius.control(height: size.height)
+            expectedRadius: cornerRadius ?? AtticRadius.control(height: size.height)
         )
     }
 }
@@ -305,7 +314,8 @@ struct AtticPageButton<Page: Hashable>: View {
         let open = isOpen
         let selected = items.firstIndex { $0.page == selection } ?? 0
         let size = AtticControlSize.headerControl
-        let radius = AtticRadius.control(height: size)
+        // The owner's panel design: the header's controls are round.
+        let radius = AtticRadius.header
         let chipRadius = AtticRadius.nested(outer: radius, gap: M.inset) ?? radius
         HStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -359,6 +369,13 @@ struct AtticPageButton<Page: Hashable>: View {
                 .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
                 .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
+            // The owner's panel design: shut, a small chevron after the
+            // current page says it opens.
+            AtticIcon(systemName: "chevron.down", size: 7, weight: .semibold, ink: .chevron)
+                .frame(width: open ? 0 : M.chevronWidth, height: M.segment)
+                .opacity(open ? 0 : 1)
+                .clipped()
+                .accessibilityHidden(true)
         }
         .padding(M.inset)
         .frame(height: size)
@@ -397,8 +414,8 @@ struct AtticPageButton<Page: Hashable>: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Pages"))
-        .atticControlProbe("Page button", id: probeID, expectedSize: open ? nil : CGSize(width: size, height: size),
-                           radius: radius, expectedRadius: AtticRadius.control(height: size))
+        .atticControlProbe("Page button", id: probeID, expectedSize: open ? nil : CGSize(width: Self.width(open: false, count: items.count), height: size),
+                           radius: radius, expectedRadius: AtticRadius.header)
     }
 
     private func select(_ page: Page) {
@@ -410,7 +427,7 @@ struct AtticPageButton<Page: Hashable>: View {
     /// The width it takes shut and open (the header's hit testing).
     static func width(open: Bool, count: Int) -> CGFloat {
         let segments = open ? CGFloat(count) : 1
-        return M.inset * 2 + segments * M.segment + (open ? CGFloat(max(count - 1, 0)) * M.gap : 0)
+        return M.inset * 2 + segments * M.segment + (open ? CGFloat(max(count - 1, 0)) * M.gap : M.chevronWidth)
     }
 }
 
@@ -677,7 +694,8 @@ struct AtticAddBar: View {
         #endif
         let m = AtticAddBarMetrics.self
         let height = AtticControlSize.addBarHeight
-        let radius = AtticRadius.control(height: height)
+        // The owner's panel design: round (32 px on 61 px, clamped).
+        let radius = height / 2
         // The field's own keyboard focus and the environment's enabled
         // state; the gallery's pinned states override both. The ring shows
         // only while the keyboard is driving (a click into the field, or
@@ -690,7 +708,9 @@ struct AtticAddBar: View {
         // move while typing).
         let grown = max(0, fieldHeight - AtticTokenFieldMetrics.height)
         HStack(alignment: .bottom, spacing: m.gap) {
-            AtticIcon(systemName: systemImage, size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
+            // The owner's panel design: a 14 pt plus circle, grey at rest,
+            // the ink disc with a white plus once there is text (it adds).
+            plusCircle(disabled: state == .disabled)
                 .frame(width: m.iconSlot, height: height)
             field(disabled: state == .disabled)
                 .frame(height: AtticTokenFieldMetrics.height + grown)
@@ -699,8 +719,18 @@ struct AtticAddBar: View {
             // Built with the bar and only shown when there is text: the
             // first keystroke changes an opacity and an offset instead of
             // building the button (spec: one frame per keystroke).
+            // While the empty field has the keyboard, a quiet "!!!" says
+            // how to set a priority.
+            if isFieldFocused, text.isEmpty, capture == nil {
+                Text(verbatim: "!!!")
+                    .font(.system(size: 10))
+                    .foregroundStyle(design.tokens.color(.placeholder))
+                    .frame(height: height)
+                    .help(String(localized: "Type !!! while adding to set priority"))
+                    .accessibilityHidden(true)
+            }
             ZStack {
-                if showsSend {
+                if showsSend, !Self.plusAdds {
                     let shown = hasText
                     sendButton(radius: radius)
                         .opacity(shown ? 1 : 0)
@@ -712,11 +742,11 @@ struct AtticAddBar: View {
                         .transformEnvironment(\.atticProbesDisabled) { if !shown { $0 = true } }
                 }
             }
-            .frame(width: send.width, height: send.height)
+            .frame(width: Self.plusAdds ? 0 : send.width, height: send.height)
             .padding(.vertical, (height - send.height) / 2)
         }
         .padding(.leading, m.leadingPadding)
-        .padding(.trailing, AtticControlSize.sendInset)
+        .padding(.trailing, Self.plusAdds ? m.leadingPadding : AtticControlSize.sendInset)
         .frame(height: height + grown)
         .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
@@ -725,7 +755,7 @@ struct AtticAddBar: View {
         // A line more or less: the bar's own spring, its text kept in view.
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: grown > 0), value: grown)
         .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius,
-                           expectedRadius: AtticRadius.control(height: AtticControlSize.addBarHeight))
+                           expectedRadius: AtticControlSize.addBarHeight / 2)
     }
 
     @ViewBuilder
@@ -779,6 +809,36 @@ struct AtticAddBar: View {
         }
     }
 
+    /// The design's plus circle adds; there is no separate send button.
+    static let plusAdds = true
+
+    @ViewBuilder
+    private func plusCircle(disabled: Bool) -> some View {
+        let tokens = design.tokens
+        let active = hasText && !disabled
+        let disc = active ? tokens.ink(.inverseFill) : tokens.ink(.heading).withAlpha(0.1)
+        let glyph = active ? tokens.ink(.onInverse) : tokens.ink(disabled ? .disabledIcon : .icon)
+        let mark = ZStack {
+            Circle().fill(disc.color)
+            AtticPlusGlyph().stroke(glyph.color, style: StrokeStyle(lineWidth: 0.85, lineCap: .round))
+                .frame(width: AtticAddBarMetrics.plusSize, height: AtticAddBarMetrics.plusSize)
+        }
+        .frame(width: AtticAddBarMetrics.iconSlot, height: AtticAddBarMetrics.iconSlot)
+        if showsSend, capture == nil {
+            Button(action: onSubmit) {
+                mark.contentShape(Rectangle().inset(by: -7))
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .disabled(!active)
+            .help(String(localized: "Add (Return)"))
+            .accessibilityLabel(String(localized: "Add"))
+            .animation(.easeOut(duration: 0.16), value: active)
+        } else {
+            mark.accessibilityHidden(true)
+        }
+    }
+
     private func sendButton(radius: CGFloat) -> some View {
         let size = AtticControlSize.sendButton
         let inner = AtticRadius.nested(outer: radius, gap: AtticControlSize.sendInset) ?? radius
@@ -821,6 +881,11 @@ struct AtticTabsSearchField: View {
     var floating = false
     /// Esc, or a click on the "Esc" hint: the search ends.
     let onEscape: () -> Void
+    /// The owner's panel design: the header's round 27 pt field (a 12 pt
+    /// magnifier in a 27 pt cell, 12 pt text), with `accessory` (the filter
+    /// button) in place of the Esc hint.
+    var header = false
+    var accessory: AnyView? = nil
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -835,11 +900,13 @@ struct AtticTabsSearchField: View {
     var body: some View {
         let m = AtticTabsSearchMetrics.self
         let tokens = design.tokens
-        let height = Self.height(floating: floating)
+        let height = header ? AtticControlSize.headerControl : Self.height(floating: floating)
+        let font = header ? Font.system(size: 12) : AtticTextStyle.listBody.font
         HStack(spacing: 0) {
-            AtticIcon(systemName: "magnifyingglass", size: m.iconSize, weight: AtticIconWeight.outline, ink: .helper)
-                .frame(width: AtticControlSize.statusCircle)
-                .padding(.leading, AtticLayout.circleX - AtticLayout.rowHighlightInset)
+            AtticIcon(systemName: "magnifyingglass", size: header ? 12 : m.iconSize, weight: AtticIconWeight.outline,
+                      ink: header ? .glyph : .helper)
+                .frame(width: header ? AtticControlSize.headerControl : AtticControlSize.statusCircle)
+                .padding(.leading, header ? 0 : AtticLayout.circleX - AtticLayout.rowHighlightInset)
             Group {
                 if capture == nil, let nativeInputIdentifier {
                     AtticNativeSearchInput(text: $text, placeholder: placeholder,
@@ -851,7 +918,7 @@ struct AtticTabsSearchField: View {
                 } else if capture == nil {
                     TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
                         .textFieldStyle(.plain)
-                        .font(AtticTextStyle.listBody.font)
+                        .font(font)
                         .foregroundStyle(tokens.color(.heading))
                         .focused($focused)
                         .onExitCommand(perform: onEscape)
@@ -866,7 +933,12 @@ struct AtticTabsSearchField: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
+            .padding(.leading, header ? 0 : AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
+            if header {
+                if let accessory {
+                    accessory.padding(.trailing, 3)
+                }
+            } else {
             Button(action: onEscape) {
                 AtticText(verbatim: String(localized: "Esc"), style: .shortcut, ink: .helper)
                     .padding(.horizontal, m.hintPadding)
@@ -877,9 +949,10 @@ struct AtticTabsSearchField: View {
             .focusEffectDisabled()
             .help(String(localized: "End the search (Esc)"))
             .accessibilityLabel(String(localized: "End search"))
+            }
         }
         .frame(height: height)
-        .modifier(AtticSearchFieldBacking(floating: floating, height: height))
+        .modifier(AtticSearchFieldBacking(floating: floating, height: height, radius: header ? AtticRadius.header : nil))
         .contentShape(Rectangle())
         .onTapGesture {
             // The native field has no SwiftUI focus of its own: a click on
@@ -904,7 +977,7 @@ struct AtticTabsSearchField: View {
                 focused = false
             }
         }
-        .padding(.horizontal, AtticLayout.rowHighlightInset)
+        .padding(.horizontal, header ? 0 : AtticLayout.rowHighlightInset)
     }
 
     private func requestKeyboard() {
@@ -1069,11 +1142,12 @@ struct AtticFieldClaimProbe: NSViewRepresentable {
 struct AtticSearchFieldBacking: ViewModifier {
     let floating: Bool
     let height: CGFloat
+    var radius: CGFloat? = nil
 
     @Environment(\.atticDesign) private var design
 
     func body(content: Content) -> some View {
-        let radius = AtticRadius.control(height: height)
+        let radius = radius ?? AtticRadius.control(height: height)
         if floating {
             content.atticRaisedMaterial(cornerRadius: radius, interactive: false)
         } else {
@@ -2201,5 +2275,17 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
             owner.onEscape()
             return true
         }
+    }
+}
+
+/// The add field's plus (the owner's panel design: two 1.7 px strokes).
+struct AtticPlusGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return path
     }
 }

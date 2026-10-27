@@ -51,6 +51,10 @@ enum AtticRadius {
     /// Kept by the owner on 2026-09-27 after comparing fully round controls.
     static let controlFraction: CGFloat = 0.42
 
+    /// The header's controls (the owner's panel design: 30 px on 54 px,
+    /// clamped to round).
+    static let header: CGFloat = AtticControlSize.headerControl / 2
+
     static func control(height: CGFloat) -> CGFloat {
         (height * controlFraction * 2).rounded() / 2
     }
@@ -90,7 +94,8 @@ enum AtticControlSize {
     /// (`AtticStyle.chromeMinimumInset`), the page switch's capsule height.
     /// Control size Medium (owner, 2026-10-20): 30 pt (it was 32, and 36
     /// before chrome B); radius 12.5 by the 42 % rule.
-    static let headerControl: CGFloat = 30
+    /// The owner's panel design (2026-10-27, 54 px at 2×): 27.
+    static let headerControl: CGFloat = 27
     /// The secondary floating controls, one step under the corner controls
     /// and the add bar (owner, 2026-10-22: "too big compared to everything
     /// else"): the tabs capsule, Find and View Options, the composer strip.
@@ -103,7 +108,9 @@ enum AtticControlSize {
     static let capsuleInset: CGFloat = 4
     /// An icon-only chip, 24 tall and 1.15 × as wide (28).
     /// The add bar matches the corner controls (Medium: 30; chrome B 32, was 36).
-    static let addBarHeight: CGFloat = headerControl
+    /// The owner's panel design: the add field is 30.5 tall (61 px at 2×),
+    /// apart from the header's 27.
+    static let addBarHeight: CGFloat = 30.5
     /// The send button: 24 × 24 (chrome B; 28 × 28 in the 36 pt bar),
     /// nested **inside** the add bar.
     ///
