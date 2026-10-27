@@ -118,7 +118,9 @@ canvas_driver.source_build_phase.add_file_reference(lab_core.files.find { |ref| 
 end
 canvas_tests.build_configurations.each do |config|
   config.build_settings['FRAMEWORK_SEARCH_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks'
-  config.build_settings['LD_RUNPATH_SEARCH_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks $(PLATFORM_DIR)/Developer/usr/lib'
+  # Xcode 26's Swift support dylib references XCTestCore from PrivateFrameworks.
+  # A command-line test host does not receive xctest's injected loader paths.
+  config.build_settings['LD_RUNPATH_SEARCH_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks $(PLATFORM_DIR)/Developer/Library/PrivateFrameworks $(PLATFORM_DIR)/Developer/usr/lib $(DEVELOPER_DIR)/../SharedFrameworks'
   config.build_settings['LIBRARY_SEARCH_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/usr/lib'
   config.build_settings['SWIFT_INCLUDE_PATHS'] = '$(inherited) $(PLATFORM_DIR)/Developer/usr/lib'
 end
