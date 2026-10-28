@@ -291,54 +291,57 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
 
     // MARK: - Folding a date group
 
-    /// A group folding, drawn at points of its turn: the group's rows above
-    /// a header that rises with the same progress (the list moves the next
-    /// header by the rows' height times the animation's progress). No row
-    /// may draw at or below that header's top (the Air's check, 27 Oct:
-    /// fading Overdue rows crossed the Today header). Rows are red, the
-    /// header blue, on clear.
-    func testAFoldingGroupsRowsNeverDrawOverTheNextHeader() throws {
+    /// Fix round 2 (the Air, 28 Oct: mid-fold, the next header and its rows
+    /// had already risen while the folding rows faded in place behind
+    /// them). A group's body closes like the design's `overflow: hidden`
+    /// body with a height transition: in a stack, the rows' part above the
+    /// fold line is all the room they take, so the next header is carried
+    /// up by the body's edge and no row draws at or below it. Drawn at
+    /// points of the turn: a green header, the group's red rows, the next
+    /// (blue) header, laid out by the stack itself.
+    func testAFoldingGroupsBodyCarriesTheNextHeaderOnItsEdge() throws {
         let heights: [CGFloat] = [29, 45.5, 29, 61.5]
         let total = heights.reduce(0, +)
         let tops = heights.indices.map { heights[..<$0].reduce(0, +) }
-        let header: CGFloat = 26
-        let size = CGSize(width: 120, height: total + header + 20)
+        let above: CGFloat = 20
         for progress in stride(from: 0.0, through: 1.0, by: 0.125) {
             let p = CGFloat(progress)
-            // The rows keep their places (they are leaving or arriving); the
-            // header is where the animation has carried it.
-            let view = ZStack(alignment: .topLeading) {
+            let view = VStack(alignment: .leading, spacing: 0) {
+                Color.green.frame(width: 100, height: above)
                 ForEach(heights.indices, id: \.self) { index in
                     Color.red
                         .frame(width: 100, height: heights[index])
-                        .modifier(TasksFoldReveal(progress: p, place: TasksFoldPlace(top: tops[index], total: total)))
-                        .offset(y: tops[index])
+                        .modifier(TasksFoldBody(progress: p, place: TasksFoldPlace(top: tops[index], total: total)))
                 }
-                Color.blue.frame(width: 100, height: header).offset(y: total * p)
+                Color.blue.frame(width: 100, height: 26)
+                Spacer(minLength: 0)
             }
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .frame(width: 120, height: above + total + 26 + 20, alignment: .topLeading)
             let renderer = ImageRenderer(content: view)
             renderer.scale = 2
-            let image = try XCTUnwrap(renderer.cgImage)
-            let rep = NSBitmapImageRep(cgImage: image)
-            let headerTop = Int((total * p * 2).rounded())
-            var redBelow = 0
-            var redAbove = 0
-            for y in 0..<rep.pixelsHigh {
-                for x in stride(from: 4, to: 196, by: 8) {
-                    guard let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), colour.alphaComponent > 0.02,
-                          colour.redComponent > colour.blueComponent + 0.05 else { continue }
-                    if y >= headerTop { redBelow += 1 } else { redAbove += 1 }
+            let rep = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+            func colour(_ y: Int) -> NSColor? {
+                guard let c = rep.colorAt(x: 100, y: y)?.usingColorSpace(.deviceRGB), c.alphaComponent > 0.5 else { return nil }
+                return c
+            }
+            let blueTop = (0..<rep.pixelsHigh).first { colour($0).map { $0.blueComponent > 0.5 && $0.redComponent < 0.3 } ?? false }
+            let edge = (above + total * p) * 2
+            XCTAssertEqual(CGFloat(blueTop ?? -100), edge, accuracy: 2, "progress \(progress): the next header is not on the body's edge")
+            // From the first device pixel wholly under the edge (the one it
+            // crosses is shared, antialiased).
+            let redBelow = (Int(edge.rounded(.up))..<rep.pixelsHigh).filter { y in
+                (stride(from: 4, to: 196, by: 8)).contains { x in
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), c.alphaComponent > 0.02 else { return false }
+                    return c.redComponent > c.blueComponent + 0.05 && c.redComponent > c.greenComponent + 0.05
                 }
             }
-            XCTAssertEqual(redBelow, 0, "progress \(progress): a folding row draws over the next header")
-            if progress > 0.2 { XCTAssertGreaterThan(redAbove, 0, "progress \(progress): the rows above the line are drawn") }
+            XCTAssertEqual(redBelow.count, 0, "progress \(progress): a folding row draws at or below the next header")
         }
         // Folded, nothing; open, every row whole.
         for (index, top) in tops.enumerated() {
             let place = TasksFoldPlace(top: top, total: total)
-            XCTAssertEqual(TasksFoldReveal.visibleHeight(progress: 0, place: place), 0)
-            XCTAssertGreaterThanOrEqual(TasksFoldReveal.visibleHeight(progress: 1, place: place), heights[index])
+            XCTAssertEqual(TasksFoldBody.visibleHeight(progress: 0, place: place), 0)
+            XCTAssertGreaterThanOrEqual(TasksFoldBody.visibleHeight(progress: 1, place: place), heights[index])
         }
     }
 }

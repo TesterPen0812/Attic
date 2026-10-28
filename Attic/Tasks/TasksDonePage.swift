@@ -51,15 +51,24 @@ struct TasksDonePage<Cell: View>: View {
     /// query's rows (`TasksDoneSlots`): only when no row holds anything of
     /// its own (the page decides; asked only when the query changed).
     var rowsAreInterchangeable: () -> Bool = { false }
+    /// A day folding or unfolding (fix round 2, `TasksFoldTurn`): the page
+    /// owns the turn; a header's click asks it to turn the day.
+    var foldTurn: TasksFoldTurn?
+    var toggleDay: (String) -> Void = { _ in }
+    /// The rows' places in a turning day (measured or estimated heights).
+    var foldPlaces: ([TasksListRow]) -> [UUID: TasksFoldPlace] = { _ in [:] }
 
     static var space: NamedCoordinateSpace { .named("AtticTasksDone") }
 
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let lines = slots.lines(for: model.doneDays(), query: model.trimmedQuery(for: .done),
+        let days = model.doneDays()
+        let lines = slots.lines(for: days, query: model.trimmedQuery(for: .done),
                                 interchangeable: rowsAreInterchangeable)
-        list(lines)
+        let turn = foldTurn?.tab == .done ? foldTurn : nil
+        let places = turn.flatMap { turn in days.first { $0.key == turn.key } }.map { foldPlaces($0.rows) } ?? [:]
+        list(lines, turn: turn, places: places)
         // Round 12: a page kept built but not drawn reads nothing and
         // watches nothing (its copy of the log is not on screen); drawn
         // again, it catches up with whatever changed meanwhile.
@@ -73,7 +82,7 @@ struct TasksDonePage<Cell: View>: View {
         }
     }
 
-    private func list(_ lines: [TasksDoneLine]) -> some View {
+    private func list(_ lines: [TasksDoneLine], turn: TasksFoldTurn?, places: [UUID: TasksFoldPlace]) -> some View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -84,13 +93,16 @@ struct TasksDonePage<Cell: View>: View {
                     case let .heading(day):
                         // The owner's panel design: the day's header folds
                         // or unfolds its tasks.
-                        TasksGroupHeader(title: day.title, count: day.total, folded: day.folded) {
-                            withAnimation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)) {
-                                model.toggleGroup(day.key, on: .done)
-                            }
+                        TasksGroupHeader(title: day.title, count: day.total,
+                                         folded: turn?.key == day.key ? turn?.headerFolded ?? day.folded : day.folded) {
+                            toggleDay(day.key)
                         }
                     case let .row(row):
+                        // A turning day's body closes or opens over its
+                        // rows (fix round 2); every other row is open.
                         cell(row)
+                            .modifier(turn.flatMap { turn in places[row.id].map { TasksFoldBody(progress: turn.progress, place: $0) } }
+                                ?? TasksFoldBody(progress: 1, place: nil))
                     }
                 }
                 if model.doneLogFailure != nil {

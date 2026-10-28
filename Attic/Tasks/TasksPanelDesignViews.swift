@@ -446,16 +446,27 @@ private struct TasksInk: ViewModifier {
     func body(content: Content) -> some View { content.foregroundStyle(design.tokens.color(ink)) }
 }
 
-/// A date group folding or unfolding (fix round 1 of the owner's panel
-/// design): the group's rows stay where they are and are cut off at the
-/// line where the next header is drawn, as the design's `overflow: hidden`
-/// group body does, so a row never draws over the header that rises over
-/// it (the Air's check: fading Overdue rows crossed the Today header).
-/// Only the rows of the group being turned carry it, and only for the turn.
-struct TasksFoldMotion: Equatable {
+/// A date group (or a Done day) folding or unfolding: its body closes like
+/// the design's `overflow: hidden` body with a height transition. The rows
+/// stay in the list while it closes; each takes only its part above the
+/// fold line, so the content below rises with the body's edge and nothing
+/// draws under or over the leaving rows (fix round 2: fix 1 cut the rows
+/// in their own place while the list had already moved the next header
+/// up, and the Air saw them fade behind it). Folding, the model folds once
+/// the body has closed; unfolding, the rows come in closed and open.
+struct TasksFoldTurn: Equatable {
     let tab: TasksTab
     let key: String
+    /// Where it is going: closed (the model folds once it is) or open.
+    let closing: Bool
+    /// The header's state: folded while closing, and in the moment an
+    /// unfolding group's rows come in closed.
+    var headerFolded: Bool
+    /// The body's openness, 1 open, 0 closed; animated.
+    var progress: CGFloat
     let generation: Int
+
+    func matches(_ tab: TasksTab, _ key: String) -> Bool { self.tab == tab && self.key == key }
 }
 
 /// Where a row of a turning group sits in it: its top in the group's rows,
@@ -465,42 +476,140 @@ struct TasksFoldPlace: Equatable {
     let total: CGFloat
 }
 
-struct TasksFoldTransition: Transition {
-    let place: TasksFoldPlace
+@MainActor
+enum TasksFold {
+    /// A header was clicked. `folded` is the model's state of the group;
+    /// `toggle` flips a group in the model. A turn still under way for
+    /// another group ends where it was going first. Under Reduce Motion
+    /// (no animation) the group flips at once.
+    static func turn(_ key: String, on tab: TasksTab, folded: Bool, animation: Animation?, generation: Int,
+                     state: Binding<TasksFoldTurn?>, toggle: @escaping (String) -> Void) {
+        var quiet = Transaction()
+        quiet.disablesAnimations = true
+        if let old = state.wrappedValue, !old.matches(tab, key) {
+            withTransaction(quiet) {
+                if old.closing { toggle(old.key) }
+                state.wrappedValue = nil
+            }
+        }
+        let current = state.wrappedValue
+        guard let animation else {
+            withTransaction(quiet) {
+                // A closing turn has not folded the model yet.
+                if current?.closing == true { state.wrappedValue = nil } else { state.wrappedValue = nil; toggle(key) }
+            }
+            return
+        }
+        let closing = current.map { !$0.closing } ?? !folded
+        if closing {
+            withAnimation(animation, completionCriteria: .removed) {
+                state.wrappedValue = TasksFoldTurn(tab: tab, key: key, closing: true, headerFolded: true, progress: 0,
+                                                   generation: generation)
+            } completion: {
+                guard state.wrappedValue?.generation == generation else { return }
+                withTransaction(quiet) {
+                    toggle(key)
+                    state.wrappedValue = nil
+                }
+            }
+        } else if current == nil {
+            // The rows come in closed, then open on the next turn of the
+            // run loop (they must be drawn closed first).
+            withTransaction(quiet) {
+                toggle(key)
+                state.wrappedValue = TasksFoldTurn(tab: tab, key: key, closing: false, headerFolded: true, progress: 0,
+                                                   generation: generation)
+            }
+            DispatchQueue.main.async {
+                guard state.wrappedValue?.generation == generation else { return }
+                open(tab, key, animation, generation: generation, state: state)
+            }
+        } else {
+            // It was closing: it turns back (the model never folded).
+            open(tab, key, animation, generation: generation, state: state)
+        }
+    }
 
-    func body(content: Content, phase: TransitionPhase) -> some View {
-        content.modifier(TasksFoldReveal(progress: phase.isIdentity ? 1 : 0, place: place))
+    private static func open(_ tab: TasksTab, _ key: String, _ animation: Animation, generation: Int,
+                             state: Binding<TasksFoldTurn?>) {
+        var quiet = Transaction()
+        quiet.disablesAnimations = true
+        withAnimation(animation, completionCriteria: .removed) {
+            state.wrappedValue = TasksFoldTurn(tab: tab, key: key, closing: false, headerFolded: false, progress: 1,
+                                               generation: generation)
+        } completion: {
+            guard state.wrappedValue?.generation == generation else { return }
+            withTransaction(quiet) { state.wrappedValue = nil }
+        }
+    }
+
+    /// Each row's place in its group, from the rows' heights.
+    static func places(_ rows: [TasksListRow], height: (TasksListRow) -> CGFloat) -> [UUID: TasksFoldPlace] {
+        var tops: [(UUID, CGFloat)] = []
+        var top: CGFloat = 0
+        for row in rows {
+            tops.append((row.id, top))
+            top += height(row)
+        }
+        return Dictionary(tops.map { ($0.0, TasksFoldPlace(top: $0.1, total: top)) }, uniquingKeysWith: { first, _ in first })
     }
 }
 
-/// The row's part above the fold line: the group's rows shrink to (or grow
-/// from) nothing with the same animation that moves the next header, so
-/// the line is always the next header's top. The row fades with it.
-struct TasksFoldReveal: ViewModifier, Animatable {
+/// A row of a group: while its group turns, it takes (and draws) only its
+/// part above the fold line, and fades with the body. Every group row
+/// wears it (open: the whole row, unclipped), so a row keeps its identity
+/// when its group starts or ends a turn.
+struct TasksFoldBody: ViewModifier, Animatable {
     var progress: CGFloat
-    let place: TasksFoldPlace
+    let place: TasksFoldPlace?
+
+    init(progress: CGFloat, place: TasksFoldPlace?) {
+        self.progress = progress
+        self.place = place
+    }
 
     var animatableData: CGFloat {
         get { progress }
         set { progress = newValue }
     }
 
-    /// How much of the row is drawn at `progress` (1 open, 0 folded): the
+    /// How much of the row is drawn at `progress` (1 open, 0 closed): the
     /// rows above it take the group's shrunken height first.
     static func visibleHeight(progress: CGFloat, place: TasksFoldPlace) -> CGFloat {
         max(0, place.total * progress - place.top)
     }
 
     func body(content: Content) -> some View {
-        content
-            .clipShape(TasksFoldClip(visible: Self.visibleHeight(progress: progress, place: place)))
-            .opacity(Double(min(1, max(0, progress))))
+        let visible: CGFloat? = place.flatMap { progress >= 1 ? nil : Self.visibleHeight(progress: progress, place: $0) }
+        TasksFoldLayout(visible: visible) { content }
+            .clipShape(TasksFoldClip(visible: visible ?? TasksFoldClip.open))
+            .opacity(visible == nil ? 1 : Double(min(1, max(0, progress))))
+    }
+}
+
+/// Lays its row out at the row's own size and reports at most `visible`
+/// points of height (the list moves what follows by that).
+struct TasksFoldLayout: Layout {
+    var visible: CGFloat?
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let row = subviews.first else { return .zero }
+        let size = row.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        guard let visible else { return size }
+        return CGSize(width: size.width, height: min(size.height, max(0, visible)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let row = subviews.first else { return }
+        let size = row.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        row.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: size.height))
     }
 }
 
 /// Everything above `visible` points under the row's top (sideways and
 /// upwards unbounded, so a ring or shadow at the row's edge is kept).
 struct TasksFoldClip: Shape {
+    static let open: CGFloat = 100_000
     var visible: CGFloat
 
     func path(in rect: CGRect) -> Path {

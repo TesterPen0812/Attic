@@ -101,8 +101,9 @@ struct TasksPage: View {
     @State private var searchFocused = false
     /// The filter button turned the chips row on (the owner's panel design).
     @State private var chipsOpen = false
-    /// The date group being folded or unfolded, while it turns (fix round 1).
-    @State private var foldMotion: TasksFoldMotion?
+    /// The date group (or Done day) folding or unfolding, while it turns
+    /// (fix round 2, `TasksFoldTurn`).
+    @State private var foldTurn: TasksFoldTurn?
     @State private var foldGeneration = 0
     /// The page the search field was opened on: moving to another page
     /// lets it go (each page keeps its own query).
@@ -809,40 +810,34 @@ struct TasksPage: View {
         model.setViewOptions(view, for: tab)
     }
 
-    /// A date group's header was clicked: it folds or unfolds. While it
-    /// turns, its rows are cut off at the next header (fix round 1: they
-    /// faded over it). A leaving row keeps the transition it was last drawn
-    /// with, so the group's rows take the fold's first, and the fold itself
-    /// follows on the next turn of the run loop. Under Reduce Motion it
-    /// changes at once.
+    /// A date group's (or a Done day's) header was clicked: its body closes
+    /// or opens like the design's `overflow: hidden` body (`TasksFold`);
+    /// under Reduce Motion it changes at once.
     private func toggleGroup(_ key: String, on tab: TasksTab, animation: Animation?) {
-        guard let animation else {
-            model.toggleGroup(key, on: tab)
-            return
-        }
         foldGeneration += 1
-        let motion = TasksFoldMotion(tab: tab, key: key, generation: foldGeneration)
-        foldMotion = motion
-        DispatchQueue.main.async { [model] in
-            withAnimation(animation, completionCriteria: .removed) {
-                model.toggleGroup(key, on: tab)
-            } completion: {
-                if foldMotion == motion { foldMotion = nil }
-            }
-        }
+        TasksFold.turn(key, on: tab, folded: model.folded(on: tab).contains(key), animation: animation,
+                       generation: foldGeneration, state: $foldTurn) { [model] key in model.toggleGroup(key, on: tab) }
+    }
+
+    /// A header's folded look: the turn's while its group turns.
+    private func shownFolded(_ key: String, on tab: TasksTab) -> Bool {
+        if let foldTurn, foldTurn.matches(tab, key) { return foldTurn.headerFolded }
+        return model.folded(on: tab).contains(key)
+    }
+
+    /// A group row's fold modifier: open and unclipped unless its group turns.
+    private func foldBody(_ key: String, on tab: TasksTab, places: [UUID: TasksFoldPlace], row: UUID) -> TasksFoldBody {
+        guard let foldTurn, foldTurn.matches(tab, key) else { return TasksFoldBody(progress: 1, place: nil) }
+        return TasksFoldBody(progress: foldTurn.progress, place: places[row])
     }
 
     /// Each drawn row's place in its turning group (heights as measured,
     /// or as estimated before the row was ever drawn).
     private func foldPlaces(_ rows: [TasksListRow], in tab: TasksTab) -> [UUID: TasksFoldPlace] {
-        var tops: [(UUID, CGFloat)] = []
-        var top: CGFloat = 0
-        for row in rows {
-            tops.append((row.id, top))
+        TasksFold.places(rows) { row in
             let measured = pointer.frames[TasksRowID(tab: tab, id: row.id)]?.height ?? 0
-            top += measured > 0 ? measured : estimatedHeight(row)
+            return measured > 0 ? measured : estimatedHeight(row)
         }
-        return Dictionary(uniqueKeysWithValues: tops.map { ($0.0, TasksFoldPlace(top: $0.1, total: top)) })
     }
 
     /// The filter button inside the search field (Now and Later): it shows
@@ -1502,7 +1497,12 @@ struct TasksPage: View {
                                   takeScrollRequest(in: .done)
                               },
                               slots: doneSlots,
-                              rowsAreInterchangeable: { doneRowsAreInterchangeable() })
+                              rowsAreInterchangeable: { doneRowsAreInterchangeable() },
+                              foldTurn: foldTurn,
+                              toggleDay: { key in
+                                  toggleGroup(key, on: .done, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                              },
+                              foldPlaces: { rows in foldPlaces(rows, in: .done) })
             }
         }
         // Larger corners move the pin (and the add bar) inward; the tabs
@@ -1539,27 +1539,29 @@ struct TasksPage: View {
                     // The date groups (the owner's panel design): a header
                     // folds or unfolds its rows.
                     ForEach(sections.groups, id: \.key) { dateGroup in
-                        let folded = model.folded(on: tab).contains(dateGroup.key)
+                        let folded = shownFolded(dateGroup.key, on: tab)
                         TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
                                          overdue: dateGroup.isOverdue) {
-                            toggleGroup(dateGroup.key, on: tab, animation: travel)
+                            toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
                         }
                         .id("group:" + dateGroup.key)
                         .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                         let drawnRows = sections.groupRows[dateGroup.key] ?? []
                         let byStatus = Dictionary(grouping: drawnRows, by: \.status).mapValues { $0.map(\.id) }
-                        let fold = foldMotion?.tab == tab && foldMotion?.key == dateGroup.key ? foldPlaces(drawnRows, in: tab) : [:]
+                        let turning = foldTurn?.matches(tab, dateGroup.key) ?? false
+                        let places = turning ? foldPlaces(drawnRows, in: tab) : [:]
                         ForEach(drawnRows) { row in
                         cell(row, tab: tab, group: byStatus[row.status] ?? [], drawn: drawn)
                             .id(row.id)
                             .opacity(reorderFade.contains(row.id) ? 0.001 : 1)
                             // A moved row pops back in with the feel (1, none, in Calm).
                             .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
+                            // A turning group's body closes or opens over
+                            // its rows (fix round 2).
+                            .modifier(foldBody(dateGroup.key, on: tab, places: places, row: row.id))
                             // A row added or leaving drops into or rises
-                            // out of its place (round 9); a folding group's
-                            // rows are cut off at the next header (fix 1).
-                            .transition(fold[row.id].map { AnyTransition(TasksFoldTransition(place: $0)) }
-                                ?? AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
+                            // out of its place (round 9).
+                            .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
                         }
                     }
                     if !query.isEmpty, !sections.open.isEmpty, let count = model.listSearchCount(for: tab) {
