@@ -560,6 +560,10 @@ struct TasksPagerPages<Page: View>: View {
     /// What a page kept built but not drawn shows: it redraws only when
     /// this changes (round 11).
     let token: (Int) -> TasksPageModel.PageToken
+    /// A group folding or unfolding (fix round 2): the page's own state,
+    /// which the closure alone does not carry here, so the lists see the
+    /// turn start and end (fix 1's fold never reached them).
+    var foldTurn: TasksFoldTurn?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
