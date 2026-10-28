@@ -182,6 +182,11 @@ struct TasksPage: View {
         // The focus owner alone redraws for focusable views coming and
         // going, and the content again only when the focused row changes.
         let generation = TasksRowFocusLink.nextGeneration()
+        // Read here so a group's fold turn redraws the page: the lists read
+        // it only inside the pager's closures, which SwiftUI does not count
+        // as this body's (fix round 2: on the Air a fold jumped closed and
+        // an unfold stayed closed until the model changed again).
+        let _ = foldTurn
         TasksRowFocusOwner { [rowFocus] focus in
             let _ = rowFocus.binding = focus
             TasksPageFocusedContent(generation: generation, focusedRow: focus.wrappedValue) {
