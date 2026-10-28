@@ -481,6 +481,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     func requestHide(
         completion: @escaping (PanelHideCompletion) -> Void
     ) -> PanelHideRequestResult {
+        #if DEBUG
+        // A hide's caller, for on-screen checks (`ATTIC_HIDE_TRACE=1`; the
+        // pinned panel that hid on an outside click, owner 2026-10-28).
+        if ProcessInfo.processInfo.environment["ATTIC_HIDE_TRACE"] == "1" {
+            NSLog("ATTIC_HIDE_TRACE pinned=%d visible=%d %@", uiState.isPanelPinned ? 1 : 0, panel.isVisible ? 1 : 0,
+                  Thread.callStackSymbols.prefix(10).joined(separator: " | "))
+        }
+        #endif
         guard panel.isVisible else {
             stopPointerPassthroughMonitoring()
             completion(.hidden)
