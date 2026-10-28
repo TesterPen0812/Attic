@@ -954,7 +954,9 @@ struct TasksPage: View {
             // The chosen chip comes fully into view (Terra, 2026-10-28: a
             // chosen tag at the row's end was cut off).
             .onChange(of: chosen, initial: true) { _, chosen in
-                withAnimation(motion) { proxy.scrollTo(chosen ?? Self.allChipID) }
+                // Centred, so the row's end keeps its margin past the last
+                // chip (pass 3: the selector met the panel's edge).
+                withAnimation(motion) { proxy.scrollTo(chosen ?? Self.allChipID, anchor: .center) }
             }
         }
         .frame(height: TasksDesignMetrics.chipHeight)
