@@ -216,13 +216,16 @@ private struct TasksImageTile: View {
 }
 
 /// A filter chip (the owner's panel design): 21 tall, 10 pt text; the
-/// chosen one white with a hairline and a soft shadow, in the primary ink;
-/// the others in the helper grey. A tag chip's text takes its tag's colour,
-/// as the row's tag pill does.
+/// chosen one on the app's glass selector (owner, 2026-10-28: what would
+/// be glass in the app is glass; the design's white pill is HTML's stand-in),
+/// in the primary ink; the others plain, in the helper grey. A tag chip's
+/// text takes its tag's colour, as the row's tag pill does.
 struct TasksFilterChip: View {
     let title: String
     let selected: Bool
     var tag: String?
+    /// Shared by a row's chips: the selector slides between them.
+    var selector: Namespace.ID?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -243,12 +246,12 @@ struct TasksFilterChip: View {
                 .frame(height: TasksDesignMetrics.chipHeight)
                 .background {
                     if selected {
-                        shape
-                            .fill(dark ? AtticRGBA(red: 1, green: 1, blue: 1, alpha: 0.16).color : Color.white)
-                            .overlay(shape
-                                .strokeBorder(AtticRGBA(red: 185 / 255, green: 189 / 255, blue: 191 / 255, alpha: dark ? 0.25 : 0.6).color,
-                                              lineWidth: 0.5))
-                            .shadow(color: AtticRGBA(red: 0.5, green: 0.5, blue: 0.5, alpha: 0.12).color, radius: 1.5, y: 1)
+                        if let selector {
+                            Color.clear.atticRaisedMaterial(cornerRadius: TasksDesignMetrics.innerRadius, interactive: false)
+                                .matchedGeometryEffect(id: "chip-selector", in: selector)
+                        } else {
+                            Color.clear.atticRaisedMaterial(cornerRadius: TasksDesignMetrics.innerRadius, interactive: false)
+                        }
                     }
                 }
                 .contentShape(shape)
