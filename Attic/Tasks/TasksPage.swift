@@ -161,11 +161,12 @@ struct TasksPage: View {
     /// it, and the list starts below them.
     private var tabsTop: CGFloat { layout.headerBottom + (chipsShown ? TasksDesignMetrics.chipsRowHeight : 0) }
 
-    /// The filter chips show while the filter button is on, or while a
-    /// filter hides tasks (the design's `chipOpen`); never on Done.
+    /// The tag chips show while the filter button is on, or while a
+    /// filter (a tag chip, the View options) hides tasks (the design's
+    /// `chipOpen`); never on Done.
     private var chipsShown: Bool {
         TasksPanelDesign.chipsShown(tab: model.tab, chipsOpen: chipsOpen, searchShown: searchShown,
-                                    filtering: model.viewOptions(for: model.tab).filters)
+                                    filtering: model.viewOptions(for: model.tab).filters || model.tagFilter(on: model.tab) != nil)
     }
 
     /// Room under the list for the add bar and its margins.
@@ -801,6 +802,7 @@ struct TasksPage: View {
         model.setSearchQuery("", for: tab)
         searchFocused = false
         chipsOpen = false
+        model.chooseTagChip(nil)
         var view = model.viewOptions(for: tab)
         view.show = .all
         view.priority = .any
@@ -837,7 +839,7 @@ struct TasksPage: View {
     }
 
     /// The filter button inside the search field (Now and Later): it shows
-    /// or hides the filter chips; off, the chips' filter is cleared. A
+    /// or hides the tag chips; off, the filters are cleared. A
     /// right-click, or ⌥⌘V, opens View Options (the sort lives there).
     private var filterButton: some View {
         let on = chipsShown
@@ -845,6 +847,7 @@ struct TasksPage: View {
         return Button {
             if on {
                 chipsOpen = false
+                model.chooseTagChip(nil)
                 if view.filters {
                     var next = view
                     next.show = .all
@@ -882,19 +885,21 @@ struct TasksPage: View {
         .accessibilityIdentifier("tasks-view-options")
     }
 
-    /// The filter chips under the header (the owner's panel design): the
-    /// View options' filters, "All" first; the chosen one white.
+    /// The tag chips under the header (owner, 2026-10-28): All, then one
+    /// per tag in use, the chosen one white. More than the row holds
+    /// scrolls sideways, without a scroller.
     private var filterChips: some View {
-        let view = model.viewOptions(for: model.tab)
-        let chosen = TasksPanelDesign.selectedChip(for: view)
+        let chosen = model.tagFilter(on: model.tab)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: TasksDesignMetrics.chipGap) {
-                ForEach(TasksPanelDesign.chips) { chip in
-                    TasksFilterChip(title: chip.title, selected: chip == chosen) {
-                        model.setViewOptions(TasksPanelDesign.view(choosing: chip, from: model.viewOptions(for: model.tab)),
-                                             for: model.tab)
+                TasksFilterChip(title: String(localized: "All"), selected: chosen == nil) { model.chooseTagChip(nil) }
+                    .accessibilityIdentifier("tasks-chip-all")
+                ForEach(model.tagChips(), id: \.self) { tag in
+                    TasksFilterChip(title: TasksPanelDesign.tagChipTitle(tag), selected: chosen == tag, tag: tag) {
+                        model.chooseTagChip(tag)
                     }
-                    .accessibilityIdentifier("tasks-chip-\(chip.id)")
+                    .accessibilityLabel(tag)
+                    .accessibilityIdentifier("tasks-chip-tag-\(tag)")
                 }
             }
             .padding(.horizontal, layout.chromeInsets.leading)
@@ -903,7 +908,7 @@ struct TasksPage: View {
         .padding(.top, TasksDesignMetrics.chipsTop)
         .padding(.bottom, TasksDesignMetrics.chipsBottom)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Filters"))
+        .accessibilityLabel(String(localized: "Tags"))
     }
 
     /// The last icon's glass circle ends on the controls' line, under the
@@ -1572,7 +1577,7 @@ struct TasksPage: View {
                             .accessibilityIdentifier("tasks-find-count")
                     } else if sections.open.isEmpty, sections.groups.isEmpty {
                         // The owner's panel design's empty states.
-                        let empty = TasksPanelDesign.empty(tab: tab, query: query, filtered: view.filters)
+                        let empty = TasksPanelDesign.empty(tab: tab, query: query, filtered: view.filters, tag: model.tagFilter(on: tab))
                         TasksEmptyState(empty: empty, clear: { clearFilters(on: tab) },
                                         action: tab == .now && model.offersLater && !empty.canClear
                                             ? (String(localized: "Choose from Later"), { model.select(tab: .backlog) }) : nil)

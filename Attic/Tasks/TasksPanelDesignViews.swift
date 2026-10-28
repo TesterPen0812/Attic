@@ -217,23 +217,28 @@ private struct TasksImageTile: View {
 
 /// A filter chip (the owner's panel design): 21 tall, 10 pt text; the
 /// chosen one white with a hairline and a soft shadow, in the primary ink;
-/// the others in the helper grey.
+/// the others in the helper grey. A tag chip's text takes its tag's colour,
+/// as the row's tag pill does.
 struct TasksFilterChip: View {
     let title: String
     let selected: Bool
+    var tag: String?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticTagColouring) private var colouring
     @State private var hovered = false
 
     var body: some View {
         let tokens = design.tokens
         let dark = design.mode == .dark
         let shape = Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
+        let ink = tag.map { TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: $0)), dark: dark).text.color }
+            ?? tokens.color(selected || hovered ? .heading : .helper)
         Button(action: action) {
             Text(verbatim: title)
                 .font(.system(size: 10))
-                .foregroundStyle(tokens.color(selected || hovered ? .heading : .helper))
+                .foregroundStyle(ink)
                 .padding(.horizontal, TasksDesignMetrics.chipPaddingX)
                 .frame(height: TasksDesignMetrics.chipHeight)
                 .background {
