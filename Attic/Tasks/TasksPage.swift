@@ -792,6 +792,8 @@ struct TasksPage: View {
         }
     }
 
+    private static let allChipID = "tasks-chip-all"
+
     private struct ChipsPlace: Equatable {
         let tab: TasksTab
         let shown: Bool
@@ -929,21 +931,31 @@ struct TasksPage: View {
     /// scrolls sideways, without a scroller.
     private var filterChips: some View {
         let chosen = model.tagFilter(on: model.tab)
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: TasksDesignMetrics.chipGap) {
-                TasksFilterChip(title: String(localized: "All"), selected: chosen == nil, selector: chipSelector) { model.chooseTagChip(nil) }
-                    .accessibilityIdentifier("tasks-chip-all")
-                ForEach(model.tagChips(), id: \.self) { tag in
-                    TasksFilterChip(title: TasksPanelDesign.tagChipTitle(tag), selected: chosen == tag, tag: tag, selector: chipSelector) {
-                        model.chooseTagChip(tag)
+        let motion = design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)
+        return ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: TasksDesignMetrics.chipGap) {
+                    TasksFilterChip(title: String(localized: "All"), selected: chosen == nil, selector: chipSelector) { model.chooseTagChip(nil) }
+                        .id(Self.allChipID)
+                        .accessibilityIdentifier("tasks-chip-all")
+                    ForEach(model.tagChips(), id: \.self) { tag in
+                        TasksFilterChip(title: TasksPanelDesign.tagChipTitle(tag), selected: chosen == tag, tag: tag, selector: chipSelector) {
+                            model.chooseTagChip(tag)
+                        }
+                        .id(tag)
+                        .accessibilityLabel(tag)
+                        .accessibilityIdentifier("tasks-chip-tag-\(tag)")
                     }
-                    .accessibilityLabel(tag)
-                    .accessibilityIdentifier("tasks-chip-tag-\(tag)")
                 }
+                .padding(.horizontal, layout.chromeInsets.leading)
+                // The glass selector slides to the chosen chip.
+                .animation(motion, value: chosen)
             }
-            .padding(.horizontal, layout.chromeInsets.leading)
-            // The glass selector slides to the chosen chip.
-            .animation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26), value: chosen)
+            // The chosen chip comes fully into view (Terra, 2026-10-28: a
+            // chosen tag at the row's end was cut off).
+            .onChange(of: chosen, initial: true) { _, chosen in
+                withAnimation(motion) { proxy.scrollTo(chosen ?? Self.allChipID) }
+            }
         }
         .frame(height: TasksDesignMetrics.chipHeight)
         .padding(.top, TasksDesignMetrics.chipsTop)
