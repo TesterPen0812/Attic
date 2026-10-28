@@ -40,6 +40,17 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.drawn = drawn
     }
 
+    /// `y` kept within what the list can scroll: from the top inset to the
+    /// content's end past the bottom inset.
+    @MainActor
+    static func clampedOriginY(_ y: CGFloat, in scroll: NSScrollView) -> CGFloat {
+        let clip = scroll.contentView
+        let insets = clip.contentInsets
+        let content = scroll.documentView?.frame.height ?? 0
+        let upper = max(-insets.top, content - clip.bounds.height + insets.bottom)
+        return min(max(y, -insets.top), upper)
+    }
+
     /// Scrolls `scroll` so the content from `place.top` for `place.height`
     /// sits in the middle of what its insets leave visible (clamped to the
     /// content).
@@ -199,5 +210,80 @@ struct TasksScrollKeeper: NSViewRepresentable {
             clip.scroll(to: origin)
             scroll.reflectScrolledClipView(clip)
         }
+    }
+}
+
+/// A list's animated reveal (a task just added, a row the keyboard moved
+/// to), run by AppKit's clip view on the settle spring.
+///
+/// The list hang (2026-10-28, first bad `b338bd91`): SwiftUI's animated
+/// `ScrollViewProxy.scrollTo` into the lazy list, met by a scroll gesture
+/// while it ran, left SwiftUI re-placing the list's rows without end
+/// (`LazySubviewPlacements` anchor translation and item phases, the main
+/// thread never back to its events) once rows of different heights (tagged
+/// two-line rows) were still estimated. The same reveal unanimated, or no
+/// reveal, never hung (Terra pass 8: 0/10 each, the head build 8/10). Here
+/// the list only ever sees its clip view move, as under a scroll gesture,
+/// and a gesture (or anything else moving the list) takes over at once.
+@MainActor
+final class TasksScrollGlide: NSObject {
+    private weak var scroll: NSScrollView?
+    private var link: CADisplayLink?
+    private var spring = Spring(duration: 0.4, bounce: 0)
+    private var from: Double = 0
+    private var to: Double = 0
+    /// Where the glide last put the clip (after AppKit's own rounding).
+    private var placed: CGFloat = 0
+    private var began: CFTimeInterval?
+
+    var isRunning: Bool { link != nil }
+
+    /// Moves the list by `delta` points (positive: its content moves up),
+    /// clamped to what the list can scroll.
+    func run(by delta: CGFloat, in scroll: NSScrollView, spring: Spring) {
+        stop()
+        scroll.layoutSubtreeIfNeeded()
+        let origin = scroll.contentView.bounds.origin.y
+        let goal = TasksScrollKeeper.clampedOriginY(origin + delta, in: scroll)
+        guard abs(goal - origin) > 0.5 else { return }
+        self.scroll = scroll
+        self.spring = spring
+        from = Double(origin)
+        to = Double(goal)
+        placed = origin
+        began = nil
+        let link = scroll.displayLink(target: self, selector: #selector(step(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+        scroll = nil
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        let now = link.targetTimestamp
+        let time = now - (began ?? link.timestamp)
+        if began == nil { began = link.timestamp }
+        advance(to: time)
+    }
+
+    /// One step of the glide, `time` seconds in (tests drive it directly).
+    func advance(to time: TimeInterval) {
+        guard let scroll else { return stop() }
+        let clip = scroll.contentView
+        // Someone else moved the list (a scroll gesture, another reveal):
+        // it is theirs from here.
+        guard abs(clip.bounds.origin.y - placed) <= 0.5 else { return stop() }
+        let done = time >= spring.settlingDuration
+        let value = done ? to : spring.value(fromValue: from, toValue: to, initialVelocity: 0, time: time)
+        var origin = clip.bounds.origin
+        origin.y = TasksScrollKeeper.clampedOriginY(CGFloat(value), in: scroll)
+        clip.scroll(to: origin)
+        scroll.reflectScrolledClipView(clip)
+        placed = clip.bounds.origin.y
+        if done { stop() }
     }
 }

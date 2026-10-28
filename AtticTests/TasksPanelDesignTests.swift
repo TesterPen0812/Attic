@@ -402,4 +402,66 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(open - closed, lateRows.reduce(0, +), accuracy: 1.5, "folded, the rows take no room")
     }
 
+    // MARK: - The list hang (2026-10-28)
+
+    /// A reveal's move: the row's top to the list's top, or its bottom to
+    /// the clear part's bottom (where `.bottom`'s anchor puts it).
+    func testRevealDeltaLinesTheRowUpWithTheClearPart() throws {
+        let viewport: CGFloat = 520, listTop: CGFloat = 45, margin: CGFloat = 42.5, clearance: CGFloat = 70.5
+        let below = CGRect(x: 0, y: 480, width: 300, height: 52)
+        let reveal = TasksViewport.reveal(frame: below, height: 52, viewport: viewport, listTop: listTop,
+                                          bottomMargin: margin, bottomClearance: clearance)
+        guard case let .bottom(fraction) = reveal else { return XCTFail("\(reveal)") }
+        let delta = try XCTUnwrap(TasksViewport.revealDelta(reveal, frame: below, viewport: viewport, listTop: listTop,
+                                                            bottomClearance: clearance))
+        XCTAssertEqual(below.maxY - delta, viewport - clearance, accuracy: 0.001)
+        // The same place `scrollTo` with the anchor would give.
+        let visible = viewport - margin - listTop
+        XCTAssertEqual(below.minY - delta, listTop + fraction * (visible - 52), accuracy: 0.001)
+        let above = CGRect(x: 0, y: 10, width: 300, height: 32)
+        XCTAssertEqual(TasksViewport.revealDelta(.minimal, frame: above, viewport: viewport, listTop: listTop,
+                                                 bottomClearance: clearance), 10 - listTop)
+        XCTAssertNil(TasksViewport.revealDelta(.none, frame: above, viewport: viewport, listTop: listTop,
+                                               bottomClearance: clearance))
+    }
+
+    /// The reveal glides by the clip view, never by an animated
+    /// `scrollTo`: it ends where it was sent (clamped to the content), and
+    /// a scroll gesture moving the list takes over at once.
+    func testRevealGlideMovesTheClipAndYieldsToTheGesture() {
+        func makeScroll() -> NSScrollView {
+            let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 300, height: 400))
+            let document = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 2_000))
+            scroll.documentView = document
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: 100))
+            return scroll
+        }
+        let spring = Spring(duration: 0.4, bounce: 0)
+        let scroll = makeScroll()
+        let glide = TasksScrollGlide()
+        glide.run(by: 300, in: scroll, spring: spring)
+        XCTAssertTrue(glide.isRunning)
+        glide.advance(to: 0.1)
+        let midway = scroll.contentView.bounds.origin.y
+        XCTAssertGreaterThan(midway, 100)
+        XCTAssertLessThan(midway, 400)
+        glide.advance(to: spring.settlingDuration)
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, 400, accuracy: 0.5)
+        XCTAssertFalse(glide.isRunning)
+
+        // Clamped to the content's end.
+        glide.run(by: 5_000, in: scroll, spring: spring)
+        glide.advance(to: spring.settlingDuration)
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, 1_600, accuracy: 0.5)
+
+        // A gesture moves the list mid-glide: the glide lets go.
+        let other = makeScroll()
+        glide.run(by: 600, in: other, spring: spring)
+        glide.advance(to: 0.05)
+        other.contentView.scroll(to: CGPoint(x: 0, y: 20))
+        glide.advance(to: 0.1)
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertEqual(other.contentView.bounds.origin.y, 20, accuracy: 0.5)
+    }
+
 }

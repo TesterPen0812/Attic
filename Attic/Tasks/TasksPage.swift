@@ -1233,7 +1233,7 @@ struct TasksPage: View {
             guard tabTarget.stop == stop, model.tab == tab, model.isPageShown else { return }
             if !landed() { focus() }
             var scrolled = false
-            if let row, let proxy = listProxies.lists[tab] { scrolled = revealRow(row, in: tab, proxy: proxy, animation: nil) }
+            if let row, let proxy = listProxies.lists[tab] { scrolled = revealRow(row, in: tab, proxy: proxy, glides: false) }
             guard left > 1, scrolled || !landed() else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { attempt(left - 1) }
         }
@@ -1493,16 +1493,28 @@ struct TasksPage: View {
     /// Brings a row into the part of the list nothing covers (keys, a new
     /// task): the page's geometry decides how.
     @discardableResult
-    private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) -> Bool {
-        let reveal = TasksViewport.reveal(frame: pointer.frames[TasksRowID(tab: tab, id: id)], height: rowHeight(id, in: tab),
-                                          viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
+    /// `glides`: the list glides there on the settle spring, moved by its
+    /// clip view (`TasksScrollGlide`), never by an animated `scrollTo` (the
+    /// list hang, 2026-10-28); a row not laid out yet is jumped to.
+    private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, glides: Bool) -> Bool {
+        let frame = pointer.frames[TasksRowID(tab: tab, id: id)]
+        let viewport = pointer.view?.bounds.height ?? layout.panelSize.height
+        let reveal = TasksViewport.reveal(frame: frame, height: rowHeight(id, in: tab),
+                                          viewport: viewport,
                                           listTop: listTop,
                                           bottomMargin: bottomMargin,
                                           bottomClearance: bottomClearance)
+        if glides, let frame, let scroll = listProxies.scrollViews[tab],
+           let delta = TasksViewport.revealDelta(reveal, frame: frame, viewport: viewport, listTop: listTop,
+                                                 bottomClearance: bottomClearance) {
+            let settle = AtticMotionPreset.settle.spring(in: .current)
+            listProxies.glide(for: tab).run(by: delta, in: scroll, spring: Spring(duration: settle.response, bounce: settle.bounce))
+            return true
+        }
         switch reveal {
         case .none: return false
-        case .minimal: withAnimation(animation) { scroll(proxy, to: id, in: tab) }
-        case let .bottom(fraction): withAnimation(animation) { scroll(proxy, to: id, in: tab, anchor: UnitPoint(x: 0, y: fraction)) }
+        case .minimal: scroll(proxy, to: id, in: tab)
+        case let .bottom(fraction): scroll(proxy, to: id, in: tab, anchor: UnitPoint(x: 0, y: fraction))
         }
         return true
     }
@@ -1543,7 +1555,7 @@ struct TasksPage: View {
                               listTop: listTop, bottomClearance: bottomClearance,
                               bottomMargin: bottomMargin, viewportTop: viewportTop, bottomInset: bottomInset, bottomStack: bottomStack, drawn: drawn,
                               reveal: $doneReveal,
-                              revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
+                              revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, glides: false) },
                               cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
                               proxies: listProxies,
                               pointer: pointer,
@@ -1684,7 +1696,7 @@ struct TasksPage: View {
                 guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
                       focusTracker.isKeyboardDriving else { return }
                 let id = focus.id
-                revealRow(id, in: tab, proxy: proxy, animation: travel)
+                revealRow(id, in: tab, proxy: proxy, glides: travel != nil)
             }
             // An agent's `show`, or a task just added: the row comes into view.
             // The list registers where it can be scrolled; the page takes
@@ -1698,7 +1710,7 @@ struct TasksPage: View {
                 guard let request, tab == model.tab else { return }
                 // The row exists once the store's change reaches the list.
                 DispatchQueue.main.async {
-                    revealRow(request.id, in: tab, proxy: proxy, animation: travel)
+                    revealRow(request.id, in: tab, proxy: proxy, glides: travel != nil)
                 }
             }
             // A row the keyboard completed leaves its place: the keyboard
@@ -5065,6 +5077,18 @@ enum TasksViewport {
         case bottom(CGFloat)
     }
 
+    /// How far the list moves for `reveal` (positive: its content moves
+    /// up), for a row whose frame is known: the row's top to the list's
+    /// top, or its bottom to the clear part's bottom. Nil: it stays.
+    static func revealDelta(_ reveal: Reveal, frame: CGRect, viewport: CGFloat, listTop: CGFloat,
+                            bottomClearance: CGFloat) -> CGFloat? {
+        switch reveal {
+        case .none: nil
+        case .minimal: frame.minY - listTop
+        case .bottom: frame.maxY - (viewport - bottomClearance)
+        }
+    }
+
     /// `frame` is the row in the page (nil when not laid out), `height`
     /// its height, `viewport` the page's height.
     static func reveal(frame: CGRect?, height: CGFloat, viewport: CGFloat, listTop: CGFloat,
@@ -5104,6 +5128,16 @@ final class TasksListProxies {
 
     private struct WeakScrollView {
         weak var view: NSScrollView?
+    }
+
+    /// Each list's reveal glide (`TasksScrollGlide`).
+    private var glides: [TasksTab: TasksScrollGlide] = [:]
+
+    func glide(for tab: TasksTab) -> TasksScrollGlide {
+        if let glide = glides[tab] { return glide }
+        let glide = TasksScrollGlide()
+        glides[tab] = glide
+        return glide
     }
 
     // MARK: Scrollers (owner, 2026-10-01)
