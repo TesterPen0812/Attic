@@ -101,6 +101,7 @@ struct TasksPage: View {
     @State private var searchFocused = false
     /// The filter button turned the chips row on (the owner's panel design).
     @State private var chipsOpen = false
+    @Namespace private var chipSelector
     @State private var foldGeneration = 0
     /// The page the search field was opened on: moving to another page
     /// lets it go (each page keeps its own query).
@@ -778,12 +779,50 @@ struct TasksPage: View {
         .animation(design.reduceMotion ? .easeOut(duration: 0.15) : (shown ? TasksDesignMetrics.curve(0.24) : .easeOut(duration: 0.12)),
                    value: shown)
         .animation(design.reduceMotion ? .easeOut(duration: 0.15) : TasksDesignMetrics.curve(0.26), value: chipsShown)
+        .onChange(of: ChipsPlace(tab: model.tab, shown: chipsShown)) { old, new in
+            // The row opened or closed on this page (not a page change).
+            if old.tab == new.tab, old.shown != new.shown { moveListWithChips(opened: new.shown) }
+        }
         .onChange(of: searchShown) { _, shown in
             PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35)
             // The chips belong to the open search (the design's Escape and
             // blur end `filterOn`): closing it puts them away, unless a
             // filter still hides tasks (fix round 1: they stayed up).
             if !shown, chipsOpen { chipsOpen = false }
+        }
+    }
+
+    private struct ChipsPlace: Equatable {
+        let tab: TasksTab
+        let shown: Bool
+    }
+
+    /// The chip row opened or closed (owner, 2026-10-28: it covered the
+    /// list): its list's top inset has grown or shrunk by the row's height,
+    /// and everything shown moves with the row, in the row's own motion.
+    /// What scrolls up under the header and chips takes the top controls'
+    /// blur, which reaches the chips' bottom (`viewportTop`).
+    private func moveListWithChips(opened: Bool) {
+        guard let scroll = listProxies.scrollViews[model.tab] else { return }
+        let clip = scroll.contentView
+        let start = clip.bounds.origin.y
+        let delta = opened ? TasksDesignMetrics.chipsRowHeight : -TasksDesignMetrics.chipsRowHeight
+        let duration = design.reduceMotion ? 0.15 : 0.26
+        DispatchQueue.main.async {
+            scroll.layoutSubtreeIfNeeded()
+            let insets = clip.contentInsets
+            let content = scroll.documentView?.frame.height ?? 0
+            let target = TasksViewport.originAfterTopChange(originY: start, delta: delta, newTopInset: insets.top,
+                                                            maxY: content - clip.bounds.height + insets.bottom)
+            if clip.bounds.origin.y != start { clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: start)) }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = design.reduceMotion ? CAMediaTimingFunction(name: .easeOut)
+                    : CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.2, 1)
+                clip.animator().setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: target))
+            } completionHandler: {
+                MainActor.assumeIsolated { scroll.reflectScrolledClipView(clip) }
+            }
         }
     }
 
@@ -892,10 +931,10 @@ struct TasksPage: View {
         let chosen = model.tagFilter(on: model.tab)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: TasksDesignMetrics.chipGap) {
-                TasksFilterChip(title: String(localized: "All"), selected: chosen == nil) { model.chooseTagChip(nil) }
+                TasksFilterChip(title: String(localized: "All"), selected: chosen == nil, selector: chipSelector) { model.chooseTagChip(nil) }
                     .accessibilityIdentifier("tasks-chip-all")
                 ForEach(model.tagChips(), id: \.self) { tag in
-                    TasksFilterChip(title: TasksPanelDesign.tagChipTitle(tag), selected: chosen == tag, tag: tag) {
+                    TasksFilterChip(title: TasksPanelDesign.tagChipTitle(tag), selected: chosen == tag, tag: tag, selector: chipSelector) {
                         model.chooseTagChip(tag)
                     }
                     .accessibilityLabel(tag)
@@ -903,6 +942,8 @@ struct TasksPage: View {
                 }
             }
             .padding(.horizontal, layout.chromeInsets.leading)
+            // The glass selector slides to the chosen chip.
+            .animation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26), value: chosen)
         }
         .frame(height: TasksDesignMetrics.chipHeight)
         .padding(.top, TasksDesignMetrics.chipsTop)
@@ -1529,6 +1570,10 @@ struct TasksPage: View {
         // A group's fold turn (fix round 2), read here as a value: the
         // list's content is redrawn only when what it captures changes.
         let turn = model.foldTurn.flatMap { $0.tab == tab ? $0 : nil }
+        // The list's top, read here as a value for the same reason: it
+        // grows while the tag chip row is open (owner, 2026-10-28: read
+        // inside the closure, it stayed shut and the chips covered rows).
+        let listTop = self.listTop, viewportTop = self.viewportTop
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -4967,6 +5012,14 @@ enum TasksViewport {
     /// Where the first row rests: the tabs, then 14.
     static func listTop(tabsTop: CGFloat) -> CGFloat {
         tabsTop + TasksDesignMetrics.listTopGap
+    }
+
+    /// Where the list's clip moves when the controls' bottom moves by
+    /// `delta` (the tag chip row opening or closing, owner 2026-10-28):
+    /// everything shown moves with it (at the top, the first row rests
+    /// below the controls), within what can scroll.
+    static func originAfterTopChange(originY: CGFloat, delta: CGFloat, newTopInset: CGFloat, maxY: CGFloat) -> CGFloat {
+        min(max(originY - delta, -newTopInset), max(-newTopInset, maxY))
     }
 
     /// The room kept at the bottom: the measured bottom stack, its margin,

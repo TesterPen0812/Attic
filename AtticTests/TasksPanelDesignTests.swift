@@ -264,6 +264,56 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertNil(model.tagFilter, "the last task losing the tag clears it on its own")
     }
 
+    /// Owner, 2026-10-28: the chip row covered the list ("All" over the
+    /// Overdue header). Opening it moves everything below down by the
+    /// row's height, so at the top the first row rests clear of the chips;
+    /// closing it brings the list back up.
+    func testOpeningTheChipRowMovesTheListDownWithIt() throws {
+        for title in ["Late one", "Due today", "Undated"] {
+            let id = try add(title, due: title == "Late one" ? -1 : (title == "Due today" ? 0 : nil))
+            tag(id, "home")
+        }
+        model.select(tab: .now)
+        let first = try XCTUnwrap(model.rows(for: .now).first?.id)
+        let pointer = TasksPointer()
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 560)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
+        let page = TasksPage(model: model, store: store, layout: layout, addBarFocused: .constant(false), pointer: pointer)
+        let window = NSPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: size.width, height: size.height))
+        window.orderFront(nil)
+        func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.6)); window.contentView?.layoutSubtreeIfNeeded() }
+        spin()
+        func top() -> CGFloat? { pointer.frames[TasksRowID(tab: .now, id: first)]?.minY }
+        let shut = try XCTUnwrap(top())
+        model.chooseTagChip("home") // a filter hides nothing here, but the row stays up while it is on
+        spin()
+        XCTAssertEqual(model.rows(for: .now).count, 3)
+        let open = try XCTUnwrap(top())
+        XCTAssertEqual(open - shut, TasksDesignMetrics.chipsRowHeight, accuracy: 1,
+                       "the first row moves down with the chips instead of sitting under them")
+        model.chooseTagChip(nil)
+        spin()
+        let closed = try XCTUnwrap(top())
+        XCTAssertEqual(closed, shut, accuracy: 1, "closing the row brings the list back up")
+    }
+
+    /// Mid-scroll the list moves with the row too, within what can scroll.
+    func testTheChipRowsShiftStaysInTheScrollableRange() {
+        XCTAssertEqual(TasksViewport.originAfterTopChange(originY: -60, delta: 41, newTopInset: 101, maxY: 900), -101,
+                       "at the top: the first row rests below the chips")
+        XCTAssertEqual(TasksViewport.originAfterTopChange(originY: 300, delta: 41, newTopInset: 101, maxY: 900), 259,
+                       "mid-scroll: what was shown moves down with the row")
+        XCTAssertEqual(TasksViewport.originAfterTopChange(originY: -101, delta: -41, newTopInset: 60, maxY: 900), -60,
+                       "closing at the top: back to the top")
+        XCTAssertEqual(TasksViewport.originAfterTopChange(originY: 880, delta: -41, newTopInset: 60, maxY: 900), 900,
+                       "closing near the end: never past the end")
+    }
+
     func testTheTagEmptyStateUsesTheDesignsWording() {
         XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", filtered: false, tag: "home"),
                        .init(title: "No results", body: "No tasks in #home in this view.", canClear: true))
