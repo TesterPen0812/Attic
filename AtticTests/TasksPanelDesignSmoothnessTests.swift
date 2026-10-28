@@ -238,13 +238,12 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
     }
 
     /// The composer's focus and blur, as the Air's gate drives them (six
-    /// cycles there; three here): what each turn costs the main thread, and
-    /// that the add field's native view keeps its width while the footer's
-    /// tabs fold away or return (fix round 1: every width the turn passes
-    /// through re-laid out its text). It takes the new width once the turn
-    /// is over. (Off screen, SwiftUI's animations do not tick: the turn
+    /// cycles there; three here): what each turn costs the main thread, that
+    /// the add field takes the tabs' room once they have folded and gives it
+    /// back, and that the footer never leaves the panel while they turn
+    /// (fix round 2). (Off screen, SwiftUI's animations do not tick: the turn
     /// itself is drawn on the Air.)
-    func testTheComposerFocusTurnHoldsTheFieldsWidth() throws {
+    func testTheComposerTurnKeepsTheFooterInsideThePanel() throws {
         let host = try FrameCostHost()
         hosted = host
         host.spin(0.5)
@@ -260,7 +259,6 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
                 host.model.objectWillChange.send()
             })
             print("ATTIC_PD_COST composer.focus.widths \(focusTurns.last?.fieldWidths.sorted() ?? []) focused=\(host.focus.addBar)")
-            XCTAssertEqual(width(), rest, "cycle \(cycle): the field's width changes while the tabs fold")
             host.spin(0.6)
             let composing = width()
             XCTAssertGreaterThan(composing, rest, "cycle \(cycle): the field takes the tabs' room once they have folded")
@@ -269,7 +267,6 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
                 host.model.objectWillChange.send()
             })
             print("ATTIC_PD_COST composer.blur.widths \(blurTurns.last?.fieldWidths.sorted() ?? []) focused=\(host.focus.addBar)")
-            XCTAssertEqual(width(), composing, "cycle \(cycle): the field's width changes while the tabs return")
             host.spin(0.6)
             XCTAssertEqual(width(), rest, "cycle \(cycle): the field is back to its width beside the tabs")
             // Fix round 2 (the Air: on blur the footer stretched past both

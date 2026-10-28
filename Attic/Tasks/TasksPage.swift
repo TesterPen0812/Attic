@@ -3480,11 +3480,6 @@ private struct TasksAddBar: View {
     @State private var priorityPresented = false
     /// Files dragged over the field itself (its text view takes the drag).
     @State private var fieldDropTargeted = false
-    /// Whether the footer's tabs were folded when the bar last settled
-    /// (the panel design's turn): while it differs from now, the tabs are
-    /// folding or returning and the field keeps its width (fix round 1).
-    @State private var settledFolded: Bool?
-    @State private var foldTurn = 0
 
     private var hasDraft: Bool { !text.text.text.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -3514,9 +3509,6 @@ private struct TasksAddBar: View {
         // What the new task will get, typed or picked (owner item 18): the
         // strip's buttons show it, and its pickers tick it.
         let parts = text.text.parts(parser: model.parser)
-        let folded = TasksPanelDesign.footerFolded(addFocused: isFocused,
-                                                   hasDraft: !text.text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        let turning = settledFolded.map { $0 != folded } ?? false
         VStack(alignment: .leading, spacing: AtticPickerMetrics.stripToBar) {
                 AtticComposerStrip(
                     datePresented: $datePresented,
@@ -3627,7 +3619,6 @@ private struct TasksAddBar: View {
                     ),
                     editor: editor
                 ),
-                holdsFieldWidth: turning,
                 onSubmit: { submit(openingPage: false) }
             )
             .atticFocusRing(dropTargeted || fieldDropTargeted, cornerRadius: AtticRadius.control(height: AtticControlSize.addBarHeight))
@@ -3647,16 +3638,6 @@ private struct TasksAddBar: View {
         }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: stripShown), value: stripShown)
         .onChange(of: stripShown) { _, _ in PerformanceSignposts.watchFrames("StripMotion", seconds: 0.35) }
-        // The tabs' turn takes 260 ms (150 under Reduce Motion): the field
-        // takes its new width once they have settled.
-        .onChange(of: folded, initial: true) { _, now in
-            guard settledFolded != nil else { settledFolded = now; return }
-            foldTurn += 1
-            let turn = foldTurn
-            DispatchQueue.main.asyncAfter(deadline: .now() + TasksPanelDesign.footerTurnSeconds) {
-                if foldTurn == turn { settledFolded = now }
-            }
-        }
         .onChange(of: datePresented || tagsPresented || priorityPresented) { _, open in
             pickerOpen = open
             // A closed picker hands the keyboard back to the draft, where

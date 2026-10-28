@@ -153,9 +153,6 @@ enum TasksPanelDesign {
         tab != .done && ((chipsOpen && searchShown) || filtering)
     }
 
-    /// How long the footer's turn lasts before the add field takes its new
-    /// width (the 260 ms turn and a little more).
-    static let footerTurnSeconds: TimeInterval = 0.3
 
     // MARK: - Empty states
 

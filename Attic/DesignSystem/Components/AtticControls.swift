@@ -651,11 +651,6 @@ struct AtticAddBar: View {
     /// Live only: the native field that draws recognised pieces as chips.
     /// Captures (and the gallery) keep the plain field.
     var tokens: Tokens?
-    /// The bar is changing width around a still field (the panel design's
-    /// footer tabs folding away or returning): the native field keeps the
-    /// width it had and takes the new one once this is false again, so the
-    /// turn never re-lays out its text frame by frame (fix round 1).
-    var holdsFieldWidth = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -668,8 +663,6 @@ struct AtticAddBar: View {
     @State private var fieldProbeID = UUID()
     /// The live field's height: one line, or more as it wraps (O17-05).
     @State private var fieldHeight = AtticTokenFieldMetrics.height
-    /// The room the field has, and the width it keeps while held.
-    @State private var widthHold = AtticFieldWidthHold()
 
     init(placeholder: String.LocalizationValue, text: Binding<String>, onSubmit: @escaping () -> Void) {
         self.placeholder = String(localized: placeholder)
@@ -681,8 +674,7 @@ struct AtticAddBar: View {
     /// The live page's bar: a placeholder chosen at run time, the chip
     /// field, and a glyph for the bar's job.
     init(placeholder: String, text: Binding<String>, systemImage: String = "plus", showsSend: Bool = true,
-         tokens: Tokens?, holdsFieldWidth: Bool = false, onSubmit: @escaping () -> Void) {
-        self.holdsFieldWidth = holdsFieldWidth
+         tokens: Tokens?, onSubmit: @escaping () -> Void) {
         self.placeholder = placeholder
         self.text = text.wrappedValue
         self.fieldText = { text }
@@ -728,20 +720,12 @@ struct AtticAddBar: View {
             // the ink disc with a white plus once there is text (it adds).
             plusCircle(disabled: state == .disabled)
                 .frame(width: m.iconSlot, height: height)
-            // The field's room is the bar's; a held field (the footer's
-            // turn) keeps its width inside that room, clipped by it, and
-            // never widens the bar (fix round 2: a held field wider than
-            // the shrinking room pushed the footer past the panel's edges).
-            Color.clear
+            // It follows the bar's width frame by frame while the footer's
+            // tabs fold away or return: on the Air (fix round 2) holding it
+            // saved nothing measurable, and a held field had pushed the
+            // footer past the panel's edges.
+            field(disabled: state == .disabled)
                 .frame(height: AtticTokenFieldMetrics.height + grown)
-                .frame(maxWidth: .infinity)
-                .overlay(alignment: .leading) {
-                    field(disabled: state == .disabled)
-                        .frame(width: widthHold.width(holding: holdsFieldWidth), height: AtticTokenFieldMetrics.height + grown,
-                               alignment: .leading)
-                }
-                .clipped()
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { [widthHold] width in widthHold.room = width }
                 .padding(.vertical, (height - AtticTokenFieldMetrics.height) / 2)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             // Built with the bar and only shown when there is text: the
@@ -2314,25 +2298,6 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
 }
 
 /// The add field's plus (the owner's panel design: two 1.7 px strokes).
-/// The add field's width while its bar changes width around it (see
-/// `AtticAddBar.holdsFieldWidth`): the room it was last given, kept from
-/// the moment the hold starts until it ends. A reference, so noting the
-/// room never redraws the bar.
-@MainActor
-final class AtticFieldWidthHold {
-    var room: CGFloat = 0
-    private var held: CGFloat?
-
-    func width(holding: Bool) -> CGFloat? {
-        if !holding {
-            held = nil
-        } else if held == nil, room > 0 {
-            held = room
-        }
-        return held
-    }
-}
-
 struct AtticPlusGlyph: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
