@@ -101,7 +101,7 @@ struct TasksFilesList: View {
             .id(TasksFileFocusID.attach(owner))
             .accessibilityIdentifier("tasks-files-attach")
         }
-        .padding(.leading, AtticLayout.textX)
+        .padding(.leading, TasksDesignMetrics.textX)
         // Sizes line up with the row's date column; a hover fill (8 pt
         // wider each side) ends where the row's own highlight does.
         .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset)

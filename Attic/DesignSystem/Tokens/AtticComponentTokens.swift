@@ -323,11 +323,11 @@ enum AtticPriorityMarkMetrics {
 /// The subtask count on a row's details line: a checklist glyph and
 /// "1/3", with a hover fill that reads as a control.
 enum AtticSubtaskChecklistMetrics {
-    /// A 10 pt glyph in a 12 pt slot, 4 pt before the count: 5 pt from
-    /// the glyph's edge, like every details icon (owner fix 2).
-    static let iconSize: CGFloat = 10
-    static let iconSlot: CGFloat = 12
-    static let iconGap: CGFloat = 4
+    /// The panel design's count: a 9 pt glyph, 3 pt before its 11 pt
+    /// text (18 and 6 px; fidelity round, 2026-10-28).
+    static let iconSize: CGFloat = 9
+    static let iconSlot: CGFloat = 9
+    static let iconGap: CGFloat = 3
     static let horizontalPadding: CGFloat = 4
     static let height: CGFloat = 18
 }

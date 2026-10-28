@@ -322,6 +322,102 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: true, tag: nil).body, "Nothing in this view.")
     }
 
+    // MARK: - Fidelity (spec audit, 2026-10-28)
+
+    /// The page as drawn, its text probes collected (ink, colour, frame).
+    private func drawnText(_ context: AtticDesignContext) throws -> [AtticProbe] {
+        let collector = AtticProbeCollector()
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 560)
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+                             addBarFocused: .constant(false), pointer: TasksPointer())
+        let window = NSPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: page.atticDesign(context)
+            .environment(\.atticCapture, AtticCaptureContext(collector: collector, backdrop: .desktop(.midGrey)))
+            .coordinateSpace(name: AtticCaptureContext.coordinateSpace)
+            .frame(width: size.width, height: size.height))
+        window.orderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        return collector.all
+    }
+
+    private func probe(_ probes: [AtticProbe], _ string: String, _ style: AtticTextStyle) throws -> AtticProbe {
+        try XCTUnwrap(probes.last { if case .text(style, string) = $0.kind { $0.frame != .null } else { false } },
+                      "no drawn \(string) in \(probes.compactMap { if case let .text(_, s) = $0.kind { "\(s)@\($0.frame.minX)" } else { nil } })")
+    }
+
+    /// The group header reads a step lighter than the titles (design: 72
+    /// against 29), dates lighter again, on Solid and on Glass; the title
+    /// column sits 24 after the header (design: 19 and 43 from the edge).
+    func testHeaderAndDateSitBelowTheTitleAndTheTitleColumnIsTheDesigns() throws {
+        try add("Pay rent", due: 0)
+        try add("Undated", due: nil)
+        model.select(tab: .now)
+        for surface in [PanelSurfaceStyle.solid, .glass] {
+            for mode in [AtticDesignContext.Mode.light, .dark] {
+                var context = AtticDesignContext(mode: mode)
+                context.surface = surface
+                let reference = AtticColorTokens.resolve(context).panel.composite(.midGrey, at: AtticSurfaceModel.contentTop)
+                let probes = try drawnText(context)
+                let title = try probe(probes, "Pay rent", .taskTitle), header = try probe(probes, "Today", .groupHeader)
+                let date = try probe(probes, "Today", .taskDate)
+                func contrast(_ p: AtticProbe) throws -> Double { try XCTUnwrap(p.foreground).contrast(on: reference) }
+                let label = "\(surface) \(mode)"
+                XCTAssertGreaterThanOrEqual(try contrast(title) / contrast(header), 1.3, "\(label): the header a step under the title")
+                XCTAssertGreaterThanOrEqual(try contrast(header), try contrast(date), "\(label): the date no stronger than the header")
+                XCTAssertEqual(header.frame.minX, 19, accuracy: 0.25, "\(label): the header on the rows' padding (design 19)")
+                XCTAssertEqual(title.frame.minX, 43, accuracy: 0.25, "\(label): the title column (design 43)")
+            }
+        }
+    }
+
+    /// The design's greys on every look: each keeps its readability floor
+    /// on every background it is judged on, sits in the design's order
+    /// (header, then date, then meta), never above the title, and with
+    /// standard contrast the header stays a clear step under the title.
+    func testTheDesignGreysKeepTheirFloorsAndTheDesignsOrderOnEveryLook() {
+        var contexts = AtticAppearanceCheck.allContexts()
+        for surface in [PanelSurfaceStyle.glass, .frosted] {
+            for mode in [AtticDesignContext.Mode.light, .dark] {
+                var context = AtticDesignContext(mode: mode)
+                context.surface = surface
+                context.reduceTransparency = true
+                contexts.append(context)
+            }
+        }
+        for context in contexts {
+            let tokens = AtticColorTokens.resolve(context)
+            let base = TasksPanelDesign.reference(tokens)
+            let title = tokens.ink(.heading).contrast(on: base)
+            var previous = title
+            for tone in TasksDesignTone.allCases {
+                let value = TasksPanelDesign.tone(tone, tokens: tokens)
+                let worst = TasksPanelDesign.toneBackgrounds(tone, tokens: tokens).map { value.contrast(on: $0) }.min() ?? 0
+                XCTAssertGreaterThanOrEqual(worst, TasksPanelDesign.toneFloor(tokens) - 0.01, "\(context.caption) \(tone): floor")
+                XCTAssertLessThanOrEqual(value.contrast(on: base), previous + 0.01, "\(context.caption) \(tone): design order")
+                previous = value.contrast(on: base)
+            }
+            if !context.increaseContrast {
+                let header = TasksPanelDesign.tone(.groupHeader, tokens: tokens).contrast(on: base)
+                XCTAssertGreaterThanOrEqual(title / header, 1.3, "\(context.caption): the header a step under the title")
+            }
+        }
+        // On white the design's own colours come back.
+        let white = AtticRGBA.white(1)
+        XCTAssertEqual(pow(TasksDesignTone.designTitle.contrast(on: white), TasksDesignTone.date.designFraction),
+                       TasksDesignTone.date.designColour.contrast(on: white), accuracy: 0.001)
+    }
+
+    func testTheSubtaskCountIsTheDesigns() {
+        XCTAssertEqual(AtticSubtaskChecklistMetrics.iconSize, 9, "18 px glyph")
+        XCTAssertEqual(AtticSubtaskChecklistMetrics.iconGap, 3, "6 px gap")
+        XCTAssertEqual(AtticTextStyle.taskMeta.spec.size, 11, "22 px text")
+    }
+
     // MARK: - The design's sizes (px ÷ 2)
 
     func testTheDesignsSizes() {

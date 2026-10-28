@@ -16,6 +16,10 @@ struct AtticText: View {
     /// Search matches in user content: the find highlight behind them,
     /// the letters in the primary ink (the Done search, owner item 17).
     var highlights: [Range<String.Index>] = []
+    /// A colour of its own for this role (the Tasks panel design's greys,
+    /// `TasksPanelDesign.tone`); the role still sets its floor, and the
+    /// appearance check judges this colour against it.
+    private(set) var colour: AtticRGBA?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -41,6 +45,13 @@ struct AtticText: View {
         self.highlights = highlights
     }
 
+    /// The same role drawn in `colour` (nil: the role's own ink).
+    func colour(_ colour: AtticRGBA?) -> AtticText {
+        var copy = self
+        copy.colour = colour
+        return copy
+    }
+
     private var text: Text {
         guard !highlights.isEmpty else { return Text(verbatim: string).font(style.font) }
         var attributed = AttributedString(string)
@@ -55,7 +66,7 @@ struct AtticText: View {
     }
 
     var body: some View {
-        let color = design.tokens.ink(ink)
+        let color = colour ?? design.tokens.ink(ink)
         text
             .foregroundStyle(color.color)
             .strikethrough(strikethrough, color: color.color)

@@ -1358,7 +1358,7 @@ struct AtticTaskRow: View {
                         .padding(.top, d.tilesTop)
                 }
             }
-            .padding(.leading, AtticLayout.textX)
+            .padding(.leading, TasksDesignMetrics.textX)
             // The date's text ends where the design's capsule text does.
             .padding(.trailing, AtticLayout.rowHighlightInset + d.paddingX + d.dateInset)
             .padding(.top, d.paddingY)
@@ -1367,7 +1367,7 @@ struct AtticTaskRow: View {
             .background(alignment: .bottomLeading) {
                 if !twoLine || model.tags.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
-                        .padding(.leading, AtticLayout.textX)
+                        .padding(.leading, TasksDesignMetrics.textX)
                         .atticDropdown(isPresented: tagsPresented(twoLine: false), label: String(localized: "Tags")) { meta?.tagPicker() }
                 }
             }
@@ -1424,7 +1424,7 @@ struct AtticTaskRow: View {
                 // A button (owner fix 5 C): hover shows its pill; a click
                 // opens the date picker, which may reach past the panel.
                 Button(action: meta.onDate) {
-                    AtticDueText(due: due, disabled: disabled)
+                    AtticDueText(due: due, disabled: disabled, panelDesign: true)
                         .fixedSize()
                         .background(AtticMetaPill(visible: dateHovered))
                         .contentShape(Rectangle())
@@ -1438,7 +1438,7 @@ struct AtticTaskRow: View {
                 .accessibilityHint(String(localized: "Changes the date"))
                 .atticDropdown(isPresented: meta.datePresented, label: String(localized: "Date")) { meta.datePicker() }
             } else {
-                AtticDueText(due: due, disabled: disabled)
+                AtticDueText(due: due, disabled: disabled, panelDesign: true)
                     .fixedSize()
             }
         } else if let meta, capture == nil {
@@ -1579,6 +1579,10 @@ struct AtticRowMeta {
 struct AtticDueText: View {
     let due: AtticTaskRowModel.Due
     var disabled = false
+    /// A Tasks panel row: the design's date grey (`TasksDesignTone.date`).
+    var panelDesign = false
+
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         // The owner's panel design: 10 pt tabular digits, the date grey,
@@ -1588,6 +1592,7 @@ struct AtticDueText: View {
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .dueText)
         case .today, .quiet:
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .helper)
+                .colour(panelDesign && !disabled ? TasksPanelDesign.tone(.date, tokens: design.tokens) : nil)
         }
     }
 }
@@ -1616,15 +1621,19 @@ struct AtticTaskDetails: View {
     /// points at what was clicked (round 5, the owner's item 3).
     var tagsPopover: AtticAnchoredPopover? = nil
 
+    @Environment(\.atticDesign) private var design
+
     var body: some View {
         let m = AtticTaskRowMetrics.self
         let text: AtticInk = disabled ? .disabledText : .helper
+        // The design's meta grey (`TasksDesignTone.meta`).
+        let tone = disabled ? nil : TasksPanelDesign.tone(.meta, tokens: design.tokens)
         let icon: AtticInk = disabled ? .disabledIcon : .icon
         HStack(spacing: m.detailsItemSpacing) {
             if model.inWindow {
                 HStack(spacing: m.detailsIconGap) {
                     AtticIcon(systemName: "macwindow", size: m.detailsIconSize, weight: .light, ink: icon)
-                    AtticText("In window", style: .taskMeta, ink: text)
+                    AtticText("In window", style: .taskMeta, ink: text).colour(tone)
                 }
                 .fixedSize()
                 .layoutPriority(1)
@@ -1670,14 +1679,14 @@ struct AtticTaskDetails: View {
                 } else {
                     HStack(spacing: m.detailsIconGap) {
                         AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
-                        AtticText(verbatim: "\(model.attachments)", style: .taskMeta, ink: text)
+                        AtticText(verbatim: "\(model.attachments)", style: .taskMeta, ink: text).colour(tone)
                     }
                     .fixedSize()
                     .layoutPriority(1)
                 }
             }
             if model.links > 0 {
-                AtticText(verbatim: String(localized: "\(model.links) links"), style: .taskMeta, ink: text)
+                AtticText(verbatim: String(localized: "\(model.links) links"), style: .taskMeta, ink: text).colour(tone)
                     .fixedSize()
                     .layoutPriority(1)
             }
@@ -1798,7 +1807,9 @@ private struct AtticDetailsCountButton: View {
             HStack(spacing: m.iconGap) {
                 AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
                     .frame(width: m.iconSlot)
-                AtticText(verbatim: count, style: .count, ink: disabled ? .disabledText : .helper)
+                // The design's 11 pt meta text in the meta grey.
+                AtticText(verbatim: count, style: .taskMeta, ink: disabled ? .disabledText : .helper)
+                    .colour(disabled ? nil : TasksPanelDesign.tone(.meta, tokens: design.tokens))
             }
             .padding(.horizontal, m.horizontalPadding)
             .frame(height: m.height)
@@ -1846,7 +1857,7 @@ struct AtticCompletedLine: View {
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .frame(width: AtticControlSize.statusCircle)
                     .padding(.leading, AtticLayout.circleX)
-                    .padding(.trailing, AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
+                    .padding(.trailing, TasksDesignMetrics.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
                 HStack(spacing: m.gap) {
                     AtticText(verbatim: title, style: .sectionToggle, ink: hover ? .body : .helper)
                     AtticText(verbatim: "·", style: .sectionToggle, ink: .helper)
@@ -2163,7 +2174,7 @@ struct AtticQuickLook: View {
                 AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
             }
         }
-        .padding(.leading, AtticLayout.textX)
+        .padding(.leading, TasksDesignMetrics.textX)
         .padding(.trailing, AtticLayout.rowHighlightInset)
         .padding(.bottom, AtticQuickLookMetrics.bottomPadding)
     }

@@ -218,3 +218,118 @@ extension TasksPanelDesign.GroupKind {
         }
     }
 }
+
+// MARK: - The design's greys under the title
+
+/// The quieter text of the panel design, each a step under the title:
+/// the group headers rgb(72,74,78), the dates rgb(110,112,116) and the
+/// meta line rgb(128,130,133), against the title's rgb(29,29,31) on white.
+enum TasksDesignTone: CaseIterable, Sendable {
+    case groupHeader, date, meta
+
+    /// The design's colour (it is drawn on white).
+    var designColour: AtticRGBA {
+        switch self {
+        case .groupHeader: AtticRGBA(red: 72 / 255, green: 74 / 255, blue: 78 / 255, alpha: 1)
+        case .date: AtticRGBA(red: 110 / 255, green: 112 / 255, blue: 116 / 255, alpha: 1)
+        case .meta: AtticRGBA(red: 128 / 255, green: 130 / 255, blue: 133 / 255, alpha: 1)
+        }
+    }
+
+    static let designTitle = AtticRGBA(red: 29 / 255, green: 29 / 255, blue: 31 / 255, alpha: 1)
+
+    /// How far under the title the design puts it: the log of its contrast
+    /// on white over the log of the title's (header 0.77, date 0.57, meta
+    /// 0.48). Contrast multiplies, so a power keeps the relation on any
+    /// surface: on white it gives the design's own colour back.
+    var designFraction: Double {
+        log(designColour.contrast(on: .white(1))) / log(Self.designTitle.contrast(on: .white(1)))
+    }
+}
+
+extension TasksPanelDesign {
+    /// A design grey on this surface (fidelity round, 2026-10-28). The
+    /// surface's tuning sets the title's ink (Phase 0's near-black on Glass,
+    /// for example); each grey keeps the design's relation to that title,
+    /// so a header reads a step lighter on every surface. Readability
+    /// still wins: each is secondary text and keeps its floor (3 : 1, or
+    /// 4.5 : 1 under Increase Contrast, with the tokens' margins) on every
+    /// background the tokens judge their own grey on, and is never
+    /// stronger than the title. Reduce Transparency
+    /// keeps the contrast the chosen Glass grey had (U-40).
+    @MainActor
+    static func tone(_ tone: TasksDesignTone, tokens: AtticColorTokens) -> AtticRGBA {
+        let key = ToneKey(colours: tokens.context, tone: tone)
+        if let cached = toneCache[key] { return cached }
+        var value = solveTone(tone, tokens: tokens)
+        if let chosen = tokens.context.chosen {
+            let glass = AtticColorTokenCache.shared.tokens(for: chosen)
+            let glassTone = Self.tone(tone, tokens: glass)
+            let glassSurface = glass.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop)
+            let base = reference(tokens)
+            let target = AtticColorTokens.reducedTransparencyTarget(glass: glassTone, glassSurface: glassSurface, base: base)
+            value = value.tuned(toContrast: min(target, tokens.ink(.heading).contrast(on: base)), against: [base],
+                                lighten: tokens.context.mode == .dark)
+        }
+        // The design's order holds where the floors bring the greys together:
+        // a date never stronger than the header, the meta than a date.
+        let louder: TasksDesignTone? = switch tone {
+        case .groupHeader: nil
+        case .date: .groupHeader
+        case .meta: .date
+        }
+        if let louder {
+            let base = reference(tokens)
+            let limit = Self.tone(louder, tokens: tokens)
+            if value.contrast(on: base) > limit.contrast(on: base) { value = limit }
+        }
+        toneCache[key] = value
+        return value
+    }
+
+    private struct ToneKey: Hashable {
+        let colours: AtticDesignContext.ColourKey
+        let tone: TasksDesignTone
+    }
+
+    @MainActor private static var toneCache: [ToneKey: AtticRGBA] = [:]
+
+    /// The surface the relation is judged on: over a mid-grey desktop,
+    /// where content starts.
+    static func reference(_ tokens: AtticColorTokens) -> AtticRGBA {
+        tokens.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop)
+    }
+
+    /// Every background a tone is judged on: the backgrounds the tokens
+    /// judge their own secondary grey on (the surface over each desktop).
+    static func toneBackgrounds(_ tone: TasksDesignTone, tokens: AtticColorTokens) -> [AtticRGBA] {
+        tokens.panel.backgrounds(for: .init(ink: .helper, foreground: tokens.ink(.helper), overlays: []))
+    }
+
+    /// The floor each tone keeps, with the tokens' margin (3.11 and 4.66).
+    static func toneFloor(_ tokens: AtticColorTokens) -> Double {
+        tokens.panel.floor(for: .helper) < 4.5 ? 3.11 : 4.66
+    }
+
+    private static func solveTone(_ tone: TasksDesignTone, tokens: AtticColorTokens) -> AtticRGBA {
+        let dark = tokens.context.mode == .dark
+        let base = reference(tokens)
+        let title = tokens.ink(.heading)
+        let titleContrast = title.contrast(on: base)
+        let target = pow(titleContrast, tone.designFraction)
+        // The design grey's hue and saturation, at the lightness that gives
+        // the target: between the title's lightness and the surface's, where
+        // contrast falls steadily.
+        let (hue, saturation, _) = tone.designColour.hsl
+        func grey(_ lightness: Double) -> AtticRGBA { AtticRGBA(hue: hue, saturation: saturation, lightness: lightness) }
+        var near = title.hsl.lightness, far = base.hsl.lightness
+        for _ in 0..<40 {
+            let mid = (near + far) / 2
+            if grey(mid).contrast(on: base) >= target { near = mid } else { far = mid }
+        }
+        var value = grey(near)
+        value = value.tuned(toContrast: toneFloor(tokens), against: toneBackgrounds(tone, tokens: tokens), lighten: dark)
+        if value.contrast(on: base) > titleContrast { value = title }
+        return value
+    }
+}

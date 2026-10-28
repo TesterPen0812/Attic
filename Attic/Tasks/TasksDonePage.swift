@@ -129,7 +129,7 @@ struct TasksDonePage<Cell: View>: View {
                     // A quiet line under the results (v22 card B).
                     AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) done tasks"), style: .rowMeta, ink: .helper)
                         .frame(height: AtticLayout.rowPitch)
-                        .padding(.leading, AtticLayout.textX)
+                        .padding(.leading, TasksDesignMetrics.textX)
                         .accessibilityIdentifier("tasks-done-search-count")
                 }
             }

@@ -1644,7 +1644,7 @@ struct TasksPage: View {
                         AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) tasks on \(tab.title)"),
                                   style: .rowMeta, ink: .helper)
                             .frame(height: AtticLayout.rowPitch)
-                            .padding(.leading, AtticLayout.textX)
+                            .padding(.leading, TasksDesignMetrics.textX)
                             .accessibilityIdentifier("tasks-find-count")
                     } else if sections.open.isEmpty, sections.groups.isEmpty {
                         // The owner's panel design's empty states.
@@ -1761,7 +1761,7 @@ struct TasksPage: View {
             allowsStart: { [pointer, dragSession] point in
                 // Not the circle column (before the row reports its
                 // controls), and never one of the row's controls.
-                point.x > cornerInset + AtticLayout.textX - AtticSpacing.s4
+                point.x > cornerInset + TasksDesignMetrics.textX - AtticSpacing.s4
                     && !dragSession.isOnControl(TasksRowID(tab: tab, id: id), at: point,
                                                 rowOrigin: pointer.frames[TasksRowID(tab: tab, id: id)]?.origin)
             },
@@ -1839,7 +1839,7 @@ struct TasksPage: View {
                         model.doneDetailID = nil
                     }
                 })
-                .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
+                .padding(.leading, TasksDesignMetrics.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
                 .padding(.bottom, AtticSpacing.s8)
                 // Raised from its row: it unfolds down from it (O14-02) by
                 // opacity, scale and travel. A Done row holds no view for its
@@ -1852,13 +1852,13 @@ struct TasksPage: View {
             }
             if model.failedSave == .title(id) {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitTitle() })
-                    .padding(.leading, AtticLayout.textX)
+                    .padding(.leading, TasksDesignMetrics.textX)
             }
             if let failure = model.rowFailure, failure.id == id {
                 AtticErrorLine(message: failure.canRetry ? String(localized: "Not saved") : failure.message,
                                actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
                                onRetry: { failure.canRetry ? model.retryRowFailure() : model.dismissRowFailure() })
-                    .padding(.leading, AtticLayout.textX)
+                    .padding(.leading, TasksDesignMetrics.textX)
                     .accessibilityIdentifier("tasks-row-failure")
             }
             if expanded() {
@@ -1911,11 +1911,11 @@ struct TasksPage: View {
                 if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
                    row.subtasks.contains(where: { $0.id == renaming }) {
                     AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitSubtaskRename() })
-                        .padding(.leading, AtticLayout.textX)
+                        .padding(.leading, TasksDesignMetrics.textX)
                 }
                 if model.failedSave == .newSubtask(id) {
                     AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitNewSubtask() })
-                        .padding(.leading, AtticLayout.textX)
+                        .padding(.leading, TasksDesignMetrics.textX)
                 }
             }
             if filesExpanded() {
@@ -2639,9 +2639,9 @@ struct TasksPage: View {
         if let anchor, anchor.window != nil {
             AtticNativeMenu.popUpContextMenu(commands, in: anchor)
         } else if let view = pointer.view, let frame = pointer.frames[id] {
-            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: frame.minX + AtticLayout.textX, y: frame.minY + AtticLayout.rowPitch))
+            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: frame.minX + TasksDesignMetrics.textX, y: frame.minY + AtticLayout.rowPitch))
         } else if let view = pointer.view {
-            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: AtticLayout.textX, y: listTop))
+            AtticNativeMenu.popUpContextMenu(commands, in: view, at: CGPoint(x: TasksDesignMetrics.textX, y: listTop))
         }
     }
 
@@ -3186,7 +3186,7 @@ struct TasksPage: View {
         let side = AtticQuietActionMetrics.iconSlot
         let lineTop = filesExpanded ? rowFrame.maxY - AtticQuickLookMetrics.bottomPadding - pitch
                                     : max(rowFrame.minY, rowFrame.maxY - pitch)
-        return CGRect(x: rowFrame.minX + AtticLayout.textX, y: lineTop + (pitch - side) / 2, width: side, height: side)
+        return CGRect(x: rowFrame.minX + TasksDesignMetrics.textX, y: lineTop + (pitch - side) / 2, width: side, height: side)
     }
 
     /// Whether the task can take what is dragged over it: files from
@@ -4471,7 +4471,7 @@ private struct TasksBoundaryHint: View {
             AtticText(verbatim: text, style: .controlLabel, ink: .helper)
         }
         .frame(height: AtticErrorLineMetrics.height)
-        .padding(.leading, AtticLayout.textX - AtticSpacing.panelMargin - AtticTaskRowMetrics.detailsIconSize - AtticSpacing.s4)
+        .padding(.leading, TasksDesignMetrics.textX - AtticSpacing.panelMargin - AtticTaskRowMetrics.detailsIconSize - AtticSpacing.s4)
         .accessibilityElement(children: .combine)
     }
 }

@@ -382,7 +382,7 @@ final class TasksDragO2Tests: XCTestCase {
     func testTheSlotIsTheFilesListsIconColumn() {
         let row = CGRect(x: 8, y: 200, width: 360, height: 34)
         let closed = TasksPage.dropLandingSlot(rowFrame: row, filesExpanded: false)
-        XCTAssertEqual(closed.minX, 8 + AtticLayout.textX)
+        XCTAssertEqual(closed.minX, 8 + TasksDesignMetrics.textX)
         XCTAssertEqual(closed.size, CGSize(width: AtticQuietActionMetrics.iconSlot, height: AtticQuietActionMetrics.iconSlot))
         XCTAssertTrue(row.contains(closed), "closed, it lands in the row itself")
         // Open: two files, then "Attach file…", where the new file goes.

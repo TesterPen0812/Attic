@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A date group's header (the owner's panel design, 2026-10-27): 11 pt in
-/// the label grey, the primary ink under the pointer. A click folds or
+/// the design's header grey, the primary ink under the pointer. A click folds or
 /// unfolds the group; the count shows only while it is folded; the chevron
 /// shows at 60 % under the pointer or while folded, turned −90° when folded.
 struct TasksGroupHeader: View {
@@ -16,22 +16,28 @@ struct TasksGroupHeader: View {
 
     var body: some View {
         let tokens = design.tokens
+        // The design's header grey, a step under the titles on every
+        // surface (Glass draws `.label` in the title's ink); the title's
+        // ink under the pointer.
+        let rest = TasksPanelDesign.tone(.groupHeader, tokens: tokens)
         Button(action: toggle) {
             HStack(spacing: TasksDesignMetrics.groupHeaderGap) {
-                AtticText(verbatim: title, style: .groupHeader, ink: hovered ? .heading : .label)
+                AtticText(verbatim: title, style: .groupHeader, ink: hovered ? .heading : .helper)
+                    .colour(hovered ? nil : rest)
                 if folded {
                     AtticText(verbatim: "\(count)", style: .groupHeader, ink: .helper)
+                        .colour(TasksPanelDesign.tone(.meta, tokens: tokens))
                 }
                 Image(systemName: "chevron.down")
                     .font(.system(size: TasksDesignMetrics.groupChevron, weight: .semibold))
-                    .foregroundStyle(tokens.color(hovered ? .heading : .label))
+                    .foregroundStyle(hovered ? tokens.color(.heading) : rest.color)
                     .rotationEffect(.degrees(folded ? -90 : 0))
                     .opacity(folded || hovered ? 0.6 : 0)
             }
             .frame(height: TasksDesignMetrics.groupHeaderLine)
             .padding(.top, TasksDesignMetrics.groupHeaderTop)
             .padding(.bottom, TasksDesignMetrics.groupHeaderBottom)
-            .padding(.leading, AtticLayout.circleX)
+            .padding(.leading, TasksDesignMetrics.groupHeaderX)
             .padding(.trailing, TasksDesignMetrics.rowPaddingX)
             .contentShape(Rectangle())
         }
@@ -64,43 +70,28 @@ enum TasksDesignMetrics {
     static let groupChevron: CGFloat = 6.5
     static let groupHeaderHeight: CGFloat = groupHeaderTop + groupHeaderLine + groupHeaderBottom
 
-    // Row: radius 24 px, padding 14 × 18 px; ring 28 px, gap 20 px.
-    static let rowRadius: CGFloat = 12
-    static let rowPaddingY: CGFloat = 7
+    // Row: padding 14 × 18 px (`TasksRowDesign` holds the row's sizes);
+    // the ring's 28 px column, then 20 px to the title.
     static let rowPaddingX: CGFloat = 9
-    static let ring: CGFloat = 14
     static let ringToTitle: CGFloat = 10
-    /// A title or meta line (30 px).
-    static let lineHeight: CGFloat = 15
-    /// Meta line's margin-top (3 px).
-    static let metaTop: CGFloat = 1.5
-    /// Priority mark after the title (gap 9 px).
-    static let priorityGap: CGFloat = 4.5
+    /// The title column in the page (title at 43 from the panel's edge):
+    /// after the circle's column, the design's 10 pt gap. The rest of the
+    /// app keeps `AtticLayout.textX` (8 pt after the circle, spacing B).
+    static let textX: CGFloat = AtticLayout.circleX + AtticControlSize.statusCircle + ringToTitle
+    /// A group header's text starts on the rows' padding: the row fill's
+    /// inset, then the row's 18 px.
+    static let groupHeaderX: CGFloat = AtticLayout.rowHighlightInset + rowPaddingX
     /// Tag pill: 30 px tall, 0 18 px padding (9 px each side ÷ 2).
     static let tagHeight: CGFloat = 15
     static let tagPaddingX: CGFloat = 4.5
-    static let tagRadius: CGFloat = 7.5
-    /// Meta items 14 px apart.
-    static let metaGap: CGFloat = 7
-    /// Date capsule: 32 px tall, 0 11 px padding.
-    static let dateHeight: CGFloat = 16
-    static let datePaddingX: CGFloat = 5.5
-    /// Attachment tiles: 56 px, radius 12 px, 8 px apart, 8 px above.
+    /// Attachment tiles: 56 px, radius 12 px, 8 px apart.
     static let tile: CGFloat = 28
     static let tileRadius: CGFloat = 6
     static let tileGap: CGFloat = 4
-    static let tilesTop: CGFloat = 4
-    static let tilesBottom: CGFloat = 1
     /// File tile 46 px wide.
     static let fileTileWidth: CGFloat = 23
 
-    /// One-line and meta-line row heights (7 + 15 + 7; 7 + 15 + 1.5 + 15 + 7).
-    static let rowHeight: CGFloat = rowPaddingY * 2 + lineHeight
-    static let metaRowHeight: CGFloat = rowPaddingY * 2 + lineHeight * 2 + metaTop
-
-    // Header: controls 54 px, radius 30 px, 6 px apart.
-    static let headerControl: CGFloat = 27
-    static let headerRadius: CGFloat = 15
+    // Header: controls 54 px (`AtticControlSize.headerControl`), 6 px apart.
     /// The design's inner controls (`rInner`, 28 px): the filter button,
     /// chips, tab thumb, tag pills, the date button, Clear filters. Each
     /// clamps to half its side, as CSS does.
@@ -108,27 +99,18 @@ enum TasksDesignMetrics {
     /// Every control's corner: `superellipse(1.4)` (`cornerSmoothing`).
     static var cornerExponent: CGFloat { AtticControlShape.designExponent }
     static let headerGap: CGFloat = 3
-    /// The page switch: 72 px shut, 150 px open; 42 px segments.
-    static let switchShut: CGFloat = 36
-    static let switchOpen: CGFloat = 75
-    static let switchSegment: CGFloat = 21
     /// The search starts 5 after the pin (10 px); its filter button is
     /// 21 (42 px).
     static let searchFromPin: CGFloat = 5
     static let filterButton: CGFloat = 21
 
-    // Footer: padding 6 31 31 31 px, gap 10 px; tab cells 53 px in a 4 px
-    // padded container (radius 32 px); the add field 61 px tall.
-    static let footerTop: CGFloat = 3
+    // Footer: gap 10 px; tab cells 53 px in a 4 px padded container
+    // (radius 32 px). The add field is `AtticAddBarMetrics`.
     static let footerGap: CGFloat = 5
     static let tabCell: CGFloat = 26.5
     static let tabsPadding: CGFloat = 2
     static let tabsGap: CGFloat = 1
     static let footerRadius: CGFloat = 16
-    static let addFieldHeight: CGFloat = 30.5
-    static let addPlus: CGFloat = 14
-    static let addPaddingX: CGFloat = 9
-    static let addGap: CGFloat = 7.5
 
     // Chips: 12 px above, 8 px below, 42 px tall, 4 px apart, 20 px text.
     static let chipsTop: CGFloat = 6
@@ -139,10 +121,6 @@ enum TasksDesignMetrics {
     static let chipsRowHeight: CGFloat = chipsTop + chipHeight + chipsBottom
     /// The list starts 2 under the header (4 px).
     static let listTopGap: CGFloat = 2
-
-    // List: inset 20 px from the sides, fading over its last 56 px.
-    static let listInset: CGFloat = 10
-    static let listFade: CGFloat = 28
 }
 
 /// A row's files as tiles (the owner's panel design): images at their own
