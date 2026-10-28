@@ -296,10 +296,16 @@ final class TasksPanelDesignTests: XCTestCase {
         let open = try XCTUnwrap(top())
         XCTAssertEqual(open - shut, TasksDesignMetrics.chipsRowHeight, accuracy: 1,
                        "the first row moves down with the chips instead of sitting under them")
+        func lists(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(lists)
+        }
+        let list = try XCTUnwrap(lists(try XCTUnwrap(window.contentView)).first { !$0.isHidden && $0.documentView != nil })
+        XCTAssertTrue(TasksChipFade.isOn(list), "rows fade out before the chip row while it shows")
         model.chooseTagChip(nil)
         spin()
         let closed = try XCTUnwrap(top())
         XCTAssertEqual(closed, shut, accuracy: 1, "closing the row brings the list back up")
+        XCTAssertFalse(TasksChipFade.isOn(list), "no mask while the chips are shut")
     }
 
     /// Mid-scroll the list moves with the row too, within what can scroll.

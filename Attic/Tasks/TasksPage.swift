@@ -782,7 +782,9 @@ struct TasksPage: View {
         .onChange(of: ChipsPlace(tab: model.tab, shown: chipsShown)) { old, new in
             // The row opened or closed on this page (not a page change).
             if old.tab == new.tab, old.shown != new.shown { moveListWithChips(opened: new.shown) }
+            fadeRowsUnderChips(new, animated: old.tab == new.tab)
         }
+        .onAppear { fadeRowsUnderChips(ChipsPlace(tab: model.tab, shown: chipsShown), animated: false) }
         .onChange(of: searchShown) { _, shown in
             PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35)
             // The chips belong to the open search (the design's Escape and
@@ -797,6 +799,27 @@ struct TasksPage: View {
     private struct ChipsPlace: Equatable {
         let tab: TasksTab
         let shown: Bool
+    }
+
+    /// Rows fade out just before the chip row while it shows (owner,
+    /// 2026-10-28), on this page's list only, in the row's own motion.
+    /// Reduce Transparency keeps its solid fallback under the header.
+    private func fadeRowsUnderChips(_ place: ChipsPlace, animated: Bool) {
+        let top: CGFloat? = place.shown && !design.reduceTransparency
+            ? layout.headerBottom + TasksDesignMetrics.chipsRowHeight : nil
+        let duration: CFTimeInterval = animated ? (design.reduceMotion ? 0.15 : 0.26) : 0
+        let timing = design.reduceMotion ? CAMediaTimingFunction(name: .easeOut)
+            : CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.2, 1)
+        for (tab, scroll) in listProxies.scrollViews {
+            TasksChipFade.set(scroll, top: tab == place.tab ? top : nil, duration: tab == place.tab ? duration : 0, timing: timing)
+        }
+        // A list built by the page change registers after this turn.
+        guard let top else { return }
+        DispatchQueue.main.async { [listProxies] in
+            if let scroll = listProxies.scrollViews[place.tab], !TasksChipFade.isOn(scroll) {
+                TasksChipFade.set(scroll, top: top, duration: 0, timing: timing)
+            }
+        }
     }
 
     /// The chip row opened or closed (owner, 2026-10-28: it covered the

@@ -287,3 +287,92 @@ final class TasksScrollGlide: NSObject {
         if done { stop() }
     }
 }
+
+/// Rows fade out just before the tag chip row (owner, 2026-10-28): while
+/// the chips show, the list is masked from the chips' bottom edge up, over
+/// a short fade, so chip text never sits on a task. The mask moves with
+/// the row as it opens and closes, and exists only while the chips show:
+/// with them shut the rows run under the header as before (its 0.5 pt
+/// blur), with no mask to composite while scrolling.
+@MainActor
+enum TasksChipFade {
+    /// The fade under the chip row's bottom edge. At rest the first group
+    /// header's text starts 11 below that edge, clear of it.
+    static let fade: CGFloat = 8
+    private static let name = "tasks-chip-fade"
+
+    /// `top`: the chip row's bottom, down from the scroll view's top; nil
+    /// takes the fade away (it slides up out of the list, then goes).
+    static func set(_ scroll: NSScrollView, top: CGFloat?, duration: CFTimeInterval, timing: CAMediaTimingFunction) {
+        scroll.wantsLayer = true
+        guard let layer = scroll.layer else { return }
+        let mask: CALayer
+        if let existing = layer.mask, existing.name == name {
+            mask = existing
+        } else {
+            guard top != nil else { return }
+            mask = CALayer()
+            mask.name = name
+            let band = CALayer()
+            band.addSublayer(CAGradientLayer())
+            band.addSublayer(CALayer())
+            mask.addSublayer(band)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            mask.frame = layer.bounds
+            place(band, in: scroll, top: -fade)
+            CATransaction.commit()
+            layer.mask = mask
+        }
+        guard let band = mask.sublayers?.first else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = layer.bounds
+        CATransaction.commit()
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(duration)
+        CATransaction.setAnimationTimingFunction(timing)
+        if top == nil {
+            CATransaction.setCompletionBlock { [weak layer] in
+                MainActor.assumeIsolated {
+                    if let layer, layer.mask === mask, band.frame == bandFrame(in: scroll, top: -fade).frame {
+                        layer.mask = nil
+                    }
+                }
+            }
+        }
+        place(band, in: scroll, top: top ?? -fade)
+        CATransaction.commit()
+    }
+
+    /// Whether the fade is on (tests).
+    static func isOn(_ scroll: NSScrollView) -> Bool { scroll.layer?.mask?.name == name }
+
+    /// The band (the fade, then opaque far past the bottom) with its top
+    /// edge at `top`, in the layer's own coordinates, and whether those run
+    /// upwards. Its size never changes, so only its position animates.
+    private static func bandFrame(in scroll: NSScrollView, top: CGFloat) -> (frame: CGRect, upwards: Bool) {
+        let span: CGFloat = 4_000
+        func layerY(_ fromTop: CGFloat) -> CGFloat {
+            scroll.convertToLayer(NSPoint(x: 0, y: scroll.isFlipped ? fromTop : scroll.bounds.height - fromTop)).y
+        }
+        let start = layerY(top)
+        let upwards = layerY(top + 1) < start
+        return (CGRect(x: 0, y: upwards ? start - span : start, width: scroll.bounds.width, height: span), upwards)
+    }
+
+    private static func place(_ band: CALayer, in scroll: NSScrollView, top: CGFloat) {
+        let (frame, upwards) = bandFrame(in: scroll, top: top)
+        band.frame = frame
+        guard let gradient = band.sublayers?.first as? CAGradientLayer, let solid = band.sublayers?.last else { return }
+        let clear = NSColor.clear.cgColor, black = NSColor.black.cgColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // A gradient's colours run from its bounds' origin.
+        gradient.colors = upwards ? [black, clear] : [clear, black]
+        gradient.frame = CGRect(x: 0, y: upwards ? frame.height - fade : 0, width: frame.width, height: fade)
+        solid.backgroundColor = black
+        solid.frame = CGRect(x: 0, y: upwards ? 0 : fade, width: frame.width, height: max(0, frame.height - fade))
+        CATransaction.commit()
+    }
+}
