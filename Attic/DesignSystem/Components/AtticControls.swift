@@ -728,10 +728,19 @@ struct AtticAddBar: View {
             // the ink disc with a white plus once there is text (it adds).
             plusCircle(disabled: state == .disabled)
                 .frame(width: m.iconSlot, height: height)
-            field(disabled: state == .disabled)
+            // The field's room is the bar's; a held field (the footer's
+            // turn) keeps its width inside that room, clipped by it, and
+            // never widens the bar (fix round 2: a held field wider than
+            // the shrinking room pushed the footer past the panel's edges).
+            Color.clear
                 .frame(height: AtticTokenFieldMetrics.height + grown)
-                .frame(width: widthHold.width(holding: holdsFieldWidth), alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    field(disabled: state == .disabled)
+                        .frame(width: widthHold.width(holding: holdsFieldWidth), height: AtticTokenFieldMetrics.height + grown,
+                               alignment: .leading)
+                }
+                .clipped()
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { [widthHold] width in widthHold.room = width }
                 .padding(.vertical, (height - AtticTokenFieldMetrics.height) / 2)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)

@@ -181,6 +181,8 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
         var frames: [Double] = []
         /// Distinct widths the add field's native view took over the turn.
         var fieldWidths: Set<CGFloat> = []
+        /// The add field's leading edge in the window, each frame.
+        var fieldLeads: [CGFloat] = []
         /// Frames in which some glass surface changed its frame.
         var glassGeometryFrames = 0
 
@@ -224,7 +226,10 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
         while Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(1.0 / 120))
             turn.frames.append(host.frame())
-            for field in Self.addFieldViews(in: root) { turn.fieldWidths.insert((field.frame.width * 2).rounded() / 2) }
+            for field in Self.addFieldViews(in: root) {
+                turn.fieldWidths.insert((field.frame.width * 2).rounded() / 2)
+                turn.fieldLeads.append(field.convert(field.bounds, to: nil).minX)
+            }
             let glass = glassFrames(in: root)
             if glass != lastGlass { turn.glassGeometryFrames += 1 }
             lastGlass = glass
@@ -245,6 +250,7 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
         host.spin(0.5)
         guard let root = host.window.contentView else { return XCTFail("no page") }
         func width() -> CGFloat { Self.addFieldViews(in: root).first?.frame.width ?? -1 }
+        func lead() -> CGFloat { Self.addFieldViews(in: root).first.map { $0.convert($0.bounds, to: nil).minX } ?? -1 }
         var focusTurns: [Turn] = []
         var blurTurns: [Turn] = []
         for cycle in 0..<3 {
@@ -266,6 +272,15 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
             XCTAssertEqual(width(), composing, "cycle \(cycle): the field's width changes while the tabs return")
             host.spin(0.6)
             XCTAssertEqual(width(), rest, "cycle \(cycle): the field is back to its width beside the tabs")
+            // Fix round 2 (the Air: on blur the footer stretched past both
+            // panel edges, then snapped): the held field never widens the
+            // bar, so the field's leading edge is never left of where it
+            // rests beside the tabs.
+            let restLead = lead()
+            for (index, value) in (blurTurns.last?.fieldLeads ?? []).enumerated() {
+                XCTAssertGreaterThanOrEqual(value, restLead - 0.5,
+                                            "cycle \(cycle), frame \(index): the footer is pushed past the panel's edge while the tabs return")
+            }
         }
         for (name, turns) in [("focus", focusTurns), ("blur", blurTurns)] {
             for (index, turn) in turns.enumerated() { print("ATTIC_PD_COST composer.\(name).\(index) \(turn)") }
