@@ -418,6 +418,17 @@ final class TasksPanelDesignTests: XCTestCase {
                        TasksDesignTone.date.designColour.contrast(on: white), accuracy: 0.001)
     }
 
+    /// The current tab is the page switch's selection tint, not a white
+    /// thumb, drawn once per colour.
+    func testTheFooterThumbIsTheSelectionTintInsideTheGlass() throws {
+        let tokens = AtticColorTokens.resolve(AtticDesignContext(mode: .light))
+        let image = TasksTabThumb.image(fill: tokens.chipSelected, stroke: nil)
+        XCTAssertTrue(image === TasksTabThumb.image(fill: tokens.chipSelected, stroke: nil), "drawn once")
+        let rep = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let centre = try XCTUnwrap(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(centre.alphaComponent, tokens.chipSelected.alpha, accuracy: 0.02, "the selection tint, not an opaque white disc")
+    }
+
     func testTheSubtaskCountIsTheDesigns() {
         XCTAssertEqual(AtticSubtaskChecklistMetrics.iconSize, 9, "18 px glyph")
         XCTAssertEqual(AtticSubtaskChecklistMetrics.iconGap, 3, "6 px gap")

@@ -253,7 +253,6 @@ struct TasksFooterTabs: View {
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var focused: Bool
     @State private var hovered: TasksTab?
-    @Namespace private var thumb
 
     static func symbol(_ tab: TasksTab) -> String {
         switch tab {
@@ -275,10 +274,7 @@ struct TasksFooterTabs: View {
                               ink: on || hovered == tab ? .heading : .icon)
                         .frame(width: m.tabCell, height: m.tabCell)
                         .background {
-                            if on {
-                                TasksTabThumb()
-                                    .matchedGeometryEffect(id: "tasks-tab-thumb", in: thumb)
-                            }
+                            if on { TasksTabThumb() }
                         }
                         .contentShape(Squircle(cornerRadius: m.innerRadius, exponent: m.cornerExponent))
                 }
@@ -317,25 +313,47 @@ struct TasksFooterTabs: View {
 /// that what our app draws as glass is Liquid Glass): a selection inside
 /// the tabs' glass, as the page switch marks its current page, the
 /// selection tint in the design's squircle (`rInner`), or Phase 0's
-/// accent where a Light palette has one. It slides between the tabs. One
-/// flat fill: no shadow or mask, so scrolling under the footer costs no
-/// offscreen pass (the round 1 census that made the old thumb a bitmap).
+/// accent where a Light palette has one. Drawn once into a bitmap, as the
+/// old white thumb was (fix round 1's panel census: shapes over the glass
+/// cost an offscreen pass each frame the list scrolled under the footer),
+/// and changing with the tab as the page switch's selection does.
 struct TasksTabThumb: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        let shape = AtticControlShape.shape(cornerRadius: TasksDesignMetrics.innerRadius,
-                                            exponent: TasksDesignMetrics.cornerExponent)
-        let stroke = AtticPageButtonMetrics.accentStrokeWidth
-        Group {
-            if let accent = design.tokens.pageChipAccent {
-                shape.fill(accent.fill.color)
-                    .overlay { shape.inset(by: stroke / 2).stroke(accent.stroke.color, lineWidth: stroke) }
-            } else {
-                shape.fill(design.tokens.chipSelected.color)
+        let tokens = design.tokens
+        let accent = tokens.pageChipAccent
+        Image(nsImage: Self.image(fill: accent?.fill ?? tokens.chipSelected, stroke: accent?.stroke))
+            .frame(width: TasksDesignMetrics.tabCell, height: TasksDesignMetrics.tabCell)
+            .accessibilityHidden(true)
+    }
+
+    @MainActor private static var cache: [String: NSImage] = [:]
+
+    @MainActor
+    static func image(fill: AtticRGBA, stroke: AtticRGBA?) -> NSImage {
+        let key = "\(fill.hexString)|\(stroke?.hexString ?? "")"
+        if let cached = cache[key] { return cached }
+        let side = TasksDesignMetrics.tabCell
+        let width = AtticPageButtonMetrics.accentStrokeWidth
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { _ in
+            func outline(_ rect: NSRect) -> NSBezierPath {
+                NSBezierPath(cgPath: Squircle(cornerRadius: TasksDesignMetrics.innerRadius,
+                                              exponent: TasksDesignMetrics.cornerExponent).path(in: rect).cgPath)
             }
+            let disc = NSRect(x: 0, y: 0, width: side, height: side)
+            NSColor(srgbRed: fill.red, green: fill.green, blue: fill.blue, alpha: fill.alpha).setFill()
+            outline(disc).fill()
+            if let stroke {
+                NSColor(srgbRed: stroke.red, green: stroke.green, blue: stroke.blue, alpha: stroke.alpha).setStroke()
+                let edge = outline(disc.insetBy(dx: width / 2, dy: width / 2))
+                edge.lineWidth = width
+                edge.stroke()
+            }
+            return true
         }
-        .accessibilityHidden(true)
+        cache[key] = image
+        return image
     }
 }
 
