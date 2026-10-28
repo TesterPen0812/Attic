@@ -1,5 +1,6 @@
 import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -224,4 +225,53 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertTrue(TasksPanelDesign.chipsShown(tab: .backlog, chipsOpen: false, searchShown: false, filtering: true))
         XCTAssertFalse(TasksPanelDesign.chipsShown(tab: .done, chipsOpen: true, searchShown: true, filtering: true))
     }
+
+    /// Fix round 2 (the Air, 28 Oct): the fold's turn never reached the
+    /// list (kept in the page's state, then read only inside the list's
+    /// content closure, which is redrawn only when what it captures
+    /// changes), so the fold jumped closed and an unfold stayed closed. A turn published on the model reaches the drawn list: half
+    /// way through closing, the group's rows take half their room, so the
+    /// next group's first row rises by that much, and its header reads
+    /// folded at once.
+    func testAFoldTurnOnTheModelReachesTheDrawnList() throws {
+        try add("Late one", due: -2)
+        try add("Late two", due: -1)
+        let today = try add("Due today", due: 0)
+        model.select(tab: .now)
+        let overdue = try XCTUnwrap(model.sections(for: .now).groups.first)
+        XCTAssertTrue(overdue.isOverdue)
+        let pointer = TasksPointer()
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 560)
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+                             addBarFocused: .constant(false), pointer: pointer)
+        let window = NSPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: size.width, height: size.height))
+        window.orderFront(nil)
+        func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.4)); window.contentView?.layoutSubtreeIfNeeded() }
+        spin()
+        func top(_ id: UUID) -> CGFloat? { pointer.frames[TasksRowID(tab: .now, id: id)]?.minY }
+        let lateRows = overdue.ids.compactMap { pointer.frames[TasksRowID(tab: .now, id: $0)]?.height }
+        XCTAssertEqual(lateRows.count, 2, "the overdue rows are drawn")
+        let open = try XCTUnwrap(top(today))
+        var quiet = Transaction()
+        quiet.disablesAnimations = true
+        withTransaction(quiet) {
+            model.foldTurn = TasksFoldTurn(tab: .now, key: overdue.key, closing: true, headerFolded: true, progress: 0.5, generation: 1)
+        }
+        spin()
+        let half = try XCTUnwrap(top(today))
+        XCTAssertEqual(open - half, lateRows.reduce(0, +) / 2, accuracy: 1.5, "the next group rises with the closing body")
+        withTransaction(quiet) {
+            model.toggleGroup(overdue.key, on: .now)
+            model.foldTurn = nil
+        }
+        spin()
+        let closed = try XCTUnwrap(top(today))
+        XCTAssertEqual(open - closed, lateRows.reduce(0, +), accuracy: 1.5, "folded, the rows take no room")
+    }
+
 }

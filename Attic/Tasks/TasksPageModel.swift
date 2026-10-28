@@ -353,6 +353,12 @@ final class TasksPageModel: ObservableObject {
     /// Search (the menu-bar item) asked for the Done page's search field;
     /// the page puts the keyboard there and clears it.
     @Published var pendingSearchFocus = false
+    /// A date group (or a Done day) folding or unfolding, while it turns
+    /// (fix round 2, `TasksFoldTurn`). Published on the model, as the
+    /// folds themselves are, because the pager rebuilds its pages for the
+    /// model's changes and not for the page's own state (on the Air a fold
+    /// kept in the page's state jumped closed and an unfold stayed closed).
+    @Published var foldTurn: TasksFoldTurn?
     /// What is typed in the add bar, kept apart from the page's published
     /// state: typing redraws the bar, not the list.
     let addBarState = TasksAddBarState()

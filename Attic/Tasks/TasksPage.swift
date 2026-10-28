@@ -101,9 +101,6 @@ struct TasksPage: View {
     @State private var searchFocused = false
     /// The filter button turned the chips row on (the owner's panel design).
     @State private var chipsOpen = false
-    /// The date group (or Done day) folding or unfolding, while it turns
-    /// (fix round 2, `TasksFoldTurn`).
-    @State private var foldTurn: TasksFoldTurn?
     @State private var foldGeneration = 0
     /// The page the search field was opened on: moving to another page
     /// lets it go (each page keeps its own query).
@@ -182,11 +179,6 @@ struct TasksPage: View {
         // The focus owner alone redraws for focusable views coming and
         // going, and the content again only when the focused row changes.
         let generation = TasksRowFocusLink.nextGeneration()
-        // Read here so a group's fold turn redraws the page: the lists read
-        // it only inside the pager's closures, which SwiftUI does not count
-        // as this body's (fix round 2: on the Air a fold jumped closed and
-        // an unfold stayed closed until the model changed again).
-        let _ = foldTurn
         TasksRowFocusOwner { [rowFocus] focus in
             let _ = rowFocus.binding = focus
             TasksPageFocusedContent(generation: generation, focusedRow: focus.wrappedValue) {
@@ -821,19 +813,18 @@ struct TasksPage: View {
     private func toggleGroup(_ key: String, on tab: TasksTab, animation: Animation?) {
         foldGeneration += 1
         TasksFold.turn(key, on: tab, folded: model.folded(on: tab).contains(key), animation: animation,
-                       generation: foldGeneration, state: $foldTurn) { [model] key in model.toggleGroup(key, on: tab) }
+                       generation: foldGeneration, state: Binding(get: { [model] in model.foldTurn }, set: { [model] in model.foldTurn = $0 })) { [model] key in model.toggleGroup(key, on: tab) }
     }
 
     /// A header's folded look: the turn's while its group turns.
-    private func shownFolded(_ key: String, on tab: TasksTab) -> Bool {
-        if let foldTurn, foldTurn.matches(tab, key) { return foldTurn.headerFolded }
-        return model.folded(on: tab).contains(key)
+    static func shownFolded(_ turn: TasksFoldTurn?, folded: Bool) -> Bool {
+        turn?.headerFolded ?? folded
     }
 
     /// A group row's fold modifier: open and unclipped unless its group turns.
-    private func foldBody(_ key: String, on tab: TasksTab, places: [UUID: TasksFoldPlace], row: UUID) -> TasksFoldBody {
-        guard let foldTurn, foldTurn.matches(tab, key) else { return TasksFoldBody(progress: 1, place: nil) }
-        return TasksFoldBody(progress: foldTurn.progress, place: places[row])
+    static func foldBody(_ turn: TasksFoldTurn?, place: TasksFoldPlace?) -> TasksFoldBody {
+        guard let turn else { return TasksFoldBody(progress: 1, place: nil) }
+        return TasksFoldBody(progress: turn.progress, place: place)
     }
 
     /// Each drawn row's place in its turning group (heights as measured,
@@ -1470,8 +1461,7 @@ struct TasksPage: View {
                 TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
                                 shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size,
                                 page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) },
-                                token: { [model] index in model.pageToken(TasksTab.allCases[index]) },
-                                foldTurn: foldTurn)
+                                token: { [model] index in model.pageToken(TasksTab.allCases[index]) })
                 if TasksPagerMotion.tracing {
                     TasksPagerTrace(motion: swipe.motion)
                 }
@@ -1504,7 +1494,7 @@ struct TasksPage: View {
                               },
                               slots: doneSlots,
                               rowsAreInterchangeable: { doneRowsAreInterchangeable() },
-                              foldTurn: foldTurn,
+                              foldTurn: model.foldTurn,
                               toggleDay: { key in
                                   toggleGroup(key, on: .done, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
                               },
@@ -1531,6 +1521,9 @@ struct TasksPage: View {
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         let view = model.viewOptions(for: tab)
         let query = model.trimmedQuery(for: tab)
+        // A group's fold turn (fix round 2), read here as a value: the
+        // list's content is redrawn only when what it captures changes.
+        let turn = model.foldTurn.flatMap { $0.tab == tab ? $0 : nil }
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -1545,7 +1538,8 @@ struct TasksPage: View {
                     // The date groups (the owner's panel design): a header
                     // folds or unfolds its rows.
                     ForEach(sections.groups, id: \.key) { dateGroup in
-                        let folded = shownFolded(dateGroup.key, on: tab)
+                        let turning = turn?.matches(tab, dateGroup.key) ?? false
+                        let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
                         TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
                                          overdue: dateGroup.isOverdue) {
                             toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
@@ -1554,7 +1548,6 @@ struct TasksPage: View {
                         .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                         let drawnRows = sections.groupRows[dateGroup.key] ?? []
                         let byStatus = Dictionary(grouping: drawnRows, by: \.status).mapValues { $0.map(\.id) }
-                        let turning = foldTurn?.matches(tab, dateGroup.key) ?? false
                         let places = turning ? foldPlaces(drawnRows, in: tab) : [:]
                         ForEach(drawnRows) { row in
                         cell(row, tab: tab, group: byStatus[row.status] ?? [], drawn: drawn)
@@ -1564,7 +1557,7 @@ struct TasksPage: View {
                             .scaleEffect(reorderFade.contains(row.id) ? AtticMotionPreset.settle.hiddenScale(reduceMotion: design.reduceMotion) : 1)
                             // A turning group's body closes or opens over
                             // its rows (fix round 2).
-                            .modifier(foldBody(dateGroup.key, on: tab, places: places, row: row.id))
+                            .modifier(Self.foldBody(turning ? turn : nil, place: places[row.id]))
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
                             .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
