@@ -587,24 +587,11 @@ struct TasksFoldBody: ViewModifier, Animatable {
         max(0, place.total * progress - place.top)
     }
 
-    #if DEBUG
-    /// A/B seam for the on-screen hang hunt (`ATTIC_FOLD_BODY_AT_REST=off`):
-    /// a row whose group is not turning is drawn without the fold body.
-    static let bypassAtRest = ProcessInfo.processInfo.environment["ATTIC_FOLD_BODY_AT_REST"] == "off"
-    #else
-    static let bypassAtRest = false
-    #endif
-
-    @ViewBuilder
     func body(content: Content) -> some View {
         let visible: CGFloat? = place.flatMap { progress >= 1 ? nil : Self.visibleHeight(progress: progress, place: $0) }
-        if Self.bypassAtRest, place == nil, progress >= 1 {
-            content
-        } else {
-            TasksFoldLayout(visible: visible) { content }
-                .clipShape(TasksFoldClip(visible: visible ?? TasksFoldClip.open))
-                .opacity(visible == nil ? 1 : Double(min(1, max(0, progress))))
-        }
+        TasksFoldLayout(visible: visible) { content }
+            .clipShape(TasksFoldClip(visible: visible ?? TasksFoldClip.open))
+            .opacity(visible == nil ? 1 : Double(min(1, max(0, progress))))
     }
 }
 
