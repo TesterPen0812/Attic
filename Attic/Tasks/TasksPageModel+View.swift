@@ -150,7 +150,55 @@ extension TasksPageModel {
     /// Whether the page shows fewer tasks than it has (a filter or a Find):
     /// a reorder then moves among what is shown (`moveVisible`).
     func narrows(_ tab: TasksTab) -> Bool {
-        viewOptions(for: tab).filters || !searchQuery(for: tab).isEmpty
+        viewOptions(for: tab).filters || !searchQuery(for: tab).isEmpty || tagFilter(on: tab) != nil
+    }
+
+    // MARK: Tag chips (owner, 2026-10-28)
+
+    /// The tag chip filtering `tab` (Done has none).
+    func tagFilter(on tab: TasksTab) -> String? {
+        tab == .done ? nil : tagFilter
+    }
+
+    /// The chips after All: the tags on the tasks that exist (Now's and
+    /// Later's), in the library's order (most used first). Built once per
+    /// change.
+    func tagChips() -> [String] {
+        let revision = store.revision, inventory = tagInventoryRevision
+        if let cache = tagChipsCache, cache.revision == revision, cache.inventory == inventory { return cache.tags }
+        var inUse = Set<String>()
+        var firstSeen: [String] = []
+        for scope in [TaskScope.tasks, .backlog] {
+            for section in store.snapshot(for: scope).sections {
+                for task in section.tasks {
+                    for tag in task.tags where inUse.insert(tag).inserted { firstSeen.append(tag) }
+                }
+            }
+        }
+        let ordered = library.tags.names.filter { inUse.contains($0) }
+        let listed = Set(ordered)
+        let tags = ordered + firstSeen.filter { !listed.contains($0) }
+        tagChipsCache = (revision, inventory, tags)
+        return tags
+    }
+
+    /// A click on a chip: a tag shows only its tasks; the chosen tag again,
+    /// or All (nil), clears it. Rows it hides leave the selection.
+    func chooseTagChip(_ tag: String?) {
+        let next = TasksPanelDesign.tagFilter(choosing: tag, current: tagFilter)
+        guard next != tagFilter else { return }
+        tagFilter = next
+        guard tab != .done else { return }
+        let shown = Set(rows(for: tab).map(\.id))
+        let kept = selection.intersection(shown)
+        if kept != selection { selectCopies(orderedSelection().filter(kept.contains)) }
+    }
+
+    /// The chosen tag left every task (deleted, removed, or renamed and then
+    /// undone): the filter clears, so the list never waits on a tag that
+    /// no longer exists.
+    func pruneTagFilter() {
+        if let tag = tagFilter, !tagChips().contains(tag) { tagFilter = nil }
     }
 
     // MARK: Find

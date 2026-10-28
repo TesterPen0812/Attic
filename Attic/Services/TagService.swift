@@ -62,6 +62,9 @@ final class TagService {
     private var inventoryBuildFailed = false
     private var needsPublication = false
     let inventoryChanges = PassthroughSubject<Void, Never>()
+    /// A rename or merge that changed items: its sources now read `target`
+    /// (the Tasks panel's tag chip follows the chosen tag).
+    let renames = PassthroughSubject<(sources: Set<String>, target: String), Never>()
     private(set) var inventoryBuildCount = 0
     private(set) var inventoryFetchCount = 0
     private(set) var inventoryRowReadCount = 0
@@ -217,7 +220,7 @@ final class TagService {
         guard !normalizedSources.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
         let carry = carryColour
         let sourceOrder = sources.compactMap(AtticTag.normalize).filter { normalizedSources.contains($0) }
-        return rewrite(beforeRewrite: { context in
+        let snapshot = rewrite(beforeRewrite: { context in
             var rows: [PersistentIdentifier: RowState] = [:]
             var divergent = Set<AtticItemRef>()
             var firstUse: [String: Date] = [:]
@@ -232,6 +235,8 @@ final class TagService {
             guard !tags.isDisjoint(with: normalizedSources) else { return nil }
             return tags.subtracting(normalizedSources).union([target])
         }
+        if let snapshot, !snapshot.isEmpty { renames.send((normalizedSources, target)) }
+        return snapshot
     }
 
     /// Removes a tag from every item. The items themselves are untouched.

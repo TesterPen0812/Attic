@@ -178,20 +178,98 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: true).canClear, true)
     }
 
-    func testFilterChipsAreTheViewOptionsFiltersAndKeepTheSort() {
-        XCTAssertEqual(TasksPanelDesign.chips.first?.title, "All")
-        var view = TasksViewOptions()
-        view.sort = .priority
-        XCTAssertEqual(TasksPanelDesign.selectedChip(for: view)?.id, "all")
-        let overdue = TasksPanelDesign.chips.first { $0.id == "overdue" }!
-        let next = TasksPanelDesign.view(choosing: overdue, from: view)
-        XCTAssertEqual(next.show, .overdueOnly)
-        XCTAssertEqual(next.sort, .priority, "a chip never changes the sort")
-        XCTAssertEqual(TasksPanelDesign.selectedChip(for: next)?.id, "overdue")
-        var mixed = TasksViewOptions()
-        mixed.show = .overdueOnly
-        mixed.priority = .highOnly
-        XCTAssertNil(TasksPanelDesign.selectedChip(for: mixed), "a mix from the menu lights no chip")
+    // MARK: - Tag chips (owner, 2026-10-28)
+
+    private func tag(_ id: UUID, _ tags: String...) {
+        for tag in tags { XCTAssertTrue(model.toggleTag(tag, for: [id]).isApplied) }
+    }
+
+    /// The chips are All, then one per tag on the tasks that exist (Now and
+    /// Later), in the library's tag order; a tag no task carries has none.
+    func testTagChipsAreAllThenTheTagsInUseInTheBranchOrder() throws {
+        let a = try add("Pay rent", due: nil)
+        let b = try add("Book flights", due: nil)
+        let c = try add("Read paper", due: nil, tab: .backlog)
+        tag(a, "home", "money")
+        tag(b, "travel", "money")
+        tag(c, "uni", "money", "travel")
+        let order = library.tags.names.filter { ["home", "money", "travel", "uni"].contains($0) }
+        XCTAssertEqual(model.tagChips(), order, "the branch's tag order")
+        XCTAssertEqual(Set(model.tagChips()), ["home", "money", "travel", "uni"])
+        XCTAssertEqual(model.tagChips().first, "money", "most used first")
+        XCTAssertEqual(TasksPanelDesign.tagChipTitle("money"), "#money", "the row pills' wording")
+        tag(a, "home") // removed from its only task
+        XCTAssertFalse(model.tagChips().contains("home"), "a tag no task carries has no chip")
+    }
+
+    /// One tag at a time: a tag shows only its tasks; the chosen tag again,
+    /// or All, clears it. It combines with the View options and the search.
+    func testATagChipFiltersAndCombinesWithTheViewAndTheSearch() throws {
+        let a = try add("Pay rent", due: nil)
+        let b = try add("Pay gym", due: nil)
+        let c = try add("Book flights", due: nil)
+        tag(a, "home")
+        tag(b, "home")
+        tag(c, "travel")
+        XCTAssertTrue(model.setPriority(.high, for: [b]).isApplied)
+        model.select(tab: .now)
+        model.chooseTagChip("home")
+        XCTAssertEqual(model.tagFilter, "home")
+        XCTAssertEqual(Set(titles(.now)), ["Pay rent", "Pay gym"])
+        XCTAssertTrue(model.narrows(.now), "a tag narrows the list (reorders move among what is shown)")
+        var view = model.viewOptions(for: .now)
+        view.priority = .highOnly
+        model.setViewOptions(view, for: .now)
+        XCTAssertEqual(titles(.now), ["Pay gym"], "the tag and the View options both match")
+        model.showAll(on: .now)
+        model.setSearchQuery("rent", for: .now)
+        XCTAssertEqual(titles(.now), ["Pay rent"], "the tag and the search both match")
+        model.setSearchQuery("flights", for: .now)
+        XCTAssertEqual(titles(.now), [], "the search alone would show Book flights")
+        model.setSearchQuery("", for: .now)
+        model.chooseTagChip("travel")
+        XCTAssertEqual(titles(.now), ["Book flights"], "one tag at a time")
+        model.chooseTagChip("travel")
+        XCTAssertNil(model.tagFilter, "the chosen tag again clears it")
+        model.chooseTagChip("home")
+        model.chooseTagChip(nil)
+        XCTAssertNil(model.tagFilter, "All clears it")
+        XCTAssertEqual(titles(.now).count, 3)
+    }
+
+    /// Deleting the chosen tag clears the filter; renaming it follows the
+    /// new name. The list is never left on a tag that no longer exists.
+    func testDeletingOrRenamingTheChosenTagClearsOrFollowsIt() throws {
+        let a = try add("Pay rent", due: nil)
+        let b = try add("Book flights", due: nil)
+        tag(a, "home")
+        tag(b, "travel")
+        model.chooseTagChip("home")
+        XCTAssertTrue(library.renameTag("home", to: "house"))
+        XCTAssertEqual(model.tagFilter, "house", "a rename follows")
+        model.pruneTagFilter()
+        XCTAssertEqual(model.tagFilter, "house")
+        XCTAssertEqual(titles(.now), ["Pay rent"])
+        XCTAssertTrue(library.deleteTag("house"))
+        model.pruneTagFilter()
+        XCTAssertNil(model.tagFilter, "a deleted tag clears it")
+        XCTAssertEqual(titles(.now).count, 2)
+        model.chooseTagChip("travel")
+        XCTAssertTrue(library.mergeTags(["travel"], into: "trips"))
+        XCTAssertEqual(model.tagFilter, "trips", "a merge follows too")
+        tag(b, "trips") // its only task loses it
+        let settled = expectation(description: "the change has been seen")
+        DispatchQueue.main.async { DispatchQueue.main.async { settled.fulfill() } }
+        wait(for: [settled], timeout: 2)
+        XCTAssertNil(model.tagFilter, "the last task losing the tag clears it on its own")
+    }
+
+    func testTheTagEmptyStateUsesTheDesignsWording() {
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "", filtered: false, tag: "home"),
+                       .init(title: "No results", body: "No tasks in #home in this view.", canClear: true))
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .now, query: "milk", filtered: false, tag: "home").body,
+                       "No tasks match “milk”.", "the search's wording first")
+        XCTAssertEqual(TasksPanelDesign.empty(tab: .backlog, query: "", filtered: true, tag: nil).body, "Nothing in this view.")
     }
 
     // MARK: - The design's sizes (px ÷ 2)

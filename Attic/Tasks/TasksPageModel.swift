@@ -418,6 +418,15 @@ final class TasksPageModel: ObservableObject {
     /// Now's and Later's View Options, per page (item 6); a page with the
     /// default view has none. Read through `viewOptions(for:)`.
     @Published var viewOptionsByTab: [TasksTab: TasksViewOptions] = [:]
+    /// The tag chip chosen under the search (owner, 2026-10-28; the
+    /// design's `listFilter`): one tag at a time, for the panel's session
+    /// (not remembered), on Now and Later. Nil is All.
+    @Published var tagFilter: String?
+    /// Bumped when the library's tags change (their order, a rename): the
+    /// tag chips are rebuilt.
+    var tagInventoryRevision: UInt64 = 0
+    /// The tag chips, built once per change (`tagChips()`).
+    var tagChipsCache: (revision: UInt64, inventory: UInt64, tags: [String])?
     /// Where the page and the views are remembered across relaunch (L7).
     var memory: TasksPageMemory?
     /// Loaded pages of the Done log (lazily, a page at a time). Published
@@ -477,7 +486,18 @@ final class TasksPageModel: ObservableObject {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneMissing() } }
             .store(in: &cancellables)
         library.tags.inventoryChanges
-            .sink { [weak self] in self?.objectWillChange.send() }
+            .sink { [weak self] in
+                self?.tagInventoryRevision &+= 1
+                self?.objectWillChange.send()
+                DispatchQueue.main.async { self?.pruneTagFilter() }
+            }
+            .store(in: &cancellables)
+        // A rename or merge of the chosen tag chip: the chip follows it.
+        library.tags.renames
+            .sink { [weak self] change in
+                guard let self, let tag = self.tagFilter, change.sources.contains(tag) else { return }
+                self.tagFilter = change.target
+            }
             .store(in: &cancellables)
         // Slice 2: a family's files moved into its note (or back).
         library.tasks.fileMigration.$statuses.dropFirst()
@@ -560,6 +580,7 @@ final class TasksPageModel: ObservableObject {
         let dateEnvironment: DatePresentationEnvironment
         let view: TasksViewOptions
         let search: String
+        let tag: String?
         let folded: Set<String>
     }
 
@@ -580,6 +601,8 @@ final class TasksPageModel: ObservableObject {
         let search: String
         /// Now's and Later's view (item 6).
         let view: TasksViewOptions
+        /// The chosen tag chip (Now and Later).
+        let tag: String?
         /// The date groups folded on this page.
         let folded: Set<String>
         /// Whether this page is the one that answers the user (the tab
@@ -592,7 +615,7 @@ final class TasksPageModel: ObservableObject {
         PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
-                  view: viewOptions(for: tab), folded: folded(on: tab), owner: self.tab == tab && isPageShown)
+                  view: viewOptions(for: tab), tag: tagFilter(on: tab), folded: folded(on: tab), owner: self.tab == tab && isPageShown)
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -616,7 +639,8 @@ final class TasksPageModel: ObservableObject {
     private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
         let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
-                          view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), folded: folded(on: tab))
+                          view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagFilter(on: tab),
+                          folded: folded(on: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
         var sections = TasksSections()
@@ -683,6 +707,9 @@ final class TasksPageModel: ObservableObject {
                 return view.sorted(section.tasks.filter { view.includes($0, today: day) })
             }
         }
+        // The chosen tag chip (owner, 2026-10-28): only its tasks, with
+        // the view and the search (all must match).
+        if let tag = tagFilter(on: tab) { tasks = tasks.filter { $0.tags.contains(tag) } }
         let holding = held.filter { $0.value.tab == tab }.sorted { $0.value.index < $1.value.index }
         if !holding.isEmpty {
             // A task finished on Later has left the backlog list: the held
@@ -1408,6 +1435,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     private func pruneMissing() {
+        pruneTagFilter()
         let live = { (id: UUID) in
             self.tab == .done ? self.store.listedTask(withID: id) != nil : self.store.task(withID: id) != nil
         }

@@ -165,14 +165,19 @@ enum TasksPanelDesign {
 
     /// The design's empty states. Now's and Later's sentences say what
     /// Attic's pages hold (the design's speak of dates, which Attic's
-    /// pages are not sorted by).
-    static func empty(tab: TasksTab, query: String, filtered: Bool) -> Empty {
+    /// pages are not sorted by). `tag` is the chosen tag chip (the
+    /// design's list filter).
+    static func empty(tab: TasksTab, query: String, filtered: Bool, tag: String? = nil) -> Empty {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             return Empty(title: String(localized: "No results"), body: String(localized: "No tasks match “\(query)”."), canClear: true)
         }
+        if let tag {
+            return Empty(title: String(localized: "No results"),
+                         body: String(localized: "No tasks in \(tagChipTitle(tag)) in this view."), canClear: true)
+        }
         if filtered {
-            // Attic's filters are the View options (the design's are lists).
+            // The View options' filters.
             return Empty(title: String(localized: "No results"), body: String(localized: "Nothing in this view."), canClear: true)
         }
         switch tab {
@@ -188,39 +193,16 @@ enum TasksPanelDesign {
         }
     }
 
-    // MARK: - Filter chips
+    // MARK: - Tag chips (owner, 2026-10-28)
 
-    /// A chip under the header: one of the View options' filters.
-    struct Chip: Equatable, Identifiable {
-        let id: String
-        let title: String
-        /// What the chip sets (the other filter returns to its default;
-        /// the sort is kept).
-        let show: TasksViewOptions.Show
-        let priority: TasksViewOptions.Priority
-    }
+    /// A tag chip's title: the row pills' wording.
+    static func tagChipTitle(_ tag: String) -> String { "#" + tag }
 
-    /// The design shows lists, which Attic doesn't have: until the owner
-    /// says otherwise the chips are the View options' filters, "All" first.
-    static let chips: [Chip] = [
-        Chip(id: "all", title: String(localized: "All"), show: .all, priority: .any),
-        Chip(id: "due", title: String(localized: "Due or overdue"), show: .dueOrOverdue, priority: .any),
-        Chip(id: "overdue", title: String(localized: "Overdue"), show: .overdueOnly, priority: .any),
-        Chip(id: "medium", title: String(localized: "Medium and high"), show: .all, priority: .mediumAndHigh),
-        Chip(id: "high", title: String(localized: "High"), show: .all, priority: .highOnly),
-    ]
-
-    /// The chip a view shows as chosen (nil for a mix the menu made).
-    static func selectedChip(for view: TasksViewOptions) -> Chip? {
-        chips.first { $0.show == view.show && $0.priority == view.priority }
-    }
-
-    /// The view a chip's click leaves: the chip's filter, the sort kept.
-    static func view(choosing chip: Chip, from view: TasksViewOptions) -> TasksViewOptions {
-        var next = view
-        next.show = chip.show
-        next.priority = chip.priority
-        return next
+    /// The tag a chip's click leaves chosen (the design's `listFilter`):
+    /// one at a time; the chosen tag again, or All (nil), clears it.
+    static func tagFilter(choosing chip: String?, current: String?) -> String? {
+        guard let chip, chip != current else { return nil }
+        return chip
     }
 }
 
