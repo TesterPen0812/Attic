@@ -1756,10 +1756,14 @@ struct AtticMetaPill: View {
     let visible: Bool
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
         let m = AtticTaskRowMetrics.self
-        RoundedRectangle(cornerRadius: AtticRadius.control(height: m.metaPillHeight), style: .continuous)
+        // In the panel design: `rInner` in the superellipse corner, clamped.
+        AtticControlShape.shape(cornerRadius: cornerExponent == nil ? AtticRadius.control(height: m.metaPillHeight)
+                                    : TasksDesignMetrics.innerRadius,
+                                exponent: cornerExponent)
             .fill((visible ? design.tokens.chipHover : .clear).color)
             .frame(height: m.metaPillHeight)
             .padding(.horizontal, -m.metaPillOutset)
@@ -2477,7 +2481,7 @@ struct AtticTagLabel: View {
                 .padding(.horizontal, TasksDesignMetrics.tagPaddingX)
                 .frame(height: TasksDesignMetrics.tagHeight)
                 .background(
-                    RoundedRectangle(cornerRadius: TasksDesignMetrics.tagRadius, style: .continuous)
+                    Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
                         .fill((disabled ? .clear : (hovered ? tokens.hover.over(colours.fill) : colours.fill)).color)
                 )
         } else {

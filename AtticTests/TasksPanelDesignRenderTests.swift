@@ -55,6 +55,54 @@ final class TasksPanelDesignRenderTests: XCTestCase {
         try context.save()
     }
 
+    /// The design gives every control `corner-shape: superellipse(1.4)`
+    /// (fix round 2, "why are the controls round now?"): the 27 pt pin with
+    /// its 15 pt radius clamps to half the side and is a rounded square. Its
+    /// edge crosses the corner's diagonal 3.12 pt in (2^1.4 superellipse);
+    /// a circle's crosses 3.95 pt in. Drawn opaque (the flat surface; an
+    /// off-screen render cannot draw glass), 8×, on a clear background.
+    func testTheHeadersControlsAreRoundedSquaresNotCircles() throws {
+        let side = AtticControlSize.headerControl
+        let view = PanelHeader(isPinned: false, page: .tasks, onTogglePin: {}, onSelectPage: { _ in })
+            .frame(width: 300)
+            .atticDesign(AtticDesignContext(controls: .craft))
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 8
+        let image = try XCTUnwrap(renderer.nsImage)
+        let rep = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let scale = CGFloat(rep.pixelsWide) / image.size.width
+        func alpha(_ x: CGFloat, _ y: CGFloat) -> CGFloat {
+            rep.colorAt(x: Int((x * scale).rounded(.down)), y: Int((y * scale).rounded(.down)))?.alphaComponent ?? 0
+        }
+        // The pin's edges: its left on its middle row, its top on its middle column.
+        let step = 1 / scale
+        let left = try XCTUnwrap(stride(from: 0, to: 40, by: step).first { alpha($0, side / 2) > 0.02 })
+        let top = try XCTUnwrap(stride(from: 0, to: 40, by: step).first { alpha(left + side / 2, $0) > 0.02 })
+        // Where the surface starts along the top-left corner's diagonal.
+        let reference = alpha(left + side / 2, top + 1.5)
+        XCTAssertGreaterThan(reference, 0.02, "the pin's surface is drawn")
+        let corner = try XCTUnwrap(stride(from: 0, to: side / 2, by: step).first {
+            alpha(left + $0, top + $0) >= reference * 0.5
+        })
+        let squircle = side / 2 * (1 - pow(0.5, 1 / AtticControlShape.designExponent))
+        let circle = side / 2 * (1 - pow(0.5, 0.5))
+        XCTAssertLessThan(corner, (squircle + circle) / 2,
+                          "the pin is a rounded square (edge \(corner) pt in; superellipse \(squircle), circle \(circle))")
+        XCTAssertEqual(corner, squircle, accuracy: 0.3, "the design's superellipse(1.4) corner")
+    }
+
+    func testTheDesignsCornerIsCSSSuperellipseOnePointFour() {
+        // CSS superellipse(K) is |x|^(2^K) + |y|^(2^K) = 1: K = 1 the round corner.
+        XCTAssertEqual(AtticControlShape.designExponent, 2.639, accuracy: 0.001)
+        let rect = CGRect(x: 0, y: 0, width: 27, height: 27)
+        let path = AtticControlShape.shape(cornerRadius: 15, exponent: AtticControlShape.designExponent).path(in: rect)
+        // Clamped to half the side, as CSS does: inside at (3.5, 3.5), which
+        // a 13.5 pt circle leaves out.
+        XCTAssertTrue(path.contains(CGPoint(x: 3.5, y: 3.5)))
+        XCTAssertFalse(Path(ellipseIn: rect).contains(CGPoint(x: 3.5, y: 3.5)))
+        XCTAssertFalse(path.contains(CGPoint(x: 2.5, y: 2.5)))
+    }
+
     func testRenderTheFooterTabsAlone() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_PANEL_DESIGN_RENDER"] == "1" else { return }
         let view = TasksFooterTabs(selection: .constant(.now)).padding(10).background(Color(white: 0.95)).atticDesign(.default)

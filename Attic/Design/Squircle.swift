@@ -26,9 +26,16 @@ struct Squircle: InsettableShape {
     /// can sit inside the edge); the corner shrinks with it.
     var insetAmount: CGFloat = 0
 
-    init(cornerRadius: CGFloat, exponent: CGFloat = 5) {
+    /// Square top or bottom corners, for a highlight that runs on into the
+    /// row above or below it (`AtticSelectionRun`).
+    var squaredTop = false
+    var squaredBottom = false
+
+    init(cornerRadius: CGFloat, exponent: CGFloat = 5, squaredTop: Bool = false, squaredBottom: Bool = false) {
         self.cornerRadius = cornerRadius
         self.exponent = exponent
+        self.squaredTop = squaredTop
+        self.squaredBottom = squaredBottom
     }
 
     func inset(by amount: CGFloat) -> Squircle {
@@ -64,6 +71,12 @@ struct Squircle: InsettableShape {
         ]
 
         for (cornerIndex, corner) in corners.enumerated() {
+            if (cornerIndex < 2 ? squaredTop : squaredBottom) {
+                let point = CGPoint(x: cornerIndex == 0 || cornerIndex == 3 ? rect.minX : rect.maxX,
+                                    y: cornerIndex < 2 ? rect.minY : rect.maxY)
+                if cornerIndex == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                continue
+            }
             for i in 0...segments {
                 let t = corner.start + (CGFloat(i) / CGFloat(segments)) * (.pi / 2)
                 let dx = r * copysign(pow(abs(cos(t)), 2 / n), cos(t))

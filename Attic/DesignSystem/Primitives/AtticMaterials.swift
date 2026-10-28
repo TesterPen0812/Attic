@@ -65,6 +65,7 @@ struct AtticRaisedBackground: View {
     var state: AtticControlState = .rest
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
         let tokens = design.tokens
@@ -78,12 +79,13 @@ struct AtticRaisedBackground: View {
             case .rest, .focused: tokens.raised
             }
         }
-        AtticRecipeBackground(recipe: recipe.opaque(design), cornerRadius: cornerRadius)
+        let shape = AtticControlShape.shape(cornerRadius: cornerRadius, exponent: cornerExponent)
+        AtticRecipeShapeBackground(recipe: recipe.opaque(design), shape: shape)
             .overlay {
                 // The glass stand-in shows hover and press as the live glass
                 // control does: a fill inside it.
                 if design.effectiveControls == .liquidGlass, let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(fill.color)
+                    shape.fill(fill.color)
                 }
             }
     }
@@ -209,9 +211,10 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     @Environment(\.atticControlAway) private var away
     @Environment(\.atticControlGone) private var gone
     @Environment(\.atticControlReveal) private var reveal
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     func body(content: Content) -> some View {
-        let shape = AtticControlShape.shape(cornerRadius: cornerRadius)
+        let shape = AtticControlShape.shape(cornerRadius: cornerRadius, exponent: cornerExponent)
         if gone {
             // Away and settled: no glass at all, so not even the faint rim
             // an identity glass keeps while it fades stays in the group.
@@ -346,8 +349,67 @@ enum AtticControlShape {
     /// (`GlassEffectContainer(spacing:)`): never.
     static let mergeDistance: CGFloat = 0
 
-    static func shape(cornerRadius: CGFloat) -> RoundedRectangle {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    /// The owner's panel design (2026-10-27) draws every control with
+    /// `corner-shape: superellipse(1.4)` (its corner smoothing). CSS draws
+    /// `superellipse(K)` as the curve |x|^(2^K) + |y|^(2^K) = 1 in the
+    /// corner's box (K = 1 is the plain round corner, 2 the squircle), so
+    /// the exponent is 2^1.4 ≈ 2.64, and CSS first clamps the radius to half
+    /// the side, as `Squircle` does: a 27 pt control with the design's
+    /// 15 pt radius is a rounded square, not a circle.
+    static let designExponent: CGFloat = pow(2, 1.4)
+
+    /// A control's outline: Apple's continuous corner, or with `exponent`
+    /// the design's superellipse corner (`Squircle`).
+    static func shape(cornerRadius: CGFloat, exponent: CGFloat? = nil) -> AtticControlOutline {
+        AtticControlOutline(cornerRadius: cornerRadius, exponent: exponent)
+    }
+}
+
+/// A control's outline (`AtticControlShape`): `RoundedRectangle`'s
+/// continuous corner, or, where the panel design's corners are on
+/// (`atticDesignCorners`), the design's superellipse corner drawn by
+/// `Squircle`. One type, so glass, fills, rings and hit shapes take either.
+struct AtticControlOutline: InsettableShape {
+    var cornerRadius: CGFloat
+    /// The superellipse exponent; nil is the continuous rounded rectangle.
+    var exponent: CGFloat?
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        if let exponent {
+            return Squircle(cornerRadius: cornerRadius, exponent: exponent).inset(by: insetAmount).path(in: rect)
+        }
+        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).inset(by: insetAmount).path(in: rect)
+    }
+
+    func inset(by amount: CGFloat) -> AtticControlOutline {
+        var outline = self
+        outline.insetAmount += amount
+        return outline
+    }
+}
+
+private struct AtticControlCornerExponentKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    /// The superellipse exponent of the controls below (their glass, fills,
+    /// focus rings and hit shapes), or nil for Apple's continuous corner.
+    /// Set by `atticDesignCorners()`.
+    var atticControlCornerExponent: CGFloat? {
+        get { self[AtticControlCornerExponentKey.self] }
+        set { self[AtticControlCornerExponentKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// The owner's panel design's corner on every control below: the
+    /// superellipse(1.4) corner, its radius clamped to half the side
+    /// (`AtticControlShape.designExponent`). The Tasks page and the
+    /// header's pin and page switch.
+    func atticDesignCorners() -> some View {
+        environment(\.atticControlCornerExponent, AtticControlShape.designExponent)
     }
 }
 
@@ -388,10 +450,11 @@ struct AtticFlatSurface: ViewModifier {
     var isSelected = false
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     func body(content: Content) -> some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shape = AtticControlShape.shape(cornerRadius: cornerRadius, exponent: cornerExponent)
         let overlay: AtticRGBA? = switch state {
         case .pressed: tokens.chipSelected
         case .hover: isSelected ? tokens.chipSelected : tokens.chipHover
@@ -522,14 +585,25 @@ struct AtticHighlight: View {
     /// Half the gap between rows, covered where the run continues.
     var joinOverlap: CGFloat = (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2
 
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
+
     var body: some View {
-        let top = run.roundsTop ? cornerRadius : 0
-        let bottom = run.roundsBottom ? cornerRadius : 0
-        UnevenRoundedRectangle(
-            cornerRadii: .init(topLeading: top, bottomLeading: bottom, bottomTrailing: bottom, topTrailing: top),
-            style: .continuous
-        )
-        .fill(fill.color)
+        Group {
+            if let cornerExponent {
+                // The panel design's row: the superellipse corner.
+                Squircle(cornerRadius: cornerRadius, exponent: cornerExponent,
+                         squaredTop: !run.roundsTop, squaredBottom: !run.roundsBottom)
+                    .fill(fill.color)
+            } else {
+                let top = run.roundsTop ? cornerRadius : 0
+                let bottom = run.roundsBottom ? cornerRadius : 0
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(topLeading: top, bottomLeading: bottom, bottomTrailing: bottom, topTrailing: top),
+                    style: .continuous
+                )
+                .fill(fill.color)
+            }
+        }
         .padding(.top, run.roundsTop ? 0 : -joinOverlap)
         .padding(.bottom, run.roundsBottom ? 0 : -joinOverlap)
         .allowsHitTesting(false)
@@ -545,10 +619,11 @@ struct AtticFocusRing: View {
     var width: CGFloat = AtticRingMetrics.width
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
         let outset = gap + width
-        RoundedRectangle(cornerRadius: AtticRadius.ring(around: cornerRadius, offset: outset), style: .continuous)
+        AtticControlShape.shape(cornerRadius: AtticRadius.ring(around: cornerRadius, offset: outset), exponent: cornerExponent)
             .strokeBorder(design.tokens.focusRing.color, lineWidth: width)
             .padding(-outset)
             .allowsHitTesting(false)

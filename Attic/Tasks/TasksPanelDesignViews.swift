@@ -101,6 +101,12 @@ enum TasksDesignMetrics {
     // Header: controls 54 px, radius 30 px, 6 px apart.
     static let headerControl: CGFloat = 27
     static let headerRadius: CGFloat = 15
+    /// The design's inner controls (`rInner`, 28 px): the filter button,
+    /// chips, tab thumb, tag pills, the date button, Clear filters. Each
+    /// clamps to half its side, as CSS does.
+    static let innerRadius: CGFloat = 14
+    /// Every control's corner: `superellipse(1.4)` (`cornerSmoothing`).
+    static var cornerExponent: CGFloat { AtticControlShape.designExponent }
     static let headerGap: CGFloat = 3
     /// The page switch: 72 px shut, 150 px open; 42 px segments.
     static let switchShut: CGFloat = 36
@@ -176,7 +182,7 @@ private struct TasksFileTile: View {
         }
         .foregroundStyle(ink)
         .frame(width: TasksDesignMetrics.fileTileWidth, height: TasksDesignMetrics.tile)
-        .background(RoundedRectangle(cornerRadius: TasksDesignMetrics.tileRadius, style: .continuous)
+        .background(Squircle(cornerRadius: TasksDesignMetrics.tileRadius, exponent: TasksDesignMetrics.cornerExponent)
             .fill(design.tokens.ink(.heading).withAlpha(0.06).color))
         .help(name)
     }
@@ -223,6 +229,7 @@ struct TasksFilterChip: View {
     var body: some View {
         let tokens = design.tokens
         let dark = design.mode == .dark
+        let shape = Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
         Button(action: action) {
             Text(verbatim: title)
                 .font(.system(size: 10))
@@ -231,15 +238,15 @@ struct TasksFilterChip: View {
                 .frame(height: TasksDesignMetrics.chipHeight)
                 .background {
                     if selected {
-                        Capsule(style: .continuous)
+                        shape
                             .fill(dark ? AtticRGBA(red: 1, green: 1, blue: 1, alpha: 0.16).color : Color.white)
-                            .overlay(Capsule(style: .continuous)
+                            .overlay(shape
                                 .strokeBorder(AtticRGBA(red: 185 / 255, green: 189 / 255, blue: 191 / 255, alpha: dark ? 0.25 : 0.6).color,
                                               lineWidth: 0.5))
                             .shadow(color: AtticRGBA(red: 0.5, green: 0.5, blue: 0.5, alpha: 0.12).color, radius: 1.5, y: 1)
                     }
                 }
-                .contentShape(Capsule())
+                .contentShape(shape)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -249,8 +256,8 @@ struct TasksFilterChip: View {
 }
 
 /// Now · Later · Done as icon tabs at the footer's left (the owner's panel
-/// design): three 26.5 pt cells (sun, clock, tick) in one round glass
-/// container; the page shown on a white cell in the primary ink, the
+/// design): three 26.5 pt cells (sun, clock, tick) in one glass container
+/// with the design's corner; the page shown on a white cell in the primary ink, the
 /// others quiet. ←/→ move between them; VoiceOver reads each by name.
 struct TasksFooterTabs: View {
     @Binding var selection: TasksTab
@@ -289,7 +296,7 @@ struct TasksFooterTabs: View {
                                     .accessibilityHidden(true)
                             }
                         }
-                        .contentShape(Circle())
+                        .contentShape(Squircle(cornerRadius: m.innerRadius, exponent: m.cornerExponent))
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
@@ -323,7 +330,8 @@ struct TasksFooterTabs: View {
 }
 
 /// The white thumb under the footer's current tab (the owner's panel
-/// design): a white disc (16 % white in dark), a 0.5 pt grey edge and the
+/// design): a white rounded square in the design's corner (`rInner`,
+/// superellipse(1.4), clamped to half the side; 16 % white in dark), a 0.5 pt grey edge and the
 /// soft grey shadow, drawn once into a bitmap. Drawn as SwiftUI shapes
 /// over the glass each part was a masked layer, and the `.shadow` a layer
 /// shadow without a path: offscreen passes every frame the footer was
@@ -344,6 +352,10 @@ enum TasksThumbImage {
         let side = diameter + pad * 2
         let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { _ in
             let disc = NSRect(x: pad, y: pad, width: diameter, height: diameter)
+            func outline(_ rect: NSRect) -> NSBezierPath {
+                NSBezierPath(cgPath: Squircle(cornerRadius: TasksDesignMetrics.innerRadius,
+                                              exponent: TasksDesignMetrics.cornerExponent).path(in: rect).cgPath)
+            }
             NSGraphicsContext.saveGraphicsState()
             let shadow = NSShadow()
             shadow.shadowColor = NSColor(white: 0.5, alpha: 0.12)
@@ -352,10 +364,10 @@ enum TasksThumbImage {
             shadow.shadowOffset = NSSize(width: 0, height: shadowY)
             shadow.set()
             (dark ? NSColor(white: 1, alpha: 0.16) : NSColor.white).setFill()
-            NSBezierPath(ovalIn: disc).fill()
+            outline(disc).fill()
             NSGraphicsContext.restoreGraphicsState()
             NSColor(red: 185 / 255, green: 189 / 255, blue: 191 / 255, alpha: dark ? 0.25 : 0.6).setStroke()
-            let edge = NSBezierPath(ovalIn: disc.insetBy(dx: 0.25, dy: 0.25))
+            let edge = outline(disc.insetBy(dx: 0.25, dy: 0.25))
             edge.lineWidth = 0.5
             edge.stroke()
             return true
@@ -409,7 +421,8 @@ struct TasksEmptyState: View {
                 .frame(maxWidth: 190)
                 .padding(.top, 3)
             if empty.canClear, let clear {
-                AtticRaisedButton(systemName: nil, title: "Clear filters", height: 22, action: clear)
+                AtticRaisedButton(systemName: nil, title: "Clear filters", height: 22,
+                                  cornerRadius: TasksDesignMetrics.innerRadius, action: clear)
                     .padding(.top, 11)
                     .accessibilityIdentifier("tasks-clear-filters")
             } else if let action {

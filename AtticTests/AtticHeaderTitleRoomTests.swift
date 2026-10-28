@@ -165,13 +165,15 @@ final class AtticControlShapeTests: XCTestCase {
     private let heights: [CGFloat] = [AtticControlSize.headerControl, AtticControlSize.panelButton.height, AtticControlSize.addBarHeight]
 
     func testControlShapeIsSymmetricOnAllFourCorners() {
+        // Apple's continuous corner, and the panel design's superellipse(1.4).
+        for exponent in [nil, AtticControlShape.designExponent] as [CGFloat?] {
         for height in heights {
             for width in [height, height * 2, height * 4] {
                 let radius = AtticRadius.control(height: height)
                 let rect = CGRect(x: 0, y: 0, width: width, height: height)
-                let shape = AtticControlShape.shape(cornerRadius: radius)
-                XCTAssertEqual(shape.cornerSize.width, shape.cornerSize.height, "one radius")
-                XCTAssertEqual(shape.style, .continuous)
+                let shape = AtticControlShape.shape(cornerRadius: radius, exponent: exponent)
+                XCTAssertEqual(shape.cornerRadius, radius, "one radius")
+                XCTAssertEqual(shape.exponent, exponent)
                 let path = shape.path(in: rect)
                 var x: CGFloat = 0.25
                 while x < width / 2 {
@@ -186,6 +188,7 @@ final class AtticControlShapeTests: XCTestCase {
                     x += 0.5
                 }
             }
+        }
         }
     }
 

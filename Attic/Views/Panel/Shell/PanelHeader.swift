@@ -89,6 +89,9 @@ struct PanelHeader: View {
                 .accessibilityIdentifier("panel-section-picker")
             }
         }
+        // The owner's panel design: the pin and the page switch in the
+        // design's superellipse(1.4) corner, rounded squares.
+        .atticDesignCorners()
         .frame(height: PanelHeaderLayout.height)
     }
 }

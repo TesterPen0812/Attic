@@ -191,6 +191,9 @@ struct TasksPage: View {
             .equatable()
         }
         .atticTagColourOrigin(.page(.tasks))
+        // The owner's panel design: every control in its superellipse(1.4)
+        // corner (fix round 2: the build drew them round).
+        .atticDesignCorners()
     }
 
     /// The page, its overlays, its keys and its monitors.
@@ -863,8 +866,9 @@ struct TasksPage: View {
         } label: {
             AtticIcon(systemName: "line.3.horizontal.decrease", size: 11, weight: .medium, ink: .glyph)
                 .frame(width: TasksDesignMetrics.filterButton, height: TasksDesignMetrics.filterButton)
-                .background(Circle().fill(design.tokens.ink(.heading).withAlpha(on ? 0.07 : 0).color))
-                .contentShape(Circle())
+                .background(Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
+                    .fill(design.tokens.ink(.heading).withAlpha(on ? 0.07 : 0).color))
+                .contentShape(Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent))
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
