@@ -253,6 +253,7 @@ struct TasksFooterTabs: View {
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var focused: Bool
     @State private var hovered: TasksTab?
+    @Namespace private var thumb
 
     static func symbol(_ tab: TasksTab) -> String {
         switch tab {
@@ -264,8 +265,6 @@ struct TasksFooterTabs: View {
 
     var body: some View {
         let m = TasksDesignMetrics.self
-        let tokens = design.tokens
-        let dark = design.mode == .dark
         let tabs = TasksTab.allCases
         let selected = tabs.firstIndex(of: selection) ?? 0
         HStack(spacing: m.tabsGap) {
@@ -277,9 +276,8 @@ struct TasksFooterTabs: View {
                         .frame(width: m.tabCell, height: m.tabCell)
                         .background {
                             if on {
-                                Image(nsImage: TasksThumbImage.image(diameter: m.tabCell, dark: dark))
-                                    .frame(width: m.tabCell + TasksThumbImage.pad * 2, height: m.tabCell + TasksThumbImage.pad * 2)
-                                    .accessibilityHidden(true)
+                                TasksTabThumb()
+                                    .matchedGeometryEffect(id: "tasks-tab-thumb", in: thumb)
                             }
                         }
                         .contentShape(Squircle(cornerRadius: m.innerRadius, exponent: m.cornerExponent))
@@ -315,51 +313,29 @@ struct TasksFooterTabs: View {
     }
 }
 
-/// The white thumb under the footer's current tab (the owner's panel
-/// design): a white rounded square in the design's corner (`rInner`,
-/// superellipse(1.4), clamped to half the side; 16 % white in dark), a 0.5 pt grey edge and the
-/// soft grey shadow, drawn once into a bitmap. Drawn as SwiftUI shapes
-/// over the glass each part was a masked layer, and the `.shadow` a layer
-/// shadow without a path: offscreen passes every frame the footer was
-/// composited, as the list scrolled under it (fix round 1, measured in the
-/// panel census). The image is one plain layer.
-enum TasksThumbImage {
-    static let shadowRadius: CGFloat = 1.5
-    static let shadowY: CGFloat = 1
-    /// Room around the disc for the shadow.
-    static let pad: CGFloat = 4
+/// The footer's current tab (fidelity round, 2026-10-28: the owner's rule
+/// that what our app draws as glass is Liquid Glass): a selection inside
+/// the tabs' glass, as the page switch marks its current page, the
+/// selection tint in the design's squircle (`rInner`), or Phase 0's
+/// accent where a Light palette has one. It slides between the tabs. One
+/// flat fill: no shadow or mask, so scrolling under the footer costs no
+/// offscreen pass (the round 1 census that made the old thumb a bitmap).
+struct TasksTabThumb: View {
+    @Environment(\.atticDesign) private var design
 
-    @MainActor private static var cache: [String: NSImage] = [:]
-
-    @MainActor
-    static func image(diameter: CGFloat, dark: Bool) -> NSImage {
-        let key = "\(diameter)-\(dark)"
-        if let cached = cache[key] { return cached }
-        let side = diameter + pad * 2
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { _ in
-            let disc = NSRect(x: pad, y: pad, width: diameter, height: diameter)
-            func outline(_ rect: NSRect) -> NSBezierPath {
-                NSBezierPath(cgPath: Squircle(cornerRadius: TasksDesignMetrics.innerRadius,
-                                              exponent: TasksDesignMetrics.cornerExponent).path(in: rect).cgPath)
+    var body: some View {
+        let shape = AtticControlShape.shape(cornerRadius: TasksDesignMetrics.innerRadius,
+                                            exponent: TasksDesignMetrics.cornerExponent)
+        let stroke = AtticPageButtonMetrics.accentStrokeWidth
+        Group {
+            if let accent = design.tokens.pageChipAccent {
+                shape.fill(accent.fill.color)
+                    .overlay { shape.inset(by: stroke / 2).stroke(accent.stroke.color, lineWidth: stroke) }
+            } else {
+                shape.fill(design.tokens.chipSelected.color)
             }
-            NSGraphicsContext.saveGraphicsState()
-            let shadow = NSShadow()
-            shadow.shadowColor = NSColor(white: 0.5, alpha: 0.12)
-            shadow.shadowBlurRadius = shadowRadius * 2
-            // Flipped: a positive height moves the shadow down.
-            shadow.shadowOffset = NSSize(width: 0, height: shadowY)
-            shadow.set()
-            (dark ? NSColor(white: 1, alpha: 0.16) : NSColor.white).setFill()
-            outline(disc).fill()
-            NSGraphicsContext.restoreGraphicsState()
-            NSColor(red: 185 / 255, green: 189 / 255, blue: 191 / 255, alpha: dark ? 0.25 : 0.6).setStroke()
-            let edge = outline(disc.insetBy(dx: 0.25, dy: 0.25))
-            edge.lineWidth = 0.5
-            edge.stroke()
-            return true
         }
-        cache[key] = image
-        return image
+        .accessibilityHidden(true)
     }
 }
 
