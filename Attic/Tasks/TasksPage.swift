@@ -805,19 +805,24 @@ struct TasksPage: View {
     /// 2026-10-28), on this page's list only, in the row's own motion.
     /// Reduce Transparency keeps its solid fallback under the header.
     private func fadeRowsUnderChips(_ place: ChipsPlace, animated: Bool) {
-        let top: CGFloat? = place.shown && !design.reduceTransparency
-            ? layout.headerBottom + TasksDesignMetrics.chipsRowHeight : nil
+        let shut = layout.headerBottom
+        let open = shut + TasksDesignMetrics.chipsRowHeight
+        let on = place.shown && !design.reduceTransparency
         let duration: CFTimeInterval = animated ? (design.reduceMotion ? 0.15 : 0.26) : 0
         let timing = design.reduceMotion ? CAMediaTimingFunction(name: .easeOut)
             : CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.2, 1)
         for (tab, scroll) in listProxies.scrollViews {
-            TasksChipFade.set(scroll, top: tab == place.tab ? top : nil, duration: tab == place.tab ? duration : 0, timing: timing)
+            if on, tab == place.tab {
+                TasksChipFade.show(scroll, top: open, from: shut, duration: duration, timing: timing)
+            } else {
+                TasksChipFade.hide(scroll, to: shut, duration: tab == place.tab ? duration : 0, timing: timing)
+            }
         }
         // A list built by the page change registers after this turn.
-        guard let top else { return }
+        guard on else { return }
         DispatchQueue.main.async { [listProxies] in
             if let scroll = listProxies.scrollViews[place.tab], !TasksChipFade.isOn(scroll) {
-                TasksChipFade.set(scroll, top: top, duration: 0, timing: timing)
+                TasksChipFade.show(scroll, top: open, from: open, duration: 0, timing: timing)
             }
         }
     }
