@@ -98,12 +98,21 @@ struct AtticIcon: View {
     var size: CGFloat = AtticControlSize.glyph
     var weight: Font.Weight = .regular
     let ink: AtticInk
+    /// Drawn in this colour instead of the role's ink (nil: the ink).
+    var colour: AtticRGBA? = nil
 
     @Environment(\.atticDesign) private var design
     @State private var probeID = UUID()
 
+    /// The same role drawn in `colour` (nil: the role's own ink).
+    func colour(_ colour: AtticRGBA?) -> AtticIcon {
+        var copy = self
+        copy.colour = colour
+        return copy
+    }
+
     var body: some View {
-        let color = design.tokens.ink(ink)
+        let color = colour ?? design.tokens.ink(ink)
         Image(systemName: systemName)
             .font(.system(size: size, weight: weight))
             .foregroundStyle(color.color)

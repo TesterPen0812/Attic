@@ -1592,7 +1592,7 @@ struct AtticDueText: View {
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .dueText)
         case .today, .quiet:
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .helper)
-                .colour(panelDesign && !disabled ? TasksPanelDesign.tone(.date, tokens: design.tokens) : nil)
+                .colour(panelDesign && !disabled ? TasksPanelDesign.toneInk(.date, tokens: design.tokens) : nil)
         }
     }
 }
@@ -1627,12 +1627,12 @@ struct AtticTaskDetails: View {
         let m = AtticTaskRowMetrics.self
         let text: AtticInk = disabled ? .disabledText : .helper
         // The design's meta grey (`TasksDesignTone.meta`).
-        let tone = disabled ? nil : TasksPanelDesign.tone(.meta, tokens: design.tokens)
+        let tone = disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens)
         let icon: AtticInk = disabled ? .disabledIcon : .icon
         HStack(spacing: m.detailsItemSpacing) {
             if model.inWindow {
                 HStack(spacing: m.detailsIconGap) {
-                    AtticIcon(systemName: "macwindow", size: m.detailsIconSize, weight: .light, ink: icon)
+                    AtticIcon(systemName: "macwindow", size: m.detailsIconSize, weight: .light, ink: icon).colour(tone)
                     AtticText("In window", style: .taskMeta, ink: text).colour(tone)
                 }
                 .fixedSize()
@@ -1656,7 +1656,7 @@ struct AtticTaskDetails: View {
             if model.hasPage {
                 // Phase 3 (`p3-06`, D11): the task has a note of its own. The
                 // glyph has no count; files keep the paperclip and theirs.
-                AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon)
+                AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon).colour(tone)
                     .help(String(localized: "Has a note"))
                     .accessibilityLabel(String(localized: "Has a note"))
                     .fixedSize()
@@ -1678,7 +1678,7 @@ struct AtticTaskDetails: View {
                     .layoutPriority(1)
                 } else {
                     HStack(spacing: m.detailsIconGap) {
-                        AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
+                        AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon).colour(tone)
                         AtticText(verbatim: "\(model.attachments)", style: .taskMeta, ink: text).colour(tone)
                     }
                     .fixedSize()
@@ -1813,10 +1813,11 @@ private struct AtticDetailsCountButton: View {
         Button(action: action) {
             HStack(spacing: m.iconGap) {
                 AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
+                    .colour(disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
                     .frame(width: m.iconSlot)
                 // The design's 11 pt meta text in the meta grey.
                 AtticText(verbatim: count, style: .taskMeta, ink: disabled ? .disabledText : .helper)
-                    .colour(disabled ? nil : TasksPanelDesign.tone(.meta, tokens: design.tokens))
+                    .colour(disabled ? nil : TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
             }
             .padding(.horizontal, m.horizontalPadding)
             .frame(height: m.height)

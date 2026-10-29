@@ -19,14 +19,14 @@ struct TasksGroupHeader: View {
         // The design's header grey, a step under the titles on every
         // surface (Glass draws `.label` in the title's ink); the title's
         // ink under the pointer.
-        let rest = TasksPanelDesign.tone(.groupHeader, tokens: tokens)
+        let rest = TasksPanelDesign.toneInk(.groupHeader, tokens: tokens)
         Button(action: toggle) {
             HStack(spacing: TasksDesignMetrics.groupHeaderGap) {
                 AtticText(verbatim: title, style: .groupHeader, ink: hovered ? .heading : .helper)
                     .colour(hovered ? nil : rest)
                 if folded {
                     AtticText(verbatim: "\(count)", style: .groupHeader, ink: .helper)
-                        .colour(TasksPanelDesign.tone(.meta, tokens: tokens))
+                        .colour(TasksPanelDesign.toneInk(.meta, tokens: tokens))
                 }
                 Image(systemName: "chevron.down")
                     .font(.system(size: TasksDesignMetrics.groupChevron, weight: .semibold))

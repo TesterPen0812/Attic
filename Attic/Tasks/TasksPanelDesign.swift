@@ -287,6 +287,25 @@ extension TasksPanelDesign {
         return value
     }
 
+    /// A design grey as drawn on a see-through surface (owner, 2026-10-29:
+    /// "vibrant greys"): the title's ink made see-through so that, over the
+    /// surface above a mid-grey desktop, it is exactly `tone`. As macOS's
+    /// own secondary label colours do, it darkens (or, in Dark, lightens)
+    /// what is behind the glass, so it keeps its step from the glass
+    /// wherever the panel sits. Solid, and Reduce Transparency, keep the
+    /// opaque grey.
+    @MainActor
+    static func toneInk(_ tone: TasksDesignTone, tokens: AtticColorTokens) -> AtticRGBA {
+        let value = Self.tone(tone, tokens: tokens)
+        guard tokens.context.surface != .solid, tokens.context.reducedFrom == nil else { return value }
+        let ink = tokens.ink(.heading)
+        let base = reference(tokens)
+        func mean(_ c: AtticRGBA) -> Double { (c.red + c.green + c.blue) / 3 }
+        let span = mean(ink) - mean(base)
+        guard abs(span) > 0.01 else { return value }
+        return ink.withAlpha((mean(value) - mean(base)) / span)
+    }
+
     private struct ToneKey: Hashable {
         let colours: AtticDesignContext.ColourKey
         let tone: TasksDesignTone
