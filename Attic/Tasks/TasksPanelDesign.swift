@@ -330,12 +330,20 @@ extension TasksPanelDesign {
         tokens.panel.floor(for: .helper) < 4.5 ? 3.11 : 4.66
     }
 
+    /// How much of the design's step under the title the greys keep on
+    /// Glass and Frosted.
+    static let glassStepScale = 0.5
+
     private static func solveTone(_ tone: TasksDesignTone, tokens: AtticColorTokens) -> AtticRGBA {
         let dark = tokens.context.mode == .dark
         let base = reference(tokens)
         let title = tokens.ink(.heading)
         let titleContrast = title.contrast(on: base)
-        let target = pow(titleContrast, tone.designFraction)
+        // On see-through surfaces the greys sit half as far under the title
+        // as on paper (owner, 2026-10-29: stronger greys on glass), so they
+        // hold up on the glass's own grey; the order and steps remain.
+        let fraction = tokens.context.surface == .solid ? tone.designFraction : 1 - (1 - tone.designFraction) * glassStepScale
+        let target = pow(titleContrast, fraction)
         // The design grey's hue and saturation, at the lightness that gives
         // the target: between the title's lightness and the surface's, where
         // contrast falls steadily.
