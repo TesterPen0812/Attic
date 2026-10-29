@@ -407,6 +407,9 @@ final class AppCoordinator: ObservableObject {
     let demoDataAllowed: Bool
     private let demoContainer: ModelContainer?
     private var performanceSignalSource: (any DispatchSourceSignal)?
+    #if DEBUG
+    private var hideMotionBench: PanelHideMotionBench?
+    #endif
     private var performancePhaseIndex = 0
 
     init(runtime: AppRuntimeEnvironment = AppRuntimeEnvironment(),
@@ -705,6 +708,11 @@ final class AppCoordinator: ObservableObject {
             noteDraft: noteDraft
         )
         self.hoverMonitor = hoverMonitor
+        // A timed hide or reveal about to happen: a Genie hide animation
+        // prepares its snapshot ahead of it.
+        hoverMonitor.onVisibilityChangeExpected = { [weak panelController] expected in
+            panelController?.prepareForExpectedVisibilityChange(expected)
+        }
         agentPresenter = PanelAgentPresenter(
             uiState: uiState, store: store, noteStore: noteStore,
             canvasSession: canvasSession, noteDraft: noteDraft,
@@ -968,6 +976,42 @@ final class AppCoordinator: ObservableObject {
                 }
                 return
             }
+            #if DEBUG
+            // The hide-animation bench (debug builds of preview identities
+            // only): signal-driven hides, reveals and swipes.
+            if let mode = ProcessInfo.processInfo.environment["ATTIC_MOTION_BENCH_MODE"].flatMap(PanelHideAnimation.init(storedValue:)) {
+                settings.hideAnimation = mode
+            }
+            hideMotionBench = PanelHideMotionBench.installIfRequested(
+                isVisible: { [weak self] in self?.panelController.isPanelVisible ?? false },
+                hide: { [weak self] done in _ = self?.hoverMonitor.hideForPerformanceProbe { _ in done() } },
+                reveal: { [weak self] in
+                    guard let self else { return }
+                    self.hoverMonitor.revealForPerformanceProbe(section: self.uiState.selectedSection)
+                },
+                mode: { [weak self] in self?.settings.hideAnimation.rawValue ?? "?" },
+                prepare: { [weak self] hiding, delay in
+                    self?.panelController.prepareForExpectedVisibilityChange((hiding, delay))
+                }
+            )
+            hideMotionBench?.trace = { [weak self] in
+                guard self?.settings.hideAnimation.usesGenieMesh == true else { return [:] }
+                return [
+                    "snapshot_ms": PanelHideMotionTrace.snapshotMilliseconds,
+                    "mask_us": PanelHideMotionTrace.maskMicroseconds,
+                    "material_layers": PanelHideMotionTrace.materialLayers,
+                    "glass_standins": PanelHideMotionTrace.glassStandIns,
+                    "glass_left_out": PanelHideMotionTrace.glassLeftOut
+                ]
+            }
+            hideMotionBench?.acceptsInput = { [weak self] in self?.panelController.acceptsInputForProbe ?? false }
+            hideMotionBench?.progress = { [weak self] in self?.panelController.displayedProgressForProbe ?? 0 }
+            hideMotionBench?.swipeTrace = {
+                defer { PanelSwipeTrace.events = []; PanelSwipeTrace.release = [:] }
+                return ["updates": PanelSwipeTrace.events, "release": PanelSwipeTrace.release]
+            }
+            hideMotionBench?.beginCost = { [weak self] in self?.panelController.alternateBeginCostForProbe ?? 0 }
+            #endif
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {
                 hoverMonitor.start()
                 hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)

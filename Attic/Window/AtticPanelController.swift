@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import QuartzCore
+import SwiftData
 import SwiftUI
 
 enum PanelWorkAreaEvent: Equatable {
@@ -156,6 +157,19 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
+    #if DEBUG
+    /// The motion bench: how far the panel is collapsed now (0 shown, 1
+    /// hidden), whichever animation draws it.
+    var displayedProgressForProbe: Double {
+        guard let container = contentContainer else { return 0 }
+        if container.alternateMode != nil { return container.alternateProgress }
+        return Double((1 - container.presentationTransform.m11) / (1 - PanelCollapseGeometry.collapsedScale))
+    }
+    /// The motion bench: whether the panel takes clicks and keys right now.
+    var acceptsInputForProbe: Bool { contentContainer?.allowsContentInteraction == true && panel.isKeyWindow }
+    /// The motion bench: what starting the last hide animation cost (ms).
+    var alternateBeginCostForProbe: Double { contentContainer?.lastAlternateBeginMilliseconds ?? 0 }
+    #endif
     /// Tests: the panel's window, to send it a swipe as the system does.
     var panelForTesting: AtticPanel { panel }
     private(set) var performanceVisibilityChanges = 0
@@ -174,6 +188,24 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isPanelMotionActive = false
     private var isInteractiveDismissal = false
     private var interactiveSwipeStartProgress: CGFloat = 0
+    /// The hide animation a swipe drives (nil: Slide),
+    /// its recent progress for the release speed, and that release.
+    private var swipeDraft: PanelHideAnimation?
+    private var swipeSamples: [(time: CFTimeInterval, progress: Double)] = []
+    private var pendingDraftRelease: Double?
+    /// The running motion is a swipe's release (its close or spring-back),
+    /// which a new swipe may take over; `nextMotionIsRelease` marks the
+    /// motion about to start as one. Slide's runs on Core Animation, so
+    /// `slideMotionRun` mirrors it for its speed.
+    private var isReleaseMotionActive = false
+    private var nextMotionIsRelease = false
+    private var slideMotionRun: PanelHideMotionRun?
+    /// A takeover's speed carried into the swipe (`PanelSwipeTakeover.carry`),
+    /// the swipe's last distance, and the timer that keeps the carry moving
+    /// between the fingers' events.
+    private var swipeCarry: (velocity: CGFloat, start: CFTimeInterval)?
+    private var lastSwipeDistance: CGFloat = 0
+    private var swipeCarryTimer: Timer?
     /// The next hide was asked for by a swipe: under Reduced motion it
     /// fades out rather than vanishing at once (owner, 2026-10-01).
     private var hideFadesWhenReduced = false
@@ -255,6 +287,22 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         bindContentSize()
         uiState.$dockingPreviewCorner.sink { [weak self] corner in
             self?.updateDockingIndicator(corner: corner)
+        }.store(in: &cancellables)
+        // Saved data may change what the panel shows, hidden or not: a
+        // snapshot taken before it is stale.
+        NotificationCenter.default.publisher(for: ModelContext.didSave).receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.contentContainer?.noteContentMayChange()
+                self?.scheduleIdlePrepare()
+            }
+            .store(in: &cancellables)
+        // Genie's shader compiles off the main thread before its first use.
+        settings.$hideAnimation.sink { [weak self] mode in
+            if mode.usesGenieMesh {
+                PanelGenieRenderer.shared.prewarm()
+                PanelGenieView.prewarmImageWork()
+            }
+            DispatchQueue.main.async { self?.scheduleIdlePrepare() }
         }.store(in: &cancellables)
     }
 
@@ -421,7 +469,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
             if mustEstablishOnTargetDisplay {
                 panel.setVisibleContentFrame(finalFrame, display: true)
-                contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+                prepareCollapsedPresentation(corner: corner)
             }
 
             if makeKey {
@@ -437,7 +485,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         panel.setVisibleContentFrame(finalFrame, display: true)
-        contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+        prepareCollapsedPresentation(corner: corner)
         panel.alphaValue = 1
 
         performanceVisibilityChanges += 1
@@ -462,12 +510,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func animateShow(to finalFrame: CGRect, spring: AtticMotionSpring? = nil) {
         let generation = visibilityTransition.beginTransition()
         isShowing = true
-        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24, spring: spring,
+        animatePanel(to: finalFrame, collapseProgress: 0,
+                     duration: settings.hideMotionDuration(.slide, hiding: false), spring: spring,
                      reducedFade: spring != nil) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.visibilityTransition.completeTransition(generation) else { return }
                 self.isShowing = false
+                self.scheduleIdlePrepare()
                 if self.needsResizeAfterShowing {
                     self.needsResizeAfterShowing = false
                     self.resizeAndReanchor()
@@ -527,7 +577,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
         let reducedFade = hideFadesWhenReduced
         hideFadesWhenReduced = false
-        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22, reducedFade: reducedFade) { [weak self] in
+        animatePanel(to: targetFrame, collapseProgress: 1,
+                     duration: settings.hideMotionDuration(.slide, hiding: true), reducedFade: reducedFade) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
@@ -575,10 +626,18 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             // `forceHidden(untilHotspotExit:)`, so it neither re-shows at
             // once nor loses its pin.
             self.hideFadesWhenReduced = true
-            if !self.requestInteractiveHide().isAccepted {
+            self.captureSwipeRelease()
+            self.nextMotionIsRelease = true
+            let accepted = self.requestInteractiveHide().isAccepted
+            self.nextMotionIsRelease = false
+            if !accepted {
                 self.hideFadesWhenReduced = false
                 self.cancelInteractiveDismissal()
             }
+        }
+        panel.onContentMayChange = { [weak self] hoverOnly in
+            self?.contentContainer?.noteContentMayChange(hoverOnly: hoverOnly)
+            self?.scheduleIdlePrepare()
         }
         panel.onTrackpadDismissProgress = { [weak self] distance in
             self?.updateInteractiveDismissal(distance: distance)
@@ -609,8 +668,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self.stopPanelMotion()
             self.restoreFullPresentation()
         }
+        panel.trackpadSwipeTakeover = { [weak self] in self?.releaseMotionTakeover() }
         panel.canBeginTrackpadSwipe = { [weak self] event in
-            guard let self, !self.isPanelMotionActive else { return false }
+            // A swipe's own release motion can be taken over; any other
+            // motion (a timed hide or reveal, a dock) cannot.
+            guard let self, !self.isPanelMotionActive || self.releaseMotionTakeover() != nil else { return false }
             let blockers: Set<PanelInteractionLockReason> = [
                 .windowMove, .windowResize, .menuTracking, .blockingSave, .canvasConfirmation,
                 .notesImport, .taskEditing
@@ -974,41 +1036,167 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func updateInteractiveDismissal(distance: CGFloat) {
         guard panel.isVisible else { return }
+        #if DEBUG
+        let traceBegan = CACurrentMediaTime()
+        var traced: CGFloat = -1
+        defer {
+            PanelSwipeTrace.events.append([traceBegan, panel.lastScrollEventTime, Double(distance), Double(traced),
+                                           (CACurrentMediaTime() - traceBegan) * 1000])
+        }
+        #endif
         if !isInteractiveDismissal {
+            // A swipe that takes over a release motion starts where that
+            // motion had the panel, with its speed (owner, 2026-10-22).
+            let takeover = panel.swipeTakeover
             stopPanelMotion()
             isInteractiveDismissal = true
-            let scale = contentContainer?.presentationTransform.m11 ?? 1
-            interactiveSwipeStartProgress = min(1, max(0,
-                (1 - scale) / (1 - PanelCollapseGeometry.collapsedScale)
-            ))
+            // Swoop and both Genies follow the
+            // fingers themselves (Reduced keeps today's dimming pull).
+            swipeDraft = nil
+            swipeSamples = []
+            if !AtticMotionPreference.reducesMotion, let container = contentContainer {
+                let mode = container.alternateMode ?? settings.hideAnimation
+                if mode != .slide { swipeDraft = mode }
+            }
+            if let takeover {
+                interactiveSwipeStartProgress = min(1, max(0, takeover.progress))
+                swipeCarry = takeover.velocity != 0 ? (takeover.velocity, CACurrentMediaTime()) : nil
+            } else if swipeDraft != nil, let container = contentContainer {
+                interactiveSwipeStartProgress = container.alternateMode == nil
+                    ? 0 : CGFloat(min(1, max(0, container.alternateProgress)))
+            } else {
+                let scale = contentContainer?.presentationTransform.m11 ?? 1
+                interactiveSwipeStartProgress = min(1, max(0,
+                    (1 - scale) / (1 - PanelCollapseGeometry.collapsedScale)
+                ))
+            }
             uiState.setInteractionLock(.panelSwipe, isActive: true)
         }
-        // A pull: it follows the fingers with resistance.
-        let progress = PanelCollapseGeometry.resistedProgress(
-            forSwipeDistance: distance, panelWidth: panel.visibleContentFrame.width
+        lastSwipeDistance = distance
+        #if DEBUG
+        traced = applyInteractiveDismissal(recordsSample: true)
+        #else
+        applyInteractiveDismissal(recordsSample: true)
+        #endif
+    }
+
+    /// Puts the panel where the swipe has it: the fingers (a pull, from
+    /// where the swipe started), plus a takeover's carried speed while it
+    /// lasts. Returns that progress.
+    @discardableResult
+    private func applyInteractiveDismissal(recordsSample: Bool) -> CGFloat {
+        let follow = PanelCollapseGeometry.followProgress(
+            from: interactiveSwipeStartProgress, distance: lastSwipeDistance, panelWidth: panel.visibleContentFrame.width
         )
+        var collapse = follow
+        if let carry = swipeCarry {
+            let elapsed = CACurrentMediaTime() - carry.start
+            if PanelSwipeTakeover.carryHasEnded(velocity: carry.velocity, elapsed: elapsed) {
+                swipeCarry = nil
+                swipeCarryTimer?.invalidate()
+                swipeCarryTimer = nil
+            } else {
+                collapse = min(1, max(0, follow + PanelSwipeTakeover.carry(velocity: carry.velocity, elapsed: elapsed)))
+                // Between the fingers' events the carry still moves.
+                if swipeCarryTimer == nil {
+                    let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self, self.isInteractiveDismissal else { return }
+                            self.applyInteractiveDismissal(recordsSample: false)
+                        }
+                    }
+                    RunLoop.main.add(timer, forMode: .common)
+                    swipeCarryTimer = timer
+                }
+            }
+        }
         contentContainer?.allowsContentInteraction = false
+        if let draft = swipeDraft, let container = contentContainer {
+            if recordsSample {
+                // The fingers' speed is timed by the events' own times: after a
+                // stall the main thread gets to them bunched (g6: release speed
+                // 10% low after an 80 ms snapshot).
+                let now = panel.lastScrollEventTime > 0 ? panel.lastScrollEventTime : CACurrentMediaTime()
+                swipeSamples.append((now, Double(collapse)))
+                swipeSamples.removeAll { now - $0.time > PanelTrackpadDismissTracker.velocityWindow }
+            }
+            container.dockedCornerForAlternate = currentCorner
+            container.setAlternateProgress(draft, Double(collapse), corner: currentCorner, surface: genieSurface(for: draft))
+            return collapse
+        }
         contentContainer?.setCollapseProgress(
-            interactiveSwipeStartProgress + (1 - interactiveSwipeStartProgress) * progress,
+            collapse,
             corner: currentCorner,
             reduceMotion: AtticMotionPreference.reducesMotion
         )
+        return collapse
+    }
+
+    /// A swipe's release motion still running, for a new swipe to take
+    /// over: where it has the panel and how fast it goes. Not under Reduced
+    /// motion (its fade has no position to pick up).
+    private func releaseMotionTakeover() -> PanelSwipeTakeover? {
+        guard isPanelMotionActive, isReleaseMotionActive, panel.isVisible,
+              !AtticMotionPreference.reducesMotion, let container = contentContainer else { return nil }
+        let progress: Double
+        let velocity: Double
+        if container.alternateMode != nil {
+            progress = container.alternateProgress
+            velocity = container.alternateVelocity
+        } else {
+            let scale = container.presentationTransform.m11
+            progress = Double((1 - scale) / (1 - PanelCollapseGeometry.collapsedScale))
+            velocity = slideMotionRun?.velocity(at: CACurrentMediaTime()) ?? 0
+        }
+        guard progress.isFinite, velocity.isFinite else { return nil }
+        return PanelSwipeTakeover(
+            progress: CGFloat(min(1, max(0, progress))),
+            velocity: CGFloat(min(PanelHideMotionTuning.swipeMaxVelocity, max(-PanelHideMotionTuning.swipeMaxVelocity, velocity))),
+            panelWidth: panel.visibleContentFrame.width
+        )
+    }
+
+    /// The fingers' speed at release, in progress per second (the swipe's
+    /// own window of recent movement), for the animation's spring.
+    private func captureSwipeRelease() {
+        #if DEBUG
+        defer {
+            PanelSwipeTrace.release = ["t": CACurrentMediaTime(), "velocity": pendingDraftRelease ?? -99,
+                                       "progress": swipeSamples.last?.progress ?? -1]
+        }
+        #endif
+        guard swipeDraft != nil else { pendingDraftRelease = nil; return }
+        let limit = PanelHideMotionTuning.swipeMaxVelocity
+        guard let first = swipeSamples.first, let last = swipeSamples.last,
+              last.time - first.time > 1.0 / 240 else { pendingDraftRelease = 0; return }
+        let velocity = (last.progress - first.progress) / (last.time - first.time)
+        pendingDraftRelease = min(limit, max(-limit, velocity))
     }
 
     private func clearInteractiveDismissal() {
         isInteractiveDismissal = false
+        swipeCarry = nil
+        swipeCarryTimer?.invalidate()
+        swipeCarryTimer = nil
+        lastSwipeDistance = 0
+        scheduleIdlePrepare()
+        swipeDraft = nil
+        swipeSamples = []
         interactiveSwipeStartProgress = 0
         uiState.setInteractionLock(.panelSwipe, isActive: false)
     }
 
     private func cancelInteractiveDismissal() {
         guard isInteractiveDismissal else { return }
+        if pendingDraftRelease == nil { captureSwipeRelease() }
         clearInteractiveDismissal()
         stopPanelMotion()
         guard panel.isVisible else { restoreFullPresentation(); return }
         // Below the threshold it springs back with the feel's navigation
         // spring (Lively by default); under Reduced it fades back.
+        nextMotionIsRelease = true
         animateShow(to: panel.visibleContentFrame, spring: AtticMotionTuning.current.slide)
+        nextMotionIsRelease = false
     }
 
     private func restoreFullPresentation() {
@@ -1073,22 +1261,102 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     ) {
         let generation = visibilityTransition.generation
         isPanelMotionActive = true
+        isReleaseMotionActive = nextMotionIsRelease
+        nextMotionIsRelease = false
+        contentContainer?.catchesSwipeStarts = isReleaseMotionActive && !AtticMotionPreference.reducesMotion
+        slideMotionRun = nil
         contentContainer?.allowsContentInteraction = false
         let reduceMotion = AtticMotionPreference.reducesMotion
         let currentScale = contentContainer?.presentationTransform.m11 ?? 1
         let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
         let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
-        // A swipe's close or spring-back under Reduced motion fades.
-        let fades = reduceMotion && reducedFade
+        // Genie, Genie Classic or Swoop owns a hide from the full panel, and
+        // the reveal or reversal that follows it.
+        // A swipe's partly collapsed Slide keeps Slide.
+        // A swipe's release (its speed) belongs to this motion only.
+        let release = pendingDraftRelease
+        pendingDraftRelease = nil
+        let draft: PanelHideAnimation? = {
+            guard let container = contentContainer else { return nil }
+            // An animation that owns the presentation (a swipe following the
+            // fingers, or its own motion) finishes or springs back as itself.
+            if let active = container.alternateMode { return active }
+            guard spring == nil, collapseProgress >= 1, settings.hideAnimation != .slide,
+                  CATransform3DIsIdentity(container.presentationTransform) else { return nil }
+            return settings.hideAnimation
+        }()
+        // A swipe's close or spring-back under Reduced motion fades; so
+        // does every hide animation other than Slide.
+        let fades = reduceMotion && (reducedFade || draft != nil || (spring == nil && settings.hideAnimation != .slide))
+        if let draft, !reduceMotion, let container = contentContainer {
+            let target = Double(collapseProgress)
+            let current = container.alternateMode == nil ? 0 : container.alternateProgress
+            let hiding = collapseProgress >= 1
+            let base = settings.hideMotionDuration(draft, hiding: hiding)
+            let left = min(1, abs(current - target))
+            let timedDuration = left > 0.001 ? max(0.08, base * sqrt(left)) : base
+            // After a swipe: a short spring into the corner from the fingers'
+            // progress and speed, or the feel's spring back open. Otherwise
+            // timed like Slide.
+            let curve: PanelHideMotionCurve
+            if hiding, let release {
+                curve = .spring(PanelHideMotionTuning.swipeCloseSpring, velocity: release)
+            } else if !hiding, let spring {
+                curve = .spring(spring, velocity: release ?? 0)
+            } else {
+                curve = .timed(
+                    duration: timedDuration,
+                    timing: hiding ? PanelHideMotionTuning.hideTiming : PanelHideMotionTuning.showTiming
+                )
+            }
+            // A reveal takes clicks and keys from its first frame.
+            container.allowsContentInteraction = !hiding
+            container.dockedCornerForAlternate = currentCorner
+            let finishes = PanelMotionCompletionBarrier { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
+                    self.isPanelMotionActive = false
+                    self.isReleaseMotionActive = false
+                    self.contentContainer?.catchesSwipeStarts = false
+                    self.contentContainer?.allowsContentInteraction = collapseProgress == 0
+                    completion()
+                }
+            }
+            let duration = container.animateAlternate(
+                draft, to: target, corner: currentCorner, surface: genieSurface(for: draft), curve: curve
+            ) {
+                MainActor.assumeIsolated { finishes.finishPresentation() }
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
+                panel.animator().setFrame(panel.nativeFrame(forVisibleFrame: frame), display: true)
+            } completionHandler: {
+                MainActor.assumeIsolated { finishes.finishFrame() }
+            }
+            return
+        }
         let duration = fades ? PanelCollapseGeometry.reducedFadeDuration
             : reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
         let finishes = PanelMotionCompletionBarrier { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.isPanelMotionActive = false
+                self.isReleaseMotionActive = false
+                self.contentContainer?.catchesSwipeStarts = false
+                self.slideMotionRun = nil
                 self.contentContainer?.allowsContentInteraction = collapseProgress == 0
                 completion()
             }
+        }
+        if !fades, !reduceMotion, duration > 0 {
+            // Slide's motion, mirrored for its speed (a takeover reads it).
+            let from = Double(1 - currentScale) / Double(1 - PanelCollapseGeometry.collapsedScale)
+            let start = CACurrentMediaTime()
+            slideMotionRun = spring.map {
+                PanelHideMotionRun(from: from, to: Double(collapseProgress), start: start, spring: $0, velocity: 0)
+            } ?? PanelHideMotionRun(from: from, to: Double(collapseProgress), start: start, duration: duration,
+                                    timing: UnitBezier(0.22, 0.8, 0.28, 1))
         }
         contentContainer?.setCollapseProgress(
             collapseProgress, corner: currentCorner, reduceMotion: reduceMotion,
@@ -1108,6 +1376,107 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// A timed hide (the pointer has left) or reveal (it rests in the
+    /// corner) will happen in `delay` unless something changes: Genie takes
+    /// its snapshot shortly before, so the flight starts on its first frame.
+    /// nil: none is due any more.
+    func prepareForExpectedVisibilityChange(_ expected: (hiding: Bool, delay: TimeInterval)?) {
+        let mode = settings.hideAnimation
+        guard let (hiding, delay) = expected, mode.usesGenieMesh, !AtticMotionPreference.reducesMotion, delay > 0 else {
+            expectedChangeWork?.cancel()
+            expectedChangeWork = nil
+            return
+        }
+        // Each pointer sample re-states the same deadline: keep its work.
+        let due = CACurrentMediaTime() + delay
+        if let expectedChange, expectedChange.hiding == hiding, abs(expectedChange.due - due) < 0.02,
+           expectedChangeWork?.isCancelled == false { return }
+        expectedChangeWork?.cancel()
+        expectedChange = (hiding, due)
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let container = self.contentContainer, !self.isInteractiveDismissal,
+                  self.panel.isVisible == hiding, self.settings.hideAnimation == mode else { return }
+            // The pointer has just left (or arrived in the corner): hover fresh.
+            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), hoverFresh: true)
+        }
+        expectedChangeWork = work
+        let lead = max(0, delay - PanelHideMotionTuning.geniePrepareLead)
+        DispatchQueue.main.asyncAfter(deadline: .now() + lead, execute: work)
+    }
+
+    private var expectedChangeWork: DispatchWorkItem?
+    private var idlePrepareWork: DispatchWorkItem?
+
+    /// Genie: once the panel has been idle `genieIdlePrepareDelay`, prepare
+    /// the snapshot a swipe or hide will start from, and keep it fresh
+    /// while the panel stays open and idle. Anything that may change the
+    /// panel calls this again.
+    func scheduleIdlePrepare() {
+        idlePrepareWork?.cancel()
+        idlePrepareWork = nil
+        let mode = settings.hideAnimation
+        guard mode.usesGenieMesh, !AtticMotionPreference.reducesMotion else { return }
+        let lifetime = PanelHideMotionTuning.genieIdlePreparedLifetime
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.panel.isVisible, self.settings.hideAnimation == mode,
+                  let container = self.contentContainer else { return }
+            // A motion still running: try again once it is done.
+            guard !self.isPanelMotionActive, !self.isInteractiveDismissal, container.alternateMode == nil else {
+                self.scheduleIdlePrepare()
+                return
+            }
+            container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), lifetime: lifetime, hoverFresh: true)
+            // Renewed before it lapses, while the panel stays open and idle.
+            let renew = DispatchWorkItem { [weak self] in self?.scheduleIdlePrepare() }
+            self.idlePrepareWork = renew
+            DispatchQueue.main.asyncAfter(deadline: .now() + lifetime - 2, execute: renew)
+        }
+        idlePrepareWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + PanelHideMotionTuning.genieIdlePrepareDelay, execute: work)
+    }
+    private var expectedChange: (hiding: Bool, due: CFTimeInterval)?
+
+    /// Before a reveal from hidden: the presentation collapsed the way the
+    /// chosen hide animation reveals from.
+    private func prepareCollapsedPresentation(corner: ScreenCorner) {
+        let mode = settings.hideAnimation
+        guard mode != .slide, let container = contentContainer else {
+            contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+            return
+        }
+        if AtticMotionPreference.reducesMotion {
+            // Reduced: the draft's reveal is a fade in from nothing.
+            container.setCollapseProgress(1, corner: corner, reduceMotion: true, fades: true)
+        } else {
+            container.dockedCornerForAlternate = corner
+            container.prepareAlternateCollapsed(mode, corner: corner, surface: genieSurface(for: mode))
+        }
+    }
+
+    /// What a Genie snapshot stands on: the panel's own material, live,
+    /// under the bent snapshot. Solid needs none.
+    private func genieSurface(for mode: PanelHideAnimation) -> PanelGenieSurface? {
+        guard mode.usesGenieMesh else { return nil }
+        let dark = hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let treatment = settings.panelSurfaceTreatment(
+            colorScheme: dark ? .dark : .light,
+            contrast: increaseContrast ? .increased : .standard,
+            reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        )
+        guard treatment.kind != .solid else { return PanelGenieSurface(live: nil, translucent: false) }
+        // As `AtticPanelSurface.nativeSurfaceColorScheme`.
+        let scheme: ColorScheme = treatment.usesShadeAsFoundation ? .light : treatment.appearance == .dark ? .dark : .light
+        return PanelGenieSurface(
+            live: PanelGenieLiveMaterial(
+                kind: treatment.kind == .glass ? .glass : .frosted,
+                colorScheme: scheme,
+                cornerRadius: hostingView.panelCornerRadius
+            ),
+            translucent: true
+        )
+    }
+
     private func stopPanelMotion() {
         visibilityTransition.invalidatePendingTransition()
         contentContainer?.stopCollapseMotion()
@@ -1120,6 +1489,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         isShowing = false
         isPanelMotionActive = false
+        isReleaseMotionActive = false
+        contentContainer?.catchesSwipeStarts = false
+        slideMotionRun = nil
         needsResizeAfterShowing = false
     }
 
@@ -1557,3 +1929,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isDisplayingResizeCursor = false
     }
 }
+
+#if DEBUG
+/// The motion bench's record of a swipe: each update (handled at, the
+/// event's own time, finger distance, collapse applied, ms to apply) and
+/// the release.
+@MainActor
+enum PanelSwipeTrace {
+    static var events: [[Double]] = []
+    static var release: [String: Double] = [:]
+}
+#endif

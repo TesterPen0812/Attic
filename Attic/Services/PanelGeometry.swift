@@ -447,6 +447,29 @@ enum PanelCollapseGeometry {
     /// The rubber band's constant (UIKit's 0.55).
     static let pullResistance: CGFloat = 0.55
 
+    /// A swipe that started with the panel at `start` (0 shown, 1 hidden):
+    /// where `distance` (points toward the edge; negative is away from it)
+    /// puts the panel. Toward the edge it is the pull above, over what is
+    /// left of the travel; away from it (a re-swipe taking the panel back
+    /// from a close) it opens evenly, fully after one travel. A fresh swipe
+    /// (`start` 0, `distance` never negative) is exactly the pull.
+    static func followProgress(from start: CGFloat, distance: CGFloat, panelWidth: CGFloat) -> CGFloat {
+        let start = start.isFinite ? min(1, max(0, start)) : 0
+        guard distance.isFinite, panelWidth.isFinite else { return start }
+        if distance >= 0 {
+            return start + (1 - start) * resistedProgress(forSwipeDistance: distance, panelWidth: panelWidth)
+        }
+        let travel = min(280, max(120, panelWidth * 0.65))
+        return start * max(0, 1 + distance / travel)
+    }
+
+    /// How far back from the edge a re-swipe can take the panel: one travel
+    /// opens it fully (`followProgress`).
+    static func openingTravel(panelWidth: CGFloat) -> CGFloat {
+        guard panelWidth.isFinite else { return 120 }
+        return min(280, max(120, panelWidth * 0.65))
+    }
+
     /// Under Reduced motion the pull fades the panel instead of moving it:
     /// its opacity at `progress` (never below `reducedMinimumOpacity` while
     /// the fingers are down).
@@ -479,17 +502,73 @@ enum PanelCollapseGeometry {
     }
 }
 
+/// A new swipe that picks the panel up from a swipe's release motion (its
+/// close or its spring-back) while that motion is still running (owner,
+/// 2026-10-22). Timed hides and reveals (the pointer, Escape, the shortcut)
+/// are never taken over.
+struct PanelSwipeTakeover: Equatable {
+    /// Where the motion had the panel (0 shown, 1 hidden) …
+    var progress: CGFloat
+    /// … and how fast it was going (progress per second, + toward hidden).
+    var velocity: CGFloat
+    /// The panel's width, which sets the swipe's travel.
+    var panelWidth: CGFloat
+
+    /// The motion's speed carries into the new swipe: on top of where the
+    /// fingers put the panel, the release spring keeps running with its
+    /// speed but now rests on the fingers, so the panel neither jumps nor
+    /// stops dead and then follows the fingers alone. This is the swipe
+    /// close spring (critically damped, `swipeCloseSpring`) released from
+    /// zero displacement with the motion's velocity: v·t·e^(−ωt), which
+    /// starts at that speed, peaks after 1/ω (about 38 ms) at v/(ωe) and has
+    /// gone after about 0.2 s.
+    static func carry(velocity: CGFloat, elapsed: TimeInterval) -> CGFloat {
+        guard velocity.isFinite, elapsed.isFinite, elapsed > 0 else { return 0 }
+        let omega = 2 * Double.pi / max(0.05, PanelHideMotionTuning.swipeCloseSpring.response)
+        return velocity * CGFloat(elapsed * exp(-omega * elapsed))
+    }
+
+    /// The carry has died away (under a thousandth of the travel).
+    static func carryHasEnded(velocity: CGFloat, elapsed: TimeInterval) -> Bool {
+        let omega = 2 * Double.pi / max(0.05, PanelHideMotionTuning.swipeCloseSpring.response)
+        return elapsed > 1 / omega && abs(carry(velocity: velocity, elapsed: elapsed)) < 0.001
+    }
+}
+
 /// Recognizes a phase-aware, precise horizontal swipe toward the screen edge
 /// that owns the panel. Mouse wheels and ordinary content scrolling remain on
 /// their existing paths.
 struct PanelTrackpadDismissTracker {
-    /// Released past this far toward the edge, the panel closes.
+    /// The release closes the panel when its projected travel reaches this
+    /// far toward the edge (see `projectedDistance`).
     static let minimumDistance: CGFloat = 48
-    /// Or released at least this fast toward the edge (points per second,
-    /// over the last tenth of a second) once it has moved `minimumFlickDistance`.
-    static let closeSpeed: CGFloat = 450
+    /// … and only once the swipe itself has moved this far toward the edge
+    /// (a tiny twitch never closes, however fast), unless the panel is
+    /// already past `minimumDistance` (a re-swipe that caught a close).
     static let minimumFlickDistance: CGFloat = 12
+    /// The window of recent movement the release spring's speed is measured
+    /// over (the controller's `captureSwipeRelease` uses the same).
     static let velocityWindow: TimeInterval = 0.1
+    /// The release's projection reads the fingers' speed over the last
+    /// 50 ms and over the last 0.1 s and takes the slower (`releaseVelocity`),
+    /// so fingers that came to rest before lifting project nothing, and a
+    /// flick must have kept its speed, not just ended in a burst.
+    static let projectionVelocityWindow: TimeInterval = 0.05
+    /// Only a flick coasts: below this speed (points per second, sustained
+    /// as above) a release projects nothing and closes only past
+    /// `minimumDistance` (owner, 10-23: a slow drag "slips, and hides
+    /// quickly"). Slow drags run at 30–120 pt/s; the flicks the projection
+    /// is for at 230 pt/s and up (g7: 36 pt at 234 pt/s closes).
+    static let flickMinimumSpeed: CGFloat = 200
+    /// The release's coast, as UIKit projects a scroll view's deceleration:
+    /// v/1000 · r/(1 − r) points for v points per second. r is UIKit's
+    /// `.fast` rate (0.99), a coast of about 0.1 s × v (owner, 2026-10-22:
+    /// close on projected travel instead of a 450 pt/s flick threshold).
+    /// `.normal` (0.998, about 0.5 s × v) would close a 12 pt nudge at
+    /// 72 pt/s; `.fast` closes one at 364 pt/s, near the old 450 pt/s flick,
+    /// and still closes every flick around the old threshold (35 pt at
+    /// 430 pt/s projects to 78 pt) with no edge where it can go either way.
+    static let decelerationRate: CGFloat = 0.99
     static let horizontalDominance: CGFloat = 1.25
     static let minimumIntentDelta: CGFloat = 0.5
 
@@ -502,27 +581,86 @@ struct PanelTrackpadDismissTracker {
 
     private var state = State.idle
     private var intent = PanelTrackpadSwipeIntent()
+    /// The swipe's distance toward the edge (points). A takeover's may go
+    /// below zero, back from the edge, down to one opening travel.
     private(set) var progress: CGFloat = 0
+    /// The release motion this swipe took over, if it did.
+    private(set) var takeover: PanelSwipeTakeover?
     /// Recent movement toward the edge, for the release's speed.
     private var recent: [(time: TimeInterval, delta: CGFloat)] = []
+    /// When the swipe began (its first event).
+    private var began: TimeInterval?
 
-    /// Whether a release at `progress` with `velocity` toward the edge
-    /// closes the panel (a distance, or a flick that has started to move).
-    static func closes(progress: CGFloat, velocity: CGFloat) -> Bool {
-        progress >= minimumDistance || (velocity >= closeSpeed && progress >= minimumFlickDistance)
+    /// The coast a release at `velocity` (points per second toward the
+    /// edge) adds to its distance.
+    static func projectedCoast(velocity: CGFloat) -> CGFloat {
+        guard velocity.isFinite else { return 0 }
+        return velocity / 1000 * decelerationRate / (1 - decelerationRate)
     }
 
-    private func velocity(at time: TimeInterval) -> CGFloat {
-        let window = recent.filter { time - $0.time <= Self.velocityWindow }
-        guard let first = window.first, time > 0 else { return 0 }
-        let span = max(time - first.time, 1 / 120)
-        return window.reduce(0) { $0 + $1.delta } / CGFloat(span)
+    /// Whether a release at `progress` with `velocity` toward the edge
+    /// closes the panel: its projected travel reaches `minimumDistance`
+    /// once it has moved `minimumFlickDistance`.
+    static func closes(progress: CGFloat, velocity: CGFloat) -> Bool {
+        progress >= minimumFlickDistance && progress + releaseCoast(velocity: velocity) >= minimumDistance
+    }
+
+    /// The coast a release adds: a flick's projection toward the edge, none
+    /// for anything slower than `flickMinimumSpeed`; a fling back from the
+    /// edge always counts against it.
+    static func releaseCoast(velocity: CGFloat) -> CGFloat {
+        guard velocity.isFinite, velocity < 0 || velocity >= flickMinimumSpeed else { return 0 }
+        return projectedCoast(velocity: velocity)
+    }
+
+    /// A takeover's release: the same rule on the panel's position. The
+    /// projected position must reach the one `minimumDistance` gives a
+    /// fresh swipe, and the swipe must have moved `minimumFlickDistance`
+    /// toward the edge unless the panel already is past that position.
+    static func closes(progress: CGFloat, velocity: CGFloat, takeover: PanelSwipeTakeover?) -> Bool {
+        guard let takeover else { return closes(progress: progress, velocity: velocity) }
+        func position(_ distance: CGFloat) -> CGFloat {
+            PanelCollapseGeometry.followProgress(from: takeover.progress, distance: distance, panelWidth: takeover.panelWidth)
+        }
+        let threshold = PanelCollapseGeometry.followProgress(from: 0, distance: minimumDistance, panelWidth: takeover.panelWidth)
+        guard position(progress + releaseCoast(velocity: velocity)) >= threshold else { return false }
+        return progress >= minimumFlickDistance || position(progress) >= threshold
+    }
+
+    /// The movement in the last `window` seconds over the time it covers
+    /// (the whole window, or the swipe's own time if shorter). Before
+    /// 10-23 this was the movement of the events in the window over the
+    /// time since the first of them, at least 1/120 s: after a pause, a
+    /// 3 pt nudge just before the lift read as 375 pt/s and closed a slow
+    /// 33 pt drag.
+    private func velocity(at time: TimeInterval, window: TimeInterval) -> CGFloat {
+        guard time > 0 else { return 0 }
+        let moved = recent.filter { time - $0.time < window - 1e-6 }.reduce(0) { $0 + $1.delta }
+        let covered = min(window, began.map { time - $0 } ?? window)
+        return moved / CGFloat(max(covered, 1 / 120))
+    }
+
+    /// The fingers' speed at the lift, as the projection uses it: the
+    /// slower of the last 50 ms and the last 0.1 s (opposite signs read as
+    /// no speed), so a burst as the fingers leave the glass is not a flick.
+    func releaseVelocity(at time: TimeInterval) -> CGFloat {
+        let recentSpeed = velocity(at: time, window: Self.projectionVelocityWindow)
+        let sustained = velocity(at: time, window: Self.velocityWindow)
+        guard recentSpeed.sign == sustained.sign else { return 0 }
+        return abs(recentSpeed) < abs(sustained) ? recentSpeed : sustained
     }
 
     private mutating func record(_ delta: CGFloat, at time: TimeInterval) {
         guard time > 0 else { return }
         recent.append((time, delta))
         recent.removeAll { time - $0.time > Self.velocityWindow }
+    }
+
+    /// Where a swipe may take the panel back to: the edge for a fresh one,
+    /// one opening travel back for a takeover.
+    private var lowestProgress: CGFloat {
+        guard let takeover, takeover.progress > 0 else { return 0 }
+        return -PanelCollapseGeometry.openingTravel(panelWidth: takeover.panelWidth)
     }
 
     static func isTowardDockedSide(
@@ -539,10 +677,13 @@ struct PanelTrackpadDismissTracker {
             && abs(physicalX) > abs(physicalY) * horizontalDominance
     }
 
+    /// `takeover`: a release motion is running that this swipe picks up if
+    /// it turns out horizontal, in either direction (read when it decides).
     mutating func update(
         sample: PanelTrackpadSwipeSample,
         dockedCorner: ScreenCorner,
-        towardDockedSide: Bool = true
+        towardDockedSide: Bool = true,
+        takeover offered: PanelSwipeTakeover? = nil
     ) -> PanelTrackpadDismissUpdate {
         guard sample.isPrecise, sample.phase != .none else {
             reset()
@@ -552,6 +693,7 @@ struct PanelTrackpadDismissTracker {
         if sample.phase == .began {
             reset()
             state = .undecided
+            began = sample.time > 0 ? sample.time : nil
         }
         guard state != .idle else { return .passThrough }
         if sample.phase == .cancelled {
@@ -563,9 +705,12 @@ struct PanelTrackpadDismissTracker {
             let inversion: CGFloat = sample.isDirectionInvertedFromDevice ? -1 : 1
             let direction = Self.horizontalEdgeDirection(for: dockedCorner) * (towardDockedSide ? 1 : -1)
             let delta = sample.deltaX * inversion * direction
-            progress = max(0, progress + delta)
+            progress = max(lowestProgress, progress + delta)
             record(delta, at: sample.time)
-            let shouldHide = state == .tracking && Self.closes(progress: progress, velocity: velocity(at: sample.time))
+            let shouldHide = state == .tracking && Self.closes(
+                progress: progress, velocity: releaseVelocity(at: sample.time),
+                takeover: takeover
+            )
             reset()
             return shouldHide ? .requestHide : .passThrough
         }
@@ -582,19 +727,21 @@ struct PanelTrackpadDismissTracker {
         if state == .undecided {
             intent.accumulate(deltaX: physicalX, deltaY: physicalY)
             guard intent.isReady else { return .passThrough }
-            guard (intent.initialDirection?.x ?? 0) * edgeDirection > 0,
-                  intent.displacement.x * edgeDirection > 0,
+            // A takeover goes either way; a fresh swipe only toward the edge.
+            guard offered != nil || ((intent.initialDirection?.x ?? 0) * edgeDirection > 0
+                                     && intent.displacement.x * edgeDirection > 0),
                   intent.isHorizontal else {
                 state = .rejected
                 return .passThrough
             }
             state = .tracking
-            progress = intent.displacement.x * edgeDirection
-            record(progress, at: sample.time)
+            takeover = offered
+            progress = max(lowestProgress, intent.displacement.x * edgeDirection)
+            record(intent.displacement.x * edgeDirection, at: sample.time)
             return .tracking
         }
 
-        progress = max(0, progress + edgeProgress)
+        progress = max(lowestProgress, progress + edgeProgress)
         record(edgeProgress, at: sample.time)
         return .tracking
     }
@@ -607,7 +754,9 @@ struct PanelTrackpadDismissTracker {
         state = .idle
         intent = PanelTrackpadSwipeIntent()
         progress = 0
+        takeover = nil
         recent = []
+        began = nil
     }
 
     private static func horizontalEdgeDirection(for corner: ScreenCorner) -> CGFloat {

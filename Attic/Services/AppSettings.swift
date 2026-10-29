@@ -82,6 +82,8 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
         static let animations = "animations"
+        static let hideAnimation = "panelHideAnimation"
+        static let hideSpeedLab = "motionLabHideSpeeds"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
@@ -227,6 +229,35 @@ final class AppSettings: ObservableObject {
     }
 
     let motionLabAvailable: Bool
+
+    /// How the panel hides and reveals (Settings › General › Behaviour).
+    @Published var hideAnimation: PanelHideAnimation {
+        didSet { defaults.set(hideAnimation.rawValue, forKey: Key.hideAnimation) }
+    }
+
+    /// The preview-only speed lab's hide and reveal durations. Under the
+    /// release identity it is never read or stored, so every animation runs
+    /// at its own default.
+    @Published var hideSpeedLab: PanelHideSpeedLab {
+        didSet {
+            guard motionLabAvailable else {
+                if hideSpeedLab != PanelHideSpeedLab() { hideSpeedLab = PanelHideSpeedLab() }
+                return
+            }
+            if hideSpeedLab.isDefault {
+                defaults.removeObject(forKey: Key.hideSpeedLab)
+            } else if let data = try? JSONEncoder().encode(hideSpeedLab) {
+                defaults.set(data, forKey: Key.hideSpeedLab)
+            }
+        }
+    }
+
+    /// How long `mode` hides (or reveals): the lab's value in previews, the
+    /// animation's own default otherwise.
+    func hideMotionDuration(_ mode: PanelHideAnimation, hiding: Bool) -> TimeInterval {
+        motionLabAvailable ? hideSpeedLab.duration(mode, hiding: hiding)
+            : hiding ? mode.defaultHideDuration : mode.defaultRevealDuration
+    }
 
     @Published var panelCornerSize: Double {
         didSet {
@@ -379,6 +410,16 @@ final class AppSettings: ObservableObject {
         tuning.popsNativePopovers = storedTuning?.popsNativePopovers ?? false
         motionTuning = tuning
         AtticMotionTuning.current = tuning
+        hideAnimation = defaults.string(forKey: Key.hideAnimation)
+            .flatMap(PanelHideAnimation.init(storedValue:)) ?? .defaultValue
+        // Genie Classic (dropped 2026-10-21) is stored as Genie from now on.
+        if defaults.string(forKey: Key.hideAnimation) == "genie" {
+            defaults.set(PanelHideAnimation.genieLiveGlass.rawValue, forKey: Key.hideAnimation)
+        }
+        hideSpeedLab = motionLabAvailable
+            ? defaults.data(forKey: Key.hideSpeedLab).flatMap { try? JSONDecoder().decode(PanelHideSpeedLab.self, from: $0) }
+                ?? PanelHideSpeedLab()
+            : PanelHideSpeedLab()
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,
