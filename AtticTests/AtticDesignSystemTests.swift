@@ -735,29 +735,51 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertNotEqual(AtticTextStyle.listBody.nsFont.fontName, AtticTextStyle.body.nsFont.fontName, "the rounded face is a different font")
     }
 
-    /// In progress (owner, 2026-09-26): the centre dot until a subtask is
-    /// ticked, then a true pie of the share ticked, with no minimum.
-    func testInProgressIsADotUntilASubtaskIsTickedThenATruePie() {
-        XCTAssertNil(AtticStatusCircle.pieShare(nil))
-        XCTAssertNil(AtticStatusCircle.pieShare((0, 3)))
-        XCTAssertNil(AtticStatusCircle.pieShare((0, 0)))
-        XCTAssertEqual(AtticStatusCircle.pieShare((1, 3))!, 1.0 / 3, accuracy: 1e-9)
-        XCTAssertEqual(AtticStatusCircle.pieShare((1, 10))!, 0.1, accuracy: 1e-9, "no minimum")
-        // Capped at 92 % (colour pass, owner 2026-10-10): all ticked keeps
-        // a sliver of ring, so only done is a full filled disc.
-        XCTAssertEqual(AtticStatusCircle.pieShare((3, 3)), 0.92)
+    /// The segmented ring (owner's changelog, 27 Oct, option 1c; v11's ring
+    /// code): one segment per subtask with a 1.6 pt gap (1.2 pt above five
+    /// subtasks), the first gap centred on 12 o'clock; finished subtasks
+    /// fill clockwise from the top; above eight, one continuous arc.
+    func testSubtasksSplitTheRingIntoSegmentsThatFillClockwise() {
+        let c = 2 * Double.pi * 6.4
+        XCTAssertEqual(AtticSegmentedRing.gap(total: 5), 1.6)
+        XCTAssertEqual(AtticSegmentedRing.gap(total: 6), 1.2)
+        XCTAssertEqual(AtticSegmentedRing.maxSegments, 8)
+        let three = AtticSegmentedRing.arcs(total: 3, filled: 3, circumference: c)
+        let half = 1.6 / c / 2
+        XCTAssertEqual(three.count, 3)
+        XCTAssertEqual(three[0].start, half, accuracy: 1e-9, "the first gap is centred on 12 o'clock")
+        XCTAssertEqual(three[0].end, 1.0 / 3 - half, accuracy: 1e-9)
+        XCTAssertEqual(three[2].end, 1 - half, accuracy: 1e-9)
+        let twoOfFive = AtticSegmentedRing.arcs(total: 5, filled: 2, circumference: c)
+        XCTAssertEqual(twoOfFive.count, 2, "two finished subtasks: the first two segments")
+        XCTAssertEqual(twoOfFive[1].start, 0.2 + half, accuracy: 1e-9)
+        XCTAssertTrue(AtticSegmentedRing.arcs(total: 5, filled: 0, circumference: c).isEmpty)
+        XCTAssertEqual(AtticSegmentedRing.arcs(total: 3, filled: 7, circumference: c).count, 3, "never more than the subtasks")
+        let partway = AtticSegmentedRing.arcs(total: 4, filled: 1.5, circumference: c)
+        XCTAssertEqual(partway.count, 2, "a fill in motion draws part of the next segment")
+        XCTAssertEqual(partway[1].end - partway[1].start, (0.25 - 2 * half) / 2, accuracy: 1e-9)
+        XCTAssertEqual(AtticSegmentedRing.arcs(total: 9, filled: 9, circumference: c), [AtticRingArc(start: 0, end: 1)], "above eight: one arc")
+        let nine = AtticSegmentedRing.arcs(total: 9, filled: 3, circumference: c)
+        XCTAssertEqual(nine.count, 1)
+        XCTAssertEqual(nine[0].start, 0)
+        XCTAssertEqual(nine[0].end, 1.0 / 3, accuracy: 1e-9)
+        XCTAssertTrue(AtticSegmentedRing.arcs(total: 0, filled: 0, circumference: c).isEmpty)
+        XCTAssertEqual(AtticStatusCircleMetrics.activeRingWidth(increaseContrast: false), 1.2, "the subtasks ring is 1.2 pt")
     }
 
-    /// In progress is a ring with a centre dot, never a share: VoiceOver
-    /// still says how many subtasks are ticked.
-    func testInProgressIsADotAndCompletionSweepsTheDisc() {
-        let m = AtticStatusCircleMetrics.self
-        XCTAssertGreaterThan(m.activeDotDiameter, 0)
-        XCTAssertLessThan(m.activeDotDiameter, AtticControlSize.statusCircle - 2 * (m.edgeInset + m.ringWidth(increaseContrast: true)) - 2,
-                          "the dot keeps clear of the ring")
-        XCTAssertEqual(AtticStatusCircle.spokenState(.inProgress, subtasks: (1, 3)), "in progress, 1 of 3 subtasks")
+    /// VoiceOver hears the ring's progress whatever the state, never on
+    /// a done task.
+    func testTheRingSaysItsSubtaskProgress() {
+        XCTAssertEqual(AtticStatusCircle.spokenState(.todo, subtasks: (2, 5)), "to do, 2 of 5 subtasks done")
+        XCTAssertEqual(AtticStatusCircle.spokenState(.inProgress, subtasks: (1, 3)), "in progress, 1 of 3 subtasks done")
         XCTAssertEqual(AtticStatusCircle.spokenState(.inProgress, subtasks: nil), "in progress")
-        XCTAssertEqual(AtticStatusCircle.spokenState(.todo, subtasks: (1, 3)), "to do")
+        XCTAssertEqual(AtticStatusCircle.spokenState(.todo, subtasks: (0, 0)), "to do")
+        XCTAssertEqual(AtticStatusCircle.spokenState(.done, subtasks: (3, 3)), "done")
+    }
+
+    /// Completing: the done disc sweeps in from 12 o'clock.
+    func testCompletionSweepsTheDisc() {
+        let m = AtticStatusCircleMetrics.self
         // The completion sweep keeps clear of the heaviest ring.
         let heaviest = m.ringWidth(increaseContrast: true)
         XCTAssertGreaterThanOrEqual(m.wedgeInset(ringWidth: heaviest), m.edgeInset + heaviest + m.wedgeGap)

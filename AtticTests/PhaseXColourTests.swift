@@ -233,25 +233,50 @@ final class PhaseXColourTokenTests: XCTestCase {
         }
     }
 
-    // MARK: Pie
+    // MARK: Segmented ring
 
-    func testThePieIsCappedSoAFullShareNeverReadsAsDone() throws {
-        XCTAssertNil(AtticStatusCircle.pieShare((done: 0, total: 3)))
-        XCTAssertEqual(try XCTUnwrap(AtticStatusCircle.pieShare((done: 1, total: 3))), 1.0 / 3, accuracy: 1e-9)
-        XCTAssertEqual(AtticStatusCircle.pieShare((done: 4, total: 4)), 0.92)
-        XCTAssertEqual(AtticStatusCircle.pieShare((done: 9, total: 4)), 0.92)
-        XCTAssertEqual(AtticStatusCircle.pieShare((done: 23, total: 25)), 0.92)
-        // Rendered: 4 of 4 leaves the open sliver at 11 o'clock that the
-        // done disc fills.
+    /// The owner's changelog (27 Oct, option 1c), rendered: 1 of 3 inks the
+    /// first segment from 12 o'clock, the rest stays the light track, the
+    /// gaps stay open; above eight it is one arc. No pie, no centre dot.
+    func testTheRingSplitsPerSubtaskAndInksFinishedSegmentsClockwise() throws {
         let context = AtticDesignContext(mode: .light)
         let base = context.tokens.panel.base
-        let full = try render(AnyView(AtticStatusCircle(state: .inProgress, subtasks: (done: 4, total: 4))), context: context)
-        let done = try render(AnyView(AtticStatusCircle(state: .done)), context: context)
-        let angle = 345.0 * .pi / 180, radius = 3.2
-        let x = 8 + radius * sin(angle), y = 8 - radius * cos(angle)
-        XCTAssertLessThanOrEqual(try pixel(full, x: x, y: y).distance(to: base), 3, "the sliver is open")
-        XCTAssertGreaterThan(try pixel(done, x: x, y: y).distance(to: base), 100, "done fills it")
-        XCTAssertGreaterThan(try pixel(full, x: 8, y: 8 + radius).distance(to: base), 100, "the pie is drawn")
+        let radius = 6.4
+        func at(_ degrees: Double) -> (Double, Double) {
+            let a = degrees * .pi / 180
+            return (8 + radius * sin(a), 8 - radius * cos(a))
+        }
+        for state in [AtticTaskState.todo, .inProgress] {
+            let ring = try render(AnyView(AtticStatusCircle(state: state, subtasks: (done: 1, total: 3))), context: context)
+            let (gx, gy) = at(0), (ix, iy) = at(60), (tx, ty) = at(180)
+            XCTAssertLessThanOrEqual(try pixel(ring, x: gx, y: gy).distance(to: base), 3, "the gap at 12 o'clock is open · \(state)")
+            XCTAssertGreaterThan(try pixel(ring, x: ix, y: iy).distance(to: base), 100, "the finished segment is ink · \(state)")
+            let track = try pixel(ring, x: tx, y: ty).distance(to: base)
+            XCTAssertGreaterThan(track, 8, "the open segments are drawn · \(state)")
+            XCTAssertLessThan(track, 80, "the open segments are a light grey · \(state)")
+            XCTAssertLessThanOrEqual(try pixel(ring, x: 8, y: 8).distance(to: base), 3, "no centre dot or pie · \(state)")
+        }
+        let nine = try render(AnyView(AtticStatusCircle(state: .todo, subtasks: (done: 3, total: 9))), context: context)
+        let (ax, ay) = at(60), (bx, by) = at(200)
+        XCTAssertGreaterThan(try pixel(nine, x: ax, y: ay).distance(to: base), 100, "3 of 9: the arc's first third is ink")
+        XCTAssertLessThan(try pixel(nine, x: bx, y: by).distance(to: base), 80)
+        let dotless = try render(AnyView(AtticStatusCircle(state: .inProgress)), context: context)
+        XCTAssertLessThanOrEqual(try pixel(dotless, x: 8, y: 8).distance(to: base), 3, "in progress has no centre dot")
+    }
+
+    /// Hovering the ring previews the click: a grey check inside it.
+    func testHoverPreviewsTheCheckInsideTheRing() throws {
+        let context = AtticDesignContext(mode: .light)
+        let base = context.tokens.panel.base
+        let point = (x: 7.2, y: 10.2)
+        let rest = try render(AnyView(AtticStatusCircle(state: .todo)), context: context)
+        XCTAssertLessThanOrEqual(try pixel(rest, x: point.x, y: point.y).distance(to: base), 3, "no check at rest")
+        for subtasks in [nil, (done: 1, total: 4)] as [(done: Int, total: Int)?] {
+            let hover = try render(AnyView(AtticStatusCircle(state: .todo, subtasks: subtasks, showsCheckPreview: true)), context: context)
+            let mark = try pixel(hover, x: point.x, y: point.y).distance(to: base)
+            XCTAssertGreaterThan(mark, 30, "a check previews the click")
+            XCTAssertLessThan(mark, 200, "in grey, not the done disc's ink")
+        }
     }
 
     // MARK: Notes

@@ -561,14 +561,15 @@ struct AtticRowTitleEditor: View {
 /// 2026-09-26: the circle is for completion; priority is a mark after the
 /// title):
 ///
-/// - **To do:** one confident ring (16 pt, 1.6 pt, the task text's ink),
+/// - **To do:** a plain grey ring (the owner's changelog, 27 Oct: 0.8 pt),
 ///   whatever the priority.
-/// - **In progress:** the same ring with a 5 pt filled centre dot
-///   ("working on it") until a subtask is ticked; then a true pie of the
-///   share ticked, with no minimum (owner, 2026-09-26), capped at 92 % so
-///   all subtasks ticked still leaves a sliver of ring and never reads as
-///   done. A task not started keeps its empty ring whatever its subtasks
-///   say (its "☑ n/m" shows it).
+/// - **In progress:** the firmer ring in the title's ink (1.2 pt).
+/// - **With subtasks** (to do or in progress; the changelog's option 1c,
+///   which replaced the pie and the centre dot): the ring splits into one
+///   light-grey segment per subtask (1.2 pt), and finished subtasks turn
+///   their segment ink, filling clockwise from the top. Above eight
+///   subtasks it is one continuous arc.
+/// - **Hover:** a grey check appears inside the ring, previewing the click.
 /// - **Done:** a filled disc in the same ink with its tick in the inverse
 ///   (owner, 2026-10-10): only done is filled and ticked.
 /// - **Backlog (Later):** the same ring, dashed.
@@ -579,8 +580,10 @@ struct AtticRowTitleEditor: View {
 /// ring takes the disabled icon colour (3 : 1), never faded below it.
 struct AtticStatusCircle: View {
     let state: AtticTaskState
-    /// Ticked and total subtasks: in progress, the pie once one is ticked.
+    /// Ticked and total subtasks: the segmented ring when there are any.
     var subtasks: (done: Int, total: Int)?
+    /// The circle itself is hovered: a grey check previews the click.
+    var showsCheckPreview = false
     /// Pin the check's drawing progress (gallery); nil animates live.
     var checkProgress: Double?
     /// Pin the completion sweep, 0 (nothing) to 1 (the full disc)
@@ -603,6 +606,12 @@ struct AtticStatusCircle: View {
     /// ink, open or working (the working one adds its centre dot).
     static let ringInk: AtticInk = .heading
     static let activeInk: AtticInk = .heading
+    /// The segmented ring's open segments: the quiet open ring's grey,
+    /// lighter (v11: rgb(214,216,219) against the open ring's
+    /// rgb(196,198,201) on white). See-through on glass, as the open ring is.
+    static let trackShare = 0.7
+    /// The hover check's weight (v11: 2.2 design px).
+    static let previewCheckWidth: CGFloat = 1.1
     /// The appearance check's name for an open (to do or Later) ring.
     static let openRingProbeName = "open status ring"
 
@@ -619,21 +628,27 @@ struct AtticStatusCircle: View {
         let motion = AtticMotionPreset.complete.animation(reduceMotion: design.reduceMotion)
         ZStack {
             switch state {
-            case .todo:
-                Circle().inset(by: m.edgeInset + width / 2).stroke(openColour, lineWidth: width)
-                    .atticOpenRingProbe(id: probeID, ink: ringInk, foreground: openForeground, disabled: isDisabled)
-            case .inProgress:
-                let active = m.activeRingWidth(increaseContrast: design.increaseContrast)
-                Circle().inset(by: m.edgeInset + active / 2).stroke(colour, lineWidth: active)
-                    .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
-                if let share = Self.pieShare(subtasks) {
-                    AtticWedge(sweep: share, inset: m.wedgeInset(ringWidth: width))
-                        .fill(colour)
-                        .animation(motion, value: share)
+            case .todo, .inProgress:
+                if let split = Self.split(subtasks) {
+                    let active = m.activeRingWidth(increaseContrast: design.increaseContrast)
+                    let inset = m.edgeInset + active / 2
+                    let open = tokens.openRing()
+                    let track = isDisabled ? tokens.ink(.disabledIcon) : open.withAlpha(open.alpha * Self.trackShare)
+                    AtticSegmentedRing(total: split.total, filled: Double(split.total), inset: inset)
+                        .stroke(track.color, lineWidth: active)
+                        .atticOpenRingProbe(id: probeID, ink: ringInk, foreground: track, disabled: isDisabled)
+                    AtticSegmentedRing(total: split.total, filled: Double(split.done), inset: inset)
+                        .stroke(colour, lineWidth: active)
+                        .animation(motion, value: split.done)
+                } else if state == .inProgress {
+                    let active = m.activeRingWidth(increaseContrast: design.increaseContrast)
+                    Circle().inset(by: m.edgeInset + active / 2).stroke(colour, lineWidth: active)
+                        .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
                 } else {
-                    Circle().fill(colour)
-                        .frame(width: m.activeDotDiameter, height: m.activeDotDiameter)
+                    Circle().inset(by: m.edgeInset + width / 2).stroke(openColour, lineWidth: width)
+                        .atticOpenRingProbe(id: probeID, ink: ringInk, foreground: openForeground, disabled: isDisabled)
                 }
+                checkPreview(tokens)
             case .done:
                 AtticCompletionMark(
                     completion: completionProgress ?? completion,
@@ -653,6 +668,7 @@ struct AtticStatusCircle: View {
                 Circle().inset(by: m.edgeInset + dashed / 2)
                     .stroke(openColour, style: StrokeStyle(lineWidth: dashed, dash: m.backlogDash))
                     .atticOpenRingProbe(id: probeID, ink: backlogInk, foreground: openForeground, disabled: isDisabled)
+                checkPreview(tokens)
             }
         }
         .frame(width: size, height: size)
@@ -679,21 +695,87 @@ struct AtticStatusCircle: View {
         .accessibilityHidden(true)
     }
 
-    /// The largest pie an in-progress task draws: 4 of 4 keeps a sliver of
-    /// open ring, so a full pie never reads as the done disc.
-    static let pieCap = 0.92
-
-    /// In progress: the pie's share, or nil (the centre dot) while no
-    /// subtask is ticked. A true share, with no minimum, capped at `pieCap`.
-    static func pieShare(_ subtasks: (done: Int, total: Int)?) -> Double? {
-        guard let subtasks, subtasks.total > 0, subtasks.done > 0 else { return nil }
-        return min(pieCap, Double(subtasks.done) / Double(subtasks.total))
+    /// The done check's shape in the hover grey (v11: the done check's
+    /// points), drawn only while the circle itself is hovered.
+    @ViewBuilder
+    private func checkPreview(_ tokens: AtticColorTokens) -> some View {
+        if showsCheckPreview && !isDisabled {
+            AtticCheckShape()
+                .stroke(tokens.openRing(emphasised: true).color,
+                        style: StrokeStyle(lineWidth: Self.previewCheckWidth, lineCap: .round, lineJoin: .round))
+                .padding(AtticStatusCircleMetrics.checkInset)
+        }
     }
 
-    /// The spoken state: "in progress, 1 of 3 subtasks".
+    /// The subtasks that split the ring: nil without any. More ticked than
+    /// there are is read as all.
+    static func split(_ subtasks: (done: Int, total: Int)?) -> (done: Int, total: Int)? {
+        guard let subtasks, subtasks.total > 0 else { return nil }
+        return (min(max(0, subtasks.done), subtasks.total), subtasks.total)
+    }
+
+    /// The spoken state with the ring's progress: "to do, 2 of 5 subtasks
+    /// done". A done task says only "done".
     static func spokenState(_ state: AtticTaskState, subtasks: (done: Int, total: Int)?) -> String {
-        guard state == .inProgress, let subtasks, subtasks.total > 0 else { return state.spokenName }
-        return state.spokenName + ", " + String(localized: "\(subtasks.done) of \(subtasks.total) subtasks")
+        guard state != .done, let split = split(subtasks) else { return state.spokenName }
+        return state.spokenName + ", " + String(localized: "\(split.done) of \(split.total) subtasks done")
+    }
+}
+
+/// An arc of the ring, as fractions of a turn clockwise from 12 o'clock.
+struct AtticRingArc: Equatable {
+    var start: Double
+    var end: Double
+}
+
+/// The segmented ring (owner's changelog, 27 Oct, option 1c; the gaps and
+/// caps are v11's ring code): `total` segments with butt caps, the first
+/// gap centred on 12 o'clock, drawn up to `filled` segments (a fraction
+/// draws part of the next, so a change of count animates). Above eight it
+/// is one continuous arc. The stroke is centred `inset` inside the frame.
+struct AtticSegmentedRing: Shape {
+    var total: Int
+    var filled: Double
+    var inset: CGFloat
+
+    /// Above this many subtasks the segments merge into one arc.
+    static let maxSegments = 8
+
+    var animatableData: Double {
+        get { filled }
+        set { filled = newValue }
+    }
+
+    /// The gap between segments, in points (v11: 3.2 design px, 2.4 above
+    /// five subtasks).
+    static func gap(total: Int) -> CGFloat { total > 5 ? 1.2 : 1.6 }
+
+    static func arcs(total: Int, filled: Double, circumference: Double) -> [AtticRingArc] {
+        guard total > 0, circumference > 0 else { return [] }
+        let filled = min(Double(total), max(0, filled))
+        guard filled > 0 else { return [] }
+        if total > maxSegments { return [AtticRingArc(start: 0, end: filled / Double(total))] }
+        let gap = Double(gap(total: total)) / circumference
+        let share = 1 / Double(total), length = share - gap
+        return (0..<Int(filled.rounded(.up))).map { index in
+            let start = Double(index) * share + gap / 2
+            return AtticRingArc(start: start, end: start + length * min(1, filled - Double(index)))
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(rect.width, rect.height) / 2 - inset
+        guard radius > 0 else { return Path() }
+        let centre = CGPoint(x: rect.midX, y: rect.midY)
+        var path = Path()
+        for arc in Self.arcs(total: total, filled: filled, circumference: 2 * .pi * Double(radius)) {
+            // Each arc its own subpath, so no line joins one to the next.
+            var segment = Path()
+            segment.addArc(center: centre, radius: radius, startAngle: .degrees(-90 + 360 * arc.start),
+                           endAngle: .degrees(-90 + 360 * arc.end), clockwise: false)
+            path.addPath(segment)
+        }
+        return path
     }
 }
 
@@ -808,7 +890,7 @@ struct AtticStatusButton: View {
     let state: AtticTaskState
     /// Spoken with the state ("to do, high priority"); not drawn.
     let priority: AtticPriority
-    /// Ticked and total subtasks: "in progress, 1 of 3 subtasks".
+    /// Ticked and total subtasks: "to do, 1 of 3 subtasks done".
     var subtasks: (done: Int, total: Int)?
     var isDisabled = false
     var isTabStop = true
@@ -822,7 +904,9 @@ struct AtticStatusButton: View {
 
     var body: some View {
         Button(action: onToggle) {
-            AtticStatusCircle(state: state, subtasks: subtasks, isDisabled: isDisabled,
+            AtticStatusCircle(state: state, subtasks: subtasks,
+                              showsCheckPreview: state != .done && (hovered || forced == .hover),
+                              isDisabled: isDisabled,
                               isEmphasised: isEmphasised || hovered || forced == .hover)
                 .frame(width: AtticControlSize.minimumHitTarget, height: AtticControlSize.minimumHitTarget)
                 .contentShape(Rectangle())
@@ -2474,10 +2558,9 @@ private struct AtticCardDetails: View {
 
 // MARK: - Tag
 
-/// A tag set in a line of text, in its colour (colour pass, owner
-/// 2026-10-10): `#word` in the tag's hue on a soft fill of the same hue
-/// that reaches past the words without moving them. Disabled, it is the
-/// disabled grey with no fill.
+/// A tag set in a line of text: `#word` in the tag's colour with no pill
+/// (owner's changelog, 27 Oct). A hover draws a soft fill that reaches
+/// past the words without moving them. Disabled, it is the disabled grey.
 struct AtticTagLabel: View {
     let name: String
     var style: AtticTextStyle = .rowMeta
@@ -2491,18 +2574,20 @@ struct AtticTagLabel: View {
     var body: some View {
         let tokens = design.tokens
         let hue = colouring.hue(for: name)
-        // On glass the tag is its clean colour alone (owner, 2026-10-29):
-        // the soft fill read as haze on the glass's grey.
-        let glass = TasksPanelDesign.seeThrough(tokens)
-        let rest: AtticRGBA = glass ? .clear : tokens.tagFill(hue)
-        let fill: AtticRGBA = disabled ? .clear : (hovered ? tokens.hover.over(rest) : rest)
+        let fill = Self.fill(hovered: hovered, disabled: disabled, tokens: tokens)
         AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
-            .colour(disabled || !glass ? nil : TasksPanelDesign.vivid(tokens.ink(hue.ink), tokens: tokens))
+            .colour(disabled ? nil : TasksPanelDesign.tagInk(hue, tokens: tokens))
             .background(
                 RoundedRectangle(cornerRadius: AtticTagMetrics.inlineFillRadius, style: .continuous)
                     .fill(fill.color)
                     .padding(.horizontal, -AtticTagMetrics.inlineFillOutset)
             )
+    }
+
+    /// Coloured text with no pill (owner's changelog, 27 Oct; on glass
+    /// since 2026-10-29): only a hover draws a fill. Disabled, none.
+    static func fill(hovered: Bool, disabled: Bool, tokens: AtticColorTokens) -> AtticRGBA {
+        hovered && !disabled ? tokens.hover.over(.clear) : .clear
     }
 }
 
