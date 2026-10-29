@@ -40,17 +40,21 @@ enum PanelHideAnimation: String, CaseIterable, Identifiable, Sendable {
     var usesGenieMesh: Bool { self == .genieLiveGlass }
 
     /// This animation's own hide and reveal durations: where each one's
-    /// shipped default lives. All three start at Slide's (0.22 s and 0.24 s);
-    /// the preview-only speed lab (`PanelHideSpeedLab`) tunes them on screen.
+    /// shipped default lives. Slide and Swoop keep Slide's (0.22 s and
+    /// 0.24 s); Genie hides in 0.80 s and reveals in 0.76 s, the owner's
+    /// lab values (2026-10-29). The preview-only speed lab
+    /// (`PanelHideSpeedLab`) tunes them on screen.
     var defaultHideDuration: TimeInterval {
         switch self {
-        case .slide, .swoop, .genieLiveGlass: 0.22
+        case .slide, .swoop: 0.22
+        case .genieLiveGlass: 0.80
         }
     }
 
     var defaultRevealDuration: TimeInterval {
         switch self {
-        case .slide, .swoop, .genieLiveGlass: 0.24
+        case .slide, .swoop: 0.24
+        case .genieLiveGlass: 0.76
         }
     }
 
@@ -715,22 +719,7 @@ final class PanelGenieView: NSView {
         let split = Self.tierSplit(tiers, surfaceRect: surfaceRect)
         let renderBegan = CACurrentMediaTime()
         func render(hiding extra: [CALayer]) -> CGImage? {
-            // Hidden for the render only, in one transaction the screen never sees.
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            let hidden = (scan.hidden + extra).filter { !$0.isHidden }
-            hidden.forEach { $0.isHidden = true }
-            defer {
-                hidden.forEach { $0.isHidden = false }
-                CATransaction.commit()
-            }
-            guard let rep = NSBitmapImageRep(
-                bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
-                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-            ) else { return nil }
-            rep.size = view.bounds.size
-            view.cacheDisplay(in: view.bounds, to: rep)
-            return rep.cgImage
+            Self.renderTier(of: view, hiding: scan.hidden + extra, scale: scale)
         }
         context.scaleBy(x: scale, y: scale)
         context.interpolationQuality = .none
@@ -890,6 +879,30 @@ final class PanelGenieView: NSView {
         return context.makeImage()
     }
 
+    /// `view` rendered with `hidden` hidden (for the render only, in one
+    /// transaction the screen never sees), at `scale`. A view's layer mask
+    /// is applied (the Tasks chip row's fade, owner's panel design
+    /// 2026-10-28: rows it hides at rest stay hidden in the first frame).
+    static func renderTier(of view: NSView, hiding hidden: [CALayer], scale: CGFloat) -> CGImage? {
+        let width = Int((view.bounds.width * scale).rounded()), height = Int((view.bounds.height * scale).rounded())
+        guard width > 0, height > 0 else { return nil }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let hidden = hidden.filter { !$0.isHidden }
+        hidden.forEach { $0.isHidden = true }
+        defer {
+            hidden.forEach { $0.isHidden = false }
+            CATransaction.commit()
+        }
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ) else { return nil }
+        rep.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep.cgImage
+    }
+
     /// One control's glass: the control's rect, shown only inside `clip`,
     /// the part of it the panel shows. In flight it rides the mesh live.
     struct GlassPill: Equatable {
@@ -901,16 +914,26 @@ final class PanelGenieView: NSView {
         /// when the glass gave none: a capsule.
         var cornerRadius: CGFloat?
         var continuous = true
+        /// The panel design's superellipse corner (`AtticControlOutline`,
+        /// owner's panel design 2026-10-27), read from a glass element that
+        /// carries its own outline; nil is the rounded rectangle above.
+        var exponent: CGFloat?
 
-        init(rect: CGRect, clip: CGRect, cornerRadius: CGFloat? = nil, continuous: Bool = true) {
+        init(rect: CGRect, clip: CGRect, cornerRadius: CGFloat? = nil, continuous: Bool = true, exponent: CGFloat? = nil) {
             self.rect = rect
             self.clip = clip
             self.cornerRadius = cornerRadius
             self.continuous = continuous
+            self.exponent = exponent
         }
 
         /// The control's outline, `inset` points in from its edge.
         func path(inset: CGFloat = 0) -> CGPath {
+            if let exponent {
+                // `Squircle` clamps the radius to half the side, as at rest.
+                return Squircle(cornerRadius: cornerRadius ?? .greatestFiniteMagnitude, exponent: exponent)
+                    .inset(by: inset).path(in: rect).cgPath
+            }
             let shape = rect.insetBy(dx: inset, dy: inset)
             let radius = max(0, min(cornerRadius ?? .greatestFiniteMagnitude, min(rect.width, rect.height) / 2) - inset)
             return Path(roundedRect: shape, cornerRadius: radius, style: continuous ? .continuous : .circular).cgPath
@@ -953,7 +976,7 @@ final class PanelGenieView: NSView {
     ) -> GlassScan {
         var scan = GlassScan()
         var groups: [(rect: CGRect, clip: CGRect)] = []
-        var elements: [(rect: CGRect, clip: CGRect, radius: CGFloat, continuous: Bool)] = []
+        var elements: [(rect: CGRect, clip: CGRect, radius: CGFloat, continuous: Bool, exponent: CGFloat?)] = []
         var backdrops: [GlassBand] = []
         var materialParents: [CALayer] = []
         func surfaceSized(_ frame: CGRect) -> Bool {
@@ -969,7 +992,12 @@ final class PanelGenieView: NSView {
             if layer.masksToBounds { clip = clip.intersection(root.convert(layer.bounds, from: layer)) }
             let frame = root.convert(layer.bounds, from: layer)
             if name == "CASDFElementLayer" {
-                elements.append((frame, shown ? clip : .null, layer.cornerRadius, layer.cornerCurve == .continuous))
+                if frame.width < surfaceRect.width - 3 || frame.height < surfaceRect.height - 3,
+                   let outline = designOutline(of: layer, frame: frame) {
+                    elements.append((outline.rect, shown ? clip : .null, outline.radius, true, AtticControlShape.designExponent))
+                } else {
+                    elements.append((frame, shown ? clip : .null, layer.cornerRadius, layer.cornerCurve == .continuous, nil))
+                }
             }
             if hidesSurfaceMaterial, name == "CABackdropLayer", surfaceSized(frame), let parent = layer.superlayer {
                 materialParents.append(parent)
@@ -1021,12 +1049,13 @@ final class PanelGenieView: NSView {
                     && abs($0.rect.width - group.rect.width) < 1 && abs($0.rect.height - group.rect.height) < 1
             }
             let candidates = inside.isEmpty
-                ? [(rect: group.rect, clip: group.clip, radius: alone?.radius ?? -1, continuous: alone?.continuous ?? true)]
+                ? [(rect: group.rect, clip: group.clip, radius: alone?.radius ?? -1, continuous: alone?.continuous ?? true,
+                    exponent: alone?.exponent)]
                 : inside
             for pill in candidates where pill.rect.width > 4 && pill.rect.height > 4 {
                 if pill.clip.intersection(pill.rect).width > 0.5, pill.clip.intersection(pill.rect).height > 0.5 {
-                    let made = GlassPill(rect: pill.rect, clip: pill.clip,
-                                         cornerRadius: pill.radius >= 0 ? pill.radius : nil, continuous: pill.continuous)
+                    let made = GlassPill(rect: pill.rect, clip: pill.clip, cornerRadius: pill.radius >= 0 ? pill.radius : nil,
+                                         continuous: pill.continuous, exponent: pill.exponent)
                     // A glass group has two SDF layers (its backdrop's and its
                     // content's vibrancy): one control, one glass. Drawn twice,
                     // live glass doubled its tint (g8: the add bar 16-34
@@ -1038,6 +1067,74 @@ final class PanelGenieView: NSView {
             }
         }
         return scan
+    }
+
+    /// A control's outline when its glass carries its own shape: the panel
+    /// design's superellipse controls (`AtticControlOutline`, owner's panel
+    /// design 2026-10-27). Such an element reports no corner radius; its
+    /// contents are the shape's distance field (red: from
+    /// `contentsZeroValueDistance` outside to `contentsOneValueDistance`
+    /// inside), padded past the control. Before, the padded element went
+    /// unmatched: a group's controls (the pin and the page switch) rode as
+    /// one capsule across the header, and each control as a capsule.
+    /// The rect is where the field crosses zero across the middle; the
+    /// radius is from the corner's inset on the diagonal, for the design's
+    /// exponent. Nil for an element with a corner radius (Apple's rounded
+    /// rectangle, read as before) or no readable field.
+    static func designOutline(of layer: CALayer, frame: CGRect) -> (rect: CGRect, radius: CGFloat)? {
+        let object = layer as NSObject
+        let zeroKey = "contentsZeroValueDistance", oneKey = "contentsOneValueDistance"
+        guard layer.cornerRadius == 0, frame.width > 1, frame.height > 1,
+              object.responds(to: NSSelectorFromString(zeroKey)), object.responds(to: NSSelectorFromString(oneKey)),
+              let contents = layer.contents, CFGetTypeID(contents as CFTypeRef) == CGImage.typeID,
+              let outside = (object.value(forKey: zeroKey) as? NSNumber).map({ CGFloat($0.doubleValue) }),
+              let inside = (object.value(forKey: oneKey) as? NSNumber).map({ CGFloat($0.doubleValue) }),
+              outside > 0, inside < 0 else { return nil }
+        let image = contents as! CGImage // swiftlint:disable:this force_cast
+        let width = image.width, height = image.height
+        guard width > 2, height > 2, width * height <= 1 << 20,
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setBlendMode(.copy)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        let rowBytes = context.bytesPerRow
+        // Row 0 is the element's top.
+        func value(_ x: Int, _ y: Int) -> CGFloat { CGFloat(data[y * rowBytes + x * 4]) }
+        let edge = 255 * outside / (outside - inside)
+        /// Pixels from the start of `samples` to where the field crosses
+        /// the edge (sub-pixel), measured from pixel centres.
+        func crossing(_ count: Int, _ sample: (Int) -> CGFloat) -> CGFloat? {
+            var previous = sample(0)
+            if previous >= edge { return 0 }
+            for index in 1..<count {
+                let current = sample(index)
+                if current >= edge {
+                    let step = current - previous
+                    return CGFloat(index - 1) + (step > 0 ? (edge - previous) / step : 1) + 0.5
+                }
+                previous = current
+            }
+            return nil
+        }
+        let scaleX = CGFloat(width) / frame.width, scaleY = CGFloat(height) / frame.height
+        let midRow = height / 2, midColumn = width / 2
+        guard let left = crossing(width, { value($0, midRow) }).map({ $0 / scaleX }),
+              let right = crossing(width, { value(width - 1 - $0, midRow) }).map({ $0 / scaleX }),
+              let top = crossing(height, { value(midColumn, $0) }).map({ $0 / scaleY }),
+              let bottom = crossing(height, { value(midColumn, height - 1 - $0) }).map({ $0 / scaleY }) else { return nil }
+        let rect = CGRect(x: frame.minX + left, y: frame.minY + bottom,
+                          width: frame.width - left - right, height: frame.height - top - bottom)
+        guard rect.width > 1, rect.height > 1 else { return nil }
+        // The corner: how far in from the rect's corner the outline crosses
+        // the diagonal, the same on both axes (top-left corner).
+        let span = min(width, height)
+        let diagonal = crossing(span) { value($0, $0) }
+        let inset = diagonal.map { (($0 / scaleX - left) + ($0 / scaleY - top)) / 2 } ?? 0
+        let exponent = max(1, AtticControlShape.designExponent)
+        let radius = max(0, inset) / (1 - pow(2, -1 / exponent))
+        return (rect, min(radius, min(rect.width, rect.height) / 2))
     }
 
     /// A variable blur's strength per row of its mask (top row first; empty

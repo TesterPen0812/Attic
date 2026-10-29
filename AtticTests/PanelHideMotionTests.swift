@@ -28,11 +28,14 @@ final class PanelHideMotionTests: XCTestCase {
         XCTAssertFalse(run.isFinished(at: 10.1))
     }
 
-    func testEachAnimationOwnsItsDurationsStartingAtSlides() {
-        for mode in PanelHideAnimation.allCases {
+    func testEachAnimationOwnsItsDurations() {
+        for mode in [PanelHideAnimation.slide, .swoop] {
             XCTAssertEqual(mode.defaultHideDuration, 0.22, "\(mode)")
             XCTAssertEqual(mode.defaultRevealDuration, 0.24, "\(mode)")
         }
+        // Owner's lab values (2026-10-29): Genie hides in 0.80 s, reveals in 0.76 s.
+        XCTAssertEqual(PanelHideAnimation.genieLiveGlass.defaultHideDuration, 0.80, accuracy: 1e-9)
+        XCTAssertEqual(PanelHideAnimation.genieLiveGlass.defaultRevealDuration, 0.76, accuracy: 1e-9)
         XCTAssertEqual(PanelHideAnimation.defaultValue, .slide)
     }
 
@@ -42,7 +45,7 @@ final class PanelHideMotionTests: XCTestCase {
         lab.setDuration(0.5, .swoop, hiding: true)
         XCTAssertEqual(lab.duration(.swoop, hiding: true), 0.5, accuracy: 1e-9)
         XCTAssertEqual(lab.duration(.swoop, hiding: false), 0.24, accuracy: 1e-9)
-        XCTAssertEqual(lab.duration(.genieLiveGlass, hiding: true), 0.22, accuracy: 1e-9)
+        XCTAssertEqual(lab.duration(.genieLiveGlass, hiding: true), 0.80, accuracy: 1e-9)
         lab.setDuration(5, .genieLiveGlass, hiding: false)
         XCTAssertEqual(lab.duration(.genieLiveGlass, hiding: false), 0.8, accuracy: 1e-9)
         lab.setDuration(0.01, .slide, hiding: true)
@@ -66,7 +69,7 @@ final class PanelHideMotionTests: XCTestCase {
             .hideMotionDuration(.genieLiveGlass, hiding: true), 0.6, accuracy: 1e-9)
         // The release identity never reads (or keeps) the lab's values.
         let release = AppSettings(defaults: defaults, motionLabAvailable: false)
-        XCTAssertEqual(release.hideMotionDuration(.genieLiveGlass, hiding: true), 0.22, accuracy: 1e-9)
+        XCTAssertEqual(release.hideMotionDuration(.genieLiveGlass, hiding: true), 0.80, accuracy: 1e-9)
         release.hideSpeedLab.setDuration(0.7, .slide, hiding: false)
         XCTAssertTrue(release.hideSpeedLab.isDefault)
         XCTAssertEqual(release.hideMotionDuration(.slide, hiding: false), 0.24, accuracy: 1e-9)
@@ -771,8 +774,10 @@ final class PanelHideMotionShipTests: XCTestCase {
         XCTAssertTrue(genie.isHidden)
     }
 
-    /// On a real panel: the corner buttons' in-flight glass has the radius
-    /// they have at rest (13.5, the 42 % rule on 32 pt), continuous.
+    /// On a real panel: the corner buttons' in-flight glass has the shape
+    /// they have at rest. In the panel design (2026-10-27) that is the
+    /// design's superellipse corner (`AtticControlOutline`) at
+    /// `AtticRadius.header` (13.5 on 27 pt), not a capsule.
     func testThePanelsCornerButtonsKeepTheirRadiusInFlight() throws {
         let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
         defer { rig.close() }
@@ -781,11 +786,104 @@ final class PanelHideMotionShipTests: XCTestCase {
         let root = try XCTUnwrap(rig.content.subviews.first?.layer ?? rig.host.superview?.layer)
         let scan = PanelGenieView.scanGlass(in: root, surfaceRect: rig.host.frame, hidesSurfaceMaterial: false)
         let corner = scan.pills.filter { abs($0.rect.width - AtticControlSize.headerControl) < 0.5 && abs($0.rect.height - AtticControlSize.headerControl) < 0.5 }
-        try XCTSkipIf(corner.isEmpty, "this Mac draws no Liquid Glass controls")
+        try XCTSkipIf(scan.pills.isEmpty, "this Mac draws no Liquid Glass controls")
+        XCTAssertEqual(corner.count, 2, "the pin and the search button: \(scan.pills.map(\.rect))")
         for pill in corner {
-            XCTAssertEqual(pill.cornerRadius ?? -1, 13.5, accuracy: 0.3, "\(pill.rect)")
-            XCTAssertTrue(pill.continuous)
+            XCTAssertEqual(pill.cornerRadius ?? -1, AtticRadius.header, accuracy: 0.3, "\(pill.rect)")
+            XCTAssertEqual(pill.exponent ?? -1, AtticControlShape.designExponent, accuracy: 1e-6, "\(pill.rect)")
         }
+    }
+
+    /// On a real panel in the panel design: each control's glass rides the
+    /// flight on its own, in its own place and shape. The pin and the page
+    /// switch share one glass group, and the design's superellipse glass
+    /// reports its outline padded past the control: before, the group rode
+    /// as one 288 pt capsule across the whole header line.
+    func testThePanelDesignsControlsEachRideInTheirOwnShape() throws {
+        let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
+        defer { rig.close() }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        rig.content.layoutSubtreeIfNeeded()
+        let root = try XCTUnwrap(rig.content.subviews.first?.layer ?? rig.host.superview?.layer)
+        let surface = rig.host.frame
+        let scan = PanelGenieView.scanGlass(in: root, surfaceRect: surface, hidesSurfaceMaterial: false)
+        try XCTSkipIf(scan.pills.isEmpty, "this Mac draws no Liquid Glass controls")
+        let control = AtticControlSize.headerControl
+        let header = scan.pills.filter { $0.rect.midY > surface.midY }.sorted { $0.rect.minX < $1.rect.minX }
+        let switchWidth = AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count)
+        XCTAssertEqual(header.map { ($0.rect.width * 2).rounded() / 2 }, [control, control, switchWidth], "\(header.map(\.rect))")
+        for pill in header { XCTAssertEqual(pill.rect.height, control, accuracy: 0.5, "\(pill.rect)") }
+        // The footer's page tabs: one glass for the three cells.
+        let m = TasksDesignMetrics.self
+        let tabsWidth = 3 * m.tabCell + 2 * m.tabsGap + 2 * m.tabsPadding
+        let tabs = try XCTUnwrap(scan.pills.first { abs($0.rect.width - tabsWidth) < 0.5 }, "\(scan.pills.map(\.rect))")
+        XCTAssertEqual(tabs.rect.height, m.tabCell + 2 * m.tabsPadding, accuracy: 0.5)
+        XCTAssertEqual(tabs.cornerRadius ?? -1, min(m.footerRadius, tabs.rect.height / 2), accuracy: 0.5)
+        // Every control here has the design's corner, at most a capsule's radius.
+        for pill in scan.pills {
+            XCTAssertEqual(pill.exponent ?? -1, AtticControlShape.designExponent, accuracy: 1e-6, "\(pill.rect)")
+            let radius = try XCTUnwrap(pill.cornerRadius, "\(pill.rect)")
+            XCTAssertGreaterThan(radius, 1, "\(pill.rect)")
+            XCTAssertLessThanOrEqual(radius, min(pill.rect.width, pill.rect.height) / 2 + 0.01, "\(pill.rect)")
+        }
+    }
+
+    /// The snapshot's render applies a view's layer mask, the Tasks chip
+    /// row's fade among them (owner's panel design, 2026-10-28), in a flipped
+    /// view (a scroll view's) as in a plain one: what a mask hides at rest
+    /// stays hidden in a flight's first frame.
+    func testTheSnapshotAppliesLayerMasks() throws {
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 80, height: 40),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = NSView(frame: CGRect(x: 0, y: 0, width: 80, height: 40))
+        view.wantsLayer = true
+        window.contentView = view
+        let base = try XCTUnwrap(view.layer)
+        base.backgroundColor = NSColor.blue.cgColor
+        // Left: a plain view whose red fill keeps its left half.
+        let plain = NSView(frame: CGRect(x: 0, y: 0, width: 40, height: 40))
+        plain.wantsLayer = true
+        view.addSubview(plain)
+        let plainFill = try XCTUnwrap(plain.layer)
+        plainFill.backgroundColor = NSColor.red.cgColor
+        let keepLeft = CALayer()
+        keepLeft.frame = CGRect(x: 0, y: 0, width: 20, height: 40)
+        keepLeft.backgroundColor = NSColor.black.cgColor
+        plainFill.mask = keepLeft
+        // Right: a flipped view whose red fill keeps its top half (y down).
+        let flipped = Flipped(frame: CGRect(x: 40, y: 0, width: 40, height: 40))
+        flipped.wantsLayer = true
+        view.addSubview(flipped)
+        let flippedFill = try XCTUnwrap(flipped.layer)
+        flippedFill.backgroundColor = NSColor.red.cgColor
+        let keepTop = CALayer()
+        keepTop.frame = CGRect(x: 0, y: 0, width: 40, height: 20)
+        keepTop.backgroundColor = NSColor.black.cgColor
+        flippedFill.mask = keepTop
+        window.orderFront(nil)
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+
+        XCTAssertNotNil(plainFill.superlayer)
+        let image = try XCTUnwrap(PanelGenieView.renderTier(of: view, hiding: [], scale: 2))
+        let context = try XCTUnwrap(CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                              bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let data = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        // (x, y) in points, y up; true where red wins over blue.
+        func red(_ x: Int, _ y: Int) -> Bool {
+            let row = image.height - 1 - y * 2, offset = row * context.bytesPerRow + x * 2 * 4
+            return data[offset] > data[offset + 2]
+        }
+        XCTAssertTrue(red(5, 20), "kept by the mask")
+        XCTAssertFalse(red(35, 20), "the mask hides it: the blue beneath shows")
+        XCTAssertTrue(red(60, 35), "kept by the flipped view's mask (its top)")
+        XCTAssertFalse(red(60, 5), "hidden by the flipped view's mask (its bottom)")
     }
 
     /// A snapshot prepared while the panel is idle stays good for as long
