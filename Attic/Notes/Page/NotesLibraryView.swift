@@ -256,7 +256,9 @@ struct NotesLibraryView: View {
         // monitor) outlives that slide by a moment: a key pressed in the
         // note is the note's, never the library's.
         guard controller.isLibraryPresented, !moreTagsShown else { return false }
-        let groups = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
+        let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
+        // A folded section's rows are not in the list.
+        let groups = model.unfolded(all)
         let selected = controller.librarySelectionID
         let editor = keys.window?.firstResponder as? NSTextView
         let action = Self.keyAction(keyCode: event.keyCode, modifiers: EventModifiers(event.modifierFlags),
@@ -276,7 +278,7 @@ struct NotesLibraryView: View {
         case .open:
             if let id = model.openTarget(in: groups) {
                 onOpen(id)
-            } else if fieldFocused, let title = model.queryForNewNote(in: groups) {
+            } else if fieldFocused, let title = model.queryForNewNote(in: all) {
                 // Nothing matched: Return makes the note the search names.
                 onCreate(title, model.tagFilter)
             } else {
@@ -337,11 +339,56 @@ struct NotesLibraryView: View {
         return true
     }
 
+    /// A section header's leading shift: Tasks' header text sits on its
+    /// rows' 9 pt padding; the notes rows' is 8.
+    static let headerShift: CGFloat = AtticNoteMetrics.libraryHighlightInset + NotesLibraryRowMetrics.paddingX
+        - TasksDesignMetrics.groupHeaderX
+
+    enum ActionsMenu { case hover, full }
+
+    static let convertIdentifier = "notes-row-convert"
+
+    /// The "•••" menu (the owner's panel design): Pin, Convert, Move to
+    /// Recently Deleted, each running the row's own command (Convert is
+    /// Make Task from Note, for an ordinary note only; nil leaves it out).
+    static func hoverMenu(_ commands: [AtticMenuCommand], pinned: Bool, convert: (() -> Void)?) -> [AtticMenuCommand] {
+        var menu: [AtticMenuCommand] = []
+        if let pin = commands.first(where: { $0.identifier == "notes-row-pin" }) {
+            var item = AtticMenuCommand(verbatim: pinned ? String(localized: "Unpin") : String(localized: "Pin"),
+                                        isDisabled: pin.isDisabled, action: pin.action)
+            item.identifier = pin.identifier
+            menu.append(item)
+        }
+        if let convert {
+            var item = AtticMenuCommand(verbatim: String(localized: "Convert to Task Note"), action: convert)
+            item.identifier = convertIdentifier
+            menu.append(item)
+        }
+        if let delete = commands.first(where: { $0.identifier == "notes-row-delete" }) {
+            var item = AtticMenuCommand(verbatim: String(localized: "Move to Recently Deleted"), isDestructive: true,
+                                        isDisabled: delete.isDisabled, startsSection: !menu.isEmpty, action: delete.action)
+            item.identifier = delete.identifier
+            menu.append(item)
+        }
+        return menu
+    }
+
+    private func hoverMenu(for id: UUID) -> [AtticMenuCommand] {
+        let stored = store.note(withID: id)
+        let convert: (() -> Void)? = if let stored, stored.taskID == nil, let makeTask = controller.makeTaskFromNote {
+            { makeTask(id) }
+        } else {
+            nil
+        }
+        return Self.hoverMenu(rowCommands(id), pinned: stored?.isPinned ?? false, convert: convert)
+    }
+
     /// The row's actions menu under its ⋯ (or under the pointer when the
     /// row is not on screen). Opened on the next turn: the menu tracks
-    /// events itself and must not start inside the key monitor.
-    private func showActions(for id: UUID) {
-        let commands = rowCommands(id)
+    /// events itself and must not start inside the key monitor. The •••
+    /// opens the design's short menu; ⇧⌘I the row's full list.
+    private func showActions(for id: UUID, menu: ActionsMenu = .full) {
+        let commands = menu == .hover ? hoverMenu(for: id) : rowCommands(id)
         let anchor = anchors.view(for: id)
         DispatchQueue.main.async { [keys] in
             if let anchor, anchor.window != nil {
@@ -419,25 +466,41 @@ struct NotesLibraryView: View {
                         }.buttonStyle(.plain)
                         .accessibilityIdentifier("notes-workspace-proposal-\(proposal.id)")
                     }
+                    // Foldable sections that work and look like Tasks' date
+                    // groups (the owner's panel design, 2026-10-27).
                     ForEach(groups) { group in
-                        AtticNoteGroupHeading(title: group.title)
-                        ForEach(group.rows) { row in
-                            PreparedNotesLibraryRow(library: model, store: store, revision: store.revision, row: row,
-                                isSelected: row.id == selected && model.highlightedID == nil,
-                                isHighlighted: row.id == model.highlightedID,
-                                commands: { rowCommands(row.id) }, anchors: anchors,
-                                onShowActions: { showActions(for: row.id) }, onOpen: { onOpen(row.id) })
-                                .id(row.id)
-                                .contextMenu { AtticMenuItems(commands: rowCommands(row.id)) }
-                                // Delete and restore: the row folds away or springs back.
-                                .transition(design.reduceMotion ? .opacity
-                                    : .opacity.combined(with: .move(edge: .leading)))
-                                .accessibilityIdentifier("notes-library-row")
+                        let folded = model.foldedGroups.contains(group.id)
+                        TasksGroupHeader(title: group.title, count: group.rows.count, folded: folded) {
+                            withAnimation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)) {
+                                model.toggleGroup(group.id, in: groups)
+                            }
+                        }
+                        // The header's text on the rows' thumbnails.
+                        .padding(.leading, Self.headerShift)
+                        .id("group:" + group.id)
+                        .accessibilityIdentifier("notes-library-group-\(group.id)")
+                        if !folded {
+                            ForEach(group.rows) { row in
+                                PreparedNotesLibraryRow(library: model, store: store, revision: store.revision, row: row,
+                                    isSelected: row.id == selected && model.highlightedID == nil,
+                                    isHighlighted: row.id == model.highlightedID,
+                                    commands: { rowCommands(row.id) }, anchors: anchors,
+                                    onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
+                                    // Rows sit 2 apart, no dividers.
+                                    .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
+                                    .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
+                                    .id(row.id)
+                                    .contextMenu { AtticMenuItems(commands: rowCommands(row.id)) }
+                                    // Delete and restore: the row folds away or springs back.
+                                    .transition(design.reduceMotion ? .opacity
+                                        : .opacity.combined(with: .move(edge: .leading)))
+                                    .accessibilityIdentifier("notes-library-row")
+                            }
                         }
                     }
                 }
                 .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
-                           value: model.orderedIDs(groups))
+                           value: model.orderedIDs(model.unfolded(groups)))
             }
             .contentMargins(.top, restTop, for: .scrollContent)
             .contentMargins(.bottom, bottomControls + bottomClearance, for: .scrollContent)
@@ -608,7 +671,8 @@ private struct PreparedNotesLibraryRow: View {
     let onShowActions: () -> Void
     let onOpen: () -> Void
     var body: some View {
-        AtticNoteRow(model: library.preparedRow(row, store: store), isSelected: isSelected, isHighlighted: isHighlighted,
-                     commands: commands, anchors: anchors, onShowActions: onShowActions, onOpen: onOpen)
+        NotesLibraryRow(details: library.libraryRow(row, store: store), thumbnails: library.thumbnails,
+                        isSelected: isSelected, isHighlighted: isHighlighted,
+                        commands: commands, anchors: anchors, onShowActions: onShowActions, onOpen: onOpen)
     }
 }

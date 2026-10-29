@@ -55,6 +55,13 @@ final class NotesLibraryModel: ObservableObject {
         }
     }
 
+    /// The groups folded by their header (Pinned, Today, This week,
+    /// Earlier, or a search's results), for the panel's life, as Tasks'
+    /// date groups are.
+    @Published private(set) var foldedGroups: Set<String> = []
+    /// The rows' page thumbnails, one per note revision.
+    let thumbnails = NoteThumbnailCache()
+
     /// Runs a search; tests inject failures and delays.
     var search: (String) async throws -> Set<UUID>
     /// The whole text of a never-saved failed draft (they are searched here,
@@ -329,6 +336,7 @@ final class NotesLibraryModel: ObservableObject {
                 let stored = Set(allNotes.map(\.id))
                 summaries.bodies = summaries.bodies.filter { stored.contains($0.key) }
             }
+            thumbnails.keep(only: Set(allNotes.map(\.id)).union(draftRows.map(\.id)))
             result = [
                 Group(id: "pinned", title: String(localized: "Pinned"), rows: pinned),
                 Group(id: "today", title: String(localized: "Today"), rows: todayRows),
@@ -425,6 +433,52 @@ final class NotesLibraryModel: ObservableObject {
         return text
     }
 
+    // MARK: Folding
+
+    /// A header's click: its rows fold away or come back. A folded row
+    /// can't keep the keyboard.
+    func toggleGroup(_ id: String, in groups: [Group]) {
+        if foldedGroups.contains(id) {
+            foldedGroups.remove(id)
+        } else {
+            foldedGroups.insert(id)
+            if let highlightedID, groups.first(where: { $0.id == id })?.rows.contains(where: { $0.id == highlightedID }) == true {
+                self.highlightedID = nil
+            }
+        }
+    }
+
+    /// The groups whose rows show: what ↑ ↓, Return, ⌘⌫ and the actions
+    /// reach (a folded group's rows are not in the list).
+    func unfolded(_ groups: [Group]) -> [Group] {
+        foldedGroups.isEmpty ? groups : groups.filter { !foldedGroups.contains($0.id) }
+    }
+
+    // MARK: Rows
+
+    /// What a library row draws beyond the shared row model: the first tag
+    /// (not the one the list is filtered by) and the page thumbnail.
+    struct RowDetails: Equatable {
+        let row: AtticNoteRowModel
+        let tag: String?
+        let thumbnail: NoteThumbnailContent
+    }
+
+    /// Called by the lazy row's body, before anything is presented.
+    func libraryRow(_ row: AtticNoteRowModel, store: NoteStore) -> RowDetails {
+        let prepared = preparedRow(row, store: store)
+        let tags = store.note(withID: row.id).map { tags(of: $0) } ?? []
+        return RowDetails(row: prepared, tag: Self.firstTag(tags, filter: tagFilter),
+                          thumbnail: NoteThumbnailContent(title: prepared.title, text: prepared.preview,
+                                                          hasImages: prepared.images > 0))
+    }
+
+    /// The tag a row shows: its first, skipping the one the list is
+    /// filtered by (every row there has it).
+    static func firstTag(_ tags: [String], filter: String?) -> String? {
+        tags.first { $0 != filter }
+    }
+
     /// The rows in list order, for ↑ ↓.
     func orderedIDs(_ groups: [Group]) -> [UUID] { groups.flatMap { $0.rows.map(\.id) } }
 
@@ -479,11 +533,12 @@ final class NotesLibraryModel: ObservableObject {
         if note.taskID.flatMap({ taskMetadata[$0] }) != nil { summary.title = title }
         let time = Self.time(note.updatedAt, now: now(), calendar: calendar)
         let hasProposal = proposalIDs?.ids.contains(note.id) == true
-        // A task's own note (Phase 3): its task's circle and "Task note".
+        // A task's own note (Phase 3). The row shows no task status and no
+        // "Task note ·" (owner's panel design, 2026-10-27/28); VoiceOver
+        // still says what it is.
         let rowTaskState: AtticTaskState? = note.taskID.map { taskMetadata[$0]?.state ?? self.taskState?($0) ?? AtticTaskState.todo }
         let taskNote = String(localized: "Task note")
-        let preview = rowTaskState == nil ? summary.preview
-            : (summary.preview.isEmpty ? taskNote : taskNote + " · " + summary.preview)
+        let preview = summary.preview
         let spoken = summary.spoken(time: time, needsAttention: attention.contains(note.id)) + (hasProposal ? ", proposal waiting" : "")
         return AtticNoteRowModel(
             id: note.id, title: summary.title, time: time, needsAttention: attention.contains(note.id), hasProposal: hasProposal,
