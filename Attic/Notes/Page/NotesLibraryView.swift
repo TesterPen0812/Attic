@@ -16,7 +16,13 @@ struct NotesLibraryView: View {
     let bottomClearance: CGFloat
     /// The bottom row's top, up from the page's bottom edge (A15's fade).
     var bottomControls: CGFloat = 0
+    /// The top row's search field has the keyboard (the field is the
+    /// Notes page's, in the panel's top row).
     @Binding var searchFocused: Bool
+    /// The search was opened (the top row's magnifier, ⌘F, typing): the
+    /// field shows first, then takes the keyboard (a focus set on a field
+    /// that isn't there yet is lost).
+    @Binding var searchOpen: Bool
     let rowCommands: (UUID) -> [AtticMenuCommand]
     /// The library's own commands (its history), for the page's background:
     /// the way to Undo with no row to right-click.
@@ -28,39 +34,35 @@ struct NotesLibraryView: View {
     var onCreate: (_ title: String, _ tag: String?) -> Void = { _, _ in }
 
     @Environment(\.atticDesign) private var design
-    @FocusState private var fieldFocused: Bool
-    /// The search was opened (the magnifier, ⌘F, typing): the field shows
-    /// first, then takes the keyboard (a focus set on a field that isn't
-    /// there yet is lost).
-    @State private var searchOpen = false
+    /// The search field's keyboard, as the top row's field reports it.
+    private var fieldFocused: Bool {
+        get { searchFocused }
+        nonmutating set { searchFocused = newValue }
+    }
     @StateObject private var keys = NotesLibraryKeys()
     @State private var keyOwner = UUID()
     /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
     @State private var anchors = AtticNoteRowAnchors()
-    /// More tags…'s card is open (its keys are its own).
-    @State private var moreTagsShown = false
     @State private var recoveryReview: WorkspaceOperationCoordinator.RecoveryIssue?
     @State private var recoveryActionRunning = false
     @State private var confirmRecoveryDiscard = false
     @State private var recoveryActionMessage: String?
 
-    /// The most tags the top line tries to fit after "All notes".
-    static let tagTabLimit = 4
-
     static let space = NamedCoordinateSpace.named("AtticNotesLibrary")
 
     private var pageEdge: CGFloat { AtticNoteMetrics.libraryPageEdge(chromeInset: layout.chromeInsets.leading) }
 
-    /// The label line's text top: the tabs' line, as on Tasks.
-    private var labelsTop: CGFloat { layout.headerBottom + AtticLayout.pageTabsTop }
-
-    /// The library's floating edges: the label line is part of the top
-    /// controls.
+    /// The library's floating edges: the panel's top row above (search
+    /// and tags moved to the top row and the bottom bar, Notes Page v2),
+    /// the bottom bar below.
     static func edges(layout: PanelPageLayout, bottomControls: CGFloat) -> AtticFloatingEdges {
-        TasksViewport.topEdges(tabsTop: layout.headerBottom + AtticLayout.pageTabsTop).with(bottom: bottomControls)
+        AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls)
     }
-    /// Where the first row rests: the label line, then 14 (Tasks' `listTop`).
-    private var restTop: CGFloat { labelsTop + AtticLayout.pageTabsHeight + AtticLayout.pageTabsToList }
+    /// Where the list starts: right under the top row (the design's list
+    /// padding, 100 px, is 15 px under the 85 px top row).
+    static func restTop(layout: PanelPageLayout) -> CGFloat { layout.headerBottom + listTopGap }
+    static let listTopGap: CGFloat = 7.5
+    private var restTop: CGFloat { Self.restTop(layout: layout) }
 
     /// The search holds the label line from when it is opened, and while it
     /// has the keyboard or a query.
@@ -80,7 +82,6 @@ struct NotesLibraryView: View {
     var body: some View {
         let groups = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         let selected = controller.librarySelectionID
-        let shown = Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query)
         // A15 (owner, 2026-10-04): the rows run under the label line and the
         // header, faintly, as on Tasks; the line floats over them.
         ZStack(alignment: .top) {
@@ -88,24 +89,14 @@ struct NotesLibraryView: View {
             // The variable blur, its own layer under the label line (the
             // bottom row has none; never an overlay of the list).
             AtticEdgeBlurBackdrops(Self.edges(layout: layout, bottomControls: bottomControls))
-            // The label line's band owns its clicks, as Tasks' tabs band: a
-            // row scrolled under it is not clickable through it.
+            // The top row's band owns its clicks, as Tasks' header: a row
+            // scrolled under it is not clickable through it.
             Color.clear
-                .frame(height: restTop - AtticLayout.pageTabsToList / 2)
+                .frame(height: layout.headerBottom)
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .onTapGesture {}
                 .accessibilityHidden(true)
-            AtticNoteLibraryLine(title: String(localized: "All notes"), placeholder: placeholder, query: $model.query,
-                                 searchShown: shown, fieldFocused: $fieldFocused,
-                                 onBeginSearch: { beginSearch() }, onEndSearch: endSearch,
-                                 tags: model.tagTabs(store: store, limit: Self.tagTabLimit), activeTag: model.tagFilter,
-                                 onSelectTag: { tag in selectTag(tag) },
-                                 moreTagsShown: $moreTagsShown, moreTagsCard: { AnyView(moreTagsCard) })
-                // Centred on the tabs' line, as on Tasks.
-                .padding(.top, labelsTop - (AtticNoteLibraryLine.height - AtticLayout.pageTabsHeight) / 2)
-                // Read before the rows, as when it stood above them.
-                .accessibilitySortPriority(1)
         }
         .accessibilityElement(children: .contain)
         .padding(.horizontal, pageEdge)
@@ -115,11 +106,13 @@ struct NotesLibraryView: View {
             if searchFocused { beginSearch() }
         }
         .onDisappear { keys.stop(owner: keyOwner) }
-        .onChange(of: searchFocused) { _, wanted in if wanted { beginSearch() } }
-        .onChange(of: fieldFocused) { _, focused in
-            if searchFocused != focused { searchFocused = focused }
-            // Leaving an empty search gives the line back.
-            if !focused, model.query.isEmpty { searchOpen = false }
+        .onChange(of: searchFocused) { _, focused in
+            if focused {
+                if !searchOpen { beginSearch() }
+            } else if model.query.isEmpty {
+                // Leaving an empty search gives the button back.
+                searchOpen = false
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-library")
@@ -211,31 +204,6 @@ struct NotesLibraryView: View {
         }
     }
 
-    // MARK: Tags
-
-    /// A tag in the top line, or "All notes" (nil). Clicking the active tag
-    /// keeps it (the tabs' rule); the title goes back to every note.
-    private func selectTag(_ tag: String?) {
-        model.tagFilter = tag
-    }
-
-    /// More tags…: every tag with its count, a find field; the active tag
-    /// is ticked. Choosing one filters to it (the active one: every note).
-    private var moreTagsCard: some View {
-        let counts = store.tagCounts
-        let all = counts.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        return AtticTagPickerCard(rows: { query in
-            let needle = query.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "#", with: "")
-            let shown = needle.isEmpty ? all : all.filter { $0.localizedStandardContains(needle) }
-            return (shown.map { AtticTagPicker.Tag(name: $0, state: $0 == model.tagFilter ? .on : .off,
-                                                   detail: "\(counts[$0] ?? 0)") }, nil)
-        }, listRows: all.count, onToggle: { name in
-            model.toggleTag(name)
-            moreTagsShown = false
-        }, onCreate: { _, _ in false })
-        .accessibilityIdentifier("notes-library-more-tags-card")
-    }
-
     private func endSearch() {
         model.clearSearch()
         searchOpen = false
@@ -255,7 +223,7 @@ struct NotesLibraryView: View {
         // The library slides away when a note opens, and this view (and its
         // monitor) outlives that slide by a moment: a key pressed in the
         // note is the note's, never the library's.
-        guard controller.isLibraryPresented, !moreTagsShown else { return false }
+        guard controller.isLibraryPresented else { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list.
         let groups = model.unfolded(all)
@@ -437,10 +405,6 @@ struct NotesLibraryView: View {
                   typedSearchText(KeyEquivalent(first), modifiers: modifiers) != nil else { return .passThrough }
             return .startSearch
         }
-    }
-
-    private var placeholder: String {
-        NotesLibraryModel.placeholder(count: store.notes.count, tag: model.tagFilter)
     }
 
     private func list(_ groups: [NotesLibraryModel.Group], selected: UUID?) -> some View {
