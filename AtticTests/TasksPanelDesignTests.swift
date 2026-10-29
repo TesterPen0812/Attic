@@ -150,16 +150,41 @@ final class TasksPanelDesignTests: XCTestCase {
 
     // MARK: - Pure rules
 
-    func testTagPillsAreTheDesignsOklchPairInTheTagsOwnHue() {
-        let blue = TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: .blue), dark: false)
+    /// Tags are coloured text, no pill (owner's changelog, 27 Oct):
+    /// `oklch(0.5 0.14 h)` in the tag's own hue (the branch's colours).
+    func testTagsAreTheChangelogsColouredTextInTheTagsOwnHue() {
         func rgb(_ c: AtticRGBA) -> [Int] { [c.red, c.green, c.blue].map { Int(($0 * 255).rounded()) } }
-        XCTAssertEqual(rgb(blue.text), [0, 90, 157], "oklch(0.46 0.13 250)")
-        XCTAssertEqual(rgb(blue.fill), [209, 224, 240], "oklch(0.9 0.028 250)")
-        XCTAssertEqual(rgb(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: .pink), dark: false).text), [133, 53, 110])
+        let blue = TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: .blue), dark: false)
+        XCTAssertEqual(blue.text, TasksPanelDesign.oklch(0.5, 0.14, 250))
+        XCTAssertEqual(rgb(blue.text), [4, 101, 175], "oklch(0.5 0.14 250)")
+        XCTAssertEqual(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: .pink), dark: false).text, TasksPanelDesign.oklch(0.5, 0.14, 340))
         XCTAssertNil(TasksPanelDesign.oklchHue(for: .grey))
         XCTAssertEqual(TasksPanelDesign.oklchHue(for: .indigo), 250, "a legacy colour shows as its clear hue")
         let dark = TasksPanelDesign.tagColours(hue: 250, dark: true)
         XCTAssertGreaterThan(dark.text.relativeLuminance, dark.fill.relativeLuminance, "dark mode: light text on a deep fill")
+    }
+
+    /// The row's `#name`: the changelog colour on Solid (Light), today's
+    /// clean colour on glass; readable everywhere; never a pill at rest,
+    /// only the hover fill.
+    @MainActor
+    func testTagLabelIsColouredTextWithNoPill() {
+        for context in AtticAppearanceCheck.allContexts() {
+            let tokens = context.tokens
+            let base = tokens.panel.base
+            for hue in AtticTagHue.palette + [.grey] {
+                let ink = TasksPanelDesign.tagInk(hue, tokens: tokens)
+                if TasksPanelDesign.seeThrough(tokens) {
+                    XCTAssertEqual(ink, TasksPanelDesign.vivid(tokens.ink(hue.ink), tokens: tokens), "glass keeps its treatment · \(context.caption)")
+                } else if context.mode == .light && !context.increaseContrast {
+                    XCTAssertEqual(ink, TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: hue), dark: false).text, context.caption)
+                }
+                XCTAssertGreaterThanOrEqual(ink.contrast(on: base), 4.5, "\(hue) · \(context.caption)")
+            }
+            XCTAssertEqual(AtticTagLabel.fill(hovered: false, disabled: false, tokens: tokens), .clear, "no pill · \(context.caption)")
+            XCTAssertNotEqual(AtticTagLabel.fill(hovered: true, disabled: false, tokens: tokens), .clear, "the hover fill · \(context.caption)")
+            XCTAssertEqual(AtticTagLabel.fill(hovered: true, disabled: true, tokens: tokens), .clear)
+        }
     }
 
     func testTheFooterTurnsWhileTheAddFieldIsUsed() {

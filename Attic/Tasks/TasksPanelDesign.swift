@@ -95,15 +95,27 @@ enum TasksPanelDesign {
         }
     }
 
-    /// The tinted pill's text and fill: `oklch(0.46 0.13 h)` on
-    /// `oklch(0.9 0.028 h)` in light; in dark, light text on a deep fill.
+    /// A tag's text and soft fill. The text is the changelog's coloured
+    /// tag (27 Oct, "coloured text, no pill"): `oklch(0.5 0.14 h)` in
+    /// light; the fill, `oklch(0.9 0.028 h)`, is for chips that need one.
+    /// In dark, light text on a deep fill.
     static func tagColours(hue: Double?, dark: Bool) -> (text: AtticRGBA, fill: AtticRGBA) {
-        let chroma: (text: Double, fill: Double) = hue == nil ? (0, 0) : (0.13, 0.028)
+        let chroma: (text: Double, fill: Double) = hue == nil ? (0, 0) : (0.14, 0.028)
         let h = hue ?? 0
         if dark {
             return (oklch(0.82, hue == nil ? 0 : 0.10, h), oklch(0.34, hue == nil ? 0 : 0.045, h))
         }
-        return (oklch(0.46, chroma.text, h), oklch(0.9, chroma.fill, h))
+        return (oklch(0.5, chroma.text, h), oklch(0.9, chroma.fill, h))
+    }
+
+    /// A tag's `#name` ink. Glass keeps its clean colour (owner,
+    /// 2026-10-29: `vivid`); Solid in Light is the changelog's
+    /// `oklch(0.5 0.14 h)`; Dark and Increase Contrast keep the tag's
+    /// token ink, which the changelog does not cover.
+    static func tagInk(_ hue: AtticTagHue, tokens: AtticColorTokens) -> AtticRGBA {
+        if seeThrough(tokens) { return vivid(tokens.ink(hue.ink), tokens: tokens) }
+        guard tokens.context.mode == .light, !tokens.context.increaseContrast else { return tokens.ink(hue.ink) }
+        return tagColours(hue: oklchHue(for: hue), dark: false).text
     }
 
     /// OKLCH to sRGB (Björn Ottosson's matrices), clipped to the gamut.
