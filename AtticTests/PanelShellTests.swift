@@ -162,16 +162,20 @@ final class PanelShellTests: XCTestCase {
         XCTAssertEqual(PanelPage(.tasks), .tasks)
         XCTAssertEqual(PanelPage(.backlog), .tasks, "Backlog is part of the Tasks page")
         XCTAssertEqual(PanelPage(.notes), .notes)
+        XCTAssertEqual(PanelPage(.calendar), .calendar)
         XCTAssertEqual(PanelPage(.canvas), .canvas)
         XCTAssertEqual(PanelPage.tasks.section, .tasks)
-        XCTAssertEqual(PanelPage.allCases.map(\.title), ["Tasks", "Notes", "Canvas"])
+        // The Calendar page (owner's panel design, 28 Oct): Tasks, Notes,
+        // Calendar; Canvas stays after them.
+        XCTAssertEqual(PanelPage.allCases.map(\.title), ["Tasks", "Notes", "Calendar", "Canvas"])
     }
 
     func testPageSwitchItemsCarryCommandDigitsAndStableIdentifiers() {
         let items = PanelPage.switchItems
-        XCTAssertEqual(items.map { $0.keyEquivalent?.character }, ["1", "2", "3"])
-        XCTAssertEqual(items.map(\.shortcut), ["⌘1", "⌘2", "⌘3"])
-        XCTAssertEqual(items.map(\.accessibilityIdentifier), ["panel-section-tasks", "panel-section-notes", "panel-section-canvas"])
+        XCTAssertEqual(items.map { $0.keyEquivalent?.character }, ["1", "2", "3", "4"])
+        XCTAssertEqual(items.map(\.shortcut), ["⌘1", "⌘2", "⌘3", "⌘4"])
+        XCTAssertEqual(items.map(\.accessibilityIdentifier),
+                       ["panel-section-tasks", "panel-section-notes", "panel-section-calendar", "panel-section-canvas"])
     }
 
     /// Phase 0's symmetrical top: the pin and the page button are equal
@@ -183,11 +187,12 @@ final class PanelShellTests: XCTestCase {
     /// 78 (three 22 pt chips).
     func testHeaderIsTwoEqualSquaresAndThePageButtonOpensTo84() {
         // The owner's panel design (2026-10-27): a 27 pt pin, the page switch
-        // 36 shut (its glyph and a chevron) and 75 open.
+        // 36 shut (its glyph and a chevron) and 75 open; with the Calendar
+        // page (28 Oct) four pages open to 99.
         XCTAssertEqual(PanelHeaderLayout.height, 27)
         XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 27, height: 27))
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), 36)
-        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 75)
+        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 99)
     }
 
     func testPageLayoutUsesTheCornerAwareInsetsAndPlacesTheHeaderBand() {
@@ -296,10 +301,10 @@ final class PanelShellTests: XCTestCase {
         // pages and Pin with theirs.
         XCTAssertEqual(commands[2].shortcut, KeyboardShortcut("n", modifiers: [.command, .shift]))
         XCTAssertEqual(commands[3].shortcut, KeyboardShortcut("f", modifiers: [.command, .shift]))
-        XCTAssertEqual(commands[4].children.map(\.title), ["Tasks", "Notes", "Canvas", "Pin Panel"])
+        XCTAssertEqual(commands[4].children.map(\.title), ["Tasks", "Notes", "Calendar", "Canvas", "Pin Panel"])
         XCTAssertEqual(commands[4].children.map(\.shortcut), [
             KeyboardShortcut("1", modifiers: .command), KeyboardShortcut("2", modifiers: .command),
-            KeyboardShortcut("3", modifiers: .command), KeyboardShortcut("p", modifiers: [.command, .shift])
+            KeyboardShortcut("3", modifiers: .command), KeyboardShortcut("4", modifiers: .command), KeyboardShortcut("p", modifiers: [.command, .shift])
         ])
         XCTAssertEqual(commands[5].shortcut, KeyboardShortcut(",", modifiers: .command))
         XCTAssertEqual(commands[6].shortcut, KeyboardShortcut("q", modifiers: .command))

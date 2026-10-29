@@ -622,7 +622,7 @@ struct PanelTrackpadDismissTracker {
 
 enum PanelModeDockLayout {
     static func width(isExpanded: Bool) -> CGFloat {
-        let visibleSectionCount = isExpanded ? PanelSection.allCases.count : 1
+        let visibleSectionCount = isExpanded ? PanelPage.allCases.count : 1
         return AtticStyle.controlHitSize * CGFloat(visibleSectionCount)
     }
 
