@@ -114,6 +114,19 @@ enum PerformanceSignposts {
         pageStart = nil
     }
 
+    /// Detailed phases are opt-in so ordinary latency cohorts carry only
+    /// the original draw/layout markers, matching their reference build.
+    private static let noteWorkPhasesEnabled = ProcessInfo.processInfo.environment["ATTIC_NOTE_WORK_PHASES"] == "1"
+
+    /// Static phase names only: traces never include document text or IDs.
+    static func beginNoteWork(_ name: StaticString) -> OSSignpostIntervalState? {
+        noteWorkPhasesEnabled && signposter.isEnabled ? signposter.beginInterval(name) : nil
+    }
+
+    static func endNoteWork(_ name: StaticString, _ state: OSSignpostIntervalState?) {
+        if let state { signposter.endInterval(name, state) }
+    }
+
     static func beginNoteKey() {
         guard noteKey == nil, noteStart == nil else { return }
         noteStart = started()
