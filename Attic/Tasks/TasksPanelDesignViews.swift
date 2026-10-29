@@ -81,9 +81,6 @@ enum TasksDesignMetrics {
     /// A group header's text starts on the rows' padding: the row fill's
     /// inset, then the row's 18 px.
     static let groupHeaderX: CGFloat = AtticLayout.rowHighlightInset + rowPaddingX
-    /// Tag pill: 30 px tall, 0 18 px padding (9 px each side ÷ 2).
-    static let tagHeight: CGFloat = 15
-    static let tagPaddingX: CGFloat = 4.5
     /// Attachment tiles: 56 px, radius 12 px, 8 px apart.
     static let tile: CGFloat = 28
     static let tileRadius: CGFloat = 6

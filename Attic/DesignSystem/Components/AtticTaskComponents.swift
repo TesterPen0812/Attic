@@ -1707,23 +1707,30 @@ private struct AtticDetailsTags: View {
     @Environment(\.atticDesign) private var design
     @State private var hovered = false
 
+    /// The tags keep the previous app's inline look (owner, 2026-10-29)
+    /// inside the design's details line: their soft fills reach past the
+    /// words, so the line's gap is kept between fills, not words.
+    private static let spacing = AtticTaskRowMetrics.detailsItemSpacing + 2 * AtticTagMetrics.inlineFillOutset
+
     var body: some View {
         // Each tag in its own colour (colour pass, owner 2026-10-10).
-        let content = ViewThatFits(in: .horizontal) {
+        let tagLine = ViewThatFits(in: .horizontal) {
             all()
             if tags.count > 1 {
-                HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                    AtticTagLabel(name: tags[0], style: .taskTag, disabled: disabled, pill: true).fixedSize()
+                HStack(spacing: Self.spacing) {
+                    AtticTagLabel(name: tags[0], disabled: disabled).fixedSize()
                         .atticTagColourMenu(tags[0])
                     more()
                 }
             }
-            HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
-                AtticTagLabel(name: tags[0], style: .taskTag, disabled: disabled, truncates: true, pill: true)
+            HStack(spacing: Self.spacing) {
+                AtticTagLabel(name: tags[0], disabled: disabled, truncates: true)
                     .atticTagColourMenu(tags[0])
                 if tags.count > 1 { more() }
             }
         }
+        // The last fill's reach, so the next item starts the line's gap after it.
+        let content = tagLine.padding(.trailing, AtticTagMetrics.inlineFillOutset)
         if let onTags, !disabled {
             Button(action: onTags) {
                 content
@@ -1744,10 +1751,10 @@ private struct AtticDetailsTags: View {
     }
 
     private func all() -> some View {
-        HStack(spacing: AtticTaskRowMetrics.detailsItemSpacing) {
+        HStack(spacing: Self.spacing) {
             ForEach(tags, id: \.self) { tag in
                 // A right-click on a tag: its Colour ▸ (owner's call, 10-11).
-                AtticTagLabel(name: tag, style: .taskTag, disabled: disabled, pill: true).fixedSize()
+                AtticTagLabel(name: tag, disabled: disabled).fixedSize()
                     .atticTagColourMenu(tag)
             }
         }
@@ -2472,9 +2479,6 @@ struct AtticTagLabel: View {
     var disabled = false
     var hovered = false
     var truncates = false
-    /// The owner's panel design: a tinted pill, 15 tall, its text and fill
-    /// the design's oklch pair in the tag's own hue.
-    var pill = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var colouring
@@ -2482,26 +2486,6 @@ struct AtticTagLabel: View {
     var body: some View {
         let tokens = design.tokens
         let hue = colouring.hue(for: name)
-        if pill {
-            let colours = TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: hue), dark: design.mode == .dark)
-            Text(verbatim: "#" + name)
-                .font(.system(size: AtticTextStyle.taskTag.spec.size))
-                .foregroundStyle((disabled ? tokens.ink(.disabledText) : colours.text).color)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.horizontal, TasksDesignMetrics.tagPaddingX)
-                .frame(height: TasksDesignMetrics.tagHeight)
-                .background(
-                    Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
-                        .fill((disabled ? .clear : (hovered ? tokens.hover.over(colours.fill) : colours.fill)).color)
-                )
-        } else {
-            inline(tokens: tokens, hue: hue)
-        }
-    }
-
-    @ViewBuilder
-    private func inline(tokens: AtticColorTokens, hue: AtticTagHue) -> some View {
         let fill: AtticRGBA = disabled ? .clear : (hovered ? tokens.hover.over(tokens.tagFill(hue)) : tokens.tagFill(hue))
         AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
             .background(
