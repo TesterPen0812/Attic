@@ -742,15 +742,11 @@ struct TasksPage: View {
                     }
                     .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
                     .id(model.tab)
-                    .transition(.asymmetric(insertion: .scale(scale: 0.2, anchor: .trailing).combined(with: .opacity),
-                                            removal: .opacity))
+                    .transition(PanelTopRowLayout.fieldTransition)
                 } else {
                     // Find (⌘F) on every page: Done's search.
-                    AtticRaisedButton(systemName: "magnifyingglass",
-                                      label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
-                                      size: CGSize(width: control, height: control),
-                                      emphasisedGlyph: true, flat: design.effectiveControls != .liquidGlass,
-                                      cornerRadius: AtticRadius.header, action: beginSearch)
+                    PanelTopRowSearchButton(label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
+                                            action: beginSearch)
                         .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
                         .transition(.opacity)
                 }
@@ -766,9 +762,9 @@ struct TasksPage: View {
                     .accessibilityHidden(true)
             }
             .padding(.top, chrome.top)
-            .padding(.leading, chrome.leading + control + TasksDesignMetrics.searchFromPin)
-            .padding(.trailing, chrome.trailing + AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count)
-                     + TasksDesignMetrics.headerGap)
+            // The shared top row's places (`PanelTopRow`, also Notes').
+            .padding(.leading, PanelTopRowLayout.leading(layout))
+            .padding(.trailing, PanelTopRowLayout.trailing(layout))
             if chipsShown {
                 filterChips
                     .transition(.opacity.combined(with: .move(edge: .top)))
@@ -776,8 +772,7 @@ struct TasksPage: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // The search opens with the design's ease (240 ms) and leaves at once.
-        .animation(design.reduceMotion ? .easeOut(duration: 0.15) : (shown ? TasksDesignMetrics.curve(0.24) : .easeOut(duration: 0.12)),
-                   value: shown)
+        .animation(PanelTopRowLayout.searchAnimation(shown: shown, reduceMotion: design.reduceMotion), value: shown)
         .animation(design.reduceMotion ? .easeOut(duration: 0.15) : TasksDesignMetrics.curve(0.26), value: chipsShown)
         .onChange(of: ChipsPlace(tab: model.tab, shown: chipsShown)) { old, new in
             // The row opened or closed on this page (not a page change).
@@ -859,9 +854,8 @@ struct TasksPage: View {
     /// Whether `x` is on the search's stretch of the header's line (not the
     /// shell's pin or page switch).
     private func searchLineContains(x: CGFloat) -> Bool {
-        let leading = layout.chromeInsets.leading + AtticControlSize.headerControl + TasksDesignMetrics.searchFromPin
-        let trailing = layout.panelSize.width - layout.chromeInsets.trailing
-            - AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count) - TasksDesignMetrics.headerGap
+        let leading = PanelTopRowLayout.leading(layout)
+        let trailing = layout.panelSize.width - PanelTopRowLayout.trailing(layout)
         return x >= leading && x <= trailing
     }
 

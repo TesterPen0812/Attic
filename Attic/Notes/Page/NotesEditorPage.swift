@@ -5,9 +5,10 @@ import UniformTypeIdentifiers
 /// The Phase 2 Notes page (slice 2, "Everyday capture and return"; mockups
 /// p2-01, p2-04, p2-05, p2-09, p2-12, p2-15, p2-02).
 ///
-/// Only the text, the tag line and the two bottom buttons: All notes
-/// (`rectangle.stack`) on the left, New note on the right, and the status
-/// slot between them. The note's rarer actions sit behind the ⋯ at the end
+/// Only the text, the tag line, the panel's shared top row (search beside
+/// the page switch) and the bottom bar: on a note, Back on the left, Aa on
+/// the right and the status slot between them; in All notes, the tag bar
+/// and compose (Notes Page v2, 2026-10-27/28). The note's rarer actions sit behind the ⋯ at the end
 /// of the title's first line, which returns as a glass title in the header
 /// once the title has scrolled away. Everything goes through the page's
 /// controller and its session rules.
@@ -34,6 +35,9 @@ struct NotesEditorPage: View {
     @StateObject private var library: NotesLibraryModel
     @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
     @State private var searchFocused = false
+    /// The top row's search is open (its button, ⌘F, typing in All notes):
+    /// the field shows first, then takes the keyboard.
+    @State private var searchOpen = false
     /// The bottom row's control that has the keyboard after ⌃Tab or ⌃⇧Tab
     /// left the text (OD-7), and whether its controls are keyboard stops:
     /// only from then until the keyboard is back in the text, so a click
@@ -86,13 +90,10 @@ struct NotesEditorPage: View {
         hasShownNote ? AtticMotionPreset.slide.animation(reduceMotion: reduceMotion) : nil
     }
 
-    static func libraryButtonGlyph(libraryShown: Bool) -> String {
-        libraryShown ? "chevron.right" : "rectangle.stack"
-    }
-
     // MARK: Geometry
 
-    private var buttonHeight: CGFloat { AtticControlSize.panelButton.height }
+    /// The bottom bar's controls: the Tasks footer's 30.5 pt squircles.
+    private var buttonHeight: CGFloat { NotesBarMetrics.control }
     /// The note's column: 4 inside the chrome's line (28 in a 320 pt panel).
     private var columnInset: CGFloat { layout.chromeInsets.leading + AtticNoteMetrics.columnInset }
     /// The title's first line 16 under the header.
@@ -119,6 +120,9 @@ struct NotesEditorPage: View {
             if showsEditor, controller.historyBrowser == nil { AtticEdgeBlurBackdrops(editorEdges) }
             if showsEditor, controller.proposalReview == nil, controller.historyBrowser == nil {
                 headerTitle
+            }
+            if controller.proposalReview == nil, controller.historyBrowser == nil {
+                topRow
             }
             if controller.proposalReview == nil, controller.historyBrowser == nil {
                 bottomRow
@@ -238,6 +242,7 @@ struct NotesEditorPage: View {
                 library.highlightedID = nil
             } else {
                 searchFocused = false
+                searchOpen = false
                 // Back on a note (the one that was open included): a toast
                 // for a delete made in the library does not follow you into
                 // the text. The step itself stays in the library's history.
@@ -282,6 +287,7 @@ struct NotesEditorPage: View {
         } else if controller.isLibraryPresented {
             NotesLibraryView(model: library, controller: controller, store: noteStore, layout: layout,
                              bottomClearance: bottomInset, bottomControls: bottomControls, searchFocused: $searchFocused,
+                             searchOpen: $searchOpen,
                              rowCommands: { id in rowCommands(id) },
                              libraryCommands: { Self.historyCommands(for: controller) },
                              onOpen: { id in openFromLibrary(id) },
@@ -336,8 +342,54 @@ struct NotesEditorPage: View {
                 .accessibilityHidden(progress < 0.5)
                 .accessibilityIdentifier("notes-header-title")
         }
+        // The search button stands between the title and the page switch:
+        // the title's room ends a gap before it.
+        .padding(.trailing, Self.headerTitleReserve)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, layout.chromeInsets.top)
+    }
+
+    /// What the top row's search button takes from the scrolled-away
+    /// title's room: the button and its gap to the page switch.
+    static let headerTitleReserve: CGFloat = AtticControlSize.headerControl + TasksDesignMetrics.headerGap
+
+    // MARK: Top row
+
+    /// The search is on the top row while it is open, has the keyboard or
+    /// a query, and only over All notes (opening it shows All notes).
+    private var topSearchShown: Bool {
+        controller.isLibraryPresented
+            && NotesLibraryView.searchShown(open: searchOpen, focused: searchFocused, query: library.query)
+    }
+
+    /// The panel's top row on Notes (`PanelTopRow`, Tasks' places): the
+    /// search button, or the field that filters All notes through its own
+    /// search and tag filter. Notes has no middle-slot controls and no
+    /// task-list filter button.
+    private var topRow: some View {
+        let shown = topSearchShown
+        return PanelTopRow(layout: layout, searchOpen: shown) {
+            if shown {
+                AtticTabsSearchField(placeholder: NotesLibraryModel.placeholder(count: noteStore.notes.count, tag: library.tagFilter),
+                                     text: $library.query, isFocused: $searchFocused, floating: true,
+                                     onEscape: endTopSearch, header: true)
+                    .accessibilityIdentifier("notes-search")
+                    .transition(PanelTopRowLayout.fieldTransition)
+            } else {
+                PanelTopRowSearchButton(label: "Search notes (⌘F)") { showLibrary(focusSearch: true) }
+                    .accessibilityIdentifier("notes-search-button")
+                    .transition(.opacity)
+            }
+        }
+        .animation(PanelTopRowLayout.searchAnimation(shown: shown, reduceMotion: design.reduceMotion), value: shown)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Esc in the field: the search ends and the button returns.
+    private func endTopSearch() {
+        library.clearSearch()
+        searchOpen = false
+        searchFocused = false
     }
 
     // MARK: Bottom row
@@ -356,54 +408,69 @@ struct NotesEditorPage: View {
     /// quiet icon grey read as disabled over the dark surface.
     private var darkGlyphs: Bool { design.tokens.context.mode == .dark }
 
+    /// All notes: the tag bar and compose. An open note: Back on the left,
+    /// its status between, Aa on the right (Notes Page v2; the "New note"
+    /// field and the scope button it once had were replaced on 2026-10-28).
+    @ViewBuilder
     private var bottomButtons: some View {
         Group {
-            HStack(spacing: 0) {
-                // The right chevron is the way back to the note, which sits
-                // to the right of All notes (the pages slide that way), so it
-                // says so (icon audit A3-09).
-                AtticRaisedButton(systemName: Self.libraryButtonGlyph(libraryShown: controller.isLibraryPresented),
-                                  label: controller.isLibraryPresented ? "Return to note" : "All notes",
-                                  help: allNotesHelp,
-                                  glyphOffsetY: controller.isLibraryPresented ? 0 : AtticRaisedButtonMetrics.stackGlyphOffsetY,
-                                  emphasisedGlyph: darkGlyphs) {
-                    toggleLibrary()
-                }
-                .keyboardShortcut("l", modifiers: [.command, .shift])
-                .noteFormatRowLeaving(.allNotes)
-                .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
-                .accessibilityIdentifier("notes-all-notes")
-                .accessibilitySortPriority(1)
-                Spacer(minLength: AtticNoteMetrics.pillMinGap)
-                if !controller.isLibraryPresented, let session = controller.active {
-                    NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
-                                   maxWidth: AtticNoteMetrics.pillMaxWidth(
-                                       panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
-                                       showsFormat: showsFormatButton))
-                        .noteFormatRowLeaving(.status)
-                        .accessibilitySortPriority(2)
-                        .transition(.opacity)
-                }
-                Spacer(minLength: AtticNoteMetrics.pillMinGap)
-                if showsFormatButton {
-                    formatButton
-                        .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))
-                        .padding(.trailing, AtticNoteMetrics.formatButtonGap)
-                        .transition(.opacity)
-                }
-                AtticRaisedButton(systemName: "square.and.pencil", label: "New note", help: String(localized: "New note (⌘N)"),
-                                  glyphOffsetY: AtticRaisedButtonMetrics.newNoteGlyphOffset.height,
-                                  glyphOffsetX: AtticRaisedButtonMetrics.newNoteGlyphOffset.width,
-                                  emphasisedGlyph: darkGlyphs) {
-                    newNote()
-                }
-                .keyboardShortcut("n", modifiers: .command)
-                .noteFormatRowLeaving(.newNote)
-                .modifier(NotesKeyboardStop(stop: .newNote, enabled: bottomStops, focus: $bottomFocus))
-                .accessibilityIdentifier("notes-new-note")
+            if controller.isLibraryPresented {
+                libraryBar
+            } else {
+                editorBar
             }
-            .frame(height: buttonHeight)
         }
+        .frame(height: buttonHeight)
+    }
+
+    private var libraryBar: some View {
+        HStack(spacing: NotesBarMetrics.gap) {
+            NotesTagBar(tags: library.recentTags(store: noteStore), selection: library.tagFilter) { tag in
+                library.tagFilter = tag
+            }
+            AtticRaisedButton(systemName: "square.and.pencil", label: "New note", size: NotesBarMetrics.size,
+                              help: String(localized: "New note (⌘N)"),
+                              glyphOffsetY: AtticRaisedButtonMetrics.newNoteGlyphOffset.height,
+                              glyphOffsetX: AtticRaisedButtonMetrics.newNoteGlyphOffset.width,
+                              emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
+                newNote()
+            }
+            .accessibilityIdentifier("notes-new-note")
+        }
+        .transition(.opacity)
+    }
+
+    private var editorBar: some View {
+        HStack(spacing: 0) {
+            // Back to All notes, which sits to the note's left (the pages
+            // slide that way).
+            AtticRaisedButton(systemName: "chevron.left", label: "All notes", size: NotesBarMetrics.size,
+                              help: String(localized: "All notes (⇧⌘L)"),
+                              emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
+                toggleLibrary()
+            }
+            .noteFormatRowLeaving(.allNotes)
+            .modifier(NotesKeyboardStop(stop: .allNotes, enabled: bottomStops, focus: $bottomFocus))
+            .accessibilityIdentifier("notes-all-notes")
+            .accessibilitySortPriority(1)
+            Spacer(minLength: AtticNoteMetrics.pillMinGap)
+            if let session = controller.active {
+                NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
+                               maxWidth: AtticNoteMetrics.pillMaxWidth(
+                                   panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
+                                   showsFormat: showsFormatButton))
+                    .noteFormatRowLeaving(.status)
+                    .accessibilitySortPriority(2)
+                    .transition(.opacity)
+            }
+            Spacer(minLength: AtticNoteMetrics.pillMinGap)
+            if showsFormatButton {
+                formatButton
+                    .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))
+                    .transition(.opacity)
+            }
+        }
+        .transition(.opacity)
     }
 
     /// Aa shows on an editable note with text under its title (owner,
@@ -416,8 +483,9 @@ struct NotesEditorPage: View {
     /// Aa (OD-14, p2-36 draft 1): the bottom row turns into the format row
     /// in place, until ✕ or Esc. ⌘T opens it too.
     private var formatButton: some View {
-        AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", help: String(localized: "Format (⌘T)"),
-                          emphasisedGlyph: darkGlyphs) {
+        AtticRaisedButton(systemName: NoteFormatRowSource.symbol, label: "Format", size: NotesBarMetrics.size,
+                          help: String(localized: "Format (⌘T)"), emphasisedGlyph: darkGlyphs,
+                          cornerRadius: NotesBarMetrics.radius) {
             chrome.openFormatBar(keyboard: false)
         }
         .noteFormatRowSource()
@@ -474,7 +542,6 @@ struct NotesEditorPage: View {
             case .format:
                 move(to: .text)
                 chrome.openFormatBar(keyboard: true)
-            case .newNote: newNote()
             case .text: return false
             }
             return true
@@ -498,12 +565,6 @@ struct NotesEditorPage: View {
         case let .locate(id):
             if let url = urls.first { chrome.objectControls?.locate(id, at: url) }
         }
-    }
-
-    private var allNotesHelp: String {
-        guard controller.isLibraryPresented else { return String(localized: "All notes (⇧⌘L)") }
-        let title = controller.active.map { $0.engine.lineText(at: 0).trimmingCharacters(in: .whitespaces) } ?? ""
-        return title.isEmpty ? String(localized: "Return to note (⇧⌘L)") : String(localized: "Return to \(title) (⇧⌘L)")
     }
 
     /// Keys whose commands live in the note's menu (the menu shows them;
@@ -534,6 +595,14 @@ struct NotesEditorPage: View {
                 .disabled(!showsEditor || !controller.canSaveRecoveryCopy(controller.active))
             Button("") { showLibrary(focusSearch: true) }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+            // The bar's New note and All notes keys, wherever the page shows
+            // (its buttons show on one side each).
+            Button("") { newNote() }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(controller.proposalReview != nil)
+            Button("") { toggleLibrary() }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(controller.proposalReview != nil)
             Button("") { chrome.openFormatBar(keyboard: true) }
                 .keyboardShortcut(NoteCommandCatalog.formatBarShortcut)
                 .disabled(!showsEditor || controller.active?.isReadOnly != false)
@@ -1237,14 +1306,14 @@ private struct NoteComparisonPreview: NSViewRepresentable {
 // MARK: - Keyboard order (OD-7)
 
 /// The note page's keyboard order once ⌃Tab leaves the text (OD-7): the
-/// text, then the bottom row left to right (All notes, Aa while the note
-/// can be formatted, New note), and round again into the text. Every stop
-/// is drawn: the text's caret, or the control's ring.
+/// text, then the bottom row left to right (All notes, then Aa while the
+/// note can be formatted), and round again into the text. Every stop is
+/// drawn: the text's caret, or the control's ring.
 enum NotesKeyboardOrder {
-    enum Stop: Hashable { case text, allNotes, format, newNote }
+    enum Stop: Hashable { case text, allNotes, format }
 
     static func stops(format: Bool) -> [Stop] {
-        format ? [.text, .allNotes, .format, .newNote] : [.text, .allNotes, .newNote]
+        format ? [.text, .allNotes, .format] : [.text, .allNotes]
     }
 
     static func next(after current: Stop, in stops: [Stop], forward: Bool) -> Stop? {
