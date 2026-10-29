@@ -412,7 +412,8 @@ final class TaskPageSliceTests: XCTestCase {
         let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes)
         let row = model.preparedRow(AtticNoteRowModel(id: noteID, title: "", time: "", preview: "", spoken: ""), store: notes.store)
         XCTAssertEqual(row.taskState, .inProgress)
-        XCTAssertTrue(row.preview.hasPrefix("Task note · "), row.preview)
+        // The panel design (2026-10-27): no "Task note ·" in the row; VoiceOver still says it.
+        XCTAssertFalse(row.preview.hasPrefix("Task note"), row.preview)
         XCTAssertTrue(row.spoken.hasPrefix("Task note, "), row.spoken)
         XCTAssertEqual(row.title, "Finalize launch checklist")
     }
