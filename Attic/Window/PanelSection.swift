@@ -2,11 +2,12 @@ import Foundation
 
 /// Top-level surface shown in the Attic panel. Tasks and Backlog retain the
 /// existing `TaskScope` semantics; Notes and Canvas own independent stores and
-/// interaction state.
+/// interaction state. Calendar reads tasks and calendar events, read-only.
 enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     case tasks
     case backlog
     case notes
+    case calendar
     case canvas
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
         case .tasks: "Tasks"
         case .backlog: "Later"
         case .notes: "Notes"
+        case .calendar: "Calendar"
         case .canvas: "Canvas"
         }
     }
@@ -24,12 +26,13 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     /// Tasks and Backlog share the Tasks page.
     var isTaskBased: Bool { taskScope != nil }
     var isCanvas: Bool { self == .canvas }
+    var isCalendar: Bool { self == .calendar }
 
     var taskScope: TaskScope? {
         switch self {
         case .tasks: .tasks
         case .backlog: .backlog
-        case .notes, .canvas: nil
+        case .notes, .calendar, .canvas: nil
         }
     }
 
@@ -38,6 +41,7 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
         case .tasks: "New Task"
         case .backlog: "New Task for Later"
         case .notes: "New Note"
+        case .calendar: "New Task"
         case .canvas: "Canvas"
         }
     }
@@ -47,6 +51,7 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
         case .tasks: "What needs doing?"
         case .backlog: "Capture an idea…"
         case .notes: "Write a note…"
+        case .calendar: "What needs doing?"
         case .canvas: "Draw on the canvas"
         }
     }
@@ -56,6 +61,7 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
         case .tasks: "Nothing hiding here"
         case .backlog: "No ideas waiting"
         case .notes: "Nothing saved yet"
+        case .calendar: "Nothing on this day"
         case .canvas: "Blank canvas"
         }
     }

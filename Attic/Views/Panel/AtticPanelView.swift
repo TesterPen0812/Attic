@@ -24,6 +24,8 @@ struct AtticPanelView: View {
     /// What the Tasks page keeps while another page shows (the add bar's
     /// draft and pending attachments).
     @StateObject private var tasksPageState = TasksPageState()
+    /// What the Calendar page keeps while another page shows.
+    @StateObject private var calendarPageState = CalendarPageState()
     /// Whether the page switcher is open, for the header titles that make
     /// room for it. Not observed here: only those titles are.
     @State private var switcherPresence = AtticPageSwitcherPresence()
@@ -221,7 +223,24 @@ struct AtticPanelView: View {
                 hasRestoredSession: hasRestoredNoteSession
             )
             .transition(pageTransition(.notes))
+        case .calendar:
+            // A task's page opens over the Calendar, which stays built
+            // (covered) so Back returns to it as it was.
+            TaskNoteRouteHost(page: .calendar, noteStore: noteStore, taskStore: store, noteDraft: noteDraft,
+                              uiState: uiState, layout: pageLayout, isReady: hasRestoredNoteSession) { _ in
+                CalendarPageHost(store: store, state: calendarPageState, uiState: uiState, layout: pageLayout,
+                                 onNewTask: startNewTask)
+            }
+            .transition(pageTransition(.calendar))
         }
+    }
+
+    /// The Calendar's "+": the Tasks page's add bar, with the keyboard in it.
+    /// The add bar has no way yet to take a due day from outside, so the
+    /// day is not filled in (reported for the composer's design).
+    private func startNewTask(_ day: DueDay) {
+        selectSection(.tasks)
+        DispatchQueue.main.async { uiState.requestPrimaryInputFocus() }
     }
 
     /// Open Task Note and a row's file drop (Phase 3).
@@ -485,7 +504,7 @@ struct AtticPanelView: View {
             }
         case .notes:
             return noteStore.lastErrorMessage.map { PanelNoticeContent(message: $0, canRetry: false) }
-        case .tasks:
+        case .tasks, .calendar:
             guard store.lastErrorOwnerID == nil else { return nil }
             return store.lastErrorMessage.map { PanelNoticeContent(message: $0, canRetry: false) }
         }
@@ -500,7 +519,7 @@ struct AtticPanelView: View {
         switch currentPage {
         case .canvas: canvasSession.dismissErrorMessage()
         case .notes: noteStore.dismissError()
-        case .tasks: store.dismissError()
+        case .tasks, .calendar: store.dismissError()
         }
     }
 }
