@@ -355,3 +355,67 @@ ran, on the Phase 0 build (`fb45082`, the merge of PR #7).
   view `draw(_:)` callback is not the moment the text reaches the screen).
   Its numbers are reported against this baseline in the Phase 2 slice
   reports.
+
+## B-11 note wrap capture and regression guard
+
+[The note-wrap baseline](performance-baseline-note-wrap.json) records six
+unprofiled runs of exact-main app source at `281eb1e4` on the Mac14,2 Air
+(macOS 26.4.1, 25E253), built Local with `ATTIC_LOCAL_ONLY`, `-O`, whole-module
+optimization and ad hoc signing. The fixture is an ordinary note, 320-point
+content width, with 100 `x` characters and a 110 ms pause between keys. The
+measured panel window is 376 × 520 points, including its outer region.
+
+The driver reads no accessibility state between timed keys. After typing,
+it maps unbroken-text wrap characters from glyph bounds. Diagnostic word
+input uses `--words --observe` and is a different observation protocol.
+
+The guard compares each cohort's median of its runs' **worst observed wrap**.
+Its tolerance is the reference runs' observed maximum minus minimum, with no
+fixed target or percentage allowance. The reference is 20.214 ms to draw
+with 2.985 ms spread, and 10.695 ms to layout with 2.102 ms spread. These end
+at the existing transaction-completion/viewport markers. The historical
+55–66 ms case remains unconfirmed under these explicit fixtures.
+
+`Scripts/measure_note_wrap.swift` and `Scripts/measure_note_wrap.py` run only
+on the Air, require `/tmp/attic-air-screen.lockdir/owner` to be `sweep`, and
+operate only `com.taha.Attic.preview.sweep`. Build a uniquely named optimized
+preview using the README launcher with `--build-only`; use the locked build
+wrapper and ad hoc flags. Compile the driver with:
+
+```sh
+xcrun swiftc -O -target arm64-apple-macos26.0 \
+  -module-cache-path .build/dd-sweep/driver-module-cache \
+  Scripts/measure_note_wrap.swift -o .build/dd-sweep/note-wrap-driver
+```
+
+Copy the preview, driver and Python runner to the Air. While owning its lock:
+
+```sh
+python3 /tmp/measure_note_wrap.py --app /path/to/AtticSweep.app \
+  --driver /tmp/note-wrap-driver --prefix /tmp/note-wrap-candidate --runs 6
+```
+
+The runner gives the app, driver, log stream and optional profiler an explicit
+environment allowlist. It captures only the app's panel and quits by bundle
+identifier. `--rich --tail` covers wrapping below rich blocks; `--long-seed`
+adds the existing long fixture. `--profile --runs 1` repeatedly crosses a wrap
+for Time Profiler and must be kept separate from timing cohorts. Detailed
+static phase markers require `ATTIC_NOTE_WORK_PHASES=1`, set by the profiler
+mode. Export only the time-profile table when inspecting a trace; never print
+its TOC or environment.
+
+Download the `.drive` and `.signposts.jsonl` files and extract/compare locally:
+
+```sh
+python3 Scripts/note_wrap_samples.py /tmp/note-wrap-candidate \
+  --machine Tahas-MacBook-Air --os 26.4.1 \
+  --fixture ordinary-note-320x460-100x-110ms-no-ax \
+  --sha256 ACTUAL_EXECUTABLE_SHA256 --output /tmp/note-wrap-candidate.json
+python3 Scripts/compare_note_wrap.py \
+  Docs/performance-baseline-note-wrap.json /tmp/note-wrap-candidate.json
+```
+
+Extraction requires all 100 keys and one complete draw/layout interval per key.
+Comparisons reject mismatched hardware, OS, geometry, seed, input and observation
+protocol, missing samples and incomplete cohorts. The `test_smooth_note_wrap.py`
+protocol tests run in fast CI without driving a screen.
