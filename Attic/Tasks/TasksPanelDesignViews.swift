@@ -211,7 +211,7 @@ struct TasksFilterChip: View {
         let tokens = design.tokens
         let dark = design.mode == .dark
         let shape = Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
-        let ink = tag.map { TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: $0)), dark: dark).text.color }
+        let ink = tag.map { TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: $0)), dark: dark).text, tokens: tokens).color }
             ?? tokens.color(selected || hovered ? .heading : .helper)
         Button(action: action) {
             Text(verbatim: title)
@@ -320,7 +320,13 @@ struct TasksTabThumb: View {
     var body: some View {
         let tokens = design.tokens
         let accent = tokens.pageChipAccent
-        Image(nsImage: Self.image(fill: accent?.fill ?? tokens.chipSelected, stroke: accent?.stroke))
+        // On glass the current tab is lifted, lighter than the glass, as
+        // the selected tag chip is (owner, 2026-10-29: "clear selected tab").
+        let dark = design.mode == .dark
+        let lift = AtticRGBA.white(dark ? 0.2 : 0.62)
+        let rim = AtticRGBA.white(dark ? 0.16 : 0.75)
+        let glass = TasksPanelDesign.seeThrough(tokens)
+        Image(nsImage: Self.image(fill: accent?.fill ?? (glass ? lift : tokens.chipSelected), stroke: accent?.stroke ?? (glass ? rim : nil)))
             .frame(width: TasksDesignMetrics.tabCell, height: TasksDesignMetrics.tabCell)
             .accessibilityHidden(true)
     }

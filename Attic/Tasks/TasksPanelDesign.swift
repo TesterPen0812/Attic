@@ -306,6 +306,24 @@ extension TasksPanelDesign {
         return ink.withAlpha((mean(value) - mean(base)) / span)
     }
 
+    /// Glass or Frosted as drawn (not Solid, not made solid by Reduce
+    /// Transparency).
+    static func seeThrough(_ tokens: AtticColorTokens) -> Bool {
+        tokens.context.surface != .solid && tokens.context.reducedFrom == nil
+    }
+
+    /// A colour cleaned up for glass (owner, 2026-10-29): the same hue,
+    /// more saturated, at the same contrast on the surface, so tags, the
+    /// overdue red and "!!" read clean on the glass's own grey instead of
+    /// muddy. Solid keeps the colour.
+    static func vivid(_ colour: AtticRGBA, tokens: AtticColorTokens) -> AtticRGBA {
+        guard seeThrough(tokens) else { return colour }
+        let base = reference(tokens)
+        let (h, s, l) = colour.hsl
+        let richer = AtticRGBA(hue: h, saturation: min(1, s * 1.35 + 0.12), lightness: l, alpha: colour.alpha)
+        return richer.tuned(toContrast: colour.contrast(on: base), against: [base], lighten: tokens.context.mode == .dark)
+    }
+
     private struct ToneKey: Hashable {
         let colours: AtticDesignContext.ColourKey
         let tone: TasksDesignTone

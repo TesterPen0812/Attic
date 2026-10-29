@@ -1145,10 +1145,13 @@ struct AtticPriorityMark: View {
     let priority: AtticPriority
     var disabled = false
 
+    @Environment(\.atticDesign) private var design
+
     var body: some View {
         switch priority {
         case .high:
             AtticText(verbatim: "!!", style: .priorityMark, ink: disabled ? .disabledText : .priorityMark)
+                .colour(disabled ? nil : TasksPanelDesign.vivid(design.tokens.ink(.priorityMark), tokens: design.tokens))
                 .fixedSize()
                 .accessibilityHidden(true)
         case .medium:
@@ -1590,6 +1593,7 @@ struct AtticDueText: View {
         switch due.tone {
         case .overdue:
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .dueText)
+                .colour(panelDesign && !disabled ? TasksPanelDesign.vivid(design.tokens.ink(.dueText), tokens: design.tokens) : nil)
         case .today, .quiet:
             AtticText(verbatim: due.text, style: .taskDate, ink: disabled ? .disabledText : .helper)
                 .colour(panelDesign && !disabled ? TasksPanelDesign.toneInk(.date, tokens: design.tokens) : nil)
@@ -2487,8 +2491,13 @@ struct AtticTagLabel: View {
     var body: some View {
         let tokens = design.tokens
         let hue = colouring.hue(for: name)
-        let fill: AtticRGBA = disabled ? .clear : (hovered ? tokens.hover.over(tokens.tagFill(hue)) : tokens.tagFill(hue))
+        // On glass the tag is its clean colour alone (owner, 2026-10-29):
+        // the soft fill read as haze on the glass's grey.
+        let glass = TasksPanelDesign.seeThrough(tokens)
+        let rest: AtticRGBA = glass ? .clear : tokens.tagFill(hue)
+        let fill: AtticRGBA = disabled ? .clear : (hovered ? tokens.hover.over(rest) : rest)
         AtticText(verbatim: "#" + name, style: style, ink: disabled ? .disabledText : hue.ink, truncates: truncates)
+            .colour(disabled || !glass ? nil : TasksPanelDesign.vivid(tokens.ink(hue.ink), tokens: tokens))
             .background(
                 RoundedRectangle(cornerRadius: AtticTagMetrics.inlineFillRadius, style: .continuous)
                     .fill(fill.color)
