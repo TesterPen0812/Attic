@@ -7,9 +7,8 @@ import SwiftUI
 final class CalendarPageState: ObservableObject {
     private var model: CalendarPageModel?
 
-    /// The page's calendar events. The stub until the EventKit source is
-    /// merged; then this line becomes `CalendarEventSources.makeDefault()`.
-    static func makeSource() -> CalendarEventSource { CalendarEventSourceStub() }
+    /// The page's calendar events: EventKit in the app, the stub in tests.
+    static func makeSource() -> CalendarEventSource { CalendarEventSources.makeDefault() }
 
     func model(store: TaskStore) -> CalendarPageModel {
         if let model { return model }
