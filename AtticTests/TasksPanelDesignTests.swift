@@ -398,7 +398,10 @@ final class TasksPanelDesignTests: XCTestCase {
                 let date = try probe(probes, "Today", .taskDate)
                 func contrast(_ p: AtticProbe) throws -> Double { try XCTUnwrap(p.foreground).contrast(on: reference) }
                 let label = "\(surface) \(mode)"
-                XCTAssertGreaterThanOrEqual(try contrast(title) / contrast(header), 1.3, "\(label): the header a step under the title")
+                // On a see-through panel the greys sit half the design's step under the
+                // title (the owner's stronger greys, 10-29): a smaller, still clear step.
+                let step = surface == .solid ? 1.3 : 1.25
+                XCTAssertGreaterThanOrEqual(try contrast(title) / contrast(header), step, "\(label): the header a step under the title")
                 XCTAssertGreaterThanOrEqual(try contrast(header), try contrast(date), "\(label): the date no stronger than the header")
                 XCTAssertEqual(header.frame.minX, 19, accuracy: 0.25, "\(label): the header on the rows' padding (design 19)")
                 XCTAssertEqual(title.frame.minX, 43, accuracy: 0.25, "\(label): the title column (design 43)")
@@ -434,7 +437,8 @@ final class TasksPanelDesignTests: XCTestCase {
             }
             if !context.increaseContrast {
                 let header = TasksPanelDesign.tone(.groupHeader, tokens: tokens).contrast(on: base)
-                XCTAssertGreaterThanOrEqual(title / header, 1.3, "\(context.caption): the header a step under the title")
+                let step = TasksPanelDesign.seeThrough(tokens) ? 1.25 : 1.3
+                XCTAssertGreaterThanOrEqual(title / header, step, "\(context.caption): the header a step under the title")
             }
         }
         // On white the design's own colours come back.
