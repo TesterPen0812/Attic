@@ -585,12 +585,14 @@ final class NotesFormatControlsTests: XCTestCase {
 
     func testNotesKeyboardOrderGoesRoundTheBottomRowAndBackIntoTheText() {
         let stops = NotesKeyboardOrder.stops(format: true)
-        XCTAssertEqual(stops, [.text, .allNotes, .format, .newNote])
+        // The writing view's bar (Notes Page v2): Back on the left, Aa on
+        // the right; New note lives in All notes' bar (⌘N anywhere).
+        XCTAssertEqual(stops, [.text, .allNotes, .format])
         XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: true), .allNotes, "⌃Tab: the next control")
-        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: false), .newNote, "⌃⇧Tab: the previous one")
-        XCTAssertEqual(NotesKeyboardOrder.next(after: .newNote, in: stops, forward: true), .text, "round again into the text")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .text, in: stops, forward: false), .format, "⌃⇧Tab: the previous one")
+        XCTAssertEqual(NotesKeyboardOrder.next(after: .format, in: stops, forward: true), .text, "round again into the text")
         XCTAssertEqual(NotesKeyboardOrder.next(after: .allNotes, in: stops, forward: false), .text)
-        XCTAssertEqual(NotesKeyboardOrder.stops(format: false), [.text, .allNotes, .newNote], "a read-only note has no Aa")
+        XCTAssertEqual(NotesKeyboardOrder.stops(format: false), [.text, .allNotes], "a read-only note has no Aa")
     }
 
     func testListsToggleBackToBodyAndAaWorksOnTheCaretParagraph() {
@@ -2792,8 +2794,8 @@ final class F4aPanelNotesTests: XCTestCase {
         }
         // The floating controls, in the content container's space.
         func controls() -> [(String, CGRect)] {
-            let ids = ["panel-pin-button", "panel-section-picker", "notes-header-title", "notes-all-notes",
-                       "notes-format-button", "notes-new-note"]
+            let ids = ["panel-pin-button", "panel-section-picker", "notes-search-button", "notes-header-title",
+                       "notes-all-notes", "notes-format-button", "notes-new-note"]
             return elements(host).compactMap { element -> (String, CGRect)? in
                 let id = element.accessibilityIdentifier?() ?? ""
                 guard ids.contains(id), let screen = element.accessibilityFrame?(), screen.width > 0 else { return nil }

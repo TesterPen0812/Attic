@@ -167,9 +167,6 @@ final class NotesOwnerFeedbackTests: XCTestCase {
     // MARK: 3. All notes' back button
 
     func testTheBackButtonPointsToTheNoteAndTheLibrarySlidesFromTheLeft() {
-        XCTAssertEqual(NotesEditorPage.libraryButtonGlyph(libraryShown: false), "rectangle.stack")
-        XCTAssertEqual(NotesEditorPage.libraryButtonGlyph(libraryShown: true), "chevron.right",
-                       "the note is to the right")
         XCTAssertEqual(NotesEditorPage.libraryEdge, .leading)
         XCTAssertEqual(NotesEditorPage.noteEdge, .trailing)
     }
