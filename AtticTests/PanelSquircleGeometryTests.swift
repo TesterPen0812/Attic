@@ -159,9 +159,11 @@ final class PanelSquircleGeometryTests: XCTestCase {
             PanelModeDockLayout.width(isExpanded: false),
             AtticStyle.controlHitSize
         )
+        // One slot per page (Backlog is part of Tasks), so adding the
+        // Calendar page kept the dock at four.
         XCTAssertEqual(
             PanelModeDockLayout.width(isExpanded: true),
-            AtticStyle.controlHitSize * CGFloat(PanelSection.allCases.count)
+            AtticStyle.controlHitSize * CGFloat(PanelPage.allCases.count)
         )
     }
 

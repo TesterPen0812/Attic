@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// The three pages the header switches between. Backlog is part of the
+/// The pages the header switches between (Tasks, Notes, Calendar, then
+/// Canvas). Backlog is part of the
 /// Tasks page, so both task sections belong to `.tasks`.
 enum PanelPage: String, CaseIterable, Hashable, Identifiable {
     case tasks
     case notes
+    case calendar
     case canvas
 
     var id: String { rawValue }
@@ -13,6 +15,7 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
         switch section {
         case .tasks, .backlog: self = .tasks
         case .notes: self = .notes
+        case .calendar: self = .calendar
         case .canvas: self = .canvas
         }
     }
@@ -22,6 +25,7 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .tasks: .tasks
         case .notes: .notes
+        case .calendar: .calendar
         case .canvas: .canvas
         }
     }
@@ -30,6 +34,7 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .tasks: String(localized: "Tasks")
         case .notes: String(localized: "Notes")
+        case .calendar: String(localized: "Calendar")
         case .canvas: String(localized: "Canvas")
         }
     }
@@ -38,16 +43,18 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .tasks: "checkmark.circle"
         case .notes: "note.text"
+        case .calendar: "calendar"
         case .canvas: "scribble.variable"
         }
     }
 
-    /// ⌘1, ⌘2, ⌘3 (spec § Accessibility and keyboard).
+    /// ⌘1 to ⌘4 in the switch's order (spec § Accessibility and keyboard).
     var keyEquivalent: KeyEquivalent {
         switch self {
         case .tasks: "1"
         case .notes: "2"
-        case .canvas: "3"
+        case .calendar: "3"
+        case .canvas: "4"
         }
     }
 
@@ -67,7 +74,7 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
     static let switchItems = allCases.map(\.switchItem)
 
     /// Which side of `other` this page sits on in the switch's order
-    /// (Tasks, Notes, Canvas): -1 before it, 1 after it, 0 if it is `other`.
+    /// (Tasks, Notes, Calendar, Canvas): -1 before it, 1 after it, 0 if it is `other`.
     func side(from other: PanelPage) -> CGFloat {
         let all = Self.allCases
         guard let mine = all.firstIndex(of: self), let theirs = all.firstIndex(of: other) else { return 0 }

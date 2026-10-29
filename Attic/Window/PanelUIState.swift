@@ -74,6 +74,7 @@ final class PanelUIState: ObservableObject {
         let fallback = switch origin {
         case .tasks: String(localized: "Back to Tasks")
         case .notes: String(localized: "Back to Notes")
+        case .calendar: String(localized: "Back to Calendar")
         case .canvas: String(localized: "Back to Canvas")
         }
         taskNoteBackTitle = backTitle ?? fallback
