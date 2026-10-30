@@ -41,8 +41,8 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
             let id = UUID()
             let made = try insert(id, draft: draft)
             undoRoute.record(UndoStep(name: "Create Event",
-                undoOutcome: { [self] in replay { try remove(id, expecting: draft) } },
-                redoOutcome: { [self] in replay { _ = try insert(id, draft: draft) } }), in: .calendar)
+                undoOutcome: { [self] in replay { try remove(id, expecting: made.draft) } },
+                redoOutcome: { [self] in replay { _ = try insert(id, draft: made.draft) } }), in: .calendar)
             return made
         }
     }
@@ -54,8 +54,8 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
             let previous = try editable(id)
             let edited = try update(id, draft: draft, expecting: previous.draft)
             undoRoute.record(UndoStep(name: "Edit Event",
-                undoOutcome: { [self] in replay { _ = try update(id, draft: previous.draft, expecting: draft) } },
-                redoOutcome: { [self] in replay { _ = try update(id, draft: draft, expecting: previous.draft) } }), in: .calendar)
+                undoOutcome: { [self] in replay { _ = try update(id, draft: previous.draft, expecting: edited.draft) } },
+                redoOutcome: { [self] in replay { _ = try update(id, draft: edited.draft, expecting: previous.draft) } }), in: .calendar)
             return edited
         }
     }
@@ -151,6 +151,9 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
             let after = try stage()
             try record.prepare(id: id, before: before, after: after)
             try requireAccess()
+            // The file write can take time. Re-read committed state through
+            // the backend's independent reader before committing staged edits.
+            if before != nil { _ = try editable(id) }
             if let after { try requireWritable(after.draft.calendarID) }
             try store.commit()
         } catch {

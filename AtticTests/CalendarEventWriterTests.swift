@@ -333,4 +333,64 @@ final class CalendarEventWriterTests: XCTestCase {
             }
         }
     }
+
+    func testEventChangingDuringRecordPreparationIsNotOverwrittenOrDeleted() throws {
+        for deleting in [false, true] {
+            var changeDuringPrepare: (() -> Void)?
+            let record = try CalendarOwnershipRecord(persist: { _ in changeDuringPrepare?() })
+            let writer = try writer(record: record)
+            let made = try writer.create(draft())
+            let key = try XCTUnwrap(store.events.values.first { $0.occurrenceID == made.occurrenceID }?.eventIdentifier)
+            changeDuringPrepare = { self.store.events[key]?.isRepeating = true }
+            assertError(.repeatingEvent) {
+                if deleting { try writer.delete(made.id) }
+                else { _ = try writer.edit(made.id, draft: draft("Fail")) }
+            }
+            XCTAssertEqual(store.events[key]?.isRepeating, true)
+            XCTAssertEqual(store.events[key]?.draft.title, "Lunch")
+        }
+    }
+
+    func testWritePreservesUnrelatedEventAddedDuringPreparation() throws {
+        let foreign = CalendarWriteSnapshot(eventIdentifier: "external", itemIdentifier: "external-item",
+                                            marker: "", draft: draft("Someone else's event"))
+        var injected = false
+        let record = try CalendarOwnershipRecord(persist: { _ in
+            if !injected {
+                self.store.events[foreign.eventIdentifier] = foreign
+                injected = true
+            }
+        })
+        let writer = try writer(record: record)
+        let made = try writer.create(draft())
+        XCTAssertEqual(store.events[foreign.eventIdentifier], foreign)
+        XCTAssertEqual(try writer.ownedEvent(matching: made.occurrenceID), made)
+        XCTAssertNil(try writer.ownedEvent(matching: foreign.occurrenceID))
+    }
+
+    func testCommitTimeIdentifiersRecoverFromJournalAndFollowUndo() throws {
+        store.assignsEventIdentifiersOnCommit = true
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attic-calendar-ids-\(UUID()).json")
+        var writes = 0
+        let record = try CalendarOwnershipRecord(fileURL: url, persist: { data in
+            writes += 1
+            if writes == 2 { throw CalendarEventWriteError.recordFailed("compaction") }
+            try data.write(to: url, options: .atomic)
+        })
+        let writer = try writer(record: record)
+        let made = try writer.create(draft())
+        let committed = try XCTUnwrap(store.events.values.first)
+        XCTAssertNotEqual(committed.eventIdentifier, committed.itemIdentifier)
+        XCTAssertEqual(made.occurrenceID, committed.occurrenceID)
+        let relaunched = try self.writer(record: CalendarOwnershipRecord(fileURL: url))
+        XCTAssertEqual(try relaunched.ownedEvent(matching: committed.occurrenceID), made)
+        _ = try writer.edit(made.id, draft: draft("Dinner", calendarID: "work"))
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertEqual(store.events.values.first?.draft, made.draft)
+        try writer.delete(made.id)
+        XCTAssertTrue(undo.undo(in: .calendar))
+        let restored = try XCTUnwrap(store.events.values.first)
+        XCTAssertEqual(try writer.ownedEvent(matching: restored.occurrenceID)?.id, made.id)
+        XCTAssertEqual(store.events.count, 1)
+    }
 }

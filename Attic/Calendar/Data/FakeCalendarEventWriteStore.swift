@@ -9,10 +9,16 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
     var stageError: CalendarEventWriteError?
     var commitError: CalendarEventWriteError?
     var openError: CalendarEventWriteError?
+    /// EventKit may allocate/change the event ID only at commit.
+    var assignsEventIdentifiersOnCommit = false
     private(set) var opened: [String] = []
     private(set) var commits = 0
     private(set) var rollbacks = 0
-    private var staged: [String: CalendarWriteSnapshot]?
+    private enum Mutation {
+        case save(replacing: String?, snapshot: CalendarWriteSnapshot)
+        case delete(String)
+    }
+    private var staged: Mutation?
 
     func calendars() -> [CalendarWriteCalendar] { availableCalendars }
     func event(identifier: String) -> CalendarWriteSnapshot? {
@@ -21,10 +27,10 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
 
     func stageCreate(_ draft: CalendarEventDraft, marker: String) throws -> CalendarWriteSnapshot {
         if let stageError { throw stageError }
-        let event = CalendarWriteSnapshot(eventIdentifier: UUID().uuidString,
-                                          itemIdentifier: UUID().uuidString, marker: marker, draft: draft)
-        staged = events
-        staged?[event.eventIdentifier] = event
+        let itemID = UUID().uuidString
+        let event = CalendarWriteSnapshot(eventIdentifier: assignsEventIdentifiersOnCommit ? itemID : UUID().uuidString,
+                                          itemIdentifier: itemID, marker: marker, draft: draft)
+        staged = .save(replacing: nil, snapshot: event)
         return event
     }
 
@@ -35,22 +41,27 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
         updated.draft = draft
         // Moving calendars may change EventKit's ID.
         if draft.calendarID != previous.draft.calendarID { updated.eventIdentifier = UUID().uuidString }
-        staged = events
-        staged?[previous.eventIdentifier] = nil
-        staged?[updated.eventIdentifier] = updated
+        staged = .save(replacing: previous.eventIdentifier, snapshot: updated)
         return updated
     }
 
     func stageDelete(_ previous: CalendarWriteSnapshot) throws {
         if let stageError { throw stageError }
         guard events[previous.eventIdentifier] == previous else { throw CalendarEventWriteError.eventChanged }
-        staged = events
-        staged?[previous.eventIdentifier] = nil
+        staged = .delete(previous.eventIdentifier)
     }
 
     func commit() throws {
         if let commitError { throw commitError }
-        if let staged { events = staged }
+        switch staged {
+        case let .save(replacing, snapshot):
+            if let replacing { events[replacing] = nil }
+            var committed = snapshot
+            if assignsEventIdentifiersOnCommit { committed.eventIdentifier = UUID().uuidString }
+            events[committed.eventIdentifier] = committed
+        case let .delete(identifier): events[identifier] = nil
+        case nil: break
+        }
         staged = nil
         commits += 1
     }
