@@ -17,10 +17,12 @@ final class TasksPageState: ObservableObject {
     let memory: TasksPageMemory?
     /// The next event in Now: its own Calendar source, which never asks
     /// for access (the Calendar page does).
-    private(set) lazy var nextEventFeed = TasksNextEventFeed(source: CalendarEventSources.makeDefault())
+    private(set) lazy var nextEventFeed = givenFeed ?? TasksNextEventFeed(source: CalendarEventSources.makeDefault())
+    private let givenFeed: TasksNextEventFeed?
 
-    init(memory: TasksPageMemory? = nil) {
+    init(memory: TasksPageMemory? = nil, nextEventFeed: TasksNextEventFeed? = nil) {
         self.memory = memory
+        givenFeed = nextEventFeed
     }
 
     /// The page model, made once over the app's command layer (the same

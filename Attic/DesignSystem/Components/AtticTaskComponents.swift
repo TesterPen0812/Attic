@@ -1361,6 +1361,8 @@ struct AtticTaskRow: View {
     #if DEBUG
     /// Test seam: how many times each row's body ran (bounded-update tests).
     static var evaluations: [UUID: Int] = [:]
+    /// Test seam: whether each row last drew its ›.
+    static var drawsOpen: [UUID: Bool] = [:]
     #endif
 
     var body: some View {
@@ -1397,6 +1399,9 @@ struct AtticTaskRow: View {
         let disabled = state == .disabled
         let showsOpen = Self.showsOpenButton(hovered: hovered || forced == .hover, selected: isSelected,
                                              renaming: titleEditing != nil, opens: onOpenPage != nil && !disabled)
+        #if DEBUG
+        let _ = Self.drawsOpen[model.id] = showsOpen
+        #endif
 
         ZStack(alignment: .topLeading) {
             Group {
@@ -1673,6 +1678,7 @@ struct AtticRowOpenButton: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @State private var hovered = false
+    @State private var probeID = UUID()
 
     var body: some View {
         let m = AtticRowOpenMetrics.self
@@ -1690,6 +1696,9 @@ struct AtticRowOpenButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Captures and tests: the drawn › and its size.
+        .atticControlProbe("row-open", id: probeID, expectedSize: CGSize(width: m.size, height: m.size),
+                           radius: AtticShape.controlRadius(height: m.size), expectedRadius: m.size / 2)
         .focusable(false)
         .focusEffectDisabled()
         .onHover { hovered = $0 }

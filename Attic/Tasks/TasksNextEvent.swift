@@ -91,6 +91,13 @@ final class TasksNextEventFeed {
         self.timer = timer
     }
 
+    #if DEBUG
+    /// Test seams: when the feed next reads again (the shown event's end,
+    /// or midnight), and that wake-up arriving now.
+    var nextWake: Date? { timer?.fireDate }
+    func wakeNow() { timer?.fire() }
+    #endif
+
     private func publish(_ event: TasksNextEvent?) {
         guard event != current else { return }
         current = event
@@ -99,7 +106,7 @@ final class TasksNextEventFeed {
 }
 
 /// The next event's row, at the top of Today: the calendar's dot where a
-/// task's ring sits, the time in the header's grey, then the title, all on
+/// task's ring sits, the time in the design's rgb(86,88,92), then the title, all on
 /// a task row's line (the design's 28 + 20 px columns and row padding). A
 /// hover tints it (3.5 %); a click opens that day on the Calendar page.
 struct TasksNextEventRow: View {
@@ -134,7 +141,7 @@ struct TasksNextEventRow: View {
                     .padding(.top, d.paddingY + (d.line - Self.dot) / 2)
                 HStack(alignment: .firstTextBaseline, spacing: Self.gap) {
                     Text(verbatim: event.time)
-                        .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: tokens).color)
+                        .foregroundStyle(TasksPanelDesign.toneInk(.nextEventTime, tokens: tokens).color)
                         .fixedSize()
                     Text(verbatim: event.title)
                         .foregroundStyle(tokens.ink(.heading).color)
