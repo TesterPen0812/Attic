@@ -355,7 +355,7 @@ struct AtticDeletedItemRow: View {
         .frame(height: AtticLayout.groupedRowTall)
         .background {
             if isSelected {
-                RoundedRectangle(cornerRadius: AtticRadius.control(height: fillHeight), style: .continuous)
+                AtticControlShape.shape(cornerRadius: AtticRadius.control(height: fillHeight), exponent: AtticShape.controlExponent)
                     .fill(design.tokens.selected.color)
                     .padding(m.selectionInset)
             }
@@ -404,7 +404,8 @@ struct AtticSearchField: View {
         let m = AtticSettingsRowMetrics.self
         let tokens = design.tokens
         let radius = AtticRadius.control(height: m.searchHeight)
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        // Shapes (Accepted 2026-10-30): Attic's own controls on curve 1.4.
+        let shape = AtticControlShape.shape(cornerRadius: radius, exponent: AtticShape.controlExponent)
         HStack(spacing: AtticSpacing.s8) {
             AtticIcon(systemName: "magnifyingglass", size: m.searchIconSize, weight: .regular, ink: .icon)
             if capture == nil {

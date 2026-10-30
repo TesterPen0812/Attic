@@ -587,11 +587,15 @@ struct AtticDropdownRow: View {
         listOwnsHighlight ? highlighted : (highlighted || hovered)
     }
 
+    /// The row's highlight: a surface squircle, concentric with the card
+    /// (Shapes, Accepted 2026-10-30).
+    static let highlightShape = Squircle(cornerRadius: AtticDropdownMetrics.highlightRadius, exponent: AtticShape.surfaceExponent)
+
     var body: some View {
         let m = AtticDropdownMetrics.self
         let tokens = design.tokens
         let lit = Self.isLit(highlighted: isHighlighted, hovered: hovered, listOwnsHighlight: onHover != nil)
-        let pill = RoundedRectangle(cornerRadius: m.highlightRadius, style: .continuous)
+        let pill = Self.highlightShape
         HStack(spacing: 0) {
             HStack(spacing: m.columnGap) {
                 if dot != nil, titleFont == nil, match?.isEmpty ?? true {
@@ -1582,7 +1586,7 @@ struct AtticUnfoldEffect: ViewModifier, Animatable {
     }
 }
 
-/// A card's outline while it unfolds: its rounded rectangle, cut to the
+/// A card's outline while it unfolds: its squircle, cut to the
 /// revealed height from its anchor's edge (the whole card at rest).
 struct AtticUnfoldShape: InsettableShape, Equatable {
     let cornerRadius: CGFloat
@@ -1606,7 +1610,8 @@ struct AtticUnfoldShape: InsettableShape, Equatable {
         let shown = CGRect(x: rect.minX, y: fromTop ? rect.minY : rect.maxY - height, width: rect.width, height: height)
             .insetBy(dx: insetAmount, dy: insetAmount)
         let radius = max(0, min(cornerRadius, height / 2) - insetAmount)
-        return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: shown)
+        // Shapes (Accepted 2026-10-30): menus are surface squircles.
+        return Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: shown)
     }
 }
 

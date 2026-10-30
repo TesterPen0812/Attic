@@ -2431,7 +2431,7 @@ final class AtticDateCardTests: XCTestCase {
         XCTAssertEqual(AtticTextStyle.dropdownDay.spec.size, 13)
         XCTAssertEqual(AtticTextStyle.dropdownWeekday.spec.size, 10)
         XCTAssertEqual(AtticTextStyle.dropdownSection.spec.size, 11)
-        XCTAssertEqual(m.monthMarkRadius, 6)
+        XCTAssertEqual(m.monthMarkRadius, m.monthMarkHeight / 2, "Shapes: the day marks on curve 1.4, half their height")
         XCTAssertEqual(AtticPickerMetrics.tagListMaxHeight, 6 * m.rowHeight + 4, "six rows before the tag list scrolls")
         XCTAssertEqual(m.monthCellWidth * 7 + m.dateBodyInset * 2, m.dateCardWidth, accuracy: 0.01, "draft C's 224 pt card")
     }
@@ -2636,7 +2636,7 @@ extension AtticDropdownTests {
 
     /// Draft C (owner, 2026-10-23) on the Craft spec supersedes O14-09's
     /// square grid: 29.7 x 26.7 cells with no gap, each holding a mark 4 pt
-    /// smaller each way (6 pt corners); the weekdays small, semibold and
+    /// smaller each way (on curve 1.4 since Shapes); the weekdays small, semibold and
     /// quieter than the days; the month header 28 pt with ‹ ⦿ › in 24 pt
     /// columns.
     func testDraftCTheCalendarGrid() {

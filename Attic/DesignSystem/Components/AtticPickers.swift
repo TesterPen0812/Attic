@@ -711,7 +711,8 @@ struct AtticDateCard: View {
     }
 
     private var navMark: some View {
-        RoundedRectangle(cornerRadius: AtticDropdownMetrics.monthMarkRadius, style: .continuous)
+        // A whole superellipse on curve 1.4, as the days' marks.
+        Squircle(cornerRadius: AtticDropdownMetrics.monthMarkRadius, exponent: AtticShape.controlExponent)
             .fill(design.tokens.dropdownHighlight.color)
     }
 
@@ -745,7 +746,7 @@ struct AtticDateCard: View {
             AtticText(verbatim: title, style: .dropdownRow, ink: lit ? .body : .label)
                 .padding(.horizontal, d.rowPadding)
                 .frame(maxWidth: .infinity, minHeight: d.clearHeight, maxHeight: d.clearHeight, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: d.clearRadius, style: .continuous)
+                .background(Squircle(cornerRadius: d.clearRadius, exponent: AtticShape.surfaceExponent)
                     .fill((lit ? tokens.dropdownHighlight : rest).color))
                 .contentShape(Rectangle())
         }
@@ -814,13 +815,20 @@ struct AtticDateCard: View {
     private static func dayID(_ day: Date) -> String { "attic.date.\(Int(day.timeIntervalSinceReferenceDate))" }
 }
 
-/// Calendar marks share one pixel-aligned outer contour. Circular arcs
-/// keep the inset stroke concentric with the fill at these small sizes.
-private struct AtticCalendarMark: View {
+/// Calendar marks share one pixel-aligned outer contour; the inset ring
+/// follows the same curve.
+struct AtticCalendarMark: View {
     let radius: CGFloat
     let fill: Color
     let ring: Color
     @Environment(\.displayScale) private var scale
+
+    /// A mark's outline in `rect`, drawn `inset` inside its edge: a
+    /// control on curve 1.4 (Shapes, Accepted 2026-10-30), rounded by half
+    /// its height, its ring concentric with it.
+    static func outline(in rect: CGRect, radius: CGFloat, inset: CGFloat = 0) -> Path {
+        Squircle(cornerRadius: radius, exponent: AtticShape.controlExponent).inset(by: inset).path(in: rect)
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -831,9 +839,8 @@ private struct AtticCalendarMark: View {
                               height: (frame.height * scale).rounded() / scale)
             let width = max(1, (AtticPickerMetrics.todayRing * scale).rounded()) / scale
             let r = (radius * scale).rounded() / scale
-            Path(roundedRect: rect, cornerRadius: r).fill(fill)
-            Path(roundedRect: rect.insetBy(dx: width / 2, dy: width / 2), cornerRadius: max(0, r - width / 2))
-                .stroke(ring, lineWidth: width)
+            Self.outline(in: rect, radius: r).fill(fill)
+            Self.outline(in: rect, radius: r, inset: width / 2).stroke(ring, lineWidth: width)
         }
         .allowsHitTesting(false)
     }
