@@ -106,6 +106,9 @@ final class DeepReviewFixTests: XCTestCase {
         // control (owner, 2026-10-17). Compare two
         // actual scroll positions in each state, with visible body movement
         // as a positive control so an empty capture cannot pass.
+        // The idle captures, by scroll position: Find's oracle compares
+        // the top row's open stretches with them.
+        var idleCaptures: [CGFloat: NSBitmapImageRep] = [:]
         func assertClear(bottom: CGFloat, state: String) throws {
             let content = try XCTUnwrap(hosted.window.contentView)
             func capture(_ y: CGFloat) throws -> NSBitmapImageRep {
@@ -115,6 +118,7 @@ final class DeepReviewFixTests: XCTestCase {
                 content.layoutSubtreeIfNeeded()
                 let image = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
                 content.cacheDisplay(in: content.bounds, to: image)
+                if state == "idle" { idleCaptures[y] = image }
                 return image
             }
             // The long demo has only fourteen added errands. 1,300 scrolls
@@ -130,6 +134,10 @@ final class DeepReviewFixTests: XCTestCase {
             }
             let scale = CGFloat(first.pixelsWide) / content.bounds.width
             func difference(top: CGFloat, bottom: CGFloat, threshold: CGFloat = 0.03) -> Double {
+                difference(first, second, top: top, bottom: bottom, threshold: threshold)
+            }
+            func difference(_ first: NSBitmapImageRep, _ second: NSBitmapImageRep, top: CGFloat, bottom: CGFloat,
+                            threshold: CGFloat = 0.03) -> Double {
                 var changed = 0, total = 0
                 for y in Int(top * scale)..<min(Int(bottom * scale), first.pixelsHigh, second.pixelsHigh) {
                     for x in 0..<first.pixelsWide {
@@ -169,12 +177,39 @@ final class DeepReviewFixTests: XCTestCase {
             // and the bottom stack, visible through the blur behind them
             // (which an in-process capture does not draw). The body's
             // movement above is the positive control.
+            // Find: the open field fills the top row, and the in-process
+            // capture draws it (its drawn edge reaches about 8 pt past its
+            // frame), so the rows show only above and below it, where a
+            // phase can leave nothing but the gap between two rows. There
+            // the rows must draw exactly as they do under the idle row at
+            // the same scroll position (a list clipped or masked under the
+            // header fails wherever idle shows a row), and they must move
+            // there at some phase (the positive control).
+            let band = TasksViewport.plainLine(tabsTop: tabsTop).upperBound
+            let field = PanelTopRowLayout.fieldFrame(layout)
+            let fieldEdge: CGFloat = 9
+            let open = [(top: CGFloat(0), bottom: field.minY - fieldEdge), (top: field.maxY + fieldEdge, bottom: band)]
+            var openMoved = 0.0
             for phase in [CGFloat(0), AtticLayout.rowPitch / 3, AtticLayout.rowPitch * 2 / 3] {
                 if phase > 0 { first = try capture(260 - phase); second = try capture(200 - phase) }
-                XCTAssertGreaterThan(difference(top: 0, bottom: TasksViewport.plainLine(tabsTop: tabsTop).upperBound), 0.0005,
-                                     "\(state): rows run on under the header and the tabs at phase \(phase)")
+                if state == "Find" {
+                    for (image, y) in [(first, 260 - phase), (second, 200 - phase)] {
+                        let idle = try XCTUnwrap(idleCaptures[y], "the idle capture at \(y)")
+                        for stretch in open {
+                            XCTAssertLessThan(difference(image, idle, top: stretch.top, bottom: stretch.bottom), 0.0005,
+                                              "Find: rows run on under the top row (\(stretch.top)–\(stretch.bottom) pt) as when idle, at \(y)")
+                        }
+                    }
+                    openMoved = max(openMoved, open.map { difference(top: $0.top, bottom: $0.bottom) }.max() ?? 0)
+                } else {
+                    XCTAssertGreaterThan(difference(top: 0, bottom: band), 0.0005,
+                                         "\(state): rows run on under the header and the tabs at phase \(phase)")
+                }
                 XCTAssertGreaterThan(difference(top: bottom, bottom: hosted.height), 0.0005,
                                      "\(state): rows run on under the bottom stack at phase \(phase)")
+            }
+            if state == "Find" {
+                XCTAssertGreaterThan(openMoved, 0.0005, "Find: the rows move above and below the open field")
             }
             XCTAssertTrue(ScrollEdgeTests.pockets(in: list).isEmpty, "\(state): no native edge")
             XCTAssertEqual(frame(), resting, "\(state): controls never change the viewport")

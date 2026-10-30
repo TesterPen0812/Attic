@@ -90,6 +90,97 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(field.minX, 340 - field.maxX, accuracy: 0.001, "the open field: equal space on both sides")
     }
 
+    // MARK: Review fixes (w1-fixes)
+
+    /// The pin's glass folds with the switch and ••• while the search is
+    /// open (a glass group ignores an opacity set on its members from
+    /// outside), and comes back when Escape closes the field.
+    func testThePinsGlassFoldsWithTheSearchAndComesBack() throws {
+        let state = PanelTopRowState()
+        let header = PanelHeader(isPinned: false, page: .tasks, onTogglePin: {}, onSelectPage: { _ in })
+            .environment(\.panelTopRowState, state)
+            .atticDesign(.default)
+            .frame(width: 340, height: 40)
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 340, height: 40), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: header)
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        spin(0.3)
+        XCTAssertFalse(PanelPinFoldProbe.away)
+        XCTAssertFalse(PanelPinFoldProbe.gone)
+        state.setSearching(true, on: .tasks)
+        spin(0.05)
+        XCTAssertTrue(PanelPinFoldProbe.away, "the pin's glass fades as the search opens")
+        spin(0.6)
+        XCTAssertTrue(PanelPinFoldProbe.away)
+        XCTAssertTrue(PanelPinFoldProbe.gone, "and is gone once the fade is over")
+        // Escape: the row reports its search closed.
+        state.setSearching(false, on: .tasks)
+        spin(0.6)
+        XCTAssertFalse(PanelPinFoldProbe.away, "Escape brings the pin back")
+        XCTAssertFalse(PanelPinFoldProbe.gone)
+        // Another page's search leaves this page's pin alone.
+        state.setSearching(true, on: .notes)
+        spin(0.6)
+        XCTAssertFalse(PanelPinFoldProbe.away)
+        XCTAssertFalse(PanelPinFoldProbe.gone)
+    }
+
+    /// Shut, the page switch still shows the current page on the grey chip
+    /// ("with the current page on a grey chip").
+    func testTheShutPageSwitchDrawsTheCurrentPageOnTheMarker() throws {
+        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
+            let button = AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false, flat: true)
+                .atticDesign(context)
+            let renderer = ImageRenderer(content: button)
+            renderer.scale = 2
+            let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+            func level(_ x: CGFloat, _ y: CGFloat) throws -> CGFloat {
+                let c = try XCTUnwrap(bitmap.colorAt(x: Int(x * 2), y: Int(y * 2))?.usingColorSpace(.sRGB))
+                return (c.redComponent + c.greenComponent + c.blueComponent) / 3 * c.alphaComponent
+            }
+            // Above the glyph, inside the 21 pt chip (3 pt in) / beside it on the surface.
+            let chip = try level(3 + 10.5, 6)
+            let surface = try level(28.5, 6)
+            XCTAssertGreaterThan(abs(chip - surface), 0.005, "\(context.caption): the current page sits on the marker while shut")
+        }
+    }
+
+    /// Shapes on the solid pickers: the cards and their rows are surface
+    /// squircles at the menu radius (14 pt, rows 11 pt), and the date
+    /// picker's day marks whole superellipses on curve 1.4.
+    func testPickerCardsRowsAndDayMarksFollowShapes() {
+        let d = AtticDropdownMetrics.self
+        let card = CGRect(x: 0, y: 0, width: 224, height: 260)
+        XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
+                       Squircle(cornerRadius: 14, exponent: AtticShape.surfaceExponent).path(in: card),
+                       "the card: a surface squircle at the menu radius")
+        let row = CGRect(x: 3, y: 3, width: 218, height: 32)
+        XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
+                       Squircle(cornerRadius: 11, exponent: AtticShape.surfaceExponent).path(in: row), "a row: 11 pt squircle")
+        XCTAssertEqual(d.clearRadius, d.highlightRadius, "Clear Date is a row")
+        XCTAssertEqual(d.monthMarkRadius, d.monthMarkHeight / 2, "a day mark is rounded by half its height")
+        let mark = CGRect(x: 0, y: 0, width: d.monthMarkWidth, height: d.monthMarkHeight)
+        let curve = Squircle(cornerRadius: d.monthMarkRadius, exponent: AtticShape.controlExponent)
+        XCTAssertEqual(AtticCalendarMark.outline(in: mark, radius: d.monthMarkRadius), curve.path(in: mark), "curve 1.4")
+        XCTAssertEqual(AtticCalendarMark.outline(in: mark, radius: d.monthMarkRadius, inset: 0.5), curve.inset(by: 0.5).path(in: mark),
+                       "today's ring follows the mark")
+    }
+
+    /// The "+" expansion (the switch and the tag bar folding as the field
+    /// takes the row) moves on the bar's fold token: the design's ease at
+    /// 260 ms, Reduce Motion a 150 ms fade, as the footer's tabs folded in
+    /// pd-combined (unchanged motion).
+    func testThePlusExpansionUsesTheBarsFoldToken() {
+        for reduce in [false, true] {
+            XCTAssertEqual(TasksBottomBar<EmptyView>.foldAnimation(reduceMotion: reduce), TasksDesignMetrics.fold(reduceMotion: reduce))
+        }
+        XCTAssertEqual(TasksDesignMetrics.fold(reduceMotion: false), TasksDesignMetrics.curve(0.26))
+        XCTAssertEqual(TasksDesignMetrics.fold(reduceMotion: true), .easeOut(duration: 0.15))
+    }
+
     // MARK: In the panel
 
     private func elements(_ root: AnyObject) -> [AnyObject] {
@@ -222,6 +313,7 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertGreaterThan(text.maxX, host.bounds.width - insets.trailing - 40, "the field fills the row to the right inset")
             XCTAssertLessThanOrEqual(text.maxX, host.bounds.width - insets.trailing + 0.5)
             XCTAssertNil(element("panel-pin-button", in: host), "Pin folds away")
+            XCTAssertTrue(PanelPinFoldProbe.away && PanelPinFoldProbe.gone, "and so does its glass")
             XCTAssertNil(element("tasks-page-tabs", in: host), "the switch folds away")
             XCTAssertNil(element("panel-settings-button", in: host), "••• folds away")
             XCTAssertEqual(chrome.modeDockWidth, host.bounds.width, "no drag lane under the open field")
