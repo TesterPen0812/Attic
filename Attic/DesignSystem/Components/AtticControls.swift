@@ -290,7 +290,8 @@ enum AtticHoverGate {
 
 /// The header's page button (Phase 0's mode dock, brought into Direction
 /// A, 2026-09-26): at rest a square the size and shape of the pin, showing
-/// only the current page's icon, plain as the pin's (D-11). Under the
+/// only the current page's icon, on the grey selection marker (Accepted
+/// 2026-10-30; it was plain as the pin's, D-11). Under the
 /// pointer or keyboard focus it opens leftward into all the pages' icons
 /// (the current one on the chip, each with a tooltip and its shortcut); a
 /// click goes there, and it folds back when the pointer leaves. 36 pt,
@@ -322,7 +323,7 @@ struct AtticPageButton<Page: Hashable>: View {
     /// The pointer arrived: the caller can build the other pages early.
     var onApproach: () -> Void = {}
     /// L3: the flat corner surface; the current page's glyph sits on it
-    /// with no inner chip (open, the chip still marks it among the others).
+    /// on the grey selection marker, shut or open.
     var flat = false
 
     @Environment(\.atticDesign) private var design
@@ -358,14 +359,10 @@ struct AtticPageButton<Page: Hashable>: View {
                 Button { select(item.page) } label: {
                     ZStack {
                         let shape = AtticControlShape.shape(cornerRadius: chipRadius, exponent: cornerExponent)
-                        if isSelected, !open {
-                            // Shut, the current page's glyph sits plain, as the
-                            // pin's does (D-11, owner 2026-10-11): the chip
-                            // means "on" only for a pinned pin, and marks the
-                            // current page only among the others once open.
-                        } else if isSelected {
+                        if isSelected {
                             // One selection marker (Accepted 2026-10-30):
-                            // every switch's flat grey chip.
+                            // every switch's flat grey chip, shut too ("with
+                            // the current page on a grey chip").
                             AtticSelectionMarker(cornerRadius: chipRadius)
                         } else if hoveredPage == item.page {
                             shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
@@ -400,7 +397,11 @@ struct AtticPageButton<Page: Hashable>: View {
             // The owner's panel design: shut, a small chevron after the
             // current page says it opens.
             if !open {
+                // The marker sits just before it and the button's rim just
+                // after, so the check reads its own surface inside the
+                // chevron's frame, where the V never draws.
                 AtticIcon(systemName: "chevron.down", size: 7, weight: .semibold, ink: .chevron)
+                    .probeBackground([CGPoint(x: 0.5, y: 0.06), CGPoint(x: 0.06, y: 0.94), CGPoint(x: 0.94, y: 0.94)])
                     .frame(width: M.chevronWidth, height: M.segment)
                     .transition(.opacity)
                     .accessibilityHidden(true)
