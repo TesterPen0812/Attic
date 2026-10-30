@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -79,34 +80,94 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
 
     // MARK: The "•••" menu
 
-    func testTheHoverMenuUsesTheLibrarysOneItemCommands() {
-        var ran: [String] = []
-        let commands = [
-            AtticMenuCommand("Open", identifier: "notes-row-open") { ran.append("open") },
-            AtticMenuCommand("Pin to Top", identifier: "notes-row-pin") { ran.append("pin") },
-            AtticMenuCommand("Add to Tasks", identifier: "one-item-add-to-tasks") { ran.append("convert") },
-            AtticMenuCommand("Duplicate", identifier: NotesLibraryView.duplicateIdentifier) { ran.append("duplicate") },
-            AtticMenuCommand("Delete", isDestructive: true, identifier: "notes-row-delete") { ran.append("delete") }
-        ]
+    private func controller() -> NotesPageController {
+        NotesPageController(store: store,
+            journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "OneItemLibrary")), defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+    }
+
+    private func rowCommands(_ id: UUID, controller: NotesPageController, tasks: TaskStore? = nil,
+                             delete: @escaping (UUID) -> Void) -> [AtticMenuCommand] {
+        NotesEditorPage.libraryRowCommands(id, noteStore: store, controller: controller, taskStore: tasks,
+            activeTag: nil, hue: { _ in nil }, filter: { _ in }, open: { _ in }, delete: delete)
+    }
+
+    func testOrdinaryNoteHoverMenuUsesRealLibraryCommands() async throws {
+        let id = try create("Groceries", "Milk and eggs"), controller = self.controller()
+        var added: [UUID] = [], deleted: [UUID] = []
+        controller.makeTaskFromNote = { added.append($0) }
+        let commands = rowCommands(id, controller: controller, delete: { deleted.append($0) })
         let menu = NotesLibraryView.hoverMenu(commands, pinned: false)
         XCTAssertEqual(menu.map(\.title), ["Pin", "Add to Tasks", "Delete"])
         XCTAssertEqual(menu.map(\.identifier), ["notes-row-pin", "one-item-add-to-tasks", "notes-row-delete"])
         XCTAssertEqual(menu.map(\.isDestructive), [false, false, true])
         XCTAssertTrue(menu[2].startsSection)
-        menu.forEach { $0.action() }
-        XCTAssertEqual(ran, ["pin", "convert", "delete"], "each item runs the row's own command")
+        XCTAssertEqual(menu[2].shortcut, commands.last?.shortcut)
+        menu[1].action()
+        for _ in 0..<100 where added.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(added, [id], "runs the real library producer's Add to Tasks")
+        menu[2].action()
+        XCTAssertEqual(deleted, [id])
+    }
 
-        let remove = AtticMenuCommand("Remove from Tasks", identifier: "one-item-remove-from-tasks") { ran.append("remove") }
-        let task = NotesLibraryView.hoverMenu(commands.filter { $0.identifier != "one-item-add-to-tasks" } + [remove], pinned: true)
-        XCTAssertEqual(task.map(\.title), ["Unpin", "Remove from Tasks", "Delete"])
-        task[1].action()
-        XCTAssertEqual(ran.last, "remove")
-        let bare = NotesLibraryView.hoverMenu(commands.filter { $0.identifier != "one-item-add-to-tasks" }, pinned: false)
-        XCTAssertEqual(bare.map(\.title), ["Pin", "Delete"])
-        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 36, modifiers: .command, characters: "\r",
-                                                composing: false, fieldFocused: false), .open)
-        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 36, modifiers: .command, characters: "\r",
-                                                composing: true, fieldFocused: true), .passThrough)
+    func testTaskWritingHoverMenuUsesRealLibraryCommands() throws {
+        let context = ModelContext(store.container)
+        let task = TaskItem(title: "Plan the offsite")
+        context.insert(task)
+        try context.save()
+        let id = UUID()
+        _ = try store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text(task.title), .text("Book the boathouse")]),
+                                         taskOwner: task.id).get()
+        XCTAssertTrue(store.setPinned(true, noteID: id))
+        let controller = self.controller(), tasks = TaskStore(container: store.container)
+        var removed: [UUID] = [], deleted: [UUID] = []
+        controller.removeFromTasks = { removed.append($0) }
+        let menu = NotesLibraryView.hoverMenu(rowCommands(id, controller: controller, tasks: tasks,
+            delete: { deleted.append($0) }), pinned: true)
+        XCTAssertEqual(menu.map(\.title), ["Unpin", "Remove from Tasks", "Delete"])
+        XCTAssertFalse(menu[1].isDestructive)
+        menu[1].action(); menu[2].action()
+        XCTAssertEqual(removed, [task.id])
+        XCTAssertEqual(deleted, [id])
+    }
+
+    func testCommandReturnUsesTheNotesKeyHandlerButPlainReturnKeepsItsBaseScope() throws {
+        let id = try create("Selected note", "Writing")
+        let controller = NotesPageController(store: store,
+            journal: NoteDraftJournal(directory: ownedTemporaryDirectory(prefix: "OneItemKeys")), defaults: nil,
+            saveDelay: .seconds(600), durabilityDelay: .seconds(600))
+        XCTAssertTrue(controller.open(noteID: id))
+        XCTAssertTrue(controller.showLibrary())
+        let model = library(), keys = NotesLibraryKeys()
+        var opened: [UUID] = []
+        let view = NotesLibraryView(model: model, controller: controller, store: store,
+            layout: PanelPageLayout(cornerSize: 28, panelSize: CGSize(width: 320, height: 460)),
+            bottomClearance: 0, searchFocused: .constant(false), searchOpen: .constant(false),
+            rowCommands: { _ in [] }, libraryCommands: { [] }, onOpen: { opened.append($0) },
+            onDelete: { _ in }, onBack: {}, keys: keys)
+        let host = NSHostingView(rootView: view.frame(width: 320, height: 460))
+        let window = NSWindow(contentRect: CGRect(x: -4000, y: -4000, width: 320, height: 460),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        host.layoutSubtreeIfNeeded()
+        let handler = try XCTUnwrap(keys.handler, "the mounted library's real key handler")
+        func key(_ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                isARepeat: false, keyCode: 36))
+        }
+        XCTAssertNil(model.highlightedID)
+        XCTAssertEqual(controller.librarySelectionID, id)
+        XCTAssertFalse(handler(try key([])), "plain Return outside search passes through without a keyboard highlight")
+        XCTAssertTrue(opened.isEmpty)
+        XCTAssertTrue(handler(try key(.command)))
+        XCTAssertEqual(opened, [id], "⌘Return opens the selected item")
+        model.highlightedID = id
+        XCTAssertTrue(handler(try key([])), "a keyboard-highlighted row still opens on Return")
+        XCTAssertEqual(opened, [id, id])
     }
 
     // MARK: Thumbnails

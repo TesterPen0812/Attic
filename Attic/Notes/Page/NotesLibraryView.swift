@@ -39,7 +39,7 @@ struct NotesLibraryView: View {
         get { searchFocused }
         nonmutating set { searchFocused = newValue }
     }
-    @StateObject private var keys = NotesLibraryKeys()
+    @StateObject var keys = NotesLibraryKeys()
     @State private var keyOwner = UUID()
     /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
     @State private var anchors = AtticNoteRowAnchors()
@@ -244,7 +244,7 @@ struct NotesLibraryView: View {
         case let .move(step):
             model.moveHighlight(by: step, in: groups, from: selected)
         case .open:
-            if let id = model.openTarget(in: groups) ?? model.commandTarget(in: groups, selected: selected) {
+            if let id = model.openTarget(in: groups) ?? (event.modifierFlags.contains(.command) ? model.commandTarget(in: groups, selected: selected) : nil) {
                 onOpen(id)
             } else if !event.modifierFlags.contains(.command), fieldFocused, let title = model.queryForNewNote(in: all) {
                 // Nothing matched: Return makes the note the search names.
