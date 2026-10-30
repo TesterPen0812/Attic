@@ -33,7 +33,7 @@ final class TaskTextParserTests: XCTestCase {
     }
 
     func testTaskTimesAreRemovedAlongsideExistingDayTagAndPriorityTokens() {
-        for time in ["4pm", "4:30 pm", "16:30", "16.30"] {
+        for time in ["4pm", "4:30 pm", "16:30"] {
             let parsed = parser().parse("Call tomorrow \(time) #home !")
             XCTAssertEqual(parsed.title, "Call", time)
             XCTAssertEqual(parsed.dueDay, day(2026, 9, 25))
@@ -44,8 +44,8 @@ final class TaskTextParserTests: XCTestCase {
 
     func testTimeOnlyMeansTodayAndNonTimesRetainExistingMeaning() {
         let parser = parser()
-        for (text, minutes) in [("4pm", 960), ("4:30 pm", 990), ("16:30", 990), ("16.30", 990),
-                                ("12am", 0), ("12pm", 720), ("23:59", 1439), ("9.05 AM", 545)] {
+        for (text, minutes) in [("4pm", 960), ("4:30 pm", 990), ("16:30", 990),
+                                ("12am", 0), ("12pm", 720), ("23:59", 1439)] {
             let result = parser.parse("Call \(text)")
             XCTAssertEqual(result.dueDay, day(2026, 9, 24), text)
             XCTAssertEqual(result.dueTimeMinutes, minutes, text)
@@ -61,6 +61,16 @@ final class TaskTextParserTests: XCTestCase {
         let first = parser.parse("Call 4pm 5pm")
         XCTAssertEqual(first.dueTimeMinutes, 960)
         XCTAssertEqual(first.title, "Call 5pm")
+    }
+
+    func testDecimalPricesAndDotClocksStayTitleText() {
+        for text in ["Pay 12.50 rent", "Read 3.14", "9.05 AM", "Pay £12.50", "Call 16.30"] {
+            let parsed = parser().parse(text)
+            XCTAssertEqual(parsed.title, text)
+            XCTAssertNil(parsed.dueTimeMinutes)
+            XCTAssertNil(parsed.dueDay)
+            XCTAssertTrue(parsed.tokens.isEmpty)
+        }
     }
 
     // MARK: - Plain text
