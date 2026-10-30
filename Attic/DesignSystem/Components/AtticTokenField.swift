@@ -186,7 +186,9 @@ struct AtticTokenField: NSViewRepresentable {
             font: style.nsFont,
             text: NSColor(tokens.color(isEnabled ? ink : .disabledText)),
             piece: NSColor(tokens.color(isEnabled ? pieceInk : .disabledText)),
-            high: NSColor(tokens.color(isEnabled ? .priorityMark : .disabledText)),
+            // "!!" in the rows' see-through orange (`TasksPanelDesign.vivid`).
+            high: NSColor(isEnabled ? TasksPanelDesign.vivid(tokens.ink(.priorityMark), tokens: tokens).color
+                                    : tokens.color(.disabledText)),
             caret: NSColor(tokens.color(.heading)),
             reduceMotion: design.reduceMotion
         ))
@@ -936,6 +938,8 @@ struct AtticChipText: View {
     let chips: [AtticTokenChip]
     var disabled = false
 
+    @Environment(\.atticDesign) private var design
+
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
@@ -947,6 +951,7 @@ struct AtticChipText: View {
                                 .accessibilityHidden(true)
                         }
                         AtticText(verbatim: segment.text, style: .listBody, ink: ink, allowsOverlap: true)
+                            .colour(ink == .priorityMark ? TasksPanelDesign.vivid(design.tokens.ink(.priorityMark), tokens: design.tokens) : nil)
                     }
                 } else if segment.text.allSatisfy(\.isWhitespace) {
                     // Only space: nothing to read, so nothing to check.
