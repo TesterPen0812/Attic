@@ -28,9 +28,9 @@ enum TasksPanelDesign {
         let title: String
         /// The overdue header's own colour.
         let isOverdue: Bool
-        /// The rows, in the list's order.
+        /// The rows in clock order within each day, with stable ties.
         var ids: [UUID]
-        /// Rows under a day header show only a time (none in Attic).
+        /// Rows under a day header omit the date; time display is deferred.
         var rowsShowDate: Bool {
             switch kind {
             case .overdue, .today, .noDate: true
@@ -44,12 +44,30 @@ enum TasksPanelDesign {
 
     /// Now's and Later's groups (the design's `VIEWS`, applied to Attic's
     /// pages): Overdue · Today · each later day (Tomorrow, then "Wed 29
-    /// Oct") · No date. Rows keep the list's order inside each group; empty
+    /// Oct") · No date. Clock order within each day, stable ties; empty
     /// groups are left out.
-    static func groups(_ rows: [(id: UUID, due: DueDay?)], today: DueDay, calendar: Calendar, locale: Locale) -> [Group] {
+    static func groups(_ rows: [(id: UUID, due: DueDay?)], times: [UUID: Int] = [:], today: DueDay, calendar: Calendar, locale: Locale) -> [Group] {
         var overdue: [UUID] = [], todays: [UUID] = [], noDate: [UUID] = []
         var days: [DueDay: [UUID]] = [:]
-        for row in rows {
+        // Reorder only slots belonging to the same date. This also keeps
+        // overdue tasks from different days in their existing relative slots.
+        var ordered: [DueDay: [UUID]] = [:]
+        if !times.isEmpty {
+            for (day, entries) in Dictionary(grouping: rows.filter { $0.due != nil }, by: { $0.due! }) {
+                ordered[day] = entries.enumerated().sorted { a, b in
+                    let left = times[a.element.id] ?? 1440, right = times[b.element.id] ?? 1440
+                    return left == right ? a.offset < b.offset : left < right
+                }.map { $0.element.id }
+            }
+        }
+        var offsets: [DueDay: Int] = [:]
+        for original in rows {
+            var row = original
+            if let day = row.due, let ids = ordered[day] {
+                let index = offsets[day, default: 0]
+                row.id = ids[index]
+                offsets[day] = index + 1
+            }
             guard let due = row.due else { noDate.append(row.id); continue }
             if due < today { overdue.append(row.id) } else if due == today { todays.append(row.id) } else { days[due, default: []].append(row.id) }
         }

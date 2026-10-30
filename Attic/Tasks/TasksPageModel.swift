@@ -663,10 +663,12 @@ final class TasksPageModel: ObservableObject {
             }
         }
         // The date groups (owner's panel design): Overdue · Today · each
-        // later day · No date, the list's order kept inside each. Built
+        // later day · No date, clocks first within each day, stable ties. Built
         // here, so only when the rows change (or the day does: `today` is
         // in the key). A folded group's rows are left out of the list.
-        let groups = TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, today: key.today,
+        let times = Dictionary(store.tasks.compactMap { task in task.dueTimeMinutes.map { (task.id, $0) } },
+                               uniquingKeysWith: { first, _ in first })
+        let groups = TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, times: times, today: key.today,
                                              calendar: services.calendar(), locale: services.locale)
         let byID = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for group in groups where !key.folded.contains(group.key) {
@@ -674,8 +676,7 @@ final class TasksPageModel: ObservableObject {
             defer { sections.groupRows[group.key] = drawn }
             for id in group.ids {
                 guard var row = byID[id] else { continue }
-                // Under a day header a row shows only its time (Attic's
-                // tasks have none): the date is the header's.
+                // The header names the date. Time display stays deferred.
                 if !group.rowsShowDate, row.model.due != nil {
                     var model = row.model
                     model.due = nil

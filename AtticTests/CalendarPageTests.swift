@@ -116,9 +116,9 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(groups.map(\.day), (0..<7).map { CalendarMonthMath.adding(days: $0, to: today, calendar: calendar) })
         XCTAssertEqual(groups.map(\.relative), [.today, .tomorrow, nil, nil, nil, nil, nil])
         XCTAssertEqual(groups[0].items.map(\.id), [
-            "event-allday", "task-" + tasks[1].id.uuidString, "task-" + tasks[0].id.uuidString,
-            "event-early", "now", "event-late",
-        ], "all-day, overdue first, today's tasks, then timed events around the now line")
+            "event-allday", "task-" + tasks[1].id.uuidString,
+            "event-early", "now", "event-late", "task-" + tasks[0].id.uuidString,
+        ], "all-day, overdue carry-ins, timeline around now, then untimed tasks")
         XCTAssertTrue(groups[1].items.isEmpty, "a free day shows its tile alone")
         XCTAssertEqual(groups[2].items.map(\.id), ["event-next"], "no now line away from today")
     }

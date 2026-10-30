@@ -214,7 +214,7 @@ final class CalendarPageModel: ObservableObject {
             // own day the tile already says when it is due.
             let isOpen = task.status != .done
             if !(isOpen && due < today) { row.due = nil }
-            return CalendarTaskEntry(id: task.id, title: task.title, due: due, isOpen: isOpen, row: row)
+            return CalendarTaskEntry(id: task.id, title: task.title, due: due, isOpen: isOpen, row: row, dueTimeMinutes: task.dueTimeMinutes)
         }
     }
 

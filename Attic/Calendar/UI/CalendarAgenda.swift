@@ -11,13 +11,15 @@ struct CalendarTaskEntry: Equatable, Sendable {
     let title: String
     let due: DueDay
     let isOpen: Bool
+    var dueTimeMinutes: Int?
     var row: AtticTaskRowModel
 
-    init(id: UUID, title: String, due: DueDay, isOpen: Bool, row: AtticTaskRowModel? = nil) {
+    init(id: UUID, title: String, due: DueDay, isOpen: Bool, row: AtticTaskRowModel? = nil, dueTimeMinutes: Int? = nil) {
         self.id = id
         self.title = title
         self.due = due
         self.isOpen = isOpen
+        self.dueTimeMinutes = dueTimeMinutes
         self.row = row ?? AtticTaskRowModel(id: id, title: title)
     }
 
@@ -63,9 +65,8 @@ enum CalendarAgenda {
     }
 
     /// The agenda without a search: `dayCount` days from `selected`.
-    /// Each day lists its all-day events, then its tasks (on today, the open
-    /// overdue tasks first), then its timed events in order, with the now
-    /// line among today's.
+    /// Each day lists all-day events, overdue carry-ins on today, the
+    /// merged event/task timeline and now line, then untimed tasks.
     static func groups(selected: DueDay, clock: Clock, events: [CalendarEvent], tasks: [CalendarTaskEntry],
                        calendar: Calendar) -> [CalendarAgendaGroup] {
         (0..<dayCount).map { offset in
@@ -119,17 +120,46 @@ enum CalendarAgenda {
     private static func group(day: DueDay, clock: Clock, events: [CalendarEvent], tasks: [CalendarTaskEntry],
                               showsNow: Bool, calendar: Calendar) -> CalendarAgendaGroup {
         let allDay = events.filter(\.isAllDay)
-        let timed = events.filter { !$0.isAllDay }
-        var items = allDay.map(CalendarAgendaItem.event) + tasks.map(CalendarAgendaItem.task)
+        // Keep grouping untouched: only merge clocks into this day's
+        // event timeline. Overdue carry-ins retain their existing block;
+        // their clock belongs to their own date, never today's timeline.
+        let carried = tasks.filter { $0.due != day }
+        let own = tasks.filter { $0.due == day }
+        // Events and now keep their real chronology through repeated
+        // hours. Floating clocks use the first occurrence; gap clocks move
+        // to the next valid instant and sort by entered time at that tie.
+        func minute(of date: Date) -> Int {
+            let parts = calendar.dateComponents([.hour, .minute], from: date)
+            return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        }
+        var timeline = events.filter { !$0.isAllDay }.map {
+            (date: $0.start, minute: minute(of: $0.start), item: CalendarAgendaItem.event($0))
+        }
+        var untimed: [CalendarTaskEntry] = []
+        for task in own {
+            if let minutes = task.dueTimeMinutes, (0..<1440).contains(minutes),
+               let start = day.startDate(in: calendar),
+               let instant = calendar.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: start,
+                                           matchingPolicy: .nextTime, repeatedTimePolicy: .first) {
+                timeline.append((date: instant, minute: minutes, item: .task(task)))
+            } else { untimed.append(task) }
+        }
+        timeline = timeline.enumerated().sorted { a, b in
+            if a.element.date != b.element.date { return a.element.date < b.element.date }
+            if a.element.minute != b.element.minute { return a.element.minute < b.element.minute }
+            return a.offset < b.offset
+        }.map(\.element)
+        var items = allDay.map(CalendarAgendaItem.event) + carried.map(CalendarAgendaItem.task)
         var nowPlaced = !showsNow
-        for event in timed {
-            if !nowPlaced, event.start > clock.now {
+        for entry in timeline {
+            if !nowPlaced, entry.date > clock.now {
                 items.append(.now)
                 nowPlaced = true
             }
-            items.append(.event(event))
+            items.append(entry.item)
         }
         if !nowPlaced { items.append(.now) }
+        items += untimed.map(CalendarAgendaItem.task)
         let group = CalendarAgendaGroup(day: day, relative: relative(day, today: clock.today, calendar: calendar), items: items)
         // A day with nothing on it shows its tile alone (no lone now line).
         return group.hasRows ? group : CalendarAgendaGroup(day: day, relative: group.relative, items: [])
