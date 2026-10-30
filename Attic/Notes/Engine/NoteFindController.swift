@@ -261,7 +261,10 @@ final class NoteFindController: ObservableObject {
         let tableScope = pendingMatches == nil && !pendingFullSearch && !selectFirst
             ? changedTable.flatMap { engine.range(ofTable: $0) } : nil
         let incremental = !selectFirst && !pendingFullSearch && pendingSearchRange != nil
-        let scope = tableScope ?? (incremental ? pendingSearchRange! : NSRange(location: 0, length: engine.textStorage.length))
+        let requested = tableScope ?? (incremental ? pendingSearchRange! : NSRange(location: 0, length: engine.textStorage.length))
+        let text = engine.textStorage.string as NSString
+        let bodyStart = engine.isBodyOnly || text.length == 0 ? 0 : NSMaxRange(text.paragraphRange(for: NSRange(location: 0, length: 0)))
+        let scope = NSIntersectionRange(requested, NSRange(location: bodyStart, length: max(0, text.length - bodyStart)))
         var found = tableScope != nil ? matches.filter { $0.tableID != changedTable?.objectID || $0.noteRange != tableScope! }
             : (incremental ? (pendingMatches ?? []) : [])
         if tableScope == nil {
@@ -411,5 +414,36 @@ private struct NoteFindBar: View {
         .accessibilityIdentifier("note-find-bar")
         .padding(AtticSpacing.s8)
         .background(AtticPopoverBackground(cornerRadius: AtticRadius.contentCard))
+    }
+}
+
+extension NoteEditorEngine {
+    /// A library search opens the writing at its paragraph without opening
+    /// Find or changing its query/highlights. Structured fields stay outside
+    /// the editor's in-page Find, including on a task page.
+    func searchParagraph(matching query: String) -> NSRange? {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return nil }
+        let text = textStorage.string as NSString
+        let start = isBodyOnly || text.length == 0 ? 0
+            : NSMaxRange(text.paragraphRange(for: NSRange(location: 0, length: 0)))
+        let scope = NSRange(location: start, length: max(0, text.length - start))
+        let match = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: scope)
+        if match.location != NSNotFound {
+            return NSRange(location: text.paragraphRange(for: match).location, length: 0)
+        }
+        var tableRange: NSRange?
+        textStorage.enumerateAttribute(.attachment, in: scope) { value, range, stop in
+            guard let table = value as? NoteTableAttachment,
+                  table.table.texts.flatMap({ $0 }).contains(where: { $0.localizedStandardContains(query) }) else { return }
+            tableRange = range; stop.pointee = true
+        }
+        return tableRange
+    }
+
+    func revealSearchParagraph(_ range: NSRange) {
+        unfoldHeadings(containing: range)
+        textView?.setSelectedRange(range)
+        textView?.scrollRangeToVisible(range)
     }
 }

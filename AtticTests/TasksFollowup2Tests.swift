@@ -69,7 +69,8 @@ final class TasksFollowup2Tests: XCTestCase {
         press("0", 29, expecting: .none)
 
         let priority = try XCTUnwrap(hosted.page.taskCommands(row.id, tab: .now).first { $0.title == "Priority" })
-        XCTAssertEqual(priority.children.map(\.title), TaskPriority.choices.map(\.menuTitle))
+        // Dropdown content: answers (owner, 2026-10-24), sheet 1: the picker's names.
+        XCTAssertEqual(priority.children.map(\.title), TaskPriority.choices.map(\.choiceTitle))
         XCTAssertEqual(priority.children.compactMap(\.menuShortcut), AtticTaskShortcut.priorities, "active menu keys")
     }
 
@@ -84,20 +85,52 @@ final class TasksFollowup2Tests: XCTestCase {
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Call the plumber" })
         hosted.model.selectOnly(row.id)
         let commands = hosted.page.taskCommands(row.id, tab: .now)
-        let top = commands.map(\.title)
-        XCTAssertEqual(top, ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
-                             "Add Subtask", "Copy", "Duplicate", "More", "Delete Task"])
+        // Dropdown content: answers (owner, 2026-10-24), answer 1 A: Complete,
+        // Start Working │ Edit Title, Add Subtask │ Date ›, Tags ›, Priority ›
+        // │ Move to Later, More › │ Delete (Open Page and Remove from Tasks
+        // come with C2: 12 rows), with Copy and Duplicate inside More ›.
+        let layout = AtticGlassMenuCard.layout(commands)
+        XCTAssertEqual(Self.kinds(layout), ["Complete", "Start Working", "—", "Edit Title", "Add Subtask", "—",
+                                            "Date", "Tags", "Priority", "—", "Move to Later", "More", "—", "Delete"])
+        XCTAssertEqual(layout.size.width, AtticMenuMetrics.commandWidth, "rule 1: 184 pt")
+        XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(commands), [], "rule 2: an icon on every row")
         let more = try XCTUnwrap(commands.first { $0.title == "More" })
-        XCTAssertEqual(more.children.map(\.title), ["Show Files", "Move Up", "Move Down"])
-        XCTAssertEqual(more.children.map(\.shortcut), [AtticTaskShortcut.openPage, AtticTaskShortcut.moveUp, AtticTaskShortcut.moveDown])
+        XCTAssertEqual(Self.kinds(AtticGlassMenuCard.layout(more.children)),
+                       ["Show Files", "—", "Copy", "Duplicate", "—", "Move Up", "Move Down"])
+        XCTAssertEqual(more.children.map(\.shortcut), [AtticTaskShortcut.openPage, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate,
+                                                       AtticTaskShortcut.moveUp, AtticTaskShortcut.moveDown])
+        XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(more.children), [])
         // Call the plumber is the last to do: Move Down is off, Move Up runs.
-        XCTAssertEqual(more.children.map(\.isDisabled), [false, false, true])
+        XCTAssertEqual(more.children.map(\.isDisabled), [false, false, false, false, true])
         XCTAssertEqual(AtticMenuCommand.command(for: AtticTaskShortcut.moveUp, in: commands)?.title, "Move Up")
         XCTAssertEqual(AtticMenuCommand.command(key: .upArrow, characters: "", modifiers: .command, in: commands)?.title, "Move Up")
+        // ⌘C and ⌘D still find Copy and Duplicate inside More.
+        XCTAssertEqual(AtticMenuCommand.command(for: AtticTaskShortcut.copy, in: commands)?.title, "Copy")
+        XCTAssertEqual(AtticMenuCommand.command(for: AtticTaskShortcut.duplicate, in: commands)?.title, "Duplicate")
+        // Date ›: the quick days │ Pick a Date…, Clear Date in one closing
+        // group, 200 pt; Tags › 224 pt; Priority › the picker's rows and marks.
+        let date = try XCTUnwrap(commands.first { $0.title == "Date" })
+        XCTAssertEqual(date.menuWidth, AtticMenuMetrics.dateMenuWidth)
+        XCTAssertEqual(Array(Self.kinds(AtticGlassMenuCard.layout(date.children)).suffix(3)), ["—", "Pick a Date…", "Clear Date"])
+        XCTAssertEqual(commands.first { $0.title == "Tags" }?.menuWidth, AtticMenuMetrics.wideWidth)
+        let priority = try XCTUnwrap(commands.first { $0.title == "Priority" })
+        XCTAssertEqual(priority.children.map(\.title), ["None", "Low", "Medium", "High"])
+        XCTAssertEqual(priority.children.map(\.priority), [AtticPriority.none, .low, .medium, .high])
         // The native menu keeps the sections inside More.
         let menu = AtticNativeMenu.make(commands)
         let submenu = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu)
-        XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title }, ["Show Files", "—", "Move Up", "Move Down"])
+        XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title },
+                       ["Show Files", "—", "Copy", "Duplicate", "—", "Move Up", "Move Down"])
+    }
+
+    static func kinds(_ layout: AtticGlassMenuCard.Layout) -> [String] {
+        layout.entries.map { entry -> String in
+            switch entry.kind {
+            case let .item(command): command.title
+            case let .header(title): "[\(title)]"
+            case .separator: "—"
+            }
+        }
     }
 
     // MARK: - L6: a Done task's details show its metadata
@@ -346,9 +379,13 @@ final class TasksViewOptionsTests: XCTestCase {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let commands = hosted.page.viewCommands(for: .now)
+        // Dropdown content: answers (owner, 2026-10-24), sheet 5: a Priority
+        // header, "Sort By", and no icon on any choice (no stray flag).
         XCTAssertEqual(commands.map(\.title), ["Show", "All Tasks", "Due or Overdue", "Overdue Only",
-                                               "Any Priority", "Medium and High", "High Only",
-                                               "Sort by", "Manual Order", "Due Date", "Priority", "Reset View"])
+                                               "Priority", "Any Priority", "Medium and High", "High Only",
+                                               "Sort By", "Manual Order", "Due Date", "Priority", "Reset View"])
+        XCTAssertEqual(commands.filter(\.isHeader).map(\.title), ["Show", "Priority", "Sort By"])
+        XCTAssertFalse(AtticGlassMenuCard.layout(commands).hasIcons, "a pure choice list draws no icons")
         XCTAssertEqual(commands.filter { $0.state == .on }.map(\.title), ["All Tasks", "Any Priority", "Manual Order"])
         XCTAssertEqual(commands.last?.isDisabled, true, "nothing to reset")
         commands.first { $0.title == "Due Date" }?.action()

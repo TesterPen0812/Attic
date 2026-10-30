@@ -67,6 +67,9 @@ final class AtticLibrary {
         }
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
         tasks.commandLibrary = self
+        notes?.commandLibrary = self
+        if let notes { tasks.observeItemWriting(notes) }
+        (try? WorkspaceLegacyBridge.coordinator(for: container))?.lifecycleLibrary = self
         if let coordinator = try? WorkspaceLegacyBridge.coordinator(for: container) { coordinator.registerHistory(self.undo) }
         let inventory = tags
         tasks.tagInventoryWillSave = { [weak inventory] in inventory?.invalidate(in: $0) }
@@ -184,6 +187,9 @@ final class AtticLibrary {
         case .note:
             guard let note = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })))
                 .flatMap({ NoteStore.canonicalReplicas(from: $0).first }) else { return nil }
+            // Both aliases address the same live title. References store UUIDs,
+            // so a task rename never rewrites the referring documents.
+            if let owner = note.taskID, let title = title(of: AtticItemRef(.task, owner)) { return title }
             return note.title.isEmpty ? String(note.body.split(whereSeparator: \.isNewline).first ?? "") : note.title
         case .canvas:
             guard let rows = try? context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })),
@@ -206,10 +212,10 @@ final class AtticLibrary {
             created = tasks
             let ids = tasks.map(\.id)
             // What this step made: the tasks and any subtasks they came with.
-            let owned = FamilyOwnership(liveFamilyMembers(of: ids))
+            let owned = itemOwnership(liveFamilyMembers(of: ids), deleted: false)
             return UndoStep(
                 name: ids.count == 1 ? "Add Task" : "Add \(ids.count) Tasks",
-                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
+                items: { owned.itemRefs },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.deleteFamiliesFromHistory(ids, owning: owned)
@@ -389,10 +395,10 @@ final class AtticLibrary {
         let deleted = undo.perform(in: history) {
             guard deleteFamiliesNow(ids) else { return nil }
             // What this delete took, to keep Redo from taking more.
-            let owned = FamilyOwnership(recordedMembers(of: ids))
+            let owned = itemOwnership(recordedMembers(of: ids), deleted: true)
             return UndoStep(
                 name: "Delete \(ids.count) Tasks",
-                items: { Set(owned.members.map { AtticItemRef(.task, $0) }) },
+                items: { owned.itemRefs },
                 undoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
                     return self.restoreFamiliesFromHistory(ids, owning: owned)
@@ -542,6 +548,7 @@ final class AtticLibrary {
     func delete(_ ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         undo.perform(in: history ?? Self.defaultHistory(for: ref)) {
             guard performDelete(ref) else { return nil }
+            refreshItemStores()
             return committedDeletionStep(ref)
         }
     }
@@ -554,10 +561,10 @@ final class AtticLibrary {
 
     private func committedDeletionStep(_ ref: AtticItemRef) -> UndoStep {
         // What this delete took, to keep Redo from taking more.
-        let owned = FamilyOwnership(ownedMembers(of: ref))
+        let owned = itemOwnership(ownedMembers(of: ref), deleted: true, noteID: ref.kind == .note ? ref.id : nil)
         return UndoStep(
             name: "Delete \(Self.noun(for: ref.kind))",
-            items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
+            items: { owned.itemRefs.union([ref]) },
             undoOutcome: { [weak self] in self?.restoreOutcome(ref, owning: owned) ?? .obsolete },
             redoOutcome: { [weak self] in
                 guard let self else { return .obsolete }
@@ -572,11 +579,12 @@ final class AtticLibrary {
     func restore(_ ref: AtticItemRef, in history: UndoHistoryID = .library) -> Bool {
         undo.perform(in: history) {
             // Read before the restore clears the record of what came back.
-            let owned = FamilyOwnership(ownedMembers(of: ref))
+            let owned = itemOwnership(ownedMembers(of: ref), deleted: true, noteID: ref.kind == .note ? ref.id : nil)
             guard performRestore(ref) else { return nil }
+            refreshItemStores()
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
-                items: { Set(owned.members.map { AtticItemRef(ref.kind, $0) }).union([ref]) },
+                items: { owned.itemRefs.union([ref]) },
                 undoOutcome: { [weak self] in self?.deleteOutcome(ref, owning: owned) ?? .obsolete },
                 redoOutcome: { [weak self] in
                     guard let self else { return .obsolete }
@@ -672,14 +680,24 @@ final class AtticLibrary {
 
     /// Everything in Recently Deleted, newest deletion first.
     func recentlyDeleted() -> [DeletedItemSummary] {
-        (tasks.recentlyDeletedTasks()
-            + (notes?.recentlyDeletedNotes() ?? [])
-            + (canvases?.recentlyDeletedCanvases() ?? []))
-            .sorted { lhs, rhs in
-                lhs.deletedAt != rhs.deletedAt
-                    ? lhs.deletedAt > rhs.deletedAt
-                    : lhs.ref.id.uuidString < rhs.ref.id.uuidString
+        let context = ModelContext(container)
+        let taskRows = (try? context.fetch(FetchDescriptor<TaskItem>())) ?? []
+        let noteRows = WorkspaceItemLifecycle.has("NoteItem", in: context) ? ((try? context.fetch(FetchDescriptor<NoteItem>())) ?? []) : []
+        let tasksByID = Dictionary(grouping: taskRows, by: \.id)
+        let notesByID = Dictionary(grouping: noteRows, by: \.id)
+        let candidates = tasks.recentlyDeletedTasks() + (notes?.recentlyDeletedNotes() ?? []) + (canvases?.recentlyDeletedCanvases() ?? [])
+        let hidden = (try? TaskStore.circleRemovedMembers(in: context)) ?? []
+        let hiddenGroups = Set(taskRows.filter { hidden.contains($0.id) }.compactMap(\.deletionGroupID))
+        var seen = Set<UUID>()
+        return candidates.filter { item in
+            let group: UUID? = switch item.ref.kind {
+            case .task: tasksByID[item.ref.id]?.first?.deletionGroupID
+            case .note: notesByID[item.ref.id]?.first?.deletionGroupID
+            case .canvas: nil
             }
+            return group.map { !hiddenGroups.contains($0) && seen.insert($0).inserted } ?? true
+        }.sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.ref.id.uuidString < $1.ref.id.uuidString }
+
     }
 
     /// Removes for good what has been in Recently Deleted for 30 days, with
@@ -696,8 +714,9 @@ final class AtticLibrary {
         // (Phase 3), after the legacy collector, without holding it up.
         if let taskNotePurge {
             Task { @MainActor [weak self] in
-                let removed = await taskNotePurge(cutoff, nil)
-                self?.undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+                let writing = self?.deletedGroupWritingRefs() ?? [:]
+                let removed = await taskNotePurge(cutoff, nil, nil)
+                self?.invalidatePurgedTaskHistory(removed, writing: writing)
                 self?.forgetPresentation(ofTasks: removed)
             }
         }
@@ -708,7 +727,7 @@ final class AtticLibrary {
     /// in one coordinated transaction that makes their notes ordinary
     /// (§ 2.7.2, through an open page's session). Installed by the app; nil
     /// leaves those families in Recently Deleted (tests, previews).
-    var taskNotePurge: ((_ cutoff: Date, _ confirmed: [UUID: Date]?) async -> Set<UUID>)?
+    var taskNotePurge: ((_ cutoff: Date, _ confirmed: [UUID: Date]?, _ confirmedNotes: [UUID: Date]?) async -> Set<UUID>)?
 
     /// Where per-item presentation state lives (the item page's expansion):
     /// a purged task's entry goes with it.
@@ -725,10 +744,46 @@ final class AtticLibrary {
     @discardableResult
     func emptyTaskNoteFamilies(_ selection: RecentlyDeletedSelection) async -> Set<UUID> {
         guard !selection.isEmpty, let taskNotePurge else { return [] }
-        let removed = await taskNotePurge(.distantFuture, selection.items(.task))
-        undo.invalidate(Set(removed.map { AtticItemRef(.task, $0) }))
+        let writing = deletedGroupWritingRefs()
+        let removed = await taskNotePurge(.distantFuture, selection.items(.task), selection.items(.note))
+        invalidatePurgedTaskHistory(removed, writing: writing)
         forgetPresentation(ofTasks: removed)
         return removed
+    }
+
+    /// Capture group writing before the coordinated purge removes its rows.
+    /// Surviving independent writing keeps its materialization history.
+    private func deletedGroupWritingRefs() -> [UUID: Set<AtticItemRef>] {
+        let context = ModelContext(container)
+        guard let tasks = try? context.fetch(FetchDescriptor<TaskItem>()),
+              WorkspaceItemLifecycle.has("NoteItem", in: context),
+              let notes = try? context.fetch(FetchDescriptor<NoteItem>()) else { return [:] }
+        let byGroup = Dictionary(grouping: notes.filter { $0.deletionGroupID != nil }, by: { $0.deletionGroupID! })
+        var refs: [UUID: Set<AtticItemRef>] = [:]
+        for task in tasks {
+            guard let group = task.deletionGroupID else { continue }
+            refs[task.id, default: []].formUnion((byGroup[group] ?? []).map { .init(.note, $0.id) })
+        }
+        if WorkspaceItemLifecycle.has("TaskNoteAssociation", in: context),
+           let redirects = try? context.fetch(FetchDescriptor<TaskNoteAssociation>()) {
+            for redirect in redirects where redirect.detachedAt != nil && notes.contains(where: { $0.id == redirect.noteID && $0.deletedAt != nil }) {
+                refs[redirect.taskID, default: []].insert(.init(.note, redirect.noteID))
+            }
+        }
+        return refs
+    }
+
+    private func invalidatePurgedTaskHistory(_ removed: Set<UUID>, writing: [UUID: Set<AtticItemRef>]) {
+        var refs = Set(removed.map { AtticItemRef(.task, $0) })
+        // A removed task may leave independent writing alive. Conversely a
+        // redirect note can have its own group. Invalidate note history only
+        // after a fresh physical read proves that note was actually collected.
+        let context = ModelContext(container)
+        if let surviving = try? context.fetch(FetchDescriptor<NoteItem>()) {
+            let present = Set(surviving.map(\.id))
+            for id in removed { refs.formUnion((writing[id] ?? []).filter { !present.contains($0.id) }) }
+        }
+        undo.invalidate(refs)
     }
 
     /// Empties Recently Deleted: removes for good exactly the deletions the
@@ -919,11 +974,17 @@ final class AtticLibrary {
     /// step (Tasks and Recently Deleted keep separate histories); the step
     /// no longer reaches the task and the family stays.
     func deleteOutcome(_ ref: AtticItemRef, owning: FamilyOwnership) -> UndoOutcome {
-        if ref.kind == .task {
-            if let stop = familyGuard(of: [ref.id], owning: owning.members) { return stop }
-        }
+        let roots: [UUID]
+        if ref.kind == .task { roots = [ref.id] }
+        else if ref.kind == .note {
+            do { roots = try WorkspaceItemLifecycle.taskOwner(noteID: ref.id, in: ModelContext(container)).map { [$0] } ?? [] }
+            catch { return .failed }
+        } else { roots = [] }
+        if let stop = wholeItemDeleteGuard(owning, roots: roots) { return stop }
         if performDelete(ref, includingDoneLog: true) {
-            if ref.kind == .task { owning.members = ownedMembers(of: ref) }
+            owning.members = ownedMembers(of: ref)
+            let updated = itemOwnership(owning.members, deleted: true, noteID: ref.kind == .note ? ref.id : nil)
+            owning.writing = updated.writing; owning.groups = updated.groups
             return .applied
         }
         let shown: Bool = switch ref.kind {
@@ -940,6 +1001,9 @@ final class AtticLibrary {
     /// the family as it is right now.
     final class FamilyOwnership {
         var members: Set<UUID>
+        var writing: Set<UUID>?
+        var groups: Set<UUID> = []
+        var itemRefs: Set<AtticItemRef> { Set(members.map { .init(.task, $0) } + (writing ?? []).map { .init(.note, $0) }) }
         init(_ members: Set<UUID>) { self.members = members }
     }
 
@@ -956,7 +1020,68 @@ final class AtticLibrary {
     /// empty for a note or canvas. Only `restore` and `delete` call it, while
     /// the record exists.
     func ownedMembers(of ref: AtticItemRef) -> Set<UUID> {
-        ownedMembers(of: [ref.id], kind: ref.kind)
+        if ref.kind == .note {
+            let context = ModelContext(container)
+            guard let notes = try? context.fetch(FetchDescriptor<NoteItem>()),
+                  let group = notes.filter({ $0.id == ref.id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID,
+                  let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return [] }
+            return Set(rows.filter { $0.deletionGroupID == group }.map(\.id))
+        }
+        return ownedMembers(of: [ref.id], kind: ref.kind)
+    }
+
+    func itemOwnership(_ members: Set<UUID>, deleted: Bool, noteID: UUID? = nil) -> FamilyOwnership {
+        let owned = FamilyOwnership(members), context = ModelContext(container)
+        guard let rows = try? context.fetch(FetchDescriptor<TaskItem>()) else { return owned }
+        let schemaHasNotes = WorkspaceItemLifecycle.has("NoteItem", in: context)
+        guard let notes = schemaHasNotes ? (try? context.fetch(FetchDescriptor<NoteItem>())) : [] else { return owned }
+        if deleted {
+            for id in members {
+                if let group = rows.filter({ $0.id == id }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }
+            }
+            if let noteID, let group = notes.filter({ $0.id == noteID }).sorted(by: { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }).first?.deletionGroupID { owned.groups.insert(group) }
+            owned.writing = Set(notes.filter { $0.deletionGroupID.map(owned.groups.contains) == true }.map(\.id))
+        } else {
+            owned.writing = Set(notes.filter { $0.taskID.map(members.contains) == true && $0.deletedAt == nil }.map(\.id))
+        }
+        return owned
+    }
+
+    func wholeItemDeleteGuard(_ owned: FamilyOwnership, roots: [UUID]) -> UndoOutcome? {
+        guard !roots.isEmpty else { return nil }
+        guard Set(roots).isSubset(of: owned.members) else { return .obsolete }
+        if let stop = familyGuard(of: roots, owning: owned.members) { return stop }
+        if let writing = owned.writing {
+            let context = ModelContext(container)
+            guard let current = try? WorkspaceItemLifecycle.writing(taskIDs: owned.members, in: context) else { return .failed }
+            if !Set(current.filter { $0.deletedAt == nil }.map(\.id)).isSubset(of: writing) { return .obsolete }
+        }
+        return nil
+    }
+
+    /// A retained step may adopt a newer deletion only while its complete
+    /// task and writing membership remains inside the step's ownership.
+    func wholeItemRestoreGuard(_ owned: FamilyOwnership, refs: [AtticItemRef]) -> UndoOutcome? {
+        guard !owned.groups.isEmpty else { return nil } // pre-group history
+        do {
+            let context = ModelContext(container)
+            let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+            let notes = WorkspaceItemLifecycle.has("NoteItem", in: context) ? try context.fetch(FetchDescriptor<NoteItem>()) : []
+            var groups = Set<UUID>()
+            for ref in refs {
+                let group: UUID?
+                if ref.kind == .task {
+                    group = tasks.filter { $0.id == ref.id }.max { ($0.deletedAt ?? .distantPast) < ($1.deletedAt ?? .distantPast) }?.deletionGroupID
+                } else if ref.kind == .note {
+                    group = notes.filter { $0.id == ref.id }.max { ($0.deletedAt ?? .distantPast) < ($1.deletedAt ?? .distantPast) }?.deletionGroupID
+                } else { continue }
+                guard let group else { return .obsolete }
+                groups.insert(group)
+            }
+            guard Set(tasks.filter { $0.deletionGroupID.map(groups.contains) == true }.map(\.id)).isSubset(of: owned.members),
+                  Set(notes.filter { $0.deletionGroupID.map(groups.contains) == true }.map(\.id)).isSubset(of: owned.writing ?? []) else { return .obsolete }
+            return nil
+        } catch { return .failed }
     }
 
     func recordedMembers(of ids: [UUID]) -> Set<UUID> {
@@ -1020,9 +1145,11 @@ final class AtticLibrary {
         owning owned: FamilyOwnership,
         includingDoneLog: Bool = false
     ) -> UndoOutcome {
-        if let stop = familyGuard(of: ids, owning: owned.members) { return stop }
+        if let stop = wholeItemDeleteGuard(owned, roots: ids) { return stop }
         if deleteFamiliesNow(ids, includingDoneLog: includingDoneLog) {
             owned.members = recordedMembers(of: ids)
+            let updated = itemOwnership(owned.members, deleted: true)
+            owned.writing = updated.writing; owned.groups = updated.groups
             return .applied
         }
         // Tasks that left the list since (deleted, or moved to the Done log
@@ -1057,6 +1184,7 @@ final class AtticLibrary {
     /// deletion record holds a task the step does not own, and replaces the
     /// ownership only once the restore is saved.
     func restoreFamiliesFromHistory(_ ids: [UUID], owning owned: FamilyOwnership) -> UndoOutcome {
+        if let stop = wholeItemRestoreGuard(owned, refs: ids.map { .init(.task, $0) }) { return stop }
         let members: Set<UUID>
         switch restoreClearance(of: ids, owning: owned.members) {
         case .failure(let stop): return stop
@@ -1074,6 +1202,7 @@ final class AtticLibrary {
     /// The single-item counterpart of `restoreFamiliesFromHistory`, for any
     /// kind of item (notes and canvases own no family).
     func restoreOutcome(_ ref: AtticItemRef, owning owned: FamilyOwnership) -> UndoOutcome {
+        if let stop = wholeItemRestoreGuard(owned, refs: [ref]) { return stop }
         var members: Set<UUID>?
         if ref.kind == .task {
             switch restoreClearance(of: [ref.id], owning: owned.members) {
@@ -1175,7 +1304,7 @@ final class AtticLibrary {
         return succeeded
     }
 
-    private func refreshItemStores() {
+    func refreshItemStores() {
         tasks.refresh()
         notes?.refresh()
         canvases?.refresh()

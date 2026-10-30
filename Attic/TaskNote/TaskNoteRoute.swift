@@ -100,5 +100,10 @@ struct TaskNoteEntryServices {
     let addFiles: (_ taskID: UUID, _ staging: TaskAttachmentStaging) -> Void
     /// The tasks with a live own note, as notes change (the row glyph and
     /// the "note kept" toast). Empty where there is no note store.
+    var removeFromTasks: ((UUID) -> Void)?
+    var canRemoveFromTasks: ((UUID) -> Bool)?
+    /// Make Checkbox on a subtask row: the page's producer, on its open
+    /// page or a headless one.
+    var makeCheckbox: ((UUID) -> Void)?
     var noteOwners: AnyPublisher<Set<UUID>, Never> = Just([]).eraseToAnyPublisher()
 }

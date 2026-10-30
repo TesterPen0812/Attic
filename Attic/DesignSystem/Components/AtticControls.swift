@@ -1431,6 +1431,18 @@ struct AtticMenuCommand: Identifiable {
     var swatch: AtticTagHue?
     /// Any other image before the title (the highlighter's colours).
     var image: NSImage?
+    /// A priority's mark before the title (↓ ! !!), as the priority
+    /// picker draws it; `.none` keeps the column empty.
+    var priority: AtticPriority?
+    /// The title's own face (a style list's names in their styles).
+    var titleFont: NSFont?
+    /// A submenu's card width when it is not the command width: Tags ›
+    /// (224 pt) and Date › (200 pt), per `AtticMenuMetrics`.
+    var menuWidth: CGFloat?
+    /// Why a dimmed command can't run now (one-item plan, "Menus and
+    /// keyboard": disabled commands explain why). VoiceOver reads it as the
+    /// row's help; nothing changes in how the row looks.
+    var disabledReason: String?
     let action: () -> Void
 
     init(
@@ -1483,10 +1495,11 @@ struct AtticMenuCommand: Identifiable {
 
     /// A submenu.
     static func submenu(_ title: String, systemImage: String? = nil, startsSection: Bool = false,
-                        isDisabled: Bool = false, _ children: [AtticMenuCommand]) -> AtticMenuCommand {
+                        isDisabled: Bool = false, width: CGFloat? = nil, _ children: [AtticMenuCommand]) -> AtticMenuCommand {
         var command = AtticMenuCommand(verbatim: title, systemImage: systemImage, isDisabled: isDisabled || children.isEmpty,
                                        startsSection: startsSection) {}
         command.children = children
+        command.menuWidth = width
         return command
     }
 
@@ -1543,6 +1556,28 @@ struct AtticMenuCommand: Identifiable {
         return nil
     }
 
+    /// The command a key belongs to, enabled or not (a disabled command
+    /// consumes its key: it does nothing rather than letting the key fall
+    /// through to something else).
+    static func keyOwner(for shortcut: KeyboardShortcut, in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+        for command in commands {
+            if !command.isHeader, command.children.isEmpty,
+               let own = command.shortcut, own.key == shortcut.key, own.modifiers == shortcut.modifiers {
+                return command
+            }
+            if let found = Self.keyOwner(for: shortcut, in: command.children) { return found }
+        }
+        return nil
+    }
+
+    /// The same command, dimmed, with the reason it can't run now.
+    func disabled(because reason: String?) -> AtticMenuCommand {
+        var copy = self
+        copy.isDisabled = true
+        copy.disabledReason = reason
+        return copy
+    }
+
     /// The command a key press runs (a subtask's keys, round 10): the
     /// first enabled one whose shortcut is this key with exactly these
     /// modifiers; letters by their character, Backspace however it comes.
@@ -1593,9 +1628,9 @@ struct AtticMenuCommand: Identifiable {
     }
 }
 
-/// A native menu (SwiftUI `Menu`, an `NSMenu` underneath) opened by an
-/// Attic-drawn label. In captures, where `ImageRenderer` cannot draw
-/// AppKit, only the label is drawn.
+/// A glass menu (draft C, `AtticGlassMenu`) opened by an Attic-drawn label.
+/// In captures, where `ImageRenderer` cannot draw AppKit, only the label is
+/// drawn.
 struct AtticCommandMenu<Label: View>: View {
     let commands: [AtticMenuCommand]
     let accessibilityLabel: String
@@ -1607,9 +1642,8 @@ struct AtticCommandMenu<Label: View>: View {
     var body: some View {
         if capture != nil {
             label
-        } else if commands.contains(where: { $0.state != nil }) {
-            // A menu of choices (the style, the alignment): the native menu,
-            // which draws each tick after its item (N-4's card design).
+        } else {
+            // Draft C: the glass menu, under its label.
             Button {
                 guard let view = anchor.view else { return }
                 AtticNativeMenu.popUp(commands, in: view)
@@ -1619,20 +1653,40 @@ struct AtticCommandMenu<Label: View>: View {
             .buttonStyle(.plain)
             .fixedSize()
             .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
-            .accessibilityLabel(accessibilityLabel)
-            .accessibilityHint(String(localized: "Opens a menu"))
-        } else {
-            Menu {
-                AtticMenuItems(commands: commands)
-            } label: {
-                label
+            // A menu button for VoiceOver and Full Keyboard Access, as the
+            // native menu's opener was: Press and Show Menu open it.
+            .accessibilityRepresentation {
+                AtticMenuButtonAccessibility(label: accessibilityLabel) { view in AtticNativeMenu.popUp(commands, in: view) }
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel(accessibilityLabel)
         }
+    }
+}
+
+/// A glass menu's opener as VoiceOver sees it: a menu button (the role a
+/// native pop-up menu's control has) whose Press and Show Menu open it.
+struct AtticMenuButtonAccessibility: NSViewRepresentable {
+    let label: String
+    let open: (NSView) -> Void
+
+    final class ButtonView: NSView {
+        var open: ((NSView) -> Void)?
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func accessibilityPerformPress() -> Bool {
+            guard let open else { return false }
+            open(self)
+            return true
+        }
+        override func accessibilityPerformShowMenu() -> Bool { accessibilityPerformPress() }
+    }
+
+    func makeNSView(context: Context) -> ButtonView { ButtonView() }
+
+    func updateNSView(_ view: ButtonView, context: Context) {
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.menuButton)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityHelp(String(localized: "Opens a menu"))
+        view.open = open
     }
 }
 
@@ -1893,71 +1947,38 @@ enum AtticNativeMenu {
         return flags
     }
 
-    /// Opens the menu under `view` (at its bottom-left, or at `point` in
-    /// its coordinates), as a pop-up button does. Returns at once: the
-    /// menu tracks on the next turn, so the caller's own event finishes.
+    // Opening a menu: every route opens Attic's glass menu (draft C, owner
+    // 2026-10-23), which supersedes the native look for these menus. The
+    // `NSMenu` builders above stay for the menu bar's Format menu and the
+    // text editor's own context menu, which are the system's.
+
     /// Opens the menu under `rect` (in `view`'s coordinates), aligned to
-    /// its leading edge, and returns when the menu closes (Notes' ⋯ and
-    /// ⇧⌘I, whose callers restore the keyboard afterwards).
+    /// its leading edge (above it at the screen's bottom), and returns when
+    /// it closes (Notes' ⋯ and ⇧⌘I, whose callers restore the keyboard
+    /// afterwards).
     static func popUp(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
-        let menu = make(commands)
-        menu.appearance = view.window?.effectiveAppearance
-        let point = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
-        menu.popUp(positioning: nil, at: point, in: view)
+        AtticGlassMenu.popUp(commands, in: view, placement: .below(rect))
     }
 
+    /// Opens the menu under `view` (or with its top-left at `point` in its
+    /// coordinates), as a pop-up button does. Returns at once: the menu
+    /// tracks on the next turn, so the caller's own event finishes.
     static func popUp(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
-        let menu = make(commands)
-        menu.appearance = view.window?.effectiveAppearance
-        let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
-        DispatchQueue.main.async {
-            guard view.window != nil else { return }
-            menu.popUp(positioning: nil, at: location, in: view)
-        }
+        AtticGlassMenu.popUpLater(commands, in: view, placement: point.map { .point($0) } ?? .below(view.bounds))
     }
 
-    /// Opens the menu as the system opens a right-click menu, under `rect`
-    /// (in `view`'s coordinates, aligned to its leading edge), and returns
-    /// when it closes: Notes' ⋯ menu (A39 F06). The pop-up style above keeps
-    /// a menu beside its button and, at the panel's screen corner, squeezes
-    /// the Format submenu's names to "H…g"; a context menu places its
-    /// submenus as the system does, names whole. Falls back to the pop-up
-    /// style if no event can be made.
+    /// The right-click style (A39 F06, CU recheck 3): with glass menus the
+    /// same as `popUp(_:below:in:)`, whose submenus are placed beside their
+    /// rows with their titles whole.
     static func popUpContextMenu(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
-        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
-        let location = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
-        guard let window = view.window,
-              let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
-                                             modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                                             clickCount: 1, pressure: 1) else {
-            menu.popUp(positioning: nil, at: location, in: view)
-            return
-        }
-        NSMenu.popUpContextMenu(menu, with: event, for: view)
+        AtticGlassMenu.popUp(commands, in: view, placement: .below(rect))
     }
 
-    /// Opens the menu as the system opens a right-click menu, with its top
-    /// left at `point` in `view` (under its bottom-left corner by default):
-    /// a row's actions (⇧⌘I, the row's ⋯, VoiceOver's Show actions). The
-    /// pop-up style above keeps a menu beside its button and, short of
-    /// room, squeezes a submenu's titles to fragments (CU recheck 3, P3:
-    /// More's Open Files…, Move Up and Move Down showed as "…"); a context
-    /// menu places its submenus as the right-click menu does, titles whole.
+    /// Opens the menu with its top left at `point` in `view` (under its
+    /// bottom-left corner by default) on the next turn: a row's actions
+    /// (⇧⌘I, the row's ⋯, VoiceOver's Show actions).
     static func popUpContextMenu(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
-        let menu = makeContextMenu(commands, appearance: view.window?.effectiveAppearance)
-        let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(location, to: nil),
-                                                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                                                 clickCount: 1, pressure: 1) else {
-                menu.popUp(positioning: nil, at: location, in: view)
-                return
-            }
-            NSMenu.popUpContextMenu(menu, with: event, for: view)
-        }
+        AtticGlassMenu.popUpLater(commands, in: view, placement: point.map { .point($0) } ?? .below(view.bounds))
     }
 }
 

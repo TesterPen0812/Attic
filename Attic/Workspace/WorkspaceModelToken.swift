@@ -261,6 +261,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("parentID", \TaskItem.parentID),
                 WorkspaceField("imageReferencesData", \TaskItem.imageReferencesData),
                 WorkspaceField("deletedAt", \TaskItem.deletedAt),
+                WorkspaceField("deletionGroupID", \TaskItem.deletionGroupID),
                 WorkspaceField("deletionRootID", \TaskItem.deletionRootID),
                 WorkspaceField("deletionMembersRaw", \TaskItem.deletionMembersRaw),
                 WorkspaceField("removedAttachmentsData", \TaskItem.removedAttachmentsData),
@@ -288,6 +289,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("createdAt", \NoteItem.createdAt),
                 WorkspaceField("updatedAt", \NoteItem.updatedAt),
                 WorkspaceField("deletedAt", \NoteItem.deletedAt),
+                WorkspaceField("deletionGroupID", \NoteItem.deletionGroupID),
                 WorkspaceField("deletedAttachmentIDsRaw", \NoteItem.deletedAttachmentIDsRaw),
                 WorkspaceField("tagsRaw", \NoteItem.tagsRaw),
                 WorkspaceField("pinnedAt", \NoteItem.pinnedAt),
@@ -342,7 +344,8 @@ enum WorkspaceModelFields {
                 WorkspaceField("title", \NoteVersion.title),
                 WorkspaceField("body", \NoteVersion.body),
                 WorkspaceField("attachmentIDsRaw", \NoteVersion.attachmentIDsRaw),
-                WorkspaceField("sourceRevisionID", \NoteVersion.sourceRevisionID)
+                WorkspaceField("sourceRevisionID", \NoteVersion.sourceRevisionID),
+                WorkspaceField("taskSnapshotData", \NoteVersion.taskSnapshotData)
             ] }, applying: values, fingerprint: fingerprint, keys: keys, copying: source)
         case let row as NotePendingEdit:
             return try record(row, fieldTable(for: row) { [

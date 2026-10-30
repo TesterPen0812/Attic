@@ -26,6 +26,8 @@ final class TaskItem {
     /// its subtasks and its files; it is only hidden until it is restored or
     /// purged 30 days later.
     var deletedAt: Date? = nil
+    /// Only rows newly hidden by one whole-item deletion share this ID.
+    var deletionGroupID: UUID? = nil
     /// The task whose deletion hid this row: its own id, or its parent's when
     /// the whole family was deleted together. Restoring that id brings back
     /// exactly the rows one delete hid, never a subtask deleted on its own.

@@ -157,11 +157,20 @@ final class AtticKeyWindowUITests: XCTestCase {
     /// (Light) and 0.020 (Dark). The bar sits well above flat and below all.
     private static let minimumRelief = 0.004
 
+    ///
+    /// The column runs from 2 pt inside the control's top to 2 pt inside its
+    /// bottom: inside the shape at that column (its edge is 1.8 pt in at 30
+    /// pt, 2.0 at 32), the rim included. It was 12 % to 88 % of the height,
+    /// which at 32 pt and 1× reached the rim's row; control size Medium
+    /// (owner, 2026-10-20) made the Pin 30 pt, and at 1× (CI) that window
+    /// stopped a pixel short of the rim, so a raised Pin measured 0.000
+    /// (its rim is 0.04 brighter than its face in Dark and Light).
     private func verticalRelief(_ image: NSImage) throws -> Double {
         let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
         let x = Int(Double(bitmap.pixelsWide) * 0.2)
+        let inset = Int((2 * Double(bitmap.pixelsHigh) / image.size.height).rounded())
         var values: [Double] = []
-        for y in stride(from: Int(Double(bitmap.pixelsHigh) * 0.12), through: Int(Double(bitmap.pixelsHigh) * 0.88), by: 1) {
+        for y in stride(from: inset, through: bitmap.pixelsHigh - 1 - inset, by: 1) {
             let colour = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
             values.append(0.2126 * colour.redComponent + 0.7152 * colour.greenComponent + 0.0722 * colour.blueComponent)
         }

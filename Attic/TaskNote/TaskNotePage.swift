@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import SwiftData
 import os
 
 @MainActor
@@ -17,8 +18,8 @@ struct TaskNoteWarmPresentation {
 /// live as long as this does (stable editor identity, § 9.1).
 @MainActor
 final class TaskNotePresenter: ObservableObject {
-    let taskID: UUID
-    let model: TaskNotePageModel
+    private(set) var taskID: UUID
+    private(set) var model: TaskNotePageModel
     let host: TaskNoteComposedHost
     /// The workspace's own note session; nil for a task with no note yet
     /// (lazy creation is slice 1: the writing shows its placeholder).
@@ -29,11 +30,14 @@ final class TaskNotePresenter: ObservableObject {
     private var design: AtticDesignContext
     private weak var notes: NotesPageController?
     @Published private(set) var engineGeneration: UInt64 = 0
+    @Published private(set) var projectionGeneration: UInt64 = 0
+    private(set) var isOrdinary = false
     /// The title riding in the header (0 hidden, 1 shown).
     @Published private(set) var headerTitleProgress: CGFloat = 0
     private var engineObservation: AnyCancellable?
     private var persistedObservation: AnyCancellable?
     private var hasMounted = false
+    private var openedSearchQuery: String?
     private var closeWork: Task<Bool, Never>?
     var isClosing: Bool { closeWork != nil }
     var isMounted: Bool { hasMounted }
@@ -136,9 +140,60 @@ final class TaskNotePresenter: ObservableObject {
         engineObservation = session?.$engine.dropFirst().sink { [weak self] replacement in
             guard let self, self.lease != nil else { return }
             self.host.replaceEngine(replacement)
-            replacement.setCompatibilityTitle(self.model.head.title)
+            if !self.isOrdinary { replacement.setCompatibilityTitle(self.model.head.title) }
             self.engineGeneration &+= 1
         }
+    }
+
+    /// Called inside reserved conversion publication, before replacing the
+    /// engine. A fresh task must never receive the retired head's title.
+    func prepareItemProjection(taskID next: UUID?) {
+        guard lease != nil, page.retainsAcrossItemChanges else { return }
+        if let old = Self.live[taskID]?.presenter, old === self { Self.live[taskID] = nil }
+        isOrdinary = next == nil
+        if let next {
+            if next != taskID {
+                let store = model.store, library = model.library
+                model.suspend()
+                taskID = next
+                store.refresh()
+                model = TaskNotePageModel(taskID: next, store: store, library: library, history: page.history)
+            } else { model.resume() }
+            Self.live[next] = WeakPresenter(presenter: self)
+            model.reduceMotion = design.reduceMotion
+            model.onGeometryChange = { [weak self] in
+                guard let self, !self.isOrdinary else { return }
+                self.host.engine.setCompatibilityTitle(self.model.head.title)
+                self.host.setNeedsRestack()
+            }
+            model.onFocusWriting = { [weak self] in self?.host.focusWriting(atTop: $0) }
+            model.isFieldComposing = { [weak self] in
+                guard let self, let field = self.host.textView.window?.firstResponder as? NSTextView,
+                      field !== self.host.textView else { return false }
+                return field.hasMarkedText()
+            }
+            host.blockHeight = { [weak model] in model?.blockHeight ?? 0 }
+            host.setRegions(head: Self.headView(model, design: design, menus: menus), block: Self.blockView(model, design: design, menus: menus))
+        } else {
+            model.store.refresh()
+            model.refresh()
+            model.suspend()
+            host.blockHeight = { 0 }
+            installOrdinaryRegions()
+        }
+        projectionGeneration &+= 1
+    }
+
+    private func installOrdinaryRegions() {
+        let notes = notes, noteID = session?.noteID
+        host.setRegions(head: AnyView(HStack {
+            if let noteID, let add = notes?.makeTaskFromNote {
+                Button("Add to Tasks") { add(noteID) }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("one-item-window-add-to-tasks")
+            }
+            Spacer()
+        }.frame(height: AtticControlSize.smallHeight)), block: AnyView(EmptyView()))
     }
 
     private static func headView(_ model: TaskNotePageModel, design: AtticDesignContext, menus: TaskNoteMenuRelay) -> AnyView {
@@ -160,20 +215,42 @@ final class TaskNotePresenter: ObservableObject {
         notes?.update(design: design)
         host.engine.update(design: design)
         model.reduceMotion = design.reduceMotion
-        host.setRegions(head: Self.headView(model, design: design, menus: menus), block: Self.blockView(model, design: design, menus: menus))
+        if isOrdinary { installOrdinaryRegions() }
+        else { host.setRegions(head: Self.headView(model, design: design, menus: menus), block: Self.blockView(model, design: design, menus: menus)) }
     }
 
     /// A section return remounts the same native page. Only a first open
     /// starts at the top; subsequent mounts keep the reading position.
     func restoreViewStateOnMount() {
         host.restack()
-        if !hasMounted { host.scrollToTop(); hasMounted = true }
+        if !hasMounted {
+            host.scrollToTop(); hasMounted = true
+            // Orchestrator decision 2026-10-23: Add commits a blank title, then
+            // puts the caret in the existing title field on first mount.
+            if model.head.exists, model.head.title.isEmpty { model.requestFocus(.title) }
+        }
         if let session {
             let length = host.engine.textStorage.length
             let selection = session.selection
             host.textView.setSelectedRange(NSRange(location: min(selection.location, length),
                 length: min(selection.length, max(0, length - selection.location))))
             session.engine.history.workspace?.inputClientDidAttach()
+        }
+        if let query = notes?.pendingTaskSearchQuery {
+            notes?.pendingTaskSearchQuery = nil
+            revealSearchResult(query)
+        } else if let query = notes?.libraryQueryAcrossTaskPage, query != openedSearchQuery { revealSearchResult(query) }
+    }
+
+    func revealSearchResult(_ query: String) {
+        guard lease != nil, !query.isEmpty else { return }
+        openedSearchQuery = query
+        if let range = host.engine.searchParagraph(matching: query) {
+            host.engine.revealSearchParagraph(range)
+        } else if let index = model.rows.firstIndex(where: { $0.title.localizedStandardContains(query) }) {
+            model.revealSearchMatch(model.rows[index].id)
+            host.restack()
+            host.revealSubtask(at: index, notices: model.noticeCount)
         }
     }
 
@@ -274,7 +351,7 @@ struct TaskNotePage: View {
     @State private var confirming: Confirmation?
 
     enum Confirmation: Identifiable {
-        case deleteTask, deleteNote
+        case deleteTask
         /// § 2.3.3: some lines hold what a subtask can't keep.
         case richSubtasks(TaskNoteSubtaskSelection)
         /// § 2.6: a Done task gets an open subtask.
@@ -286,7 +363,6 @@ struct TaskNotePage: View {
             case .reopenRequest: "reopenRequest"
 
             case .deleteTask: "deleteTask"
-            case .deleteNote: "deleteNote"
             case .richSubtasks: "richSubtasks"
             case .reopenForSubtasks: "reopenForSubtasks"
             }
@@ -387,9 +463,7 @@ struct TaskNotePage: View {
                             titleVisibility: .visible, presenting: confirming) { kind in
             switch kind {
             case .deleteTask:
-                Button(String(localized: "Delete Task"), role: .destructive) { model.deleteTask() }
-            case .deleteNote:
-                Button(String(localized: "Delete Note"), role: .destructive) { deleteNote() }
+                Button(String(localized: "Delete"), role: .destructive) { model.deleteTask() }
             case let .richSubtasks(analysis):
                 Button(String(localized: "Create Subtask and Keep Original")) { runMakeSubtask(analysis) }
                     .keyboardShortcut(.defaultAction)
@@ -478,6 +552,11 @@ struct TaskNotePage: View {
     /// page only; ordinary notes never see them.
     private func installWritingCommands() {
         let textView = presenter.host.textView
+        guard !presenter.isOrdinary else {
+            textView.workspaceShortcut = nil
+            textView.workspaceMenuItems = nil
+            return
+        }
         textView.workspaceShortcut = { event in
             let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
             guard flags == [.command, .option], event.charactersIgnoringModifiers?.lowercased() == "s"
@@ -559,10 +638,16 @@ struct TaskNotePage: View {
             commands.append(AtticMenuCommand("Restore Note", startsSection: !commands.isEmpty,
                                              identifier: "task-note-menu-restore-note") { restoreNote() })
         }
+        if let remove = controller.removeFromTasks {
+            commands += TaskNoteConversion.commands(taskID: presenter.taskID,
+                hasWriting: TaskNoteConversion.hasWriting(presenter.taskID, in: ModelContext(model.store.container)),
+                isSubtask: model.store.listedTask(withID: presenter.taskID)?.parentID != nil,
+                add: {}, remove: { remove(presenter.taskID) })
+        }
         commands.append(contentsOf: placementCommands(startsSection: !commands.isEmpty))
-        if persisted {
-            commands.append(AtticMenuCommand("Delete Note…", isDestructive: true, startsSection: true,
-                                             identifier: "task-note-menu-delete-note") { confirming = .deleteNote })
+        if persisted, model.head.exists {
+            commands.append(AtticMenuCommand("Delete…", isDestructive: true, startsSection: true,
+                                             identifier: "task-note-task-delete") { confirming = .deleteTask })
         }
         return commands
     }
@@ -590,8 +675,14 @@ struct TaskNotePage: View {
                                          isDisabled: presenter.session?.isReadOnly == true, startsSection: true) {
             addFilesToNote()
         }.identified("task-note-task-add-files"))
+        if let remove = controller.removeFromTasks {
+            commands += TaskNoteConversion.commands(taskID: presenter.taskID,
+                hasWriting: TaskNoteConversion.hasWriting(presenter.taskID, in: ModelContext(model.store.container)),
+                isSubtask: model.store.listedTask(withID: presenter.taskID)?.parentID != nil,
+                add: {}, remove: { remove(presenter.taskID) })
+        }
         commands.append(contentsOf: placementCommands(startsSection: true))
-        commands.append(AtticMenuCommand(verbatim: String(localized: "Delete Task…"), isDestructive: true, startsSection: true) {
+        commands.append(AtticMenuCommand(verbatim: String(localized: "Delete…"), isDestructive: true, startsSection: true) {
             confirming = .deleteTask
         }.identified("task-note-task-delete"))
         return commands
@@ -621,7 +712,6 @@ struct TaskNotePage: View {
     private var confirmationTitle: String {
         switch confirming {
         case .deleteTask: String(localized: "Delete “\(model.head.title)”?")
-        case .deleteNote: String(localized: "Delete this note?")
         case let .richSubtasks(analysis):
             analysis.richCount == 1 ? String(localized: "1 line has links or formatting a subtask can't keep.")
                 : String(localized: "\(analysis.richCount) lines have links or formatting a subtask can't keep.")
@@ -695,7 +785,7 @@ struct TaskNotePage: View {
         let readOnly = presenter.session?.isReadOnly == true
         return [
             AtticMenuCommand(verbatim: String(localized: "Rename")) { model.beginRename(id) }.identified("task-note-subtask-rename"),
-            AtticMenuCommand(verbatim: String(localized: "Make Note Checkbox"), isDisabled: readOnly) {
+            AtticMenuCommand(verbatim: String(localized: "Make Checkbox"), isDisabled: readOnly) {
                 makeNoteCheckbox(id)
             }.identified("task-note-subtask-make-checkbox"),
             AtticMenuCommand(verbatim: String(localized: "Delete Subtask"), shortcut: AtticTaskShortcut.delete,
@@ -843,12 +933,8 @@ struct TaskNotePage: View {
     private func confirmationMessage(_ kind: Confirmation) -> String {
         switch kind {
         case .deleteTask:
-            let count = model.head.subtasks.total
-            let subtasks = count == 0 ? String(localized: "The task goes")
-                : String(localized: "The task and its \(count) subtasks go")
-            return subtasks + " " + String(localized: "to Recently Deleted for 30 days. Its note stays in All notes, and you can keep editing it.")
-        case .deleteNote:
-            return String(localized: "Its writing and files go to Recently Deleted for 30 days. “\(model.head.title)” and its subtasks stay in Tasks.")
+            return model.library.deletionScope(for: model.taskID)?.confirmationMessage
+                ?? String(localized: "The item, its writing, subtasks and files go to Recently Deleted for 30 days.")
         case let .richSubtasks(analysis):
             return analysis.richCount == 1 ? String(localized: "That line stays in the note unchanged; plain lines still move.")
                 : String(localized: "Those lines stay in the note unchanged; plain lines still move.")
@@ -878,29 +964,6 @@ struct TaskNotePage: View {
         }
     }
 
-    private func deleteNote() {
-        guard let session = presenter.session else { return }
-        let id = session.noteID
-        Task { @MainActor in
-            // Leave the page durably first (its draft is saved), then delete
-            // the note itself; the page comes back with Restore Note.
-            guard await presenter.close() else {
-                Self.log.notice("Delete Note: the page kept its note (close refused)")
-                return
-            }
-            guard await controller.deleteNoteDurably(noteID: id) else {
-                Self.log.notice("Delete Note refused by the store")
-                onReopen()
-                return
-            }
-            onReopen()
-        }
-    }
-
-    /// Restore Note (§ 2.7.2) is its own Undo step, with its toast. The
-    /// page leaves first, durably: writing already in its "Write a new
-    /// note" draft becomes the task's note, and the restored one then
-    /// returns as a separate note (the task has a newer one).
     private func restoreNote() {
         guard let id = presenter.deletedNoteID, model.deletedNote else {
             Self.log.notice("Restore Note: no deleted note on this page")
@@ -954,11 +1017,14 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
     final class Coordinator {
         var controls: NoteFormatControls?
         var objects: NoteObjectControls?
+        var titleAccessories: NoteTitleAccessories?
         weak var engine: NoteEditorEngine?
 
         func invalidate() {
             controls?.invalidate()
             objects?.invalidate()
+            titleAccessories?.invalidate()
+            titleAccessories = nil
             controls = nil
             objects = nil
             engine = nil
@@ -991,11 +1057,22 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         let engine = host.engine
         guard coordinator.engine !== engine else { return }
         coordinator.invalidate()
+        if presenter.isOrdinary {
+            host.textView.workspaceShortcut = nil
+            host.textView.workspaceMenuItems = nil
+        }
         host.onInvalidate = { [weak coordinator] in coordinator?.invalidate() }
         chrome.controls = nil
         chrome.objectControls = nil
         coordinator.engine = engine
         let textView = host.textView
+        if presenter.isOrdinary, let session = presenter.session, let store = presenter.page.controller?.store {
+            let accessories = NoteTitleAccessories(engine: engine, textView: textView, scrollView: host.scrollView,
+                chrome: chrome, design: design, headerBottom: topInset,
+                isUntouched: { false }, tagEditor: { AnyView(NoteTagEditor(session: session, store: store, onClose: {})) })
+            accessories.tagCounts = { store.tagCounts }
+            coordinator.titleAccessories = accessories
+        }
         if !engine.isReadOnly {
             let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: host.scrollView, design: design)
             controls.requestFormatBar = { [weak chrome] keyboard in chrome?.openFormatBar(keyboard: keyboard) }

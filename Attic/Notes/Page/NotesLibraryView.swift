@@ -278,12 +278,14 @@ struct NotesLibraryView: View {
         return true
     }
 
-    /// A row's Tags ▸ (right-click): the note's tags, since rows don't
-    /// repeat them. In All notes a tag filters (D3); the active one is
-    /// ticked and choosing it again shows every note. Dimmed with none.
+    /// A row's Filter by Tag ▸ (right-click): the note's tags, since rows
+    /// don't repeat them. In All notes a tag filters (D3); the active one is
+    /// ticked and choosing it again shows every note. Dimmed with none. It
+    /// says it filters, since the task menu's Tags › edits (Dropdown
+    /// content: answers, owner, 2026-10-24, sheet 2).
     static func tagsSubmenu(tags: [String], activeTag: String?, hue: (String) -> AtticTagHue? = { _ in nil },
                             onSelect: @escaping (String?) -> Void) -> AtticMenuCommand {
-        var command = AtticMenuCommand.submenu(String(localized: "Tags"), tags.map { tag in
+        var command = AtticMenuCommand.submenu(String(localized: "Filter by Tag"), width: AtticMenuMetrics.wideWidth, tags.map { tag in
             AtticMenuCommand(verbatim: "#\(tag)", state: tag == activeTag ? .on : nil, swatch: hue(tag)) {
                 onSelect(tag == activeTag ? nil : tag)
             }
@@ -454,7 +456,7 @@ struct NotesLibraryView: View {
                                     .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
                                     .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
                                     .id(row.id)
-                                    .contextMenu { AtticMenuItems(commands: rowCommands(row.id)) }
+                                    .atticContextMenu { rowCommands(row.id) }
                                     // Delete and restore: the row folds away or springs back.
                                     .transition(design.reduceMotion ? .opacity
                                         : .opacity.combined(with: .move(edge: .leading)))
@@ -480,7 +482,7 @@ struct NotesLibraryView: View {
             // Right-click anywhere the rows are not (all of it, with none):
             // the library's history, so Undo never depends on a row.
             .contentShape(Rectangle())
-            .contextMenu { AtticMenuItems(commands: libraryCommands()) }
+            .atticContextMenu { libraryCommands() }
             .onAppear {
                 if let selected { proxy.scrollTo(selected, anchor: .center) }
             }

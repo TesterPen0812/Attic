@@ -108,6 +108,7 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var baseTags: [String] = []
     @Published private(set) var engine: NoteEditorEngine
     @Published fileprivate(set) var workspacePublicationPending = false
+    var isItemDeleted = false
     fileprivate(set) var readOnlyReason: NoteReadOnlyReason?
     /// A readable checkpoint with unavailable placements. Its display ID is
     /// separate from the original owner; it can never replace that saved note.
@@ -500,8 +501,14 @@ final class NotesPageController: ObservableObject {
     }
     /// Library navigation prepares only document bytes. Full byte ownership
     /// hydration remains part of the existing explicit durable-open API.
-    func openFromLibrary(noteID: UUID) async -> Bool {
-        await openDecoded(noteID: noteID)
+    func openFromLibrary(noteID: UUID, searchQuery: String? = nil) async -> Bool {
+        guard await openDecoded(noteID: noteID) else { return false }
+        if let searchQuery, let session = active, session.noteID == noteID,
+           let range = session.engine.searchParagraph(matching: searchQuery) {
+            session.selection = range
+            session.engine.revealSearchParagraph(range)
+        }
+        return true
     }
 
     private func openDecoded(noteID: UUID) async -> Bool {
@@ -721,6 +728,7 @@ final class NotesPageController: ObservableObject {
             }
         }
         attachUndoRoute(undoRoute)
+        (try? WorkspaceLegacyBridge.coordinator(for: store.container))?.lifecycleNotes = self
         purgeSubscription = store.purgedNoteIDs.sink { [weak self] ids in self?.forgetPurgedSnapshots(ids) }
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
@@ -1379,12 +1387,14 @@ final class NotesPageController: ObservableObject {
     /// host closes that task's page and shows the note (with the patch and
     /// its operation for "Task removed permanently · Undo").
     var taskNoteMaterialized: ((WorkspaceMaterializationPatch, UUID) -> Void)?
-    /// Make Task from Note (the ⋯ of an ordinary note); nil hides it.
+    /// Add to Tasks (the ⋯ of an ordinary note); nil hides it.
     var makeTaskFromNote: ((UUID) -> Void)?
+    var removeFromTasks: ((UUID) -> Void)?
 
     /// All notes' search while a task's page opened from it is shown; the
     /// library takes it back on Back (slice 1).
     var libraryQueryAcrossTaskPage: String?
+    var pendingTaskSearchQuery: String?
 
     func installFileHistoryState(_ session: NoteSession, rootID: UUID, noteID: UUID, history: WorkspaceHistory) throws {
         guard !session.isImporting,
@@ -1604,6 +1614,15 @@ final class NotesPageController: ObservableObject {
 
     private func wire(_ session: NoteSession) {
         let engine = session.engine
+        engine.permitsReadOnlyLifecycleReplay = { [weak session] redo in
+            guard let session, session.isItemDeleted, let history = session.engine.history.workspace,
+                  let step = history.route.steps(in: history.historyID, redo: redo).last,
+                  step.name.hasPrefix(redo ? "Restore" : "Delete") else { return false }
+            let ref: AtticItemRef
+            if let page = session.workspacePage, case let .task(id) = page.key.workspace { ref = .init(.task, id) }
+            else { ref = .init(.note, session.noteID) }
+            return step.affectedItems().contains(ref)
+        }
         engine.history.onWorkspaceRecoveryChanged = { [weak self, weak session] pending, permitsDraft, conflict in
             guard let self, let session else { return }
             session.workspacePublicationPending = pending
@@ -1629,6 +1648,10 @@ final class NotesPageController: ObservableObject {
                     session.state = .clean
                 } else if NoteSessionPolicy.hasPendingWork(session.state) { self.scheduleSave(session) }
             }
+        }
+        engine.exportProjection = { [weak self, weak session] document in
+            guard let self, let session else { throw WorkspaceFoundationError.protectedOwner }
+            return try self.taskSnapshot(noteID: session.noteID)?.document(writing: document) ?? document
         }
         session.workspacePublicationPending = engine.history.workspace?.hasPendingPublication == true
         engine.canUndoVersionRestore = { [weak self, weak session] in
@@ -3321,8 +3344,11 @@ extension NotesPageController {
             session.showNotice(NoteNotice(kind: .historyError, detail: "Version history could not be read. Try again. Your note is kept."))
             return false
         }
+        let snapshot: TaskNotePageSnapshot?
+        do { snapshot = try taskSnapshot(noteID: session.noteID) }
+        catch { return false }
         let browser = NoteHistoryBrowser(noteID: session.noteID, current: session.engine.document(),
-            currentRevision: session.baseRevisionID, entries: entries)
+            currentRevision: session.baseRevisionID, entries: entries, currentTaskSnapshot: snapshot)
         if let scroll = session.engine.scrollView {
             browser.scrollOffset = scroll.contentView.bounds.origin.y + scroll.contentInsets.top
         }
@@ -3612,16 +3638,20 @@ extension NotesPageController {
     /// All notes.
     @discardableResult
     func deleteNote(noteID: UUID) -> Bool {
-        // Deleting the note on screen returns to it on Undo.
         let reopen = active?.noteID == noteID && !isLibraryPresented
+        let context = ModelContext(store.container)
+        let taskID = try? WorkspaceItemLifecycle.taskOwner(noteID: noteID, in: context)
         guard removeNote(noteID: noteID) else { return false }
-        undoRoute.record(deleteStep(noteID: noteID, reopen: reopen), in: .notesLibrary)
+        if let taskID, let library = store.commandLibrary ?? workspaceTaskStore?.commandLibrary
+            ?? (try? WorkspaceLegacyBridge.coordinator(for: store.container))?.lifecycleLibrary {
+            library.recordCommittedDeletion(.init(.task, taskID), in: .notesLibrary)
+        } else { undoRoute.record(deleteStep(noteID: noteID, reopen: reopen), in: .notesLibrary) }
         return true
     }
 
     /// The delete itself, as a history step also runs it (Redo, and Undo of
     /// a duplicate).
-    private func removeNote(noteID: UUID) -> Bool {
+    private func removeNote(noteID: UUID, restoredLegacy: Bool = false) -> Bool {
         let session = cache[noteID]
         if let session {
             session.engine.refreshCompositionActivity()
@@ -3657,9 +3687,8 @@ extension NotesPageController {
             session.saveTask?.cancel()
             session.durabilityTask?.cancel()
             session.pauseTask?.cancel()
-            cache[noteID] = nil
         }
-        guard store.delete(note) else {
+        guard (restoredLegacy ? store.deleteRestoredLegacyNote(noteID: noteID) : store.delete(note)) else {
             if let session {
                 cache[noteID] = session
                 touch(noteID)
@@ -3667,13 +3696,15 @@ extension NotesPageController {
             }
             return false
         }
+        let keepWorkspace = session?.workspacePage?.activeLease != nil && session?.isItemDeleted == true
+        if !keepWorkspace { cache[noteID] = nil }
         recency.removeAll { $0 == noteID }
         if lastViewedNoteID == noteID { defaults?.removeObject(forKey: Self.lastViewedKey) }
         if let session, active === session {
             active = nil
             isLibraryPresented = true
         }
-        session?.engine.detachView()
+        if !keepWorkspace { session?.engine.detachView() }
         collectReleasedStaging()
         return true
     }
@@ -3736,23 +3767,22 @@ extension NotesPageController {
     /// separate, ordinary note (the task had a newer own note) and the
     /// step's id (the toast's Undo targets exactly that step).
     func restoreTaskNote(noteID: UUID, staging: ((ModelContext) throws -> Void)? = nil) -> (separate: Bool, stepID: UUID?)? {
-        let owner = (try? store.replicasIncludingDeleted(of: noteID))?.first?.taskID
+        let before = (try? store.replicasIncludingDeleted(of: noteID)) ?? []
+        let owner = before.first?.taskID
+        let independent = before.allSatisfy { $0.deletionGroupID == nil }
         let historyID: UndoHistoryID = owner.map { .taskWorkspace($0) } ?? .note(noteID)
+        let owned = noteHistoryOwnership(noteID, deleted: true)
         guard store.restoreDeleted(noteID: noteID, staging: staging) else { return nil }
         let separate = store.lastRestoreWasSeparate
         undoRoute.record(UndoStep(
             name: String(localized: "Restore Note"),
-            items: { [AtticItemRef(.note, noteID)] },
+            items: { owned.itemRefs.union([.init(.note, noteID)]) },
             undoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                guard self.store.note(withID: noteID) != nil else { return .obsolete }
-                return self.removeNote(noteID: noteID) ? .applied : .failed
+                self?.deleteHistoryNote(noteID, owned: owned, legacyOwner: separate ? nil : owner,
+                    restoredLegacy: independent) ?? .obsolete
             },
-            redoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                if self.store.restoreDeleted(noteID: noteID) { return .applied }
-                return self.store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete
-            }), in: historyID)
+            redoOutcome: { [weak self] in self?.restoreHistoryNote(noteID, owned: owned, reopen: false) ?? .obsolete }
+        ), in: historyID)
         return (separate, undoRoute.undoStepID(in: historyID))
     }
 
@@ -3936,20 +3966,66 @@ extension NotesPageController {
     /// shows it again when it was the note on screen); Redo deletes it
     /// again. A refused restore of a note still in Recently Deleted keeps
     /// the step; one that can never apply drops it.
+    private var lifecycleHistoryLibrary: AtticLibrary? {
+        store.commandLibrary ?? workspaceTaskStore?.commandLibrary
+            ?? (try? WorkspaceLegacyBridge.coordinator(for: store.container))?.lifecycleLibrary
+    }
+
+    private func noteHistoryOwnership(_ noteID: UUID, deleted: Bool) -> AtticLibrary.FamilyOwnership {
+        if let library = lifecycleHistoryLibrary {
+            let owned = library.itemOwnership(deleted ? library.ownedMembers(of: .init(.note, noteID)) : [], deleted: deleted, noteID: noteID)
+            owned.writing = (owned.writing ?? []).union([noteID])
+            return owned
+        }
+        let owned = AtticLibrary.FamilyOwnership([])
+        owned.writing = [noteID]
+        if deleted, let copies = try? store.replicasIncludingDeleted(of: noteID) {
+            owned.groups = Set(copies.compactMap(\.deletionGroupID))
+        }
+        return owned
+    }
+
+    private func restoreHistoryNote(_ noteID: UUID, owned: AtticLibrary.FamilyOwnership, reopen: Bool) -> UndoOutcome {
+        let outcome: UndoOutcome
+        if let library = lifecycleHistoryLibrary {
+            if let stop = library.wholeItemRestoreGuard(owned, refs: [.init(.note, noteID)]) { return stop }
+            if store.restoreDeleted(noteID: noteID) { outcome = .applied }
+            else { outcome = store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete }
+        } else {
+            guard let copies = try? store.replicasIncludingDeleted(of: noteID) else { return .failed }
+            let current = Set(copies.compactMap(\.deletionGroupID))
+            guard owned.groups.isEmpty || !current.isEmpty && current.isSubset(of: owned.groups) else { return .obsolete }
+            if store.restoreDeleted(noteID: noteID) { outcome = .applied }
+            else { outcome = store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete }
+        }
+        if outcome == .applied, reopen, open(noteID: noteID) { isLibraryPresented = false }
+        return outcome
+    }
+
+    private func deleteHistoryNote(_ noteID: UUID, owned: AtticLibrary.FamilyOwnership,
+                                   legacyOwner: UUID? = nil, restoredLegacy: Bool = false) -> UndoOutcome {
+        guard store.note(withID: noteID) != nil else { return .obsolete }
+        do {
+            let root = try WorkspaceItemLifecycle.taskOwner(noteID: noteID, in: ModelContext(store.container))
+            if restoredLegacy {
+                guard root == legacyOwner else { return .obsolete }
+            } else if let library = lifecycleHistoryLibrary {
+                if let stop = library.wholeItemDeleteGuard(owned, roots: root.map { [$0] } ?? []) { return stop }
+            } else if root != nil { return .obsolete }
+        } catch { return .failed }
+        guard removeNote(noteID: noteID, restoredLegacy: restoredLegacy) else { return .failed }
+        let updated = noteHistoryOwnership(noteID, deleted: true)
+        owned.members = updated.members; owned.writing = updated.writing; owned.groups = updated.groups
+        return .applied
+    }
+
     private func deleteStep(noteID: UUID, reopen: Bool) -> UndoStep {
-        UndoStep(
+        let owned = noteHistoryOwnership(noteID, deleted: true)
+        return UndoStep(
             name: String(localized: "Delete Note"),
-            items: { [AtticItemRef(.note, noteID)] },
-            undoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                if self.restoreDeletedNote(noteID: noteID, reopen: reopen) { return .applied }
-                return self.store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete
-            },
-            redoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                guard self.store.note(withID: noteID) != nil else { return .obsolete }
-                return self.removeNote(noteID: noteID) ? .applied : .failed
-            }
+            items: { owned.itemRefs.union([.init(.note, noteID)]) },
+            undoOutcome: { [weak self] in self?.restoreHistoryNote(noteID, owned: owned, reopen: reopen) ?? .obsolete },
+            redoOutcome: { [weak self] in self?.deleteHistoryNote(noteID, owned: owned) ?? .obsolete }
         )
     }
 
@@ -3975,19 +4051,12 @@ extension NotesPageController {
     /// typed into it since saved first, so nothing is lost); Redo restores
     /// it without opening it.
     private func duplicateStep(newID: UUID) -> UndoStep {
-        UndoStep(
+        let owned = noteHistoryOwnership(newID, deleted: false)
+        return UndoStep(
             name: String(localized: "Duplicate Note"),
-            items: { [AtticItemRef(.note, newID)] },
-            undoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                guard self.store.note(withID: newID) != nil else { return .obsolete }
-                return self.removeNote(noteID: newID) ? .applied : .failed
-            },
-            redoOutcome: { [weak self] in
-                guard let self else { return .obsolete }
-                if self.restoreDeletedNote(noteID: newID, reopen: false) { return .applied }
-                return self.store.recentlyDeletedNotes().contains { $0.ref.id == newID } ? .failed : .obsolete
-            }
+            items: { owned.itemRefs.union([.init(.note, newID)]) },
+            undoOutcome: { [weak self] in self?.deleteHistoryNote(newID, owned: owned) ?? .obsolete },
+            redoOutcome: { [weak self] in self?.restoreHistoryNote(newID, owned: owned, reopen: false) ?? .obsolete }
         )
     }
 
@@ -4007,7 +4076,20 @@ extension NotesPageController {
         } else {
             return nil
         }
-        return NoteMarkdownExport.markdown(document) { id in staged[id] ?? self.filename(forAttachment: id) }
+        guard let page = try? taskSnapshot(noteID: noteID)?.document(writing: document) ?? document else { return nil }
+        return NoteMarkdownExport.markdown(page) { id in staged[id] ?? self.filename(forAttachment: id) }
+    }
+
+    func taskSnapshot(noteID: UUID) throws -> TaskNotePageSnapshot? {
+        let context = ModelContext(store.container)
+        let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        if let row = NoteStore.canonicalReplicas(from: rows).first {
+            return try TaskNotePageSnapshot.capture(note: row, in: context)
+        }
+        // A task's writing is a never-saved draft until its first edit.
+        // Read the head directly without creating a compatibility note.
+        if let owner = cache[noteID]?.pendingTaskID { return try TaskNotePageSnapshot.capture(taskID: owner, in: context) }
+        return nil
     }
 
     func copyMarkdown(noteID: UUID) {
@@ -4050,7 +4132,7 @@ extension NotesPageController {
             session.engine.refreshCompositionActivity()
             var snapshot = session.workspacePage?.activitySnapshot ?? WorkspacePurge.SessionSnapshot()
             snapshot.activity = session.engine.activity
-            snapshot.state = session.state
+            snapshot.state = session.isItemDeleted ? .clean : session.state
             snapshot.importing = session.isImporting
             snapshot.proposal = proposalReview?.noteID == id
             if session.engine.textView?.hasMarkedText() == true { snapshot.activity = .composing }
@@ -4134,9 +4216,42 @@ extension NotesPageController {
         session.state = reason == nil ? .clean : .readOnly
     }
 
-    func installCommittedTaskNote(_ noteID: UUID) {
+    @discardableResult
+    func installCommittedTaskNote(_ noteID: UUID, preservingWritingSelection: Bool = false) -> Bool {
+        guard allowsItemProjection(noteID) else { return false }
         store.refresh()
-        if let session = cache[noteID] { installCommittedTaskNoteForm(session) }
+        if let session = cache[noteID] {
+            let old = session.engine.textStorage.string
+            let selection = session.engine.textView?.selectedRange() ?? session.selection
+            if session.workspacePage?.retainsAcrossItemChanges == true {
+                do {
+                    let coordinator = try WorkspaceLegacyBridge.coordinator(for: store.container)
+                    let owner = store.note(withID: noteID)?.taskID
+                    _ = try coordinator.sessions.installRetainedItemIdentity(session, taskID: owner)
+                    TaskNoteWindows.shared.prepareProjection(session: session, taskID: owner)
+                } catch {
+                    session.showNotice(NoteNotice(kind: .didntWork, detail: "The saved item is waiting to update its window."))
+                    return false
+                }
+            }
+            installCommittedTaskNoteForm(session)
+            if session.workspacePage?.retainsAcrossItemChanges == true { WorkspaceCrashHook.reach("C2-projection-installed") }
+            if preservingWritingSelection {
+                let text = session.engine.textStorage.string
+                if old.hasSuffix(text) || text.hasSuffix(old) {
+                    let shift = (text as NSString).length - (old as NSString).length
+                    let location = min(session.engine.textStorage.length, max(0, selection.location + shift))
+                    session.selection = NSRange(location: location, length: min(selection.length, session.engine.textStorage.length - location))
+                    session.engine.textView?.setSelectedRange(session.selection)
+                }
+            }
+        }
+        return true
+    }
+
+    func allowsItemProjection(_ noteID: UUID) -> Bool {
+        guard let session = cache[noteID] else { return true }
+        return TaskNoteWindows.shared.allowsProjection(session: session)
     }
 
     /// A change written by another owner (a purge's Undo): a clean editor
@@ -4155,12 +4270,23 @@ extension NotesPageController {
         if wasActive { _ = open(noteID: noteID) }
     }
 
+    func retainsWindowSession(_ session: NoteSession?) -> Bool {
+        guard let session, let page = session.workspacePage else { return false }
+        return page.retainsAcrossItemChanges && page.activeLease != nil && page.controller === self
+            && page.note === session && session.usesWorkspaceBinding
+    }
+
     /// Make Task from Note (or its Undo) rewrote `noteID` in the other
     /// form: the editor built for the old form leaves (an ordinary one
     /// can't show a task's note, nor the reverse); the store is re-read.
     func retireConvertedNote(_ noteID: UUID, installingCommittedForm: Bool = true) async {
         store.refresh()
         guard let session = cache[noteID] else { return }
+        if session.workspacePage?.retainsAcrossItemChanges == true, session.workspacePage?.activeLease != nil {
+            // Reserved publication is the sole installer. Its completion has
+            // already released queued typing; reloading here would erase it.
+            return
+        }
         let owner: UUID? = if case let .task(id) = session.workspacePage?.key.workspace { id } else { nil }
         if session.usesWorkspaceBinding {
             if installingCommittedForm { installCommittedTaskNoteForm(session) }
@@ -4169,6 +4295,7 @@ extension NotesPageController {
             } else if let page = session.workspacePage, let lease = page.activeLease {
                 guard await page.close(lease) else { return }
             }
+            if let owner { TaskNoteWindows.shared.finishHandoff(owner) }
         }
         if NoteSessionPolicy.hasPendingWork(session.state), !(await preserveDurably(session)) { return }
         guard cache[noteID] === session, session.noteID == noteID else { return }
@@ -4188,5 +4315,70 @@ extension NotesPageController {
         guard let session = cache[noteID], session.engine.isBodyOnly, !session.usesWorkspaceBinding else { return }
         session.engine.detachView()
         cache[noteID] = nil
+    }
+}
+
+extension NotesPageController {
+    func wholeItemSessions(noteIDs: Set<UUID>, taskIDs: Set<UUID>) -> [NoteSession] {
+        cache.values.filter { noteIDs.contains($0.noteID) || $0.pendingTaskID.map(taskIDs.contains) == true }
+    }
+    func retireWholeItemRecovery(_ session: NoteSession) -> Bool {
+        retireRecoveryCopy(noteID: session.noteID, session: session)
+    }
+    func publishWholeItemLifecycle() {
+        store.refresh()
+        let context = ModelContext(store.container)
+        guard let rows = try? context.fetch(FetchDescriptor<NoteItem>()),
+              let tasks = try? context.fetch(FetchDescriptor<TaskItem>()) else { return }
+        let notesByID = Dictionary(grouping: rows, by: \.id)
+        let deletedTaskIDs = Set(tasks.filter { $0.deletedAt != nil && $0.deletionGroupID != nil }.map(\.id))
+        let liveTaskIDs = Set(tasks.filter { $0.deletedAt == nil }.map(\.id))
+        for session in cache.values {
+            let row = NoteStore.canonicalReplicas(from: notesByID[session.noteID] ?? []).first
+            let deleted = row?.deletionGroupID != nil && row?.deletedAt != nil
+                || (session.pendingTaskID.map(deletedTaskIDs.contains) ?? false)
+            if deleted, !session.isItemDeleted {
+                let history = session.engine.history.workspace
+                let document = row?.content.flatMap { NoteContentCodec.decode($0).document } ?? session.engine.checkpointDocument()
+                session.saveTask?.cancel(); session.durabilityTask?.cancel(); session.pauseTask?.cancel()
+                session.isItemDeleted = true
+                session.readOnlyReason = .unreadable("This item is in Recently Deleted.")
+                session.replaceEngine(makeEngine(noteID: session.noteID, document: document, readOnly: true,
+                    tags: row?.tags ?? [], bodyOnly: row?.taskID != nil || session.pendingTaskID != nil))
+                if let history { history.attach(session.engine.history) }
+                session.state = .readOnly
+                wire(session)
+            } else if !deleted, session.isItemDeleted, row?.deletedAt == nil,
+                      row != nil || (!session.isPersisted && session.pendingTaskID.map(liveTaskIDs.contains) == true) {
+                session.isItemDeleted = false
+                if row != nil { installCommittedTaskNoteForm(session) }
+                else {
+                    let history = session.engine.history.workspace, document = session.engine.checkpointDocument()
+                    session.readOnlyReason = nil
+                    session.replaceEngine(makeEngine(noteID: session.noteID, document: document, readOnly: false, bodyOnly: true))
+                    if let history { history.attach(session.engine.history) }
+                    session.state = .untouched; wire(session)
+                }
+            }
+        }
+    }
+}
+
+extension NotesPageController {
+    /// A new-style deleted item opens its preserved writing read-only; only
+    /// legacy split states may offer an independent replacement draft.
+    func workspaceDeletedItemSession(noteID: UUID) -> NoteSession? {
+        let context = ModelContext(store.container)
+        guard let rows = try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })),
+              let row = NoteStore.canonicalReplicas(from: rows).first,
+              row.deletedAt != nil, row.deletionGroupID != nil else { return nil }
+        if let existing = cache[noteID], existing.isItemDeleted { return existing }
+        let document = row.content.flatMap { NoteContentCodec.decode($0).document } ?? .blank
+        let session = NoteSession(noteID: noteID, isPersisted: true, baseRevisionID: row.revisionID,
+            engine: makeEngine(noteID: noteID, document: document, readOnly: true, tags: row.tags, bodyOnly: row.taskID != nil),
+            readOnlyReason: .unreadable("This item is in Recently Deleted."))
+        session.isItemDeleted = true; session.baseContent = row.content; session.baseTags = row.tags
+        cache[noteID] = session; wire(session)
+        return session
     }
 }

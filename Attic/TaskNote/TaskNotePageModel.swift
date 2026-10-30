@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import SwiftData
 
 /// A task's own note, the page (UX plan § 2.2, mockups `p3-20` 2b and
 /// `p3-21`; owner's draft B, 2026-10-23): the live task head, the quiet
@@ -69,7 +70,9 @@ final class TaskNotePageModel: ObservableObject {
     @Published private(set) var isExpanded: Bool
     /// The row the list's ring is on (arrows move it).
     @Published var focusedRowID: UUID?
-    @Published private(set) var renamingID: UUID?
+    @Published private(set) var renamingID: UUID? {
+        didSet { if renamingID == nil, history.hasPendingPublication { history.requestPublicationRetry() } }
+    }
     /// The rename field's draft (plain text: its pieces are never parsed).
     @Published var renameEdit = TaskAddBarText()
     var renameText: String {
@@ -92,9 +95,14 @@ final class TaskNotePageModel: ObservableObject {
     var titleEditSelection: NSRange?
     /// Reduce Motion: the held rows settle at once (review P2-4).
     var reduceMotion = false
-    @Published var newSubtaskText = ""
+    @Published var newSubtaskText = "" {
+        didSet { if newSubtaskText.isEmpty, history.hasPendingPublication { history.requestPublicationRetry() } }
+    }
     @Published private(set) var isEditingTitle = false {
-        didSet { if isEditingTitle != oldValue { onGeometryChange?() } }
+        didSet {
+            if isEditingTitle != oldValue { onGeometryChange?() }
+            if !isEditingTitle, history.hasPendingPublication { history.requestPublicationRetry() }
+        }
     }
     @Published var titleEdit = TaskAddBarText()
     @Published var titleEditCaret: Int?
@@ -197,10 +205,32 @@ final class TaskNotePageModel: ObservableObject {
 
     var historyID: UndoHistoryID { history.historyID }
 
+    var hasFieldDrafts: Bool {
+        isEditingTitle || renamingID != nil || !newSubtaskText.isEmpty || isFieldComposing?() == true
+    }
+
+    /// Pending publication may have released the writing as a fallback
+    /// draft. Starting a new native field then would strand that draft on
+    /// the retired head. Cancellation/clearing always remains available.
+    func admitFieldInput() -> Bool {
+        guard !history.isInputReserved, !history.hasPendingPublication else {
+            return report(CommandFailure(String(localized: "Finish updating this item before editing its fields.")))
+        }
+        return true
+    }
+
+    func editNewSubtask(_ value: String) {
+        guard value.isEmpty || admitFieldInput() else { return }
+        newSubtaskText = value
+    }
+
+    func cancelNewSubtask() { newSubtaskText = "" }
+
     // MARK: Reading the store
 
     /// Re-reads the task and its subtasks. Publishes only what changed.
     func refresh(animated: Bool = false) {
+        guard !history.hasPendingPublication || !hasFieldDrafts else { return }
         // A task moved to the Done log still has its page (`p3-22` row 3).
         let task = store.listedTask(withID: taskID)
         // Next-day cleanup moved the family to the Done log (§ 2.6): its
@@ -440,6 +470,15 @@ final class TaskNotePageModel: ObservableObject {
         setExpanded(true, remember: false)
     }
 
+    /// A search reveal is transient, and never changes held row order.
+    func revealSearchMatch(_ id: UUID) {
+        guard rows.contains(where: { $0.id == id }) else { return }
+        if !isVisible(id) { revealAll() }
+        requestFocus(.list)
+        focusedRowID = id
+        lastFocusedRowID = id
+    }
+
     // MARK: Subtask commands
 
     @discardableResult
@@ -462,7 +501,7 @@ final class TaskNotePageModel: ObservableObject {
     func commitNewSubtask() -> Bool {
         let title = TaskDraftBuilder.collapsed(newSubtaskText)
         guard !title.isEmpty else {
-            newSubtaskText = ""
+            cancelNewSubtask()
             focusWriting(atTop: true)
             return true
         }
@@ -478,7 +517,7 @@ final class TaskNotePageModel: ObservableObject {
             }
         }
         clearFailure()
-        newSubtaskText = ""
+        cancelNewSubtask()
         refresh()
         // The new row and the field stay in sight (draft B: Add subtask
         // shows with 0–3 rows, so a fourth row expands the list).
@@ -487,6 +526,7 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func beginRename(_ id: UUID, undoManager: UndoManager? = nil) {
+        guard admitFieldInput() else { return }
         guard rows.contains(where: { $0.id == id }), let task = store.listedTask(withID: id) else { return }
         if renamingID != nil, renamingID != id { cancelRename() }
         guard renamingID != id else { return }
@@ -499,17 +539,20 @@ final class TaskNotePageModel: ObservableObject {
 
     /// The rename field replaced `range` with `replacement` (a draft step).
     func renameEdited(_ range: NSRange, replacement: String) {
+        guard admitFieldInput() else { return }
         renameHistory.willEdit(renameEdit, selection: nil, range: range, replacement: replacement)
         renameEdit.edited(range, replacement: replacement)
     }
 
     func undoRenameDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = renameHistory.undo(current: renameEdit, selection: nil) else { return nil }
         renameEdit = entry.text
         return (entry.text.text, entry.selection)
     }
 
     func redoRenameDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = renameHistory.redo(current: renameEdit, selection: nil) else { return nil }
         renameEdit = entry.text
         return (entry.text.text, entry.selection)
@@ -587,10 +630,10 @@ final class TaskNotePageModel: ObservableObject {
         return applied
     }
 
-    // MARK: Lifecycle (`p3-22`: nothing cascades)
+    // MARK: Whole-item lifecycle (orchestrator decision 2026-10-23)
 
-    /// Delete Task…: the task and its subtasks go to Recently Deleted; its
-    /// note stays, editable (§ 2.7). One step in the page's history.
+    /// Orchestrator decision 2026-10-23: Delete moves the whole item, including
+    /// writing and files, in one step in the retained workspace history.
     @discardableResult
     func deleteTask() -> Bool {
         guard store.listedTask(withID: taskID) != nil else { return report(.taskGone) }
@@ -627,6 +670,7 @@ final class TaskNotePageModel: ObservableObject {
     // MARK: The head's title (Tasks' title editor and its shorthand)
 
     func beginEditingTitle(undoManager: UndoManager? = nil) {
+        guard admitFieldInput() else { return }
         guard let task = store.listedTask(withID: taskID), !isEditingTitle else { return }
         titleBase = (task.title, task.priority, task.dueDay)
         titleHistory.reset()
@@ -643,17 +687,20 @@ final class TaskNotePageModel: ObservableObject {
 
     /// The title field replaced `range` with `replacement` (a draft step).
     func titleEdited(_ range: NSRange, replacement: String) {
+        guard admitFieldInput() else { return }
         titleHistory.willEdit(titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret),
                               range: range, replacement: replacement)
         titleEdit.edited(range, replacement: replacement)
     }
 
     func dismissTitleChip(_ range: NSRange) {
+        guard admitFieldInput() else { return }
         titleHistory.checkpoint(titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
         titleEdit.dismiss(range)
     }
 
     func undoTitleDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = titleHistory.undo(current: titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
         else { return nil }
         applyTitleDraft(entry)
@@ -661,6 +708,7 @@ final class TaskNotePageModel: ObservableObject {
     }
 
     func redoTitleDraft() -> (text: String, selection: NSRange)? {
+        guard admitFieldInput() else { return nil }
         guard let entry = titleHistory.redo(current: titleEdit, selection: TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret))
         else { return nil }
         applyTitleDraft(entry)
@@ -908,5 +956,86 @@ final class TaskNotePageModel: ObservableObject {
         }
         if !recorded, outcome.isApplied { field.cancel() }
         return outcome
+    }
+}
+
+/// Read-only page metadata. Version bytes remain the exact writing document;
+/// this optional snapshot is for historical presentation, never restoration.
+struct TaskNotePageSnapshot: Codable, Equatable, Sendable {
+    struct Child: Codable, Equatable, Sendable {
+        let id: UUID
+        let title: String
+        let isDone: Bool
+    }
+    var format = 1
+    let title: String
+    let status: String
+    let priority: String
+    let dueDay: DueDay?
+    let completedAt: Date?
+    let tags: [String]
+    let children: [Child]
+
+    @MainActor
+    static func capture(note: NoteItem, in context: ModelContext) throws -> Self? {
+        guard let owner = note.taskID else { return nil }
+        return try capture(taskID: owner, in: context)
+    }
+
+    @MainActor
+    static func capture(taskID owner: UUID, in context: ModelContext) throws -> Self? {
+        guard context.container.schema.entities.contains(where: { $0.name == "TaskItem" }) else { return nil }
+        let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == owner || $0.parentID == owner }))
+        let canonical = TaskStore.canonicalReplicas(from: rows)
+        guard let task = canonical.first(where: { $0.id == owner }) else { return nil }
+        let children = canonical.filter { $0.parentID == owner && $0.deletedAt == nil }.sorted {
+            if ($0.status == .done) != ($1.status == .done) { return $0.status != .done }
+            if $0.manualOrder != $1.manualOrder { return ($0.manualOrder ?? 0) > ($1.manualOrder ?? 0) }
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        return Self(title: task.title, status: task.statusRaw, priority: task.priorityRaw,
+            dueDay: task.dueDay, completedAt: task.completedAt, tags: task.tags,
+            children: children.map { Child(id: $0.id, title: $0.title, isDone: $0.status == .done) })
+    }
+
+    @MainActor
+    static func data(note: NoteItem, in context: ModelContext) throws -> Data? {
+        try capture(note: note, in: context).map { try WorkspaceModelFields.encode($0) }
+    }
+
+    static func decode(_ data: Data?) -> Self? {
+        guard let data, let value = try? JSONDecoder().decode(Self.self, from: data), value.format == 1 else { return nil }
+        return value
+    }
+
+    /// One title, task details and subtasks, then the unmodified writing.
+    func document(writing: NoteDocument) -> NoteDocument {
+        var page = writing
+        page.requires.removeAll { $0 == "taskNote" }
+        page.blocks = [.text(title)] + detailBlocks + children.map {
+            .checklist($0.title, id: $0.id, checked: $0.isDone)
+        } + writing.blocks.dropFirst()
+        return page
+    }
+
+    /// The history engine retains its body-only projection. A visible title
+    /// belongs to this immutable historical head, not today's task model.
+    func historyDocument(writing: NoteDocument) -> NoteDocument {
+        var page = document(writing: writing)
+        page.blocks.insert(.text(""), at: 0)
+        page.blocks[1].style = "heading"
+        page.blocks[1].level = 1
+        page.requires.append("taskNote")
+        return page
+    }
+
+    private var detailBlocks: [NoteBlock] {
+        var lines = [TaskStatus(rawValue: status)?.title ?? status]
+        if let value = TaskPriority(rawValue: priority), value != .none { lines.append("\(value.title) priority") }
+        if let dueDay { lines.append("Due \(dueDay.rawValue)") }
+        if let completedAt { lines.append("Completed \(completedAt.formatted(.dateTime.day().month(.abbreviated).year()))") }
+        if !tags.isEmpty { lines.append(tags.map { "#" + $0 }.joined(separator: " ")) }
+        return lines.map { .text($0) }
     }
 }

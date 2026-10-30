@@ -495,12 +495,15 @@ final class NoteTableView: NSView {
         if changedCell, hasEditor, editor.hasMarkedText() { editor.unmarkText() }
         activeCell = position
         hasEditor = true
-        if changedCell || editor.isHidden {
+        let reload = changedCell || editor.isHidden
+        if reload {
             engine?.tableWillChangeCell(self)
             editor.prepare(header: table.headerRow && position.row == 0)
-            editor.load(cellString(position), keepingSelection: false)
         }
+        // Give TextKit its real cell geometry before loading the text:
+        // load ensures layout and can cache the first line immediately.
         refreshLayout()
+        if reload { editor.load(cellString(position), keepingSelection: false) }
         placeEditor()
         canvas.needsDisplay = true
         scrollToVisible(position)

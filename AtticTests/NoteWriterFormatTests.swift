@@ -88,7 +88,7 @@ import XCTest
     func testSaveAsNewAfterDeletionWritesDocumentFormat() async throws {
         let store = try store(), source = try XCTUnwrap(store.create(title: "Source")), page = await page(store)
         XCTAssertTrue(page.open(noteID: source.id)); let session = try type(page, " unsaved")
-        XCTAssertTrue(store.delete(source)); XCTAssertFalse(page.save(session))
+        XCTAssertTrue(try deleteNoteElsewhereForTest(source.id, in: store)); XCTAssertFalse(page.save(session))
         await XCTAssertTrueAsync(await page.keepAsNewNoteDurably())
         XCTAssertNotEqual(session.noteID, source.id); try assertFormat(store, session.noteID)
         XCTAssertEqual(store.note(withID: session.noteID)?.plainText, session.engine.plainText)

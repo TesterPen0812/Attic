@@ -1,9 +1,33 @@
+## 2026-10-24 · C2: one-item rows in the new menus
+
+The drafted rows are in (Dropdown content: answers, owner, 2026-10-24; names from the one-item owner answers of 2026-10-23). Task menu: Open Page first in the Edit Title group, Remove from Tasks before Delete, Add Files… in More beside Show Files. Subtask menu: Make Checkbox after Make Standalone Task. Note row and note ⋯: Add to Tasks (or Remove from Tasks), and "Delete Note" is now Delete. New icons: checkmark.circle, minus.circle, checkmark.square, doc.badge.plus. All notes rows lose the "Task note" wording; sizes and colours are unchanged. Dimmed rows carry a reason for VoiceOver.
+
+## 2026-10-24 · C2 item window and history projections
+
+Requested C2 scope, implemented as an engineering change: a mini window
+keeps its native frame across item placement changes. Its ordinary-note
+projection uses the existing title/tag controls and Add to Tasks action;
+Undo restores the task regions. Historical previews show the captured head
+and subtasks above the writing. Native field admission refuses edits before
+mutation during reserved publication; cancellation keeps its existing role.
+No token, menu style or All notes row presentation change.
+
+## 2026-10-23 · Whole-item lifecycle
+
+The item page has one Delete confirmation naming its writing, subtasks and files. Deleted writing is read-only and restores with the item; task-row deletion feedback includes writing in multi-selection counts. No layout change.
+
 # Design system change log
 
 The design system was frozen when the owner signed off the Phase 0 gallery.
 Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase X
+
+### 2026-10-23 · Tasks scroll layout and PR #11 verification (Sol)
+
+- Row controls publish bounds anchors. One equatable geometry observation per row resolves hit rectangles for the input cache, keeping geometry reads out of preference construction and rendering state.
+- Table cell editors receive their final cell frame before text is loaded and TextKit creates its first line geometry; live/drawn baseline and natural-caret assertions keep their existing tolerance.
+- Scroll coverage follows the owner's 2026-10-20/22 decisions: 32/48 pt row pitches, 30/26 pt controls, glass tabs without an underline, slight top blur, and no bottom blur/fade. The superseded N-6 plain-label and bottom-edge fade assertions are replaced by live geometry/hit-target checks; rendered row movement and all four scroll steps remain.
 
 ### 2026-10-20 · Table add-chip cancellation (owner review round PRB1, B7-01)
 

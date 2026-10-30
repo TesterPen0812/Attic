@@ -58,6 +58,13 @@ struct TasksPageServices {
     var addFilesToTaskNote: ((UUID, TaskAttachmentStaging) -> Void)?
     /// Add Files to Note… (§ 2.4): the picker, then `addFilesToTaskNote`.
     var chooseFilesForNote: ((UUID) -> Void)?
+    var removeFromTasks: ((UUID) -> Void)?
+    var canRemoveFromTasks: ((UUID) -> Bool)?
+    /// Make Checkbox on a subtask row (One item: owner answers,
+    /// 2026-10-23, answer 3): the subtask goes into its item's writing
+    /// through the page's producer. Nil where the host has no task pages:
+    /// the command is hidden.
+    var makeCheckbox: ((UUID) -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -702,7 +709,7 @@ final class TasksPageModel: ObservableObject {
             tasks = store.snapshot(for: scope).sections.flatMap { section -> [TaskItem] in
                 if !query.isEmpty {
                     guard section.status != .done else { return [] }
-                    return view.sorted(section.tasks.filter { $0.title.localizedStandardContains(query) })
+                    return view.sorted(section.tasks.filter { store.matchesItemSearch($0, query: query) })
                 }
                 return view.sorted(section.tasks.filter { view.includes($0, today: day) })
             }
@@ -784,7 +791,7 @@ final class TasksPageModel: ObservableObject {
     private func buildDoneDays() -> [TasksDoneDay] {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let today = store.doneTodayTasks()
-        let finished = (today.filter { query.isEmpty || $0.title.localizedStandardContains(query) } + doneLogTasks)
+        let finished = (today.filter { store.matchesItemSearch($0, query: query) } + doneLogTasks)
         let calendar = services.calendar()
         let now = services.now()
         var days: [TasksDoneDay] = []
@@ -828,7 +835,7 @@ final class TasksPageModel: ObservableObject {
         if doneLogFailure == nil {
             let logMatches = store.indexedDoneLogCount(matching: query)
             let logTotal = store.indexedDoneLogCount()
-            count = (today.filter { $0.title.localizedStandardContains(query) }.count + logMatches, today.count + logTotal)
+            count = (today.filter { store.matchesItemSearch($0, query: query) }.count + logMatches, today.count + logTotal)
         }
         doneCountCache = (key, count)
         return count
@@ -1247,7 +1254,7 @@ final class TasksPageModel: ObservableObject {
         } else if target == .done {
             if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
+            if !query.isEmpty, !store.matchesItemSearch(task, query: query) { doneSearch = "" }
             if parent != nil { doneDetailID = task.id }
             guard revealInDoneLog(task.id) else {
                 // Not loaded: nothing is selected or scrolled to until it is.
@@ -1674,17 +1681,14 @@ final class TasksPageModel: ObservableObject {
         if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
         expandedFiles.subtract(live)
-        // § 2.7.1: deleting never takes the note with it, and the toast
-        // says so ("note kept").
-        let kept = live.filter(noteOwners.contains).count
+        // Orchestrator decision 2026-10-23: deletion includes each task's writing.
+        let withWriting = live.filter(noteOwners.contains).count
         if let title {
-            showToast(kept > 0 ? String(localized: "Deleted “\(title)” · note kept")
-                : String(localized: "Deleted “\(title)”"))
-        } else if kept > 0 {
-            showToast(kept == 1 ? String(localized: "Deleted \(live.count) tasks · 1 note kept")
-                : String(localized: "Deleted \(live.count) tasks · \(kept) notes kept"))
+            showToast(String(localized: "“\(title)” deleted"))
+        } else if withWriting > 0 {
+            showToast(String(localized: "\(live.count) tasks deleted, \(withWriting) with writing"))
         } else {
-            showToast(String(localized: "Deleted \(live.count) tasks"))
+            showToast(String(localized: "\(live.count) tasks deleted"))
         }
         return outcome
     }

@@ -44,6 +44,18 @@ final class TaskPageSliceTests: XCTestCase {
         return id
     }
 
+    /// Pre-2026-10-23 split-state fixture. New deletes use the whole-item test.
+    private func legacyDeleteNote(_ id: UUID) throws -> Bool {
+        let context = ModelContext(container)
+        let files = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { $0.noteID == id }
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == id {
+            row.deletedAt = Date(); row.deletionGroupID = nil
+            row.deletedAttachmentIDsRaw = Set(files.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
+        }
+        try context.save(); notes.store.refresh()
+        return true
+    }
+
     private func open(_ taskID: UUID) throws -> TaskNotePresenter {
         let presenter = try TaskNotePresenter(taskID: taskID, tasks: tasks, library: library, notes: notes,
                                               design: .default, columnInset: 28, defaults: nil)
@@ -231,8 +243,9 @@ final class TaskPageSliceTests: XCTestCase {
 
     // MARK: Lifecycle (`p3-22`: nothing cascades)
 
-    func testDeleteTaskKeepsTheNoteAndTheHeadOffersRestore() async throws {
+    func testDeleteTaskDeletesTheWholeItemAndRestoreReturnsItsWriting() async throws {
         let id = try seed(.boundary)
+        await notes.startAndWait() // Deletion must await the existing recovery inventory.
         let presenter = try open(id)
         let model = presenter.model
         let noteID = try XCTUnwrap(presenter.session?.noteID)
@@ -245,18 +258,60 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(model.head.subtasks.total, 2)
         let kept = try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).filter { $0.id == noteID }
         XCTAssertFalse(kept.isEmpty)
-        XCTAssertTrue(kept.allSatisfy { $0.deletedAt == nil }, "deleting the task never deletes its note")
-        XCTAssertFalse(presenter.host.engine.isReadOnly, "the writing stays editable")
+        // Orchestrator decision 2026-10-23: task and writing have one lifecycle.
+        XCTAssertTrue(kept.allSatisfy { $0.deletedAt != nil }, "the writing goes with the task")
+        XCTAssertTrue(presenter.host.engine.isReadOnly, "deleted writing cannot keep accepting edits")
         XCTAssertTrue(model.restoreTask())
         XCTAssertNotNil(tasks.task(withID: id))
+        XCTAssertFalse(presenter.host.engine.isReadOnly, "Restore returns the writing")
         XCTAssertTrue(model.head.exists)
         XCTAssertEqual(model.rows.count, 2)
+    }
+
+    func testDeletedItemKeepsNativeUndoForItsWholeLifecycleStep() async throws {
+        let id = try seed(.boundary)
+        await notes.startAndWait()
+        let presenter = try open(id), before = presenter.host.textView.string
+        XCTAssertTrue(presenter.model.deleteTask())
+        XCTAssertTrue(presenter.host.engine.isReadOnly)
+        XCTAssertTrue(presenter.host.engine.canUndoCommand)
+        XCTAssertTrue(presenter.host.engine.undoCommand())
+        for _ in 0..<200 where tasks.task(withID: id) == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(tasks.task(withID: id))
+        XCTAssertFalse(presenter.host.engine.isReadOnly)
+        XCTAssertEqual(presenter.host.textView.string, before)
+    }
+
+    func testPurgedCachedWritingStaysReadOnlyOnLaterPublication() async throws {
+        let id = try seed(.boundary)
+        await notes.startAndWait()
+        let presenter = try open(id), noteID = try XCTUnwrap(presenter.session?.noteID)
+        XCTAssertTrue(presenter.model.deleteTask())
+        let context = ModelContext(container)
+        for row in try context.fetch(FetchDescriptor<NoteItem>()) where row.id == noteID { context.delete(row) }
+        for row in try context.fetch(FetchDescriptor<TaskItem>()) where row.id == id { context.delete(row) }
+        try context.save()
+        notes.publishWholeItemLifecycle()
+        XCTAssertTrue(presenter.host.engine.isReadOnly)
+    }
+
+    func testWholeItemDeletedPageReopensReadOnlyWithoutReplacementDraft() async throws {
+        let id = try seed(.boundary)
+        await notes.startAndWait()
+        let first = try open(id), noteID = try XCTUnwrap(first.session?.noteID)
+        XCTAssertTrue(first.model.deleteTask())
+        let closed = await first.close(); XCTAssertTrue(closed)
+        let reopened = try open(id)
+        XCTAssertTrue(reopened.host.engine.isReadOnly)
+        XCTAssertEqual(reopened.session?.noteID, noteID)
+        XCTAssertFalse(reopened.model.deletedNote, "new groups have one Restore, with no replacement writing")
+        XCTAssertTrue(try ownNotes(id).allSatisfy { $0.deletedAt != nil })
     }
 
     func testATaskWhoseNoteIsInRecentlyDeletedOffersRestoreNote() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
-        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        let deleted = try legacyDeleteNote(noteID)
         XCTAssertTrue(deleted)
         let presenter = try open(id)
         // § 2.7.2: the writing reads "Write a new note": a never-saved draft
@@ -281,7 +336,7 @@ final class TaskPageSliceTests: XCTestCase {
     func testRestoreNoteReopensThePageWithItsOwnEditorOnScreen() async throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
-        let deleted = await notes.deleteNoteDurably(noteID: noteID)
+        let deleted = try legacyDeleteNote(noteID)
         XCTAssertTrue(deleted)
         let hosting = NSHostingController(rootView: AnyView(
             TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
@@ -405,6 +460,8 @@ final class TaskPageSliceTests: XCTestCase {
 
     // MARK: All notes (`p3-22` row 3)
 
+    /// No "Task note" wording any more (one-item plan, "All notes rows",
+    /// under the 2026-10-23 one-item build rules): the row is the item's.
     func testAllNotesShowsATaskNoteWithItsCircleAndTaskNote() throws {
         let id = try seed(.boundary)
         let noteID = try XCTUnwrap(try ownNotes(id).first?.id)
@@ -412,9 +469,9 @@ final class TaskPageSliceTests: XCTestCase {
         let model = NotesLibraryModel(search: { _ in [] }, store: notes.store, controller: notes)
         let row = model.preparedRow(AtticNoteRowModel(id: noteID, title: "", time: "", preview: "", spoken: ""), store: notes.store)
         XCTAssertEqual(row.taskState, .inProgress)
-        // The panel design (2026-10-27): no "Task note ·" in the row; VoiceOver still says it.
-        XCTAssertFalse(row.preview.hasPrefix("Task note"), row.preview)
-        XCTAssertTrue(row.spoken.hasPrefix("Task note, "), row.spoken)
+        XCTAssertFalse(row.preview.localizedCaseInsensitiveContains("task note"), row.preview)
+        XCTAssertFalse(row.preview.isEmpty, "the writing's first line")
+        XCTAssertFalse(row.spoken.localizedCaseInsensitiveContains("task note"), row.spoken)
         XCTAssertEqual(row.title, "Finalize launch checklist")
     }
 
@@ -472,7 +529,8 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(uiState.taskNoteReturnRow, id, "the anchor row takes the keyboard again")
     }
 
-    /// ⌘Return, a click on the title and VoiceOver's Open task note open the
+    /// ⌘Return, a click on the title and VoiceOver's Open page (the menu's
+    /// Open Page, owner answer 3 of 2026-10-23) open the
     /// task's page through the host's service; the files list keeps its
     /// own control (the files count) and menu item.
     func testRowOpenCommandOpensTheTaskPage() throws {
@@ -482,7 +540,7 @@ final class TaskPageSliceTests: XCTestCase {
         hosted.model.services.openTaskNote = { opened.append($0) }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first)
         let actions = hosted.page.actions(for: row.id, in: .now)
-        XCTAssertEqual(actions.names.openPage, "Open task note")
+        XCTAssertEqual(actions.names.openPage, "Open page")
         actions.openPage()
         hosted.spin(0.2)
         XCTAssertEqual(opened, [row.id])
@@ -495,7 +553,7 @@ final class TaskPageSliceTests: XCTestCase {
         let hosted = try Hosted(height: 520, keyWindow: false)
         defer { hosted.close() }
         let row = try XCTUnwrap(hosted.model.rows(for: .now).first)
-        XCTAssertNotEqual(hosted.page.actions(for: row.id, in: .now).names.openPage, "Open task note")
+        XCTAssertNotEqual(hosted.page.actions(for: row.id, in: .now).names.openPage, "Open page")
     }
 }
 

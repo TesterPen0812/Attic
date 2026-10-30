@@ -431,6 +431,7 @@ struct AtticTitleEditing {
     var pageUndo: ((_ nativeHasUndo: Bool) -> Bool)? = nil
     var pageRedo: ((_ nativeHasRedo: Bool) -> Bool)? = nil
     var didEdit: (() -> Void)? = nil
+    var admitEdit: (() -> Bool)? = nil
 
     struct Tokens {
         var chips: [AtticTokenChip]
@@ -445,6 +446,7 @@ struct AtticTitleEditing {
         /// ⌘Z past the title's own history: the page's.
         var undoFallback: () -> Void = {}
         var redoFallback: () -> Void = {}
+        var admitEdit: (() -> Bool)? = nil
     }
 }
 
@@ -481,7 +483,8 @@ struct AtticRowTitleEditor: View {
                     redoDraft: tokens.redoDraft,
                     selectionMoved: tokens.selectionMoved,
                     undoFallback: tokens.undoFallback,
-                    redoFallback: tokens.redoFallback
+                    redoFallback: tokens.redoFallback,
+                    admitEdit: tokens.admitEdit
                 ),
                 style: style,
                 ink: .heading,
@@ -1576,25 +1579,32 @@ struct AtticRowActionsButton: View {
     }
 }
 
-/// The frames of the controls inside a task row (its circle, checklist,
-/// date and tags), in the row's own coordinate space
-/// (`AtticTaskRow.space`), so a list can keep a drag from starting on
-/// them (round 4: embedded controls keep their own presses).
-struct AtticRowControlFramesKey: PreferenceKey {
-    static var defaultValue: [CGRect] { [] }
+/// Controls publish layout anchors; resolving a frame while constructing
+/// its preference would make the writer depend on the layout it reports.
+private struct AtticRowControlAnchorsKey: PreferenceKey {
+    static var defaultValue: [Anchor<CGRect>] { [] }
 
-    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
         value.append(contentsOf: nextValue())
     }
 }
 
 extension View {
-    /// Reports this control's frame in its task row (see
-    /// `AtticRowControlFramesKey`).
     func atticRowControl() -> some View {
-        background(GeometryReader { proxy in
-            Color.clear.preference(key: AtticRowControlFramesKey.self, value: [proxy.frame(in: AtticTaskRow.space)])
-        })
+        anchorPreference(key: AtticRowControlAnchorsKey.self, value: .bounds) { [$0] }
+    }
+
+    /// Resolve the anchors in the row's coordinates. Only actual rectangle
+    /// changes reach the input cache; geometry never constructs a writer.
+    func onAtticRowControlFramesChange(_ action: @escaping ([CGRect]) -> Void) -> some View {
+        overlayPreferenceValue(AtticRowControlAnchorsKey.self) { anchors in
+            Color.clear
+                .onGeometryChange(for: [CGRect].self) { proxy in anchors.map { proxy[$0] } } action: { frames in
+                    action(frames)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -2193,7 +2203,7 @@ private struct AtticSubtaskCommands: ViewModifier {
                     return AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
                                                               modifiers: press.modifiers, in: commands, showActions: showActions)
                 }
-                .contextMenu { AtticMenuItems(commands: commands) }
+                .atticContextMenu { commands }
         }
     }
 }
@@ -2651,7 +2661,7 @@ private struct AtticTagColourMenu: ViewModifier {
         if commands.isEmpty {
             content
         } else {
-            content.contextMenu { AtticMenuItems(commands: commands) }
+            content.atticContextMenu { commands }
         }
     }
 }
@@ -2852,6 +2862,10 @@ final class AtticSubtaskTextField: NSTextField {
 /// deleting an empty sibling) answers Undo before the older typing.
 final class AtticSubtaskFieldEditor: NSTextView {
     var editing: AtticTitleEditing?
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard editing?.admitEdit?() != false else { return false }
+        return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    }
     /// V-12: grown past its most lines, it scrolls to the insertion point
     /// by whole lines (its clip is whole lines tall).
     override func adjustScroll(_ newVisible: NSRect) -> NSRect {
@@ -2862,11 +2876,11 @@ final class AtticSubtaskFieldEditor: NSTextView {
         return rect
     }
     @objc func undo(_ sender: Any?) {
-        guard !hasMarkedText() else { return }
+        guard !hasMarkedText(), editing?.admitEdit?() != false else { return }
         if editing?.pageUndo?(undoManager?.canUndo == true) != true { undoManager?.undo() }
     }
     @objc func redo(_ sender: Any?) {
-        guard !hasMarkedText() else { return }
+        guard !hasMarkedText(), editing?.admitEdit?() != false else { return }
         if editing?.pageRedo?(undoManager?.canRedo == true) != true { undoManager?.redo() }
     }
     override func keyDown(with event: NSEvent) {

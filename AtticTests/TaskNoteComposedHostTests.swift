@@ -1805,8 +1805,21 @@ extension TaskNoteComposedHostTests {
                        "a reveal does not change how the item opens")
     }
 
-    func testOnlyExpandedItemsAreRememberedAndPurgedOnesAreForgotten() throws {
+    func testOnlyExpandedItemsAreRememberedAndPurgedOnesAreForgotten() async throws {
         let id = try seed(.heavy)
+        // Physical deletion must wait for startup classification; opening a
+        // page pumps the run loop and can otherwise enter the launch hold.
+        let recovered = expectation(description: "startup recovery completes")
+        let controller = try XCTUnwrap(notes)
+        let recovery = Task { @MainActor in
+            await controller.recoverAtLaunchAndWait()
+            guard !Task.isCancelled else { return }
+            recovered.fulfill()
+        }
+        defer { recovery.cancel() }
+        await fulfillment(of: [recovered], timeout: 5)
+        XCTAssertTrue(notes.launchRecoveryCompleted)
+        XCTAssertTrue(coordinator.startupReconciled)
         let presenter = try open(id)
         let defaults = freshDefaults()
         library.presentationDefaults = defaults
@@ -1824,8 +1837,10 @@ extension TaskNoteComposedHostTests {
         model(purged).toggleExpanded()
         model(kept).toggleExpanded()
         XCTAssertTrue(library.deleteListedTasks([purged]).isApplied)
+        let wasReconciled = coordinator.startupReconciled
+        let wasRecovered = notes.launchRecoveryCompleted
         let report = library.emptyRecentlyDeleted(RecentlyDeletedSelection(items: library.recentlyDeleted()))
-        XCTAssertTrue(report.taskIDs.contains(purged))
+        XCTAssertTrue(report.taskIDs.contains(purged), "Purge refused: \(tasks.lastErrorMessage ?? "no store error"), startup=\(wasReconciled), recovery=\(wasRecovered)")
         XCTAssertNil(defaults.object(forKey: TaskNotePageModel.expandKey(purged)), "a purged item's entry goes")
         XCTAssertEqual(defaults.object(forKey: TaskNotePageModel.expandKey(kept)) as? Bool, true)
     }

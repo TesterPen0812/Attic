@@ -280,7 +280,10 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     // Attic's own dropdowns (E1, p2-24 D; Compact size, p2-28): 13 pt
     // names (SF Pro), the date card's month title, its days and its light
     // weekday row.
-    case dropdownRow, dropdownHeading, dropdownDay, dropdownWeekday
+    // Draft C (owner, 2026-10-23): the month title 13 medium, days 13 with
+    // the chosen one medium, weekdays 10 semibold, section headers 11
+    // semibold.
+    case dropdownRow, dropdownHeading, dropdownDay, dropdownDaySelected, dropdownWeekday, dropdownSection
     // Settings
     case pageTitle, sectionHeading, sidebarHeading, sidebarRow, groupLabel, groupValue
     case settingsHelper, settingsHint, tileLabel, tileLabelSelected, rowSingle
@@ -330,11 +333,12 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .noteRowMeta: Spec(size: 10.5, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: AtticNoteType.body.size, weight: .regular, italic: false, monospacedDigits: false)
         case .dropdownRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
-        case .dropdownHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
-        case .dropdownDay: Spec(size: 12.5, weight: .regular, italic: false, monospacedDigits: true)
-        // O14-09: the weekday letters read apart from the dates (owner
-        // 2026-10-14: "too strong"): secondary ink, smaller, regular.
-        case .dropdownWeekday: Spec(size: 10, weight: .regular, italic: false, monospacedDigits: false)
+        case .dropdownHeading: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
+        case .dropdownDay: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: true)
+        case .dropdownDaySelected: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: true)
+        // Draft C: two-letter weekdays, small, semibold, in a light ink.
+        case .dropdownWeekday: Spec(size: 10, weight: .semibold, italic: false, monospacedDigits: false)
+        case .dropdownSection: Spec(size: 11, weight: .semibold, italic: false, monospacedDigits: false)
         case .rowMeta, .helper: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
         case .rowMetaEmphasis: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)

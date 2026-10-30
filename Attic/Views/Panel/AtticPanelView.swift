@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import SwiftData
 
 /// The panel's shell: the surface, the header (Pin and the page switch), the
 /// page host for the current page, and the notices above it (the Undo toast
@@ -246,11 +247,26 @@ struct AtticPanelView: View {
     /// Open Task Note and a row's file drop (Phase 3).
     private var taskNoteEntryServices: TaskNoteEntryServices {
         TaskNoteEntryServices(
-            open: { [uiState] id, backTitle in uiState.openTaskNote(id, from: .tasks, row: id, backTitle: backTitle) },
+            open: { [uiState, tasksPageState, store, toasts, weak pages = noteDraft.pages] id, backTitle in
+                let model = tasksPageState.model(for: store, toasts: toasts)
+                let query = model.trimmedQuery(for: model.tab)
+                if TaskNoteWindows.shared.bringForward(id, searchQuery: query) { return }
+                pages?.pendingTaskSearchQuery = query.isEmpty ? nil : query
+                uiState.openTaskNote(id, from: .tasks, row: id, backTitle: backTitle)
+            },
             addFiles: { [noteDraft, store, toasts, uiState] id, staging in
                 TaskNoteFiles.add(staging, to: id, tasks: store, controller: noteDraft.pages, toasts: toasts) {
                     uiState.openTaskNote(id, from: .tasks, row: id, backTitle: nil)
                 }
+            },
+            removeFromTasks: { [weak pages = noteDraft.pages] id in pages?.removeFromTasks?(id) },
+            canRemoveFromTasks: { [weak store] id in
+                guard let store else { return false }
+                return TaskNoteConversion.hasWriting(id, in: ModelContext(store.container))
+            },
+            makeCheckbox: { [weak pages = noteDraft.pages, weak store, weak toasts] id in
+                guard let pages, let store else { return }
+                Task { @MainActor in await Self.makeCheckbox(subtaskID: id, pages: pages, tasks: store, toasts: toasts) }
             },
             noteOwners: noteDraft.pages.store.$notes
                 .map { Set($0.compactMap(\.taskID)) }
@@ -277,11 +293,13 @@ struct AtticPanelView: View {
                 case let .made(taskID):
                     let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
                     let stepID = pages.undoRoute.undoStepID(in: history.historyID)
-                    uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
-                    toasts.show(String(localized: "Made a task from the note"), answersUndoKey: false, performingAsync: { [weak pages, weak uiState, weak history] in
+                    if TaskNoteWindows.shared.window(noteID: noteID) == nil {
+                        uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
+                    }
+                    toasts.show(String(localized: "Added to Now"), answersUndoKey: false, performingAsync: { [weak pages, weak uiState, weak history] in
                         guard let pages, let uiState, let history, let stepID,
                               history.route.undoStepID(in: history.historyID) == stepID else { return .applied }
-                        if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) {
+                        if let open = TaskNotePresenter.open(for: taskID), !open.page.retainsAcrossItemChanges, !(await open.close()) {
                             return .failed(CommandFailure(String(localized: "Couldn't undo: the note is in use")))
                         }
                         TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState)
@@ -291,6 +309,12 @@ struct AtticPanelView: View {
                 case let .refused(reason):
                     pages.active?.showNotice(NoteNotice(kind: .didntWork, detail: reason))
                 }
+            }
+        }
+        pages.removeFromTasks = { [weak pages, weak store, weak uiState, weak toasts] taskID in
+            guard let pages, let store, let uiState else { return }
+            Task { @MainActor in
+                await Self.removeFromTasks(taskID, pages: pages, tasks: store, uiState: uiState, toasts: toasts)
             }
         }
         pages.taskNoteMaterialized = { [weak pages, weak store, weak uiState, weak toasts] patch, operationID in
@@ -325,9 +349,7 @@ struct AtticPanelView: View {
                 cornerSize: cornerRadius,
                 elevation: Self.showsSurfaceElevation ? panelSurfaceTreatment.surfaceElevation : nil
             ))
-            .contextMenu {
-                AtticMenuItems(commands: panelMenuCommands)
-            }
+            .atticContextMenu { panelMenuCommands }
     }
 
     private var storeObservedPanel: some View {
@@ -394,18 +416,20 @@ struct AtticPanelView: View {
 
     // MARK: Menus
 
-    /// The panel's own right-click menu, with every shortcut shown.
+    /// The panel's own right-click menu, with every shortcut shown. The
+    /// current page is ticked, not greyed (Dropdown content: answers,
+    /// owner, 2026-10-24, sheet 5).
     private var panelMenuCommands: [AtticMenuCommand] {
         var commands = PanelPage.allCases.map { page in
             AtticMenuCommand(
-                String.LocalizationValue(page.title),
+                verbatim: String(localized: String.LocalizationValue(page.title)),
                 systemImage: page.systemName,
                 shortcut: KeyboardShortcut(page.keyEquivalent, modifiers: .command),
-                isDisabled: page == currentPage
+                state: page == currentPage ? .on : nil
             ) { selectPage(page) }
         }
         commands.append(AtticMenuCommand(
-            uiState.isPanelPinned ? "Unpin panel" : "Pin panel",
+            uiState.isPanelPinned ? "Unpin Panel" : "Pin Panel",
             systemImage: uiState.isPanelPinned ? "pin.slash" : "pin",
             shortcut: KeyboardShortcut("p", modifiers: [.command, .shift]),
             startsSection: true
@@ -661,5 +685,119 @@ struct PanelRootLayout: Layout {
         let size = bounds.size
         MainActor.assumeIsolated { Self.lastPlacedSize = size }
         #endif
+    }
+}
+
+
+extension AtticPanelView {
+    /// Make Checkbox from a subtask row (C2): the page's own producer,
+    /// `TaskNotePresenter.makeNoteCheckbox`, through the write gate,
+    /// journal and the item's retained history. On the item's open page
+    /// when there is one, else on a headless page closed straight after
+    /// (as the agent's tool does). The toast's Undo is the history's step.
+    @MainActor static func makeCheckbox(subtaskID: UUID, pages: NotesPageController, tasks: TaskStore,
+                                        toasts: PanelToastCenter?) async {
+        func report(_ reason: String) {
+            toasts?.show(reason, actionTitle: String(localized: "Retry"), answersUndoKey: false) { [weak pages, weak tasks, weak toasts] in
+                guard let pages, let tasks else { return }
+                Task { @MainActor in await Self.makeCheckbox(subtaskID: subtaskID, pages: pages, tasks: tasks, toasts: toasts) }
+            }
+        }
+        guard let parentID = tasks.task(withID: subtaskID)?.parentID,
+              let coordinator = try? WorkspaceLegacyBridge.coordinator(for: tasks.container) else { return }
+        await coordinator.sessions.retryHeadlessClosures()
+        let presenter: TaskNotePresenter
+        let headless: Bool
+        if let open = TaskNotePresenter.open(for: parentID) {
+            presenter = open
+            headless = false
+        } else {
+            let library = tasks.commandLibrary ?? AtticLibrary(tasks: tasks)
+            guard let made = try? TaskNotePresenter(taskID: parentID, tasks: tasks, library: library, notes: pages,
+                                                    design: .default, columnInset: AtticNoteMetrics.columnInset, defaults: nil) else {
+                report(String(localized: "Couldn't make the note checkbox"))
+                return
+            }
+            presenter = made
+            headless = true
+        }
+        let result = await presenter.makeNoteCheckbox(subtaskID: subtaskID, tasks: tasks, notes: pages)
+        if headless, !(await presenter.close()), let lease = presenter.lease {
+            _ = await coordinator.sessions.closeHeadless(presenter.page, lease: lease)
+        }
+        switch result {
+        case let .madeCheckbox(entryID, recovery):
+            let history = pages.undoRoute.workspace(for: .taskWorkspace(parentID))
+            let message = recovery.map { String(localized: "Made note checkbox") + " · " + $0 } ?? String(localized: "Made note checkbox")
+            toasts?.show(message, answersUndoKey: false, performingAsync: { [weak history] in
+                guard let history, history.route.undoStepID(in: history.historyID) == entryID else { return .applied }
+                return await history.undoLatest(stepID: entryID) == .applied ? .applied
+                    : .failed(CommandFailure(String(localized: "Can't undo: the line was edited since")))
+            })
+        case let .refused(reason):
+            report(reason)
+        case .made:
+            break
+        }
+    }
+
+    @MainActor static func removeFromTasks(_ taskID: UUID, pages: NotesPageController,
+        tasks: TaskStore, uiState: PanelUIState, toasts: PanelToastCenter?, moveFilesFirst: Bool = false) async {
+        func report(_ reason: String) {
+            toasts?.show(reason, actionTitle: String(localized: "Retry"), answersUndoKey: false) { [weak pages, weak tasks, weak uiState, weak toasts] in
+                guard let pages, let tasks, let uiState else { return }
+                Task { @MainActor in await Self.removeFromTasks(taskID, pages: pages, tasks: tasks,
+                    uiState: uiState, toasts: toasts, moveFilesFirst: moveFilesFirst) }
+            }
+        }
+        if moveFilesFirst {
+            let moved: TaskAttachmentMigration.Outcome
+            if TaskNoteWindows.shared.window(for: taskID) != nil {
+                moved = await TaskNoteWindows.shared.moveFilesFirst(taskID, tasks: tasks, controller: pages)
+            } else {
+                if let open = TaskNotePresenter.open(for: taskID), !(await open.close()) { return }
+                moved = await tasks.fileMigration.moveIntoNote(taskID, tasks: tasks, notes: pages)
+            }
+            switch moved {
+            case .migrated, .reconciled, .unchanged: break
+            case let .refused(reason): report(reason.reason); return
+            case .deferred: report(String(localized: "Couldn't move the files now")); return
+            }
+        }
+        let open = TaskNotePresenter.open(for: taskID)
+        switch await TaskNoteConversion.removeTask(taskID, notes: pages, tasks: tasks, workspaceSession: open?.session) {
+        case let .removed(noteID):
+            let history = pages.undoRoute.workspace(for: .taskWorkspace(taskID))
+            let entry = history.route.undoStepID(in: history.historyID)
+            toasts?.show(String(localized: "Removed from Tasks"), answersUndoKey: false, performingAsync: { [weak pages, weak history, weak uiState] in
+                guard let pages, let history, let uiState, let entry,
+                      history.route.undoStepID(in: history.historyID) == entry else { return .applied }
+                guard await history.undoLatest(stepID: entry) == .applied else {
+                    return .failed(CommandFailure(String(localized: "Couldn't undo")))
+                }
+                await pages.retireConvertedNote(noteID, installingCommittedForm: false)
+                if pages.retainsWindowSession(pages.workspaceSessionIfCached(noteID)) { return .applied }
+                uiState.openTaskNote(taskID, from: .notes, backTitle: String(localized: "Back to Notes"))
+                return .applied
+            })
+            // A mini window retains the page already installed by publication.
+            if pages.retainsWindowSession(open?.session) { return }
+            // The committed ordinary projection is already installed while
+            // input is reserved; durable close preserves any queued writing.
+            if let open, !(await open.close()) { return }
+            TaskNoteWindows.shared.finishHandoff(taskID)
+            TaskNoteRouteHost<EmptyView>.closeRoute(taskID, uiState: uiState, controller: pages)
+            _ = pages.open(noteID: noteID)
+            uiState.switchPage(to: .notes, motion: .instant)
+
+        case let .refused(reason):
+            if reason == TaskNoteConversion.earlierFilesReason {
+                toasts?.show(reason, actionTitle: String(localized: "Move Files into Note"), answersUndoKey: false) { [weak pages, weak tasks, weak uiState, weak toasts] in
+                    guard let pages, let tasks, let uiState else { return }
+                    Task { @MainActor in await Self.removeFromTasks(taskID, pages: pages, tasks: tasks,
+                        uiState: uiState, toasts: toasts, moveFilesFirst: true) }
+                }
+            } else { report(reason) }
+        }
     }
 }

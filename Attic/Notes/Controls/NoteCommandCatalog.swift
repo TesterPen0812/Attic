@@ -243,8 +243,21 @@ enum NoteCommandCatalog {
 
     // MARK: The / list
 
-    /// The typing shortcut a `/` row shows (the habits the engine converts
-    /// as you type), or the key shortcut when a row has no habit.
+    /// The `/` list's groups (Dropdown content: answers, owner, 2026-10-24,
+    /// answer 4 B): styles │ lists │ blocks │ insert, a separator between
+    /// neighbouring rows of different groups.
+    static func slashGroup(_ kind: NoteSlashItem.Kind) -> Int {
+        switch kind {
+        case .body, .title, .heading, .subheading, .smallHeading: 0
+        case .checklist, .bullet, .number: 1
+        case .quote, .callout, .codeBlock, .diagram, .divider, .table: 2
+        case .imageOrFile, .date: 3
+        }
+    }
+
+    /// The Markdown a `/` row's block types (the habits the engine converts
+    /// as you type), shown quiet and trailing (answer 4 B); none for a row
+    /// with no habit.
     static func slashHint(_ kind: NoteSlashItem.Kind) -> String? {
         switch kind {
         case .checklist: "-[]"
@@ -259,9 +272,8 @@ enum NoteCommandCatalog {
         case .mono, .codeBlock: "```"
         case .diagram: "```mermaid"
         case .divider: "---"
-        case .imageOrFile: String(localized: "paste or drop")
         case .table: "2 × 3"
-        case .body, .date, .callout: nil
+        case .body, .date, .callout, .imageOrFile: nil
         }
     }
 

@@ -43,6 +43,8 @@ enum NotePhysicalFamilyRetention {
                   NoteTextReplacement.utf16Equal(row.title, first.title), NoteTextReplacement.utf16Equal(row.body, first.body),
                   row.attachmentIDsRaw == first.attachmentIDsRaw,
                   row.sourceRevisionID == first.sourceRevisionID,
+                  row.taskSnapshotData == first.taskSnapshotData,
+                  row.taskSnapshotData == nil || TaskNotePageSnapshot.decode(row.taskSnapshotData) != nil,
                   (row.contentFormat == NoteDocument.currentFormat
                         && row.content.map { NoteContentCodec.decode($0).isEditable } == true),
                   row.attachmentIDsRaw.split(separator: " ").allSatisfy({ UUID(uuidString: String($0)) != nil })
@@ -372,7 +374,7 @@ extension NoteStore {
         for replica in replicas where seen.insert(NotePreservationState(replica)).inserted {
             if baseRevisionID != nil, replica.revisionID == baseRevisionID,
                commonBaseState == NotePreservationState(replica) { continue }
-            if let latest = latestVersion(noteID: replica.id), isSameState(latest, replica) { continue }
+            if let latest = latestVersion(noteID: replica.id), try isSameState(latest, replica) { continue }
             displaced.append(replica)
         }
         // Only rows actually displaced need a dependency inventory. Ordinary
@@ -385,7 +387,7 @@ extension NoteStore {
                 .filter { $0.deletedAt == nil }.map(\.id)
         }
         for replica in displaced {
-            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext, fallbackAttachmentIDs: fallbackIDs[replica.id] ?? [])
+            try stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext, fallbackAttachmentIDs: fallbackIDs[replica.id] ?? [])
         }
         return displaced.count
     }
@@ -464,10 +466,19 @@ extension NoteStore {
                 }))
                 let owners = Array(Set(linked.compactMap(\.taskID)))
                 if !owners.isEmpty {
-                    let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { owners.contains($0.id) }))
+                    let roots = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { owners.contains($0.id) }))
+                    // SQLCore cannot translate IN over a coalesced optional
+                    // UUID. Filter child ownership on this background context.
+                    let ownerSet = Set(owners)
+                    let children = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID != nil && $0.deletedAt == nil }))
+                        .filter { $0.parentID.map(ownerSet.contains) == true }
+                    let rows = roots + children
                     let matching = Set(TaskStore.canonicalReplicas(from: rows).filter {
-                        $0.title.localizedStandardContains(text) || (!tagText.isEmpty && $0.tagsRaw.localizedStandardContains(tagText))
-                    }.map(\.id))
+                        ($0.parentID == nil || $0.deletedAt == nil) &&
+                        ($0.title.localizedStandardContains(text)
+                            || ($0.parentID == nil && !tagText.isEmpty && $0.tagsRaw.localizedStandardContains(tagText))
+                            || $0.attachments.contains { $0.filename.localizedStandardContains(text) })
+                    }.map { $0.parentID ?? $0.id })
                     ids.formUnion(linked.filter { $0.taskID.map(matching.contains) == true }.map(\.id))
                 }
             }
@@ -475,7 +486,16 @@ extension NoteStore {
                 attachment.deletedAt == nil && attachment.originalFilename.localizedStandardContains(text)
             }))
             ids.formUnion(files.map(\.noteID))
-            return ids
+            // S10 is one result even when the match is in alternate writing.
+            // Keep all records/bytes; only the presented UUID is canonical.
+            let physical = try context.fetch(FetchDescriptor<NoteItem>())
+            let canonical = NoteStore.itemWritingIDs(from: physical)
+            let all = NoteStore.canonicalReplicas(from: physical).filter { $0.deletedAt == nil }
+            let byID = Dictionary(all.map { ($0.id, $0.taskID) }, uniquingKeysWith: { first, _ in first })
+            return Set(ids.compactMap { id in
+                guard let owner = byID[id] else { return nil }
+                return owner.flatMap { canonical[$0] } ?? id
+            })
         }.value
     }
 
@@ -1118,7 +1138,7 @@ extension NoteStore {
         let context = modelContext
         do {
         if let preservationID {
-            stageVersion(of: preflight.canonical, reason: .beforeRestore, timestamp: timestamp,
+            try stageVersion(of: preflight.canonical, reason: .beforeRestore, timestamp: timestamp,
                          context: context, id: preservationID)
             try stageDisplacedReplicas(replicas.filter { $0 !== preflight.canonical }, reason: .beforeRestore, timestamp: timestamp)
         } else {
@@ -1174,7 +1194,7 @@ extension NoteStore {
     }
 
     func stageVersion(of replica: NoteItem, reason: NoteVersionReason, timestamp: Date, context: ModelContext,
-                      id: UUID = UUID(), fallbackAttachmentIDs: [UUID]? = nil) {
+                      id: UUID = UUID(), fallbackAttachmentIDs: [UUID]? = nil) throws {
         let attachmentIDs: [UUID]
         if replica.usesDocumentFormat, let data = replica.content,
            case let .editable(document) = NoteContentCodec.decode(data) {
@@ -1194,7 +1214,8 @@ extension NoteStore {
             title: replica.title,
             body: replica.body,
             attachmentIDs: attachmentIDs,
-            sourceRevisionID: replica.revisionID
+            sourceRevisionID: replica.revisionID,
+            taskSnapshotData: try TaskNotePageSnapshot.data(note: replica, in: context)
         ))
     }
 
@@ -1208,11 +1229,12 @@ extension NoteStore {
         return (try? modelContext.fetch(descriptor))?.first
     }
 
-    private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
+    private func isSameState(_ version: NoteVersion, _ note: NoteItem) throws -> Bool {
         guard version.contentFormat == note.contentFormat,
               version.contentFingerprint.map({ $0 == WorkspaceModelFields.digest(note.content) }) ?? (version.content == note.content),
               NoteTextReplacement.utf16Equal(version.title, note.title),
-              NoteTextReplacement.utf16Equal(version.body, note.body) else { return false }
+              NoteTextReplacement.utf16Equal(version.body, note.body),
+              version.taskSnapshotData == (try TaskNotePageSnapshot.data(note: note, in: modelContext)) else { return false }
         return true
     }
 
@@ -1276,11 +1298,15 @@ extension NoteStore {
             // attachment metadata cannot be read (main's conservative fallback).
             let baseAttachmentIDs = (try? attachmentRows(forNoteID: noteID).map(\.id)) ?? []
             let baseVersionID = UUID()
+            let snapshot: Data?
+            do { snapshot = try TaskNotePageSnapshot.data(note: current, in: modelContext) }
+            catch { modelContext.rollback(); return .failure(.saveFailed(error.localizedDescription)) }
             modelContext.insert(NoteVersion(id: baseVersionID, noteID: noteID, createdAt: timestamp,
                                             reason: .beforeAgentEdit, content: current.content,
                                             contentFormat: current.contentFormat, title: current.title, body: current.body,
                                             attachmentIDs: baseAttachmentIDs,
-                                            sourceRevisionID: current.revisionID))
+                                            sourceRevisionID: current.revisionID,
+                                            taskSnapshotData: snapshot))
             let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
                                        proposedContent: data, agentName: agentName, createdAt: timestamp,
                                        baseVersionID: baseVersionID)
@@ -1410,7 +1436,8 @@ extension NoteStore {
                 modelContext.insert(NoteVersion(id: baseID, noteID: noteID, createdAt: timestamp,
                     reason: .beforeAgentEdit, content: note.content, contentFormat: note.contentFormat,
                     title: note.title, body: note.body, attachmentIDs: try attachmentRows(forNoteID: noteID).map(\.id),
-                    sourceRevisionID: note.revisionID))
+                    sourceRevisionID: note.revisionID,
+                    taskSnapshotData: try TaskNotePageSnapshot.data(note: note, in: modelContext)))
                 let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
                     proposedContent: try NoteContentCodec.encode(document), agentName: agentName,
                     createdAt: timestamp, baseVersionID: baseID)
@@ -1480,7 +1507,8 @@ extension NoteStore {
             modelContext.insert(NoteVersion(noteID: noteID, createdAt: timestamp, reason: .replacedByDraft,
                 content: try NoteContentCodec.encode(current), contentFormat: current.format,
                 title: current.title, body: NoteTextExport.plainBody(current), attachmentIDs: current.attachmentIDs,
-                sourceRevisionID: note.revisionID))
+                sourceRevisionID: note.revisionID,
+                    taskSnapshotData: try TaskNotePageSnapshot.data(note: note, in: modelContext)))
             if edit.isDeletion {
                 guard preflight.replicas.allSatisfy({ $0.revisionToken == expectedRevision && $0.content == note.content &&
                     NoteTextReplacement.utf16Equal($0.title, note.title) && NoteTextReplacement.utf16Equal($0.body, note.body) }) else {
@@ -1584,7 +1612,8 @@ extension NoteStore {
                 context.insert(NoteVersion(id: versionID, noteID: noteID, createdAt: timestamp,
                     reason: .replacedByDraft, content: content, contentFormat: replica.contentFormat,
                     title: replica.title, body: replica.body, attachmentIDs: old.attachmentIDs,
-                    sourceRevisionID: replica.revisionID))
+                    sourceRevisionID: replica.revisionID,
+                    taskSnapshotData: try TaskNotePageSnapshot.data(note: replica, in: context)))
             }
         }
         stageDocumentContent(prepared, format: document.format, on: replicas, timestamp: timestamp,

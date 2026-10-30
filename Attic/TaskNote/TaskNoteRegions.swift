@@ -186,7 +186,8 @@ struct TaskNoteHeadView: View {
                 redoDraft: { model.redoTitleDraft() },
                 selectionMoved: { model.titleEditSelection = $0 },
                 undoFallback: { model.undoWorkspace() },
-                redoFallback: { model.redoWorkspace() }
+                redoFallback: { model.redoWorkspace() },
+                admitEdit: { model.admitFieldInput() }
             ),
             accessibilityLabel: String(localized: "Title"))
     }
@@ -469,7 +470,7 @@ struct TaskNoteSubtasksBlock: View {
             .accessibilityAction { model.toggle(row.id) }
             .accessibilityAction(named: Text("Rename")) { model.beginRename(row.id, undoManager: undoManager) }
             .accessibilityAction(named: Text("Delete Subtask")) { model.delete(row.id) }
-            .accessibilityAction(named: Text("Make Note Checkbox")) {
+            .accessibilityAction(named: Text("Make Checkbox")) {
                 subtaskMenu(row.id).first { $0.identifier == "task-note-subtask-make-checkbox" }?.action()
             }
             .accessibilityIdentifier("task-note-subtask-row")
@@ -521,7 +522,8 @@ struct TaskNoteSubtasksBlock: View {
                 undoDraft: { model.undoRenameDraft() },
                 redoDraft: { model.redoRenameDraft() },
                 undoFallback: { model.undoWorkspace() },
-                redoFallback: { model.redoWorkspace() }
+                redoFallback: { model.redoWorkspace() },
+                admitEdit: { model.admitFieldInput() }
             ),
             accessibilityLabel: String(localized: "Rename subtask"))
     }
@@ -593,14 +595,8 @@ struct TaskNoteSubtasksBlock: View {
         HStack(spacing: AtticSubtaskMetrics.titleGap) {
             AtticIcon(systemName: "plus", size: 11, weight: .medium, ink: .helper)
                 .frame(width: TaskNoteMetrics.boxColumn)
-            TextField(String(localized: "Add subtask"), text: $model.newSubtaskText)
-                .textFieldStyle(.plain)
-                .font(Font(AtticTextStyle.listBody.nsFont))
-                .focused($focus, equals: .add)
-                .onSubmit(submitAdd)
-                .onKeyPress(.tab, phases: .down, action: tabFromAdd)
-                .accessibilityLabel(String(localized: "Add subtask"))
-                .accessibilityIdentifier("task-note-add-subtask")
+            TaskNoteAddField(model: model, focused: Binding(get: { focus == .add }, set: { focus = $0 ? .add : nil }),
+                color: NSColor(design.tokens.color(.body)), submit: submitAdd, tab: { tab(from: .add, backwards: $0) })
         }
         .frame(height: TaskNoteMetrics.rowHeight)
     }
@@ -613,8 +609,65 @@ struct TaskNoteSubtasksBlock: View {
 
     /// Tab: "Show less" when shown, else the writing, with a caret and no
     /// ring (§ 7). ⇧Tab: back to the list (or the title with no rows).
-    private func tabFromAdd(_ press: KeyPress) -> KeyPress.Result {
-        tab(from: .add, backwards: press.modifiers.contains(.shift))
-        return .handled
+}
+
+/// A one-line native field with admission before mutation. It adds no
+/// scroll view to the composed page and retains AppKit's field draft Undo.
+struct TaskNoteAddField: NSViewRepresentable {
+    let model: TaskNotePageModel
+    @Binding var focused: Bool
+    let color: NSColor
+    let submit: () -> Void
+    let tab: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSTextField {
+        let field = AtticSubtaskTitleField.makeField()
+        field.cell?.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.maximumNumberOfLines = 1
+        field.font = AtticTextStyle.listBody.nsFont
+        field.delegate = context.coordinator
+        field.setAccessibilityIdentifier("task-note-add-subtask")
+        return field
+    }
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        let label = String(localized: "Add subtask")
+        field.textColor = color; field.placeholderString = label; field.setAccessibilityLabel(label)
+        if field.stringValue != model.newSubtaskText { field.stringValue = model.newSubtaskText }
+        var editing = AtticTitleEditing(text: Binding(get: { model.newSubtaskText }, set: { model.editNewSubtask($0) }),
+            commit: { model.commitNewSubtask() }, cancel: { model.cancelNewSubtask() })
+        editing.admitEdit = { model.admitFieldInput() }
+        let editor = (field.cell as? AtticSubtaskTitleCell)?.editor
+        editor?.editing = editing; editor?.allowsUndo = true
+        if focused, field.currentEditor() == nil {
+            DispatchQueue.main.async { [weak field, weak coordinator = context.coordinator] in
+                guard coordinator?.parent.focused == true, let field, let window = field.window,
+                      window.isKeyWindow, !field.isHiddenOrHasHiddenAncestor else { return }
+                window.makeFirstResponder(field)
+            }
+        }
+    }
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: TaskNoteAddField
+        init(_ parent: TaskNoteAddField) { self.parent = parent }
+        func controlTextDidBeginEditing(_ notification: Notification) { parent.focused = true }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            if parent.focused { parent.focused = false }
+        }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.model.editNewSubtask(field.stringValue)
+        }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
+            if command == #selector(NSResponder.insertNewline(_:)) { parent.submit(); return true }
+            if command == #selector(NSResponder.cancelOperation(_:)) { parent.model.cancelNewSubtask(); return true }
+            if command == #selector(NSResponder.insertTab(_:)) { parent.tab(false); return true }
+            if command == #selector(NSResponder.insertBacktab(_:)) { parent.tab(true); return true }
+            return false
+        }
     }
 }

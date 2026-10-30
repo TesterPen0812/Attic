@@ -38,8 +38,13 @@ final class InvisibleHostObserver: NSObject, XCTestObservation {
                     if NSApp.isActive { self?.violations.insert("application became active") }
                 }
             })
-            tokens.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.violations.insert("native NSMenu began tracking in the invisible host")
+            tokens.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    // A glass menu a test drives off screen (its cards never
+                    // ordered in) is not a native menu on screen.
+                    if (notification.object as AnyObject?) === AtticGlassMenu.trackingObject, !AtticGlassMenu.ordersCardsFront { return }
+                    self?.violations.insert("native NSMenu began tracking in the invisible host")
+                }
             })
             print("INVISIBLE_HOST_CANARY registered for whole bundle")
         }

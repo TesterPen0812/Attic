@@ -19,7 +19,8 @@ switched off (see [What is not active](#what-is-not-active)).
 - Reveals from a chosen screen corner after a set delay, or from the global
   shortcut with a new task ready to type.
 - Three pages: **Tasks**, **Notes** and **Canvas**.
-- Content scrolls under the floating controls and stays visible there, blurred.
+- Content scrolls under the floating controls, with a slight blur at the top
+  and each bottom control’s own glass.
 - Glass or solid surfaces, palettes and tint, Light and Dark, and Reduce
   Transparency support.
 - A menu bar app with no Dock icon. Launch at login is optional.
@@ -52,7 +53,27 @@ switched off (see [What is not active](#what-is-not-active)).
 
 ### Everywhere
 
-- Recently Deleted keeps deleted tasks, notes and canvases for 30 days.
+- Search groups an item's title, writing, subtasks and filenames into one
+  result, including completed work. Opening a match reveals its writing
+  paragraph or hidden subtask; in-page Find searches only the writing.
+- In Tasks, the task owns the live title and tags. The note's compatibility
+  title and legacy tags remain recoverable. Print and Markdown show one
+  title, task details and subtasks, then the writing. Historical previews
+  include captured task details; restoring writing does not restore task fields.
+- Item mini windows keep their window, editor lease and history across
+  Add to Tasks and Remove from Tasks. Moving Earlier files uses its durable
+  handoff and remounts in the same window before conversion continues.
+- **Add to Tasks** puts an ordinary note in Now as a fresh task. Its writing,
+  files and versions stay on the same note; leading checkboxes stay writing.
+  **Remove from Tasks** keeps a task's writing as an ordinary note, with its
+  subtasks as leading checkboxes in page order. Task dates, priority and
+  completion details are dropped; Undo restores the exact family. Retired
+  task records stay hidden from Recently Deleted and expire after 30 days.
+  Unproven Earlier files must first use **Move Files into Note**. Earlier-deleted
+  subtasks with writing must first be restored or emptied in Recently Deleted. Subtasks
+  and tasks without writing have no Remove from Tasks command.
+- Deleting a task or its writing moves the whole item, including subtasks and files, to one Recently Deleted entry for 30 days. Restore returns its original placement. Old independent deletions remain separate.
+- Recently Deleted keeps deleted items and canvases for 30 days.
 - Settings: General, Panel, Appearance, Recently Deleted, Agent Access and
   About. `Command–,` opens it while Attic is focused.
 - An optional local MCP server lets AI agents on the same Mac read and change
@@ -189,8 +210,9 @@ describes its arguments in `tools/list`. A few rules:
   These cover every physical replica and expected absence. A stale workspace
   write is kept as a proposal requiring review.
 - The async workspace tools `make_subtask`, `make_note_checkbox`,
-  `make_task_from_note`, `restore` (notes), and `move_files_into_note` require
-  `base_workspace_token`: pass the combined `workspace_token` returned by
+  `add_to_tasks`, `remove_from_tasks`, `make_task_from_note` (compatibility
+  alias for Add to Tasks), `restore` (notes), and `move_files_into_note` require
+  `base_workspace_token`: paired Delete/Restore aliases also require this combined token and run as one whole-item change (a stale or open-editor call becomes one proposal). Pass the combined `workspace_token` returned by
   `get_task_workspace`, or request it with `include_workspace_token: true`
   in `list_notes` or `list_deleted`. This token covers the complete read set
   from one snapshot. Open-editor or stale writes wait as proposals for Review.

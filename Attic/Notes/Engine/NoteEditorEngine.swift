@@ -122,13 +122,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var canRedoVersionRestore: (() -> Bool)?
     var undoVersionRestore: (() -> Void)?
     var redoVersionRestore: (() -> Void)?
-    var canUndoCommand: Bool { !isReadOnly && (history.canUndo || canUndoVersionRestore?() == true || history.outsideEditBarrier != nil) }
-    var canRedoCommand: Bool { !isReadOnly && (history.canRedo || canRedoVersionRestore?() == true) }
+    var permitsReadOnlyLifecycleReplay: ((Bool) -> Bool)?
+    var canUndoCommand: Bool { (!isReadOnly || permitsReadOnlyLifecycleReplay?(false) == true) && (history.canUndo || canUndoVersionRestore?() == true || history.outsideEditBarrier != nil) }
+    var canRedoCommand: Bool { (!isReadOnly || permitsReadOnlyLifecycleReplay?(true) == true) && (history.canRedo || canRedoVersionRestore?() == true) }
     var undoCommandName: String { history.canUndo ? history.undoActionName : (canUndoVersionRestore?() == true ? "Restore Version" : "") }
     var redoCommandName: String { canRedoVersionRestore?() == true ? "Restore Version" : history.redoActionName }
 
     @discardableResult func undoCommand() -> Bool {
-        guard !isReadOnly else { return false }
+        guard !isReadOnly || permitsReadOnlyLifecycleReplay?(false) == true else { return false }
         if history.workspace != nil, history.canUndo { history.requestReplay(redo: false); return true }
         if history.canUndo { return history.undo() }
         guard canUndoVersionRestore?() == true else { return history.undo() }
@@ -136,7 +137,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return true
     }
     @discardableResult func redoCommand() -> Bool {
-        guard !isReadOnly else { return false }
+        guard !isReadOnly || permitsReadOnlyLifecycleReplay?(true) == true else { return false }
         if history.workspace != nil, history.canRedo { history.requestReplay(redo: true); return true }
         if canRedoVersionRestore?() == true { redoVersionRestore?(); return true }
         return history.redo()
@@ -146,6 +147,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// shown, selected, edited or read as a heading; the head shows the
     /// task's live title instead.
     let isBodyOnly: Bool
+    /// Whole-page export resolves the current structured head on demand.
+    /// Checkpoint/save/Find continue to use writing only.
+    var exportProjection: ((NoteDocument) throws -> NoteDocument)?
     /// A task's page whose note is in Recently Deleted invites a new one
     /// ("Write a new note", § 2.7.2); nil keeps "Write, or drop a file".
     var bodyPlaceholder: String?

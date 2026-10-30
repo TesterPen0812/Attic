@@ -66,6 +66,30 @@ final class TaskFilesSliceTests: XCTestCase {
         try? FileManager.default.removeItem(at: filesRoot)
     }
 
+    /// A deadline surrounds the await itself, including a stalled retirement.
+    private func finishPublication(timeout: Duration = .seconds(5), work: @escaping @MainActor () async -> Void) async -> Bool {
+        var finished = false
+        let pending = Task { @MainActor in
+            await work()
+            finished = true
+        }
+        defer { pending.cancel() }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !finished, !Task.isCancelled, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return finished
+    }
+
+    func testPublicationWaitHasAnOverallDeadline() async throws {
+        let start = ContinuousClock.now
+        let finished = await finishPublication(timeout: .milliseconds(50)) {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        XCTAssertFalse(finished, "a stalled awaited dependency must time out")
+        XCTAssertLessThan(start.duration(to: .now), .milliseconds(200))
+    }
+
     private func makeStores() {
         tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: filesRoot))
         library = AtticLibrary(tasks: tasks)
@@ -376,6 +400,75 @@ final class TaskFilesSliceTests: XCTestCase {
         return (text, payload["isError"] as? Bool ?? false)
     }
 
+    // Engineering rule 2026-10-23: agents use the same circle commands,
+    // combined read sets, refusal rules and retained workspace history.
+    func testBAgentsExposeCircleCommandsAndKeepStaleRemovalAsOneProposal() async throws {
+        let handler = agent()
+        XCTAssertTrue(AgentTaskTools.asyncToolNames.isSuperset(of: ["add_to_tasks", "remove_from_tasks"]))
+        let ordinaryID = UUID(), original = NoteDocument(blocks: [.text("Agent item"), .checklist("Keep writing", checked: true)])
+        _ = try notes.store.createDocumentNote(id: ordinaryID, document: original).get()
+        let (added, addError) = try await call(handler, "add_to_tasks", ["note_id": ordinaryID.uuidString])
+        XCTAssertFalse(addError, added)
+        guard !addError, let taskID = ownNoteTask(ordinaryID) else { return }
+        XCTAssertTrue(tasks.subtasks(of: taskID).isEmpty)
+        let stale = try AgentWorkspaceReadSet.capture(taskID: taskID, noteID: nil, in: ModelContext(container))
+        XCTAssertTrue(tasks.update(try XCTUnwrap(tasks.task(withID: taskID)), title: "New task title"))
+        let (pending, pendingError) = try await call(handler, "remove_from_tasks", ["task_id": taskID.uuidString,
+            "base_workspace_token": try WorkspaceModelFields.encode(stale).base64EncodedString()])
+        XCTAssertFalse(pendingError, pending); XCTAssertTrue(pending.contains("pending"), pending)
+        XCTAssertNotNil(tasks.task(withID: taskID)); XCTAssertEqual(notes.workspaceProposals.count, 1)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        let began = await notes.beginProposalReview(id: proposal.id); XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal(); XCTAssertTrue(accepted)
+        XCTAssertNil(tasks.task(withID: taskID)); XCTAssertNil(ownNoteTask(ordinaryID))
+        XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(taskID)).undoName, "Remove from Tasks")
+    }
+
+    func testBAgentRemoveClosedPageLeavesPresentationUnchanged() async throws {
+        for hasActiveNote in [false, true] {
+            let (id, noteID) = try await taskWithOwnNote()
+            XCTAssertNil(TaskNotePresenter.open(for: id))
+            if hasActiveNote {
+                let ordinary = UUID()
+                _ = try notes.store.createDocumentNote(id: ordinary,
+                    document: NoteDocument(blocks: [.text("Owner's note"), .text("Keep this open")])).get()
+                XCTAssertTrue(notes.open(noteID: ordinary))
+            }
+            let active = notes.active
+            var handedOff = false
+            notes.taskNoteBecameOrdinary = { _, _ in handedOff = true }
+            let (result, failed) = try await call(agent(), "remove_from_tasks", ["task_id": id.uuidString])
+            XCTAssertFalse(failed, result)
+            XCTAssertNil(tasks.task(withID: id))
+            XCTAssertNil(ownNoteTask(noteID))
+            XCTAssertFalse(handedOff, "a headless operation must not switch the owner's panel")
+            XCTAssertTrue(notes.active === active, "the owner's active editor must stay unchanged")
+            XCTAssertNil(TaskNotePresenter.open(for: id))
+            XCTAssertEqual(notes.undoRoute.workspace(for: .taskWorkspace(id)).undoName, "Remove from Tasks")
+        }
+    }
+
+    func testBAcceptedAgentRemoveClosesOpenPageAndHandsOffOrdinaryWriting() async throws {
+        let (id, noteID) = try await taskWithOwnNote(), presenter = try open(id)
+        notes.taskNotePresenter = presenter
+        var handoff: (UUID, UUID)?
+        notes.taskNoteBecameOrdinary = { handoff = ($0, $1) }
+        let (pending, failed) = try await call(agent(), "remove_from_tasks", ["task_id": id.uuidString])
+        XCTAssertFalse(failed, pending); XCTAssertTrue(pending.contains("pending"), pending)
+        let proposal = try XCTUnwrap(notes.workspaceProposals.first)
+        let began = await notes.beginProposalReview(id: proposal.id); XCTAssertTrue(began)
+        let accepted = await notes.acceptProposal(); XCTAssertTrue(accepted)
+        XCTAssertNil(tasks.task(withID: id))
+        XCTAssertNil(presenter.lease)
+        XCTAssertNil(notes.taskNotePresenter)
+        XCTAssertEqual(notes.active?.noteID, noteID)
+        XCTAssertEqual(handoff?.0, id); XCTAssertEqual(handoff?.1, noteID)
+    }
+
+    private func ownNoteTask(_ id: UUID) -> UUID? {
+        try? ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first { $0.id == id }?.taskID
+    }
+
     func testAgentsMakeSubtasksAndNoteCheckboxesThroughTheSameOperationAndRefusals() async throws {
         let id = try XCTUnwrap(tasks.create(title: "Launch")?.id)
         let handler = agent()
@@ -518,6 +611,13 @@ extension TaskFilesSliceTests {
 @MainActor
 extension TaskFilesSliceTests {
     func testP3S2F3LaunchWaitsForRecoveryRepair() async throws {
+        // Complete the preceding launch before constructing a next-launch
+        // checkpoint and simulating bytes lost by an older writer. The app has
+        // one recovery controller; a relaunch cannot retain the old writer.
+        await notes.recoverAtLaunchAndWait()
+        await notes.store.waitForAttachmentReconciliation()
+        XCTAssertTrue(notes.launchRecoveryCompleted)
+        XCTAssertTrue(coordinator.startupReconciled)
         let (id, noteID) = try await taskWithOwnNote()
         let bytes = Data("note-owned bytes, outside the legacy manifest".utf8)
         let item = StagedNoteAttachment(id: UUID(), filename: "note-only.txt", contentTypeIdentifier: "public.plain-text",
@@ -543,20 +643,20 @@ extension TaskFilesSliceTests {
         try edit.save()
         let noteStore = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: filesRoot.appendingPathComponent("recovery-files")))
         var began = false
+        let repairStarted = expectation(description: "replacement launch attachment reconciliation")
         var resume: CheckedContinuation<Void, Never>?
         noteStore.attachmentReconciliationWillBegin = {
             guard !began else { return }
             began = true
+            repairStarted.fulfill()
             await withCheckedContinuation { resume = $0 }
         }
         let recovery = NotesPageController(store: noteStore, journal: coordinator.journal, defaults: nil)
-        for _ in 0..<100 where !began { await Task.yield() }
+        await fulfillment(of: [repairStarted], timeout: 5)
         XCTAssertTrue(began)
-        // The launch's offers callback starts this work but does not await
-        // it. Let its startup task reach the attachment drain.
-        for _ in 0..<20 { await Task.yield() }
+        // The held reconciliation is the dependency being tested. Start
+        // migration while it is held, then release the explicit barrier.
         let release = Task { @MainActor in
-            await Task.yield()
             resume?.resume(); resume = nil
         }
         var visited = false
@@ -642,20 +742,30 @@ extension TaskFilesSliceTests {
             let history = presenter.page.history
             let undone = await history.replay(redo: false)
             XCTAssertEqual(undone, .applied)
-            for _ in 0..<200 where history.hasPendingPublication {
-                try await Task.sleep(for: .milliseconds(10))
-                _ = await history.retryPublication(using: coordinator)
+            let undoFinished = await finishPublication { [self] in
+                for _ in 0..<200 where history.hasPendingPublication {
+                    guard !Task.isCancelled else { return }
+                    await notes.waitForRecoveryWork()
+                    guard !Task.isCancelled else { return }
+                    _ = await history.retryPublication(using: coordinator)
+                }
             }
+            XCTAssertTrue(undoFinished, "Undo publication exceeded its overall 5 s deadline")
             XCTAssertFalse(history.hasPendingPublication)
             XCTAssertNil(try ownNote(id))
             XCTAssertFalse(try XCTUnwrap(presenter.session).isPersisted)
             XCTAssertFalse(presenter.host.textView.string.contains("history.txt"))
             let redone = await history.replay(redo: true)
             XCTAssertEqual(redone, .applied)
-            for _ in 0..<200 where history.hasPendingPublication {
-                try await Task.sleep(for: .milliseconds(10))
-                _ = await history.retryPublication(using: coordinator)
+            let redoFinished = await finishPublication { [self] in
+                for _ in 0..<200 where history.hasPendingPublication {
+                    guard !Task.isCancelled else { return }
+                    await notes.waitForRecoveryWork()
+                    guard !Task.isCancelled else { return }
+                    _ = await history.retryPublication(using: coordinator)
+                }
             }
+            XCTAssertTrue(redoFinished, "Redo publication exceeded its overall 5 s deadline")
             XCTAssertFalse(history.hasPendingPublication)
             XCTAssertEqual(try ownNote(id), noteID)
             XCTAssertTrue(try XCTUnwrap(presenter.session).isPersisted)
@@ -851,10 +961,15 @@ extension TaskFilesSliceTests {
         let savedUndo = await notes.preserveDurably(session); XCTAssertTrue(savedUndo)
         let undone = await history.replay(redo: false)
         XCTAssertEqual(undone, .applied)
-        for _ in 0..<200 where history.hasPendingPublication {
-            try await Task.sleep(for: .milliseconds(10))
-            _ = await history.retryPublication(using: coordinator)
+        let finished = await finishPublication { [self] in
+            for _ in 0..<200 where history.hasPendingPublication {
+                guard !Task.isCancelled else { return }
+                await notes.waitForRecoveryWork()
+                guard !Task.isCancelled else { return }
+                _ = await history.retryPublication(using: coordinator)
+            }
         }
+        XCTAssertTrue(finished, "Publication exceeded its overall 5 s deadline")
         XCTAssertFalse(history.hasPendingPublication)
         XCTAssertNil(try ownNote(rootID))
         XCTAssertFalse(try document(noteID).attachmentIDs.contains(refs[0].id))

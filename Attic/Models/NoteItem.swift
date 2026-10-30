@@ -16,6 +16,8 @@ final class NoteItem {
     /// Soft deletion (Recently Deleted). Attachments stay keyed by `noteID`
     /// and are left untouched, so a restore brings them back with the note.
     var deletedAt: Date? = nil
+    /// Only rows newly hidden by one whole-item deletion share this ID.
+    var deletionGroupID: UUID? = nil
     /// The attachment ids the note held when it was deleted (sorted,
     /// space-separated; empty for none), written to every replica, so the
     /// purge removes exactly that family and never a row that arrived later.

@@ -568,7 +568,7 @@ final class AppCoordinator: ObservableObject {
                     }
                     // "Attic Task Life" (slice 1): the task pages and one
                     // task for each lifecycle state.
-                    if runtime.bundleIdentifier == TaskNoteLifecyclePreviewSeed.bundleIdentifier {
+                    if TaskNoteLifecyclePreviewSeed.seeds(bundleIdentifier: runtime.bundleIdentifier) {
                         try TaskNotePreviewSeed.seedOwnerPreview(in: container)
                         try TaskNoteLifecyclePreviewSeed.seed(in: container)
                     }
@@ -684,9 +684,9 @@ final class AppCoordinator: ObservableObject {
         // coordinated path, through any open task page (§ 2.7.2).
         // Weak: the library must never keep an unshown coordinator's stores
         // and editors alive.
-        library.taskNotePurge = { [weak store, weak noteDraft] cutoff, confirmed in
+        library.taskNotePurge = { [weak store, weak noteDraft] cutoff, confirmed, confirmedNotes in
             guard let store, let noteDraft else { return [] }
-            return await TaskNotePurge.run(tasks: store, notes: noteDraft.pages, before: cutoff, confirmed: confirmed).removedTaskIDs
+            return await TaskNotePurge.run(tasks: store, notes: noteDraft.pages, before: cutoff, confirmed: confirmed, confirmedNotes: confirmedNotes).removedTaskIDs
         }
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController

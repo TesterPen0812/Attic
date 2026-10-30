@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SwiftData
 import UniformTypeIdentifiers
 
 /// The Phase 2 Notes page (slice 2, "Everyday capture and return"; mockups
@@ -27,6 +28,7 @@ struct NotesEditorPage: View {
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let layout: PanelPageLayout
+    private let taskStore: TaskStore?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var tagColouring
@@ -66,6 +68,7 @@ struct NotesEditorPage: View {
         self.noteDraft = noteDraft
         self.uiState = uiState
         self.layout = layout
+        self.taskStore = taskStore
         let store = noteStore
         _damagedRecovery = StateObject(wrappedValue: NoteDamagedRecoveryExit(perform: { [controller] command in
             await controller.perform(command)
@@ -648,16 +651,20 @@ struct NotesEditorPage: View {
 
     private func openFromLibrary(_ id: UUID) {
         // A task's own note opens as its task's page (§ 5.3), over Notes.
-        if let taskID = noteStore.note(withID: id)?.taskID, controller.openTaskPage?(taskID) == true {
-            // The search is kept for Back to All notes.
-            controller.libraryQueryAcrossTaskPage = library.query.isEmpty ? nil : library.query
-            return
+        let query = library.query
+        if TaskNoteWindows.shared.bringForward(noteID: id, searchQuery: query) { return }
+        if let taskID = noteStore.note(withID: id)?.taskID {
+            controller.libraryQueryAcrossTaskPage = query.isEmpty ? nil : query
+            if controller.openTaskPage?(taskID) == true {
+                TaskNotePresenter.open(for: taskID)?.revealSearchResult(query)
+                return
+            }
         }
         if let draft = controller.failedDrafts.first(where: { $0.noteID == id }), noteStore.note(withID: id) == nil {
             controller.openFailedDraft(sessionID: draft.id)
         } else {
             Task { @MainActor in
-                if await controller.openFromLibrary(noteID: id) { controller.dismissLibrary() }
+                if await controller.openFromLibrary(noteID: id, searchQuery: query) { controller.dismissLibrary() }
                 library.clearSearch()
             }
             return
@@ -717,32 +724,32 @@ struct NotesEditorPage: View {
 
     // MARK: Menus
 
-    /// The note's menu (⋯, ⇧⌘I, the header title): Insert and Format as far
-    /// as this slice supports them, then the note's actions. What is not
-    /// built yet is left out.
+    /// The note's menu (⋯, ⇧⌘I, the header title). Page commands first,
+    /// an icon on every row (Dropdown content: answers, owner, 2026-10-24,
+    /// sheet 5): Add to Tasks, Pin to Top, Tags…, Version History │ Copy
+    /// as Markdown, Print…, Duplicate, Save Recovery Copy… │ a selected
+    /// image's or file's own menu, Insert ›, Format › │ Delete. Format › is
+    /// split into short submenus (answer 5 B). What is not built yet is
+    /// left out.
     private func noteMenuCommands() -> [AtticMenuCommand] {
         guard let session = controller.active else { return [] }
         let id = session.noteID
         let engine = session.engine
         let editable = !session.isReadOnly
         var commands: [AtticMenuCommand] = []
-        // A selected image or file: its own commands first (Image ▸ or
-        // File ▸), the same list as its right-click menu.
-        if let objects = chrome.objectControls,
-           let submenu = NoteObjectMenu.selectedObjectSubmenu(engine: engine,
-                run: { [weak objects] id, command in objects?.run(command, objectID: id) },
-                chooseApplication: { [weak objects] id in objects?.chooseApplication(for: id) }) {
-            commands.append(submenu)
-        }
-        if editable {
-            // Insert ▸ and Format ▸: the same command list as the selection
-            // bar, Aa, the right-click menu and the menu bar.
-            let router = chrome.controls?.router ?? NoteCommandRouter(engine: engine)
-            commands += router.menuCommands(from: .noteMenu)
+        // Add to Tasks first, from the shared producer (an open ordinary
+        // note: an item in Tasks shows its own page instead).
+        // A draft not saved yet is an ordinary note too (slice B's rule).
+        if editable, let makeTask = controller.makeTaskFromNote {
+            commands += noteStore.note(withID: id) == nil
+                ? TaskNoteConversion.commands(taskID: nil, hasWriting: true, isSubtask: false, add: { makeTask(id) }, remove: {})
+                : Self.oneItemCommands(noteID: id, noteStore: noteStore, controller: controller, taskStore: taskStore) {
+                    makeTask(id)
+                }
         }
         let pinned = noteStore.note(withID: id)?.isPinned ?? false
         commands.append(AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: !session.isPersisted && session.isUntouchedDraft,
-                                         startsSection: !commands.isEmpty, identifier: "notes-menu-pin") {
+                                         identifier: "notes-menu-pin") {
             controller.setPinned(!pinned, noteID: id)
         })
         if editable {
@@ -766,20 +773,35 @@ struct NotesEditorPage: View {
                 Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
             })
         }
-        // Phase 3 (§ 2.1): the whole note becomes a task's own note. No
-        // shortcut.
-        if editable, noteStore.note(withID: id)?.taskID == nil, let makeTask = controller.makeTaskFromNote {
-            commands.append(AtticMenuCommand("Make Task from Note", isDisabled: !session.isPersisted,
-                                             identifier: "notes-menu-make-task") { makeTask(id) })
-        }
         if controller.canSaveRecoveryCopy(session) {
             commands.append(AtticMenuCommand("Save Recovery Copy…", shortcut: Self.saveRecoveryCopyShortcut,
-                                             startsSection: true, identifier: Self.saveRecoveryCopyIdentifier) {
+                                             identifier: Self.saveRecoveryCopyIdentifier) {
                 Task { await controller.saveRecoveryCopy(of: session) }
             })
         }
-        commands.append(AtticMenuCommand("Delete Note", isDestructive: true, startsSection: true,
-                                         identifier: "notes-menu-delete") { delete(id) })
+        var editing: [AtticMenuCommand] = []
+        // A selected image or file: its own commands (Image ▸ or File ▸),
+        // the same list as its right-click menu.
+        if let objects = chrome.objectControls,
+           let submenu = NoteObjectMenu.selectedObjectSubmenu(engine: engine,
+                run: { [weak objects] id, command in objects?.run(command, objectID: id) },
+                chooseApplication: { [weak objects] id in objects?.chooseApplication(for: id) }) {
+            editing.append(submenu)
+        }
+        if editable {
+            // Insert ▸ and Format ▸: the same commands as the selection bar,
+            // Aa, the right-click menu and the menu bar.
+            let router = chrome.controls?.router ?? NoteCommandRouter(engine: engine)
+            editing += router.menuCommands(from: .noteMenu)
+        }
+        if var first = editing.first {
+            first.startsSection = true
+            editing[0] = first
+            commands += editing
+        }
+        commands.append(AtticMenuCommand(verbatim: Self.deleteTitle, isDestructive: true, startsSection: true) {
+            delete(id)
+        }.identified("notes-menu-delete"))
         return commands
     }
 
@@ -789,37 +811,94 @@ struct NotesEditorPage: View {
     /// scope: this is the library row's; `noteMenuCommands` is the open
     /// note's. A command that cannot run is dimmed here, and its key does
     /// nothing.
+    ///
+    /// Its content (Dropdown content: answers, owner, 2026-10-24, sheet 2
+    /// and answer 2 A): Open Page, Add to Tasks (or Remove from Tasks for
+    /// an item in Tasks with writing) │ Pin to Top, Filter by
+    /// Tag › │ Copy as Markdown, Duplicate │ Delete, an icon on every row.
+    /// Undo and Redo leave the row menu: ⌘Z and the Edit menu keep them,
+    /// and the library's background menu (`historyCommands`) still has them.
     private func rowCommands(_ id: UUID) -> [AtticMenuCommand] {
+        Self.libraryRowCommands(id, noteStore: noteStore, controller: controller, taskStore: taskStore,
+                                activeTag: library.tagFilter, hue: tagColouring.hue(for:),
+                                filter: { [library] tag in library.tagFilter = tag },
+                                open: { openFromLibrary($0) }, delete: { delete($0) })
+    }
+
+    /// The word both note menus use for deleting the whole item.
+    /// The word both note menus use for deleting the whole item: Delete
+    /// (One item: owner answers, 2026-10-23, answer 3), replacing the
+    /// draft's "Delete Note".
+    static var deleteTitle: String { String(localized: "Delete") }
+
+    /// Add to Tasks, or Remove from Tasks for an item in Tasks with writing:
+    /// the shared producer (slice B), so both note menus and the task row
+    /// offer the same command under the same rule. `add` runs Add to Tasks
+    /// for an ordinary note.
+    static func oneItemCommands(noteID: UUID, noteStore: NoteStore, controller: NotesPageController,
+                                taskStore: TaskStore?, add: @escaping () -> Void) -> [AtticMenuCommand] {
+        guard let stored = noteStore.note(withID: noteID) else { return [] }
+        if let taskID = stored.taskID {
+            guard let remove = controller.removeFromTasks else { return [] }
+            return TaskNoteConversion.commands(taskID: taskID,
+                hasWriting: TaskNoteConversion.hasWriting(taskID, in: ModelContext(noteStore.container)),
+                isSubtask: taskStore?.listedTask(withID: taskID)?.parentID != nil, add: {}, remove: { remove(taskID) })
+        }
+        guard controller.makeTaskFromNote != nil else { return [] }
+        return TaskNoteConversion.commands(taskID: nil, hasWriting: true, isSubtask: false, add: add, remove: {})
+    }
+
+    static func libraryRowCommands(_ id: UUID, noteStore: NoteStore, controller: NotesPageController, taskStore: TaskStore?,
+                                   activeTag: String?, hue: @escaping (String) -> AtticTagHue?,
+                                   filter: @escaping (String?) -> Void, open: @escaping (UUID) -> Void,
+                                   delete: @escaping (UUID) -> Void) -> [AtticMenuCommand] {
         let stored = noteStore.note(withID: id)
         let pinned = stored?.isPinned ?? false
-        return [
-            AtticMenuCommand("Open", identifier: "notes-row-open") { openFromLibrary(id) },
-            AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: stored == nil, startsSection: true,
-                             identifier: "notes-row-pin") {
-                controller.setPinned(!pinned, noteID: id)
-            },
-            NotesLibraryView.tagsSubmenu(tags: stored?.tags ?? [], activeTag: library.tagFilter, hue: tagColouring.hue(for:)) { [library] tag in
-                library.tagFilter = tag
-            },
+        let conversion = oneItemCommands(noteID: id, noteStore: noteStore, controller: controller, taskStore: taskStore) {
+            guard let add = controller.makeTaskFromNote else { return }
+            Task { @MainActor in
+                if await controller.openFromLibrary(noteID: id) { controller.dismissLibrary(); add(id) }
+            }
+        }
+        // An item in Tasks filters by its task's live tags (the plan's
+        // effective item tags); an ordinary note by its own.
+        let tags = stored?.taskID.flatMap { taskStore?.listedTask(withID: $0)?.tags } ?? stored?.tags ?? []
+        // A dimmed row says why (one-item plan, "Menus and keyboard").
+        let notSaved = String(localized: "Not saved yet")
+        var pin = AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", startsSection: true, identifier: "notes-row-pin") {
+            controller.setPinned(!pinned, noteID: id)
+        }
+        if stored == nil { pin = pin.disabled(because: notSaved) }
+        var filterByTag = NotesLibraryView.tagsSubmenu(tags: tags, activeTag: activeTag, hue: hue, onSelect: filter)
+        if tags.isEmpty { filterByTag.disabledReason = String(localized: "No tags") }
+        var duplicate = AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
+                                         identifier: NotesLibraryView.duplicateIdentifier) {
+            Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
+        }
+        if stored?.usesDocumentFormat != true {
+            duplicate = duplicate.disabled(because: stored == nil ? notSaved : String(localized: "This note's format can't be copied"))
+        }
+        var remove = AtticMenuCommand(verbatim: deleteTitle,
+                                      shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
+                                      startsSection: true) { delete(id) }.identified("notes-row-delete")
+        if stored == nil { remove = remove.disabled(because: notSaved) }
+        return [AtticMenuCommand("Open Page", identifier: "notes-row-open") { open(id) }] + conversion + [
+            pin,
+            filterByTag,
             AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
                              startsSection: true, identifier: NotesLibraryView.copyMarkdownIdentifier) {
                 controller.copyMarkdown(noteID: id)
             },
-            AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
-                             isDisabled: stored?.usesDocumentFormat != true,
-                             identifier: NotesLibraryView.duplicateIdentifier) {
-                Task { @MainActor in _ = await controller.duplicateNote(noteID: id) }
-            },
-            AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
-                             isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }
-        ] + Self.historyCommands(for: controller)
+            duplicate,
+            remove
+        ]
     }
 
     /// The library's history (pin, duplicate, delete) as commands, named for
-    /// the step each would reverse and dimmed when there is none. They are
-    /// the tail of every row's menu and, on their own, the menu of the
-    /// library's background: with no rows (the last note just deleted) there
-    /// is no row menu, and Undo is still reachable here.
+    /// the step each would reverse and dimmed when there is none: the menu
+    /// of the library's background, so with no rows (the last note just
+    /// deleted) Undo is still reachable here. Row menus no longer repeat
+    /// them (Dropdown content: answers, owner, 2026-10-24, answer 2 A).
     static func historyCommands(for controller: NotesPageController) -> [AtticMenuCommand] {
         [
             AtticMenuCommand("\(historyTitle(String(localized: "Undo"), step: controller.libraryUndoName))",

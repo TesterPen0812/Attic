@@ -5,8 +5,37 @@ import SwiftData
 /// compatibility head comes from today's task or its immutable preservation.
 @MainActor
 enum WorkspaceRestoreNormalization {
+    /// Circle-removed redirects describe retired identities, not a recipe
+    /// to replay their children whenever historical writing is restored.
+    private static func circleRemoved(_ document: NoteDocument, noteID: UUID, in context: ModelContext) throws -> NoteDocument? {
+        guard document.requires.contains("taskNote") else { return nil }
+        let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+        guard let note = notes.first, notes.allSatisfy({ $0.taskID == nil && $0.title == note.title }) else { return nil }
+        let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == noteID }))
+        let redirected = links.filter { $0.detachedPreservationID != nil }
+        guard !redirected.isEmpty else { return nil }
+        var circle = false
+        for link in redirected {
+            guard link.detachedAt != nil, let id = link.detachedPreservationID else { throw WorkspaceFoundationError.conflict }
+            let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { $0.id == id }))
+            guard let record = records.first else { throw WorkspaceFoundationError.unknown }
+            let fields = try WorkspaceModelFields.read(record)
+            guard try records.allSatisfy({ try WorkspaceModelFields.read($0) == fields }),
+                  try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot).members.contains(where: { $0.id == link.taskID }) else { throw WorkspaceFoundationError.conflict }
+            circle = circle || record.provenance == "circle removed"
+        }
+        guard circle else { return nil }
+        guard links.allSatisfy({ $0.detachedAt != nil }) else { throw WorkspaceFoundationError.conflict }
+        return try document.ordinarySnapshot(title: note.title)
+    }
+
     static func materialization(_ document: NoteDocument, noteID: UUID, in context: ModelContext) throws -> WorkspaceTaskNoteMaterializer.Value? {
         guard document.requires.contains("taskNote") else { return nil }
+        if let ordinary = try circleRemoved(document, noteID: noteID, in: context) {
+            let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID }))
+            guard let first = notes.first, notes.allSatisfy({ $0.tags == first.tags }) else { throw WorkspaceFoundationError.conflict }
+            return .init(document: ordinary, tags: first.tags)
+        }
         let links = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.noteID == noteID }))
             .filter { $0.detachedPreservationID != nil }
         guard !links.isEmpty else { return nil }
@@ -36,6 +65,7 @@ enum WorkspaceRestoreNormalization {
             guard let task = tasks.first, tasks.allSatisfy({ $0.title == task.title && $0.deletedAt == task.deletedAt }) else { throw WorkspaceFoundationError.conflict }
             return try document.taskSnapshot(title: task.title)
         }
+        if let ordinary = try circleRemoved(document, noteID: noteID, in: context) { return ordinary }
         // Detached ordinary content belongs to the person, including saved
         // ordinary versions. Historical links cannot materialize it again.
         guard document.requires.contains("taskNote") else { return document }
@@ -68,7 +98,7 @@ enum WorkspaceTaskNoteMaterializer {
     struct Value { let document: NoteDocument; let tags: [String] }
 
     static func materialize(_ document: NoteDocument, taskID: UUID,
-                            preservation: WorkspacePurge.Preservation) throws -> Value {
+                            preservation: WorkspacePurge.Preservation, childOrder: [UUID]? = nil) throws -> Value {
         guard let head = preservation.members.first(where: { $0.id == taskID }) else { throw WorkspaceFoundationError.conflict }
         func value<T: Decodable>(_ name: String, in member: WorkspacePurge.Preservation.Member, as: T.Type) throws -> T {
             guard let data = member.fields[name] else { throw WorkspaceFoundationError.unknown }
@@ -76,32 +106,37 @@ enum WorkspaceTaskNoteMaterializer {
         }
         let title = try value("title", in: head, as: String.self)
         let tags = AtticTag.decode(try value("tagsRaw", in: head, as: String.self))
-        let children = try preservation.members.filter { try value("parentID", in: $0, as: UUID?.self) == taskID }
+        var children = try preservation.members.filter {
+            try value("parentID", in: $0, as: UUID?.self) == taskID
+                && value("deletedAt", in: $0, as: Date?.self) == value("deletedAt", in: head, as: Date?.self)
+                && ($0.fields["deletionGroupID"].map { try JSONDecoder().decode(UUID?.self, from: $0) } ?? nil)
+                    == (head.fields["deletionGroupID"].map { try JSONDecoder().decode(UUID?.self, from: $0) } ?? nil)
+        }
             .sorted { left, right in
                 let leftDone = try value("statusRaw", in: left, as: String.self) == TaskStatus.done.rawValue
                 let rightDone = try value("statusRaw", in: right, as: String.self) == TaskStatus.done.rawValue
                 if leftDone != rightDone { return !leftDone }
                 let l = try value("manualOrder", in: left, as: Int64?.self) ?? 0
                 let r = try value("manualOrder", in: right, as: Int64?.self) ?? 0
-                return l == r ? left.id.uuidString < right.id.uuidString : l > r
+                if l != r { return l > r }
+                let leftCreated = try value("createdAt", in: left, as: Date.self)
+                let rightCreated = try value("createdAt", in: right, as: Date.self)
+                return leftCreated == rightCreated ? left.id.uuidString < right.id.uuidString : leftCreated < rightCreated
             }
-        let done = try children.filter { try value("statusRaw", in: $0, as: String.self) == TaskStatus.done.rawValue }.count
-        let status = try value("statusRaw", in: head, as: String.self)
-        var detail = TaskStatus(rawValue: status)?.title.lowercased() ?? status
-        if status == TaskStatus.done.rawValue, let at = try value("completedAt", in: head, as: Date?.self) {
-            let thisWeek = Calendar.autoupdatingCurrent.dateInterval(of: .weekOfYear, for: Date())
-            detail += " " + (thisWeek?.contains(at) == true
-                ? at.formatted(.dateTime.weekday(.abbreviated))
-                : at.formatted(.dateTime.day().month(.wide).year()))
+        if let childOrder {
+            guard childOrder.count == Set(childOrder).count, Set(childOrder) == Set(children.map(\.id)) else { throw WorkspaceFoundationError.conflict }
+            let positions = Dictionary(uniqueKeysWithValues: childOrder.enumerated().map { ($1, $0) })
+            children.sort { positions[$0.id]! < positions[$1.id]! }
         }
+        // Owner decision 2026-10-23: Remove from Tasks drops task-only
+        // metadata; only the subtasks become writing, in page order.
         var ordinary = try document.ordinarySnapshot(title: title)
-        let summary = "Was a task · \(detail) · \(done)/\(children.count)"
-        if ordinary.blocks.dropFirst().first?.text.hasPrefix("Was a task · ") != true {
+        if document.requires.contains("taskNote") {
             let boxes = try children.map { child in
                 NoteBlock.checklist(try value("title", in: child, as: String.self),
-                                    checked: try value("statusRaw", in: child, as: String.self) == TaskStatus.done.rawValue)
+                    checked: try value("statusRaw", in: child, as: String.self) == TaskStatus.done.rawValue)
             }
-            ordinary.blocks.insert(contentsOf: [.text(summary)] + boxes, at: min(1, ordinary.blocks.count))
+            ordinary.blocks.insert(contentsOf: boxes, at: min(1, ordinary.blocks.count))
         }
         return Value(document: ordinary, tags: tags)
     }

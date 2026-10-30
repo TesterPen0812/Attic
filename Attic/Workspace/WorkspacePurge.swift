@@ -66,7 +66,17 @@ enum WorkspacePurge {
         let preservationID: UUID?
         var materialization: [WorkspaceMaterializationPatch] = []
         var checkpoint: (UUID, NoteRecoveryClaim)? = nil
+        var retentionReason: String? = nil
+        var retainedByteReasons: [UUID: String] = [:]
     }
+    /// Global tag edits include deleted rows. No other captured task field
+    /// may drift before Restore or destructive collection.
+    static func matchesTaskCapture(_ fields: [String: Data], _ captured: [String: Data]) -> Bool {
+        let tagFields: Set<String> = ["tagsRaw", "updatedAt"]
+        return fields.filter { !tagFields.contains($0.key) }
+            == captured.filter { !tagFields.contains($0.key) }
+    }
+
     static func hasOwnNotesOrAssociations(_ taskIDs: Set<UUID>, in context: ModelContext) throws -> Bool {
         let schema = Set(context.container.schema.entities.map(\.name))
         let notes = schema.contains("NoteItem") ? try context.fetch(FetchDescriptor<NoteItem>()) : []
@@ -78,7 +88,7 @@ enum WorkspacePurge {
     /// New deletion records are immutable and share the soft-delete save.
     /// Original availability has not been checked here: nil records that fact,
     /// rather than inventing a deletion-time missing-file observation.
-    static func stageDeletionCapture(id: UUID = UUID(), rootID: UUID, rows: [TaskItem], deletedAt: Date, in context: ModelContext) throws {
+    static func stageDeletionCapture(id: UUID = UUID(), rootID: UUID, rows: [TaskItem], deletedAt: Date, in context: ModelContext, provenance: String = "soft deletion") throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
         let members = try Dictionary(grouping: rows, by: \.id).values.map { replicas in
             let fields = try replicas.map { try WorkspaceModelFields.read($0) }
@@ -90,10 +100,11 @@ enum WorkspacePurge {
             ($0.id.uuidString, $0.digest) < ($1.id.uuidString, $1.digest)
         }
         let dependencies = try preservationDependencies(taskIDs: Set(rows.map(\.id)), in: context)
+            .filter { provenance != "circle removed" || $0.owner.entity == .association }
         let snapshot = Preservation(rootID: rootID, title: head.title, members: members,
             originals: refs.map { .init(reference: $0, wasMissing: nil) }, dependencies: dependencies)
         let record = TaskDeletionPreservation(id: id, rootID: rootID, deletedAt: deletedAt,
-            capturedAt: deletedAt, provenance: "soft deletion", snapshot: try WorkspaceModelFields.encode(snapshot))
+            capturedAt: deletedAt, provenance: provenance, snapshot: try WorkspaceModelFields.encode(snapshot))
         record.dependencyOwnersData = try WorkspaceModelFields.encode(dependencies.map(\.owner))
         context.insert(record)
     }
@@ -125,10 +136,10 @@ enum WorkspacePurge {
         return owners
     }
 
-    static func stageRetirement(rootIDs: Set<UUID>, timestamp: Date, purged: Bool = false, in context: ModelContext) throws {
+    static func stageRetirement(rootIDs: Set<UUID>, timestamp: Date, purged: Bool = false, deletedAt: Date? = nil, in context: ModelContext) throws {
         guard context.container.schema.entities.contains(where: { $0.name == "TaskDeletionPreservation" }) else { return }
         let records = try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter {
-            rootIDs.contains($0.rootID) && $0.retiredAt == nil
+            rootIDs.contains($0.rootID) && $0.retiredAt == nil && (deletedAt == nil || $0.deletedAt == deletedAt)
         }
         WorkspaceLegacyBridge.prepareMutations(records, in: context)
         records.forEach {
@@ -137,7 +148,7 @@ enum WorkspacePurge {
         }
     }
 
-    private static func preservationDependencies(taskIDs: Set<UUID>, in context: ModelContext) throws -> [Preservation.Dependency] {
+    static func preservationDependencies(taskIDs: Set<UUID>, in context: ModelContext) throws -> [Preservation.Dependency] {
         let schema = Set(context.container.schema.entities.map(\.name))
         let associations = schema.contains("TaskNoteAssociation") ? try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter { taskIDs.contains($0.taskID) } : []
         let associatedNotes = Set(associations.map(\.noteID))
@@ -147,7 +158,9 @@ enum WorkspacePurge {
         for note in notes {
             result.append(.init(owner: .init(entity: .note, id: note.id), fields: [
                 "revisionID": try WorkspaceModelFields.encode(note.revisionID),
-                "associationGeneration": try WorkspaceModelFields.encode(note.associationGeneration)]))
+                "associationGeneration": try WorkspaceModelFields.encode(note.associationGeneration),
+                "deletionGroupID": try WorkspaceModelFields.encode(note.deletionGroupID),
+                "deletedAt": try WorkspaceModelFields.encode(note.deletedAt)]))
         }
         if schema.contains("NoteVersion") {
             for version in try context.fetch(FetchDescriptor<NoteVersion>()) where noteIDs.contains(version.noteID) {
@@ -167,9 +180,15 @@ enum WorkspacePurge {
                       inventory: () throws -> Inventory?,
                       publication: WorkspaceOperationCoordinator.Publication = .init(),
                       materialize: ((UUID, [WorkspaceMaterializationPatch]) throws -> Void)? = nil) async -> Result {
+        let probe = coordinator.freshContext()
+        if let rows = try? probe.fetch(FetchDescriptor<TaskItem>()),
+           let group = rows.first(where: { $0.id == rootID })?.deletionGroupID {
+            return await WorkspaceItemLifecycle.purge(group: group, before: cutoff, confirmed: confirmed,
+                coordinator: coordinator, files: files, inventory: inventory, publication: publication, materialize: materialize)
+        }
         var checkpoint: (UUID, NoteRecoveryClaim)?
         func refused(_ outcome: WorkspaceOperationCoordinator.Outcome = .conflict) -> Result {
-            Result(outcome: outcome, operationID: nil, removedIDs: [], preservationID: nil, checkpoint: checkpoint)
+            return Result(outcome: outcome, operationID: nil, removedIDs: [], preservationID: nil, checkpoint: checkpoint)
         }
         let context = coordinator.freshContext()
         do {
@@ -289,7 +308,7 @@ enum WorkspacePurge {
                     guard captured.rootID == snapshot.rootID,
                           captured.members.map(\.id) == snapshot.members.map(\.id),
                           captured.members.allSatisfy({ member in
-                              snapshot.members.first(where: { $0.id == member.id })?.fields == member.fields
+                              snapshot.members.first(where: { $0.id == member.id }).map { matchesTaskCapture($0.fields, member.fields) } == true
                                   && (member.replicas ?? [member.fields]).allSatisfy { $0 == member.fields }
                           }),
                           captured.originals.map(\.reference) == snapshot.originals.map(\.reference),
@@ -323,6 +342,34 @@ enum WorkspacePurge {
             let attachmentRows = try context.fetch(FetchDescriptor<NoteAttachment>()).filter { ownIDs.contains($0.noteID) }
             let missingAssociations = ownIDs.subtracting(Set(associations.map(\.noteID)))
             let detachedIDs = Dictionary(uniqueKeysWithValues: missingAssociations.map { ($0, UUID()) })
+            // These notes and associations are detached in this purge's own
+            // envelope. Retain their links through the same redirect rather
+            // than collecting a link whose writing endpoint survives.
+            let linkedTaskIDs = Set((affectedLinks.compactMap(\.source) + affectedLinks.compactMap(\.target))
+                .filter { $0.kind == .task }.map(\.id))
+            var redirects: [UUID: UUID] = [:]
+            for note in notes {
+                let candidates = Set([note.taskID].compactMap { $0 })
+                    .union(associations.filter { $0.noteID == note.id }.map(\.taskID))
+                guard !candidates.isDisjoint(with: linkedTaskIDs) else { continue }
+                guard candidates.count == 1, let taskID = candidates.first else { return refused() }
+                if let old = redirects[taskID], old != note.id { return refused() }
+                redirects[taskID] = note.id
+            }
+            var redirectedLinks: [PersistentIdentifier: (AtticItemRef, AtticItemRef)] = [:]
+            for link in affectedLinks {
+                guard let source = link.source, let target = link.target else { return refused() }
+                func redirected(_ endpoint: AtticItemRef) -> AtticItemRef {
+                    guard endpoint.kind == .task, let note = redirects[endpoint.id] else { return endpoint }
+                    return .init(.note, note)
+                }
+                let afterSource = redirected(source), afterTarget = redirected(target)
+                if afterSource != afterTarget, !touching.contains(afterSource), !touching.contains(afterTarget) {
+                    redirectedLinks[link.persistentModelID] = (afterSource, afterTarget)
+                }
+            }
+            let linkTimestamp = Date()
+
             var owners = taskOwners.union(notes.map { WorkspaceOwner(entity: .note, id: $0.id) })
                 .union(associations.map { WorkspaceOwner(entity: .association, id: $0.id) })
                 .union(detachedIDs.values.map { WorkspaceOwner(entity: .association, id: $0) })
@@ -368,7 +415,8 @@ enum WorkspacePurge {
                     let old = try PreparedNoteDocument(document), row = notes.first(where: { $0.id == id })!
                     commit.insert(NoteVersion(id: draftVersionIDs[id]!, noteID: id, createdAt: Date(), reason: .replacedByDraft,
                         content: old.content, contentFormat: document.format, title: old.title, body: old.body,
-                        attachmentIDs: document.attachmentIDs, sourceRevisionID: row.revisionID))
+                        attachmentIDs: document.attachmentIDs, sourceRevisionID: row.revisionID,
+                        taskSnapshotData: try TaskNotePageSnapshot.data(note: row, in: commit)))
                 }
                 for (id, document) in documents {
                     try NoteStore.stageDocument(in: commit, noteID: id, document: document, prepared: prepared[id]!,
@@ -390,7 +438,14 @@ enum WorkspacePurge {
                     association.noteGeneration = notes.filter { $0.id == noteID }.map(\.associationGeneration).max().map { $0 + 1 } ?? 1
                     commit.insert(association)
                 }
-                guard try LinkStore.stagePurge(touching: touching, in: commit) == affectedLinkIDs.count else { throw WorkspaceFoundationError.conflict }
+                for row in affectedLinks {
+                    guard let link = commit.model(for: row.persistentModelID) as? ItemLink else { throw WorkspaceFoundationError.conflict }
+                    if let endpoints = redirectedLinks[row.persistentModelID] {
+                        link.sourceKindRaw = endpoints.0.kind.rawValue; link.sourceID = endpoints.0.id
+                        link.targetKindRaw = endpoints.1.kind.rawValue; link.targetID = endpoints.1.id
+                        link.updatedAt = linkTimestamp
+                    } else { commit.delete(link) }
+                }
                 _ = try TaskStore.stagePermanentRemoval(in: commit, rootID: rootID, before: cutoff, confirmed: confirmed)
             }, publication: .init(steps: materializationSteps + publication.steps))
             if outcome == .committed {

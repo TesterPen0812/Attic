@@ -185,7 +185,7 @@ private struct TaskReplicaSnapshot: Equatable {
 
 /// What a task holds, without when it was last touched or how it was
 /// deleted: two replicas with equal content show the same task.
-private struct TaskContentSnapshot: Equatable {
+struct TaskContentSnapshot: Equatable {
     let title: [UInt16]
     let statusRaw: String
     let priorityRaw: String
@@ -254,7 +254,7 @@ struct TaskEditableState: Equatable {
     }
 }
 
-private enum TaskReplicaMutationError: LocalizedError {
+enum TaskReplicaMutationError: LocalizedError {
     case missingReplica(UUID)
     case notRecentlyDeleted(UUID)
     case incompleteRestore(UUID)
@@ -796,10 +796,11 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    private func stageCreation(_ drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+    private func stageCreation(_ drafts: [TaskDraft], ids: [UUID], timestamp: Date, allowingBlankTitle: Bool = false) throws -> [TaskItem] {
         guard ids.count == drafts.count else { throw TaskEditRefusal("Task identity count does not match the draft count.") }
-        let titles = drafts.map { Self.normalized($0.title) }
-        guard titles.allSatisfy({ !$0.isEmpty }) else { throw TaskEditRefusal("A task needs a title.") }
+        // Note conversion keeps the literal title, including an empty one.
+        let titles = drafts.map { allowingBlankTitle ? $0.title : Self.normalized($0.title) }
+        guard allowingBlankTitle || titles.allSatisfy({ !$0.isEmpty }) else { throw TaskEditRefusal("A task needs a title.") }
         let parentIDs = Set(drafts.map(\.parentID))
         var created: [TaskItem?] = Array(repeating: nil, count: drafts.count)
             for parentID in parentIDs.compactMap({ $0 }) {
@@ -868,9 +869,9 @@ final class TaskStore: ObservableObject {
         self.tasks = try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletedAt == nil }
     }
 
-    static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date) throws -> [TaskItem] {
+    static func stageCreation(in context: ModelContext, drafts: [TaskDraft], ids: [UUID], timestamp: Date, allowingBlankTitle: Bool = false) throws -> [TaskItem] {
         let adapter = try TaskStore(staging: context, timestamp: timestamp)
-        let rows = try adapter.stageCreation(drafts, ids: ids, timestamp: timestamp)
+        let rows = try adapter.stageCreation(drafts, ids: ids, timestamp: timestamp, allowingBlankTitle: allowingBlankTitle)
         WorkspaceCrashHook.reach("K3-task")
         return rows
     }
@@ -1826,6 +1827,11 @@ final class TaskStore: ObservableObject {
     /// restoring them from Recently Deleted puts them back in the log.
     @discardableResult
     func delete(taskIDs: [UUID], includingDoneLog: Bool = false) -> Bool {
+        let release: () -> Void
+        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: Set(taskIDs), noteID: nil, container: container) }
+        catch { report(error.localizedDescription, owner: taskIDs.first); return false }
+        defer { release() }
+        if !context.hasChanges { context = Self.makeStoreContext(container) }
         let visible = taskIDs.compactMap { id in
             tasks.first(where: { $0.id == id }) ?? (includingDoneLog ? listedTask(withID: id) : nil)
         }
@@ -1847,26 +1853,18 @@ final class TaskStore: ObservableObject {
         }
         let timestamp = now()
         var deletedIDs = Set<UUID>()
-        WorkspaceLegacyBridge.prepareMutations(staged.flatMap { $0.rows }, in: context)
-        for (root, rows) in staged {
-            let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
-            for replica in rows {
-                WorkspaceLegacyBridge.prepareMutation(replica, in: context)
-                replica.deletedAt = timestamp
-                replica.deletionRootID = root
-                replica.deletionMembersRaw = members
-                deletedIDs.insert(replica.id)
-            }
-        }
         do {
             for (root, rows) in staged {
-                try WorkspacePurge.stageDeletionCapture(rootID: root, rows: rows, deletedAt: timestamp, in: context)
+                try WorkspaceItemLifecycle.stageDeletion(rootID: root, tasks: rows, timestamp: timestamp, in: context)
+                deletedIDs.formUnion(rows.map(\.id))
             }
         } catch {
             context.rollback(); refresh(); report(error.localizedDescription, owner: owner); return false
         }
         tasks.removeAll { deletedIDs.contains($0.id) }
-        return save(owner: owner)
+        guard save(owner: owner) else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
+        return true
     }
 
     /// The ids of the subtasks a delete of the main task `parentID` would take
@@ -1961,13 +1959,34 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    static func circleRemovedRoots(in context: ModelContext) throws -> Set<UUID> {
+        guard WorkspaceItemLifecycle.has("TaskDeletionPreservation", in: context) else { return [] }
+        return Set(try context.fetch(FetchDescriptor<TaskDeletionPreservation>()).filter {
+            $0.provenance == "circle removed" && $0.retiredAt == nil
+        }.map(\.rootID))
+    }
+
+    /// Only explicitly captured members are hidden. Old or late independent
+    /// deletions outside the circle capture keep their existing visibility.
+    static func circleRemovedMembers(in context: ModelContext) throws -> Set<UUID> {
+        guard WorkspaceItemLifecycle.has("TaskDeletionPreservation", in: context) else { return [] }
+        var ids = Set<UUID>()
+        for record in try context.fetch(FetchDescriptor<TaskDeletionPreservation>()) where record.provenance == "circle removed" && record.retiredAt == nil {
+            let snapshot = try JSONDecoder().decode(WorkspacePurge.Preservation.self, from: record.snapshot)
+            ids.formUnion(snapshot.members.map(\.id))
+        }
+        return ids
+    }
+
     /// One entry per delete: the task a delete started from, newest first.
     /// Subtasks that went with their parent are counted, not listed.
     func recentlyDeletedTasks() -> [DeletedItemSummary] {
         let deleted: [TaskItem]
         let rootWinners: [UUID: TaskItem]
+        let circleRemoved: Set<UUID>
         do {
             let freshContext = Self.makeStoreContext(container)
+            circleRemoved = try Self.circleRemovedMembers(in: freshContext)
             deleted = try freshContext.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
@@ -1989,7 +2008,7 @@ final class TaskStore: ObservableObject {
         }
         return Dictionary(grouping: deleted) { $0.deletionRootID ?? $0.id }
             .compactMap { rootID, rows -> DeletedItemSummary? in
-                guard let root = rootWinners[rootID],
+                guard !circleRemoved.contains(rootID), let root = rootWinners[rootID],
                       (root.deletionRootID ?? root.id) == rootID,
                       let deletedAt = root.deletedAt else { return nil }
                 return DeletedItemSummary(
@@ -2034,16 +2053,42 @@ final class TaskStore: ObservableObject {
         // replicas saved by another context since the previous refusal.
         if !context.hasChanges { context = Self.makeStoreContext(container) }
         do {
+            let retired = try Self.circleRemovedRoots(in: context)
+            let requested = try context.fetch(FetchDescriptor<TaskItem>()).filter { taskIDs.contains($0.id) }
+            let roots = Set(requested.map { $0.deletionRootID ?? $0.id }).union(taskIDs)
+            guard retired.isDisjoint(with: roots) else {
+                throw TaskEditRefusal("Only Undo can return a task removed from Tasks.")
+            }
             try stageRestoration(taskIDs: taskIDs)
         } catch {
             context.rollback()
             report(error.localizedDescription, owner: nil)
             return false
         }
-        return save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed")
+        guard save(owner: nil, presentationFailure: "Restored, but the list could not be refreshed") else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
+        return true
     }
 
-    private func stageRestoration(taskIDs: [UUID]) throws {
+    private func stageRestoration(taskIDs: [UUID], includeGroups: Bool = true) throws {
+        if includeGroups {
+            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            var selected: [UUID: UUID] = [:]
+            for id in taskIDs {
+                let candidates = all.filter { $0.id == id && $0.deletedAt != nil }.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
+                if let group = candidates.first?.deletionGroupID { selected[id] = group }
+            }
+            let ordered = Set(selected.values).sorted { left, right in
+                let l = all.first { $0.deletionGroupID == left && $0.deletionRootID == $0.id }?.parentID == nil
+                let r = all.first { $0.deletionGroupID == right && $0.deletionRootID == $0.id }?.parentID == nil
+                return l == r ? left.uuidString < right.uuidString : l
+            }
+            for group in ordered { try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context) }
+            let remaining = taskIDs.filter { selected[$0] == nil }
+            if remaining.isEmpty { return }
+            try stageRestoration(taskIDs: remaining, includeGroups: false)
+            return
+        }
         var batches: [UUID: [TaskItem]] = [:]
         for taskID in Set(taskIDs) {
             batches[taskID] = try context.fetch(FetchDescriptor<TaskItem>(
@@ -2123,9 +2168,16 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    static func stageRestoreDeleted(in context: ModelContext, taskIDs: [UUID], timestamp: Date) throws {
+    static func stageRestoreDeleted(in context: ModelContext, taskIDs: [UUID], timestamp: Date, includeGroups: Bool = true) throws {
         let adapter = try TaskStore(staging: context, timestamp: timestamp)
-        try adapter.stageRestoration(taskIDs: taskIDs)
+        try adapter.stageRestoration(taskIDs: taskIDs, includeGroups: includeGroups)
+    }
+
+    static func stageItemDeletion(in context: ModelContext, taskID: UUID, timestamp: Date) throws {
+        let adapter = try TaskStore(staging: context, timestamp: timestamp)
+        guard let task = adapter.listedTask(withID: taskID),
+              let rows = adapter.deletionFamily(of: task, owner: taskID) else { throw WorkspaceFoundationError.conflict }
+        try WorkspaceItemLifecycle.stageDeletion(rootID: taskID, tasks: rows, timestamp: timestamp, in: context)
     }
 
     static func stageSoftDeletion(in context: ModelContext, taskID: UUID, preservationID: UUID, timestamp: Date) throws {
@@ -2158,7 +2210,7 @@ final class TaskStore: ObservableObject {
         for id in members {
             let family = replicas.filter { $0.id == id }
             guard let row = family.first, family.allSatisfy({
-                $0.deletionRootID == rootID && $0.deletedAt == deletedAt
+                $0.deletionRootID == rootID && $0.deletedAt == deletedAt && $0.deletionGroupID == row.deletionGroupID
                     && $0.deletionMembersRaw == first.deletionMembersRaw
                     && TaskReplicaSnapshot($0) == TaskReplicaSnapshot(row)
                     && $0.associationGeneration == row.associationGeneration
@@ -2242,6 +2294,9 @@ final class TaskStore: ObservableObject {
             guard let complete = try? Self.guardedDeletedFamily(in: context, rootID: rootID, before: cutoff,
                                                                  confirmed: confirmed?[rootID]),
                   Set(complete.map(\.id)) == ids else { continue }
+            // Circle-removed groups retain live writing redirects and use
+            // the same whole-group coordinator as other one-item groups.
+            guard (try? Self.circleRemovedMembers(in: context).contains(rootID)) == false else { continue }
             // Own notes/associations must go through the coordinated path.
             // The legacy collector cannot leave an actionable purged task ID.
             guard (try? WorkspacePurge.hasOwnNotesOrAssociations(ids, in: context)) == false else { continue }
@@ -2433,13 +2488,14 @@ final class TaskStore: ObservableObject {
         excluding shown: Set<UUID> = []
     ) -> DoneLogPage {
         let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let supplemental = additionalItemIDs(query: trimmed)
         func descriptor(offset: Int, limit: Int) -> FetchDescriptor<TaskItem> {
             let order = [SortDescriptor(\TaskItem.completedAt, order: .reverse),
                          SortDescriptor(\TaskItem.createdAt, order: .reverse)]
             var descriptor = trimmed.isEmpty
                 ? FetchDescriptor<TaskItem>(predicate: #Predicate { $0.doneLoggedAt != nil && $0.parentID == nil }, sortBy: order)
                 : FetchDescriptor<TaskItem>(predicate: #Predicate {
-                    $0.doneLoggedAt != nil && $0.parentID == nil && $0.title.localizedStandardContains(trimmed)
+                    $0.doneLoggedAt != nil && $0.parentID == nil && ($0.title.localizedStandardContains(trimmed) || supplemental.contains($0.id))
                 }, sortBy: order)
             descriptor.fetchOffset = offset
             descriptor.fetchLimit = limit
@@ -2471,7 +2527,7 @@ final class TaskStore: ObservableObject {
                     guard let winner = winners[row.id], winner.persistentModelID == row.persistentModelID,
                           winner.doneLoggedAt != nil, winner.deletedAt == nil,
                           winner.parentID == nil,
-                          trimmed.isEmpty || winner.title.localizedStandardContains(trimmed),
+                          trimmed.isEmpty || matchesItemSearch(winner, query: trimmed),
                           seen.insert(row.id).inserted else { continue }
                     result.append(winner)
                     if result.count == limit { break walk }
@@ -2506,10 +2562,80 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    // Extra item terms are copied on publication, never fetched per key.
+    // A root remains one result even when its writing or a child matches.
+    private var itemTaskParts: [UUID: (root: UUID, text: String)] = [:]
+    private var itemTaskTerms: [UUID: NSString] = [:]
+    private var itemWritingTerms: [UUID: NSString] = [:]
+    private var itemWritingObservation: AnyCancellable?
+
+    func observeItemWriting(_ notes: NoteStore) {
+        refreshItemWriting(notes)
+        itemWritingObservation = notes.$revision.dropFirst().sink { [weak self, weak notes] _ in
+            guard let self, let notes else { return }
+            self.refreshItemWriting(notes)
+        }
+    }
+
+    private func refreshItemWriting(_ notes: NoteStore) {
+        var terms: [UUID: [String]] = [:]
+        for note in notes.notes.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            guard let owner = note.taskID else { continue }
+            if !note.body.isEmpty { terms[owner, default: []].append(note.body) }
+            for file in notes.attachmentsByNoteID[note.id] ?? [] where file.deletedAt == nil {
+                terms[owner, default: []].append(file.originalFilename)
+            }
+        }
+        let next = terms.mapValues { $0.joined(separator: "\n") as NSString }
+        guard next != itemWritingTerms else { return }
+        itemWritingTerms = next
+        doneSearchMatches = nil
+        // This is a presentation invalidation; it writes no model rows.
+        revision &+= 1
+        familyIndexCache?.revision = revision
+    }
+
+    private func indexItemTasks(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
+        var changed = Set<UUID>()
+        if let ids {
+            for id in ids { if let old = itemTaskParts.removeValue(forKey: id) { changed.insert(old.root) } }
+        } else {
+            itemTaskParts.removeAll(keepingCapacity: true)
+            itemTaskTerms.removeAll(keepingCapacity: true)
+        }
+        for task in winners where task.deletedAt == nil {
+            let root = task.parentID ?? task.id
+            let text = ([task.parentID == nil ? "" : task.title, task.tagsRaw] + task.attachments.map(\.filename))
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+            if !text.isEmpty { itemTaskParts[task.id] = (root, text); changed.insert(root) }
+        }
+        var grouped: [UUID: [String]] = [:]
+        for (_, part) in itemTaskParts.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where ids == nil || changed.contains(part.root) {
+            grouped[part.root, default: []].append(part.text)
+        }
+        for root in changed { itemTaskTerms[root] = grouped[root].map { $0.joined(separator: "\n") as NSString } }
+    }
+
+    func matchesItemSearch(_ task: TaskItem, query: String) -> Bool {
+        query.isEmpty || task.title.localizedStandardContains(query) || additionalItemMatch(task.id, query: query)
+    }
+
+    private func additionalItemMatch(_ id: UUID, query: String) -> Bool {
+        let tagOrText = query.hasPrefix("#") ? String(query.dropFirst()) : query
+        guard !tagOrText.isEmpty else { return false }
+        return itemTaskTerms[id]?.localizedStandardContains(tagOrText) == true
+            || itemWritingTerms[id]?.localizedStandardContains(query) == true
+    }
+
+    private func additionalItemIDs(query: String) -> [UUID] {
+        Set(itemTaskTerms.keys).union(itemWritingTerms.keys).filter { additionalItemMatch($0, query: query) }
+    }
+
     private var doneSearchEntries: [DoneSearchEntry] = []
     private var doneSearchMatches: (query: String, locale: String, ids: [UUID])?
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
+        indexItemTasks(winners, replacing: ids)
         updateDoneSearch(winners.filter {
             $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil
         }.map(DoneSearchEntry.init), replacing: ids)
@@ -2537,7 +2663,7 @@ final class TaskStore: ObservableObject {
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
         let ids = doneSearchEntries.compactMap {
-            query.isEmpty || $0.title.localizedStandardContains(query) ? $0.id : nil
+            query.isEmpty || $0.title.localizedStandardContains(query) || additionalItemMatch($0.id, query: query) ? $0.id : nil
         }
         doneSearchMatches = (query, locale, ids)
         return ids
@@ -2659,6 +2785,7 @@ final class TaskStore: ObservableObject {
     /// failed.
     func doneLogTaskCount(matching query: String = "") -> Int? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let supplemental = additionalItemIDs(query: trimmed)
         let noDate: Date? = nil
         let noParent: UUID? = nil
         var descriptor = trimmed.isEmpty
@@ -2667,7 +2794,7 @@ final class TaskStore: ObservableObject {
             })
             : FetchDescriptor<TaskItem>(predicate: #Predicate<TaskItem> { item in
                 item.doneLoggedAt != noDate && item.parentID == noParent && item.deletedAt == noDate
-                    && item.title.localizedStandardContains(trimmed)
+                    && (item.title.localizedStandardContains(trimmed) || supplemental.contains(item.id))
             })
         descriptor.propertiesToFetch = [\.id]
         guard let rows = try? context.fetch(descriptor) else { return nil }
@@ -3638,7 +3765,9 @@ final class TaskStore: ObservableObject {
                     changedRows = try context.fetch(
                         FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
                     #endif
-                    let changedEntries = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
+                    let changedWinners = Self.canonicalReplicas(from: changedRows.filter { !deleted.contains($0.persistentModelID) })
+                    indexItemTasks(changedWinners, replacing: changedIDs)
+                    let changedEntries = changedWinners
                         .filter { $0.doneLoggedAt != nil && $0.deletedAt == nil && $0.parentID == nil }
                         .map(DoneSearchEntry.init)
                     updateDoneSearch(changedEntries, replacing: changedIDs)

@@ -50,8 +50,9 @@ struct NoteHistoryPage: View {
             // The variable blur, its own layer under the version line (the
             // bottom row has none; never an overlay of the text view).
             if browser.preview != nil { AtticEdgeBlurBackdrops(Self.edges(layout)) }
-            // Top glass: the switch grew 4 pt (26 to 30), so the gap to the
-            // summary shrank by as much and the summary keeps its place.
+            // Top glass: the switch is a secondary control, 26 pt as the old
+            // recessed track (owner, 2026-10-22), so the summary keeps its
+            // place 6 pt under it.
             VStack(spacing: NoteHistoryVersionSwitch.summaryGap) {
                 // U-30: the app's own monochrome selected state (as the
                 // tabs and menus), never the system's blue segment.
@@ -134,21 +135,24 @@ struct NoteHistoryPage: View {
 
     private func step(_ delta: Int) { controller.selectHistoryVersion(browser.selectedIndex + delta) }
 
+    /// The day names are real headers and each version is its time, with
+    /// the reason as quiet detail (Dropdown content: answers, owner,
+    /// 2026-10-24, sheet 4).
     private var versionCommands: [AtticMenuCommand] {
         var commands: [AtticMenuCommand] = []
         var lastDay: Date?
         for (index, entry) in browser.entries.enumerated() {
             let day = Calendar.current.startOfDay(for: entry.createdAt)
             if day != lastDay {
-                commands.append(AtticMenuCommand("\(day.formatted(.dateTime.weekday().month().day()))", isDisabled: true,
-                    startsSection: !commands.isEmpty) {})
+                commands.append(.header(day.formatted(.dateTime.weekday().month().day())))
                 lastDay = day
             }
-            let reason = entry.reason == .pause ? "" : " · \(entry.reason?.historyLabel ?? "Saved version")"
-            commands.append(AtticMenuCommand("\(entry.createdAt.formatted(.dateTime.hour().minute()))\(reason)",
+            var version = AtticMenuCommand("\(entry.createdAt.formatted(.dateTime.hour().minute()))",
                 isChecked: index == browser.selectedIndex, identifier: "notes-history-version-\(entry.id)") {
                 controller.selectHistoryVersion(index)
-            })
+            }
+            version.detail = entry.reason == .pause ? nil : (entry.reason?.historyLabel ?? String(localized: "Saved version"))
+            commands.append(version)
         }
         commands.append(AtticMenuCommand("Copy This Version", startsSection: true, identifier: "notes-history-copy") {
             controller.copyHistoryVersion()
@@ -182,7 +186,8 @@ struct NoteHistoryPage: View {
 ///
 /// Top glass (2026-10-22): the preview scrolls under it, so its track is
 /// the floating glass, as the page switch's capsule: the raised material at
-/// the Medium height (was a recessed 26 pt track), the halves 4 pt inside.
+/// the secondary controls' 26 pt (was a recessed 26 pt track), the halves
+/// 4 pt inside.
 /// Under Reduce Transparency it is the opaque raised surface.
 struct NoteHistoryVersionSwitch: View {
     let choices: [(value: Bool, title: String)]
@@ -193,7 +198,8 @@ struct NoteHistoryVersionSwitch: View {
 
     static let height = AtticTopGlassMetrics.height
     static let inset = AtticControlSize.capsuleInset
-    /// The summary under it: 6 below the old 26 pt track, so 2 below this one.
+    /// The summary under it: 6 below the old 26 pt track, less whatever this
+    /// one adds to that height (none at the secondary controls' 26).
     static let summaryGap: CGFloat = 6 - (height - 26)
 
     var body: some View {

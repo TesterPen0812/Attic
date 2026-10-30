@@ -65,6 +65,7 @@ final class WorkspaceHistory {
     private var publicationInstalled = false
     private var fallbackBranchesStoredResult = false
     private var pendingCompletion: (() async -> Void)?
+    private var publicationFieldHold: (() -> Bool)?
     private var completingPublication = false
     private final class WeakHistory {
         weak var value: WorkspaceHistory?
@@ -170,6 +171,7 @@ final class WorkspaceHistory {
         guard !completingPublication, !inputReserved, pendingReplayID == nil, pendingCommandID == nil,
               currentAdapter?.canPrepareWorkspaceCommand != false else { return false }
         closeGroup(); announcedInputRefusal = false; publicationInstalled = false
+        publicationFieldHold = nil
         fallbackBranchesStoredResult = false; inputReserved = true; return true
     }
     /// Values, never an old selection or a retained native view. The new
@@ -355,6 +357,7 @@ final class WorkspaceHistory {
         let branched = hasNewerPublicationDraft
         let conflict = branched && fallbackBranchesStoredResult && outcome == .committed
         pendingReplayID = nil; pendingCommandID = nil
+        publicationFieldHold = nil
         retryTask?.cancel(); retryTask = nil; pendingCoordinator = nil
         recoveryLeader = nil
         permitsUnsavedDraft = false; inputReserved = false
@@ -429,8 +432,15 @@ final class WorkspaceHistory {
             self.schedulePublicationRetry(after: .seconds(1))
         }
     }
+    /// A known committed projection cannot hide a native field draft. Keep
+    /// its reservation until explicit cancellation; storage/receipt failures
+    /// that have not reached this publication guard keep the usual fallback.
+    func holdPublicationInput(while unresolved: @escaping () -> Bool) {
+        publicationFieldHold = unresolved
+    }
+
     private func permitUnsavedDraft() {
-        guard !permitsUnsavedDraft else { return }
+        guard !permitsUnsavedDraft, publicationFieldHold?() != true else { return }
         permitsUnsavedDraft = true
         fallbackBranchesStoredResult = !publicationInstalled
         inputReserved = false

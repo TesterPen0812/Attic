@@ -70,19 +70,22 @@ final class TasksRound3Tests: XCTestCase {
     func testTheMonthStartsOnTheLocalesFirstWeekday() throws {
         let card = model.dateChoices.cardCalendar
         let september = AtticDateMonth(containing: try XCTUnwrap(day("2026-09-21").startDate(in: card)), calendar: card)
-        XCTAssertEqual(september.weekdays, ["M", "T", "W", "T", "F", "S", "S"])
-        XCTAssertEqual(september.cells.first ?? nil, nil, "1 Sep is a Tuesday: Monday's cell is blank, no August day")
-        XCTAssertEqual(september.cells[1].map { DueDay(date: $0, calendar: card) }, day("2026-09-01"))
-        XCTAssertEqual(september.cells.count % 7, 0)
-        XCTAssertEqual(september.cells.compactMap { $0 }.count, 30)
+        // Draft C (owner, 2026-10-23) supersedes the quiet month (2026-10-05):
+        // two-letter weekdays and six whole weeks, the neighbouring months'
+        // days shown lighter.
+        XCTAssertEqual(september.weekdays, ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"])
+        XCTAssertEqual(september.inMonth.first, false, "1 Sep is a Tuesday: Monday's cell is 31 August, outside the month")
+        XCTAssertEqual(DueDay(date: september.cells[1], calendar: card), day("2026-09-01"))
+        XCTAssertEqual(september.cells.count, 42)
+        XCTAssertEqual(september.inMonth.filter { $0 }.count, 30)
         XCTAssertEqual(AtticDateCardFormat.monthTitle(september.start, calendar: card), "September 2026")
 
         var sunday = calendar
         sunday.firstWeekday = 1
         let choices = TaskDateChoices(parser: TaskTextParser(calendar: sunday, locale: Locale(identifier: "en_US"), now: { [clock] in clock.value }))
         let us = AtticDateMonth(containing: try XCTUnwrap(day("2026-09-21").startDate(in: choices.cardCalendar)), calendar: choices.cardCalendar)
-        XCTAssertEqual(us.weekdays.first, "S")
-        XCTAssertEqual(us.cells.prefix(2), [nil, nil], "Sunday and Monday lead blank")
+        XCTAssertEqual(us.weekdays.first, "Su")
+        XCTAssertEqual(us.inMonth.prefix(3), [false, false, true], "Sunday and Monday lead from August")
     }
 
     func testMonthsAndKeyboardTravelCrossTheYear() throws {

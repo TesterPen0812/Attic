@@ -8,6 +8,13 @@ import SwiftData
 /// their preservation records, the task-note storage form).
 enum TaskNoteLifecyclePreviewSeed {
     static let bundleIdentifier = "com.taha.Attic.preview.tasklife"
+    /// "Attic One Item" (Phase 3 C2) opens on the same samples.
+    static let oneItemBundleIdentifier = "com.taha.Attic.preview.oneitem"
+
+    /// The preview identities whose fresh store gets these samples.
+    static func seeds(bundleIdentifier: String?) -> Bool {
+        bundleIdentifier == Self.bundleIdentifier || bundleIdentifier == oneItemBundleIdentifier
+    }
 
     enum Sample: String, CaseIterable {
         /// Lines to try Make Subtask on: plain lines, a checked note

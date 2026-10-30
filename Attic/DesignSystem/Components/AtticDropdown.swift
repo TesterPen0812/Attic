@@ -1,19 +1,21 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Attic's own dropdowns (E1)
+// MARK: - Attic's own dropdowns (draft C, "Craft on glass")
 
-// The one pop-over list Attic draws itself (owner, 2026-10-02: E1 of
-// mockup p2-25, with p2-24 D's rows and p2-23's width rule): the `/` list,
-// the date card (Notes and Tasks), the tag and priority pickers, Aa and the
-// link card. Native menus (right-click, ⋯, the menu bar) stay native.
+// The pop-over cards Attic draws itself (owner, 2026-10-23: draft C, "the
+// menus look good", superseding E1 of 2026-10-02): the `/` list, the date
+// card (Notes and Tasks), the tag and priority pickers, Aa and the link
+// card. The command menus (right-click, ⋯, ⇧⌘I) are glass cards too, drawn
+// by `AtticGlassMenu` on the same metrics and tokens.
 //
-// - `AtticDropdownCard`: the solid card (no blur), one hairline, D's shadow,
-//   16 pt corners, rows 6 pt in (the Compact size, p2-28).
-// - `AtticDropdownRow`: a 28 pt row, touching its neighbours; the pill is the
-//   whole row. One highlight per list, which the keyboard and the pointer
-//   share (`onHover` moves the list's).
-// - `AtticDropdownField`: the card's field (Find or add a tag, the date).
+// - `AtticDropdownCard`: real system glass (Liquid Glass, regular) with 18 pt
+//   corners, a light hairline rim and a soft shadow; rows 4 pt in.
+// - `AtticDropdownRow`: a 32 pt row, touching its neighbours; the soft fill
+//   is the whole row. One highlight per list, which the keyboard and the
+//   pointer share (`onHover` moves the list's).
+// - `AtticDropdownField`: the card's field (Date, Tag), 30 pt in a 40 pt
+//   header ruled off by a full-width hairline (`AtticDropdownFieldHeader`).
 // - `AtticDropdownLayout`: the width rule and where the card opens;
 //   `AtticDropdownLayout.place` and `AtticDropdownSpace` are the one
 //   placement every card uses (the presenter's, the `/` list, Notes' date
@@ -23,36 +25,105 @@ import SwiftUI
 //   behind it.
 //
 // Every value is in `AtticDropdownMetrics` and the colour tokens
-// (`popoverFill`, `popoverOuterRim`, `dropdownHighlight`, `dropdownShadow`,
-// `dropdownContactShadow`).
+// (`dropdownHighlight`, `dropdownRim`, `dropdownRule`, `dropdownSelected`,
+// `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
+// `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: a solid fill, one hairline just outside it (Attic's
-/// outer-rim token, 1 pt under Increase Contrast) and D's two shadows. Solid,
-/// so Reduce Transparency changes nothing.
+/// The card's face: regular system glass (draft C on real glass), a light
+/// 0.5 pt rim just inside its edge (1 pt in the contrast edge's ink under
+/// Increase Contrast) and its soft shadow. Under Reduce Transparency, with
+/// the solid controls setting, and in `ImageRenderer` captures (which
+/// cannot draw glass) the face is the opaque `popoverFill` with
+/// `popoverOuterRim`.
 ///
-/// While the card unfolds (`AtticDropdownReveal`) the face is drawn at the
-/// revealed height, so its corners, hairline and shadow travel with it.
+/// While the card fades in or out (`AtticDropdownReveal`) the face goes
+/// with it, as one piece.
 struct AtticDropdownSurface: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticUnfold) private var unfold
+    @Environment(\.atticCapture) private var capture
+
+    /// Whether the face is glass for this design (and not a capture).
+    static func isGlass(_ design: AtticDesignContext, capture: Bool) -> Bool {
+        !capture && design.effectiveControls == .liquidGlass
+    }
 
     var body: some View {
         let tokens = design.tokens
         let shape = AtticUnfoldShape(cornerRadius: AtticDropdownMetrics.cornerRadius, reveal: unfold?.reveal ?? 1,
                                      fromTop: unfold?.fromTop ?? true)
-        let edge = design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width
+        let contrast = design.increaseContrast
+        let edge = contrast ? AtticHairline.widthIncreased : AtticHairline.width
         let shadow = Double(unfold?.shadow ?? 1)
         ZStack {
             AtticOutsideShadow(shape: shape, color: tokens.dropdownShadow.withAlpha(tokens.dropdownShadow.alpha * shadow),
                                spec: AtticShadows.dropdown)
             AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
                                spec: AtticShadows.dropdownContact)
-            shape.fill(tokens.popoverFill.color)
-            // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
-            shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
+            if Self.isGlass(design, capture: capture != nil) {
+                Color.clear.glassEffect(.regular, in: shape)
+                shape.inset(by: edge / 2)
+                    .stroke((contrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark) : tokens.dropdownRim).color,
+                            lineWidth: edge)
+            } else {
+                shape.fill(tokens.popoverFill.color)
+                // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
+                shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
+            }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// A full-width hairline: under a card's field header (1 pt, edge to edge
+/// of the card) or between a list's groups (0.5 pt, 4 pt in, 4 pt above
+/// and below).
+struct AtticDropdownRule: View {
+    /// The header's rule, through the card's inset to its edges.
+    var header = false
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let m = AtticDropdownMetrics.self
+        Rectangle()
+            .fill(design.tokens.dropdownRule.color)
+            .frame(height: header ? m.headerRule : m.separator)
+            .padding(.horizontal, header ? -m.inset : m.separatorInset)
+            .padding(.vertical, header ? 0 : m.separatorGap)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A list's section header ("Tags"): 11 pt semibold in a light ink, on the
+/// rows' leading edge.
+struct AtticDropdownSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        let m = AtticDropdownMetrics.self
+        AtticText(verbatim: title, style: .dropdownSection, ink: .helper)
+            .padding(.horizontal, m.rowPadding)
+            .padding(.bottom, m.sectionHeaderBottom)
+            .frame(maxWidth: .infinity, minHeight: m.sectionHeaderHeight, maxHeight: m.sectionHeaderHeight, alignment: .bottomLeading)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The card's 40 pt header: its field 6 pt in from the edges, then the
+/// full-width rule.
+struct AtticDropdownFieldHeader<Field: View>: View {
+    @ViewBuilder let field: Field
+
+    var body: some View {
+        let m = AtticDropdownMetrics.self
+        VStack(spacing: 0) {
+            field
+                .padding(.horizontal, m.fieldInset)
+                .padding(.top, (m.fieldHeaderHeight - m.fieldHeight) / 2 - m.inset)
+                .padding(.bottom, (m.fieldHeaderHeight - m.fieldHeight) / 2)
+            AtticDropdownRule(header: true)
+        }
     }
 }
 
@@ -293,6 +364,21 @@ struct AtticDropdownGap: View {
 /// One highlight (fix 1): a list with a keyboard highlight owns it and the
 /// pointer moves it (`onHover`), as in a native menu; with no `onHover` the
 /// row lights while hovered.
+/// A row's press: a click anywhere on it runs its action. A plain tap,
+/// not a SwiftUI Button: a Button per row was the largest part of a list's
+/// opening cost (menus fix 1; a tag picker opens with a row per tag), and
+/// it was never the row's keyboard or VoiceOver face. The keyboard reaches
+/// rows through their list (`atticDropdownList`), never as Tab stops, and
+/// VoiceOver presses the row's menu item (`AtticDropdownMenuItem`).
+private struct AtticDropdownRowPress: ViewModifier {
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+
+    func body(content: Content) -> some View {
+        content.onTapGesture { if enabled { action() } }
+    }
+}
+
 /// A tag row's inline colour dot: an image as wide as the dot column and
 /// the gap after it, the 7 pt dot centred in the column on the capitals'
 /// middle (it sits on the baseline in the text).
@@ -506,70 +592,63 @@ struct AtticDropdownRow: View {
         let tokens = design.tokens
         let lit = Self.isLit(highlighted: isHighlighted, hovered: hovered, listOwnsHighlight: onHover != nil)
         let pill = RoundedRectangle(cornerRadius: m.highlightRadius, style: .continuous)
-        Button(action: action) {
-            HStack(spacing: 0) {
-                HStack(spacing: m.columnGap) {
-                    if dot != nil, titleFont == nil, match?.isEmpty ?? true {
-                        // The dot is set inline in the name's own text (one
-                        // view per row: the tag picker opens with a row per
-                        // tag and its open cost is gated).
-                        dottedName
-                    } else if let checkGlyph {
-                        AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
-                            .frame(width: m.dotSlot)
-                    }
-                    if let mark {
-                        // None keeps the column (U-15): an empty mark is
-                        // EmptyView, which a frame alone would not hold open.
-                        ZStack { AtticPriorityMark(priority: mark) }
-                            .frame(width: m.markSlot)
-                    }
-                    if let systemName {
-                        AtticIcon(systemName: systemName, size: m.iconSize, ink: .icon)
-                            .frame(width: m.iconSlot)
-                    }
-                    if !(dot != nil && titleFont == nil && (match?.isEmpty ?? true)) {
-                        name
-                    }
+        HStack(spacing: 0) {
+            HStack(spacing: m.columnGap) {
+                if dot != nil, titleFont == nil, match?.isEmpty ?? true {
+                    // The dot is set inline in the name's own text (one
+                    // view per row: the tag picker opens with a row per
+                    // tag and its open cost is gated).
+                    dottedName
+                } else if let checkGlyph {
+                    AtticIcon(systemName: checkGlyph, size: m.checkSize, weight: .semibold, ink: .glyph)
+                        .frame(width: m.dotSlot)
                 }
-                Spacer(minLength: detail == nil ? (check == nil ? 0 : m.columnGap) : m.detailGap)
-                if let detail {
-                    if AtticOptionHints.isShortcut(detail) {
-                        // O14-08: shortcuts show while ⌥ is held.
-                        if let shortcutHintsShown {
-                            AtticShortcutHintText(text: detail, shown: shortcutHintsShown)
-                        } else {
-                            AtticShortcutHint(text: detail)
-                        }
-                    } else {
-                        AtticText(verbatim: detail, style: .shortcut, ink: .helper)
-                            .fixedSize()
-                    }
+                if let mark {
+                    // None keeps the column (U-15): an empty mark is
+                    // EmptyView, which a frame alone would not hold open.
+                    ZStack { AtticPriorityMark(priority: mark) }
+                        .frame(width: m.markSlot)
                 }
-                // An unticked row draws nothing there: its column is room the
-                // card's width already keeps (the tag picker opens with a row
-                // per tag, so every view a row saves counts).
-                if let check, check != .off {
-                    AtticIcon(systemName: check == .on ? "checkmark" : "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
-                        .frame(width: m.checkSlot)
-                        .padding(.leading, detail == nil ? 0 : m.columnGap)
-                } else if check == .off, detail != nil {
-                    // Details stay in one column, ticked or not.
-                    Color.clear.frame(width: m.checkSlot + m.columnGap, height: 1)
+                if let systemName {
+                    AtticIcon(systemName: systemName, size: m.iconSize, ink: .icon)
+                        .frame(width: m.iconSlot)
+                }
+                if !(dot != nil && titleFont == nil && (match?.isEmpty ?? true)) {
+                    name
                 }
             }
-            .padding(.horizontal, m.rowPadding)
-            .frame(height: m.rowHeight)
-            .background(pill.fill((lit ? tokens.dropdownHighlight : .clear).color))
-            .contentShape(Rectangle())
+            Spacer(minLength: detail == nil ? (check == nil ? 0 : m.columnGap) : m.detailGap)
+            if let detail {
+                if AtticOptionHints.isShortcut(detail) {
+                    // O14-08: shortcuts show while ⌥ is held.
+                    if let shortcutHintsShown {
+                        AtticShortcutHintText(text: detail, shown: shortcutHintsShown)
+                    } else {
+                        AtticShortcutHint(text: detail)
+                    }
+                } else {
+                    AtticText(verbatim: detail, style: .shortcut, ink: .helper)
+                        .fixedSize()
+                }
+            }
+            // An unticked row draws nothing there: its column is room the
+            // card's width already keeps (the tag picker opens with a row
+            // per tag, so every view a row saves counts).
+            if let check, check != .off {
+                AtticIcon(systemName: check == .on ? "checkmark" : "minus", size: m.checkSize, weight: .semibold, ink: .glyph)
+                    .frame(width: m.checkSlot)
+                    .padding(.leading, detail == nil ? 0 : m.columnGap)
+            } else if check == .off, detail != nil {
+                // Details stay in one column, ticked or not.
+                Color.clear.frame(width: m.checkSlot + m.columnGap, height: 1)
+            }
         }
-        .buttonStyle(AtticUndimmedButtonStyle())
-        // Never its own Tab stop: a list's rows are one keyboard stop, as a
-        // native menu's are (`atticDropdownList`), and the one highlight
-        // shows where the keyboard is. Under Full Keyboard Access a row
-        // took Tab as a button but its Space reached nothing.
-        .focusable(false)
-        .focusEffectDisabled()
+        .padding(.horizontal, m.rowPadding)
+        .frame(height: m.rowHeight)
+        .background(pill.fill((lit ? tokens.dropdownHighlight : .clear).color))
+        .contentShape(Rectangle())
+        // The whole row picks on a click (`AtticDropdownRowPress`).
+        .modifier(AtticDropdownRowPress(action: action))
         // The whole row answers the pointer (no dead gap between rows). A
         // row sliding under a resting pointer as the keyboard scrolls the
         // list is not the pointer moving: the keyboard keeps its highlight.
@@ -689,15 +768,16 @@ struct AtticDropdownField: View {
         let font = AtticTextStyle.dropdownRow.font
         HStack(spacing: 0) {
             if let systemName {
-                AtticIcon(systemName: systemName, size: AtticSmallControlMetrics.iconSize, ink: .helper)
-                    .frame(width: m.dotSlot)
-                    .padding(.trailing, m.columnGap)
+                // Draft C: the magnifier 10 pt in, the text 32 pt in.
+                AtticIcon(systemName: systemName, size: m.iconSize, ink: .helper)
+                    .frame(width: m.iconSlot)
+                    .padding(.trailing, m.fieldTextLeading - m.fieldIconLeading - m.iconSlot)
                     .accessibilityHidden(true)
             }
             ZStack(alignment: .leading) {
                 Text(verbatim: placeholder).font(font).lineLimit(1).fixedSize().hidden()
                     .accessibilityHidden(true)
-                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.helper)))
+                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.placeholder)))
                     .textFieldStyle(.plain)
                     .font(font)
                     .modifier(AtticDropdownFieldFocusModifier(focus: focus))
@@ -706,9 +786,10 @@ struct AtticDropdownField: View {
                     .accessibilityIdentifier(identifier ?? "")
             }
         }
-        .padding(.horizontal, m.rowPadding)
+        .padding(.leading, systemName == nil ? m.rowPadding : m.fieldIconLeading)
+        .padding(.trailing, m.rowPadding)
         .frame(height: m.fieldHeight)
-        .background(RoundedRectangle(cornerRadius: m.highlightRadius, style: .continuous).fill(design.tokens.recessed.color))
+        .background(RoundedRectangle(cornerRadius: m.fieldRadius, style: .continuous).fill(design.tokens.dropdownHighlight.color))
     }
 }
 
@@ -814,6 +895,25 @@ enum AtticDropdownLayout {
         let placed = frame(size: CGSize(width: width, height: height), anchor: anchor, bounds: bounds, prefer: current ?? prefer)
         return Placement(frame: placed.frame, side: placed.side,
                          heightLimit: placed.frame.height < height ? placed.frame.height : nil)
+    }
+
+    /// A card cut short to fit (`heightLimit`) through a scroll or a move:
+    /// placed once, it moves with its anchor and keeps its cut, stopping
+    /// at the edge of `bounds` rather than leave them. Re-cutting it on
+    /// every frame re-laid its content and re-shaped real glass over
+    /// moving rows (menus fix 1). Nil when it is placed again instead: it
+    /// fits (moving it is then all a placement does), `bounds` changed
+    /// (the panel resized), or its anchor left the view or went wholly
+    /// under the card.
+    static func follow(_ placement: Placement, placedAnchor: CGRect, placedBounds: CGRect,
+                       anchor: CGRect, bounds: CGRect, anchorShown: Bool) -> Placement? {
+        guard placement.heightLimit != nil, bounds == placedBounds, anchorShown,
+              anchor.maxY > bounds.minY, anchor.minY < bounds.maxY else { return nil }
+        var frame = placement.frame.offsetBy(dx: anchor.minX - placedAnchor.minX, dy: anchor.minY - placedAnchor.minY)
+        frame.origin.x = max(bounds.minX, min(frame.minX, bounds.maxX - frame.width))
+        frame.origin.y = max(bounds.minY, min(frame.minY, bounds.maxY - frame.height))
+        guard !(frame.minY <= anchor.minY && frame.maxY >= anchor.maxY) else { return nil }
+        return Placement(frame: frame, side: placement.side, heightLimit: placement.heightLimit)
     }
 }
 
@@ -1300,11 +1400,12 @@ enum AtticDropdownReveal {
             return Frame(reveal: 1, opacity: 1 - e, scale: 1 - (1 - startScale) * e, travel: closeTravel * e,
                          contentBlur: 0, shadow: 1 - e)
         }
+        // Draft C (owner, 2026-10-23): the card opens as one piece too, as
+        // it closes (V-11): whole, a quick fade from 0.98 and 4 pt towards
+        // its anchor, never unfolding row by row (glass is never re-cut).
         let e = CGFloat(curve.y(at: t))
-        let contentTime = (t * openDuration - contentDelay) / contentDuration
-        let c = CGFloat(curve.y(at: contentTime))
-        return Frame(reveal: e, opacity: opacity(progress: e), scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
-                     contentBlur: contentBlur * (1 - c), shadow: e)
+        return Frame(reveal: 1, opacity: opacity(progress: e), scale: startScale + (1 - startScale) * e, travel: openTravel * (1 - e),
+                     contentBlur: 0, shadow: e)
     }
 
     #if DEBUG
@@ -1345,7 +1446,8 @@ struct AtticUnfoldPresence<Value: Equatable, Content: View>: View {
         ZStack {
             if let value {
                 AtticUnfolding(fromTop: fromTop, reduced: reduced) { content(value) }
-                    .transition(reduced ? .opacity.animation(AtticDropdownReveal.fadeAnimation) : AtticDropdownReveal.presence(fromTop: fromTop))
+                    // Reduce Motion: there and gone at once (draft C).
+                    .transition(reduced ? .identity : AtticDropdownReveal.presence(fromTop: fromTop))
             }
         }
         // The insertion and removal run in an animated transaction, as
@@ -1632,8 +1734,8 @@ struct AtticDropdownStage: View {
             .animation(reduce ? nil : (closing ? AtticDropdownReveal.closeAnimation : AtticDropdownReveal.openAnimation)) {
                 $0.modifier(AtticUnfoldEffect(clock: reduce || model.shown ? 1 : 0, closing: closing, fromTop: fromTop))
             }
-            // Reduced: the fade alone.
-            .animation(model.shown ? AtticDropdownReveal.fadeAnimation : AtticMotionScale.exit) {
+            // Reduced: no motion at all, opening or closing (draft C).
+            .animation(nil) {
                 $0.opacity(!reduce || model.shown ? 1 : 0)
             }
             .environment(\.atticDropdownFocusRequest, model.focusRequest)
@@ -1686,6 +1788,10 @@ final class AtticDropdownPresenter {
     private var resignObserver: NSObjectProtocol?
     private var geometryObservers: [NSObjectProtocol] = []
     private var placementScheduled = false
+    /// The last full placement, with the anchor and bounds it was made
+    /// for: a card cut short follows its anchor from it
+    /// (`AtticDropdownLayout.follow`).
+    private var lastPlacement: (placement: AtticDropdownLayout.Placement, anchor: CGRect, bounds: CGRect)?
     private var removal: DispatchWorkItem?
     private var updateScheduled = false
     private var pendingClose: DispatchWorkItem?
@@ -1730,7 +1836,9 @@ final class AtticDropdownPresenter {
         let fitting = host.fittingSize
         let ideal = contentWidth ?? (fitting.width - room * 2)
         let height = contentHeight ?? max(0, fitting.height - room * 2)
-        let placed = space.place(idealWidth: ideal, height: height, anchor: space.anchor(anchor.bounds, in: anchor), prefer: prefer)
+        let anchorRect = space.anchor(anchor.bounds, in: anchor)
+        let placed = space.place(idealWidth: ideal, height: height, anchor: anchorRect, prefer: prefer)
+        lastPlacement = (placed, anchorRect, space.bounds)
         if contentHasCard || placed.width != ideal.rounded(.up) { stage.width = placed.width }
         openWidth = placed.width
         openIdealWidth = ideal
@@ -1821,8 +1929,10 @@ final class AtticDropdownPresenter {
         guard isOpen, height.isFinite, height > 0, abs(height - naturalHeight) > 0.5 || widthChanged,
               let host, let anchor, let space = AtticDropdownSpace(around: anchor) else { return }
         naturalHeight = height
-        let placed = space.place(idealWidth: width ?? openWidth, height: height, anchor: space.anchor(anchor.bounds, in: anchor),
+        let anchorRect = space.anchor(anchor.bounds, in: anchor)
+        let placed = space.place(idealWidth: width ?? openWidth, height: height, anchor: anchorRect,
                                  prefer: prefer, current: stage.side)
+        lastPlacement = (placed, anchorRect, space.bounds)
         if let width {
             openIdealWidth = width
             if placed.width != openWidth {
@@ -1843,9 +1953,11 @@ final class AtticDropdownPresenter {
         guard isOpen, width.isFinite, width > openIdealWidth + 0.5,
               let host, let anchor, let space = AtticDropdownSpace(around: anchor) else { return }
         openIdealWidth = width
-        let placed = space.place(idealWidth: width, height: naturalHeight, anchor: space.anchor(anchor.bounds, in: anchor),
+        let anchorRect = space.anchor(anchor.bounds, in: anchor)
+        let placed = space.place(idealWidth: width, height: naturalHeight, anchor: anchorRect,
                                  prefer: prefer, current: stage.side)
         guard placed.width > openWidth + 0.5 else { return }
+        lastPlacement = (placed, anchorRect, space.bounds)
         openWidth = placed.width
         stage.width = placed.width
         if stage.side != placed.side { stage.side = placed.side }
@@ -1971,10 +2083,25 @@ final class AtticDropdownPresenter {
             if AtticOverlayHierarchy.isInLayoutPass { self.schedulePlacementUpdate(); return }
             guard self.isOpen, let host = self.host, let anchor = self.anchor,
                   let space = AtticDropdownSpace(around: anchor) else { return }
+            let anchorRect = space.anchor(anchor.bounds, in: anchor)
+            // A card cut short moves with its row and keeps its cut while
+            // the row stays in view (menus fix 1).
+            if let last = self.lastPlacement,
+               let moved = AtticDropdownLayout.follow(last.placement, placedAnchor: last.anchor, placedBounds: last.bounds,
+                                                      anchor: anchorRect, bounds: space.bounds,
+                                                      anchorShown: !anchor.visibleRect.isEmpty) {
+                space.show(host, at: moved)
+                return
+            }
             let placed = space.place(idealWidth: self.openIdealWidth, height: self.naturalHeight,
-                                     anchor: space.anchor(anchor.bounds, in: anchor), prefer: self.prefer, current: self.stage.side)
+                                     anchor: anchorRect, prefer: self.prefer, current: self.stage.side)
+            self.lastPlacement = (placed, anchorRect, space.bounds)
             if self.stage.side != placed.side { self.stage.side = placed.side }
-            if self.stage.height != placed.heightLimit { self.stage.height = placed.heightLimit }
+            if self.stage.height != placed.heightLimit {
+                self.stage.height = placed.heightLimit
+                // The on-screen gate counts these (with the frame monitor).
+                PerformanceSignposts.noteInput("dropdown-recut \(placed.heightLimit.map { "\($0)" } ?? "none")")
+            }
             if self.openWidth != placed.width { self.openWidth = placed.width; self.stage.width = placed.width }
             space.show(host, at: placed)
         }

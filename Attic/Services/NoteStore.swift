@@ -17,6 +17,7 @@ private struct NoteReplicaSnapshot: Equatable {
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
+    let deletionGroupID: UUID?
     let deletedAttachmentIDsRaw: String?
     let tagsRaw: String
     let content: Data?
@@ -36,6 +37,7 @@ private struct NoteReplicaSnapshot: Equatable {
         createdAt = note.createdAt
         updatedAt = note.updatedAt
         deletedAt = note.deletedAt
+        deletionGroupID = note.deletionGroupID
         deletedAttachmentIDsRaw = note.deletedAttachmentIDsRaw
         tagsRaw = note.tagsRaw
         content = note.content
@@ -122,6 +124,9 @@ private enum NotePersistenceRefreshOutcome {
 /// `LSUIElement` Mac app does not nap while Core Data is mirroring.
 @MainActor
 final class NoteStore: ObservableObject {
+    /// S10 chooses the same oldest physical creation date as the registry.
+    /// Keep this with the published snapshot, rather than fetching per row.
+    private(set) var itemWritingIDs: [UUID: UUID] = [:]
     @Published private(set) var notes: [NoteItem] = [] {
         didSet { presentationIndex = nil; presentationByID = nil; tagInventory = nil; tagInventoryDidRefresh() }
     }
@@ -404,6 +409,7 @@ final class NoteStore: ObservableObject {
     private var presentationIndex: PresentationIndex?
     private var presentationByID: [UUID: NoteItem]?
     private let now: () -> Date
+    weak var commandLibrary: AtticLibrary?
     private let persist: (ModelContext) throws -> Void
     /// Versions held by an open browser or a restore's Undo ticket.
     var historyRetainedVersionIDs = Set<UUID>()
@@ -605,35 +611,39 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func delete(_ note: NoteItem) -> Bool {
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
-        let replicas: [NoteItem]
-        let attachmentFamily: String
+        let release: () -> Void
+        do { release = try WorkspaceItemLifecycle.beginDeletion(taskIDs: [], noteID: note.id, container: container) }
+        catch { lastErrorMessage = error.localizedDescription; return false }
+        defer { release() }
         do {
-            replicas = try storedNotes(matching: note.id)
-#if os(macOS)
-            // Every attachment row the note holds now, shown or removed:
-            // exactly what a purge 30 days later may remove with it.
-            attachmentFamily = Set(try storedAttachments(forNoteID: note.id).map(\.id))
-                .map(\.uuidString).sorted().joined(separator: " ")
-#else
-            attachmentFamily = ""
-#endif
+            if let taskID = try WorkspaceItemLifecycle.taskOwner(noteID: note.id, in: context) {
+                try TaskStore.stageItemDeletion(in: context, taskID: taskID, timestamp: now())
+            } else {
+                try WorkspaceItemLifecycle.stageWritingDeletion(try storedNotesIncludingDeleted(matching: note.id),
+                    group: UUID(), timestamp: now(), in: context)
+            }
         } catch {
-            lastErrorMessage = error.localizedDescription
-            return false
-        }
-        // `updatedAt` is kept, so a restored note returns to its place in
-        // the newest-first list.
-        let timestamp = now()
-        WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
-        for replica in replicas {
-            replica.deletedAt = timestamp
-            replica.deletedAttachmentIDsRaw = attachmentFamily
+            context.rollback(); lastErrorMessage = error.localizedDescription; return false
         }
         notes.removeAll { $0.id == note.id }
 #if os(macOS)
         attachmentsByNoteID[note.id] = nil
 #endif
         guard save() else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
+        return true
+    }
+
+    /// Exact inverse of restoring a pre-group independent note deletion.
+    /// This is not a user Delete route; it must not hide the surviving task.
+    func deleteRestoredLegacyNote(noteID: UUID) -> Bool {
+        do {
+            let rows = try storedNotesIncludingDeleted(matching: noteID)
+            guard rows.contains(where: { $0.deletedAt == nil }) else { return false }
+            try WorkspaceItemLifecycle.stageWritingDeletion(rows, group: UUID(), timestamp: now(), in: context)
+        } catch { context.rollback(); lastErrorMessage = error.localizedDescription; return false }
+        guard save() else { return false }
+        WorkspaceItemLifecycle.didCommit(in: container)
         return true
     }
 
@@ -691,6 +701,16 @@ final class NoteStore: ObservableObject {
             let replicas = try storedNotesIncludingDeleted(matching: noteID)
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
+            }
+            let groups = Set(replicas.compactMap(\.deletionGroupID))
+            if !groups.isEmpty {
+                guard groups.count == 1, let group = groups.first else { throw WorkspaceFoundationError.conflict }
+                try WorkspaceItemLifecycle.stageRestore(group: group, timestamp: now(), in: context)
+                try staging?(context)
+                guard save() else { return false }
+                refresh()
+                WorkspaceItemLifecycle.didCommit(in: container)
+                return true
             }
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             // § 2.7.2: a task's note restored while the task has a newer own
@@ -837,10 +857,26 @@ final class NoteStore: ObservableObject {
             ))
             let expiredIDs = Set(deleted.filter { ($0.deletedAt ?? .distantFuture) < cutoff }.map(\.id))
             let preserved = try WorkspacePurge.preservationOwners(in: context)
+#if os(macOS)
+            let circles = try TaskStore.circleRemovedRoots(in: context)
+            let redirectNotes = WorkspaceItemLifecycle.has("TaskNoteAssociation", in: context)
+                ? Set(try context.fetch(FetchDescriptor<TaskNoteAssociation>()).filter {
+                    circles.contains($0.taskID) && $0.detachedAt != nil && $0.detachedPreservationID != nil
+                }.map(\.noteID)) : []
+#else
+            let redirectNotes = Set<UUID>()
+#endif
             for id in expiredIDs {
-                guard !preserved.contains(.init(entity: .note, id: id)) else { continue }
+                guard !preserved.contains(.init(entity: .note, id: id)), !redirectNotes.contains(id) else { continue }
                 let replicas = try storedNotesIncludingDeleted(matching: id)
                 guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
+                if let group = first.deletionGroupID {
+                    // A writing endpoint of a task group never enters the
+                    // independent collector, even if its task is divergent.
+                    let groupedTasks = WorkspaceItemLifecycle.has("TaskItem", in: context) ? try context.fetch(FetchDescriptor<TaskItem>()).filter { $0.deletionGroupID == group } : []
+                    let groupedNotes = try context.fetch(FetchDescriptor<NoteItem>()).filter { $0.deletionGroupID == group }
+                    guard groupedTasks.isEmpty, Set(groupedNotes.map(\.id)) == [id] else { continue }
+                }
                 if let confirmed, confirmed[id] != first.deletedAt { continue }
                 let snapshot = NoteReplicaSnapshot(first)
                 guard NotePhysicalFamilyRetention.mayDelete(replicas, decision: {
@@ -1494,6 +1530,7 @@ final class NoteStore: ObservableObject {
         documentReplicaCapabilityCache.removeAll()
         try? WorkspaceLegacyBridge.establishScopeBaseline(sourceContext, roots: presentation.notes + presentation.attachments, entities: [.note, .attachment])
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
+        itemWritingIDs = Self.itemWritingIDs(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
         // A deleted note's attachments stay stored (and their files stay
         // reconciled below) but are not presented.
@@ -1567,6 +1604,7 @@ final class NoteStore: ObservableObject {
         context = sourceContext
         if !preservingAttachmentProofs { clearVerifiedAttachmentCache() }
         documentReplicaCapabilityCache.removeAll()
+        itemWritingIDs = Self.itemWritingIDs(from: fetchedNotes)
         notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
         revision &+= 1
     }
@@ -1583,7 +1621,7 @@ final class NoteStore: ObservableObject {
     /// The one replica per id that presentation shows, in fetch order. Every
     /// question about a logical note (shown, in Recently Deleted, tagged) is
     /// answered from it after all of the id's replicas were read.
-    static func canonicalReplicas(from fetched: [NoteItem]) -> [NoteItem] {
+    nonisolated static func canonicalReplicas(from fetched: [NoteItem]) -> [NoteItem] {
         var newestByID: [UUID: NoteItem] = [:]
 
         for note in fetched {
@@ -1603,6 +1641,17 @@ final class NoteStore: ObservableObject {
         return fetched.filter { note in
             newestByID[note.id] === note
         }
+    }
+
+    nonisolated static func itemWritingIDs(from physical: [NoteItem]) -> [UUID: UUID] {
+        let created = Dictionary(grouping: physical, by: \.id).mapValues { $0.map(\.createdAt).min()! }
+        var result: [UUID: UUID] = [:]
+        for note in canonicalReplicas(from: physical) where note.deletedAt == nil {
+            guard let owner = note.taskID else { continue }
+            if let old = result[owner], (created[old]!, old.uuidString) <= (created[note.id]!, note.id.uuidString) { continue }
+            result[owner] = note.id
+        }
+        return result
     }
 
     private func storedNotes(
@@ -1962,7 +2011,7 @@ final class NoteStore: ObservableObject {
         !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private static func tieBreakKey(for note: NoteItem) -> String {
+    nonisolated private static func tieBreakKey(for note: NoteItem) -> String {
         [
             note.title,
             note.body,

@@ -209,7 +209,7 @@ final class PhaseXColourDataTests: XCTestCase {
             host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
             host.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-            let colour = try XCTUnwrap(state.colouring.colourCommands(for: "launch").first?.children.first { $0.swatch == .pink })
+            let colour = try XCTUnwrap(state.colouring.colourCommands(for: "launch").first { $0.swatch == .pink })
             colour.action()
             XCTAssertEqual(library.undo.undoCount(in: .library), 0)
             if history == .tasks {
@@ -238,7 +238,7 @@ final class PhaseXColourDataTests: XCTestCase {
         host.frame = NSRect(x: 0, y: 0, width: 20, height: 20)
         host.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        let colour = try XCTUnwrap(state.colouring.colourCommands(for: "launch").first?.children.first { $0.swatch == .pink })
+        let colour = try XCTUnwrap(state.colouring.colourCommands(for: "launch").first { $0.swatch == .pink })
         colour.action()
         XCTAssertEqual(engine.history.undoActionName, "Tag Colour")
         XCTAssertEqual(library.undo.undoCount(in: .library), 0)

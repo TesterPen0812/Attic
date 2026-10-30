@@ -166,7 +166,8 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.selection, [a, b])
         XCTAssertEqual(Set(model.targets(for: a)), [a, b])
         model.delete(model.targets(for: a))
-        XCTAssertEqual(model.toasts.current?.message, "Deleted 2 tasks")
+        // 2026-10-23 whole-item decision: the count leads the Delete toast.
+        XCTAssertEqual(model.toasts.current?.message, "2 tasks deleted")
         XCTAssertTrue(store.tasks.isEmpty)
         XCTAssertTrue(model.selection.isEmpty)
         model.undo()

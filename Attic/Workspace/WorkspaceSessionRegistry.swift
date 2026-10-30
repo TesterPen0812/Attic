@@ -135,9 +135,10 @@ final class WorkspaceSessionRegistry {
             if case let .note(id) = identity { return (identity, id) }
             throw WorkspaceFoundationError.invalidIdentity
         }
-        guard try context.fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })) > 0 else {
-            throw WorkspaceFoundationError.conflict
-        }
+        let taskRows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID }))
+        guard !taskRows.isEmpty else { throw WorkspaceFoundationError.conflict }
+        let deletedGroup = taskRows.allSatisfy({ $0.deletedAt != nil })
+            ? taskRows.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }.first?.deletionGroupID : nil
         let taskNotes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.taskID == taskID }))
         let taskLinks = try context.fetch(FetchDescriptor<TaskNoteAssociation>(predicate: #Predicate { $0.taskID == taskID && $0.detachedAt == nil }))
         noteRows += taskNotes.count; associationRows += taskLinks.count
@@ -147,7 +148,9 @@ final class WorkspaceSessionRegistry {
         own = try own.filter { id in
             let rows = taskNotes.filter { $0.id == id }
             // A linked note without a `taskID` row is checked on its own.
-            return try (rows.isEmpty ? notes(id: id) : rows).contains { $0.deletedAt == nil }
+            return try (rows.isEmpty ? notes(id: id) : rows).contains {
+                $0.deletedAt == nil || (deletedGroup != nil && $0.deletionGroupID == deletedGroup)
+            }
         }
         // S10: two different notes claiming one task. The one made first
         // (createdAt, then UUID) is the task's note; the others are
@@ -162,6 +165,22 @@ final class WorkspaceSessionRegistry {
             }
         }
         return (.task(taskID), own.first)
+    }
+
+    /// Projection changes reuse the window's lease and history. Only the
+    /// presentation key changes; the conversion already committed durably.
+    func installRetainedItemIdentity(_ note: NoteSession, taskID: UUID?) throws -> Bool {
+        guard let page = note.workspacePage, page.retainsAcrossItemChanges else { return false }
+        guard page.activeLease != nil, page.note === note, note.usesWorkspaceBinding,
+              page.controller != nil, note.engine.history.workspace === page.history,
+              sessions[page.key.workspace] === page else { throw WorkspaceFoundationError.protectedOwner }
+        let destination: Identity = taskID.map(Identity.task) ?? .note(note.noteID)
+        guard sessions[destination] == nil || sessions[destination] === page else { throw WorkspaceFoundationError.protectedOwner }
+        sessions[page.key.workspace] = nil
+        page.key = Key(domain: domain, workspace: destination)
+        sessions[destination] = page
+        WorkspaceCrashHook.reach("C2-projection-rekeyed")
+        return true
     }
 
     func session(for identity: Identity, notes: NotesPageController) throws -> WorkspacePageSession {
@@ -190,8 +209,8 @@ final class WorkspaceSessionRegistry {
             try session.attachDraft(taskID: taskID)
         }
         session.onRelease = { [weak self] page in
-            guard self?.sessions[canonical] === page else { return }
-            self?.sessions[canonical] = nil
+            guard self?.sessions[page.key.workspace] === page else { return }
+            self?.sessions[page.key.workspace] = nil
         }
         sessions[canonical] = session
         return session
@@ -246,7 +265,7 @@ final class WorkspacePageSession {
         fileprivate let note: NoteSession.CallbackStamp?
     }
     let id = UUID()
-    let key: WorkspaceSessionRegistry.Key
+    fileprivate(set) var key: WorkspaceSessionRegistry.Key
     private(set) weak var controller: NotesPageController?
     private let route: UndoRoute
     let history: WorkspaceHistory
@@ -257,6 +276,13 @@ final class WorkspacePageSession {
     private var bindingGeneration: UInt64 = 0
     private var closing = false
     private var released = false
+    private(set) var retainsAcrossItemChanges = false
+
+    func retainAcrossItemChanges(lease: Lease) throws {
+        guard activeLease == lease, !closing, !released, note?.workspacePage === self,
+              note?.usesWorkspaceBinding == true else { throw WorkspaceFoundationError.protectedOwner }
+        retainsAcrossItemChanges = true
+    }
     fileprivate var onRelease: ((WorkspacePageSession) -> Void)?
 
     fileprivate init(key: WorkspaceSessionRegistry.Key, controller: NotesPageController,
@@ -272,7 +298,7 @@ final class WorkspacePageSession {
     }
     fileprivate func attach(noteID: UUID) throws {
         guard let controller, note == nil,
-              let session = controller.workspaceSession(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
+              let session = controller.workspaceSession(noteID: noteID) ?? controller.workspaceDeletedItemSession(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
         let adapter = session.engine.history
         guard adapter.workspace === history || (adapter.workspace == nil && adapter.redoOps.isEmpty),
               history.bind(noteID: noteID) else { throw WorkspaceFoundationError.conflict }
@@ -296,6 +322,7 @@ final class WorkspacePageSession {
         session.usesWorkspaceBinding = true
         session.workspacePage = self
         note = session
+        controller.publishWholeItemLifecycle()
     }
 
     private static func storedTitle(_ taskID: UUID, in controller: NotesPageController) -> String {

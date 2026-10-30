@@ -82,6 +82,9 @@ struct TasksPageHost: View {
             taskNotes.open(id, String(localized: "Back to \(model?.tab.title ?? TasksTab.now.title)"))
         }
         model.services.addFilesToTaskNote = taskNotes.addFiles
+        model.services.removeFromTasks = taskNotes.removeFromTasks
+        model.services.canRemoveFromTasks = taskNotes.canRemoveFromTasks
+        model.services.makeCheckbox = taskNotes.makeCheckbox
         // The row glyph follows the note store (owned by the model, outside
         // view updates).
         model.observeNoteOwners(taskNotes.noteOwners)
