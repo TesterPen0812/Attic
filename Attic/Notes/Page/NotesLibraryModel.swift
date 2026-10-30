@@ -467,7 +467,7 @@ final class NotesLibraryModel: ObservableObject {
     /// Called by the lazy row's body, before anything is presented.
     func libraryRow(_ row: AtticNoteRowModel, store: NoteStore) -> RowDetails {
         let prepared = preparedRow(row, store: store)
-        let tags = store.note(withID: row.id).map { tags(of: $0) } ?? []
+        let tags = store.note(withID: row.id).map { self.tags(of: $0) } ?? []
         return RowDetails(row: prepared, tag: Self.firstTag(tags, filter: tagFilter),
                           thumbnail: NoteThumbnailContent(title: prepared.title, text: prepared.preview,
                                                           hasImages: prepared.images > 0))
