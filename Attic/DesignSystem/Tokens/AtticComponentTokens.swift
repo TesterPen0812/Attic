@@ -383,13 +383,15 @@ enum AtticPopoverMetrics {
 /// 13 pt names (`AtticTextStyle.dropdownRow`).
 /// Every value of the look is here, so it is tuned in one place.
 enum AtticDropdownMetrics {
-    static let cornerRadius: CGFloat = 16
+    /// Shapes (Accepted 2026-10-30): menus and popovers 28 px with 6 px
+    /// padding and 22 px rows; the pickers stay solid.
+    static let cornerRadius: CGFloat = AtticRadius.menu
     /// Rows and fields sit this far in from the card's edge.
-    static let inset: CGFloat = 6
+    static let inset: CGFloat = AtticRadius.menuPadding
     static let rowHeight: CGFloat = 28
     static let rowPadding: CGFloat = 9
-    /// The pill: the whole row.
-    static let highlightRadius: CGFloat = 8
+    /// The pill: the whole row, concentric with the card (14 − 3).
+    static let highlightRadius: CGFloat = AtticRadius.menuRow
     /// Native soft scroll edges overlap this small inset in cramped lists.
     static let iconSize: CGFloat = 13
     static let iconSlot: CGFloat = 16
@@ -923,7 +925,7 @@ enum AtticNoteObjectMetrics {
     /// D5, D24): radius 17, the recessed fill, no border; a 28 pt header
     /// with the type ("PDF") left and Quick Look and ⋯ right, then the
     /// glyph, the name and the size, 10 under.
-    static let blockRadius: CGFloat = AtticRadius.groupCard
+    static let blockRadius: CGFloat = AtticRadius.noteBlock
     static let blockHeaderHeight: CGFloat = 28
     static let blockCardHeight: CGFloat = 70
     static let blockFirstLine: CGFloat = 36
@@ -1045,7 +1047,7 @@ enum TasksRowDesign {
     static let paddingX: CGFloat = 9
     static let line: CGFloat = 15
     static let metaTop: CGFloat = 1.5
-    static let radius: CGFloat = 12
+    static let radius: CGFloat = AtticRadius.row
     static let tile: CGFloat = 28
     static let tilesTop: CGFloat = 4
     static let tilesBottom: CGFloat = 1

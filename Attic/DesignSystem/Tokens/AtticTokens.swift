@@ -41,15 +41,63 @@ enum AtticSpacing {
     static let scale: [CGFloat] = [4, 8, 12, 16, 20, 24, 32]
 }
 
+/// The owner's Shapes (Accepted 2026-10-30, "Shapes: squircle surfaces,
+/// 1.4 controls"). The design draws CSS `corner-shape`, whose
+/// `superellipse(K)` is the curve |x|^(2^K) + |y|^(2^K) = 1 in the corner's
+/// box; `Squircle` draws |x|^n + |y|^n = 1, so n = 2^K.
+enum AtticShape {
+    /// Surfaces (the panel, page shells, cards, menus, popovers, sheets,
+    /// note blocks, rows, thumbnails): `squircle`, superellipse(2), n = 4.
+    static let surfaceExponent: CGFloat = 4
+    /// Controls (buttons, segmented controls and their highlights, tags,
+    /// chips, badges, day keys): curve 1.4, n = 2^1.4 ≈ 2.64.
+    static let controlExponent: CGFloat = pow(2, 1.4)
+
+    /// A control on curve 1.4 is rounded by half its height: a wide one is
+    /// a capsule, a square one a whole superellipse.
+    static func controlRadius(height: CGFloat) -> CGFloat { height / 2 }
+}
+
 /// Corner radii. Controls follow `control(height:)`; surfaces keep a fixed
 /// radius by kind whatever their size (spec § Corner rules).
 enum AtticRadius {
+    // The Shapes radii (Accepted 2026-10-30): design px, half in points.
+
+    /// The panel and page shells: 104 px.
+    static let shell: CGFloat = 52
+    /// Cards: 36 px (the design's Card radius slider). Calendar day cards
+    /// and Notes board cards both use it.
+    static let card: CGFloat = 18
+    /// Rows: 24 px.
+    static let row: CGFloat = 12
+    /// Menus and popovers: 28 px, with 6 px padding and 22 px rows.
+    static let menu: CGFloat = 14
+    static let menuPadding: CGFloat = 3
+    static let menuRow: CGFloat = 11
+    /// Note blocks: 20 px.
+    static let noteBlock: CGFloat = 10
+    /// Small objects (thumbnails, file tiles): 12 px.
+    static let small: CGFloat = 6
+    /// The format sheet: its 12 pt buttons plus its 7 pt padding (38 px).
+    static let formatSheet: CGFloat = concentric(inner: 12, padding: 7)
+    /// The review bar: its 10 pt buttons plus its 7 pt padding (34 px).
+    static let reviewBar: CGFloat = concentric(inner: 10, padding: 7)
+
+    /// Nested shapes stay concentric: the inner radius is the outer radius
+    /// minus the padding between them, so the outer one is the inner one
+    /// plus the padding (the format sheet 24 + 14 = 38 px).
+    static func concentric(inner: CGFloat, padding: CGFloat) -> CGFloat { inner + padding }
+    static func concentric(outer: CGFloat, padding: CGFloat) -> CGFloat { max(0, outer - padding) }
+
     /// Controls: Apple's continuous corner at about 42 % of the height
     /// (owner's decision, 2026-09-25, spec rev 175: the rounder corner,
     /// chosen over Craft's 32 % on the full panel), rounded to the half
     /// point: 13.5 on 32, 14.5 on 34, 15 on 36, 12 on 28, 7.5 on 18.
     /// Kept by the owner on 2026-09-27 after comparing fully round controls.
-    static let controlFraction: CGFloat = 0.42
+    /// Shapes (Accepted 2026-10-30): controls are on curve 1.4 and rounded
+    /// by half their height, so a wide control is a capsule and a square
+    /// one a whole superellipse.
+    static let controlFraction: CGFloat = 0.5
 
     /// The header's controls (the owner's panel design: 30 px on 54 px,
     /// clamped to round).
@@ -59,8 +107,7 @@ enum AtticRadius {
         (height * controlFraction * 2).rounded() / 2
     }
 
-    static let menu: CGFloat = 20
-    static let popover: CGFloat = 20
+    static let popover: CGFloat = menu
     static let groupCard: CGFloat = 17
     static let contentCard: CGFloat = 10
     static let tile: CGFloat = 10
@@ -108,9 +155,10 @@ enum AtticControlSize {
     static let capsuleInset: CGFloat = 4
     /// An icon-only chip, 24 tall and 1.15 × as wide (28).
     /// The add bar matches the corner controls (Medium: 30; chrome B 32, was 36).
-    /// The owner's panel design: the add field is 30.5 tall (61 px at 2×),
-    /// apart from the header's 27.
-    static let addBarHeight: CGFloat = 30.5
+    /// The owner's panel design: the add field was 30.5 tall (61 px at 2×).
+    /// One size (Accepted 2026-10-30): every control in the top row and the
+    /// bottom bar is the page switch's 27.
+    static let addBarHeight: CGFloat = headerControl
     /// The send button: 24 × 24 (chrome B; 28 × 28 in the 36 pt bar),
     /// nested **inside** the add bar.
     ///

@@ -356,7 +356,7 @@ enum AtticControlShape {
     /// the exponent is 2^1.4 ≈ 2.64, and CSS first clamps the radius to half
     /// the side, as `Squircle` does: a 27 pt control with the design's
     /// 15 pt radius is a rounded square, not a circle.
-    static let designExponent: CGFloat = pow(2, 1.4)
+    static let designExponent: CGFloat = AtticShape.controlExponent
 
     /// A control's outline: Apple's continuous corner, or with `exponent`
     /// the design's superellipse corner (`Squircle`).
@@ -552,7 +552,8 @@ struct AtticPopoverBackground: View {
 
     var body: some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        // Menus and popovers are surfaces: squircles (Shapes, 2026-10-30).
+        let shape = Squircle(cornerRadius: cornerRadius, exponent: AtticShape.surfaceExponent)
         ZStack {
             AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popover)
             AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popoverContact)
@@ -589,9 +590,10 @@ struct AtticHighlight: View {
 
     var body: some View {
         Group {
-            if let cornerExponent {
-                // The panel design's row: the superellipse corner.
-                Squircle(cornerRadius: cornerRadius, exponent: cornerExponent,
+            if cornerExponent != nil {
+                // The panel design's row: a surface, so a squircle
+                // (Shapes, Accepted 2026-10-30).
+                Squircle(cornerRadius: cornerRadius, exponent: AtticShape.surfaceExponent,
                          squaredTop: !run.roundsTop, squaredBottom: !run.roundsBottom)
                     .fill(fill.color)
             } else {

@@ -83,7 +83,7 @@ enum TasksDesignMetrics {
     static let groupHeaderX: CGFloat = AtticLayout.rowHighlightInset + rowPaddingX
     /// Attachment tiles: 56 px, radius 12 px, 8 px apart.
     static let tile: CGFloat = 28
-    static let tileRadius: CGFloat = 6
+    static let tileRadius: CGFloat = AtticRadius.small
     static let tileGap: CGFloat = 4
     /// File tile 46 px wide.
     static let fileTileWidth: CGFloat = 23

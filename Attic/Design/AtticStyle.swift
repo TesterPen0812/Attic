@@ -4,7 +4,7 @@ enum AtticStyle {
     /// Superellipse exponent for the panel corners. `5` produces a
     /// recognisably squircular silhouette without aggressive inward
     /// curvature.
-    static let panelSquircleExponent: CGFloat = 5
+    static let panelSquircleExponent: CGFloat = AtticShape.surfaceExponent
 
     /// The AppKit window remains rectangular while the visible panel is a squircle.
     /// Disabling its system shadow prevents square bounds from showing beyond large corners.

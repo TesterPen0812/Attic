@@ -37,9 +37,14 @@ enum CalendarDesign {
     static let agendaTop: CGFloat = 4
     static let agendaBottom: CGFloat = 80
     // A day: padding 10 px, 8 px apart, radius 36 px, 10 px tile to rows.
-    static let dayPadding: CGFloat = 5
+    static let dayPadding: CGFloat = dayPadding(radius: dayRadius)
+    /// A day card's padding grows with its radius (Shapes): the design's
+    /// max(6, round(10 + (R − 36) / 4)) px, R in px.
+    static func dayPadding(radius: CGFloat) -> CGFloat {
+        max(6, (10 + (radius * 2 - 36) / 4).rounded()) / 2
+    }
     static let dayGap: CGFloat = 4
-    static let dayRadius: CGFloat = 18
+    static let dayRadius: CGFloat = AtticRadius.card
     static let tileToRows: CGFloat = 5
     // Date tile: 128 px wide, radius 26 px, padding 14 16 16 16 px.
     static let tileWidth: CGFloat = 64
@@ -62,7 +67,7 @@ enum CalendarDesign {
     static let eventLine: CGFloat = 15
     static let eventMetaFont: CGFloat = 11
     static let eventMetaTop: CGFloat = 1.5
-    static let eventRadius: CGFloat = 12
+    static let eventRadius: CGFloat = AtticRadius.row
     // Now line: 10 px dot, 2 px line, 18 px time; 4 px above and below.
     static let nowDot: CGFloat = 5
     static let nowLine: CGFloat = 1
@@ -87,7 +92,7 @@ enum CalendarDesign {
     static let controlsGap: CGFloat = 3
 
     // Footer: Today 61 px tall, 22 px padding, 22 px medium text.
-    static let footerHeight: CGFloat = 30.5
+    static let footerHeight: CGFloat = AtticControlSize.headerControl
     static let todayPaddingX: CGFloat = 11
     static let todayFont: CGFloat = 11
 
