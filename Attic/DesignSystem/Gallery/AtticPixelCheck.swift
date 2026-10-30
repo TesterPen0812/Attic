@@ -251,6 +251,17 @@ enum AtticGeometryCheck {
         )?.radius ?? 0
     }
 
+    /// Pop-overs are surfaces, drawn as squircles (superellipse, exponent 4;
+    /// Shapes, Accepted 2026-10-30): the expected radius is what the same
+    /// fit reads from that squircle drawn alone at the pop-over's size.
+    static var popoverRadius: CGFloat {
+        let size = CGSize(width: AtticPopoverMetrics.defaultWidth, height: 64 + 2 * AtticPopoverMetrics.padding)
+        return AtticCornerMeasure.measure(
+            Squircle(cornerRadius: AtticRadius.popover, exponent: AtticShape.surfaceExponent).fill(Color.gray),
+            layoutSize: size, context: .default
+        )?.radius ?? 0
+    }
+
     static func specimens(demo: AtticGalleryDemo = AtticGalleryDemo()) -> [Specimen] {
         let noop = demo.record("Geometry check")
         let tokens = AtticDesignContext.default.tokens
@@ -273,16 +284,18 @@ enum AtticGeometryCheck {
             Specimen(name: "Small control (pressed)", view: AnyView(AtticSmallButton(systemName: "flag", label: "Priority", action: noop).atticForcedState(.pressed)),
                      expectedSize: CGSize(width: AtticControlSize.smallMinWidth, height: AtticControlSize.smallHeight), expectedRadius: 12),
             Specimen(name: "Selection bar", view: AnyView(AtticSelectionBar(count: 3, actions: [.init(systemName: "flag", label: "Priority", handler: noop)])),
-                     expectedSize: CGSize(width: 0, height: 36), expectedRadius: 15),
+                     expectedSize: CGSize(width: 0, height: 36), expectedRadius: AtticRadius.control(height: 36)),
             Specimen(name: "Undo toast", view: AnyView(AtticUndoToast(message: "Task deleted", onUndo: noop)),
                      expectedSize: CGSize(width: 0, height: AtticControlSize.toastHeight), expectedRadius: 15),
             Specimen(name: "Tag chip", view: AnyView(AtticTagChip(name: "launch")),
-                     expectedSize: CGSize(width: 0, height: AtticControlSize.tagHeight), expectedRadius: 7.5),
+                     expectedSize: CGSize(width: 0, height: AtticControlSize.tagHeight),
+                     expectedRadius: AtticRadius.control(height: AtticControlSize.tagHeight)),
             Specimen(name: "Pop-over row (highlighted)", view: AnyView(AtticPopoverRow(systemName: "note.text", title: "Launch sync", isHighlighted: true, action: noop)),
                      layoutSize: CGSize(width: 208, height: AtticControlSize.smallHeight),
-                     expectedSize: CGSize(width: 208, height: 28), expectedRadius: 12),
+                     expectedSize: CGSize(width: 208, height: 28), expectedRadius: AtticRadius.control(height: 28)),
             Specimen(name: "Title menu (hover)", view: AnyView(AtticTitleMenu(title: "Launch sync", commands: []).atticForcedState(.hover)),
-                     expectedSize: CGSize(width: 0, height: AtticTitleMenuMetrics.height), expectedRadius: 12),
+                     expectedSize: CGSize(width: 0, height: AtticTitleMenuMetrics.height),
+                     expectedRadius: AtticRadius.control(height: AtticTitleMenuMetrics.height)),
             Specimen(name: "Task card", view: AnyView(
                         AtticTaskCard(model: .init(title: "Go to the appointment", priority: .high), actions: demo.taskActions("card"),
                                       cardActions: .init(toggleExpanded: noop, toggleSubtask: { _ in }, addSubtask: noop, openInTasks: noop))
@@ -295,7 +308,7 @@ enum AtticGeometryCheck {
                      layoutSize: CGSize(width: 300, height: 120),
                      expectedSize: CGSize(width: 300, height: 120), expectedRadius: AtticRadius.contentCard),
             Specimen(name: "Pop-over", view: AnyView(AtticPopover { Color.clear.frame(height: 64) }),
-                     expectedSize: CGSize(width: AtticPopoverMetrics.defaultWidth, height: 64 + 2 * AtticPopoverMetrics.padding), expectedRadius: AtticRadius.popover),
+                     expectedSize: CGSize(width: AtticPopoverMetrics.defaultWidth, height: 64 + 2 * AtticPopoverMetrics.padding), expectedRadius: popoverRadius),
             Specimen(name: "Palette tile", view: AnyView(AtticPaletteTile(palette: .original, action: noop)),
                      expectedSize: CGSize(width: AtticPaletteTileMetrics.width, height: 0), expectedRadius: AtticRadius.tile),
             Specimen(name: "Row highlight", view: AnyView(AtticHighlight(fill: tokens.selected)),

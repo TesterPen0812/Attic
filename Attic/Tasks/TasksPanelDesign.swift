@@ -156,16 +156,6 @@ enum TasksPanelDesign {
         addFocused || hasDraft
     }
 
-    /// The filter chips show under the header while the open search's
-    /// filter button is on, or while a filter hides tasks (the design's
-    /// `chipOpen = filterOn || listFilter`; its Escape and blur end
-    /// `filterOn`); never on Done. A closed search never keeps them up by
-    /// itself (fix round 1: they stayed after the search closed).
-    static func chipsShown(tab: TasksTab, chipsOpen: Bool, searchShown: Bool, filtering: Bool) -> Bool {
-        tab != .done && ((chipsOpen && searchShown) || filtering)
-    }
-
-
     // MARK: - Empty states
 
     struct Empty: Equatable {

@@ -58,6 +58,8 @@ struct CalendarPage: View {
             // (a month of another length has another offset).
             if flags.weekView { scrollPosition.scrollTo(y: CalendarMonthMath.weekViewOffset(weekCount: count)) }
         }
+        // A container, so its id does not replace its controls' own.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("calendar-page")
     }
 
@@ -131,44 +133,31 @@ struct CalendarPage: View {
 
     // MARK: Top row
 
-    /// Between the shell's pin and page switch: the month controls, then
-    /// Search. Opening Search widens the field over the month controls,
-    /// which fade out.
+    /// The top row (Accepted 2026-10-30): "October 2026" after the pin,
+    /// then ‹ › in one capsule, ••• and Search. Opening Search folds the
+    /// rest away and the field fills the row.
     private func topRow(_ snapshot: CalendarPageSnapshot) -> some View {
-        let chrome = layout.chromeInsets
-        let control = AtticControlSize.headerControl
-        let flat = design.effectiveControls != .liquidGlass
-        return ZStack(alignment: .trailing) {
-            CalendarTopRowControls(month: snapshot.month, isWeekView: flags.weekView,
-                                   onToggleWeekView: { toggleWeekView(weekCount: snapshot.weeks.count) },
-                                   onPrevious: { model.shift(by: -1, weekView: flags.weekView) },
-                                   onNext: { model.shift(by: 1, weekView: flags.weekView) })
-                .padding(.trailing, control + CalendarDesign.controlsGap)
-                .opacity(searchOpen ? 0 : 1)
-                .allowsHitTesting(!searchOpen)
-                .accessibilityHidden(searchOpen)
+        PanelTopRow(page: .calendar, layout: layout, searchOpen: searchOpen) {
+            CalendarMonthTitle(month: snapshot.month, isWeekView: flags.weekView,
+                               onToggleWeekView: { toggleWeekView(weekCount: snapshot.weeks.count) })
+        } pageSwitch: {
+            CalendarMonthArrows(isWeekView: flags.weekView,
+                                onPrevious: { model.shift(by: -1, weekView: flags.weekView) },
+                                onNext: { model.shift(by: 1, weekView: flags.weekView) })
+        } search: {
             if searchOpen {
                 AtticTabsSearchField(placeholder: String(localized: "Search"),
                                      text: Binding(get: { model.searchText }, set: { model.setQuery($0) }),
                                      isFocused: $searchFocused, floating: true, onEscape: endSearch, header: true)
                     .atticDesignCorners()
                     .accessibilityIdentifier("calendar-search")
-                    .transition(.asymmetric(insertion: .scale(scale: 0.2, anchor: .trailing).combined(with: .opacity),
-                                            removal: .opacity))
+                    .transition(PanelTopRowLayout.fieldTransition)
             } else {
-                AtticRaisedButton(systemName: "magnifyingglass", label: "Search",
-                                  size: CGSize(width: control, height: control), emphasisedGlyph: true, flat: flat,
-                                  cornerRadius: AtticRadius.header, action: beginSearch)
-                    .atticDesignCorners()
+                PanelTopRowSearchButton(label: "Search", action: beginSearch)
                     .accessibilityIdentifier("calendar-search-button")
                     .transition(.opacity)
             }
         }
-        .frame(height: control)
-        .padding(.top, chrome.top)
-        .padding(.leading, chrome.leading + control + TasksDesignMetrics.searchFromPin)
-        .padding(.trailing, chrome.trailing + AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count)
-                 + TasksDesignMetrics.headerGap)
         .animation(CalendarDesign.searchAnimation(opening: searchOpen, reduceMotion: design.reduceMotion), value: searchOpen)
         .onChange(of: searchFocused) { _, focused in
             // Leaving an empty search puts it away.
@@ -201,8 +190,11 @@ struct CalendarPage: View {
         let flat = design.effectiveControls != .liquidGlass
         let onToday = snapshot.selected == snapshot.today
         let height = CalendarDesign.footerHeight
+        // The bottom bar (Accepted 2026-10-29/30): the page switch, Today,
+        // then "+".
         return AtticControlGroup {
             HStack(spacing: TasksDesignMetrics.footerGap) {
+                PanelPageSwitcher(page: .calendar)
                 Button {
                     model.goToToday()
                 } label: {

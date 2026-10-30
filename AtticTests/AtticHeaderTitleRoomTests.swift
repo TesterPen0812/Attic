@@ -118,7 +118,10 @@ final class AtticHeaderTitleRoomTests: XCTestCase {
             let room = panel - side * 2
             XCTAssertLessThanOrEqual(shut.width, room + 0.5, "shut, panel \(panel)")
             XCTAssertGreaterThan(shut.width, room - 10, "shut, panel \(panel)")
-            XCTAssertGreaterThan(shut.width, open.width, "the width comes back, panel \(panel)")
+            // The page switch moved to the bottom bar (Accepted 2026-10-30):
+            // the top row's right-hand control is •••, which never opens, so
+            // the title keeps one room.
+            XCTAssertEqual(shut.width, open.width, accuracy: 0.5, "one room, panel \(panel)")
         }
     }
 

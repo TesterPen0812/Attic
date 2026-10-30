@@ -829,6 +829,7 @@ enum AtticPanelDragPolicy {
         in bounds: CGRect,
         cornerRadius: CGFloat,
         modeDockWidth: CGFloat = PanelModeDockLayout.width(isExpanded: true),
+        leadingControlsWidth: CGFloat = 0,
         dockedAt corner: ScreenCorner? = nil
     ) -> CGRect {
         let insets = PanelGeometry.chromeInsets(
@@ -837,7 +838,7 @@ enum AtticPanelDragPolicy {
         )
         let leading = bounds.minX
             + insets.leading
-            + AtticStyle.controlHitSize
+            + max(AtticStyle.controlHitSize, leadingControlsWidth)
             + controlClearance
         let trailing = bounds.maxX
             - insets.trailing
@@ -861,6 +862,7 @@ enum AtticPanelDragPolicy {
         in bounds: CGRect,
         cornerRadius: CGFloat,
         modeDockWidth: CGFloat = PanelModeDockLayout.width(isExpanded: true),
+        leadingControlsWidth: CGFloat = 0,
         dockedAt corner: ScreenCorner? = nil
     ) -> Bool {
         guard bounds.width > 0,
@@ -889,6 +891,7 @@ enum AtticPanelDragPolicy {
             in: bounds,
             cornerRadius: cornerRadius,
             modeDockWidth: modeDockWidth,
+            leadingControlsWidth: leadingControlsWidth,
             dockedAt: corner
         )
         let inMiddleLane = point.x >= region.minX
@@ -1057,11 +1060,26 @@ struct PanelDragIntentTracker {
 final class PanelChromeInteractionState {
     var onModeDockWidthChanged: (() -> Void)?
     var bottomControlsHeight: CGFloat = AtticStyle.controlHitSize
+    /// The top row's right-hand controls (the page's switch, ••• and
+    /// Search; the whole row while its search is open), from the chrome inset.
     var modeDockWidth = PanelModeDockLayout.width(isExpanded: false) {
         didSet {
             guard modeDockWidth != oldValue else { return }
             onModeDockWidthChanged?()
         }
+    }
+    /// The top row's left-hand controls (the pin and Calendar's month after
+    /// it), from the chrome inset.
+    var topRowLeadingWidth: CGFloat = 0 {
+        didSet {
+            guard topRowLeadingWidth != oldValue else { return }
+            onModeDockWidthChanged?()
+        }
+    }
+
+    func setTopRowControls(leading: CGFloat, trailing: CGFloat) {
+        topRowLeadingWidth = leading
+        modeDockWidth = trailing
     }
 }
 
@@ -1778,6 +1796,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             in: bounds,
             cornerRadius: panelCornerRadius,
             modeDockWidth: chromeInteractionState.modeDockWidth,
+            leadingControlsWidth: chromeInteractionState.topRowLeadingWidth,
             dockedAt: dockedCorner
         ) {
             return self
@@ -1898,6 +1917,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             in: bounds,
             cornerRadius: panelCornerRadius,
             modeDockWidth: chromeInteractionState.modeDockWidth,
+            leadingControlsWidth: chromeInteractionState.topRowLeadingWidth,
             dockedAt: dockedCorner
         ) else {
             super.mouseDown(with: event)
@@ -2181,6 +2201,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                     in: bounds,
                     cornerRadius: panelCornerRadius,
                     modeDockWidth: chromeInteractionState.modeDockWidth,
+                    leadingControlsWidth: chromeInteractionState.topRowLeadingWidth,
                     dockedAt: dockedCorner
                 ),
                 in: bounds,

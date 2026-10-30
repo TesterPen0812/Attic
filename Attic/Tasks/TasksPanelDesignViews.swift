@@ -88,34 +88,18 @@ enum TasksDesignMetrics {
     /// File tile 46 px wide.
     static let fileTileWidth: CGFloat = 23
 
-    // Header: controls 54 px (`AtticControlSize.headerControl`), 6 px apart.
-    /// The design's inner controls (`rInner`, 28 px): the filter button,
-    /// chips, tab thumb, tag pills, the date button, Clear filters. Each
-    /// clamps to half its side, as CSS does.
+    // Top row: controls 54 px (`AtticControlSize.headerControl`), 6 px apart.
+    /// The design's inner controls (`rInner`, 28 px): the date button, tag
+    /// pills, Clear filters. Each clamps to half its side, as CSS does.
     static let innerRadius: CGFloat = 14
     /// Every control's corner: `superellipse(1.4)` (`cornerSmoothing`).
     static var cornerExponent: CGFloat { AtticControlShape.designExponent }
     static let headerGap: CGFloat = 3
-    /// The search starts 5 after the pin (10 px); its filter button is
-    /// 21 (42 px).
-    static let searchFromPin: CGFloat = 5
-    static let filterButton: CGFloat = 21
 
-    // Footer: gap 10 px; tab cells 53 px in a 4 px padded container
-    // (radius 32 px). The add field is `AtticAddBarMetrics`.
+    // Bottom bar: gap 10 px; its controls are the top row's 27 pt capsules.
     static let footerGap: CGFloat = 5
-    static let tabCell: CGFloat = 26.5
-    static let tabsPadding: CGFloat = 2
-    static let tabsGap: CGFloat = 1
-    static let footerRadius: CGFloat = 16
+    static let footerRadius: CGFloat = AtticRadius.header
 
-    // Chips: 12 px above, 8 px below, 42 px tall, 4 px apart, 20 px text.
-    static let chipsTop: CGFloat = 6
-    static let chipsBottom: CGFloat = 4
-    static let chipHeight: CGFloat = 21
-    static let chipGap: CGFloat = 2
-    static let chipPaddingX: CGFloat = 8
-    static let chipsRowHeight: CGFloat = chipsTop + chipHeight + chipsBottom
     /// The list starts 2 under the header (4 px).
     static let listTopGap: CGFloat = 2
 }
@@ -190,59 +174,13 @@ private struct TasksImageTile: View {
     }
 }
 
-/// A filter chip (the owner's panel design): 21 tall, 10 pt text; the
-/// chosen one on the app's glass selector (owner, 2026-10-28: what would
-/// be glass in the app is glass; the design's white pill is HTML's stand-in),
-/// in the primary ink; the others plain, in the helper grey. A tag chip's
-/// text takes its tag's colour, as the row's tag pill does.
-struct TasksFilterChip: View {
-    let title: String
-    let selected: Bool
-    var tag: String?
-    /// Shared by a row's chips: the selector slides between them.
-    var selector: Namespace.ID?
-    let action: () -> Void
-
-    @Environment(\.atticDesign) private var design
-    @Environment(\.atticTagColouring) private var colouring
-    @State private var hovered = false
-
-    var body: some View {
-        let tokens = design.tokens
-        let dark = design.mode == .dark
-        let shape = Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
-        let ink = tag.map { TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: colouring.hue(for: $0)), dark: dark).text, tokens: tokens).color }
-            ?? tokens.color(selected || hovered ? .heading : .helper)
-        Button(action: action) {
-            Text(verbatim: title)
-                .font(.system(size: 10))
-                .foregroundStyle(ink)
-                .padding(.horizontal, TasksDesignMetrics.chipPaddingX)
-                .frame(height: TasksDesignMetrics.chipHeight)
-                .background {
-                    if selected {
-                        if let selector {
-                            Color.clear.atticRaisedMaterial(cornerRadius: TasksDesignMetrics.innerRadius, interactive: false)
-                                .matchedGeometryEffect(id: "chip-selector", in: selector)
-                        } else {
-                            Color.clear.atticRaisedMaterial(cornerRadius: TasksDesignMetrics.innerRadius, interactive: false)
-                        }
-                    }
-                }
-                .contentShape(shape)
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .onHover { hovered = $0 }
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-/// Now · Later · Done as icon tabs at the footer's left (the owner's panel
-/// design): three 26.5 pt cells (sun, clock, tick) in one glass container
-/// with the design's corner; the page shown on a white cell in the primary ink, the
-/// others quiet. ←/→ move between them; VoiceOver reads each by name.
-struct TasksFooterTabs: View {
+/// Now · Later · Done in words, the Tasks page's own switch on the top row
+/// (Accepted 2026-10-29/30, "Top row and bottom bar"): the top row's 27 pt
+/// glass capsule, 3 pt inset, 42 × 21 pt cells 1 pt apart, the current
+/// tab on the flat grey marker (one selection marker), its word in the
+/// primary ink and the others grey. ←/→ move between them; VoiceOver reads
+/// each by name.
+struct TasksTopTabs: View {
     @Binding var selection: TasksTab
 
     @Environment(\.atticDesign) private var design
@@ -251,45 +189,48 @@ struct TasksFooterTabs: View {
     @FocusState private var focused: Bool
     @State private var hovered: TasksTab?
 
-    static func symbol(_ tab: TasksTab) -> String {
-        switch tab {
-        case .now: "sun.max"
-        case .backlog: "clock"
-        case .done: "checkmark"
-        }
-    }
+    typealias M = TasksTopTabsMetrics
 
     var body: some View {
-        let m = TasksDesignMetrics.self
+        let tokens = design.tokens
         let tabs = TasksTab.allCases
         let selected = tabs.firstIndex(of: selection) ?? 0
-        HStack(spacing: m.tabsGap) {
+        let chipRadius = AtticShape.controlRadius(height: M.cell.height)
+        HStack(spacing: M.gap) {
             ForEach(tabs) { tab in
                 let on = tab == selection
                 Button { selection = tab } label: {
-                    AtticIcon(systemName: Self.symbol(tab), size: 11.5, weight: .medium,
-                              ink: on || hovered == tab ? .heading : .icon)
-                        .frame(width: m.tabCell, height: m.tabCell)
-                        .background {
-                            if on { TasksTabThumb() }
-                        }
-                        .contentShape(Squircle(cornerRadius: m.innerRadius, exponent: m.cornerExponent))
+                    Text(verbatim: tab.title)
+                        .font(.system(size: M.fontSize, weight: .medium))
+                        .tracking(M.tracking)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .foregroundStyle(on || hovered == tab ? tokens.ink(.heading).color
+                                         : TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
+                        .frame(width: M.cell.width, height: M.cell.height)
+                        .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
                 .onHover { inside in
                     if inside { hovered = tab } else if hovered == tab { hovered = nil }
                 }
-                .help(tab.title)
                 .accessibilityLabel(tab.title)
                 .accessibilityIdentifier("tasks-page-\(tab.identifier)")
                 .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
             }
         }
-        .padding(m.tabsPadding)
-        // The glass behind the cells, never over them.
-        .background(Color.clear.atticRaisedMaterial(cornerRadius: m.footerRadius, interactive: false))
-        .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: m.footerRadius)
+        // The marker slides under the words.
+        .background(alignment: .leading) {
+            AtticSelectionMarker(cornerRadius: chipRadius)
+                .frame(width: M.cell.width, height: M.cell.height)
+                .offset(x: M.markerOffset(index: selected))
+                .accessibilityHidden(true)
+        }
+        .padding(M.inset)
+        .frame(height: AtticControlSize.headerControl)
+        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+        .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: AtticRadius.header)
         .animation(design.reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
         .focusable(capture == nil)
         .focused($focused)
@@ -306,81 +247,84 @@ struct TasksFooterTabs: View {
     }
 }
 
-/// The footer's current tab (fidelity round, 2026-10-28: the owner's rule
-/// that what our app draws as glass is Liquid Glass): a selection inside
-/// the tabs' glass, as the page switch marks its current page, the
-/// selection tint in the design's squircle (`rInner`), or Phase 0's
-/// accent where a Light palette has one. Drawn once into a bitmap, as the
-/// old white thumb was (fix round 1's panel census: shapes over the glass
-/// cost an offscreen pass each frame the list scrolled under the footer),
-/// and changing with the tab as the page switch's selection does.
-struct TasksTabThumb: View {
-    @Environment(\.atticDesign) private var design
+/// The words switch's sizes (the design's 84 px cells; 3 pt inset and 21 pt
+/// chips as every top-row control).
+enum TasksTopTabsMetrics {
+    static let inset: CGFloat = AtticPageButtonMetrics.inset
+    static let cell = CGSize(width: 42, height: AtticPageButtonMetrics.segment)
+    static let gap: CGFloat = 1
+    /// 21 px, weight 500, −0.1 px.
+    static let fontSize: CGFloat = 10.5
+    static let tracking: CGFloat = -0.05
 
-    var body: some View {
-        let tokens = design.tokens
-        let accent = tokens.pageChipAccent
-        // On glass the current tab is lifted, lighter than the glass, as
-        // the selected tag chip is (owner, 2026-10-29: "clear selected tab").
-        let dark = design.mode == .dark
-        let lift = AtticRGBA.white(dark ? 0.2 : 0.62)
-        let rim = AtticRGBA.white(dark ? 0.16 : 0.75)
-        let glass = TasksPanelDesign.seeThrough(tokens)
-        Image(nsImage: Self.image(fill: accent?.fill ?? (glass ? lift : tokens.chipSelected), stroke: accent?.stroke ?? (glass ? rim : nil)))
-            .frame(width: TasksDesignMetrics.tabCell, height: TasksDesignMetrics.tabCell)
-            .accessibilityHidden(true)
-    }
+    static func markerOffset(index: Int) -> CGFloat { CGFloat(index) * (cell.width + gap) }
 
-    @MainActor private static var cache: [String: NSImage] = [:]
-
-    @MainActor
-    static func image(fill: AtticRGBA, stroke: AtticRGBA?) -> NSImage {
-        let key = "\(fill.hexString)|\(stroke?.hexString ?? "")"
-        if let cached = cache[key] { return cached }
-        let side = TasksDesignMetrics.tabCell
-        let width = AtticPageButtonMetrics.accentStrokeWidth
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { _ in
-            func outline(_ rect: NSRect) -> NSBezierPath {
-                NSBezierPath(cgPath: Squircle(cornerRadius: TasksDesignMetrics.innerRadius,
-                                              exponent: TasksDesignMetrics.cornerExponent).path(in: rect).cgPath)
-            }
-            let disc = NSRect(x: 0, y: 0, width: side, height: side)
-            NSColor(srgbRed: fill.red, green: fill.green, blue: fill.blue, alpha: fill.alpha).setFill()
-            outline(disc).fill()
-            if let stroke {
-                NSColor(srgbRed: stroke.red, green: stroke.green, blue: stroke.blue, alpha: stroke.alpha).setStroke()
-                let edge = outline(disc.insetBy(dx: width / 2, dy: width / 2))
-                edge.lineWidth = width
-                edge.stroke()
-            }
-            return true
-        }
-        cache[key] = image
-        return image
+    /// The whole switch's width.
+    static var width: CGFloat {
+        let count = CGFloat(TasksTab.allCases.count)
+        return inset * 2 + count * cell.width + (count - 1) * gap
     }
 }
 
-/// The footer's tabs, folded away while the add field is used (the
-/// design's turn): only this slot watches the draft, so a keystroke
-/// never redraws the page.
-struct TasksFooterTabsSlot: View {
+
+/// The Tasks bottom bar (Accepted 2026-10-29/30, "Top row and bottom bar"):
+/// the page switch, then the tag bar (All and the coloured #tags, filtering
+/// the list, as on Notes), then "+". "+" is the add field at rest: a click
+/// gives the field the keyboard, and while it has it or keeps a draft the
+/// switch and the tag bar fold away and the field takes the row (the
+/// design's turn, as the tabs folded before). Only this view watches the
+/// draft, so a keystroke never redraws the page.
+struct TasksBottomBar<AddBar: View>: View {
     @ObservedObject var text: TasksAddBarState
     let addFocused: Bool
-    @Binding var selection: TasksTab
+    let tab: TasksTab
+    let tags: [String]
+    let tagSelection: String?
+    let onSelectTag: (String?) -> Void
+    let onPlus: () -> Void
+    @ViewBuilder var addBar: () -> AddBar
 
     @Environment(\.atticDesign) private var design
 
     var body: some View {
         let hasDraft = !text.text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let folded = TasksPanelDesign.footerFolded(addFocused: addFocused, hasDraft: hasDraft)
-        TasksFooterTabs(selection: $selection)
-            .fixedSize()
-            .frame(width: folded ? 0 : nil, alignment: .leading)
+        let side = AtticControlSize.headerControl
+        // Done has no tag filter: its bar keeps its place, empty.
+        let tagsShown = tab != .done
+        HStack(alignment: .bottom, spacing: 0) {
+            HStack(spacing: TasksDesignMetrics.footerGap) {
+                PanelPageSwitcher(page: .tasks)
+                PanelTagBar(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar", onSelect: onSelectTag)
+                    .opacity(tagsShown ? 1 : 0)
+                    .allowsHitTesting(tagsShown)
+                    .accessibilityHidden(!tagsShown)
+            }
+            .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)
             .opacity(folded ? 0 : 1)
             .padding(.trailing, folded ? 0 : TasksDesignMetrics.footerGap)
             .allowsHitTesting(!folded)
             .accessibilityHidden(folded)
-            .animation(design.reduceMotion ? .easeOut(duration: 0.15) : TasksDesignMetrics.curve(0.26), value: folded)
+            ZStack(alignment: .bottomTrailing) {
+                // Always built, so "+" (or ⌘N) can give it the keyboard.
+                addBar()
+                    .opacity(folded ? 1 : 0)
+                    .allowsHitTesting(folded)
+                    .accessibilityHidden(!folded)
+                if !folded {
+                    AtticRaisedButton(systemName: "plus", label: "New task", size: CGSize(width: side, height: side),
+                                      help: String(localized: "New task"), emphasisedGlyph: true,
+                                      flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
+                                      action: onPlus)
+                        .atticDesignCorners()
+                        .accessibilityIdentifier("tasks-new-task")
+                        .transition(.opacity)
+                }
+            }
+            .frame(width: folded ? nil : side, alignment: .trailing)
+            .frame(maxWidth: folded ? .infinity : side, alignment: .trailing)
+        }
+        .animation(design.reduceMotion ? .easeOut(duration: 0.15) : TasksDesignMetrics.curve(0.26), value: folded)
     }
 }
 

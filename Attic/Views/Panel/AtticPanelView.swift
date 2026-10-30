@@ -28,7 +28,8 @@ struct AtticPanelView: View {
     @StateObject private var calendarPageState = CalendarPageState()
     /// Whether the page switcher is open, for the header titles that make
     /// room for it. Not observed here: only those titles are.
-    @State private var switcherPresence = AtticPageSwitcherPresence()
+    /// The top row's search and footprint, shared by the pages and the pin.
+    @State private var topRowState = PanelTopRowState()
     @State private var noticeHeight: CGFloat = 0
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
@@ -158,8 +159,7 @@ struct AtticPanelView: View {
             isPinned: uiState.isPanelPinned,
             page: currentPage,
             onTogglePin: { uiState.isPanelPinned.toggle() },
-            onSelectPage: selectPage,
-            onApproachPageSwitch: prepareOtherPages
+            onSelectPage: selectPage
         )
         .padding(.horizontal, chromeInsets.leading)
         .padding(.top, chromeInsets.top)
@@ -304,14 +304,28 @@ struct AtticPanelView: View {
         }
     }
 
-    /// The header controls' frames in panel coordinates (top-left origin).
+    /// The chrome controls' frames in panel coordinates (top-left origin):
+    /// the pin, and the page switch at the bottom left, open.
     private var headerControlRects: [CGRect] {
-        [
+        let switchWidth = PanelPageSwitcher.width(open: true)
+        return [
             CGRect(x: chromeInsets.leading, y: chromeInsets.top,
                    width: PanelHeaderLayout.pinSize.width, height: PanelHeaderLayout.height),
-            CGRect(x: panelSize.width - chromeInsets.trailing - PanelHeaderLayout.pageSwitchWidth,
-                   y: chromeInsets.top, width: PanelHeaderLayout.pageSwitchWidth, height: PanelHeaderLayout.height)
+            CGRect(x: chromeInsets.leading, y: panelSize.height - chromeInsets.bottom - PanelHeaderLayout.height,
+                   width: switchWidth, height: PanelHeaderLayout.height)
         ]
+    }
+
+    /// AppKit's top drag lane keeps clear of the current page's top-row
+    /// controls: the pin and any text after it, and the switch, ••• and
+    /// Search; while the search is open, of the whole row.
+    private func syncTopRowFootprint() {
+        let page = currentPage
+        let footprint = topRowState.footprints[page]
+        let searching = topRowState.isSearching(page)
+        let leading = max(0, (footprint?.leading ?? 0) - chromeInsets.leading)
+        let trailing = searching ? panelSize.width : max(0, (footprint?.trailing ?? 0) - chromeInsets.trailing)
+        chromeInteractionState.setTopRowControls(leading: leading, trailing: trailing)
     }
 
     // MARK: Surface, observation and theme
@@ -334,6 +348,7 @@ struct AtticPanelView: View {
         surfacedPanel
             .onChange(of: uiState.selectedSection) { _, _ in
                 syncBottomControlsHeight()
+                syncTopRowFootprint()
                 releaseTaskEntryInteractionLocks()
                 if PerformanceSignposts.hasPendingPageSwitch {
                     DispatchQueue.main.async { PerformanceSignposts.pageLaidOut() }
@@ -353,7 +368,8 @@ struct AtticPanelView: View {
     private var interactionObservedPanel: some View {
         storeObservedPanel
             .onAppear {
-                chromeInteractionState.modeDockWidth = PanelHeaderLayout.pageSwitchWidth
+                topRowState.onFootprintChange = { syncTopRowFootprint() }
+                syncTopRowFootprint()
                 syncBottomControlsHeight()
                 syncNoteDraftInteractionLocks()
                 installTaskNotePurgePresentation()
@@ -373,7 +389,9 @@ struct AtticPanelView: View {
             .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
             .environment(\.atticPanelToasts, toasts)
-            .environment(\.atticPageSwitcherPresence, switcherPresence)
+            .environment(\.panelTopRowState, topRowState)
+            .environment(\.panelPageSwitch, PanelPageSwitchContext(page: currentPage, select: selectPage,
+                                                                   approach: prepareOtherPages))
             .atticTagColours(store.commandLibrary)
             .tint(panelAccentColor)
             .accentColor(panelAccentColor)

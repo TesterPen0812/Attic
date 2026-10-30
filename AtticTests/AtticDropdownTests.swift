@@ -297,8 +297,9 @@ final class AtticDropdownTests: XCTestCase {
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let full = AtticDropdownLayout.listWidth(titles: all.map(\.title))
         // The Compact rows (13 pt names, 9 pt padding) measure 145 pt for the
-        // nine (Numbered List); p2-24 D's 14 pt rows measured 165.
-        XCTAssertEqual(full, 145, accuracy: 4, "the nine rows fit Numbered List")
+        // nine (Numbered List); p2-24 D's 14 pt rows measured 165. The menu's
+        // padding came down from 6 to 3 pt a side (Shapes, 2026-10-30): 139.
+        XCTAssertEqual(full, 139, accuracy: 4, "the nine rows fit Numbered List")
         XCTAssertTrue(all.contains { $0.kind == .mono }, "Mono is in the list")
         let date = AtticDropdownLayout.listWidth(titles: ["Date"], match: "da")
         XCTAssertEqual(AtticDropdownLayout.width(ideal: date, available: 296), 144, "“/da” leaves Date at the minimum")
@@ -2334,11 +2335,12 @@ final class AtticDateCardTests: XCTestCase {
     func testTheCompactSizeTokens() {
         let m = AtticDropdownMetrics.self
         XCTAssertEqual(m.rowHeight, 28)
-        XCTAssertEqual(m.cornerRadius, 16)
-        XCTAssertEqual(m.inset, 6)
+        // Shapes (Accepted 2026-10-30): menus 14 with 3 pt padding, rows 11, concentric.
+        XCTAssertEqual(m.cornerRadius, 14)
+        XCTAssertEqual(m.inset, 3)
         XCTAssertEqual(m.rowPadding, 9)
-        XCTAssertEqual(m.highlightRadius, 8)
-        XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius + 2, "the pill sits inside the corner")
+        XCTAssertEqual(m.highlightRadius, 11)
+        XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius, "the pill nests in the corner")
         XCTAssertEqual(m.fieldHeight, 26)
         XCTAssertEqual(m.minWidth, 144, "the width rule is unchanged")
         XCTAssertEqual(m.panelMargin, 12)
@@ -2349,7 +2351,7 @@ final class AtticDateCardTests: XCTestCase {
         XCTAssertEqual(m.monthMark, 25)
         XCTAssertEqual(m.monthMarkRadius, 7)
         XCTAssertEqual(AtticPickerMetrics.tagListMaxHeight, 7 * m.rowHeight, "seven rows before the tag list scrolls")
-        XCTAssertEqual(m.monthCellWidth * 7 + m.monthGridInset * 2 + m.inset * 2, 221, accuracy: 1, "draft 2's 222 pt card")
+        XCTAssertEqual(m.monthCellWidth * 7 + m.monthGridInset * 2 + m.inset * 2, 215, accuracy: 1, "draft 2's 222 pt card, less the 3 pt padding each side")
     }
 
     private func keyEvent(_ characters: String, keyCode: UInt16, flags: NSEvent.ModifierFlags) -> NSEvent {

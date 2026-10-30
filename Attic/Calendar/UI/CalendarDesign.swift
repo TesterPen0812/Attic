@@ -79,17 +79,15 @@ enum CalendarDesign {
     static let noMatchesPaddingX: CGFloat = 9
     static let noMatchesFont: CGFloat = 11
 
-    // Top row: the month pill's 16/18 px padding and 10 px gaps; month and
-    // year 24 px; the chevron 13 × 9 px; the arrows 11 × 19 px; 6 px apart.
-    static let pillPaddingLeading: CGFloat = 9
-    static let pillPaddingTrailing: CGFloat = 8
-    static let pillGap: CGFloat = 5
+    // Top row: month and year 24 px.
     static let pillFont: CGFloat = 12
     /// -0.015 em.
     static let monthTracking: CGFloat = -0.18
-    static let chevronSize = CGSize(width: 6.5, height: 4.5)
-    static let arrowSize = CGSize(width: 5.5, height: 9.5)
     static let controlsGap: CGFloat = 3
+    /// The header (Accepted 2026-10-30): month and year 9 px apart; ‹ ›
+    /// 1 pt apart in their capsule.
+    static let titleGap: CGFloat = 4.5
+    static let arrowsGap: CGFloat = 1
 
     // Footer: Today 61 px tall, 22 px padding, 22 px medium text.
     static let footerHeight: CGFloat = AtticControlSize.headerControl
