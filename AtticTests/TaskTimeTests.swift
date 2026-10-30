@@ -226,15 +226,15 @@ final class TaskTimeTests: XCTestCase {
         })
     }
 
-    func testMakingAChildOfLaterStandaloneClearsScheduleAndUndoRestoresIt() throws {
+    func testMakingAChildStandalonePreservesScheduleAndUndoRestoresItsParent() throws {
         let store = try makeTestStore()
         let library = AtticLibrary(tasks: store)
-        let parent = try XCTUnwrap(store.create(title: "Later parent", status: .backlog))
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
         let child = try XCTUnwrap(store.commit([TaskDraft(title: "Child", dueDay: today, dueTimeMinutes: 60,
                                                          parentID: parent.id)])?.first)
         XCTAssertTrue(library.moveSubtask(child.id, toTask: nil).isApplied)
-        XCTAssertEqual(child.status, .backlog); XCTAssertNil(child.parentID)
-        XCTAssertNil(child.dueDay); XCTAssertNil(child.dueTimeMinutes)
+        XCTAssertEqual(child.status, .todo); XCTAssertNil(child.parentID)
+        XCTAssertEqual(child.dueDay, today); XCTAssertEqual(child.dueTimeMinutes, 60)
         XCTAssertTrue(library.undo(in: .tasks).isApplied)
         let restored = try XCTUnwrap(store.task(withID: child.id))
         XCTAssertEqual(restored.parentID, parent.id); XCTAssertEqual(restored.status, .todo)

@@ -994,13 +994,12 @@ final class TaskStore: ObservableObject {
         let destinationPriority = priority ?? task.priority
         let destinationStatus = status ?? task.status
         let destinationTagsRaw = tags.map { AtticTag.encode($0) } ?? task.tagsRaw
-        let movesToLater = destinationStatus == .backlog && task.status != .backlog
-        let destinationDueDayRaw = movesToLater ? nil : (dueDay.map { $0?.rawValue } ?? task.dueDayRaw)
+        let destinationDueDayRaw = dueDay.map { $0?.rawValue } ?? task.dueDayRaw
         if let requested = dueTimeMinutes, let minutes = requested,
-           !movesToLater && (destinationDueDayRaw == nil || !(0..<1440).contains(minutes)) {
+           destinationDueDayRaw == nil || !(0..<1440).contains(minutes) {
             throw TaskEditRefusal("A task time needs a date and a valid time of day.")
         }
-        if let requested = dueTimeMinutes, requested != nil, dueDay == nil, !movesToLater,
+        if let requested = dueTimeMinutes, requested != nil, dueDay == nil,
            replicas.contains(where: { $0.dueDay == nil }) {
             throw TaskEditRefusal("Set a date on every copy before adding a task time.")
         }
@@ -1088,7 +1087,7 @@ final class TaskStore: ObservableObject {
                 }
             }
             if tagsChanged { replica.tagsRaw = destinationTagsRaw }
-            if dueChanged || movesToLater { replica.dueDay = destinationDueDayRaw.flatMap(DueDay.init(rawValue:)) }
+            if dueChanged { replica.dueDay = destinationDueDayRaw.flatMap(DueDay.init(rawValue:)) }
             if timeChanged || dueTimeMinutes != nil { replica.dueTimeMinutes = destinationTime }
             if destinationDueDayRaw == nil && dueDay != nil { replica.dueDay = nil }
             if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
@@ -3501,13 +3500,11 @@ final class TaskStore: ObservableObject {
             // change its answer for the copies after it.
             let changesStatus = status != task.status
             // Parent and placement only: a copy's own state (completion,
-            // title, tags…) is never written by a move, except that a
-            // transition into Later clears its date and time. A field that
-            // already holds its value is left alone.
+            // title, tags…) is never written by a move. A field that already
+            // holds its value is left alone.
             for replica in replicas {
                 if replica.parentID != newParentID { replica.parentID = newParentID }
                 if changesStatus, replica.status != status { replica.status = status }
-                if changesStatus && status == .backlog { replica.dueDay = nil }
                 if replica.manualOrder != order { replica.manualOrder = order }
                 if replica.listOrderVersion != TaskItem.currentListOrderVersion {
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
