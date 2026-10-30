@@ -356,7 +356,7 @@ enum AtticControlShape {
     /// the exponent is 2^1.4 ≈ 2.64, and CSS first clamps the radius to half
     /// the side, as `Squircle` does: a 27 pt control with the design's
     /// 15 pt radius is a rounded square, not a circle.
-    static let designExponent: CGFloat = pow(2, 1.4)
+    static let designExponent: CGFloat = AtticShape.controlExponent
 
     /// A control's outline: Apple's continuous corner, or with `exponent`
     /// the design's superellipse corner (`Squircle`).
@@ -547,21 +547,35 @@ struct AtticOutsideShadow<S: Shape>: View {
 /// with a hairline, an inner light band and a soft shadow.
 struct AtticPopoverBackground: View {
     var cornerRadius: CGFloat = AtticRadius.popover
+    /// A surface's squircle; nil draws a pill-shaped control (the toast)
+    /// in the controls' own corner (Shapes, Accepted 2026-10-30).
+    var exponent: CGFloat? = AtticShape.surfaceExponent
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var controlExponent
 
     var body: some View {
+        Group {
+            if let exponent {
+                // Menus and popovers are surfaces: squircles.
+                layers(Squircle(cornerRadius: cornerRadius, exponent: exponent))
+            } else {
+                layers(AtticControlShape.shape(cornerRadius: cornerRadius, exponent: controlExponent))
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func layers<S: InsettableShape>(_ shape: S) -> some View {
         let tokens = design.tokens
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        ZStack {
+        return ZStack {
             AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popover)
             AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popoverContact)
             shape.fill(tokens.popoverFill.color)
             shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
             shape.stroke(tokens.popoverOuterRim.color, lineWidth: design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width)
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 
@@ -589,9 +603,10 @@ struct AtticHighlight: View {
 
     var body: some View {
         Group {
-            if let cornerExponent {
-                // The panel design's row: the superellipse corner.
-                Squircle(cornerRadius: cornerRadius, exponent: cornerExponent,
+            if cornerExponent != nil {
+                // The panel design's row: a surface, so a squircle
+                // (Shapes, Accepted 2026-10-30).
+                Squircle(cornerRadius: cornerRadius, exponent: AtticShape.surfaceExponent,
                          squaredTop: !run.roundsTop, squaredBottom: !run.roundsBottom)
                     .fill(fill.color)
             } else {

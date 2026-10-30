@@ -100,8 +100,6 @@ struct TasksPage: View {
     /// the keyboard.
     @State private var searchFocused = false
     /// The filter button turned the chips row on (the owner's panel design).
-    @State private var chipsOpen = false
-    @Namespace private var chipSelector
     @State private var foldGeneration = 0
     /// The page the search field was opened on: moving to another page
     /// lets it go (each page keeps its own query).
@@ -157,18 +155,9 @@ struct TasksPage: View {
 
     /// The tabs sit 14 below the header, which moves inward with larger
     /// corners, so the gap under the header stays the same.
-    /// The owner's panel design (2026-10-27): no tabs line. The search
-    /// shares the header's line, the filter chips (when open) sit under
-    /// it, and the list starts below them.
-    private var tabsTop: CGFloat { layout.headerBottom + (chipsShown ? TasksDesignMetrics.chipsRowHeight : 0) }
-
-    /// The tag chips show while the filter button is on, or while a
-    /// filter (a tag chip, the View options) hides tasks (the design's
-    /// `chipOpen`); never on Done.
-    private var chipsShown: Bool {
-        TasksPanelDesign.chipsShown(tab: model.tab, chipsOpen: chipsOpen, searchShown: searchShown,
-                                    filtering: model.viewOptions(for: model.tab).filters || model.tagFilter(on: model.tab) != nil)
-    }
+    /// The owner's panel design (2026-10-27): no tabs line; the list starts
+    /// under the top row (the search has no chips since 2026-10-30).
+    private var tabsTop: CGFloat { layout.headerBottom }
 
     /// Room under the list for the add bar and its margins.
     static let footerZone: CGFloat = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
@@ -724,11 +713,13 @@ struct TasksPage: View {
         let shown = drawnSearchShown
         let _ = searchRedraw
         return VStack(alignment: .leading, spacing: 0) {
-            // The owner's panel design (2026-10-27): on the header's line,
-            // between the pin and the page switch, the search button, which
-            // opens into the field (the filter button inside it).
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
+            // The top row (Accepted 2026-10-29/30): Now · Later · Done in
+            // words, ••• and Search on the right; the search folds the
+            // rest away and fills the row. No filter button or list chips:
+            // the tag bar at the bottom filters.
+            PanelTopRow(page: .tasks, layout: layout, searchOpen: shown) {
+                TasksTopTabs(selection: Binding(get: { model.tab }, set: { model.select(tab: $0) }))
+            } search: {
                 if shown {
                     Group {
                         if model.tab == .done {
@@ -739,7 +730,7 @@ struct TasksPage: View {
                                                  text: Binding(get: { model.searchQuery(for: model.tab) },
                                                                set: { model.setSearchQuery($0, for: model.tab) }),
                                                  isFocused: $searchFocused, floating: true, onEscape: endSearch,
-                                                 header: true, accessory: AnyView(filterButton))
+                                                 header: true)
                         }
                     }
                     .accessibilityIdentifier(model.tab == .done ? "tasks-done-search" : "tasks-find")
@@ -753,112 +744,29 @@ struct TasksPage: View {
                         .transition(.opacity)
                 }
             }
-            .frame(height: control)
-            // ⌥⌘V's anchor where the filter button sits, mounted whatever
-            // the line shows.
-            .overlay(alignment: .trailing) {
+            // ⌥⌘V's anchor at the row's end, mounted whatever the row shows.
+            .overlay(alignment: .topTrailing) {
                 AtticMenuAnchor(holder: viewOptionsAnchor)
-                    .frame(width: TasksDesignMetrics.filterButton, height: TasksDesignMetrics.filterButton)
-                    .padding(.trailing, 3)
+                    .frame(width: control, height: control)
+                    .padding(.top, chrome.top)
+                    .padding(.trailing, chrome.trailing)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
-            }
-            .padding(.top, chrome.top)
-            // The shared top row's places (`PanelTopRow`, also Notes').
-            .padding(.leading, PanelTopRowLayout.leading(layout))
-            .padding(.trailing, PanelTopRowLayout.trailing(layout))
-            if chipsShown {
-                filterChips
-                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // The search opens with the design's ease (240 ms) and leaves at once.
         .animation(PanelTopRowLayout.searchAnimation(shown: shown, reduceMotion: design.reduceMotion), value: shown)
-        .animation(design.reduceMotion ? .easeOut(duration: 0.15) : TasksDesignMetrics.curve(0.26), value: chipsShown)
-        .onChange(of: ChipsPlace(tab: model.tab, shown: chipsShown)) { old, new in
-            // The row opened or closed on this page (not a page change).
-            if old.tab == new.tab, old.shown != new.shown { moveListWithChips(opened: new.shown) }
-            fadeRowsUnderChips(new, animated: old.tab == new.tab)
-        }
-        .onAppear { fadeRowsUnderChips(ChipsPlace(tab: model.tab, shown: chipsShown), animated: false) }
-        .onChange(of: searchShown) { _, shown in
+        .onChange(of: searchShown) { _, _ in
             PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35)
-            // The chips belong to the open search (the design's Escape and
-            // blur end `filterOn`): closing it puts them away, unless a
-            // filter still hides tasks (fix round 1: they stayed up).
-            if !shown, chipsOpen { chipsOpen = false }
         }
     }
 
-    private static let allChipID = "tasks-chip-all"
-
-    private struct ChipsPlace: Equatable {
-        let tab: TasksTab
-        let shown: Bool
-    }
-
-    /// Rows fade out just before the chip row while it shows (owner,
-    /// 2026-10-28), on this page's list only, in the row's own motion.
-    /// Reduce Transparency keeps its solid fallback under the header.
-    private func fadeRowsUnderChips(_ place: ChipsPlace, animated: Bool) {
-        let shut = layout.headerBottom
-        let open = shut + TasksDesignMetrics.chipsRowHeight
-        let on = place.shown && !design.reduceTransparency
-        let duration: CFTimeInterval = animated ? (design.reduceMotion ? 0.15 : 0.26) : 0
-        let timing = design.reduceMotion ? CAMediaTimingFunction(name: .easeOut)
-            : CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.2, 1)
-        for (tab, scroll) in listProxies.scrollViews {
-            if on, tab == place.tab {
-                TasksChipFade.show(scroll, top: open, from: shut, duration: duration, timing: timing)
-            } else {
-                TasksChipFade.hide(scroll, to: shut, duration: tab == place.tab ? duration : 0, timing: timing)
-            }
-        }
-        // A list built by the page change registers after this turn.
-        guard on else { return }
-        DispatchQueue.main.async { [listProxies] in
-            if let scroll = listProxies.scrollViews[place.tab], !TasksChipFade.isOn(scroll) {
-                TasksChipFade.show(scroll, top: open, from: open, duration: 0, timing: timing)
-            }
-        }
-    }
-
-    /// The chip row opened or closed (owner, 2026-10-28: it covered the
-    /// list): its list's top inset has grown or shrunk by the row's height,
-    /// and everything shown moves with the row, in the row's own motion.
-    /// What scrolls up under the header and chips takes the top controls'
-    /// blur, which reaches the chips' bottom (`viewportTop`).
-    private func moveListWithChips(opened: Bool) {
-        guard let scroll = listProxies.scrollViews[model.tab] else { return }
-        let clip = scroll.contentView
-        let start = clip.bounds.origin.y
-        let delta = opened ? TasksDesignMetrics.chipsRowHeight : -TasksDesignMetrics.chipsRowHeight
-        let duration = design.reduceMotion ? 0.15 : 0.26
-        DispatchQueue.main.async {
-            scroll.layoutSubtreeIfNeeded()
-            let insets = clip.contentInsets
-            let content = scroll.documentView?.frame.height ?? 0
-            let target = TasksViewport.originAfterTopChange(originY: start, delta: delta, newTopInset: insets.top,
-                                                            maxY: content - clip.bounds.height + insets.bottom)
-            if clip.bounds.origin.y != start { clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: start)) }
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = duration
-                context.timingFunction = design.reduceMotion ? CAMediaTimingFunction(name: .easeOut)
-                    : CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.2, 1)
-                clip.animator().setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: target))
-            } completionHandler: {
-                MainActor.assumeIsolated { scroll.reflectScrolledClipView(clip) }
-            }
-        }
-    }
-
-    /// Whether `x` is on the search's stretch of the header's line (not the
-    /// shell's pin or page switch).
+    /// Whether `x` is on the open search field's stretch of the top row
+    /// (the whole row, inset to the chrome on both sides).
     private func searchLineContains(x: CGFloat) -> Bool {
-        let leading = PanelTopRowLayout.leading(layout)
-        let trailing = layout.panelSize.width - PanelTopRowLayout.trailing(layout)
-        return x >= leading && x <= trailing
+        let field = PanelTopRowLayout.fieldFrame(layout)
+        return x >= field.minX && x <= field.maxX
     }
 
     /// Clear filters (the design's empty state): the search ends and the
@@ -866,7 +774,6 @@ struct TasksPage: View {
     private func clearFilters(on tab: TasksTab) {
         model.setSearchQuery("", for: tab)
         searchFocused = false
-        chipsOpen = false
         model.chooseTagChip(nil)
         var view = model.viewOptions(for: tab)
         view.show = .all
@@ -901,93 +808,6 @@ struct TasksPage: View {
             let measured = pointer.frames[TasksRowID(tab: tab, id: row.id)]?.height ?? 0
             return measured > 0 ? measured : estimatedHeight(row)
         }
-    }
-
-    /// The filter button inside the search field (Now and Later): it shows
-    /// or hides the tag chips; off, the filters are cleared. A
-    /// right-click, or ⌥⌘V, opens View Options (the sort lives there).
-    private var filterButton: some View {
-        let on = chipsShown
-        let view = model.viewOptions(for: model.tab)
-        return Button {
-            if on {
-                chipsOpen = false
-                model.chooseTagChip(nil)
-                if view.filters {
-                    var next = view
-                    next.show = .all
-                    next.priority = .any
-                    model.setViewOptions(next, for: model.tab)
-                }
-            } else {
-                chipsOpen = true
-            }
-        } label: {
-            AtticIcon(systemName: "line.3.horizontal.decrease", size: 11, weight: .medium, ink: .glyph)
-                .frame(width: TasksDesignMetrics.filterButton, height: TasksDesignMetrics.filterButton)
-                .background(Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent)
-                    .fill(design.tokens.ink(.heading).withAlpha(on ? 0.07 : 0).color))
-                .contentShape(Squircle(cornerRadius: TasksDesignMetrics.innerRadius, exponent: TasksDesignMetrics.cornerExponent))
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .contextMenu {
-            ForEach(viewCommands(for: model.tab)) { command in
-                if command.isHeader {
-                    Text(verbatim: command.title)
-                } else {
-                    Button(action: command.action) {
-                        if command.state == .on { Label(command.title, systemImage: "checkmark") } else { Text(verbatim: command.title) }
-                    }
-                    .disabled(command.isDisabled)
-                }
-            }
-        }
-        .help(String(localized: "Filter (View Options: ⌥⌘V)"))
-        .accessibilityLabel(String(localized: "Filter"))
-        .accessibilityValue(view.spokenValue)
-        .accessibilityAddTraits(on ? .isSelected : [])
-        .accessibilityIdentifier("tasks-view-options")
-    }
-
-    /// The tag chips under the header (owner, 2026-10-28): All, then one
-    /// per tag in use, the chosen one white. More than the row holds
-    /// scrolls sideways, without a scroller.
-    private var filterChips: some View {
-        let chosen = model.tagFilter(on: model.tab)
-        let motion = design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)
-        return ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: TasksDesignMetrics.chipGap) {
-                    TasksFilterChip(title: String(localized: "All"), selected: chosen == nil, selector: chipSelector) { model.chooseTagChip(nil) }
-                        .id(Self.allChipID)
-                        .accessibilityIdentifier("tasks-chip-all")
-                    ForEach(model.tagChips(), id: \.self) { tag in
-                        TasksFilterChip(title: TasksPanelDesign.tagChipTitle(tag), selected: chosen == tag, tag: tag, selector: chipSelector) {
-                            model.chooseTagChip(tag)
-                        }
-                        .id(tag)
-                        .accessibilityLabel(tag)
-                        .accessibilityIdentifier("tasks-chip-tag-\(tag)")
-                    }
-                }
-                .padding(.horizontal, layout.chromeInsets.leading)
-                // The glass selector slides to the chosen chip.
-                .animation(motion, value: chosen)
-            }
-            // The chosen chip comes fully into view (Terra, 2026-10-28: a
-            // chosen tag at the row's end was cut off).
-            .onChange(of: chosen, initial: true) { _, chosen in
-                // Centred, so the row's end keeps its margin past the last
-                // chip (pass 3: the selector met the panel's edge).
-                withAnimation(motion) { proxy.scrollTo(chosen ?? Self.allChipID, anchor: .center) }
-            }
-        }
-        .frame(height: TasksDesignMetrics.chipHeight)
-        .padding(.top, TasksDesignMetrics.chipsTop)
-        .padding(.bottom, TasksDesignMetrics.chipsBottom)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Tags"))
     }
 
     /// The last icon's glass circle ends on the controls' line, under the
@@ -3347,11 +3167,11 @@ struct TasksPage: View {
                     .frame(maxWidth: .infinity)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
-            // The owner's panel design: Now · Later · Done at the footer's
-            // left, folding away while the add field is used.
-            HStack(alignment: .bottom, spacing: 0) {
-                TasksFooterTabsSlot(text: model.addBarState, addFocused: addBarFocused,
-                                    selection: Binding(get: { model.tab }, set: { model.select(tab: $0) }))
+            // The bottom bar (Accepted 2026-10-29/30): the page switch, the
+            // tag bar and "+", which opens into the add field.
+            TasksBottomBar(text: model.addBarState, addFocused: addBarFocused, tab: model.tab,
+                           tags: model.tagChips(), tagSelection: model.tagFilter(on: model.tab),
+                           onSelectTag: { model.chooseTagChip($0) }, onPlus: { addBarFocused = true }) {
                 addBar
             }
         }

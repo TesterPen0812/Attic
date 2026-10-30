@@ -11,28 +11,30 @@ import XCTest
 final class NotesChromeTests: XCTestCase {
     // MARK: Geometry
 
-    func testTheTopRowKeepsTasksPlacesAndLeavesAMiddleSlot() {
+    /// Accepted 2026-10-30 ("Top row and bottom bar"): Search far right,
+    /// ••• a gap before it, the page's own switch a gap before that.
+    func testTheTopRowPutsSearchFarRightThenMoreThenTheSwitch() {
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
         let chrome = layout.chromeInsets
         let button = PanelTopRowLayout.searchButtonFrame(layout)
-        // The design (2×): a 54 px search 10 px before the switch, the
-        // row starting 10 px after the pin.
         XCTAssertEqual(button.size, CGSize(width: 27, height: 27))
         XCTAssertEqual(button.minY, chrome.top)
-        let switchShut = AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count)
-        XCTAssertEqual(button.maxX, 340 - chrome.trailing - switchShut - TasksDesignMetrics.headerGap, accuracy: 0.001)
-        XCTAssertEqual(PanelTopRowLayout.leading(layout), chrome.leading + 27 + 5, accuracy: 0.001)
-        let slot = PanelTopRowLayout.middleSlot(layout)
-        XCTAssertEqual(slot.lowerBound, PanelTopRowLayout.leading(layout))
-        XCTAssertEqual(slot.upperBound, button.minX - 5, accuracy: 0.001, "the middle slot ends a gap before the search")
-        XCTAssertGreaterThan(slot.upperBound - slot.lowerBound, 100, "room for Calendar's month controls")
+        XCTAssertEqual(button.maxX, 340 - chrome.trailing, accuracy: 0.001)
+        let more = PanelTopRowLayout.moreButtonFrame(layout)
+        XCTAssertEqual(more.maxX, button.minX - PanelTopRowLayout.gap, accuracy: 0.001)
+        let pageSwitch = PanelTopRowLayout.switchFrame(layout, width: 60)
+        XCTAssertEqual(pageSwitch.maxX, more.minX - PanelTopRowLayout.gap, accuracy: 0.001)
+        XCTAssertEqual(PanelTopRowLayout.leading(layout), chrome.leading + 27 + PanelTopRowLayout.leadingGap, accuracy: 0.001)
+        let field = PanelTopRowLayout.fieldFrame(layout)
+        XCTAssertEqual(field.minX, chrome.leading, accuracy: 0.001)
+        XCTAssertEqual(340 - field.maxX, chrome.trailing, accuracy: 0.001, "the open field: equal room both sides")
     }
 
     func testTheBarsTakeTheTasksFooterMeasures() {
-        XCTAssertEqual(NotesBarMetrics.control, 30.5, "61 px")
-        XCTAssertEqual(NotesBarMetrics.radius, 16, "32 px")
+        XCTAssertEqual(NotesBarMetrics.control, 27, "one size: 27 pt (Accepted 2026-10-30)")
+        XCTAssertEqual(NotesBarMetrics.radius, 13.5, "a capsule")
         XCTAssertEqual(NotesBarMetrics.gap, 5, "10 px")
-        XCTAssertEqual(NotesBarMetrics.pillHeight, 23.5, "47 px")
+        XCTAssertEqual(NotesBarMetrics.pillHeight, 21, "21 pt tags")
         XCTAssertEqual(NotesBarMetrics.pillFontSize, 10.5, "21 px")
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
         XCTAssertEqual(NotesLibraryView.restTop(layout: layout), layout.headerBottom + 7.5,

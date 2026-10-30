@@ -12,10 +12,10 @@ struct NoteThumbnailContent: Hashable, Sendable {
 
 /// The design's sizes, in points (the drawing is at 2×: px ÷ 2).
 enum NoteThumbnailMetrics {
-    /// The card: 48 × 60 px, radius 10 px, `superellipse(1.3)`.
+    /// The card: 48 × 60 px, a small object (Shapes: 12 px, squircle).
     static let size = CGSize(width: 24, height: 30)
-    static let radius: CGFloat = 5
-    static let cornerExponent: CGFloat = pow(2, 1.3)
+    static let radius: CGFloat = AtticRadius.small
+    static let cornerExponent: CGFloat = AtticShape.surfaceExponent
     /// Padding 6 px top and bottom, 5 px at the sides; parts 2 px apart.
     static let paddingY: CGFloat = 3
     static let paddingX: CGFloat = 2.5

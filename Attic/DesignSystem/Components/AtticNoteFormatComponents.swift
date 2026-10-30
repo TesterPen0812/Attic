@@ -232,7 +232,9 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
     }
 
     var body: some View {
-        let radius = AtticRadius.control(height: height)
+        // The format sheet (Shapes: 24 + 14 = 38 px), clamped to the row's
+        // half height while it is one row.
+        let radius = min(AtticRadius.formatSheet, height / 2)
         let row = HStack(spacing: 0) { content }
             .padding(.horizontal, AtticControlSize.capsuleInset)
             .frame(maxWidth: .infinity)

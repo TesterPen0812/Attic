@@ -371,7 +371,9 @@ struct NotesEditorPage: View {
     /// task-list filter button.
     private var topRow: some View {
         let shown = topSearchShown
-        return PanelTopRow(layout: layout, searchOpen: shown) {
+        // The page-switch slot (`pageSwitch:`) is empty until the notes
+        // list's board | list switch fills it (w2-notes).
+        return PanelTopRow(page: .notes, layout: layout, searchOpen: shown) {
             if shown {
                 AtticTabsSearchField(placeholder: NotesLibraryModel.placeholder(count: noteStore.notes.count, tag: library.tagFilter),
                                      text: $library.query, isFocused: $searchFocused, floating: true,
@@ -428,6 +430,7 @@ struct NotesEditorPage: View {
 
     private var libraryBar: some View {
         HStack(spacing: NotesBarMetrics.gap) {
+            PanelPageSwitcher(page: .notes)
             NotesTagBar(tags: library.recentTags(store: noteStore), selection: library.tagFilter) { tag in
                 library.tagFilter = tag
             }

@@ -51,11 +51,11 @@ struct AtticUndoToast: View {
         .padding(.leading, AtticToastMetrics.leadingPadding)
         .padding(.trailing, AtticControlSize.capsuleInset)
         .frame(height: height)
-        .background(AtticPopoverBackground(cornerRadius: radius))
+        .background(AtticPopoverBackground(cornerRadius: radius, exponent: nil))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
         .atticAnnounceErrors(isFailure ? [message] : [])
-        .atticControlProbe("Toast", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+        .atticControlProbe("Toast", id: probeID, expectedSize: nil, radius: radius, expectedRadius: AtticRadius.control(height: height))
     }
 }
 

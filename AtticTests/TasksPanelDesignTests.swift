@@ -289,11 +289,10 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertNil(model.tagFilter, "the last task losing the tag clears it on its own")
     }
 
-    /// Owner, 2026-10-28: the chip row covered the list ("All" over the
-    /// Overdue header). Opening it moves everything below down by the
-    /// row's height, so at the top the first row rests clear of the chips;
-    /// closing it brings the list back up.
-    func testOpeningTheChipRowMovesTheListDownWithIt() throws {
+    /// Accepted 2026-10-30 ("Top row and bottom bar"): the search has no
+    /// list chips; the tag bar at the bottom filters, and choosing a tag
+    /// never moves the list under the top row.
+    func testATagFilterLeavesTheListInPlace() throws {
         for title in ["Late one", "Due today", "Undated"] {
             let id = try add(title, due: title == "Late one" ? -1 : (title == "Due today" ? 0 : nil))
             tag(id, "home")
@@ -319,18 +318,11 @@ final class TasksPanelDesignTests: XCTestCase {
         spin()
         XCTAssertEqual(model.rows(for: .now).count, 3)
         let open = try XCTUnwrap(top())
-        XCTAssertEqual(open - shut, TasksDesignMetrics.chipsRowHeight, accuracy: 1,
-                       "the first row moves down with the chips instead of sitting under them")
-        func lists(_ view: NSView) -> [NSScrollView] {
-            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(lists)
-        }
-        let list = try XCTUnwrap(lists(try XCTUnwrap(window.contentView)).first { !$0.isHidden && $0.documentView != nil })
-        XCTAssertTrue(TasksChipFade.isOn(list), "rows fade out before the chip row while it shows")
+        XCTAssertEqual(open, shut, accuracy: 1, "no chip row opens under the top row")
         model.chooseTagChip(nil)
         spin()
         let closed = try XCTUnwrap(top())
-        XCTAssertEqual(closed, shut, accuracy: 1, "closing the row brings the list back up")
-        XCTAssertFalse(TasksChipFade.isOn(list), "no mask while the chips are shut")
+        XCTAssertEqual(closed, shut, accuracy: 1)
     }
 
     /// Mid-scroll the list moves with the row too, within what can scroll.
@@ -447,15 +439,13 @@ final class TasksPanelDesignTests: XCTestCase {
                        TasksDesignTone.date.designColour.contrast(on: white), accuracy: 0.001)
     }
 
-    /// The current tab is the page switch's selection tint, not a white
-    /// thumb, drawn once per colour.
-    func testTheFooterThumbIsTheSelectionTintInsideTheGlass() throws {
+    /// One selection marker (Accepted 2026-10-30): the current tab sits on
+    /// the flat grey chip every switch uses, not a raised white thumb.
+    func testTheCurrentTabIsTheFlatGreyMarker() {
         let tokens = AtticColorTokens.resolve(AtticDesignContext(mode: .light))
-        let image = TasksTabThumb.image(fill: tokens.chipSelected, stroke: nil)
-        XCTAssertTrue(image === TasksTabThumb.image(fill: tokens.chipSelected, stroke: nil), "drawn once")
-        let rep = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
-        let centre = try XCTUnwrap(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
-        XCTAssertEqual(centre.alphaComponent, tokens.chipSelected.alpha, accuracy: 0.02, "the selection tint, not an opaque white disc")
+        XCTAssertEqual(AtticSelectionMarker.fill(tokens).alpha, 0.06, accuracy: 0.001)
+        XCTAssertEqual(TasksTopTabsMetrics.markerOffset(index: 0), 0)
+        XCTAssertEqual(TasksTopTabsMetrics.markerOffset(index: 2), 2 * (42 + 1), "the marker slides under the words")
     }
 
     func testTheSubtaskCountIsTheDesigns() {
@@ -468,7 +458,7 @@ final class TasksPanelDesignTests: XCTestCase {
 
     func testTheDesignsSizes() {
         XCTAssertEqual(AtticControlSize.headerControl, 27, "54 px header controls")
-        XCTAssertEqual(AtticControlSize.addBarHeight, 30.5, "61 px add field")
+        XCTAssertEqual(AtticControlSize.addBarHeight, 27, "one size: the bottom bar is 54 px")
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: 3), 36, "72 px shut")
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: true, count: 3), 75, "150 px open")
         XCTAssertEqual(TasksRowDesign.height(twoLine: false, tiles: false), 29, "7 + 15 + 7")
@@ -482,18 +472,8 @@ final class TasksPanelDesignTests: XCTestCase {
         XCTAssertEqual(AtticTextStyle.priorityMark.spec.weight, .bold)
         XCTAssertEqual(AtticStatusCircleMetrics.ringWidth(increaseContrast: false), 0.8)
         XCTAssertEqual(AtticStatusCircleMetrics.ringWidth(increaseContrast: true), 2, "Increase Contrast keeps its ring")
-        XCTAssertEqual(TasksDesignMetrics.tabCell * 3 + TasksDesignMetrics.tabsGap * 2 + TasksDesignMetrics.tabsPadding * 2, 85.5)
+        XCTAssertEqual(TasksTopTabsMetrics.width, 134, "Now · Later · Done: 3 + 3 × 42 + 2 + 3")
         XCTAssertEqual(TasksPanelDesign.tileLabel("Last invoice.pdf"), "PDF")
-    }
-
-    /// Fix round 1: the chips belong to the open search; after it closes
-    /// they stay only while a filter hides tasks.
-    func testTheChipsLeaveWithTheSearchUnlessAFilterHidesTasks() {
-        XCTAssertTrue(TasksPanelDesign.chipsShown(tab: .now, chipsOpen: true, searchShown: true, filtering: false))
-        XCTAssertFalse(TasksPanelDesign.chipsShown(tab: .now, chipsOpen: true, searchShown: false, filtering: false),
-                       "the filter button's chips outlived the search")
-        XCTAssertTrue(TasksPanelDesign.chipsShown(tab: .backlog, chipsOpen: false, searchShown: false, filtering: true))
-        XCTAssertFalse(TasksPanelDesign.chipsShown(tab: .done, chipsOpen: true, searchShown: true, filtering: true))
     }
 
     /// Fix round 2 (the Air, 28 Oct): the fold's turn never reached the

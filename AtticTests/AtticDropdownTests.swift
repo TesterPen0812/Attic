@@ -298,7 +298,7 @@ final class AtticDropdownTests: XCTestCase {
         let all = NoteSlashItem.Kind.allCases.map { NoteSlashItem(kind: $0) }
         let full = AtticDropdownLayout.listWidth(titles: all.map(\.title))
         // Draft C's rows (13 pt names, 10 pt padding, a 14 pt icon slot and
-        // an 8 pt gap, 4 pt in; owner 2026-10-23) measure 139 pt for the nine
+        // an 8 pt gap, 3 pt in; owner 2026-10-23) measure 139 pt for the nine
         // (Numbered List); E1's Compact rows measured 145.
         XCTAssertEqual(full, 139, accuracy: 4, "the nine rows fit Numbered List")
         XCTAssertTrue(all.contains { $0.kind == .mono }, "Mono is in the list")
@@ -2415,13 +2415,14 @@ final class AtticDateCardTests: XCTestCase {
     func testDraftCSizeTokens() {
         let m = AtticDropdownMetrics.self
         XCTAssertEqual(m.rowHeight, 32)
-        XCTAssertEqual(m.cornerRadius, 18)
-        XCTAssertEqual(m.inset, 4)
+        XCTAssertEqual(m.cornerRadius, 14)
+        XCTAssertEqual(m.inset, 3)
         XCTAssertEqual(m.rowPadding, 10)
-        XCTAssertEqual(m.highlightRadius, 6)
+        XCTAssertEqual(m.highlightRadius, 11)
+        XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius)
         XCTAssertEqual(m.fieldHeight, 30)
         XCTAssertEqual(m.fieldHeaderHeight, 40)
-        XCTAssertEqual(m.inset + m.fieldInset, 6, "the field 6 pt in from the card's edge")
+        XCTAssertEqual(m.inset + m.fieldInset, 5, "the field stays 2 pt inside the rows")
         XCTAssertEqual(m.minWidth, 150)
         XCTAssertEqual(m.panelMargin, 12)
         XCTAssertEqual(AtticTextStyle.dropdownRow.spec.size, 13)

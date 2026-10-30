@@ -135,9 +135,11 @@ enum PanelHeaderLayout {
     static let height = AtticControlSize.headerControl
     static let pinSize = AtticControlSize.panelButton
 
-    /// The page button's width when open (the region its controls may
-    /// take; shut it is the pin's width).
-    static let pageSwitchWidth: CGFloat = AtticPageButton<PanelPage>.width(open: true, count: PanelPage.allCases.count)
+    /// What a scrolled-away header title keeps clear of on the right,
+    /// besides the search button: ••• (Settings). The page switch moved to
+    /// the bottom bar (Accepted 2026-10-29/30), so it no longer takes room
+    /// on the top row of a page without its own switch (an open note).
+    static let pageSwitchWidth: CGFloat = AtticControlSize.headerControl
 
     /// The bottom of the header, measured from the panel's top edge.
     static func bottom(chromeInsets: EdgeInsets) -> CGFloat {
