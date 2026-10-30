@@ -136,7 +136,7 @@ struct TaskAddBarText: Equatable {
 
     /// The strip's buttons show these too: the new task's values, typed or
     /// picked (a pick wins; tags from both).
-    func parts(parser: TaskTextParser) -> Parts {
+    func parts(parser: TaskTextParser, existingDay: DueDay? = nil) -> Parts {
         let tokens = activeTokens(parser: parser)
         var parts = Parts(title: TaskTextParser.title(text, removing: tokens.map(\.range)))
         for token in tokens {
@@ -148,7 +148,8 @@ struct TaskAddBarText: Equatable {
             }
         }
         if let day = picked.day { parts.dueDay = day }
-        if parts.dueTimeMinutes != nil && parts.dueDay == nil { parts.dueDay = parser.today }
+        // Title edits keep the task's date; only an empty date infers today.
+        if parts.dueTimeMinutes != nil && parts.dueDay == nil { parts.dueDay = existingDay ?? parser.today }
         if let priority = picked.priority { parts.priority = priority }
         for tag in picked.tags where !parts.tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
             parts.tags.append(tag)

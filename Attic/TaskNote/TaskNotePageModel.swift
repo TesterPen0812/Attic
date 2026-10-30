@@ -730,7 +730,7 @@ final class TaskNotePageModel: ObservableObject {
     func commitTitle() -> Bool {
         guard isEditingTitle else { return true }
         guard let task = store.listedTask(withID: taskID) else { return report(.taskGone) }
-        let parts = titleEdit.parts(parser: parser)
+        let parts = titleEdit.parts(parser: parser, existingDay: task.dueDay)
         let title = TaskDraftBuilder.collapsed(parts.title)
         let tags = AtticTag.normalizedSet(task.tags + parts.tags)
         let editsTitle = !title.isEmpty && title != titleBase?.title

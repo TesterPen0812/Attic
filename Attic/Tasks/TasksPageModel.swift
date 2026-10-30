@@ -1777,7 +1777,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func titlePatch(for task: TaskItem) -> TitlePatch? {
-        let parts = titleEdit.parts(parser: parser)
+        let parts = titleEdit.parts(parser: parser, existingDay: task.dueDay)
         let title = TaskDraftBuilder.collapsed(parts.title)
         var patch = TitlePatch()
         // Only shorthand ("#home" alone) keeps the title it had.
