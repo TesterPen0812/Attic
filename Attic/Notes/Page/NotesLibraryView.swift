@@ -244,9 +244,9 @@ struct NotesLibraryView: View {
         case let .move(step):
             model.moveHighlight(by: step, in: groups, from: selected)
         case .open:
-            if let id = model.openTarget(in: groups) {
+            if let id = model.openTarget(in: groups) ?? model.commandTarget(in: groups, selected: selected) {
                 onOpen(id)
-            } else if fieldFocused, let title = model.queryForNewNote(in: all) {
+            } else if !event.modifierFlags.contains(.command), fieldFocused, let title = model.queryForNewNote(in: all) {
                 // Nothing matched: Return makes the note the search names.
                 onCreate(title, model.tagFilter)
             } else {
@@ -316,41 +316,29 @@ struct NotesLibraryView: View {
 
     enum ActionsMenu { case hover, full }
 
-    static let convertIdentifier = "notes-row-convert"
-
-    /// The "•••" menu (the owner's panel design): Pin, Convert, Move to
-    /// Recently Deleted, each running the row's own command (Convert is
-    /// Make Task from Note, for an ordinary note only; nil leaves it out).
-    static func hoverMenu(_ commands: [AtticMenuCommand], pinned: Bool, convert: (() -> Void)?) -> [AtticMenuCommand] {
+    /// The short ••• menu uses the same producers as the full row menu:
+    /// Pin, Add to / Remove from Tasks, Delete, with their live eligibility.
+    static func hoverMenu(_ commands: [AtticMenuCommand], pinned: Bool) -> [AtticMenuCommand] {
         var menu: [AtticMenuCommand] = []
         if let pin = commands.first(where: { $0.identifier == "notes-row-pin" }) {
             var item = AtticMenuCommand(verbatim: pinned ? String(localized: "Unpin") : String(localized: "Pin"),
-                                        isDisabled: pin.isDisabled, action: pin.action)
+                systemImage: pin.systemImage, shortcut: pin.shortcut, isDisabled: pin.isDisabled, action: pin.action)
             item.identifier = pin.identifier
+            item.disabledReason = pin.disabledReason
             menu.append(item)
         }
-        if let convert {
-            var item = AtticMenuCommand(verbatim: String(localized: "Convert to Task Note"), action: convert)
-            item.identifier = convertIdentifier
-            menu.append(item)
+        menu += commands.filter {
+            $0.identifier == "one-item-add-to-tasks" || $0.identifier == "one-item-remove-from-tasks"
         }
-        if let delete = commands.first(where: { $0.identifier == "notes-row-delete" }) {
-            var item = AtticMenuCommand(verbatim: String(localized: "Move to Recently Deleted"), isDestructive: true,
-                                        isDisabled: delete.isDisabled, startsSection: !menu.isEmpty, action: delete.action)
-            item.identifier = delete.identifier
-            menu.append(item)
+        if var delete = commands.first(where: { $0.identifier == "notes-row-delete" }) {
+            delete.startsSection = !menu.isEmpty
+            menu.append(delete)
         }
         return menu
     }
 
     private func hoverMenu(for id: UUID) -> [AtticMenuCommand] {
-        let stored = store.note(withID: id)
-        let convert: (() -> Void)? = if let stored, stored.taskID == nil, let makeTask = controller.makeTaskFromNote {
-            { makeTask(id) }
-        } else {
-            nil
-        }
-        return Self.hoverMenu(rowCommands(id), pinned: stored?.isPinned ?? false, convert: convert)
+        Self.hoverMenu(rowCommands(id), pinned: store.note(withID: id)?.isPinned ?? false)
     }
 
     /// The row's actions menu under its ⋯ (or under the pointer when the
@@ -395,7 +383,7 @@ struct NotesLibraryView: View {
         case 3 where chord == .command: return .find
         case 125 where chord.isEmpty: return .move(1)
         case 126 where chord.isEmpty: return .move(-1)
-        case 36 where chord.isEmpty, 76 where chord.isEmpty: return .open
+        case 36 where chord.isEmpty || chord == .command, 76 where chord.isEmpty || chord == .command: return .open
         case 51 where chord == .command: return .delete
         case 6 where chord == .command: return fieldCanUndo ? .passThrough : .undo
         case 6 where chord == [.command, .shift]: return fieldCanRedo ? .passThrough : .redo

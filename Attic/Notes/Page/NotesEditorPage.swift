@@ -882,7 +882,7 @@ struct NotesEditorPage: View {
                                       shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
                                       startsSection: true) { delete(id) }.identified("notes-row-delete")
         if stored == nil { remove = remove.disabled(because: notSaved) }
-        return [AtticMenuCommand("Open Page", identifier: "notes-row-open") { open(id) }] + conversion + [
+        return [AtticMenuCommand("Open Page", shortcut: AtticTaskShortcut.openPage, identifier: "notes-row-open") { open(id) }] + conversion + [
             pin,
             filterByTag,
             AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),

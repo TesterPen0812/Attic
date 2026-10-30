@@ -79,24 +79,34 @@ final class NotesLibraryRowsDesignTests: XCTestCase {
 
     // MARK: The "•••" menu
 
-    func testTheHoverMenuIsPinConvertAndMoveToRecentlyDeleted() {
+    func testTheHoverMenuUsesTheLibrarysOneItemCommands() {
         var ran: [String] = []
         let commands = [
             AtticMenuCommand("Open", identifier: "notes-row-open") { ran.append("open") },
             AtticMenuCommand("Pin to Top", identifier: "notes-row-pin") { ran.append("pin") },
+            AtticMenuCommand("Add to Tasks", identifier: "one-item-add-to-tasks") { ran.append("convert") },
             AtticMenuCommand("Duplicate", identifier: NotesLibraryView.duplicateIdentifier) { ran.append("duplicate") },
-            AtticMenuCommand("Delete Note", isDestructive: true, identifier: "notes-row-delete") { ran.append("delete") }
+            AtticMenuCommand("Delete", isDestructive: true, identifier: "notes-row-delete") { ran.append("delete") }
         ]
-        let menu = NotesLibraryView.hoverMenu(commands, pinned: false, convert: { ran.append("convert") })
-        XCTAssertEqual(menu.map(\.title), ["Pin", "Convert to Task Note", "Move to Recently Deleted"])
-        XCTAssertEqual(menu.map(\.identifier), ["notes-row-pin", NotesLibraryView.convertIdentifier, "notes-row-delete"])
+        let menu = NotesLibraryView.hoverMenu(commands, pinned: false)
+        XCTAssertEqual(menu.map(\.title), ["Pin", "Add to Tasks", "Delete"])
+        XCTAssertEqual(menu.map(\.identifier), ["notes-row-pin", "one-item-add-to-tasks", "notes-row-delete"])
         XCTAssertEqual(menu.map(\.isDestructive), [false, false, true])
         XCTAssertTrue(menu[2].startsSection)
         menu.forEach { $0.action() }
         XCTAssertEqual(ran, ["pin", "convert", "delete"], "each item runs the row's own command")
 
-        let taskNote = NotesLibraryView.hoverMenu(commands, pinned: true, convert: nil)
-        XCTAssertEqual(taskNote.map(\.title), ["Unpin", "Move to Recently Deleted"])
+        let remove = AtticMenuCommand("Remove from Tasks", identifier: "one-item-remove-from-tasks") { ran.append("remove") }
+        let task = NotesLibraryView.hoverMenu(commands.filter { $0.identifier != "one-item-add-to-tasks" } + [remove], pinned: true)
+        XCTAssertEqual(task.map(\.title), ["Unpin", "Remove from Tasks", "Delete"])
+        task[1].action()
+        XCTAssertEqual(ran.last, "remove")
+        let bare = NotesLibraryView.hoverMenu(commands.filter { $0.identifier != "one-item-add-to-tasks" }, pinned: false)
+        XCTAssertEqual(bare.map(\.title), ["Pin", "Delete"])
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 36, modifiers: .command, characters: "\r",
+                                                composing: false, fieldFocused: false), .open)
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 36, modifiers: .command, characters: "\r",
+                                                composing: true, fieldFocused: true), .passThrough)
     }
 
     // MARK: Thumbnails
