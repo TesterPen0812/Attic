@@ -60,30 +60,37 @@ struct CalendarWeekRow: View, Equatable {
     }
 }
 
-/// A day's key (Keys, option 3d): raised from today on, flat before,
-/// pressed when selected (ink, or red on today). The day's number, and its
-/// event dots and open-task ring under it.
+/// A day (Accepted 2026-10-30, "Calendar page: Grid"): flat in every
+/// month. The number (today red, past days grey, the rest ink) and its
+/// event dots and open-task ring under it; the selected day alone sits on a
+/// grey key.
 struct CalendarKey: View {
     let day: CalendarGridDay
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
 
+    /// The selected day's key: a 30 pt whole superellipse on curve 1.4.
+    static var keyShape: AtticControlOutline {
+        AtticControlShape.shape(cornerRadius: CalendarDesign.keyCornerRadius, exponent: CalendarDesign.keyExponent)
+    }
+
+    static func numberColour(_ number: CalendarKeyNumber, tokens: AtticColorTokens) -> AtticRGBA {
+        switch number {
+        case .red: TasksPanelDesign.vivid(CalendarDesign.red, tokens: tokens)
+        case .grey: TasksPanelDesign.toneInk(.meta, tokens: tokens)
+        case .ink: tokens.ink(.heading)
+        }
+    }
+
     var body: some View {
         let tokens = design.tokens
-        let style = day.style
-        let red = TasksPanelDesign.vivid(CalendarDesign.red, tokens: tokens)
-        let number: Color = switch style {
-        case .selected, .selectedToday: .white
-        case .flat: TasksPanelDesign.toneInk(.meta, tokens: tokens).color
-        case .raised: day.isToday ? red.color : tokens.ink(.heading).color
-        }
         Button(action: action) {
             VStack(spacing: CalendarDesign.dayToDots) {
                 Text(verbatim: String(day.day.day))
                     .font(.system(size: CalendarDesign.dayFont, weight: day.isSelected || day.isToday ? .semibold : .regular)
                         .monospacedDigit())
-                    .foregroundStyle(number)
+                    .foregroundStyle(Self.numberColour(day.number, tokens: tokens).color)
                     .frame(height: CalendarDesign.dayLine)
                 CalendarDayMarksView(marks: day.marks, isPast: day.isPast)
             }
@@ -91,7 +98,7 @@ struct CalendarKey: View {
             .frame(height: CalendarDesign.keyHeight)
             .contentShape(Rectangle())
         }
-        .buttonStyle(CalendarKeyButtonStyle(style: style))
+        .buttonStyle(CalendarKeyButtonStyle(style: day.style))
         .focusEffectDisabled()
         .accessibilityLabel(Self.accessibilityName(day.day))
         .accessibilityAddTraits(day.isSelected ? .isSelected : [])
@@ -134,14 +141,19 @@ struct CalendarDayMarksView: View {
     }
 }
 
-/// The key's material. Raised keys are the panel's button material at rest
-/// (not interactive glass: up to 31 share one glass group, so they stay
-/// cheap); a press shows as the material's pressed fill.
+/// The selected day's grey key, and a press on any day: the same 30 pt
+/// key, centred in the day's cell. No raised material in the grid.
 struct CalendarKeyButtonStyle: ButtonStyle {
     let style: CalendarKeyStyle
 
     func makeBody(configuration: Configuration) -> some View {
         CalendarKeyFace(configuration: configuration, style: style)
+    }
+
+    /// The key's fill: the selection grey, the press grey, or none.
+    static func fill(style: CalendarKeyStyle, isPressed: Bool, tokens: AtticColorTokens) -> AtticRGBA? {
+        if isPressed { return tokens.pressed }
+        return style == .selected ? tokens.selected : nil
     }
 }
 
@@ -150,34 +162,15 @@ private struct CalendarKeyFace: View {
     let style: CalendarKeyStyle
 
     @Environment(\.atticDesign) private var design
-    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
-        let tokens = design.tokens
-        let shape = AtticControlShape.shape(cornerRadius: CalendarDesign.keyRadius, exponent: cornerExponent)
-        Group {
-            switch style {
-            case .raised:
-                configuration.label
-                    .atticRaisedMaterial(cornerRadius: CalendarDesign.keyRadius,
-                                         state: configuration.isPressed ? .pressed : .rest, interactive: false)
-            case .flat:
-                configuration.label
-                    .background { if configuration.isPressed { shape.fill(tokens.pressed.color) } }
-            case .selected, .selectedToday:
-                let fill = style == .selectedToday ? CalendarDesign.red : tokens.ink(.heading)
-                configuration.label
-                    .background {
-                        // The pressed key: the fill, darkened from the top
-                        // edge (the design's inset shadow).
-                        shape.fill(fill.color)
-                            .overlay {
-                                shape.fill(LinearGradient(colors: [.black.opacity(0.22), .clear],
-                                                          startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.25)))
-                            }
-                    }
+        let fill = CalendarKeyButtonStyle.fill(style: style, isPressed: configuration.isPressed, tokens: design.tokens)
+        configuration.label
+            .background {
+                if let fill {
+                    CalendarKey.keyShape.fill(fill.color)
+                        .frame(width: CalendarDesign.keySize, height: CalendarDesign.keySize)
+                }
             }
-        }
-        .contentShape(shape)
     }
 }
