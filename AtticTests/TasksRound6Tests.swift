@@ -229,7 +229,7 @@ final class TasksRound6Tests: XCTestCase {
     /// a draft it stays the composer's (it adds the task and opens it).
     func testCommandReturnInTheComposerOpensTheSelectedRowsFilesOnlyWithoutADraft() throws {
         try requireKeyWindowTests()
-        XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.actions, composerDraft: "a draft"), "⇧⌘I: no field acts on it")
+        XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.page, composerDraft: "a draft"), "⇧⌘I: no field acts on it")
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: "  "))
         XCTAssertTrue(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: nil), "Find has no ⌘Return")
         XCTAssertFalse(TasksPage.typingFieldPasses(AtticTaskShortcut.openPage, composerDraft: "Call"), "a draft's ⌘Return adds it")
@@ -398,13 +398,13 @@ final class Hosted {
     let focus = Focus()
 
     init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true,
-         chrome: TasksPageChrome = TasksPageChrome()) throws {
+         chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices()) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container, long: long)
         store = TaskStore(container: container)
-        model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        model = TasksPageModel(library: AtticLibrary(tasks: store), services: services)
         let size = CGSize(width: AtticLayout.panelSize.width, height: height)
         let focus = focus
         page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),

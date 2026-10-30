@@ -189,3 +189,70 @@ enum CalendarAgenda {
         return DateInterval(start: from, end: to)
     }
 }
+
+// MARK: - Free days (Accepted 2026-10-30, "Calendar page: Empty days")
+
+/// A run of consecutive days with nothing on them, shown as one thin grey
+/// line ("10–11 Oct"). Clicking it selects its first day.
+struct CalendarFreeDays: Equatable, Sendable {
+    let first: DueDay
+    let last: DueDay
+
+    /// "10 Oct", "10–11 Oct", "31 Oct – 1 Nov" (the locale's own range).
+    func label(locale: Locale = .current) -> String {
+        let calendar = CalendarMonthMath.calendar()
+        guard let start = first.startDate(in: calendar), let end = last.startDate(in: calendar) else { return first.rawValue }
+        if first == last { return TaskRowPresentation.format(start, template: "dMMM", calendar: calendar, locale: locale) }
+        let formatter = DateIntervalFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateTemplate = "dMMM"
+        let range = formatter.string(from: start, to: end)
+        // Within one month the design closes the dash up ("10–11 Oct"); across
+        // months it keeps the locale's spaced dash ("31 Oct – 1 Nov").
+        guard calendar.isDate(start, equalTo: end, toGranularity: .month) else { return range }
+        return range.replacingOccurrences(of: #"\s*–\s*"#, with: "–", options: .regularExpression)
+    }
+}
+
+/// What the agenda lists: a day's card, or a run of free days.
+enum CalendarAgendaEntry: Identifiable, Equatable, Sendable {
+    case day(CalendarAgendaGroup)
+    case free(CalendarFreeDays)
+
+    /// Stable while scrolling and as events load: a day's card by its day,
+    /// a run by its first day.
+    var id: String {
+        switch self {
+        case let .day(group): "day-" + group.day.rawValue
+        case let .free(run): "free-" + run.first.rawValue
+        }
+    }
+}
+
+extension CalendarAgenda {
+    /// The agenda's entries: each day with rows keeps its card, consecutive
+    /// days with nothing on them fold into one line, and today always keeps
+    /// its card. A search lists only days with matches, so nothing folds.
+    /// The days' own contents and order are `groups`'s, unchanged.
+    static func entries(_ groups: [CalendarAgendaGroup], foldsFreeDays: Bool) -> [CalendarAgendaEntry] {
+        guard foldsFreeDays else { return groups.map(CalendarAgendaEntry.day) }
+        var entries: [CalendarAgendaEntry] = []
+        var run: (first: DueDay, last: DueDay)?
+        func flush() {
+            if let open = run { entries.append(.free(CalendarFreeDays(first: open.first, last: open.last))) }
+            run = nil
+        }
+        for group in groups {
+            if !group.hasRows, !group.isToday {
+                run = (run?.first ?? group.day, group.day)
+                continue
+            }
+            flush()
+            entries.append(.day(group))
+        }
+        flush()
+        return entries
+    }
+}

@@ -75,6 +75,16 @@ struct GeneralSettingsView: View {
                 .help(PanelHideAnimation.settingsHelp)
             }
 
+            // The design's Tasks switch (Accepted 2026-10-29, "Tasks: the
+            // next event in Now").
+            SettingsGroup(title: String(localized: "Tasks")) {
+                AtticSwitchRow(
+                    title: String(localized: "Next event in Now"),
+                    isOn: $settings.nextEventInNow,
+                    identifier: "setting-next-event-in-now"
+                )
+            }
+
             // The Motion Lab: preview builds only (never the release
             // identity), for blur tuning and the native-popover experiment.
             if settings.motionLabAvailable {

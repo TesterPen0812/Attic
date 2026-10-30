@@ -254,6 +254,30 @@ struct AtticSelectedChip: View {
     }
 }
 
+/// One selection marker (Accepted 2026-10-30, "Top row and bottom bar"):
+/// every switch marks its current choice with the same flat grey chip, the
+/// tag bar's (the design's rgba(0, 0, 0, 0.06) in the primary ink), in the
+/// control's own corner. Hover is a step lighter (0.045).
+struct AtticSelectionMarker: View {
+    var cornerRadius: CGFloat
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
+
+    static let fillAlpha: Double = 0.06
+    static let hoverAlpha: Double = 0.045
+
+    static func fill(_ tokens: AtticColorTokens) -> AtticRGBA { tokens.ink(.heading).withAlpha(fillAlpha) }
+    static func hoverFill(_ tokens: AtticColorTokens) -> AtticRGBA { tokens.ink(.heading).withAlpha(hoverAlpha) }
+
+    var body: some View {
+        AtticControlShape.shape(cornerRadius: cornerRadius, exponent: cornerExponent ?? AtticShape.controlExponent)
+            .fill(Self.fill(design.tokens).color)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Hover gate
 
 /// Hover UI opens only while no mouse button is down (V-04): a drag that
@@ -334,22 +358,19 @@ struct AtticPageButton<Page: Hashable>: View {
                 Button { select(item.page) } label: {
                     ZStack {
                         let shape = AtticControlShape.shape(cornerRadius: chipRadius, exponent: cornerExponent)
-                        let accent = design.tokens.pageChipAccent
                         if isSelected, !open {
                             // Shut, the current page's glyph sits plain, as the
                             // pin's does (D-11, owner 2026-10-11): the chip
                             // means "on" only for a pinned pin, and marks the
                             // current page only among the others once open.
-                        } else if isSelected, let accent {
-                            // Phase 0's Light palettes: the current page in the accent.
-                            shape.fill(accent.fill.color)
-                            shape.inset(by: M.accentStrokeWidth / 2).stroke(accent.stroke.color, lineWidth: M.accentStrokeWidth)
                         } else if isSelected {
-                            shape.fill(design.tokens.chipSelected.color)
+                            // One selection marker (Accepted 2026-10-30):
+                            // every switch's flat grey chip.
+                            AtticSelectionMarker(cornerRadius: chipRadius)
                         } else if hoveredPage == item.page {
-                            shape.fill(design.tokens.chipHover.color)
+                            shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
                         }
-                        let face = M.glyphFace(isSelected: isSelected, open: open, accent: accent != nil,
+                        let face = M.glyphFace(isSelected: isSelected, open: open, accent: false,
                                                solid: design.effectiveSurface == .solid)
                         AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
                     }
@@ -1608,11 +1629,11 @@ struct AtticMenuCommand: Identifiable {
     /// the first subtask) still takes its key and does nothing, so the key
     /// never falls through to the list and moves the main task instead.
     /// ⇧⌘I opens the line's whole menu (`showActions`, control audit item
-    /// 5), as it does a task row's.
+    /// 5); a subtask has no page of its own to open.
     static func performSubtaskKey(key: KeyEquivalent, characters: String, modifiers: EventModifiers,
                                   in commands: [AtticMenuCommand], showActions: (() -> Void)? = nil) -> KeyPress.Result {
         if let showActions, !commands.isEmpty,
-           AtticTaskKeys.command(key: key, characters: characters, modifiers: modifiers, listCommands: true) == .showActions {
+           AtticTaskKeys.isShiftCommandI(key: key, characters: characters, modifiers: modifiers) {
             showActions()
             return .handled
         }

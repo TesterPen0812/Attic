@@ -90,6 +90,33 @@ final class TaskTimeTests: XCTestCase {
         XCTAssertNil(task.dueTimeMinutes, "a time cannot exist without a date")
     }
 
+    func testDatingLaterMovesToNowAndMovingBackClearsTheWholeScheduleWithUndo() throws {
+        let store = try makeTestStore()
+        let library = AtticLibrary(tasks: store)
+        let task = try XCTUnwrap(store.create(title: "Later call", status: .backlog))
+        XCTAssertTrue(library.updateTask(task.id, dueDay: .some(today), dueTimeMinutes: .some(990)).isApplied)
+        XCTAssertEqual(task.status, .todo)
+        XCTAssertEqual(task.dueDay, today)
+        XCTAssertEqual(task.dueTimeMinutes, 990)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(task.status, .backlog)
+        XCTAssertNil(task.dueDay)
+        XCTAssertNil(task.dueTimeMinutesRaw)
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        XCTAssertTrue(library.updateTask(task.id, status: .backlog).isApplied)
+        XCTAssertEqual(task.status, .backlog)
+        XCTAssertNil(task.dueDay)
+        XCTAssertNil(task.dueTimeMinutesRaw)
+        let reopened = try XCTUnwrap(ModelContext(store.container).fetch(FetchDescriptor<TaskItem>()).first)
+        XCTAssertEqual(reopened.status, .backlog)
+        XCTAssertNil(reopened.dueDay)
+        XCTAssertNil(reopened.dueTimeMinutesRaw)
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(task.status, .todo)
+        XCTAssertEqual(task.dueDay, today)
+        XCTAssertEqual(task.dueTimeMinutes, 990)
+    }
+
     func testTimeOnlyDraftInfersTodayAndPersistsThroughBothComposerBuilders() throws {
         let parser = TaskTextParser(calendar: calendar, now: { self.noon })
         let built = try XCTUnwrap(TaskDraftBuilder(parser: parser).draft(fromLine: "Call 4:30 pm"))

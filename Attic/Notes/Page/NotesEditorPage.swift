@@ -371,7 +371,15 @@ struct NotesEditorPage: View {
     /// task-list filter button.
     private var topRow: some View {
         let shown = topSearchShown
-        return PanelTopRow(layout: layout, searchOpen: shown) {
+        // Board | list in the page-switch slot, only on the notes list
+        // (Accepted 2026-10-30, "Notes board"); the search folds it.
+        return PanelTopRow(page: .notes, layout: layout, searchOpen: shown) {
+            if controller.isLibraryPresented {
+                NotesLayoutSwitch(selection: $library.layout)
+                    .atticDesignCorners()
+                    .transition(.opacity)
+            }
+        } search: {
             if shown {
                 AtticTabsSearchField(placeholder: NotesLibraryModel.placeholder(count: noteStore.notes.count, tag: library.tagFilter),
                                      text: $library.query, isFocused: $searchFocused, floating: true,
@@ -411,7 +419,7 @@ struct NotesEditorPage: View {
     /// quiet icon grey read as disabled over the dark surface.
     private var darkGlyphs: Bool { design.tokens.context.mode == .dark }
 
-    /// All notes: the tag bar and compose. An open note: Back on the left,
+    /// All notes: the tag bar and "+". An open note: Back on the left,
     /// its status between, Aa on the right (Notes Page v2; the "New note"
     /// field and the scope button it once had were replaced on 2026-10-28).
     @ViewBuilder
@@ -428,13 +436,12 @@ struct NotesEditorPage: View {
 
     private var libraryBar: some View {
         HStack(spacing: NotesBarMetrics.gap) {
+            PanelPageSwitcher(page: .notes)
             NotesTagBar(tags: library.recentTags(store: noteStore), selection: library.tagFilter) { tag in
                 library.tagFilter = tag
             }
-            AtticRaisedButton(systemName: "square.and.pencil", label: "New note", size: NotesBarMetrics.size,
+            AtticRaisedButton(systemName: NotesBarMetrics.newNoteSymbol, label: "New note", size: NotesBarMetrics.size,
                               help: String(localized: "New note (⌘N)"),
-                              glyphOffsetY: AtticRaisedButtonMetrics.newNoteGlyphOffset.height,
-                              glyphOffsetX: AtticRaisedButtonMetrics.newNoteGlyphOffset.width,
                               emphasisedGlyph: darkGlyphs, cornerRadius: NotesBarMetrics.radius) {
                 newNote()
             }

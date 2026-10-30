@@ -556,9 +556,11 @@ final class PanelHideMotionShipTests: XCTestCase {
         try XCTSkipUnless(has([root], isBlur) || has([root], isControlGlass),
                           "this Mac draws neither the edges' variable blur nor the controls' Liquid Glass")
         let split = try XCTUnwrap(PanelGenieView.tierSplit(rig.host.layer, surfaceRect: rig.host.frame))
-        // SwiftUI's page scroll view (the composer's field has one of its own).
+        // SwiftUI's page scroll view (the composer's field has one of its own;
+        // the bottom bar's tag bar scrolls too, a control one row tall).
         let isPage: (CALayer) -> Bool = { layer in
-            layer.delegate.map { String(describing: type(of: $0)).contains("HostingScrollView") } ?? false
+            layer.bounds.height > 2 * AtticControlSize.headerControl
+                && (layer.delegate.map { String(describing: type(of: $0)).contains("HostingScrollView") } ?? false)
         }
         let isField: (CALayer) -> Bool = { $0.delegate is AtticTokenFieldView }
         // The content's render keeps the pages and leaves the controls out.
@@ -787,7 +789,7 @@ final class PanelHideMotionShipTests: XCTestCase {
         let scan = PanelGenieView.scanGlass(in: root, surfaceRect: rig.host.frame, hidesSurfaceMaterial: false)
         let corner = scan.pills.filter { abs($0.rect.width - AtticControlSize.headerControl) < 0.5 && abs($0.rect.height - AtticControlSize.headerControl) < 0.5 }
         try XCTSkipIf(scan.pills.isEmpty, "this Mac draws no Liquid Glass controls")
-        XCTAssertEqual(corner.count, 2, "the pin and the search button: \(scan.pills.map(\.rect))")
+        XCTAssertEqual(corner.count, 4, "the pin, •••, Search and \"+\": \(scan.pills.map(\.rect))")
         for pill in corner {
             XCTAssertEqual(pill.cornerRadius ?? -1, AtticRadius.header, accuracy: 0.3, "\(pill.rect)")
             XCTAssertEqual(pill.exponent ?? -1, AtticControlShape.designExponent, accuracy: 1e-6, "\(pill.rect)")
@@ -810,15 +812,16 @@ final class PanelHideMotionShipTests: XCTestCase {
         try XCTSkipIf(scan.pills.isEmpty, "this Mac draws no Liquid Glass controls")
         let control = AtticControlSize.headerControl
         let header = scan.pills.filter { $0.rect.midY > surface.midY }.sorted { $0.rect.minX < $1.rect.minX }
-        let switchWidth = AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count)
-        XCTAssertEqual(header.map { ($0.rect.width * 2).rounded() / 2 }, [control, control, switchWidth], "\(header.map(\.rect))")
+        // The top row (Accepted 2026-10-30): Pin, Now · Later · Done, •••, Search.
+        XCTAssertEqual(header.map { ($0.rect.width * 2).rounded() / 2 }, [control, TasksTopTabsMetrics.width, control, control],
+                       "\(header.map(\.rect))")
         for pill in header { XCTAssertEqual(pill.rect.height, control, accuracy: 0.5, "\(pill.rect)") }
-        // The footer's page tabs: one glass for the three cells.
-        let m = TasksDesignMetrics.self
-        let tabsWidth = 3 * m.tabCell + 2 * m.tabsGap + 2 * m.tabsPadding
-        let tabs = try XCTUnwrap(scan.pills.first { abs($0.rect.width - tabsWidth) < 0.5 }, "\(scan.pills.map(\.rect))")
-        XCTAssertEqual(tabs.rect.height, m.tabCell + 2 * m.tabsPadding, accuracy: 0.5)
-        XCTAssertEqual(tabs.cornerRadius ?? -1, min(m.footerRadius, tabs.rect.height / 2), accuracy: 0.5)
+        // The bottom bar's page switch: one glass, 27 tall, a capsule.
+        let switchWidth = AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count)
+        let pageSwitch = try XCTUnwrap(scan.pills.first { abs($0.rect.width - switchWidth) < 0.5 && $0.rect.midY < surface.midY },
+                                       "\(scan.pills.map(\.rect))")
+        XCTAssertEqual(pageSwitch.rect.height, control, accuracy: 0.5)
+        XCTAssertEqual(pageSwitch.cornerRadius ?? -1, control / 2, accuracy: 0.5)
         // Every control here has the design's corner, at most a capsule's radius.
         for pill in scan.pills {
             XCTAssertEqual(pill.exponent ?? -1, AtticControlShape.designExponent, accuracy: 1e-6, "\(pill.rect)")

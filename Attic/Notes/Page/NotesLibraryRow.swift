@@ -3,11 +3,11 @@ import SwiftUI
 /// The design's row sizes, in points (Task Panel v11's Notes rows, drawn
 /// at 2×: px ÷ 2).
 enum NotesLibraryRowMetrics {
-    /// Padding 12 × 16 px; radius 22 px (`superellipse(1.4)`, the app's
-    /// squircle); rows 4 px apart, no dividers.
+    /// Padding 12 × 16 px; a row's radius (Shapes: 24 px, squircle); rows
+    /// 4 px apart, no dividers.
     static let paddingY: CGFloat = 6
     static let paddingX: CGFloat = 8
-    static let radius: CGFloat = 11
+    static let radius: CGFloat = AtticRadius.row
     static let rowGap: CGFloat = 2
     /// The thumbnail, then 18 px to the text.
     static let thumbnailToText: CGFloat = 9

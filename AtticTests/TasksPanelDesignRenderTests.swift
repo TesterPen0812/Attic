@@ -103,16 +103,16 @@ final class TasksPanelDesignRenderTests: XCTestCase {
         XCTAssertFalse(path.contains(CGPoint(x: 2.5, y: 2.5)))
     }
 
-    func testRenderTheFooterTabsAlone() throws {
+    func testRenderTheTopTabsAlone() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_PANEL_DESIGN_RENDER"] == "1" else { return }
-        let view = TasksFooterTabs(selection: .constant(.now)).padding(10).background(Color(white: 0.95)).atticDesign(.default)
+        let view = TasksTopTabs(selection: .constant(.now)).padding(10).background(Color(white: 0.95)).atticDesign(.default)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2
         let image = try XCTUnwrap(renderer.nsImage)
         let rep = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PanelDesignRenders", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: dir.appendingPathComponent("footer-tabs-alone.png"))
+        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: dir.appendingPathComponent("top-tabs-alone.png"))
     }
 
     func testRenderThePanelLikeTheDesign() throws {

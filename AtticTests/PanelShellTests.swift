@@ -192,7 +192,10 @@ final class PanelShellTests: XCTestCase {
         XCTAssertEqual(PanelHeaderLayout.height, 27)
         XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 27, height: 27))
         XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), 36)
-        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 99)
+        XCTAssertEqual(AtticPageButton<PanelPage>.width(open: true, count: PanelPage.allCases.count), 99)
+        // The switch moved to the bottom bar (Accepted 2026-10-30); the
+        // header's title room keeps one control's width for •••.
+        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, AtticControlSize.headerControl)
     }
 
     func testPageLayoutUsesTheCornerAwareInsetsAndPlacesTheHeaderBand() {

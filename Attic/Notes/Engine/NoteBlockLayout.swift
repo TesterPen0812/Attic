@@ -498,7 +498,8 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         let reach = radius * 2
         let full = CGRect(x: slice.minX, y: slice.minY - (starts ? 0 : reach),
                           width: slice.width, height: slice.height + (starts ? 0 : reach) + (ends ? 0 : reach))
-        let path = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: full).cgPath
+        // Note blocks are surfaces: squircles (Shapes, Accepted 2026-10-30).
+        let path = Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).path(in: full).cgPath
         context.saveGState()
         context.clip(to: slice)
         context.addPath(path)
@@ -506,7 +507,7 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         context.fillPath()
         if let (ink, width) = edge {
             let inset = width / 2
-            let outline = RoundedRectangle(cornerRadius: radius - inset, style: .continuous)
+            let outline = Squircle(cornerRadius: radius - inset, exponent: AtticShape.surfaceExponent)
                 .path(in: full.insetBy(dx: inset, dy: inset)).cgPath
             context.addPath(outline)
             context.setStrokeColor(ink.cgColor)

@@ -61,10 +61,11 @@ final class CornerGlassTests: XCTestCase {
                     defer { panel.orderOut(nil); panel.close() }
                     let glass = backdrops(in: view)
                     let name = "\(mode) contrast=\(increaseContrast) pinned=\(isPinned)"
-                    // One shared container: one backdrop for both buttons,
-                    // not one each.
-                    XCTAssertEqual(glass.count, 1, "\(name): one shared glass container")
-                    XCTAssertEqual(glass.first?.shapes, 2, "\(name): the pin and the page button are its two shapes")
+                    // One glass container. The page switch moved to the
+                    // bottom bar (Accepted 2026-10-30): the pin is the
+                    // shell header's one shape.
+                    XCTAssertEqual(glass.count, 1, "\(name): one glass container")
+                    XCTAssertEqual(glass.first?.shapes, 1, "\(name): the pin is its one shape")
                 }
             }
         }

@@ -216,8 +216,8 @@ final class DeepReviewFixTests: XCTestCase {
     // MARK: - P2-03: one Open Files command
 
     /// Open Files… from the row's right-click menu (the menu a secondary
-    /// click on the row gets), from ⇧⌘I's menu (a real ⇧⌘I, the menu's own
-    /// keys) and from ⌘Return: each opens the row's files, once.
+    /// click on the row gets), from the actions menu (the menu's own keys)
+    /// and from ⌘Return: each opens the row's files, once.
     func testOpenFilesOpensFromTheRightClickMenuTheActionsMenuAndCommandReturn() throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 520)
@@ -264,17 +264,19 @@ final class DeepReviewFixTests: XCTestCase {
                            frame.height, accuracy: 0.5, "the files have collapsed in the rendered cell")
         }
 
-        // ⇧⌘I's menu: down to More (its ninth item since Dropdown content:
-        // answers, owner, 2026-10-24, answer 1 A), into it, Return.
+        // The actions menu (a real secondary click on the selected row; ⇧⌘I
+        // opens the page since 2026-10-30): down to More (its ninth item
+        // since Dropdown content: answers, owner, 2026-10-24, answer 1 A),
+        // into it, Return.
         try closeFilesAndWaitForLayout()
         try hosted.clickRow(row, tab: .now)
         XCTAssertEqual(hosted.model.selection, [row], "the menu's key is sent with its row selected")
         let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
         let actionTimers = schedule(Array(repeating: down, count: 9) + [("\u{F703}", 124), ("\r", 36)], in: hosted)
-        hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
+        hosted.rightClick(y: try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)]).midY, x: 200)
         hosted.spin(1)
         actionTimers.forEach { $0.invalidate() }
-        XCTAssertEqual(opened, [row], "⇧⌘I's Open Files… opens them the same way")
+        XCTAssertEqual(opened, [row], "the actions menu's Open Files… opens them the same way")
 
         // ⌘Return on the selected row.
         try closeFilesAndWaitForLayout()

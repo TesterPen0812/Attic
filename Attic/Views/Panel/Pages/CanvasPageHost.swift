@@ -24,5 +24,14 @@ struct CanvasPageHost: View {
             topOverlayInset: headerBottom,
             mainControlRects: headerControlRects
         )
+        // The page switch at the bottom left, as on every page (Accepted
+        // 2026-10-29/30); the Draw page itself is still in Backlog.
+        .overlay(alignment: .bottomLeading) {
+            AtticControlGroup {
+                PanelPageSwitcher(page: .canvas)
+            }
+            .padding(.leading, layout.chromeInsets.leading)
+            .padding(.bottom, layout.chromeInsets.bottom)
+        }
     }
 }

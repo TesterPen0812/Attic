@@ -261,6 +261,7 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
             print("ATTIC_PD_COST composer.focus.widths \(focusTurns.last?.fieldWidths.sorted() ?? []) focused=\(host.focus.addBar)")
             host.spin(0.6)
             let composing = width()
+            let composingLead = lead()
             XCTAssertGreaterThan(composing, rest, "cycle \(cycle): the field takes the tabs' room once they have folded")
             blurTurns.append(turn(host, seconds: 0.1) {
                 host.focus.addBar = false
@@ -272,10 +273,12 @@ final class TasksPanelDesignSmoothnessTests: XCTestCase {
             // Fix round 2 (the Air: on blur the footer stretched past both
             // panel edges, then snapped): the held field never widens the
             // bar, so the field's leading edge is never left of where it
-            // rests beside the tabs.
-            let restLead = lead()
+            // starts while composing (the bar's left inset). The bottom bar
+            // (Accepted 2026-10-30) rests as the page switch, the tag bar
+            // and "+", the field folded into "+", so the field shrinks back
+            // from the inset rather than resting beside tabs.
             for (index, value) in (blurTurns.last?.fieldLeads ?? []).enumerated() {
-                XCTAssertGreaterThanOrEqual(value, restLead - 0.5,
+                XCTAssertGreaterThanOrEqual(value, composingLead - 0.5,
                                             "cycle \(cycle), frame \(index): the footer is pushed past the panel's edge while the tabs return")
             }
         }

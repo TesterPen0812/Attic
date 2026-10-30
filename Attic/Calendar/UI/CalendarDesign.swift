@@ -15,9 +15,13 @@ enum CalendarDesign {
     // Grid: 30 px from the panel's sides, 7 px between keys.
     static let gridInset: CGFloat = 15
     static let keyGap: CGFloat = 3.5
-    // Keys: 60 px tall, radius 20 px; 2 px above and 7 px below each row.
+    // Days: 60 px tall; 2 px above and 7 px below each row.
     static let keyHeight: CGFloat = 30
-    static let keyRadius: CGFloat = 10
+    /// The selected day's key (Accepted 2026-10-30): a 60 × 60 px whole
+    /// superellipse on curve 1.4, so rounded by half its side.
+    static let keySize: CGFloat = 30
+    static let keyCornerRadius: CGFloat = AtticShape.controlRadius(height: keySize)
+    static let keyExponent: CGFloat = AtticShape.controlExponent
     static let weekTop: CGFloat = 1
     static let weekBottom: CGFloat = 3.5
     static let weekPitch: CGFloat = weekTop + keyHeight + weekBottom
@@ -37,13 +41,20 @@ enum CalendarDesign {
     static let agendaTop: CGFloat = 4
     static let agendaBottom: CGFloat = 80
     // A day: padding 10 px, 8 px apart, radius 36 px, 10 px tile to rows.
-    static let dayPadding: CGFloat = 5
+    static let dayPadding: CGFloat = dayPadding(radius: dayRadius)
+    /// A day card's padding grows with its radius (Shapes): the design's
+    /// max(6, round(10 + (R − 36) / 4)) px, R in px.
+    static func dayPadding(radius: CGFloat) -> CGFloat {
+        max(6, (10 + (radius * 2 - 36) / 4).rounded()) / 2
+    }
     static let dayGap: CGFloat = 4
-    static let dayRadius: CGFloat = 18
+    static let dayRadius: CGFloat = AtticRadius.card
+    /// Today's card is a surface: a squircle (Shapes, Accepted 2026-10-30).
+    static let dayCardExponent: CGFloat = AtticShape.surfaceExponent
     static let tileToRows: CGFloat = 5
-    // Date tile: 128 px wide, radius 26 px, padding 14 16 16 16 px.
+    // Date (Accepted 2026-10-30: plain text, no box): 128 px wide,
+    // padding 14 16 16 16 px.
     static let tileWidth: CGFloat = 64
-    static let tileRadius: CGFloat = 13
     static let tilePaddingTop: CGFloat = 7
     static let tilePaddingX: CGFloat = 8
     static let tilePaddingBottom: CGFloat = 8
@@ -52,6 +63,18 @@ enum CalendarDesign {
     static let tileDateLine: CGFloat = 14
     static let tileWeekdayFont: CGFloat = 9.5
     static let tileWeekdayLine: CGFloat = 13
+
+    // A run of free days ("10–11 Oct"): a 40 px line, the card's padding
+    // plus 16 px in, 19 px text, 14 px to a 1 px hairline.
+    static let freeHeight: CGFloat = 20
+    static let freeInsetX: CGFloat = dayPadding + 8
+    static let freeFont: CGFloat = 9.5
+    static let freeGap: CGFloat = 7
+    static let freeHairline: CGFloat = 0.5
+
+    /// The agenda fades in over 40 px under the pinned week (Accepted
+    /// 2026-10-30, "Scrolling": a plain gradient, no native soft edge).
+    static let agendaFade: CGFloat = 20
 
     // Event rows: padding 12 × 14 px, the 28 px dot column, 20 px to the
     // title; dot 12 px; title 24 px (500) on 30 px; second line 22 px on
@@ -62,7 +85,7 @@ enum CalendarDesign {
     static let eventLine: CGFloat = 15
     static let eventMetaFont: CGFloat = 11
     static let eventMetaTop: CGFloat = 1.5
-    static let eventRadius: CGFloat = 12
+    static let eventRadius: CGFloat = AtticRadius.row
     // Now line: 10 px dot, 2 px line, 18 px time; 4 px above and below.
     static let nowDot: CGFloat = 5
     static let nowLine: CGFloat = 1
@@ -74,20 +97,18 @@ enum CalendarDesign {
     static let noMatchesPaddingX: CGFloat = 9
     static let noMatchesFont: CGFloat = 11
 
-    // Top row: the month pill's 16/18 px padding and 10 px gaps; month and
-    // year 24 px; the chevron 13 × 9 px; the arrows 11 × 19 px; 6 px apart.
-    static let pillPaddingLeading: CGFloat = 9
-    static let pillPaddingTrailing: CGFloat = 8
-    static let pillGap: CGFloat = 5
+    // Top row: month and year 24 px.
     static let pillFont: CGFloat = 12
     /// -0.015 em.
     static let monthTracking: CGFloat = -0.18
-    static let chevronSize = CGSize(width: 6.5, height: 4.5)
-    static let arrowSize = CGSize(width: 5.5, height: 9.5)
     static let controlsGap: CGFloat = 3
+    /// The header (Accepted 2026-10-30): month and year 9 px apart; ‹ ›
+    /// 1 pt apart in their capsule.
+    static let titleGap: CGFloat = 4.5
+    static let arrowsGap: CGFloat = 1
 
     // Footer: Today 61 px tall, 22 px padding, 22 px medium text.
-    static let footerHeight: CGFloat = 30.5
+    static let footerHeight: CGFloat = AtticControlSize.headerControl
     static let todayPaddingX: CGFloat = 11
     static let todayFont: CGFloat = 11
 

@@ -481,7 +481,8 @@ final class TasksRound10Tests: XCTestCase {
         }
         XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("d"), characters: "d", modifiers: .command, listCommands: true), .duplicate)
         XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("c"), characters: "c", modifiers: .command, listCommands: true), .copy)
-        XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("I"), characters: "I", modifiers: [.command, .shift], listCommands: true), .showActions)
+        XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("I"), characters: "I", modifiers: [.command, .shift], listCommands: true), .openPage,
+                       "⇧⌘I opens the page (Accepted 2026-10-30); Show actions stays on the button and VoiceOver")
         AtticTaskKeys.perform(.duplicate, actions)
         AtticTaskKeys.perform(.showActions, actions)
         XCTAssertEqual(fired, ["dup", "menu"])
@@ -501,7 +502,7 @@ final class TasksRound10Tests: XCTestCase {
             .submenu("Tags", [tagged, AtticMenuCommand(verbatim: "#work", state: .on) {}]),
             AtticMenuCommand(verbatim: "Move Up", shortcut: AtticTaskShortcut.moveUp, isDisabled: true, startsSection: true) {},
             AtticMenuCommand(verbatim: "Tomorrow", detail: "Tue") {},
-            AtticMenuCommand(verbatim: "Actions", shortcut: AtticTaskShortcut.actions) {}
+            AtticMenuCommand(verbatim: "Actions", shortcut: AtticTaskShortcut.page) {}
         ]
         let menu = AtticNativeMenu.make(commands)
         XCTAssertTrue(menu.items[0].isSectionHeader)

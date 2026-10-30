@@ -15,6 +15,9 @@ struct CalendarPageSnapshot: Equatable {
 
     var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var showsNoMatches: Bool { isSearching && groups.isEmpty }
+    /// The agenda as shown: days with rows (and today) as cards, runs of
+    /// free days as one line each.
+    var entries: [CalendarAgendaEntry] { CalendarAgenda.entries(groups, foldsFreeDays: !isSearching) }
     var pinnedWeekIndex: Int? { CalendarMonthMath.pinnedWeekIndex(weeks) }
 }
 

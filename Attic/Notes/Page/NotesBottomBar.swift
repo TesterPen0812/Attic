@@ -6,28 +6,37 @@ import SwiftUI
 /// compose button; an open note shows Back on the left and Aa on the right.
 /// The design is drawn at 2×: each value is half its px.
 enum NotesBarMetrics {
-    /// The bar's controls: 61 px, the add field's height on Tasks.
+    /// One size (Accepted 2026-10-30): every bottom-bar control is 27 pt
+    /// (it was the 30.5 pt add field).
     static let control: CGFloat = AtticControlSize.addBarHeight
-    /// 32 px superellipse corners, the Tasks footer's.
-    static let radius: CGFloat = TasksDesignMetrics.footerRadius
+    /// Curve 1.4: a capsule, half the height.
+    static let radius: CGFloat = AtticShape.controlRadius(height: control)
     /// 10 px between the controls.
     static let gap: CGFloat = TasksDesignMetrics.footerGap
-    /// The tag bar's inner padding (6 px) and its pills (47 px tall, 15 px
-    /// padding, 24 px corners, 2 px apart, 21 px text).
-    static let tagBarPadding: CGFloat = 3
-    static let pillHeight: CGFloat = 23.5
+    /// The tag bar's inner padding (6 px) and its tags (One size: 21 pt
+    /// tall, capsules; 15 px padding, 2 px apart, 21 px text).
+    static let tagBarPadding: CGFloat = AtticPageButtonMetrics.inset
+    static let pillHeight: CGFloat = AtticPageButtonMetrics.segment
     static let pillPaddingX: CGFloat = 7.5
-    static let pillRadius: CGFloat = 12
+    static let pillRadius: CGFloat = AtticShape.controlRadius(height: pillHeight)
     static let pillGap: CGFloat = 1
     static let pillFontSize: CGFloat = 10.5
     /// The tag bar fades out over its last 28 px.
     static let endFade: CGFloat = 14
-    /// The chosen pill's fill and the hover's, over the bar's glass.
-    static let selectedFill: Double = 0.06
-    static let hoverFill: Double = 0.045
+    /// The chosen pill's fill and the hover's, over the bar's glass: the
+    /// one selection marker.
+    static let selectedFill: Double = AtticSelectionMarker.fillAlpha
+    static let hoverFill: Double = AtticSelectionMarker.hoverAlpha
 
     static var size: CGSize { CGSize(width: control, height: control) }
+    /// The bar ends with "+", as on Tasks (Accepted 2026-10-30, "Top row
+    /// and bottom bar"), not the compose glyph.
+    static let newNoteSymbol = "plus"
 }
+
+/// The tag bar on every page that has tags (Notes, and Tasks since
+/// 2026-10-30).
+typealias PanelTagBar = NotesTagBar
 
 /// All and every tag in use, coloured; the chosen one on a quiet fill.
 /// Choosing one filters the list; more than the bar holds scrolls sideways,
@@ -35,11 +44,13 @@ enum NotesBarMetrics {
 struct NotesTagBar: View {
     let tags: [String]
     let selection: String?
+    /// The accessibility identifiers' stem ("notes-tag-bar", "tasks-tag-bar").
+    var idPrefix = "notes-tag-bar"
     let onSelect: (String?) -> Void
 
     @Environment(\.atticDesign) private var design
 
-    static let allID = "notes-tag-bar-all"
+    private var allID: String { "\(idPrefix)-all" }
 
     var body: some View {
         let m = NotesBarMetrics.self
@@ -49,15 +60,15 @@ struct NotesTagBar: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: m.pillGap) {
                     NotesTagBarPill(title: String(localized: "All"), tag: nil, selected: selection == nil) { onSelect(nil) }
-                        .id(Self.allID)
-                        .accessibilityIdentifier("notes-tag-bar-all")
+                        .id(allID)
+                        .accessibilityIdentifier(allID)
                     ForEach(tags, id: \.self) { tag in
                         NotesTagBarPill(title: TasksPanelDesign.tagChipTitle(tag), tag: tag, selected: selection == tag) {
                             onSelect(tag)
                         }
                         .id(tag)
                         .accessibilityLabel(tag)
-                        .accessibilityIdentifier("notes-tag-bar-\(tag)")
+                        .accessibilityIdentifier("\(idPrefix)-\(tag)")
                     }
                 }
                 .padding(.horizontal, m.tagBarPadding)
@@ -65,7 +76,7 @@ struct NotesTagBar: View {
             }
             // The chosen tag comes into view.
             .onChange(of: selection) { _, chosen in
-                withAnimation(motion) { proxy.scrollTo(chosen ?? Self.allID, anchor: .center) }
+                withAnimation(motion) { proxy.scrollTo(chosen ?? allID, anchor: .center) }
             }
         }
         .mask {
@@ -82,7 +93,7 @@ struct NotesTagBar: View {
         .background(Color.clear.atticRaisedMaterial(cornerRadius: m.radius, interactive: false))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
-        .accessibilityIdentifier("notes-tag-bar")
+        .accessibilityIdentifier(idPrefix)
     }
 }
 

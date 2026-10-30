@@ -238,8 +238,6 @@ enum AtticRaisedButtonMetrics {
     /// O14-05: the pinned pin, and what hovering it offers (Unpin).
     static let pinnedSymbol = "pin.fill"
     static let unpinSymbol = "pin.slash"
-    /// New note's `square.and.pencil` (A3-01: measured low and right).
-    static let newNoteGlyphOffset = CGSize(width: -0.5, height: -0.5)
     /// All notes' `rectangle.stack` (A3-02: measured high).
     static let stackGlyphOffsetY: CGFloat = 0.5
     /// Icon and label buttons: padding each side and icon-to-label gap.
@@ -381,20 +379,20 @@ enum AtticPopoverMetrics {
 /// 2026-10-23: "the menus look good"), which supersedes E1 (2026-10-02)
 /// and its Compact size (2026-10-05). Craft's finish on real glass, sized
 /// for the 320 pt panel (`phaseX/dropdown-redo/craft-spec-from-owner-codex.md`,
-/// draft C's `work/c-style.css`): 18 pt corners, rows 4 pt in, 32 pt rows
-/// with 13 pt names, 14 pt icons, a soft 6 pt hover fill, hairline
+/// draft C's `work/c-style.css`): 14 pt corners, rows 3 pt in, 32 pt rows
+/// with 13 pt names, 14 pt icons, an 11 pt hover radius, hairline
 /// separators, 11 pt section headers, a 30 pt field in a 40 pt header.
 /// The same values draw the SwiftUI cards (the date card, the tag picker,
 /// the `/` list and the rest) and the glass menus (`AtticGlassMenu`).
 /// Every value of the look is here, so it is tuned in one place.
 enum AtticDropdownMetrics {
-    static let cornerRadius: CGFloat = 18
+    static let cornerRadius: CGFloat = AtticRadius.menu
     /// Rows and fields sit this far in from the card's edge.
-    static let inset: CGFloat = 4
+    static let inset: CGFloat = AtticRadius.menuPadding
     static let rowHeight: CGFloat = 32
     static let rowPadding: CGFloat = 10
-    /// The hover fill: the whole row, 6 pt corners.
-    static let highlightRadius: CGFloat = 6
+    /// Shapes (Accepted 2026-10-30): concentric with the 14 pt card.
+    static let highlightRadius: CGFloat = AtticRadius.menuRow
     static let iconSize: CGFloat = 13
     static let iconSlot: CGFloat = 14
     /// Between a row's columns (dot or icon, name).
@@ -410,12 +408,12 @@ enum AtticDropdownMetrics {
     static let markSlot: CGFloat = 15
     /// The least room before a trailing detail (Fri, 2 Oct).
     static let detailGap: CGFloat = 14
-    /// The field (Date, Tag): 30 pt with 12 pt corners, 6 pt in from the
+    /// The field (Date, Tag): 30 pt with 12 pt corners, 5 pt in from the
     /// card's edge, in a 40 pt header ruled off by a full-width hairline.
     static let fieldHeight: CGFloat = 30
     static let fieldRadius: CGFloat = 12
     static let fieldHeaderHeight: CGFloat = 40
-    /// The field is this much further in than the rows (6 pt from the edge).
+    /// The field is this much further in than the rows (5 pt from the edge).
     static let fieldInset: CGFloat = 2
     /// The magnifier's slot: text starts 32 pt into the field.
     static let fieldIconLeading: CGFloat = 10
@@ -976,7 +974,7 @@ enum AtticNoteObjectMetrics {
     /// D5, D24): radius 17, the recessed fill, no border; a 28 pt header
     /// with the type ("PDF") left and Quick Look and ⋯ right, then the
     /// glyph, the name and the size, 10 under.
-    static let blockRadius: CGFloat = AtticRadius.groupCard
+    static let blockRadius: CGFloat = AtticRadius.noteBlock
     static let blockHeaderHeight: CGFloat = 28
     static let blockCardHeight: CGFloat = 70
     static let blockFirstLine: CGFloat = 36
@@ -1098,7 +1096,7 @@ enum TasksRowDesign {
     static let paddingX: CGFloat = 9
     static let line: CGFloat = 15
     static let metaTop: CGFloat = 1.5
-    static let radius: CGFloat = 12
+    static let radius: CGFloat = AtticRadius.row
     static let tile: CGFloat = 28
     static let tilesTop: CGFloat = 4
     static let tilesBottom: CGFloat = 1

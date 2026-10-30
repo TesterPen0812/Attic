@@ -15,13 +15,13 @@ final class NotesV2ChromeTests: XCTestCase {
 
     func testChromeBTokens() {
         // The owner's panel design (2026-10-27): 27 pt header controls, a
-        // 30.5 pt add field.
+        // 27 pt add field (one size, Accepted 2026-10-30; was 30.5).
         XCTAssertEqual(AtticControlSize.headerControl, 27)
         XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 27, height: 27))
-        XCTAssertEqual(AtticControlSize.addBarHeight, 30.5)
-        XCTAssertEqual(AtticControlSize.sendButton, CGSize(width: 22.5, height: 22.5))
+        XCTAssertEqual(AtticControlSize.addBarHeight, 27, "one size, 27 pt (Accepted 2026-10-30)")
+        XCTAssertEqual(AtticControlSize.sendButton, CGSize(width: 19, height: 19))
         XCTAssertEqual(AtticStyle.chromeMinimumInset, 16)
-        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 11.5, "the 42 % rule")
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 13.5, "half the height (Shapes, 2026-10-30)")
         XCTAssertEqual(AtticPageButtonMetrics.segment, 21)
         XCTAssertEqual(AtticNoteFormatMetrics.rowCellHeight, 19)
         XCTAssertEqual(AtticNoteMetrics.pillHeight, 27)
@@ -35,7 +35,9 @@ final class NotesV2ChromeTests: XCTestCase {
         let minimum = AtticControlSize.minimumHitTarget
         // The 27 pt header controls answer a 28 pt target (half a point out).
         XCTAssertEqual(AtticControlSize.panelButton.height + 2 * AtticControlSize.hitOutset(for: AtticControlSize.panelButton.height), minimum)
-        XCTAssertGreaterThanOrEqual(AtticControlSize.addBarHeight, minimum)
+        // One size (Accepted 2026-10-30): the bottom bar is the top row's 27 pt,
+        // so the add field answers the same half-point-out target.
+        XCTAssertEqual(AtticControlSize.addBarHeight + 2 * AtticControlSize.hitOutset(for: AtticControlSize.addBarHeight), minimum)
         for side in [AtticPageButtonMetrics.segment, AtticNoteFormatMetrics.rowCellHeight, AtticControlSize.sendButton.height] {
             XCTAssertEqual(side + 2 * AtticControlSize.hitOutset(for: side), minimum, "side \(side)")
         }
