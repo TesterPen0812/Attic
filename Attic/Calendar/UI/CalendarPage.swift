@@ -220,7 +220,16 @@ struct CalendarScrollMask: View {
 
     @Environment(\.atticDesign) private var design
 
+    #if DEBUG
+    /// Test seam: the `pinned` of each body run, so a hosted test can see
+    /// that the mounted scroller carries this mask and follows the pin.
+    static var renders: [Bool] = []
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.renders.append(pinned)
+        #endif
         VStack(spacing: 0) {
             Color.clear.frame(height: pinned ? CalendarDesign.weekPitch : 0)
             LinearGradient(colors: [.black.opacity(pinned ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
