@@ -1041,7 +1041,12 @@ private struct EdgeBlurBoard: View {
                 .overlay {
                     VStack {
                         HStack {
-                            AtticRaisedButton(systemName: "pin", label: "Pin", action: demo.record("Pin"))
+                            // The top row's own pin (`PanelHeader`): the
+                            // filled glyph in the header's strong ink.
+                            AtticRaisedButton(systemName: "pin.fill", label: "Pin",
+                                              glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
+                                              emphasisedGlyph: true, cornerRadius: AtticRadius.header,
+                                              glyphRotation: 30, action: demo.record("Pin"))
                             Spacer()
                         }
                         Spacer()
