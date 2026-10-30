@@ -444,8 +444,9 @@ final class TasksPanelDesignTests: XCTestCase {
     func testTheCurrentTabIsTheFlatGreyMarker() {
         let tokens = AtticColorTokens.resolve(AtticDesignContext(mode: .light))
         XCTAssertEqual(AtticSelectionMarker.fill(tokens).alpha, 0.06, accuracy: 0.001)
-        XCTAssertEqual(TasksTopTabsMetrics.markerOffset(index: 0), 0)
-        XCTAssertEqual(TasksTopTabsMetrics.markerOffset(index: 2), 2 * (42 + 1), "the marker slides under the words")
+        // It changes tab as the old thumb did (motion unchanged).
+        XCTAssertEqual(TasksTopTabs.selectionAnimation(reduceMotion: false), .easeOut(duration: 0.16))
+        XCTAssertNil(TasksTopTabs.selectionAnimation(reduceMotion: true))
     }
 
     func testTheSubtaskCountIsTheDesigns() {

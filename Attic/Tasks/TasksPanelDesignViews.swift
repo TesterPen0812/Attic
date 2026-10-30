@@ -62,6 +62,13 @@ enum TasksDesignMetrics {
         .timingCurve(0.3, 0.7, 0.2, 1, duration: duration)
     }
 
+    /// The bottom bar's fold, as the footer's tabs folded for the add
+    /// field (pd-combined): the design's ease at 260 ms; Reduce Motion a
+    /// 150 ms fade.
+    static func fold(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeOut(duration: 0.15) : curve(0.26)
+    }
+
     // Group header: padding 18 18 6 18 px, 22 px text on a 28 px line, gap 8 px.
     static let groupHeaderTop: CGFloat = 9
     static let groupHeaderBottom: CGFloat = 3
@@ -191,6 +198,12 @@ struct TasksTopTabs: View {
 
     typealias M = TasksTopTabsMetrics
 
+    /// A change of tab, as the footer tabs' thumb changed (pd-combined):
+    /// a 160 ms fade between the cells; Reduce Motion at once.
+    static func selectionAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.16)
+    }
+
     var body: some View {
         let tokens = design.tokens
         let tabs = TasksTab.allCases
@@ -208,6 +221,9 @@ struct TasksTopTabs: View {
                         .foregroundStyle(on || hovered == tab ? tokens.ink(.heading).color
                                          : TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
                         .frame(width: M.cell.width, height: M.cell.height)
+                        // In the current cell, as the old thumb was: a
+                        // change of tab crossfades it between the cells.
+                        .background { if on { AtticSelectionMarker(cornerRadius: chipRadius) } }
                         .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
                 }
                 .buttonStyle(.plain)
@@ -220,18 +236,11 @@ struct TasksTopTabs: View {
                 .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
             }
         }
-        // The marker slides under the words.
-        .background(alignment: .leading) {
-            AtticSelectionMarker(cornerRadius: chipRadius)
-                .frame(width: M.cell.width, height: M.cell.height)
-                .offset(x: M.markerOffset(index: selected))
-                .accessibilityHidden(true)
-        }
         .padding(M.inset)
         .frame(height: AtticControlSize.headerControl)
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: AtticRadius.header)
-        .animation(design.reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
+        .animation(Self.selectionAnimation(reduceMotion: design.reduceMotion), value: selection)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
@@ -256,8 +265,6 @@ enum TasksTopTabsMetrics {
     /// 21 px, weight 500, −0.1 px.
     static let fontSize: CGFloat = 10.5
     static let tracking: CGFloat = -0.05
-
-    static func markerOffset(index: Int) -> CGFloat { CGFloat(index) * (cell.width + gap) }
 
     /// The whole switch's width.
     static var width: CGFloat {
@@ -324,7 +331,12 @@ struct TasksBottomBar<AddBar: View>: View {
             .frame(width: folded ? nil : side, alignment: .trailing)
             .frame(maxWidth: folded ? .infinity : side, alignment: .trailing)
         }
-        .animation(design.reduceMotion ? .easeOut(duration: 0.15) : TasksDesignMetrics.curve(0.26), value: folded)
+        .animation(Self.foldAnimation(reduceMotion: design.reduceMotion), value: folded)
+    }
+
+    /// "+" expanding into the field and back: the bar's fold token.
+    static func foldAnimation(reduceMotion: Bool) -> Animation {
+        TasksDesignMetrics.fold(reduceMotion: reduceMotion)
     }
 }
 
