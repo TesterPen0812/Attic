@@ -43,6 +43,7 @@ struct NotesLibraryView: View {
     @State private var keyOwner = UUID()
     /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
     @State private var anchors = AtticNoteRowAnchors()
+    @State private var reveal = NotesLibraryReveal()
     @State private var recoveryReview: WorkspaceOperationCoordinator.RecoveryIssue?
     @State private var recoveryActionRunning = false
     @State private var confirmRecoveryDiscard = false
@@ -226,7 +227,7 @@ struct NotesLibraryView: View {
         guard controller.isLibraryPresented else { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
         // A folded section's rows are not in the list (the board folds none).
-        let groups = model.navigable(all, layout: model.layout)
+        let groups = model.navigable(all, layout: model.layout, store: store)
         let selected = controller.librarySelectionID
         let editor = keys.window?.firstResponder as? NSTextView
         let action = Self.keyAction(keyCode: event.keyCode, modifiers: EventModifiers(event.modifierFlags),
@@ -435,6 +436,7 @@ struct NotesLibraryView: View {
                                         .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
                                         .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
                                         .id(row.id)
+                                        .background { NotesRevealAnchor(id: row.id, reveal: reveal) }
                                         .atticContextMenu { rowCommands(row.id) }
                                         // Delete and restore: the row folds away or springs back.
                                         .transition(design.reduceMotion ? .opacity
@@ -466,10 +468,16 @@ struct NotesLibraryView: View {
             .onAppear {
                 if let selected { proxy.scrollTo(selected, anchor: .center) }
             }
+            // ↑ ↓: never an animated `scrollTo` over the lazy stacks (the
+            // list hang, 2026-10-28). A row or card laid out glides there
+            // by the clip view; one not built yet is jumped to.
             .onChange(of: model.highlightedID) { _, id in
                 guard let id else { return }
-                withAnimation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion)) {
-                    proxy.scrollTo(id)
+                if !reveal.reveal(id, clearTop: restTop, clearBottom: bottomControls + bottomClearance,
+                                  reduceMotion: design.reduceMotion) {
+                    var jump = Transaction()
+                    jump.disablesAnimations = true
+                    withTransaction(jump) { proxy.scrollTo(id) }
                 }
             }
         }
@@ -509,12 +517,15 @@ struct NotesLibraryView: View {
             ForEach(columns.indices, id: \.self) { index in
                 LazyVStack(alignment: .leading, spacing: NotesBoardMetrics.cardGap) {
                     ForEach(columns[index]) { row in
-                        PreparedNotesBoardCard(library: model, store: store, revision: store.revision, row: row,
+                        PreparedNotesBoardCard(library: model, store: store, revision: store.revision,
+                            tagFilter: model.tagFilter, row: row,
                             isSelected: row.id == selected && model.highlightedID == nil,
                             isHighlighted: row.id == model.highlightedID,
                             commands: { rowCommands(row.id) }, anchors: anchors,
                             onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
+                            .equatable()
                             .id(row.id)
+                            .background { NotesRevealAnchor(id: row.id, reveal: reveal) }
                             .atticContextMenu { rowCommands(row.id) }
                             .transition(.opacity)
                     }
@@ -676,10 +687,15 @@ private struct PreparedNotesLibraryRow: View {
     }
 }
 
-private struct PreparedNotesBoardCard: View {
+/// Equal (its card not drawn again) while what the card shows is the same:
+/// ↑ ↓ redraw the two cards whose marks change, not every card built
+/// (fix round 1). The callbacks only name the card's note.
+private struct PreparedNotesBoardCard: View, Equatable {
     let library: NotesLibraryModel
     let store: NoteStore
     let revision: UInt64
+    /// The first tag a card shows is never the one the list is filtered by.
+    let tagFilter: String?
     let row: AtticNoteRowModel
     let isSelected: Bool
     let isHighlighted: Bool
@@ -692,5 +708,88 @@ private struct PreparedNotesBoardCard: View {
                        pinned: store.note(withID: row.id)?.isPinned ?? false,
                        isSelected: isSelected, isHighlighted: isHighlighted,
                        commands: commands, anchors: anchors, onShowActions: onShowActions, onOpen: onOpen)
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.library === rhs.library && lhs.store === rhs.store && lhs.revision == rhs.revision
+                && lhs.tagFilter == rhs.tagFilter && lhs.row == rhs.row
+                && lhs.isSelected == rhs.isSelected && lhs.isHighlighted == rhs.isHighlighted
+                && lhs.anchors === rhs.anchors
+        }
+    }
+}
+
+// MARK: - Keyboard reveal
+
+/// Brings the keyboard's row or card into the clear part of the list (↑
+/// ↓) the way Tasks reveals a row since the list hang (`hang-report.md`):
+/// never an animated `ScrollViewProxy.scrollTo` over the lazy stacks. One
+/// laid out glides there on the settle spring, moved by the AppKit clip
+/// view (`TasksScrollGlide`), so SwiftUI only sees a plain scroll; Reduce
+/// Motion puts it there at once. One not laid out yet is the caller's to
+/// jump to. Not observed: nothing here redraws.
+@MainActor
+final class NotesLibraryReveal {
+    private struct Weak { weak var view: NSView? }
+    private var views: [UUID: Weak] = [:]
+    let glide = TasksScrollGlide()
+
+    func register(_ view: NSView, for id: UUID) { views[id] = Weak(view: view) }
+
+    /// How far the list moves (positive: its content moves up) to bring
+    /// `frame` between `clearTop` and `clearBottom`, as little as it can;
+    /// nil when it is there already. Taller than the clear part: its top.
+    static func delta(frame: CGRect, clearTop: CGFloat, clearBottom: CGFloat) -> CGFloat? {
+        if frame.minY < clearTop - 0.5 { return frame.minY - clearTop }
+        if frame.maxY > clearBottom + 0.5 { return min(frame.maxY - clearBottom, frame.minY - clearTop) }
+        return nil
+    }
+
+    /// Reveals `id`'s row when it is laid out in its list (true), else
+    /// leaves it to the caller (false). `clearTop` and `clearBottom` are
+    /// what the header and the bottom controls cover of the list's view.
+    func reveal(_ id: UUID, clearTop: CGFloat, clearBottom: CGFloat, reduceMotion: Bool) -> Bool {
+        guard let view = views[id]?.view, view.window != nil, let scroll = view.enclosingScrollView,
+              let document = scroll.documentView, view.isDescendant(of: document) else {
+            glide.stop()
+            return false
+        }
+        let clip = scroll.contentView
+        let frame = clip.convert(view.bounds, from: view)
+        guard let delta = Self.delta(frame: frame, clearTop: clip.bounds.minY + clearTop,
+                                     clearBottom: clip.bounds.maxY - clearBottom) else { return true }
+        if reduceMotion {
+            glide.stop()
+            var origin = clip.bounds.origin
+            origin.y = TasksScrollKeeper.clampedOriginY(origin.y + delta, in: scroll)
+            clip.scroll(to: origin)
+            scroll.reflectScrolledClipView(clip)
+        } else {
+            let settle = AtticMotionPreset.settle.spring(in: .current)
+            glide.run(by: delta, in: scroll, spring: Spring(duration: settle.response, bounce: settle.bounce))
+        }
+        return true
+    }
+}
+
+/// A click-through view behind a library row or board card that
+/// registers it for the keyboard's reveal.
+struct NotesRevealAnchor: NSViewRepresentable {
+    let id: UUID
+    let reveal: NotesLibraryReveal
+
+    func makeNSView(context: Context) -> NSView {
+        let view = PassthroughView()
+        reveal.register(view, for: id)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        reveal.register(view, for: id)
+    }
+
+    private final class PassthroughView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
