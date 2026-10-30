@@ -35,6 +35,27 @@ struct CalendarEventDraft: Codable, Equatable, Sendable {
         self.init(title: title, start: start, end: start.addingTimeInterval(length),
                   calendarID: calendarID, timeZoneID: timeZoneID)
     }
+
+    /// Match civil dates for floating all-day events, independent of travel.
+    /// Timed events retain their absolute dates and explicit zone.
+    func hasSameOwnedValues(as other: Self) -> Bool {
+        guard title == other.title, calendarID == other.calendarID, isAllDay == other.isAllDay else { return false }
+        if !isAllDay { return start == other.start && end == other.end && timeZoneID == other.timeZoneID }
+        func days(_ draft: Self) -> [DateComponents] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: draft.timeZoneID) ?? .autoupdatingCurrent
+            return [draft.start, draft.end].map { calendar.dateComponents([.year, .month, .day], from: $0) }
+        }
+        return days(self) == days(other)
+    }
+
+    var roundedToMinutes: Self {
+        guard !isAllDay else { return self }
+        var rounded = self
+        rounded.start = Date(timeIntervalSinceReferenceDate: (start.timeIntervalSinceReferenceDate / 60).rounded() * 60)
+        rounded.end = Date(timeIntervalSinceReferenceDate: (end.timeIntervalSinceReferenceDate / 60).rounded() * 60)
+        return rounded
+    }
 }
 
 enum CalendarEventWriteError: Error, Equatable {
@@ -72,15 +93,28 @@ protocol CalendarEventWriter: AnyObject {
     func openInCalendar(_ occurrenceID: String) throws
 }
 
-/// Persisted proof: both EventKit IDs, a random URL marker and the complete
-/// editable values must match. Additional metadata is compared conservatively.
+/// Local proof: EventKit identity and the captured user-visible values. Attic
+/// never writes a URL or other marker into events. Provider alarms/availability
+/// are observations only and do not participate in ownership matching.
 struct CalendarWriteSnapshot: Codable, Equatable {
     var eventIdentifier: String
     var itemIdentifier: String
-    var marker: String
     var draft: CalendarEventDraft
     var isRepeating: Bool = false
     var metadata: String = ""
+    var url: String? = nil
+    var alarms: [TimeInterval] = []
+    var availability: Int = 0
+
+    private enum CodingKeys: String, CodingKey {
+        case eventIdentifier, itemIdentifier, draft, isRepeating, metadata, url
+    }
+
+    func matchesOwnership(of proof: Self) -> Bool {
+        itemIdentifier == proof.itemIdentifier && !isRepeating && !proof.isRepeating
+            && draft.hasSameOwnedValues(as: proof.draft) && metadata == proof.metadata
+            && (url ?? "") == (proof.url ?? "")
+    }
 
     var occurrenceID: String {
         "\(eventIdentifier)@\(draft.start.timeIntervalSinceReferenceDate)"
@@ -93,13 +127,20 @@ struct CalendarWriteSnapshot: Codable, Equatable {
 @MainActor
 protocol CalendarEventWriteStore: AnyObject {
     var accessState: CalendarAccessState { get }
+    /// Live EventKit already posts its own notification. Fakes normally rely
+    /// on the engine, or may simulate that native notification themselves.
+    var postsChangeNotifications: Bool { get }
     func calendars() -> [CalendarWriteCalendar]
     /// Fresh committed state, looked up by event OR calendar-item identifier.
     func event(identifier: String) -> CalendarWriteSnapshot?
-    func stageCreate(_ draft: CalendarEventDraft, marker: String) throws -> CalendarWriteSnapshot
+    func stageCreate(_ draft: CalendarEventDraft) throws -> CalendarWriteSnapshot
     func stageEdit(_ previous: CalendarWriteSnapshot, draft: CalendarEventDraft) throws -> CalendarWriteSnapshot
     func stageDelete(_ previous: CalendarWriteSnapshot) throws
     func commit() throws
     func rollback()
     func openInCalendar(_ occurrenceID: String) throws
+}
+
+extension CalendarEventWriteStore {
+    var postsChangeNotifications: Bool { false }
 }

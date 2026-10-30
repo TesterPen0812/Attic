@@ -101,12 +101,13 @@ final class CalendarEventWriterTests: XCTestCase {
     func testForeignAndRepeatingEventsAreNeverAdoptedButCanOpen() throws {
         let writer = try writer()
         for repeating in [false, true] {
-            let event = CalendarWriteSnapshot(eventIdentifier: UUID().uuidString, itemIdentifier: "foreign",
-                marker: "attic-calendar-event://\(UUID())", draft: draft(), isRepeating: repeating)
+            let foreignID = UUID()
+            let event = CalendarWriteSnapshot(eventIdentifier: foreignID.uuidString, itemIdentifier: "foreign-\(foreignID)",
+                draft: draft(), isRepeating: repeating)
             store.events[event.eventIdentifier] = event
             XCTAssertNil(try writer.ownedEvent(matching: event.occurrenceID))
-            assertError(.notOwned) { try writer.edit(UUID(), draft: draft()) }
-            assertError(.notOwned) { try writer.delete(UUID()) }
+            assertError(.notOwned) { try writer.edit(foreignID, draft: draft()) }
+            assertError(.notOwned) { try writer.delete(foreignID) }
             try writer.openInCalendar(event.occurrenceID)
         }
         XCTAssertEqual(store.events.count, 2)
@@ -133,7 +134,7 @@ final class CalendarEventWriterTests: XCTestCase {
         }
     }
 
-    func testDurableRecordSurvivesNewInstanceAndRejectsClonedMarker() throws {
+    func testDurableRecordSurvivesNewInstanceAndRejectsCopiedValuesWithDifferentIDs() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("attic-calendar-writer-\(UUID()).json")
         let writer = try writer(record: CalendarOwnershipRecord(fileURL: url))
         let made = try writer.create(draft())
@@ -353,7 +354,7 @@ final class CalendarEventWriterTests: XCTestCase {
 
     func testWritePreservesUnrelatedEventAddedDuringPreparation() throws {
         let foreign = CalendarWriteSnapshot(eventIdentifier: "external", itemIdentifier: "external-item",
-                                            marker: "", draft: draft("Someone else's event"))
+                                            draft: draft("Someone else's event"))
         var injected = false
         let record = try CalendarOwnershipRecord(persist: { _ in
             if !injected {
@@ -391,6 +392,145 @@ final class CalendarEventWriterTests: XCTestCase {
         XCTAssertTrue(undo.undo(in: .calendar))
         let restored = try XCTUnwrap(store.events.values.first)
         XCTAssertEqual(try writer.ownedEvent(matching: restored.occurrenceID)?.id, made.id)
+        XCTAssertEqual(store.events.count, 1)
+    }
+
+    func testNormalizingProviderCreateUndoRedoAndMinuteRounding() throws {
+        store.normalizesOnCommit = true
+        let writer = try writer()
+        var input = draft()
+        input.start.addTimeInterval(17.75)
+        input.end.addTimeInterval(44.25)
+        let made = try writer.create(input)
+        XCTAssertEqual(store.lastStagedDraft?.start, draft().start)
+        XCTAssertEqual(store.lastStagedDraft?.end, draft().end.addingTimeInterval(60))
+        let live = try XCTUnwrap(store.events.values.first)
+        XCTAssertEqual(made.occurrenceID, live.occurrenceID)
+        XCTAssertNil(live.url)
+        XCTAssertEqual(live.alarms, [-900])
+        XCTAssertEqual(try writer.ownedEvent(matching: live.occurrenceID)?.id, made.id)
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertTrue(store.events.isEmpty)
+        XCTAssertTrue(undo.redo(in: .calendar))
+        XCTAssertEqual(store.events.count, 1)
+    }
+
+    func testNormalizingProviderEditAndDeleteUndo() throws {
+        store.normalizesOnCommit = true
+        let writer = try writer()
+        let made = try writer.create(draft())
+        _ = try writer.edit(made.id, draft: draft("Dinner", calendarID: "work"))
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertEqual(store.events.values.first?.draft.title, "Lunch")
+        try writer.delete(made.id)
+        XCTAssertTrue(store.events.isEmpty)
+        XCTAssertTrue(undo.undo(in: .calendar))
+        let live = try XCTUnwrap(store.events.values.first)
+        XCTAssertEqual(try writer.ownedEvent(matching: live.occurrenceID)?.id, made.id)
+        XCTAssertTrue(undo.redo(in: .calendar))
+        XCTAssertTrue(store.events.isEmpty)
+    }
+
+    func testEventIdentifierDriftFallsBackToItemIdentityButUserChangesStillRefuse() throws {
+        let writer = try writer()
+        let made = try writer.create(draft())
+        var live = try XCTUnwrap(store.events.values.first)
+        store.events[live.eventIdentifier] = nil
+        live.eventIdentifier = "provider-new-id"
+        live.alarms = [-600]
+        live.availability = 2
+        store.events[live.eventIdentifier] = live
+        XCTAssertEqual(try writer.ownedEvent(matching: live.occurrenceID)?.id, made.id)
+        _ = try writer.edit(made.id, draft: draft("Dinner"))
+        store.events[live.eventIdentifier]?.draft.title = "Changed by the user"
+        assertError(.eventChanged) { try writer.delete(made.id) }
+    }
+
+    func testCommitThatLandsThenThrowsIsConfirmedAndKeepsOwnershipAcrossRelaunch() throws {
+        store.normalizesOnCommit = true
+        store.landsThenThrowsOnCommit = true
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attic-calendar-partial-\(UUID()).json")
+        let writer = try writer(record: CalendarOwnershipRecord(fileURL: url))
+        let made = try writer.create(draft())
+        XCTAssertTrue(undo.canUndo(in: .calendar), "confirmed writes keep their inverse")
+        let live = try XCTUnwrap(store.events.values.first)
+        let relaunched = try self.writer(record: CalendarOwnershipRecord(fileURL: url))
+        let owned = try XCTUnwrap(relaunched.ownedEvent(matching: live.occurrenceID))
+        XCTAssertEqual(owned.id, made.id)
+        store.landsThenThrowsOnCommit = false
+        try relaunched.delete(owned.id)
+        XCTAssertTrue(store.events.isEmpty)
+    }
+
+    func testAllDayOwnershipSurvivesFloatingTimeZoneChange() throws {
+        let writer = try writer()
+        var london = Calendar(identifier: .gregorian)
+        london.timeZone = TimeZone(identifier: "Europe/London")!
+        var newYork = london
+        newYork.timeZone = TimeZone(identifier: "America/New_York")!
+        let components = DateComponents(year: 2026, month: 10, day: 30)
+        let start = london.date(from: components)!
+        let input = CalendarEventDraft(title: "Day", start: start, end: london.date(byAdding: .day, value: 1, to: start)!,
+                                       isAllDay: true, calendarID: "home", timeZoneID: london.timeZone.identifier)
+        let made = try writer.create(input)
+        let key = try XCTUnwrap(store.events.keys.first)
+        let shifted = newYork.date(from: components)!
+        store.events[key]?.draft.start = shifted
+        store.events[key]?.draft.end = newYork.date(byAdding: .day, value: 1, to: shifted)!
+        store.events[key]?.draft.timeZoneID = newYork.timeZone.identifier
+        let occurrence = try XCTUnwrap(store.events[key]?.occurrenceID)
+        XCTAssertEqual(try writer.ownedEvent(matching: occurrence)?.id, made.id)
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertTrue(store.events.isEmpty)
+    }
+
+    func testCreateDoesNotWriteAnyMarkerIntoEvent() throws {
+        let writer = try writer()
+        _ = try writer.create(draft())
+        let live = try XCTUnwrap(store.events.values.first)
+        let serialized = try JSONEncoder().encode(live)
+        XCTAssertFalse(String(decoding: serialized, as: UTF8.self).contains("attic-calendar-event"))
+        XCTAssertNil(live.url)
+    }
+
+    func testStoreNotificationIsNotDuplicatedByEngine() throws {
+        store.postsChangeNotifications = true
+        store.notificationCenter = center
+        let writer = try writer()
+        var changes = 0
+        let token = center.addObserver(forName: .EKEventStoreChanged, object: nil, queue: nil) { _ in
+            MainActor.assumeIsolated { changes += 1 }
+        }
+        defer { center.removeObserver(token) }
+        let made = try writer.create(draft())
+        XCTAssertEqual(changes, 1)
+        _ = try writer.edit(made.id, draft: draft("Dinner"))
+        XCTAssertEqual(changes, 2)
+        try writer.delete(made.id)
+        XCTAssertEqual(changes, 3)
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertEqual(changes, 4)
+    }
+
+    func testDeleteThatLandsThenThrowsStillRecordsUndo() throws {
+        let writer = try writer()
+        let made = try writer.create(draft())
+        store.landsThenThrowsOnCommit = true
+        XCTAssertNoThrow(try writer.delete(made.id))
+        XCTAssertTrue(store.events.isEmpty)
+        XCTAssertTrue(undo.undo(in: .calendar))
+        XCTAssertEqual(store.events.count, 1)
+        XCTAssertTrue(undo.redo(in: .calendar))
+        XCTAssertTrue(store.events.isEmpty)
+    }
+
+    func testUndoThatLandsThenThrowsAdvancesHistoryAndKeepsRedo() throws {
+        let writer = try writer()
+        _ = try writer.create(draft())
+        store.landsThenThrowsOnCommit = true
+        XCTAssertEqual(undo.undoStep(in: .calendar), .applied)
+        XCTAssertTrue(store.events.isEmpty)
+        XCTAssertEqual(undo.redoStep(in: .calendar), .applied)
         XCTAssertEqual(store.events.count, 1)
     }
 }

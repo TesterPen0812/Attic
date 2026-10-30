@@ -33,20 +33,8 @@ final class CalendarOwnershipRecord {
     /// also recovery after a crash between EventKit commit and file compaction.
     func reload(using store: CalendarEventWriteStore) throws {
         if let disk = try Self.read(fileURL) { state = disk }
-        guard let pending = state.pending else { return }
-        var resolved = state
-        if let after = pending.after,
-           let live = store.event(identifier: after.itemIdentifier),
-           Self.matchesStaged(live, after) {
-            resolved.entries[pending.id] = live
-        } else if let before = pending.before,
-                  store.event(identifier: before.eventIdentifier) == before {
-            resolved.entries[pending.id] = before
-        } else {
-            // Missing, changed, or a committed delete: no ownership to claim.
-            resolved.entries[pending.id] = nil
-        }
-        resolved.pending = nil
+        guard state.pending != nil else { return }
+        let resolved = resolvingPending(using: store).state
         try write(resolved)
         state = resolved
     }
@@ -60,26 +48,42 @@ final class CalendarOwnershipRecord {
         state = prepared
     }
 
-    func finish(committed: Bool, using store: CalendarEventWriteStore) {
-        guard let pending = state.pending else { return }
-        if committed, let after = pending.after {
-            // EventKit may assign its event ID only at commit. The item ID was
-            // allocated at creation; require it and every other proof field.
-            let live = store.event(identifier: after.itemIdentifier)
-            state.entries[pending.id] = live.flatMap { Self.matchesStaged($0, after) ? $0 : nil } ?? after
-        } else {
-            state.entries[pending.id] = committed ? nil : pending.before
-        }
-        state.pending = nil
+    @discardableResult
+    func resolve(using store: CalendarEventWriteStore) -> (changed: Bool, landed: Bool) {
+        guard state.pending != nil, store.accessState == .granted else { return (false, false) }
+        let previous = state.entries
+        let resolution = resolvingPending(using: store)
+        state = resolution.state
         // Compaction is optional: the already durable journal recovers either
         // outcome. A failure here must not report a committed write as failed.
         try? write(state)
+        return (state.entries != previous, resolution.landed)
     }
 
-    private static func matchesStaged(_ live: CalendarWriteSnapshot, _ staged: CalendarWriteSnapshot) -> Bool {
-        var comparable = live
-        comparable.eventIdentifier = staged.eventIdentifier
-        return comparable == staged
+    private func resolvingPending(using store: CalendarEventWriteStore) -> (state: State, landed: Bool) {
+        guard let pending = state.pending else { return (state, false) }
+        var resolved = state
+        var landed = false
+        if let after = pending.after,
+           let live = store.event(identifier: after.itemIdentifier), live.matchesOwnership(of: after) {
+            // Adopt committed IDs and provider observations, never stale staging.
+            resolved.entries[pending.id] = live
+            landed = true
+        } else if let before = pending.before,
+                  let live = store.event(identifier: before.eventIdentifier) ?? store.event(identifier: before.itemIdentifier),
+                  live.matchesOwnership(of: before) {
+            resolved.entries[pending.id] = live
+        } else {
+            resolved.entries[pending.id] = nil
+            // Absence proves the requested delete only when both identifiers
+            // are gone; a changed, still-present event remains ambiguous.
+            if pending.after == nil, let before = pending.before {
+                landed = store.event(identifier: before.eventIdentifier) == nil
+                    && store.event(identifier: before.itemIdentifier) == nil
+            }
+        }
+        resolved.pending = nil
+        return (resolved, landed)
     }
 
     private static func read(_ url: URL?) throws -> State? {

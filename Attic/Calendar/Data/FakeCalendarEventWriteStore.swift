@@ -1,3 +1,4 @@
+import EventKit
 import Foundation
 
 /// Transactional fake used by hosted tests. Never creates an EKEventStore.
@@ -11,6 +12,11 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
     var openError: CalendarEventWriteError?
     /// EventKit may allocate/change the event ID only at commit.
     var assignsEventIdentifiersOnCommit = false
+    var normalizesOnCommit = false
+    var landsThenThrowsOnCommit = false
+    var postsChangeNotifications = false
+    var notificationCenter = NotificationCenter.default
+    private(set) var lastStagedDraft: CalendarEventDraft?
     private(set) var opened: [String] = []
     private(set) var commits = 0
     private(set) var rollbacks = 0
@@ -25,17 +31,19 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
         events[identifier] ?? events.values.first { $0.itemIdentifier == identifier }
     }
 
-    func stageCreate(_ draft: CalendarEventDraft, marker: String) throws -> CalendarWriteSnapshot {
+    func stageCreate(_ draft: CalendarEventDraft) throws -> CalendarWriteSnapshot {
         if let stageError { throw stageError }
+        lastStagedDraft = draft
         let itemID = UUID().uuidString
         let event = CalendarWriteSnapshot(eventIdentifier: assignsEventIdentifiersOnCommit ? itemID : UUID().uuidString,
-                                          itemIdentifier: itemID, marker: marker, draft: draft)
+                                          itemIdentifier: itemID, draft: draft)
         staged = .save(replacing: nil, snapshot: event)
         return event
     }
 
     func stageEdit(_ previous: CalendarWriteSnapshot, draft: CalendarEventDraft) throws -> CalendarWriteSnapshot {
         if let stageError { throw stageError }
+        lastStagedDraft = draft
         guard events[previous.eventIdentifier] == previous else { throw CalendarEventWriteError.eventChanged }
         var updated = previous
         updated.draft = draft
@@ -58,12 +66,22 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
             if let replacing { events[replacing] = nil }
             var committed = snapshot
             if assignsEventIdentifiersOnCommit { committed.eventIdentifier = UUID().uuidString }
+            if normalizesOnCommit {
+                committed.draft.start = Date(timeIntervalSinceReferenceDate: floor(committed.draft.start.timeIntervalSinceReferenceDate / 60) * 60)
+                committed.draft.end = Date(timeIntervalSinceReferenceDate: floor(committed.draft.end.timeIntervalSinceReferenceDate / 60) * 60)
+                committed.eventIdentifier = UUID().uuidString
+                committed.url = nil
+                committed.alarms = [-900]
+                committed.availability = 1
+            }
             events[committed.eventIdentifier] = committed
         case let .delete(identifier): events[identifier] = nil
         case nil: break
         }
         staged = nil
         commits += 1
+        if postsChangeNotifications { notificationCenter.post(name: .EKEventStoreChanged, object: self) }
+        if landsThenThrowsOnCommit { throw CalendarEventWriteError.saveFailed("Commit landed before error.") }
     }
 
     func rollback() { staged = nil; rollbacks += 1 }

@@ -6,7 +6,8 @@ enum CalendarEventWriters {
     @MainActor
     static func makeDefault(undoRoute: UndoRoute,
                             environment: AppRuntimeEnvironment = AppRuntimeEnvironment()) throws -> CalendarEventWriter {
-        if environment.isRunningTests || environment.isUITesting || AppRuntimeEnvironment().isRunningTests {
+        let runtime = AppRuntimeEnvironment()
+        if environment.isRunningTests || environment.isUITesting || runtime.isRunningTests || runtime.isUITesting {
             return EventKitCalendarEventWriter(store: FakeCalendarEventWriteStore(),
                                                record: try CalendarOwnershipRecord(), undoRoute: undoRoute)
         }

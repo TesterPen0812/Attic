@@ -7,15 +7,35 @@ import Foundation
 /// Merely constructing this adapter does not create an EKEventStore.
 @MainActor
 final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
-    private lazy var writer = EKEventStore()
-    private lazy var reader = EKEventStore()
+    private let storeFactory: () throws -> EKEventStore
+    private var loadedWriter: EKEventStore?
+    private var loadedReader: EKEventStore?
+    var postsChangeNotifications: Bool { true }
+
+    init(storeFactory: @escaping () throws -> EKEventStore = { EKEventStore() }) {
+        self.storeFactory = storeFactory
+    }
+
+    private func writerStore() throws -> EKEventStore {
+        if let loadedWriter { return loadedWriter }
+        let store = try storeFactory()
+        loadedWriter = store
+        return store
+    }
+
+    private func readerStore() throws -> EKEventStore {
+        if let loadedReader { return loadedReader }
+        let store = try storeFactory()
+        loadedReader = store
+        return store
+    }
 
     var accessState: CalendarAccessState {
         EventKitCalendarEventSource.accessState(for: EKEventStore.authorizationStatus(for: .event))
     }
 
     func calendars() -> [CalendarWriteCalendar] {
-        guard accessState == .granted else { return [] }
+        guard accessState == .granted, let reader = try? readerStore() else { return [] }
         reader.reset()
         return reader.calendars(for: .event).map { calendar in
             CalendarWriteCalendar(id: calendar.calendarIdentifier, title: calendar.title,
@@ -26,17 +46,17 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
     }
 
     func event(identifier: String) -> CalendarWriteSnapshot? {
-        guard accessState == .granted else { return nil }
+        guard accessState == .granted, let reader = try? readerStore() else { return nil }
         reader.reset()
         return lookup(identifier, in: reader).flatMap(snapshot)
     }
 
-    func stageCreate(_ draft: CalendarEventDraft, marker: String) throws -> CalendarWriteSnapshot {
+    func stageCreate(_ draft: CalendarEventDraft) throws -> CalendarWriteSnapshot {
         try requireLiveWrite()
+        let writer = try writerStore()
         writer.reset()
         let event = EKEvent(eventStore: writer)
         try apply(draft, to: event)
-        event.url = URL(string: marker)
         try saveStaged(event)
         guard let result = snapshot(event) else { throw CalendarEventWriteError.saveFailed("EventKit did not assign an item identifier.") }
         return result
@@ -44,6 +64,7 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
 
     func stageEdit(_ previous: CalendarWriteSnapshot, draft: CalendarEventDraft) throws -> CalendarWriteSnapshot {
         try requireLiveWrite()
+        let writer = try writerStore()
         writer.reset()
         let event = try editable(previous)
         try apply(draft, to: event)
@@ -54,6 +75,7 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
 
     func stageDelete(_ previous: CalendarWriteSnapshot) throws {
         try requireLiveWrite()
+        let writer = try writerStore()
         writer.reset()
         let event = try editable(previous)
         do { try writer.remove(event, span: .thisEvent, commit: false) }
@@ -62,11 +84,11 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
 
     func commit() throws {
         try requireLiveWrite()
-        do { try writer.commit() }
+        do { try writerStore().commit() }
         catch { throw Self.typed(error) }
     }
 
-    func rollback() { writer.reset() }
+    func rollback() { loadedWriter?.reset() }
 
     private func requireLiveWrite() throws {
         // A second safety boundary in addition to the factory's fake. A future
@@ -83,30 +105,42 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
     }
 
     private func editable(_ previous: CalendarWriteSnapshot) throws -> EKEvent {
-        guard let event = lookup(previous.eventIdentifier, in: writer), event.refresh() else {
+        let writer = try writerStore()
+        guard let event = lookup(previous.eventIdentifier, in: writer) ?? lookup(previous.itemIdentifier, in: writer), event.refresh() else {
             throw CalendarEventWriteError.eventMissing
         }
         guard !event.hasRecurrenceRules && !event.isDetached else { throw CalendarEventWriteError.repeatingEvent }
         guard event.calendar.allowsContentModifications else { throw CalendarEventWriteError.calendarReadOnly }
-        guard snapshot(event) == previous else { throw CalendarEventWriteError.eventChanged }
+        guard snapshot(event)?.matchesOwnership(of: previous) == true else { throw CalendarEventWriteError.eventChanged }
         return event
     }
 
     private func apply(_ draft: CalendarEventDraft, to event: EKEvent) throws {
+        let writer = try writerStore()
         guard let calendar = writer.calendar(withIdentifier: draft.calendarID) else { throw CalendarEventWriteError.calendarMissing }
         guard calendar.allowsContentModifications && calendar.allowedEntityTypes.contains(.event) else {
             throw CalendarEventWriteError.calendarReadOnly
         }
         event.calendar = calendar
         event.title = draft.title
-        event.timeZone = TimeZone(identifier: draft.timeZoneID)
+        event.timeZone = draft.isAllDay ? nil : TimeZone(identifier: draft.timeZoneID)
         event.isAllDay = draft.isAllDay
-        event.startDate = draft.start
-        event.endDate = draft.end
+        if draft.isAllDay {
+            // Rebase civil days into the Mac's current zone for floating events.
+            var original = Calendar(identifier: .gregorian)
+            original.timeZone = TimeZone(identifier: draft.timeZoneID) ?? .autoupdatingCurrent
+            var local = original
+            local.timeZone = .autoupdatingCurrent
+            event.startDate = local.date(from: original.dateComponents([.year, .month, .day], from: draft.start))
+            event.endDate = local.date(from: original.dateComponents([.year, .month, .day], from: draft.end))
+        } else {
+            event.startDate = draft.start
+            event.endDate = draft.end
+        }
     }
 
     private func saveStaged(_ event: EKEvent) throws {
-        do { try writer.save(event, span: .thisEvent, commit: false) }
+        do { try writerStore().save(event, span: .thisEvent, commit: false) }
         catch { throw Self.typed(error) }
     }
 
@@ -129,23 +163,17 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
         let metadata: [String: Any] = [
             "notes": event.notes ?? "", "location": event.location ?? "",
             "structuredLocation": location(event.structuredLocation),
-            "availability": event.availability.rawValue,
             "organizer": event.organizer?.url.absoluteString ?? "",
             "attendees": (event.attendees ?? []).map {
                 [$0.url.absoluteString, $0.name ?? "", String($0.participantStatus.rawValue), String($0.participantRole.rawValue)]
             }.sorted { $0.lexicographicallyPrecedes($1) },
-            "alarms": (event.alarms ?? []).map { alarm -> [String: Any] in
-                ["absolute": alarm.absoluteDate?.timeIntervalSinceReferenceDate ?? 0,
-                 "relative": alarm.relativeOffset, "proximity": alarm.proximity.rawValue,
-                 "location": location(alarm.structuredLocation)]
-            },
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]),
               let fingerprint = String(data: data, encoding: .utf8) else { return nil }
         let identifier = event.eventIdentifier.flatMap { $0.isEmpty ? nil : $0 } ?? event.calendarItemIdentifier
         return CalendarWriteSnapshot(eventIdentifier: identifier, itemIdentifier: event.calendarItemIdentifier,
-            marker: event.url?.absoluteString ?? "", draft: draft,
-            isRepeating: event.hasRecurrenceRules || event.isDetached, metadata: fingerprint)
+            draft: draft, isRepeating: event.hasRecurrenceRules || event.isDetached, metadata: fingerprint,
+            url: event.url?.absoluteString, alarms: (event.alarms ?? []).map(\.relativeOffset), availability: event.availability.rawValue)
     }
 
     private func location(_ location: EKStructuredLocation?) -> [String: Any] {
@@ -158,7 +186,7 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
         return result
     }
 
-    private static func typed(_ error: Error) -> CalendarEventWriteError {
+    static func typed(_ error: Error) -> CalendarEventWriteError {
         let nsError = error as NSError
         if nsError.domain == EKErrorDomain {
             switch nsError.code {
@@ -182,6 +210,7 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
               seconds.isFinite else { throw CalendarEventWriteError.openFailed }
         let identifier = String(occurrenceID[..<at])
         let start = Date(timeIntervalSinceReferenceDate: seconds)
+        let reader = try readerStore()
         reader.reset()
         let predicate = reader.predicateForEvents(withStart: start.addingTimeInterval(-1),
                                                   end: start.addingTimeInterval(1), calendars: nil)

@@ -10,6 +10,7 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
     // view going away. The engine must not retain that history in a cycle.
     private weak var undoRoute: UndoRoute?
     private let center: NotificationCenter
+    var isFakeBacked: Bool { store is FakeCalendarEventWriteStore }
 
     init(store: CalendarEventWriteStore, record: CalendarOwnershipRecord, undoRoute: UndoRoute,
          notificationCenter: NotificationCenter = .default) {
@@ -29,9 +30,11 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
     func ownedEvent(matching occurrenceID: String) throws -> CalendarOwnedEvent? {
         try reporting {
             try begin()
-            guard let (id, _) = record.entries.first(where: { $0.value.occurrenceID == occurrenceID }),
-                  let current = try? editable(id) else { return nil }
-            return owned(id, current)
+            for id in record.entries.keys {
+                guard let current = try? editable(id), current.occurrenceID == occurrenceID else { continue }
+                return owned(id, current)
+            }
+            return nil
         }
     }
 
@@ -110,35 +113,40 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
 
     private func editable(_ id: UUID) throws -> CalendarWriteSnapshot {
         guard let proof = record.entries[id] else { throw CalendarEventWriteError.notOwned }
-        guard let live = store.event(identifier: proof.eventIdentifier) else { throw CalendarEventWriteError.eventMissing }
+        guard let live = store.event(identifier: proof.eventIdentifier) ?? store.event(identifier: proof.itemIdentifier) else {
+            throw CalendarEventWriteError.eventMissing
+        }
         guard !live.isRepeating else { throw CalendarEventWriteError.repeatingEvent }
         try requireWritable(live.draft.calendarID)
-        guard live == proof else { throw CalendarEventWriteError.eventChanged }
+        guard live.matchesOwnership(of: proof) else { throw CalendarEventWriteError.eventChanged }
         return live
     }
 
     private func insert(_ id: UUID, draft: CalendarEventDraft) throws -> CalendarOwnedEvent {
         try begin()
         guard record.entries[id] == nil else { throw CalendarEventWriteError.eventChanged }
+        let draft = draft.roundedToMinutes
         try validate(draft)
-        let marker = "attic-calendar-event://\(UUID().uuidString)"
-        try transaction(id, before: nil) { try store.stageCreate(draft, marker: marker) }
-        return owned(id, record.entries[id]!)
+        try transaction(id, before: nil) { try store.stageCreate(draft) }
+        guard let saved = record.entries[id] else { throw CalendarEventWriteError.eventMissing }
+        return owned(id, saved)
     }
 
     private func update(_ id: UUID, draft: CalendarEventDraft, expecting: CalendarEventDraft) throws -> CalendarOwnedEvent {
         try begin()
         let previous = try editable(id)
-        guard previous.draft == expecting else { throw CalendarEventWriteError.eventChanged }
+        guard previous.draft.hasSameOwnedValues(as: expecting) else { throw CalendarEventWriteError.eventChanged }
+        let draft = draft.roundedToMinutes
         try validate(draft)
         try transaction(id, before: previous) { try store.stageEdit(previous, draft: draft) }
-        return owned(id, record.entries[id]!)
+        guard let saved = record.entries[id] else { throw CalendarEventWriteError.eventMissing }
+        return owned(id, saved)
     }
 
     private func remove(_ id: UUID, expecting: CalendarEventDraft) throws {
         try begin()
         let previous = try editable(id)
-        guard previous.draft == expecting else { throw CalendarEventWriteError.eventChanged }
+        guard previous.draft.hasSameOwnedValues(as: expecting) else { throw CalendarEventWriteError.eventChanged }
         try transaction(id, before: previous) {
             try store.stageDelete(previous)
             return nil
@@ -147,6 +155,7 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
 
     private func transaction(_ id: UUID, before: CalendarWriteSnapshot?,
                              stage: () throws -> CalendarWriteSnapshot?) throws {
+        var attemptedCommit = false
         do {
             let after = try stage()
             try record.prepare(id: id, before: before, after: after)
@@ -155,14 +164,21 @@ final class EventKitCalendarEventWriter: CalendarEventWriter {
             // the backend's independent reader before committing staged edits.
             if before != nil { _ = try editable(id) }
             if let after { try requireWritable(after.draft.calendarID) }
+            attemptedCommit = true
             try store.commit()
         } catch {
             store.rollback()
-            record.finish(committed: false, using: store)
+            // A thrown commit may already have landed. Use the same committed
+            // state reconciliation as relaunch, retaining any verified creation.
+            let resolution = record.resolve(using: store)
+            if resolution.changed && !store.postsChangeNotifications { center.post(name: .EKEventStoreChanged, object: self) }
+            // A verified landed operation must register/advance Undo normally.
+            // Pre-commit failures and ambiguous outcomes retain the typed error.
+            if attemptedCommit && resolution.landed { return }
             throw error
         }
-        record.finish(committed: true, using: store)
-        center.post(name: .EKEventStoreChanged, object: self)
+        record.resolve(using: store)
+        if !store.postsChangeNotifications { center.post(name: .EKEventStoreChanged, object: self) }
     }
 
     private func owned(_ id: UUID, _ snapshot: CalendarWriteSnapshot) -> CalendarOwnedEvent {
