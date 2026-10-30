@@ -115,27 +115,23 @@ final class TasksRound6Tests: XCTestCase {
     /// the field takes the tabs' line and the keyboard (CI run 1).
     func testTheMagnifierGivesTheSearchTheKeyboard() throws {
         try requireKeyWindowTests()
-        // The owner's panel design: the tabs are at the footer's left (they
-        // fold away while the add field has the keyboard, so it starts
-        // without it), the magnifier on the header's line.
+        // The panel design (Accepted 2026-10-29/30, "Top row and bottom
+        // bar"): Now · Later · Done on the top row's right, then •••, then
+        // the magnifier at the row's end.
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
-        let tabsY = 520 - max(AtticSpacing.panelMargin, layout.chromeInsets.bottom) - AtticControlSize.addBarHeight / 2
+        let y = layout.headerBottom - AtticControlSize.headerControl / 2
+        let control = PanelTopRowLayout.control, gap = PanelTopRowLayout.gap
+        let rowEnd = AtticLayout.panelSize.width - layout.chromeInsets.trailing
+        let magnifierX = rowEnd - control / 2
+        let tabsEnd = rowEnd - control - gap - control - gap
+        let doneX = tabsEnd - TasksTopTabsMetrics.inset - TasksTopTabsMetrics.cell.width / 2
         // A click on the Done tab, as a person arrives there.
-        var tabX: CGFloat = 60
-        while tabX < 120, hosted.model.tab != .done {
-            hosted.click(y: tabsY, x: tabX)
-            tabX += 4
-        }
+        hosted.click(y: y, x: doneX)
         XCTAssertEqual(hosted.model.tab, .done)
         hosted.spin(1)
-        let y = layout.headerBottom - AtticControlSize.headerControl / 2
-        var x = AtticLayout.panelSize.width - 50
-        while x > AtticLayout.panelSize.width - 120, !hosted.searchFieldShown {
-            hosted.click(y: y, x: x)
-            x -= 4
-        }
+        hosted.click(y: y, x: magnifierX)
         XCTAssertTrue(hosted.searchFieldShown, "the magnifier opens the search")
         XCTAssertNotNil(hosted.window.contentView.flatMap { AtticTabsSearchField.searchField(in: $0, placeholder: "Search done tasks") },
                         "the field's own text field is found by its prompt (the keyboard's fallback)")
