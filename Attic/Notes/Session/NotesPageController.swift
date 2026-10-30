@@ -299,7 +299,9 @@ final class NotesPageController: ObservableObject {
     private var undoRevisionSubscription: AnyCancellable?
     private var purgeSubscription: AnyCancellable?
     let journal: NoteDraftJournaling?
-    private let defaults: UserDefaults?
+    /// The identity's own defaults (nil in tests and previews); the
+    /// notes list's layout is kept here too.
+    let defaults: UserDefaults?
     private let saveDelay: Duration
     private let durabilityDelay: Duration
     private let pauseVersionDelay: Duration

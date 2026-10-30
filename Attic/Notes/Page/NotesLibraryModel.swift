@@ -26,6 +26,24 @@ final class NotesLibraryModel: ObservableObject {
         let rows: [AtticNoteRowModel]
     }
 
+    /// Board or list (Accepted 2026-10-30, "Notes board"), kept per user
+    /// in the identity's own defaults (none in tests and previews).
+    @Published var layout: NotesLibraryLayout {
+        didSet {
+            guard layout != oldValue else { return }
+            preferences?.set(layout.rawValue, forKey: NotesLibraryLayout.defaultsKey)
+        }
+    }
+    private let preferences: UserDefaults?
+    /// The board's column for each card, kept while the cards and their
+    /// notes stay the same (estimated from content, never measured).
+    private var boardCache: (key: BoardKey, columns: [Int])?
+    private struct BoardKey: Equatable {
+        let ids: [UUID]
+        let revision: UInt64
+        let taskRevision: UInt64
+    }
+
     /// What the search field holds.
     @Published var query = "" {
         didSet {
@@ -138,6 +156,8 @@ final class NotesLibraryModel: ObservableObject {
     init(search: @escaping (String) async throws -> Set<UUID>, store: NoteStore? = nil, controller: NotesPageController? = nil, taskStore: TaskStore? = nil, now: @escaping () -> Date = Date.init,
          calendar: Calendar = .autoupdatingCurrent) {
         self.search = search
+        preferences = controller?.defaults
+        _layout = Published(initialValue: NotesLibraryLayout(stored: controller?.defaults?.string(forKey: NotesLibraryLayout.defaultsKey)))
         if let controller {
             summaries = controller.librarySummaries
             taskState = { [weak controller] id in controller?.taskStateLookup?(id) }
@@ -452,6 +472,43 @@ final class NotesLibraryModel: ObservableObject {
     /// reach (a folded group's rows are not in the list).
     func unfolded(_ groups: [Group]) -> [Group] {
         foldedGroups.isEmpty ? groups : groups.filter { !foldedGroups.contains($0.id) }
+    }
+
+    /// The rows the keyboard and the actions reach: the board has no
+    /// headings, so nothing on it is folded away.
+    func navigable(_ groups: [Group], layout: NotesLibraryLayout) -> [Group] {
+        layout == .board ? groups : unfolded(groups)
+    }
+
+    // MARK: Board
+
+    /// The board's two columns: the rows in list order (pinned first, no
+    /// sections), each card in the shorter column by its estimated height.
+    func boardColumns(_ groups: [Group], store: NoteStore) -> [[AtticNoteRowModel]] {
+        let rows = groups.flatMap(\.rows)
+        let key = BoardKey(ids: rows.map(\.id), revision: store.revision, taskRevision: taskRevision)
+        let assignment: [Int]
+        if let boardCache, boardCache.key == key {
+            assignment = boardCache.columns
+        } else {
+            assignment = NotesBoardLayout.columns(heights: rows.map { boardEstimate($0, store: store) })
+            boardCache = (key, assignment)
+        }
+        var columns = [[AtticNoteRowModel]](repeating: [], count: NotesBoardMetrics.columns)
+        for (row, column) in zip(rows, assignment) { columns[column].append(row) }
+        return columns
+    }
+
+    /// A card's height from its content alone: the title, the stored plain
+    /// text after it (no document is decoded), and the image count. A
+    /// never-saved draft uses its row.
+    private func boardEstimate(_ row: AtticNoteRowModel, store: NoteStore) -> CGFloat {
+        let title = row.title.utf16.count
+        guard let note = store.note(withID: row.id) else {
+            return NotesBoardLayout.estimatedHeight(titleLength: title, snippetLength: row.preview.utf16.count, images: row.images)
+        }
+        let snippet = max(0, note.plainText.utf16.count - note.title.utf16.count - 1)
+        return NotesBoardLayout.estimatedHeight(titleLength: title, snippetLength: snippet, images: note.imageCount)
     }
 
     // MARK: Rows

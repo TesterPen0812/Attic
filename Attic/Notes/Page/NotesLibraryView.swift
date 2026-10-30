@@ -225,8 +225,8 @@ struct NotesLibraryView: View {
         // note is the note's, never the library's.
         guard controller.isLibraryPresented else { return false }
         let all = model.groups(store: store, drafts: controller.failedDrafts, prepareSummaries: false)
-        // A folded section's rows are not in the list.
-        let groups = model.unfolded(all)
+        // A folded section's rows are not in the list (the board folds none).
+        let groups = model.navigable(all, layout: model.layout)
         let selected = controller.librarySelectionID
         let editor = keys.window?.firstResponder as? NSTextView
         let action = Self.keyAction(keyCode: event.keyCode, modifiers: EventModifiers(event.modifierFlags),
@@ -400,61 +400,53 @@ struct NotesLibraryView: View {
     private func list(_ groups: [NotesLibraryModel.Group], selected: UUID?) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    status(groups)
-                    ForEach(controller.workspaceRecoveryIssues) { issue in
-                        Button("Review interrupted change") { recoveryReview = issue }
-                            .font(Font(AtticTextStyle.rowMeta.nsFont))
-                            .padding(.vertical, 8)
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("notes-workspace-recovery-\(issue.directory.lastPathComponent)")
+                if model.layout == .board {
+                    // The board's columns are lazy themselves.
+                    VStack(alignment: .leading, spacing: 0) {
+                        preamble(groups)
+                        board(groups, selected: selected)
                     }
-                    ForEach(controller.workspaceProposals, id: \.id) { proposal in
-                        Button {
-                            Task { @MainActor in _ = await controller.beginProposalReview(id: proposal.id) }
-                        } label: {
-                            Text("Review proposed workspace change")
-                                .font(Font(AtticTextStyle.rowMeta.nsFont))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 8)
-                        }.buttonStyle(.plain)
-                        .accessibilityIdentifier("notes-workspace-proposal-\(proposal.id)")
-                    }
-                    // Foldable sections that work and look like Tasks' date
-                    // groups (the owner's panel design, 2026-10-27).
-                    ForEach(groups) { group in
-                        let folded = model.foldedGroups.contains(group.id)
-                        TasksGroupHeader(title: group.title, count: group.rows.count, folded: folded) {
-                            withAnimation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)) {
-                                model.toggleGroup(group.id, in: groups)
+                    .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
+                               value: model.orderedIDs(groups))
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        preamble(groups)
+                        // Foldable sections that work and look like Tasks' date
+                        // groups (the owner's panel design, 2026-10-27).
+                        ForEach(groups) { group in
+                            let folded = model.foldedGroups.contains(group.id)
+                            TasksGroupHeader(title: group.title, count: group.rows.count, folded: folded) {
+                                withAnimation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)) {
+                                    model.toggleGroup(group.id, in: groups)
+                                }
                             }
-                        }
-                        // The header's text on the rows' thumbnails.
-                        .padding(.leading, Self.headerShift)
-                        .id("group:" + group.id)
-                        .accessibilityIdentifier("notes-library-group-\(group.id)")
-                        if !folded {
-                            ForEach(group.rows) { row in
-                                PreparedNotesLibraryRow(library: model, store: store, revision: store.revision, row: row,
-                                    isSelected: row.id == selected && model.highlightedID == nil,
-                                    isHighlighted: row.id == model.highlightedID,
-                                    commands: { rowCommands(row.id) }, anchors: anchors,
-                                    onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
-                                    // Rows sit 2 apart, no dividers.
-                                    .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
-                                    .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
-                                    .id(row.id)
-                                    .atticContextMenu { rowCommands(row.id) }
-                                    // Delete and restore: the row folds away or springs back.
-                                    .transition(design.reduceMotion ? .opacity
-                                        : .opacity.combined(with: .move(edge: .leading)))
-                                    .accessibilityIdentifier("notes-library-row")
+                            // The header's text on the rows' thumbnails.
+                            .padding(.leading, Self.headerShift)
+                            .id("group:" + group.id)
+                            .accessibilityIdentifier("notes-library-group-\(group.id)")
+                            if !folded {
+                                ForEach(group.rows) { row in
+                                    PreparedNotesLibraryRow(library: model, store: store, revision: store.revision, row: row,
+                                        isSelected: row.id == selected && model.highlightedID == nil,
+                                        isHighlighted: row.id == model.highlightedID,
+                                        commands: { rowCommands(row.id) }, anchors: anchors,
+                                        onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
+                                        // Rows sit 2 apart, no dividers.
+                                        .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
+                                        .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
+                                        .id(row.id)
+                                        .atticContextMenu { rowCommands(row.id) }
+                                        // Delete and restore: the row folds away or springs back.
+                                        .transition(design.reduceMotion ? .opacity
+                                            : .opacity.combined(with: .move(edge: .leading)))
+                                        .accessibilityIdentifier("notes-library-row")
+                                }
                             }
                         }
                     }
+                    .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
+                               value: model.orderedIDs(model.unfolded(groups)))
                 }
-                .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion),
-                           value: model.orderedIDs(model.unfolded(groups)))
             }
             .contentMargins(.top, restTop, for: .scrollContent)
             .contentMargins(.bottom, bottomControls + bottomClearance, for: .scrollContent)
@@ -481,6 +473,59 @@ struct NotesLibraryView: View {
                 }
             }
         }
+    }
+
+    /// Search failure or emptiness, then any recovery or proposal waiting:
+    /// above the list or the board.
+    @ViewBuilder
+    private func preamble(_ groups: [NotesLibraryModel.Group]) -> some View {
+        status(groups)
+        ForEach(controller.workspaceRecoveryIssues) { issue in
+            Button("Review interrupted change") { recoveryReview = issue }
+                .font(Font(AtticTextStyle.rowMeta.nsFont))
+                .padding(.vertical, 8)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("notes-workspace-recovery-\(issue.directory.lastPathComponent)")
+        }
+        ForEach(controller.workspaceProposals, id: \.id) { proposal in
+            Button {
+                Task { @MainActor in _ = await controller.beginProposalReview(id: proposal.id) }
+            } label: {
+                Text("Review proposed workspace change")
+                    .font(Font(AtticTextStyle.rowMeta.nsFont))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            }.buttonStyle(.plain)
+            .accessibilityIdentifier("notes-workspace-proposal-\(proposal.id)")
+        }
+    }
+
+    /// The board (Accepted 2026-10-30, "Notes board"): one flowing board in
+    /// two columns, no headings, pinned first; each card in the shorter
+    /// column by its estimated height (`NotesBoardLayout`).
+    private func board(_ groups: [NotesLibraryModel.Group], selected: UUID?) -> some View {
+        let columns = model.boardColumns(groups, store: store)
+        return HStack(alignment: .top, spacing: NotesBoardMetrics.columnGap) {
+            ForEach(columns.indices, id: \.self) { index in
+                LazyVStack(alignment: .leading, spacing: NotesBoardMetrics.cardGap) {
+                    ForEach(columns[index]) { row in
+                        PreparedNotesBoardCard(library: model, store: store, revision: store.revision, row: row,
+                            isSelected: row.id == selected && model.highlightedID == nil,
+                            isHighlighted: row.id == model.highlightedID,
+                            commands: { rowCommands(row.id) }, anchors: anchors,
+                            onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
+                            .id(row.id)
+                            .atticContextMenu { rowCommands(row.id) }
+                            .transition(.opacity)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("notes-board-column-\(index)")
+            }
+        }
+        .padding(.top, NotesBoardMetrics.topPadding)
+        .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
     }
 
     /// Empty, no matches, searching and failure: one quiet line where the
@@ -628,5 +673,24 @@ private struct PreparedNotesLibraryRow: View {
         NotesLibraryRow(details: library.libraryRow(row, store: store), thumbnails: library.thumbnails,
                         isSelected: isSelected, isHighlighted: isHighlighted,
                         commands: commands, anchors: anchors, onShowActions: onShowActions, onOpen: onOpen)
+    }
+}
+
+private struct PreparedNotesBoardCard: View {
+    let library: NotesLibraryModel
+    let store: NoteStore
+    let revision: UInt64
+    let row: AtticNoteRowModel
+    let isSelected: Bool
+    let isHighlighted: Bool
+    let commands: () -> [AtticMenuCommand]
+    let anchors: AtticNoteRowAnchors
+    let onShowActions: () -> Void
+    let onOpen: () -> Void
+    var body: some View {
+        NotesBoardCard(details: library.libraryRow(row, store: store),
+                       pinned: store.note(withID: row.id)?.isPinned ?? false,
+                       isSelected: isSelected, isHighlighted: isHighlighted,
+                       commands: commands, anchors: anchors, onShowActions: onShowActions, onOpen: onOpen)
     }
 }
