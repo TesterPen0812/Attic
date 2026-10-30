@@ -149,8 +149,9 @@ final class TasksRound13Tests: XCTestCase {
         return timers
     }
 
-    /// The row selected and focused, ⇧⌘I pressed for real (a native menu
-    /// pops up), `keys` typed into the menu, and the run spun until it closed.
+    /// The row selected and focused, a real secondary click on it (a native
+    /// menu pops up; ⇧⌘I opens the page since 2026-10-30), `keys` typed into
+    /// the menu, and the run spun until it closed.
     private func openActionsMenu(_ hosted: Hosted, on title: String, keys: [(characters: String, keyCode: UInt16)],
                                  coreGraphicsReturn: Bool = false) throws -> UUID {
         let model = hosted.model
@@ -159,7 +160,7 @@ final class TasksRound13Tests: XCTestCase {
         XCTAssertEqual(model.selection, [row])
         let timers = schedule(keys, in: hosted, coreGraphicsReturn: coreGraphicsReturn)
         defer { timers.forEach { $0.invalidate() } }
-        hosted.press("i", keyCode: 34, modifiers: [.command, .shift])
+        hosted.rightClick(y: try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)]).midY, x: 200)
         hosted.spin(1.5)
         return row
     }

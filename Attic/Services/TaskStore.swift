@@ -976,9 +976,15 @@ final class TaskStore: ObservableObject {
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
-        let destinationStatus = status ?? task.status
+        var destinationStatus = status ?? task.status
         let destinationTagsRaw = tags.map { AtticTag.encode($0) } ?? task.tagsRaw
-        let destinationDueDayRaw = dueDay.map { $0?.rawValue } ?? task.dueDayRaw
+        var destinationDueDayRaw = dueDay.map { $0?.rawValue } ?? task.dueDayRaw
+        // Later is the backlog (Accepted 2026-10-29): a put-off task has no
+        // date. Giving one a date moves it to Now; moving one to Later
+        // clears its date. One edit, so one undo step.
+        if destinationStatus == .backlog {
+            if case .some(.some) = dueDay { destinationStatus = .todo } else if status == .backlog { destinationDueDayRaw = nil }
+        }
         // Status rules are checked against every stored replica, but only
         // the rows they concern: a title or priority edit fetches nothing.
         if destinationStatus != task.status {

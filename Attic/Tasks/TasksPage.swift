@@ -635,7 +635,10 @@ struct TasksPage: View {
         if model.viewOptions(for: tab).filters, model.trimmedQuery(for: tab).isEmpty { top += AtticLayout.rowPitch }
         // Each date group's header, then its rows (none while folded).
         for group in sections.groups {
-            top += TasksDesignMetrics.groupHeaderHeight
+            if group.showsHeader { top += TasksDesignMetrics.groupHeaderHeight }
+            if group.kind == .today, model.nextEvent(on: tab) != nil, !model.folded(on: tab).contains(group.key) {
+                top += TasksNextEventRow.height
+            }
             for row in sections.groupRows[group.key] ?? [] {
                 if row.id == id { return (top, rowHeight(id, in: tab)) }
                 top += rowHeight(row.id, in: tab)
@@ -1152,7 +1155,7 @@ struct TasksPage: View {
     /// before any menu sees them (round 10), as ⌘F is, since the app's Edit
     /// menu answers ⌘C itself. ⌘C and ⌘D run the command the row's menu
     /// holds for their key (`taskCommands`), so the key and the menu can
-    /// never differ; ⇧⌘I opens that menu. An editor or a picker keeps every
+    /// never differ; ⇧⌘I opens the task's page. An editor or a picker keeps every
     /// key; the composer and Find keep the keys they act on
     /// (`typingFieldPasses`).
     private func taskShortcutPressed(_ event: NSEvent) -> Bool {
@@ -1163,7 +1166,7 @@ struct TasksPage: View {
             return typingFieldShortcutPressed(event, in: window)
         }
         if focusRequests.current?.base is TasksFileFocusID, case .file? = currentTabStop(in: tabStops()) { return false }
-        let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
+        let shortcuts = [AtticTaskShortcut.page, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
         }) else { return false }
@@ -1171,8 +1174,9 @@ struct TasksPage: View {
         guard let current = model.shortcutRow(focusedRow: keyboardRow(visible: visible), visible: Set(visible)) else { return false }
         // No right-click's binding decides a key's targets.
         pointer.endInvocation()
-        if shortcut == AtticTaskShortcut.actions {
-            showActions(for: current, anchor: nil, tab: model.tab)
+        if shortcut == AtticTaskShortcut.page {
+            // ⇧⌘I opens the task's page (Accepted 2026-10-30).
+            actions(for: current, in: model.tab).openPage()
             return true
         }
         // A dimmed command still owns its key: nothing runs, nothing else
@@ -1190,13 +1194,13 @@ struct TasksPage: View {
     /// - The field keeps text editing, ⌘C and ⌘D (the Edit menu's, on its
     ///   text) and ⌥⌘0–3, as before.
     /// - ⇧⌘I, which no typing field acts on, opens the selected row's
-    ///   actions.
+    ///   page (Accepted 2026-10-30).
     /// - ⌘Return stays the composer's while it holds a draft (it adds the
     ///   task and opens it); with no draft to add, and in Find, which has
     ///   no ⌘Return, it opens the selected row's files.
     /// Editors (a title, a subtask) and pickers keep every key.
     static func typingFieldPasses(_ shortcut: KeyboardShortcut, composerDraft: String?) -> Bool {
-        if shortcut == AtticTaskShortcut.actions { return true }
+        if shortcut == AtticTaskShortcut.page { return true }
         if shortcut == AtticTaskShortcut.openPage {
             return composerDraft?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
         }
@@ -1207,7 +1211,7 @@ struct TasksPage: View {
     /// key runs as the selected row's command, never as the field's key.
     private func typingFieldShortcutPressed(_ event: NSEvent, in window: NSWindow) -> Bool {
         guard addBarFocused || searchFocused, !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
-              let shortcut = [AtticTaskShortcut.actions, AtticTaskShortcut.openPage].first(where: {
+              let shortcut = [AtticTaskShortcut.page, AtticTaskShortcut.openPage].first(where: {
                   AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
                                             modifiers: event.modifierFlags)
               }),
@@ -1216,8 +1220,8 @@ struct TasksPage: View {
         let visible = visibleIDs()
         guard let current = model.shortcutRow(focusedRow: nil, visible: Set(visible)) else { return false }
         pointer.endInvocation()
-        if shortcut == AtticTaskShortcut.actions {
-            showActions(for: current, anchor: nil, tab: model.tab)
+        if shortcut == AtticTaskShortcut.page {
+            AtticTextInput.passingToSelection { actions(for: current, in: model.tab).openPage() }
             return true
         }
         guard let command = AtticMenuCommand.command(for: shortcut, in: taskCommands(current, tab: model.tab)) else { return false }
@@ -1464,12 +1468,20 @@ struct TasksPage: View {
                     ForEach(sections.groups, id: \.key) { dateGroup in
                         let turning = turn?.matches(tab, dateGroup.key) ?? false
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
-                        TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
-                                         overdue: dateGroup.isOverdue) {
-                            toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                        if dateGroup.showsHeader {
+                            TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
+                                             overdue: dateGroup.isOverdue) {
+                                toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                            }
+                            .id("group:" + dateGroup.key)
+                            .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
                         }
-                        .id("group:" + dateGroup.key)
-                        .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
+                        // The next event at the top of Today (read-only; a
+                        // click opens that day on the Calendar page).
+                        if dateGroup.kind == .today, !folded, let event = model.nextEvent(on: tab) {
+                            TasksNextEventRow(event: event, open: { model.openNextEvent() })
+                                .id("next-event")
+                        }
                         let drawnRows = sections.groupRows[dateGroup.key] ?? []
                         let byStatus = Dictionary(grouping: drawnRows, by: \.status).mapValues { $0.map(\.id) }
                         let places = turning ? foldPlaces(drawnRows, in: tab) : [:]
@@ -1654,7 +1666,7 @@ struct TasksPage: View {
                         actions: actions(for: id, in: tab),
                         onToggleExpanded: { toggleExpanded(id) },
                         onSelect: { rowClicked(id, tab: tab) },
-                        onOpenTitle: opensTaskNotes && tab != .done ? { openTaskNote(id) } : nil,
+                        onOpenPage: opensTaskNotes && tab != .done ? { openTaskNote(id) } : nil,
                         focus: live.focus,
                         titleEditing: editing ? titleEditing(for: id) : nil,
                         // Every row, done ones too (round 10): a finished task shows
@@ -2129,9 +2141,9 @@ struct TasksPage: View {
     // MARK: - Right-click menu
 
     /// The right-click menu: the task's commands (`taskCommands`), the
-    /// same list the actions button and ⇧⌘I open.
+    /// same list the actions button opens.
     /// Every command a row offers, in one list (round 10: one definition
-    /// for the right-click menu, the actions button, ⇧⌘I, and the keys
+    /// for the right-click menu, the actions button, and the keys
     /// ⌘C and ⌘D, which run the command this list holds for their key).
     /// It acts on the menu's targets: the row, or the selection it is part
     /// of. Each command shows its key from `AtticTaskShortcut`.
@@ -2521,7 +2533,7 @@ struct TasksPage: View {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    /// ⇧⌘I, the actions button and VoiceOver's "Show actions": the task's
+    /// The actions button and VoiceOver's "Show actions": the task's
     /// whole menu (for a selection, the selection's), under `anchor` or at
     /// the row.
     private func showActions(for id: UUID, anchor: NSView?, tab: TasksTab) {

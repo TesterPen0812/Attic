@@ -50,21 +50,66 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(CalendarMonth(year: 2026, month: 0), CalendarMonth(year: 2025, month: 12))
     }
 
-    func testTodayPastAndSelectedKeys() {
+    func testGridIsFlatAndOnlyTheSelectedDayIsAKey() {
         let weeks = CalendarMonthMath.weeks(for: CalendarMonth(year: 2026, month: 10), today: day(2026, 10, 29),
                                             selected: day(2026, 10, 31), calendar: calendar)
-        let days = Dictionary(uniqueKeysWithValues: weeks.flatMap(\.days).map { ($0.day, $0) })
-        XCTAssertEqual(days[day(2026, 10, 28)]?.style, .flat, "past days are flat")
-        XCTAssertEqual(days[day(2026, 10, 29)]?.style, .raised, "today onward is raised")
-        XCTAssertEqual(days[day(2026, 10, 29)]?.isToday, true)
-        XCTAssertEqual(days[day(2026, 10, 30)]?.style, .raised)
-        XCTAssertEqual(days[day(2026, 10, 31)]?.style, .selected, "selected is the ink key")
+        let all = weeks.flatMap(\.days)
+        let days = Dictionary(uniqueKeysWithValues: all.map { ($0.day, $0) })
+        XCTAssertEqual(all.filter { $0.style == .selected }.map(\.day), [day(2026, 10, 31)], "the selected day is the only key")
+        XCTAssertTrue(all.filter { !$0.isSelected }.allSatisfy { $0.style == .plain }, "no raised keys in any month")
+        XCTAssertEqual(days[day(2026, 10, 28)]?.number, .grey, "past days are grey")
+        XCTAssertEqual(days[day(2026, 10, 29)]?.number, .red, "today is a red number")
+        XCTAssertEqual(days[day(2026, 10, 30)]?.number, .ink, "the rest are ink")
+        XCTAssertEqual(days[day(2026, 10, 31)]?.number, .ink)
         let onToday = CalendarMonthMath.weeks(for: CalendarMonth(year: 2026, month: 10), today: day(2026, 10, 29),
-                                              selected: day(2026, 10, 29), calendar: calendar)
-        XCTAssertEqual(onToday.flatMap(\.days).first { $0.day == day(2026, 10, 29) }?.style, .selectedToday,
-                       "selected today is the red key")
-        let raised = weeks.flatMap(\.days).filter { $0.isInMonth && $0.style == .raised }
-        XCTAssertEqual(raised.count, 2, "29 and 30 Oct (31 is selected)")
+                                              selected: day(2026, 10, 29), calendar: calendar).flatMap(\.days)
+        let today = onToday.first { $0.day == day(2026, 10, 29) }
+        XCTAssertEqual(today?.style, .selected)
+        XCTAssertEqual(today?.number, .red, "today's number stays red when selected")
+        let onPast = CalendarMonthMath.weeks(for: CalendarMonth(year: 2026, month: 10), today: day(2026, 10, 29),
+                                             selected: day(2026, 10, 5), calendar: calendar).flatMap(\.days)
+        XCTAssertEqual(onPast.first { $0.day == day(2026, 10, 5) }?.number, .ink, "a selected past day is ink")
+        // The key: 60 × 60 px, a whole superellipse on curve 1.4.
+        XCTAssertEqual(CalendarDesign.keySize, 30)
+        XCTAssertEqual(CalendarDesign.keyCornerRadius, 15)
+        XCTAssertEqual(CalendarDesign.keyExponent, pow(2, 1.4), accuracy: 0.0001)
+    }
+
+    func testOnlyTheSelectedDayDrawsAThirtyPointGreyKey() throws {
+        let selected = try render(key(day(2026, 10, 31), today: day(2026, 10, 29), selected: day(2026, 10, 31)))
+        let box = try XCTUnwrap(inkBox(selected, minAlpha: 0.02))
+        XCTAssertEqual(box.width, 60, accuracy: 2, "a 30 pt key")
+        XCTAssertEqual(box.height, 60, accuracy: 2)
+        XCTAssertLessThan(try alpha(selected, px: Int(box.minX) + 2, py: Int(box.minY) + 2), 0.01,
+                          "a whole superellipse: its corner is open")
+        // The shared selection marker's grey: the design's 6 % heading ink,
+        // not the row-selection token (7.5 % in Light).
+        XCTAssertEqual(try alpha(selected, px: Int(box.midX) - 22, py: Int(box.midY)), AtticSelectionMarker.fillAlpha,
+                       accuracy: 0.008, "the selection marker's 6 % grey")
+        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
+            let tokens = AtticColorTokens.resolve(context)
+            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens),
+                           AtticSelectionMarker.fill(tokens), "the key is the shared selection marker, light and dark")
+        }
+        for plain in [day(2026, 10, 30), day(2026, 10, 28), day(2026, 10, 29)] {
+            let image = try render(key(plain, today: day(2026, 10, 29), selected: day(2026, 10, 31)))
+            let ink = try XCTUnwrap(inkBox(image, minAlpha: 0.02))
+            XCTAssertLessThan(ink.width, 36, "\(plain.rawValue): no key, only its number")
+            XCTAssertLessThan(ink.height, 36, "\(plain.rawValue): no key, only its number")
+        }
+    }
+
+    func testNumbersAreRedOnTodayGreyInThePastAndInkOtherwise() throws {
+        let today = day(2026, 10, 29)
+        for selected in [today, day(2026, 10, 31)] {
+            let red = try numberColour(try render(key(today, today: today, selected: selected)))
+            XCTAssertGreaterThan(red.red - red.green, 0.4, "today is red, selected or not")
+        }
+        let past = try numberColour(try render(key(day(2026, 10, 28), today: today, selected: day(2026, 10, 31))))
+        let ink = try numberColour(try render(key(day(2026, 10, 30), today: today, selected: day(2026, 10, 31))))
+        XCTAssertEqual(past.red, past.green, accuracy: 0.05, "past days are grey")
+        XCTAssertGreaterThan(past.red, ink.red + 0.15, "grey is lighter than ink")
+        XCTAssertLessThan(ink.red, 0.25, "the rest are ink")
     }
 
     func testPinnedWeekAndWeekViewOffsets() {
@@ -234,7 +279,11 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertFalse(bare.commands(for: id).contains { $0.title == "Remove from Tasks" })
     }
 
-    func testCalendarRowKeepsClickEntryAndCommandReturnOpensItsPage() throws {
+    /// The Calendar agenda's task rows go into the page the Tasks rows'
+    /// way (Accepted 2026-10-30, through the shared row): the › and a
+    /// double-click open it, a single click opens nothing, and ⌘Return and
+    /// ⇧⌘I open it from the keyboard.
+    func testCalendarRowOpensLikeATasksRowAndBothKeysOpenItsPage() throws {
         let id = UUID(), today = day(2026, 10, 29)
         let task = CalendarTaskEntry(id: id, title: "A Calendar task", due: today, isOpen: true)
         var opened: [UUID] = []
@@ -242,10 +291,14 @@ final class CalendarPageTests: XCTestCase {
         let group = CalendarAgenda.groups(selected: today, clock: .init(today: today, now: date(2026, 10, 29, 12)),
             events: [], tasks: [task], calendar: calendar)[0]
         let row = CalendarAgendaDay(group: group, today: today, taskActions: actions, onSelectDay: { _ in }).taskRow(task)
-        XCTAssertNil(row.onSelect, "base wiring: the row click falls back to Open Page")
-        (row.onSelect ?? row.actions.openPage)()
-        XCTAssertNotNil(row.onOpenTitle)
-        row.onOpenTitle?()
+        let click = try XCTUnwrap(row.onSelect, "a single click no longer falls back to Open Page")
+        click()
+        XCTAssertEqual(opened, [], "a single click opens nothing")
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, opens: row.onOpenPage != nil), .open, "a double-click opens")
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 1, opens: row.onOpenPage != nil), .select)
+        XCTAssertTrue(AtticTaskRow.showsOpenButton(hovered: true, selected: false, renaming: false, opens: row.onOpenPage != nil),
+                      "the › shows on a hovered Calendar row")
+        row.onOpenPage?()
         let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
             timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
             isARepeat: false, keyCode: 36))
@@ -254,7 +307,11 @@ final class CalendarPageTests: XCTestCase {
             modifiers: EventModifiers(event.modifierFlags), listCommands: true))
         XCTAssertTrue(AtticTaskKeys.offers(command, row.actions))
         AtticTaskKeys.perform(command, row.actions)
-        XCTAssertEqual(opened, [id, id, id], "row click, title click and ⌘Return share the Calendar route")
+        let page = try XCTUnwrap(AtticTaskKeys.command(key: KeyEquivalent("i"), characters: "I", modifiers: [.command, .shift],
+                                                       listCommands: true))
+        XCTAssertEqual(page, .openPage, "⇧⌘I opens the page")
+        AtticTaskKeys.perform(page, row.actions)
+        XCTAssertEqual(opened, [id, id, id], "the ›, ⌘Return and ⇧⌘I share the Calendar route")
     }
 
     func testTypingIsDebouncedIntoOneSearch() async throws {
@@ -308,6 +365,91 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertTrue(PanelUIState.keepsBuilt(.calendar))
     }
 
+    // MARK: - Free days, date tiles, Today and the fade
+
+    func testFreeDaysFoldIntoOneLineAndTodayKeepsItsCard() {
+        let today = day(2026, 10, 29)
+        let clock = CalendarAgenda.Clock(today: today, now: date(2026, 10, 29, 12))
+        // Events on 30 Oct and 2 Nov; 31 Oct–1 Nov and 3–4 Nov are free.
+        let events = [event("a", "Gym", start: date(2026, 10, 30, 7), end: date(2026, 10, 30, 8)),
+                      event("b", "Dentist", start: date(2026, 11, 2, 10), end: date(2026, 11, 2, 11))]
+        let groups = CalendarAgenda.groups(selected: today, clock: clock, events: events, tasks: [], calendar: calendar)
+        let entries = CalendarAgenda.entries(groups, foldsFreeDays: true)
+        XCTAssertEqual(entries.map(\.id), ["day-2026-10-29", "day-2026-10-30", "free-2026-10-31", "day-2026-11-02",
+                                           "free-2026-11-03"], "today keeps its card even when empty")
+        guard case let .free(run) = entries[2], case let .free(tail) = entries[4] else { return XCTFail("runs") }
+        let british = Locale(identifier: "en_GB")
+        XCTAssertEqual(run.label(locale: british).replacingOccurrences(of: "\u{2009}", with: " "), "31 Oct – 1 Nov")
+        XCTAssertEqual(CalendarFreeDays(first: day(2026, 10, 10), last: day(2026, 10, 11)).label(locale: british), "10–11 Oct")
+        XCTAssertEqual(tail.label(locale: british), "3–4 Nov")
+        XCTAssertEqual(CalendarFreeDays(first: day(2026, 10, 10), last: day(2026, 10, 10)).label(locale: british), "10 Oct")
+        XCTAssertEqual(CalendarAgenda.entries(groups, foldsFreeDays: false).count, 7, "a search never folds")
+        // Selecting an empty day that is not today folds it too.
+        let away = CalendarAgenda.groups(selected: day(2026, 11, 3), clock: clock, events: events, tasks: [], calendar: calendar)
+        XCTAssertEqual(CalendarAgenda.entries(away, foldsFreeDays: true).map(\.id), ["free-2026-11-03"])
+    }
+
+    func testFreeDaysLineSelectsItsFirstDay() {
+        var selected: [DueDay] = []
+        let run = CalendarFreeDays(first: day(2026, 10, 10), last: day(2026, 10, 11))
+        CalendarFreeDaysLine(run: run, onSelectDay: { selected.append($0) }).select()
+        XCTAssertEqual(selected, [day(2026, 10, 10)])
+        XCTAssertEqual(CalendarDesign.freeHeight, 20, "a 40 px line")
+        XCTAssertEqual(CalendarDesign.freeInsetX, CalendarDesign.dayPadding + 8, "the card's padding plus 16 px")
+    }
+
+    func testFreeRunIdsStayStableAsEventsLoad() {
+        let today = day(2026, 10, 29)
+        let clock = CalendarAgenda.Clock(today: today, now: date(2026, 10, 29, 12))
+        let before = CalendarAgenda.entries(CalendarAgenda.groups(selected: today, clock: clock, events: [], tasks: [],
+                                                                  calendar: calendar), foldsFreeDays: true)
+        XCTAssertEqual(before.map(\.id), ["day-2026-10-29", "free-2026-10-30"])
+        let late = [event("x", "Party", start: date(2026, 11, 2, 20), end: date(2026, 11, 2, 22))]
+        let after = CalendarAgenda.entries(CalendarAgenda.groups(selected: today, clock: clock, events: late, tasks: [],
+                                                                 calendar: calendar), foldsFreeDays: true)
+        XCTAssertEqual(after.map(\.id), ["day-2026-10-29", "free-2026-10-30", "day-2026-11-02", "free-2026-11-03"],
+                       "days before a new event keep their ids")
+        XCTAssertEqual(Set(after.map(\.id)).count, after.count, "unique ids")
+    }
+
+    func testDateTilesArePlainAndOnlyTodayHasASquircleCard() throws {
+        let today = day(2026, 10, 29)
+        let clock = CalendarAgenda.Clock(today: today, now: date(2026, 10, 29, 12))
+        let groups = CalendarAgenda.groups(selected: today, clock: clock, events: [], tasks: [], calendar: calendar)
+        XCTAssertEqual(groups.map(CalendarAgendaDay.hasCard), [true, false, false, false, false, false, false])
+        let tile = try render(AnyView(CalendarDateTile(group: groups[2]) {}.frame(height: 40)),
+                              size: CGSize(width: CalendarDesign.tileWidth, height: 40))
+        XCTAssertLessThan(try alpha(tile, px: Int((CalendarDesign.tileWidth - 4) * 2), py: 40), 0.01,
+                          "no grey box behind the date")
+        XCTAssertEqual(CalendarDesign.dayCardExponent, AtticShape.surfaceExponent, "today's card is a squircle surface")
+        XCTAssertEqual(CalendarDesign.dayRadius, AtticRadius.card)
+        XCTAssertEqual(CalendarDesign.dayPadding(radius: 18), 5, "36 px radius, 10 px padding")
+        XCTAssertEqual(CalendarDesign.dayPadding(radius: 32), 8.5, "padding grows with the radius (64 px: 17 px)")
+    }
+
+    func testTodayButtonShowsOnlyWhileAnotherDayIsSelected() {
+        XCTAssertFalse(CalendarTodayButton.isShown(selected: day(2026, 10, 29), today: day(2026, 10, 29)))
+        XCTAssertTrue(CalendarTodayButton.isShown(selected: day(2026, 10, 30), today: day(2026, 10, 29)))
+        XCTAssertTrue(CalendarTodayButton.isShown(selected: day(2026, 9, 1), today: day(2026, 10, 29)))
+    }
+
+    func testAgendaFadesUnderThePinnedWeekAsAGradientWithNoSoftEdge() throws {
+        let size = CGSize(width: 40, height: 120)
+        let pinned = try render(AnyView(CalendarScrollMask(pinned: true)), size: size)
+        let top = CalendarDesign.weekPitch
+        func a(_ y: CGFloat) throws -> Double { try alpha(pinned, px: 40, py: Int(y * 2)) }
+        XCTAssertLessThan(try a(top - 2), 0.01, "hidden under the pinned week")
+        XCTAssertEqual(try a(top + CalendarDesign.agendaFade / 2), 0.5, accuracy: 0.15, "half way through the fade")
+        XCTAssertGreaterThan(try a(top + CalendarDesign.agendaFade + 2), 0.99, "full below the fade")
+        XCTAssertEqual(CalendarDesign.agendaFade, 20, "a 40 px fade")
+        let unpinned = try render(AnyView(CalendarScrollMask(pinned: false)), size: size)
+        XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: 4), 0.99, "nothing hidden before the week pins")
+        XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: 40), 0.99)
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Attic/Calendar/UI/CalendarPage.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".atticScrollEdgeEffect()"), "Clean cut: the native soft scroll edge stays off")
+    }
+
     // MARK: - Hosted: bounded updates, no layout loop
 
     func testHostedPageSettlesAndUpdatesBoundedly() throws {
@@ -350,5 +492,81 @@ final class CalendarPageTests: XCTestCase {
         let quiet = CalendarPage.bodyEvaluations
         settle(0.5)
         XCTAssertEqual(CalendarPage.bodyEvaluations, quiet)
+
+        // Scrolling through the month and the agenda: the entries keep their
+        // ids, and the page re-runs only when the week pins or unpins.
+        let ids = model.snapshot.entries.map(\.id)
+        let scroller = try XCTUnwrap(Self.scrollView(in: host), "the page's scroller")
+        let beforeScroll = CalendarPage.bodyEvaluations
+        // The agenda's fade is the mounted scroller's mask: unpinned at the
+        // top, the gradient once the week pins, and not re-run per frame.
+        XCTAssertEqual(CalendarScrollMask.renders.last, false, "the mounted scroller carries the fade mask, unpinned at rest")
+        let masksBefore = CalendarScrollMask.renders.count
+        var pinnedMaskSeen = false
+        for y in Array(stride(from: 0.0, through: 400.0, by: 10.0)) + Array(stride(from: 400.0, through: 0.0, by: -20.0)) {
+            scroller.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroller.reflectScrolledClipView(scroller.contentView)
+            settle(0.02)
+            if y == 400 { pinnedMaskSeen = CalendarScrollMask.renders.last == true }
+        }
+        settle(0.3)
+        XCTAssertTrue(pinnedMaskSeen, "scrolled past the pin, the mounted mask is the pinned gradient")
+        XCTAssertEqual(CalendarScrollMask.renders.last, false, "back at the top, the fade goes")
+        XCTAssertLessThanOrEqual(CalendarScrollMask.renders.count - masksBefore, 8,
+                                 "the mask re-runs only when the week pins or unpins, not per scroll frame")
+        XCTAssertEqual(model.snapshot.entries.map(\.id), ids, "stable ids while scrolling")
+        XCTAssertLessThanOrEqual(CalendarPage.bodyEvaluations - beforeScroll, 12,
+                                 "61 scroll steps re-run the page only at the pin and week-view changes")
+    }
+
+    private static func scrollView(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView, scroll.documentView != nil { return scroll }
+        for sub in view.subviews { if let found = scrollView(in: sub) { return found } }
+        return nil
+    }
+
+    // MARK: - Rendering
+
+    private func key(_ d: DueDay, today: DueDay, selected: DueDay) -> AnyView {
+        let grid = CalendarMonthMath.weeks(for: CalendarMonth(d), today: today, selected: selected, calendar: calendar)
+        let gridDay = grid.flatMap(\.days).first { $0.day == d }!
+        return AnyView(CalendarKey(day: gridDay) {})
+    }
+
+    private func render(_ view: AnyView, size: CGSize = CGSize(width: 44, height: 30)) throws -> NSBitmapImageRep {
+        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height)
+            .atticDesign(AtticDesignContext(mode: .light)).environment(\.colorScheme, .light))
+        renderer.scale = 2
+        return NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+    }
+
+    private func alpha(_ bitmap: NSBitmapImageRep, px: Int, py: Int) throws -> Double {
+        try XCTUnwrap(bitmap.colorAt(x: px, y: py)).alphaComponent
+    }
+
+    /// The box of every pixel at least `minAlpha` opaque, in pixels.
+    private func inkBox(_ bitmap: NSBitmapImageRep, minAlpha: Double) -> CGRect? {
+        var box: CGRect?
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) >= minAlpha {
+                let pixel = CGRect(x: x, y: y, width: 1, height: 1)
+                box = box.map { $0.union(pixel) } ?? pixel
+            }
+        }
+        return box
+    }
+
+    /// The average colour of the number's solid pixels.
+    private func numberColour(_ bitmap: NSBitmapImageRep) throws -> AtticRGBA {
+        var sum = (0.0, 0.0, 0.0), count = 0.0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let colour = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), colour.alphaComponent > 0.9 else { continue }
+                sum = (sum.0 + colour.redComponent, sum.1 + colour.greenComponent, sum.2 + colour.blueComponent)
+                count += 1
+            }
+        }
+        XCTAssertGreaterThan(count, 10, "the number is drawn")
+        return AtticRGBA(red: sum.0 / count, green: sum.1 / count, blue: sum.2 / count)
     }
 }

@@ -21,6 +21,9 @@ enum TasksPanelDesign {
         case noDate
         /// A Done page day (the day the tasks were finished).
         case finished(Date)
+        /// Later's one list (Accepted 2026-10-29, "Later is the backlog"):
+        /// every put-off task, no date groups, no header.
+        case backlog
     }
 
     struct Group: Equatable, Sendable {
@@ -33,10 +36,13 @@ enum TasksPanelDesign {
         /// Rows under a day header show only a time (none in Attic).
         var rowsShowDate: Bool {
             switch kind {
-            case .overdue, .today, .noDate: true
+            case .overdue, .today, .noDate, .backlog: true
             case .day, .finished: false
             }
         }
+
+        /// Whether the group draws a header (Later's one list has none).
+        var showsHeader: Bool { kind != .backlog }
 
         /// The key a fold is remembered by (per page).
         var key: String { kind.key }
@@ -71,6 +77,23 @@ enum TasksPanelDesign {
             groups.append(Group(kind: .day(day), title: title, isOverdue: false, ids: days[day] ?? []))
         }
         if !noDate.isEmpty { groups.append(Group(kind: .noDate, title: String(localized: "No date"), isOverdue: false, ids: noDate)) }
+        return groups
+    }
+
+    /// Later's list (Accepted 2026-10-29): one group without a header, the
+    /// list's order kept; nothing when Later is empty.
+    static func backlogGroups(_ ids: [UUID]) -> [Group] {
+        ids.isEmpty ? [] : [Group(kind: .backlog, title: "", isOverdue: false, ids: ids)]
+    }
+
+    /// Now's groups with the next event (Accepted 2026-10-29, "the next
+    /// event in Now"): the event sits at the top of Today, so Today shows
+    /// for it even with no task due today (after Overdue, before the days).
+    static func withTodayForNextEvent(_ groups: [Group]) -> [Group] {
+        guard !groups.contains(where: { $0.kind == .today }) else { return groups }
+        var groups = groups
+        let at = groups.firstIndex { $0.kind != .overdue } ?? groups.endIndex
+        groups.insert(Group(kind: .today, title: String(localized: "Today"), isOverdue: false, ids: []), at: at)
         return groups
     }
 
@@ -217,6 +240,7 @@ extension TasksPanelDesign.GroupKind {
         case let .day(day): "day:\(day.rawValue)"
         case .noDate: "nodate"
         case let .finished(date): "done:\(Int(date.timeIntervalSinceReferenceDate))"
+        case .backlog: "backlog"
         }
     }
 }

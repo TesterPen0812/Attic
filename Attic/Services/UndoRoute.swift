@@ -16,6 +16,8 @@ enum UndoHistoryID: Hashable, Sendable {
     /// (⌘Z / ⇧⌘Z while the library has focus). Apart from `.library` so
     /// Settings' Recently Deleted and tag changes never mix with it.
     case notesLibrary
+    /// Apple Calendar writes have their own page history.
+    case calendar
 }
 
 /// What happened when a step was undone or redone.

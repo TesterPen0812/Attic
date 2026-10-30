@@ -65,6 +65,9 @@ struct TasksPageServices {
     /// through the page's producer. Nil where the host has no task pages:
     /// the command is hidden.
     var makeCheckbox: ((UUID) -> Void)?
+    /// The next event's row (Accepted 2026-10-29): the host shows that day
+    /// on the Calendar page. Nil where the page has no Calendar.
+    var openCalendarDay: ((DueDay) -> Void)?
     var now: () -> Date = Date.init
     var calendar: () -> Calendar = { Calendar.autoupdatingCurrent }
     var locale: Locale = .autoupdatingCurrent
@@ -346,11 +349,38 @@ final class TasksPageModel: ObservableObject {
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
     @Published var completedTodayExpanded = false
+    /// Today's next event (`TasksNextEventFeed`), shown at the top of Now's
+    /// Today; nil without Calendar access, with the switch off, or with no
+    /// event still ahead today.
+    @Published var nextEvent: TasksNextEvent?
     /// The date groups folded, per page (the owner's panel design: a
     /// header's click folds or unfolds its group).
     @Published private(set) var foldedGroups: [TasksTab: Set<String>] = [:]
 
     func folded(on tab: TasksTab) -> Set<String> { foldedGroups[tab] ?? [] }
+
+    /// The next event as `tab` shows it: on Now only, and not while Find or
+    /// a tag chip narrows the list (the design's `nextToday` rule).
+    func nextEvent(on tab: TasksTab) -> TasksNextEvent? {
+        guard tab == .now, let nextEvent, trimmedQuery(for: tab).isEmpty, tagFilter(on: tab) == nil else { return nil }
+        return nextEvent
+    }
+
+    /// The next event's row: that day on the Calendar page.
+    func openNextEvent() {
+        guard let day = nextEvent(on: .now)?.day else { return }
+        services.openCalendarDay?(day)
+    }
+
+    /// Giving a Later task a date moves it to Now under that day (the
+    /// store's rule), and the page follows it there, as the design does.
+    func followDatedOutOfLater(_ ids: [UUID]) {
+        guard tab == .backlog, ids.contains(where: { store.task(withID: $0)?.status == .todo }) else { return }
+        let keep = selection
+        select(tab: .now)
+        guard self.tab == .now else { return }
+        for id in keep where store.task(withID: id) != nil { selection.insert(id) }
+    }
 
     func toggleGroup(_ key: String, on tab: TasksTab) {
         var set = foldedGroups[tab] ?? []
@@ -589,6 +619,7 @@ final class TasksPageModel: ObservableObject {
         let search: String
         let tag: String?
         let folded: Set<String>
+        let nextEvent: TasksNextEvent?
     }
 
     /// What a page kept built but not drawn shows (round 11): while it is
@@ -612,6 +643,8 @@ final class TasksPageModel: ObservableObject {
         let tag: String?
         /// The date groups folded on this page.
         let folded: Set<String>
+        /// The next event at the top of Today (Now only).
+        let nextEvent: TasksNextEvent?
         /// Whether this page is the one that answers the user (the tab
         /// shown, on screen): it gains and loses editors, focus and popovers
         /// with it (round 12).
@@ -622,7 +655,8 @@ final class TasksPageModel: ObservableObject {
         PageToken(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
-                  view: viewOptions(for: tab), tag: tagFilter(on: tab), folded: folded(on: tab), owner: self.tab == tab && isPageShown)
+                  view: viewOptions(for: tab), tag: tagFilter(on: tab), folded: folded(on: tab), nextEvent: nextEvent(on: tab),
+                  owner: self.tab == tab && isPageShown)
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -647,7 +681,7 @@ final class TasksPageModel: ObservableObject {
         let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           expandedFiles: expandedFiles, completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagFilter(on: tab),
-                          folded: folded(on: tab))
+                          folded: folded(on: tab), nextEvent: nextEvent(on: tab))
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
         var sections = TasksSections()
@@ -666,8 +700,13 @@ final class TasksPageModel: ObservableObject {
         // later day · No date, the list's order kept inside each. Built
         // here, so only when the rows change (or the day does: `today` is
         // in the key). A folded group's rows are left out of the list.
-        let groups = TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, today: key.today,
-                                             calendar: services.calendar(), locale: services.locale)
+        // Later is the backlog (Accepted 2026-10-29): one list, no date
+        // groups. Now's Today also shows for the next event alone.
+        var groups = tab == .backlog
+            ? TasksPanelDesign.backlogGroups(open.map(\.id))
+            : TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, today: key.today,
+                                      calendar: services.calendar(), locale: services.locale)
+        if key.nextEvent != nil { groups = TasksPanelDesign.withTodayForNextEvent(groups) }
         let byID = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for group in groups where !key.folded.contains(group.key) {
             var drawn: [TasksListRow] = []
@@ -1758,6 +1797,7 @@ final class TasksPageModel: ObservableObject {
         }
         editingTitleID = nil
         clearFailure(.title(id))
+        if patch.dueDay != nil { followDatedOutOfLater([id]) }
         return true
     }
 
