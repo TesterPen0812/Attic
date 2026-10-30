@@ -259,4 +259,48 @@ final class PanelChromeTests: XCTestCase {
             _ = try assertRow(["panel-section-picker", "calendar-today", "calendar-new-task"], in: host)
         }
     }
+
+    /// Notes board (Accepted 2026-10-30): board | list on the top row's
+    /// page-switch slot, only on the notes list, 27 pt like the Tasks tabs,
+    /// the current one on the selection marker; it folds with the search.
+    /// The bottom bar ends with "+".
+    func testNotesLayoutSwitchOnlyOnTheListAndFoldsWithSearch() throws {
+        XCTAssertEqual(NotesBarMetrics.newNoteSymbol, "plus", "the bottom bar ends with +")
+        XCTAssertEqual(NotesLayoutSwitchMetrics.width, 3 + 21 + 1 + 21 + 3)
+        try withPanel { host, state, _, _, draft, _ in
+            state.selectSection(.notes)
+            spin(1.5)
+            XCTAssertTrue(draft.pages.showLibrary())
+            spin(1.0)
+            let top = try assertRow(["panel-pin-button", "notes-layout-switch", "panel-settings-button", "notes-search-button"],
+                                    in: host)
+            XCTAssertEqual(top[1].width, NotesLayoutSwitchMetrics.width, accuracy: 0.5)
+            XCTAssertEqual(top[2].minX - top[1].maxX, 3, accuracy: 0.5, "a 6 px gap before •••")
+            _ = try assertRow(["panel-section-picker", "notes-tag-bar", "notes-new-note"], in: host)
+            XCTAssertNotNil(element("notes-library-group-today", in: host), "the list, with its sections")
+
+            // Board: the cards, no headings.
+            let board = try XCTUnwrap(element("notes-layout-board", in: host))
+            XCTAssertTrue(board.accessibilityPerformPress?() ?? false)
+            spin(0.6)
+            XCTAssertNotNil(element("notes-board-column-0", in: host), "the board")
+            XCTAssertNil(element("notes-library-group-today", in: host), "no headings on the board")
+            let list = try XCTUnwrap(element("notes-layout-list", in: host))
+            XCTAssertTrue(list.accessibilityPerformPress?() ?? false)
+            spin(0.6)
+            XCTAssertNotNil(element("notes-library-group-today", in: host))
+
+            // Search folds the switch with Pin and •••.
+            let search = try XCTUnwrap(element("notes-search-button", in: host))
+            XCTAssertTrue(search.accessibilityPerformPress?() ?? false)
+            spin(0.8)
+            XCTAssertNil(element("notes-layout-switch", in: host), "folds with the search")
+
+            // An open note has no layout switch.
+            draft.pages.dismissLibrary()
+            spin(1.0)
+            XCTAssertNil(element("notes-layout-switch", in: host), "only on the notes list")
+            XCTAssertNotNil(element("notes-search-button", in: host))
+        }
+    }
 }

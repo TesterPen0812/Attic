@@ -238,8 +238,6 @@ enum AtticRaisedButtonMetrics {
     /// O14-05: the pinned pin, and what hovering it offers (Unpin).
     static let pinnedSymbol = "pin.fill"
     static let unpinSymbol = "pin.slash"
-    /// New note's `square.and.pencil` (A3-01: measured low and right).
-    static let newNoteGlyphOffset = CGSize(width: -0.5, height: -0.5)
     /// All notes' `rectangle.stack` (A3-02: measured high).
     static let stackGlyphOffsetY: CGFloat = 0.5
     /// Icon and label buttons: padding each side and icon-to-label gap.
