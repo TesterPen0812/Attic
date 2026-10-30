@@ -656,10 +656,10 @@ struct AtticGlassMenuStyle {
     var isGlass: Bool { AtticDropdownSurface.isGlass(design, capture: false) }
     var title: NSColor { tokens.ink(.body).nsColor }
     var icon: NSColor { tokens.ink(.icon).nsColor }
-    var detail: NSColor { TasksPanelDesign.toneInk(.meta, tokens: tokens).nsColor }
-    var header: NSColor { TasksPanelDesign.toneInk(.groupHeader, tokens: tokens).nsColor }
-    var disabled: NSColor { TasksPanelDesign.toneInk(.meta, tokens: tokens).nsColor }
-    var destructive: NSColor { TasksPanelDesign.vivid(tokens.ink(.dueText), tokens: tokens).nsColor }
+    var detail: NSColor { secondary(.meta) }
+    var header: NSColor { secondary(.groupHeader) }
+    var disabled: NSColor { secondary(.meta) }
+    var destructive: NSColor { colourInk(tokens.ink(.dueText)).nsColor }
     var highlight: NSColor { tokens.dropdownHighlight.nsColor }
     var separator: NSColor { tokens.dropdownRule.nsColor }
     var fill: NSColor { tokens.popoverFill.nsColor }
@@ -668,6 +668,18 @@ struct AtticGlassMenuStyle {
         return (design.increaseContrast ? AtticGlassModel.contrastEdge(dark: dark) : tokens.dropdownRim).nsColor
     }
     var rimWidth: CGFloat { design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width }
+
+    /// The card's material controls its inks, independently of the panel.
+    private func secondary(_ tone: TasksDesignTone) -> NSColor {
+        if isGlass { return TasksPanelDesign.toneInk(tone, tokens: tokens).nsColor }
+        // The opaque menu fill differs from the panel base, notably in Dark.
+        return TasksPanelDesign.tone(tone, tokens: tokens)
+            .tuned(toContrast: TasksPanelDesign.toneFloor(tokens), against: [tokens.popoverFill], lighten: dark).nsColor
+    }
+
+    func colourInk(_ colour: AtticRGBA) -> AtticRGBA {
+        isGlass ? TasksPanelDesign.vivid(colour, tokens: tokens) : colour
+    }
 
     static let titleFont = NSFont.systemFont(ofSize: AtticTextStyle.dropdownRow.spec.size)
     static let detailFont = NSFont.systemFont(ofSize: AtticTextStyle.shortcut.spec.size)
@@ -1086,7 +1098,7 @@ final class AtticGlassMenuView: NSView {
                 drawPriority(priority, in: slot, disabled: command.isDisabled, style: style)
             } else if let swatch = command.swatch {
                 let dot = NSRect(x: slot.midX - m.dotSize / 2, y: slot.midY - m.dotSize / 2, width: m.dotSize, height: m.dotSize)
-                TasksPanelDesign.vivid(style.tokens.tagInk(swatch), tokens: style.tokens).nsColor.setFill()
+                style.colourInk(style.tokens.tagInk(swatch)).nsColor.setFill()
                 NSBezierPath(ovalIn: dot).fill()
             }
             x += m.iconSlot + m.columnGap
@@ -1126,7 +1138,7 @@ final class AtticGlassMenuView: NSView {
         case .medium: text = "!"
         case .high: text = "!!"
         }
-        let ink = disabled ? style.disabled : (priority == .high ? TasksPanelDesign.vivid(style.tokens.ink(.priorityMark), tokens: style.tokens).nsColor : style.detail)
+        let ink = disabled ? style.disabled : (priority == .high ? style.colourInk(style.tokens.ink(.priorityMark)).nsColor : style.detail)
         let font = AtticTextStyle.priorityMark.nsFont
         let width = ceil(AtticGlassMenuCard.measure(text, font))
         let height = font.ascender - font.descender

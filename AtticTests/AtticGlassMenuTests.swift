@@ -94,15 +94,32 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(plain.size, hinted.size, "shortcut hints are not drawn (draft C), so they take no room")
     }
 
-    func testMenuSecondaryInksReadThroughGlass() {
+    func testMenuSecondaryInksReadThroughGlass() throws {
         for mode in AtticDesignContext.Mode.allCases {
-            for surface in [PanelSurfaceStyle.glass, .solid] {
-                for reduced in [false, true] {
-                    let style = AtticGlassMenuStyle(design: AtticDesignContext(mode: mode, surface: surface, reduceTransparency: reduced))
-                    XCTAssertEqual(style.detail, TasksPanelDesign.toneInk(.meta, tokens: style.tokens).nsColor)
-                    XCTAssertEqual(style.header, TasksPanelDesign.toneInk(.groupHeader, tokens: style.tokens).nsColor)
-                    XCTAssertEqual(style.disabled, TasksPanelDesign.toneInk(.meta, tokens: style.tokens).nsColor)
-                    XCTAssertEqual(style.destructive, TasksPanelDesign.vivid(style.tokens.ink(.dueText), tokens: style.tokens).nsColor)
+            for surface in [PanelSurfaceStyle.glass, .frosted, .solid] {
+                for controls in AtticControlMaterial.allCases {
+                    for reduced in [false, true] {
+                        for contrast in [false, true] {
+                            let style = AtticGlassMenuStyle(design: AtticDesignContext(mode: mode, surface: surface,
+                                increaseContrast: contrast, reduceTransparency: reduced, controls: controls))
+                            XCTAssertEqual(style.isGlass, controls == .liquidGlass && !reduced)
+                            guard !style.isGlass else { continue } // Real glass is an on-screen gate.
+                            let floor = contrast ? 4.5 : 3.0
+                            for ink in [style.detail, style.header, style.disabled] {
+                                let colour = try XCTUnwrap(ink.usingColorSpace(.sRGB))
+                                let rgba = AtticRGBA(red: colour.redComponent, green: colour.greenComponent,
+                                    blue: colour.blueComponent, alpha: colour.alphaComponent)
+                                XCTAssertEqual(rgba.alpha, 1, "opaque card on \(surface), \(controls), \(mode)")
+                                XCTAssertGreaterThanOrEqual(rgba.contrast(on: style.tokens.popoverFill), floor,
+                                    "the actual opaque card fill: \(surface), \(controls), \(mode), IC=\(contrast)")
+                            }
+                            for colour in [style.tokens.tagInk(.pink), style.tokens.ink(.priorityMark)] {
+                                XCTAssertEqual(style.colourInk(colour), colour, "no vivid on the opaque card")
+                            }
+                            XCTAssertEqual(style.destructive, style.tokens.ink(.dueText).nsColor,
+                                "opaque cards keep the original colour, without vivid")
+                        }
+                    }
                 }
             }
         }

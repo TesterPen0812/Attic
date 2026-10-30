@@ -1,3 +1,12 @@
+## 2026-10-30 · One Item fix round 1
+
+Restored Calendar's base row/title click entry until wave 2. Notes' plain
+Return keeps its original keyboard-highlight/search scope; only ⌘Return
+falls back to the selected note. Menu secondary inks use opaque `tone` and
+colours skip `vivid` whenever the card itself is opaque, including Craft
+controls on a Glass/Frosted panel. Opaque tones keep their contrast floor
+against the card's actual fill. Glass menu geometry and motion are unchanged.
+
 ## 2026-10-30 · One Item on the panel design (w1-oneitem)
 
 Merged C2 at `83d14431`, retaining pd's row geometry and Notes library layout.
