@@ -693,7 +693,7 @@ final class TaskStore: ObservableObject {
 
         init(_ task: TaskItem) {
             self.task = task
-            statusRaw = task.statusRaw
+            statusRaw = task.listedStatus.rawValue
             manualOrder = task.manualOrder
             updatedAt = task.updatedAt
             id = task.id
@@ -976,14 +976,23 @@ final class TaskStore: ObservableObject {
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
-        var destinationStatus = status ?? task.status
+        // A task starts from where it lists: a stored Later task that still
+        // has a date lists in Now, and this write stores it there.
+        var destinationStatus = status ?? task.listedStatus
         let destinationTagsRaw = tags.map { AtticTag.encode($0) } ?? task.tagsRaw
         var destinationDueDayRaw = dueDay.map { $0?.rawValue } ?? task.dueDayRaw
         // Later is the backlog (Accepted 2026-10-29): a put-off task has no
         // date. Giving one a date moves it to Now; moving one to Later
-        // clears its date. One edit, so one undo step.
+        // clears its date, on every copy whatever the shown one holds. One
+        // edit, so one undo step.
+        var clearsDateForLater = false
         if destinationStatus == .backlog {
-            if case .some(.some) = dueDay { destinationStatus = .todo } else if status == .backlog { destinationDueDayRaw = nil }
+            if case .some(.some) = dueDay {
+                destinationStatus = .todo
+            } else {
+                destinationDueDayRaw = nil
+                clearsDateForLater = status == .backlog
+            }
         }
         // Status rules are checked against every stored replica, but only
         // the rows they concern: a title or priority edit fetches nothing.
@@ -1018,6 +1027,7 @@ final class TaskStore: ObservableObject {
         let statusChanged = destinationStatus != task.status
         let tagsChanged = destinationTagsRaw != task.tagsRaw
         let dueChanged = destinationDueDayRaw != task.dueDayRaw
+            || (clearsDateForLater && replicas.contains { $0.dueDayRaw != nil })
         guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged else {
             return false
         }
@@ -1025,8 +1035,10 @@ final class TaskStore: ObservableObject {
         let timestamp = fixedTimestamp ?? now()
         // A state change moves the task to the top of its new group (a done
         // task lands at the top of the done group); nothing else moves it.
+        // A dated Later task stored as Now keeps its place: it already lists
+        // there.
         var destinationManualOrder: Int64?
-        if statusChanged {
+        if destinationStatus != task.listedStatus {
             destinationManualOrder = try nextManualOrder(
                 status: destinationStatus,
                 parentID: task.parentID,
@@ -1058,10 +1070,10 @@ final class TaskStore: ObservableObject {
                 replica.completedAt = destinationCompletedAt
                 replica.completedFromRaw = destinationCompletedFrom.raw
                 replica.completedFromOrder = destinationCompletedFrom.order
-                if let destinationManualOrder {
-                    replica.manualOrder = destinationManualOrder
-                    replica.listOrderVersion = TaskItem.currentListOrderVersion
-                }
+            }
+            if let destinationManualOrder {
+                replica.manualOrder = destinationManualOrder
+                replica.listOrderVersion = TaskItem.currentListOrderVersion
             }
             if tagsChanged { replica.tagsRaw = destinationTagsRaw }
             if dueChanged { replica.dueDayRaw = destinationDueDayRaw }
@@ -3216,10 +3228,10 @@ final class TaskStore: ObservableObject {
         var created: [TaskItem] = []
         do {
             for source in sources {
-                let status: TaskStatus = source.status == .backlog ? .backlog : .todo
+                let status: TaskStatus = source.listedStatus == .backlog ? .backlog : .todo
                 var order: Int64?
                 let group = orderedTasks(for: status).filter { $0.parentID == nil || parent(of: $0) == nil }
-                if source.status == status, tasks.contains(where: { $0.id == source.id }),
+                if source.listedStatus == status, tasks.contains(where: { $0.id == source.id }),
                    let index = group.firstIndex(where: { $0.id == source.id }) {
                     var placed = group
                     placed.insert(source, at: index + 1)
@@ -3367,10 +3379,12 @@ final class TaskStore: ObservableObject {
         return [id] + orderedTasks(for: status).filter { $0.parentID == nil || self.parent(of: $0) == nil }.map(\.id)
     }
 
-    /// The state a subtask has once it is a task of its own: its own, except
-    /// that an open subtask of a Later task stays in Later with it.
+    /// The state a subtask has once it is a task of its own: where it
+    /// lists, except that an open undated subtask of a Later task stays in
+    /// Later with it (Later is the backlog: a dated one lists in Now).
     private static func standaloneStatus(of task: TaskItem, parent: TaskItem) -> TaskStatus {
-        task.status != .done && parent.status == .backlog ? .backlog : task.status
+        let own = task.listedStatus
+        return own != .done && task.dueDayRaw == nil && parent.listedStatus == .backlog ? .backlog : own
     }
 
     /// Moves a subtask to another main task (`newParentID`), or makes it a
@@ -3441,7 +3455,7 @@ final class TaskStore: ObservableObject {
                     }
                 }
                 let group = orderedTasks(for: status).filter { $0.parentID == nil || parent(of: $0) == nil }
-                if oldParent.status == status, let index = group.firstIndex(where: { $0.id == oldParentID }) {
+                if oldParent.listedStatus == status, let index = group.firstIndex(where: { $0.id == oldParentID }) {
                     var placed = group
                     placed.insert(task, at: index + 1)
                     order = sparseManualOrder(at: index + 1, in: placed)
@@ -3464,12 +3478,16 @@ final class TaskStore: ObservableObject {
             // of the replicas, so reading `task.status` inside the loop would
             // change its answer for the copies after it.
             let changesStatus = status != task.status
+            // Made a Later task, it has no date (Later is the backlog): a
+            // divergent copy's date is cleared too.
+            let clearsDateForLater = newParentID == nil && status == .backlog
             // Parent and placement only: a copy's own state (completion,
             // title, tags…) is never written by a move, and a field that
             // already holds its value is left alone.
             for replica in replicas {
                 if replica.parentID != newParentID { replica.parentID = newParentID }
                 if changesStatus, replica.status != status { replica.status = status }
+                if clearsDateForLater, replica.dueDayRaw != nil { replica.dueDayRaw = nil }
                 if replica.manualOrder != order { replica.manualOrder = order }
                 if replica.listOrderVersion != TaskItem.currentListOrderVersion {
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
@@ -3520,9 +3538,8 @@ final class TaskStore: ObservableObject {
     }
 
     func orderedTasks(for status: TaskStatus) -> [TaskItem] {
-        let raw = status.rawValue
         return tasks
-            .filter { $0.statusRaw == raw }
+            .filter { $0.listedStatus == status }
             .map(SectionSortKey.init)
             .sorted(by: SectionSortKey.comesBefore)
             .map(\.task)
@@ -3644,8 +3661,8 @@ final class TaskStore: ObservableObject {
     /// The rows sharing `task`'s manual order: its siblings under the same
     /// parent in the same state, in display order.
     func orderGroup(of task: TaskItem) -> [TaskItem] {
-        (task.parentID.flatMap { parent(of: task) != nil ? subtasks(of: $0) : nil } ?? orderedTasks(for: task.status))
-            .filter { $0.parentID == task.parentID && $0.status == task.status }
+        (task.parentID.flatMap { parent(of: task) != nil ? subtasks(of: $0) : nil } ?? orderedTasks(for: task.listedStatus))
+            .filter { $0.parentID == task.parentID && $0.listedStatus == task.listedStatus }
     }
 
     /// Moves a task to `index` within its group (see `orderGroup(of:)`),
@@ -4093,14 +4110,14 @@ final class TaskStore: ObservableObject {
         updatedAt: Date
     ) throws -> Int64? {
         let group = tasks.filter {
-            $0.id != excludedID && $0.status == status && $0.parentID == parentID
+            $0.id != excludedID && $0.listedStatus == status && $0.parentID == parentID
         }
         guard let maximum = group.compactMap(\.manualOrder).max() else {
             return parentID == nil ? Self.manualOrderStride : nil
         }
         guard maximum <= .max - Self.manualOrderStride else {
             let orderedGroup = (parentID.map(subtasks(of:)) ?? orderedTasks(for: status)).filter {
-                $0.id != excludedID && $0.status == status && $0.parentID == parentID
+                $0.id != excludedID && $0.listedStatus == status && $0.parentID == parentID
             }
             try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
             return Int64(orderedGroup.count + 1) * Self.manualOrderStride

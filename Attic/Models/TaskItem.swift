@@ -117,6 +117,15 @@ final class TaskItem {
         set { statusRaw = newValue.rawValue }
     }
 
+    /// Where the task lists: its state, except that a task with a date
+    /// always lists in Now (Later is the backlog, Accepted 2026-10-29). A
+    /// stored Later task that still has a date (from before that rule) is
+    /// not rewritten at launch; the next edit to it stores it as Now.
+    var listedStatus: TaskStatus {
+        let stored = status
+        return stored == .backlog && dueDayRaw != nil ? .todo : stored
+    }
+
     var priority: TaskPriority {
         get { TaskPriority(rawValue: priorityRaw) ?? .none }
         set { priorityRaw = newValue.rawValue }
