@@ -29,6 +29,9 @@ enum NotesBarMetrics {
     static let hoverFill: Double = AtticSelectionMarker.hoverAlpha
 
     static var size: CGSize { CGSize(width: control, height: control) }
+    /// The bar ends with "+", as on Tasks (Accepted 2026-10-30, "Top row
+    /// and bottom bar"), not the compose glyph.
+    static let newNoteSymbol = "plus"
 }
 
 /// The tag bar on every page that has tags (Notes, and Tasks since
