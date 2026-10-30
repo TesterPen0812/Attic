@@ -15,6 +15,9 @@ final class TasksPageState: ObservableObject {
     /// Where the page remembers its page and views across relaunch (L7);
     /// nil keeps them for the session only.
     let memory: TasksPageMemory?
+    /// The next event in Now: its own Calendar source, which never asks
+    /// for access (the Calendar page does).
+    private(set) lazy var nextEventFeed = TasksNextEventFeed(source: CalendarEventSources.makeDefault())
 
     init(memory: TasksPageMemory? = nil) {
         self.memory = memory
@@ -50,6 +53,8 @@ struct TasksPageHost: View {
     /// Phase 3: open task pages and fill task notes. Nil: Phase 1's rows
     /// (⌘Return opens files, a drop attaches to the task).
     var taskNotes: TaskNoteEntryServices?
+    /// The next event's row: that day on the Calendar page (the shell).
+    var openCalendarDay: ((DueDay) -> Void)?
 
     @State private var addBarFocused = false
     @State private var editHold: PanelEditHold
@@ -60,8 +65,10 @@ struct TasksPageHost: View {
     init(store: TaskStore, uiState: PanelUIState, settings: AppSettings, state: TasksPageState,
          layout: PanelPageLayout, chromeInteractionState: PanelChromeInteractionState,
          primaryInputFocusRequest: UInt64, isCurrent: Bool = true, taskNotes: TaskNoteEntryServices? = nil,
+         openCalendarDay: ((DueDay) -> Void)? = nil,
          editHold: PanelEditHold? = nil, filesHold: PanelEditHold? = nil) {
         self.taskNotes = taskNotes
+        self.openCalendarDay = openCalendarDay
         self.store = store
         self.uiState = uiState
         self.settings = settings
@@ -90,6 +97,15 @@ struct TasksPageHost: View {
         model.observeNoteOwners(taskNotes.noteOwners)
     }
 
+    /// The next event in Now follows the feed and the setting (after the
+    /// first build: the feed publishes into the model).
+    private func followNextEvent(_ model: TasksPageModel) {
+        let feed = state.nextEventFeed
+        guard feed.onUpdate == nil else { feed.refresh(); return }
+        feed.onUpdate = { [weak model] in model?.nextEvent = $0 }
+        feed.follow(settings.$nextEventInNow.eraseToAnyPublisher())
+    }
+
     /// The host's callbacks, also exercised without the Tasks page's own
     /// monitors when testing the lifetime of its holds.
     var pageChrome: TasksPageChrome { pageChrome(editHold: editHold, filesHold: filesHold) }
@@ -112,6 +128,7 @@ struct TasksPageHost: View {
     var body: some View {
         let model = state.model(for: store, toasts: toasts)
         let _ = installTaskNoteServices(model)
+        let _ = { if model.services.openCalendarDay == nil { model.services.openCalendarDay = openCalendarDay } }()
         TasksPage(
             model: model,
             store: store,
@@ -143,6 +160,8 @@ struct TasksPageHost: View {
         // Now (`revealCount`, below).
         .onChange(of: isCurrent) { _, current in
             guard current else { return }
+            // Access may have been granted on Calendar meanwhile.
+            state.nextEventFeed.refresh()
             model.pageDidReturn()
             // Back from a task's page: the anchor row has the keyboard.
             if let row = uiState.taskNoteReturnRow, uiState.openTaskNoteID == nil {
@@ -165,6 +184,7 @@ struct TasksPageHost: View {
             DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
         }
         .onAppear {
+            followNextEvent(model)
             // "Attach file…" in a row's files list (A1): the picker, which
             // keeps the panel open while it is up; the list opens on what
             // was attached.

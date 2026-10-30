@@ -200,7 +200,8 @@ struct AtticPanelView: View {
                     chromeInteractionState: chromeInteractionState,
                     primaryInputFocusRequest: uiState.primaryInputFocusRequest,
                     isCurrent: page == currentPage && !covered,
-                    taskNotes: taskNoteEntryServices
+                    taskNotes: taskNoteEntryServices,
+                    openCalendarDay: openCalendarDay
                 )
             }
             .transition(pageTransition(.tasks))
@@ -234,6 +235,14 @@ struct AtticPanelView: View {
             }
             .transition(pageTransition(.calendar))
         }
+    }
+
+    /// Now's next event (Accepted 2026-10-29): that day on the Calendar page.
+    private func openCalendarDay(_ day: DueDay) {
+        let calendar = calendarPageState.model(store: store)
+        calendar.goToToday()
+        calendar.select(day)
+        selectSection(.calendar)
     }
 
     /// The Calendar's "+": the Tasks page's add bar, with the keyboard in it.
