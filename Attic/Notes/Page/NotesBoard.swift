@@ -58,6 +58,13 @@ enum NotesBoardMetrics {
     static let actionsSide: CGFloat = 16
     static let actionsOutset = CGSize(width: 2, height: 1)
     static let actionsGlyphSize: CGFloat = 12.5
+    /// Where "•••" shows, the title (and the pin) fade out under it over
+    /// this much, so the resting title keeps the card's whole width.
+    static let actionsFade: CGFloat = 6
+    /// The selected (or keyboard's) card: inset 0 0 0 2px
+    /// rgba(29,29,31,0.45), a 1 pt ring in the title's ink.
+    static let ringWidth: CGFloat = 1
+    static let ringAlpha: Double = 0.45
     /// Images: a striped block 112 px tall (150 from three images), its
     /// lower corners 6 px; the count 15 px, 8 × 12 px in.
     static let imageHeight: CGFloat = 56
@@ -146,17 +153,17 @@ struct NotesBoardCard: View {
         let hover = forced == .hover || hovered
         let showsActions = hover || isHighlighted || actionsFocused
         let shape = Squircle(cornerRadius: M.radius, exponent: M.cornerExponent)
-        openButton(shape: shape, hover: hover)
+        openButton(shape: shape, hover: hover, showsActions: showsActions)
             .overlay(alignment: .topTrailing) { actionsButton(shown: showsActions) }
             .onHover { hovered = $0 }
     }
 
-    private func openButton(shape: Squircle, hover: Bool) -> some View {
+    private func openButton(shape: Squircle, hover: Bool, showsActions: Bool) -> some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 0) {
                 if row.images > 0 { imageBlock }
                 VStack(alignment: .leading, spacing: M.lineGap) {
-                    titleLine
+                    titleLine(actionsShown: showsActions)
                     if !row.preview.isEmpty { snippet }
                     metaLine.padding(.top, M.metaTop)
                 }
@@ -181,18 +188,25 @@ struct NotesBoardCard: View {
     }
 
     /// The raised surface (glass where the controls are glass), the hover
-    /// on it, and the selected or keyboard card's fill.
+    /// on it, and the selected or keyboard card's 1 pt ring (the design's
+    /// 2 px inset ring, drawn inside the edge).
     private func surface(shape: Squircle, hover: Bool) -> some View {
         Color.clear
             .atticRaisedMaterial(cornerRadius: M.radius, state: hover ? .hover : .rest, interactive: false)
             .environment(\.atticControlCornerExponent, M.cornerExponent)
             .overlay {
-                if isSelected || isHighlighted { shape.fill(design.tokens.selected.color) }
+                if isSelected || isHighlighted {
+                    shape.stroke(design.tokens.ink(.heading).withAlpha(M.ringAlpha).color, lineWidth: M.ringWidth * 2)
+                        .clipShape(shape)
+                }
             }
             .allowsHitTesting(false)
     }
 
-    private var titleLine: some View {
+    /// The title at the card's whole width, as the design's at rest;
+    /// "•••" lies over its end and the title (and the pin) fade out under
+    /// it, so showing it never re-wraps the title or moves the cards.
+    private func titleLine(actionsShown: Bool) -> some View {
         HStack(alignment: .top, spacing: M.titleGap) {
             Text(verbatim: row.title)
                 .font(.system(size: M.titleSize, weight: .semibold))
@@ -208,9 +222,22 @@ struct NotesBoardCard: View {
                     .padding(.top, M.pinTop)
                     .accessibilityHidden(true)
             }
-            // "•••"'s room, kept at rest too, so hover never re-wraps the
-            // title (and moves the cards under it).
-            Color.clear.frame(width: M.actionsSide - M.actionsOutset.width, height: 1)
+        }
+        .mask {
+            if actionsShown {
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        Rectangle()
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: M.actionsFade)
+                        Color.clear.frame(width: M.actionsSide - M.actionsOutset.width)
+                    }
+                    .frame(height: M.titleLine)
+                    Rectangle()
+                }
+            } else {
+                Rectangle()
+            }
         }
     }
 
@@ -233,6 +260,7 @@ struct NotesBoardCard: View {
                 AtticIcon(systemName: "exclamationmark.circle", size: M.metaSize, weight: .medium, ink: .warningText)
             } else if row.hasProposal {
                 AtticIcon(systemName: "sparkle", size: M.metaSize, ink: .helper)
+                    .colour(TasksPanelDesign.toneInk(.meta, tokens: tokens))
             }
             Text(verbatim: row.time)
                 .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
@@ -289,6 +317,7 @@ struct NotesBoardCard: View {
         let radius = AtticShape.controlRadius(height: M.actionsSide)
         return Button(action: onShowActions) {
             AtticIcon(systemName: "ellipsis", size: M.actionsGlyphSize, weight: .medium, ink: .icon)
+                .colour(TasksPanelDesign.toneInk(.meta, tokens: design.tokens))
                 .frame(width: M.actionsSide, height: M.actionsSide)
                 .background {
                     if actionsHovered {
@@ -309,7 +338,6 @@ struct NotesBoardCard: View {
         .padding(.top, M.padding.top + (row.images > 0 ? (row.images >= 3 ? M.tallImageHeight : M.imageHeight) : 0)
                  + (M.titleLine - M.actionsSide) / 2)
         .padding(.trailing, M.padding.trailing - M.actionsOutset.width)
-        .help(String(localized: "Note actions (⇧⌘I)"))
         .accessibilityLabel(String(localized: "Actions for \(row.title)"))
         .accessibilityIdentifier("notes-row-actions")
     }
@@ -349,10 +377,8 @@ enum NotesLayoutSwitchMetrics {
     static let inset: CGFloat = AtticPageButtonMetrics.inset
     static let cell: CGFloat = AtticPageButtonMetrics.segment
     static let gap: CGFloat = 1
-    /// The design's 22 px glyphs.
-    static let glyph: CGFloat = 11
-
-    static func markerOffset(index: Int) -> CGFloat { CGFloat(index) * (cell + gap) }
+    /// The row's 12.2 pt icons (Accepted, "Top row and bottom bar").
+    static let glyph: CGFloat = AtticControlSize.raisedGlyph
 
     static var width: CGFloat {
         let count = CGFloat(NotesLibraryLayout.allCases.count)
@@ -362,7 +388,8 @@ enum NotesLayoutSwitchMetrics {
 
 /// Board | list on the top row's page-switch slot (Accepted 2026-10-30,
 /// "Notes board"), shown only on the notes list: the current one on the
-/// flat grey marker, its glyph in the primary ink and the other grey.
+/// flat grey marker (crossfading between the cells as the Tasks tabs'),
+/// its glyph in the primary ink and the other grey.
 /// ←/→ move between them; VoiceOver reads each by name.
 struct NotesLayoutSwitch: View {
     @Binding var selection: NotesLibraryLayout
@@ -374,6 +401,12 @@ struct NotesLayoutSwitch: View {
     @State private var hovered: NotesLibraryLayout?
 
     private typealias M = NotesLayoutSwitchMetrics
+
+    /// A change of layout: the Tasks tabs' own (a 160 ms crossfade in the
+    /// cells; Reduce Motion at once).
+    static func selectionAnimation(reduceMotion: Bool) -> Animation? {
+        TasksTopTabs.selectionAnimation(reduceMotion: reduceMotion)
+    }
 
     var body: some View {
         let tokens = design.tokens
@@ -390,6 +423,9 @@ struct NotesLayoutSwitch: View {
                         .stroke(ink, style: StrokeStyle(lineWidth: layout == .board ? 0.9 : 1, lineCap: .round, lineJoin: .round))
                         .frame(width: M.glyph, height: M.glyph)
                         .frame(width: M.cell, height: M.cell)
+                        // In the current cell, as Now · Later · Done's: a
+                        // change crossfades it between the cells, never a slide.
+                        .background { if on { AtticSelectionMarker(cornerRadius: chipRadius) } }
                         .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
                 }
                 .buttonStyle(.plain)
@@ -403,17 +439,11 @@ struct NotesLayoutSwitch: View {
                 .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
             }
         }
-        .background(alignment: .leading) {
-            AtticSelectionMarker(cornerRadius: chipRadius)
-                .frame(width: M.cell, height: M.cell)
-                .offset(x: M.markerOffset(index: selected))
-                .accessibilityHidden(true)
-        }
         .padding(M.inset)
         .frame(height: AtticControlSize.headerControl)
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: AtticRadius.header)
-        .animation(design.reduceMotion ? nil : .easeOut(duration: 0.16), value: selection)
+        .animation(Self.selectionAnimation(reduceMotion: design.reduceMotion), value: selection)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
