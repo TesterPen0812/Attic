@@ -58,7 +58,7 @@ struct TaskAddBarText: Equatable {
             switch token.value {
             case .dueDay: return !pinnedDate
             case .priority: return !pinnedPriority
-            case .tag: return true
+            case .tag, .time: return true
             }
         }
         return (parsed + pinnedTokens).sorted { $0.range.lowerBound < $1.range.lowerBound }
@@ -80,7 +80,7 @@ struct TaskAddBarText: Equatable {
                 let kind: AtticTokenChip.Kind = switch token.value {
                 case .dueDay: .date
                 case .priority(.high): .high
-                case .priority, .tag: .piece
+                case .priority, .tag, .time: .piece
                 }
                 return AtticTokenChip(range: token.utf16Range(in: text), kind: kind)
             }
@@ -117,6 +117,7 @@ struct TaskAddBarText: Equatable {
             title: parts.title.isEmpty ? collapsed : parts.title,
             tags: parts.tags,
             dueDay: parts.dueDay,
+            dueTimeMinutes: parts.dueTimeMinutes,
             priority: parts.priority ?? .none,
             status: status,
             parentID: parentID
@@ -129,6 +130,7 @@ struct TaskAddBarText: Equatable {
         var title: String
         var tags: [String] = []
         var dueDay: DueDay?
+        var dueTimeMinutes: Int?
         var priority: TaskPriority?
     }
 
@@ -141,10 +143,12 @@ struct TaskAddBarText: Equatable {
             switch token.value {
             case let .tag(tag): if !parts.tags.contains(tag) { parts.tags.append(tag) }
             case let .dueDay(day): parts.dueDay = parts.dueDay ?? day
+            case let .time(minutes): parts.dueTimeMinutes = parts.dueTimeMinutes ?? minutes
             case let .priority(level): parts.priority = parts.priority ?? level
             }
         }
         if let day = picked.day { parts.dueDay = day }
+        if parts.dueTimeMinutes != nil && parts.dueDay == nil { parts.dueDay = parser.today }
         if let priority = picked.priority { parts.priority = priority }
         for tag in picked.tags where !parts.tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
             parts.tags.append(tag)

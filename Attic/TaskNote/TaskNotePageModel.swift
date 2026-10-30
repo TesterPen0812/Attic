@@ -90,7 +90,7 @@ final class TaskNotePageModel: ObservableObject {
     private(set) var titleHistory = TaskDraftHistory()
     private var titleField: WorkspaceFieldUndo?
     private var titleConflictID: UUID?
-    private var titleBase: (title: String, priority: TaskPriority, dueDay: DueDay?)?
+    private var titleBase: (title: String, priority: TaskPriority, dueDay: DueDay?, dueTimeMinutes: Int?)?
     /// The title editor's whole selection (its draft history only).
     var titleEditSelection: NSRange?
     /// Reduce Motion: the held rows settle at once (review P2-4).
@@ -672,7 +672,7 @@ final class TaskNotePageModel: ObservableObject {
     func beginEditingTitle(undoManager: UndoManager? = nil) {
         guard admitFieldInput() else { return }
         guard let task = store.listedTask(withID: taskID), !isEditingTitle else { return }
-        titleBase = (task.title, task.priority, task.dueDay)
+        titleBase = (task.title, task.priority, task.dueDay, task.dueTimeMinutes)
         titleHistory.reset()
         titleField = WorkspaceFieldUndo(manager: undoManager ?? UndoManager())
         titleEditSelection = nil
@@ -736,7 +736,8 @@ final class TaskNotePageModel: ObservableObject {
         let editsTitle = !title.isEmpty && title != titleBase?.title
         guard (!editsTitle || task.title == titleBase?.title || title == task.title),
               (parts.priority == nil || task.priority == titleBase?.priority || parts.priority == task.priority),
-              (parts.dueDay == nil || task.dueDay == titleBase?.dueDay || parts.dueDay == task.dueDay) else {
+              (parts.dueDay == nil || task.dueDay == titleBase?.dueDay || parts.dueDay == task.dueDay),
+              (parts.dueTimeMinutes == nil || task.dueTimeMinutes == titleBase?.dueTimeMinutes || parts.dueTimeMinutes == task.dueTimeMinutes) else {
             report(CommandFailure(String(localized: "This task changed elsewhere. Your title draft is kept; press Esc to keep the newer values.")))
             titleConflictID = failure?.id
             return false
@@ -744,14 +745,15 @@ final class TaskNotePageModel: ObservableObject {
         let newTitle: String? = editsTitle && title != task.title ? title : nil
         let newTags: [String]? = Set(tags.map { $0.lowercased() }) != Set(task.tags.map { $0.lowercased() }) ? tags : nil
         let newDay: DueDay?? = parts.dueDay.flatMap { $0 != task.dueDay ? .some($0) : nil }
+        let newTime: Int?? = parts.dueTimeMinutes.flatMap { $0 != task.dueTimeMinutes ? .some($0) : nil }
         let newPriority: TaskPriority? = parts.priority.flatMap { $0 != task.priority ? $0 : nil }
-        guard newTitle != nil || newTags != nil || newDay != nil || newPriority != nil else {
+        guard newTitle != nil || newTags != nil || newDay != nil || newTime != nil || newPriority != nil else {
             cancelTitle()
             requestFocus(.list)
             return true
         }
         let outcome = fieldCommit(titleField) { [library, taskID, historyID] in
-            library.updateListedTasks([taskID], title: newTitle, priority: newPriority, tags: newTags, dueDay: newDay, in: historyID)
+            library.updateListedTasks([taskID], title: newTitle, priority: newPriority, tags: newTags, dueDay: newDay, dueTimeMinutes: newTime, in: historyID)
         }
         // Refused: the editor, its text and its draft Undo stay.
         guard outcome.isApplied else {

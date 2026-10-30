@@ -88,6 +88,7 @@ struct TaskDraftBuilder {
             title: title,
             tags: parsed.tags + inheritedTags,
             dueDay: parsed.dueDay,
+            dueTimeMinutes: parsed.dueTimeMinutes,
             priority: parsed.priority ?? .none,
             status: status,
             parentID: parentID

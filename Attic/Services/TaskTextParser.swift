@@ -6,6 +6,7 @@ struct ParsedTaskToken: Equatable {
     enum Value: Equatable {
         case tag(String)
         case dueDay(DueDay)
+        case time(Int)
         case priority(TaskPriority)
     }
 
@@ -25,13 +26,18 @@ struct ParsedTaskText: Equatable {
     let tokens: [ParsedTaskToken]
     /// The text with every token removed and whitespace tidied.
     let title: String
+    var inferredDay: DueDay? = nil
 
     var tags: [String] {
         tokens.compactMap { if case let .tag(tag) = $0.value { tag } else { nil } }
     }
 
     var dueDay: DueDay? {
-        tokens.lazy.compactMap { if case let .dueDay(day) = $0.value { day } else { nil } }.first
+        tokens.lazy.compactMap { if case let .dueDay(day) = $0.value { day } else { nil } }.first ?? inferredDay
+    }
+
+    var dueTimeMinutes: Int? {
+        tokens.lazy.compactMap { if case let .time(minutes) = $0.value { minutes } else { nil } }.first
     }
 
     var priority: TaskPriority? {
@@ -57,6 +63,9 @@ struct ParsedTaskText: Equatable {
 ///   means next year. Only the first date is recognised; later ones stay text.
 ///   The short weekday forms that are everyday words ("sun", "sat", "wed")
 ///   are not dates; their full names are.
+/// - Time: `4pm`, `4:30 pm`, `16:30` or `16.30`, in local minutes
+///   since midnight. The first free clock counts; task ranges stay text.
+///   A clock without a typed day means today.
 /// - Priority: a standalone `!` (medium) or `!!` (high). "Call mom!" stays
 ///   text, and `!` inside a word is ignored. Only the first one counts.
 struct TaskTextParser {
@@ -77,6 +86,8 @@ struct TaskTextParser {
     /// The calendar every day is counted in: Gregorian, in the injected
     /// calendar's time zone (see `DueDay.storageCalendar(matching:)`).
     private var dayCalendar: Calendar { DueDay.storageCalendar(matching: calendar) }
+
+    var today: DueDay { DueDay(date: now(), calendar: dayCalendar) }
 
     func parse(_ text: String) -> ParsedTaskText {
         let words = Self.words(in: text)
@@ -109,7 +120,14 @@ struct TaskTextParser {
             index += 1
         }
 
-        return ParsedTaskText(text: text, tokens: tokens, title: Self.title(text, removing: tokens.map(\.range)))
+        // Parse clocks only in free text, after tags and the existing day
+        // parser. Task ranges are blocked, as in parseComposerTitle; tasks
+        // have one clock, not a duration. Dot clocks follow parseWhen.
+        if let token = Self.timeToken(in: text, excluding: tokens.map(\.range)) { tokens.append(token) }
+        tokens.sort { $0.range.lowerBound < $1.range.lowerBound }
+        let hasTime = tokens.contains { if case .time = $0.value { true } else { false } }
+        return ParsedTaskText(text: text, tokens: tokens, title: Self.title(text, removing: tokens.map(\.range)),
+                              inferredDay: !foundDate && hasTime ? today : nil)
     }
 
     /// A due date given on its own (an agent's `due` argument): the whole
@@ -122,6 +140,38 @@ struct TaskTextParser {
               let (day, length) = date(at: 0, in: words, today: DueDay(date: now(), calendar: dayCalendar)),
               length == words.count else { return nil }
         return day
+    }
+
+    // MARK: - Time
+
+    private static let clockPattern = try! NSRegularExpression(
+        pattern: #"(?<![\p{L}\p{N}_#:.\/-])(?:[0-9]{1,2}[:.][0-9]{2}(?:\s*(?:am|pm))?|[0-9]{1,2}\s*(?:am|pm))(?![\p{L}\p{N}_:\/-]|\.[0-9])"#,
+        options: .caseInsensitive)
+    private static let clockParts = try! NSRegularExpression(
+        pattern: #"^([0-9]{1,2})(?:[:.]([0-9]{2}))?\s*(am|pm)?$"#, options: .caseInsensitive)
+    private static let timeRangePattern = try! NSRegularExpression(
+        pattern: #"\b[0-9]{1,2}(?:[:.][0-9]{2})?\s*(?:am|pm)?\s*[–—-]\s*[0-9]{1,2}(?:[:.][0-9]{2})?\s*(?:am|pm)?\b"#,
+        options: .caseInsensitive)
+
+    private static func timeToken(in text: String, excluding: [Range<String.Index>]) -> ParsedTaskToken? {
+        let full = NSRange(text.startIndex..<text.endIndex, in: text)
+        let blocked = excluding.map { NSRange($0, in: text) }
+            + timeRangePattern.matches(in: text, range: full).map(\.range)
+        let ns = text as NSString
+        for match in clockPattern.matches(in: text, range: full) {
+            guard !blocked.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
+                  let range = Range(match.range, in: text) else { continue }
+            let clock = ns.substring(with: match.range).lowercased() as NSString
+            guard let parts = clockParts.firstMatch(in: clock as String, range: NSRange(location: 0, length: clock.length)),
+                  let hour = Int(clock.substring(with: parts.range(at: 1))) else { continue }
+            let minute = parts.range(at: 2).location == NSNotFound ? 0 : Int(clock.substring(with: parts.range(at: 2))) ?? 0
+            guard minute < 60 else { continue }
+            let suffix = parts.range(at: 3).location == NSNotFound ? nil : clock.substring(with: parts.range(at: 3))
+            guard suffix == nil ? hour < 24 : (1...12).contains(hour) else { continue }
+            let hours = suffix.map { hour % 12 + ($0 == "pm" ? 12 : 0) } ?? hour
+            return ParsedTaskToken(value: .time(hours * 60 + minute), range: range)
+        }
+        return nil
     }
 
     // MARK: - Words

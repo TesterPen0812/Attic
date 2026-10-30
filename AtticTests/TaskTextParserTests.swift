@@ -32,6 +32,37 @@ final class TaskTextParserTests: XCTestCase {
         (parser ?? self.parser()).parse(text).dueDay
     }
 
+    func testTaskTimesAreRemovedAlongsideExistingDayTagAndPriorityTokens() {
+        for time in ["4pm", "4:30 pm", "16:30", "16.30"] {
+            let parsed = parser().parse("Call tomorrow \(time) #home !")
+            XCTAssertEqual(parsed.title, "Call", time)
+            XCTAssertEqual(parsed.dueDay, day(2026, 9, 25))
+            XCTAssertEqual(parsed.tags, ["home"])
+            XCTAssertEqual(parsed.priority, .medium)
+        }
+    }
+
+    func testTimeOnlyMeansTodayAndNonTimesRetainExistingMeaning() {
+        let parser = parser()
+        for (text, minutes) in [("4pm", 960), ("4:30 pm", 990), ("16:30", 990), ("16.30", 990),
+                                ("12am", 0), ("12pm", 720), ("23:59", 1439), ("9.05 AM", 545)] {
+            let result = parser.parse("Call \(text)")
+            XCTAssertEqual(result.dueDay, day(2026, 9, 24), text)
+            XCTAssertEqual(result.dueTimeMinutes, minutes, text)
+            XCTAssertEqual(result.title, "Call", text)
+        }
+        for text in ["#16", "v2.0", "v16.30", "24:00", "16:60", "0pm", "13pm", "2–4pm", "9:00-10:00", "#16:30"] {
+            XCTAssertNil(parser.parse(text).dueTimeMinutes, text)
+            XCTAssertEqual(parser.parse(text).title, text)
+        }
+        // 1/2 remains a numeric date, as before; it must never become a time.
+        XCTAssertNil(parser.parse("1/2").dueTimeMinutes)
+        XCTAssertEqual(parser.parse("1/2").dueDay, day(2027, 1, 2))
+        let first = parser.parse("Call 4pm 5pm")
+        XCTAssertEqual(first.dueTimeMinutes, 960)
+        XCTAssertEqual(first.title, "Call 5pm")
+    }
+
     // MARK: - Plain text
 
     func testPlainTextIsTheTitleWithNoTokens() {

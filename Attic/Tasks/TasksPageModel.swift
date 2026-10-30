@@ -1748,9 +1748,11 @@ final class TasksPageModel: ObservableObject {
         }
         let saved = store.task(withID: id) == nil
             ? library.updateListedTasks([id], title: patch.title, priority: patch.priority, tags: patch.tags,
-                                        dueDay: patch.dueDay.map { .some($0) })
+                                        dueDay: patch.dueDay.map { .some($0) },
+                                        dueTimeMinutes: patch.dueTimeMinutes.map { .some($0) })
             : library.updateTask(id, title: patch.title, priority: patch.priority, tags: patch.tags,
-                                 dueDay: patch.dueDay.map { .some($0) })
+                                 dueDay: patch.dueDay.map { .some($0) },
+                                        dueTimeMinutes: patch.dueTimeMinutes.map { .some($0) })
         if store.task(withID: id) == nil { reloadDoneLogAfterEdit() }
         guard saved.isApplied else {
             failedSave = .title(id)
@@ -1769,6 +1771,7 @@ final class TasksPageModel: ObservableObject {
         var title: String?
         var tags: [String]?
         var dueDay: DueDay?
+        var dueTimeMinutes: Int?
         var priority: TaskPriority?
     }
 
@@ -1781,9 +1784,10 @@ final class TasksPageModel: ObservableObject {
         let tags = AtticTag.normalizedSet(task.tags + parts.tags)
         if Set(tags.map { $0.lowercased() }) != Set(task.tags.map { $0.lowercased() }) { patch.tags = tags }
         if let day = parts.dueDay, day != task.dueDay { patch.dueDay = day }
+        if let time = parts.dueTimeMinutes, time != task.dueTimeMinutes { patch.dueTimeMinutes = time }
         if let priority = parts.priority, priority != task.priority { patch.priority = priority }
         guard patch != TitlePatch() else { return nil }
-        if title.isEmpty, patch.tags == nil, patch.dueDay == nil, patch.priority == nil { return nil }
+        if title.isEmpty, patch.tags == nil, patch.dueDay == nil, patch.dueTimeMinutes == nil, patch.priority == nil { return nil }
         return patch
     }
 
