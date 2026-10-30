@@ -49,6 +49,7 @@ enum CalendarEventWriteError: Error, Equatable {
     case saveFailed(String)
     case recordFailed(String)
     case openFailed
+    case undoUnavailable
 }
 
 /// This local UUID survives delete/Undo, even when EventKit assigns new IDs.
@@ -93,6 +94,7 @@ struct CalendarWriteSnapshot: Codable, Equatable {
 protocol CalendarEventWriteStore: AnyObject {
     var accessState: CalendarAccessState { get }
     func calendars() -> [CalendarWriteCalendar]
+    /// Fresh committed state, looked up by event OR calendar-item identifier.
     func event(identifier: String) -> CalendarWriteSnapshot?
     func stageCreate(_ draft: CalendarEventDraft, marker: String) throws -> CalendarWriteSnapshot
     func stageEdit(_ previous: CalendarWriteSnapshot, draft: CalendarEventDraft) throws -> CalendarWriteSnapshot

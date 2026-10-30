@@ -15,7 +15,9 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
     private var staged: [String: CalendarWriteSnapshot]?
 
     func calendars() -> [CalendarWriteCalendar] { availableCalendars }
-    func event(identifier: String) -> CalendarWriteSnapshot? { events[identifier] }
+    func event(identifier: String) -> CalendarWriteSnapshot? {
+        events[identifier] ?? events.values.first { $0.itemIdentifier == identifier }
+    }
 
     func stageCreate(_ draft: CalendarEventDraft, marker: String) throws -> CalendarWriteSnapshot {
         if let stageError { throw stageError }
