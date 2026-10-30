@@ -47,7 +47,14 @@ final class TaskItem {
     var tagsRaw: String = ""
     /// A floating calendar day (`yyyy-MM-dd`, see `DueDay`), so a due date
     /// never moves when the Mac changes time zone.
-    var dueDayRaw: String? = nil
+    var dueDayRaw: String? = nil {
+        didSet { if dueDayRaw == nil { dueTimeMinutesRaw = nil } }
+    }
+    /// Floating local minutes since midnight. Optional for lightweight
+    /// migration; no absolute instant, notification or alarm is implied.
+    // Raw access is reserved for lossless workspace snapshots. Normal
+    // task writes use the validated dueTimeMinutes property below.
+    var dueTimeMinutesRaw: Int? = nil
     /// Which ordering `manualOrder` belongs to. 0 is the pre-Phase 1 order,
     /// kept per (state, priority) group and read after priority; 1 is the
     /// Phase 1 order, one manual order per state group, which priority no
@@ -130,6 +137,18 @@ final class TaskItem {
     var dueDay: DueDay? {
         get { dueDayRaw.flatMap(DueDay.init(rawValue:)) }
         set { dueDayRaw = newValue?.rawValue }
+    }
+
+    /// A clock belongs to the task's single floating date. Invalid or
+    /// orphaned imported values never become a usable time.
+    var dueTimeMinutes: Int? {
+        get {
+            guard dueDay != nil, let value = dueTimeMinutesRaw, (0..<1440).contains(value) else { return nil }
+            return value
+        }
+        set {
+            dueTimeMinutesRaw = dueDay == nil ? nil : newValue.flatMap { (0..<1440).contains($0) ? $0 : nil }
+        }
     }
 
     var isSoftDeleted: Bool { deletedAt != nil }

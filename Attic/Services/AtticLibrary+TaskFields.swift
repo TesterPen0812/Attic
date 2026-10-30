@@ -8,6 +8,7 @@ extension AtticLibrary {
     func updateTaskFields(
         _ ids: [UUID],
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         addingTag: String? = nil,
         removingTag: String? = nil,
         in history: UndoHistoryID = .tasks
@@ -19,7 +20,7 @@ extension AtticLibrary {
         let serial = tasks.errorSerial
         undo.perform(in: history) {
             let before = ids.compactMap(tasks.editableState(of:))
-            guard tasks.updateBatchFields(ids, dueDay: dueDay, addingTag: addingTag, removingTag: removingTag) else { return nil }
+            guard tasks.updateBatchFields(ids, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, addingTag: addingTag, removingTag: removingTag) else { return nil }
             succeeded = true
             let after = ids.compactMap(tasks.editableState(of:))
             guard before != after else { return nil }

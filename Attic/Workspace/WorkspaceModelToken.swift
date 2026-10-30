@@ -268,6 +268,7 @@ enum WorkspaceModelFields {
                 WorkspaceField("doneLoggedAt", \TaskItem.doneLoggedAt),
                 WorkspaceField("tagsRaw", \TaskItem.tagsRaw),
                 WorkspaceField("dueDayRaw", \TaskItem.dueDayRaw),
+                WorkspaceField("dueTimeMinutesRaw", \TaskItem.dueTimeMinutesRaw),
                 WorkspaceField("listOrderVersion", \TaskItem.listOrderVersion),
                 WorkspaceField("completedFromRaw", \TaskItem.completedFromRaw),
                 WorkspaceField("completedFromOrder", \TaskItem.completedFromOrder)

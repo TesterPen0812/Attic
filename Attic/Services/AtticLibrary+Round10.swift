@@ -44,6 +44,7 @@ extension AtticLibrary {
         priority: TaskPriority? = nil,
         tags: [String]? = nil,
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         addingTag: String? = nil,
         removingTag: String? = nil,
         in history: UndoHistoryID = .tasks
@@ -55,7 +56,7 @@ extension AtticLibrary {
         let serial = tasks.errorSerial
         undo.perform(in: history) {
             let before = ids.compactMap(tasks.listedEditableState(of:))
-            guard tasks.updateListed(ids, title: title, priority: priority, tags: tags, dueDay: dueDay,
+            guard tasks.updateListed(ids, title: title, priority: priority, tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes,
                                      addingTag: addingTag, removingTag: removingTag) else { return nil }
             succeeded = true
             let after = ids.compactMap(tasks.listedEditableState(of:))

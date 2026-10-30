@@ -238,6 +238,7 @@ final class AtticLibrary {
         status: TaskStatus? = nil,
         tags newTags: [String]? = nil,
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         allowingUnfinishedSubtasks: Bool = false,
         in history: UndoHistoryID = .tasks
     ) -> CommandOutcome {
@@ -251,7 +252,7 @@ final class AtticLibrary {
                     priority: priority,
                     status: status,
                     tags: newTags,
-                    dueDay: dueDay,
+                    dueDay: dueDay, dueTimeMinutes: dueTimeMinutes,
                     allowingUnfinishedSubtasks: allowingUnfinishedSubtasks
                   ),
                   let after = tasks.editableState(of: id) else { return nil }
@@ -273,6 +274,7 @@ final class AtticLibrary {
         status: TaskStatus,
         tags: [String]? = nil,
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         in history: UndoHistoryID = .tasks
     ) -> CommandOutcome {
         var succeeded = false
@@ -281,7 +283,7 @@ final class AtticLibrary {
             guard let before = tasks.listedEditableState(of: id),
                   let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt,
                   tasks.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
-                                             tags: tags, dueDay: dueDay) else { return nil }
+                                             tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes) else { return nil }
             // The save has committed even if the subsequent list refresh
             // failed. Missing presentation state can only omit history.
             succeeded = true
@@ -296,7 +298,7 @@ final class AtticLibrary {
                     // live. That compound restoration no longer applies.
                     guard store.listedTask(withID: id)?.doneLoggedAt != nil else { return .obsolete }
                     return store.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
-                                                      tags: tags, dueDay: dueDay) ? .applied : .failed
+                                                      tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes) ? .applied : .failed
                 }
             )
         }

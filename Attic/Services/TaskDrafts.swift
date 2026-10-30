@@ -8,6 +8,8 @@ struct TaskDraft: Equatable {
     var title: String
     var tags: [String]
     var dueDay: DueDay?
+    /// A floating clock on dueDay, in minutes since midnight.
+    var dueTimeMinutes: Int?
     var priority: TaskPriority
     /// The list the task goes to: `.todo` for Now, `.backlog` for Backlog
     /// (`.inProgress` is allowed for agents that start work straight away).
@@ -21,6 +23,7 @@ struct TaskDraft: Equatable {
         title: String,
         tags: [String] = [],
         dueDay: DueDay? = nil,
+        dueTimeMinutes: Int? = nil,
         priority: TaskPriority = .none,
         status: TaskStatus = .todo,
         parentID: UUID? = nil,
@@ -29,6 +32,7 @@ struct TaskDraft: Equatable {
         self.title = title
         self.tags = AtticTag.normalizedSet(tags)
         self.dueDay = dueDay
+        self.dueTimeMinutes = dueDay == nil ? nil : dueTimeMinutes
         self.priority = priority
         self.status = status
         self.parentID = parentID

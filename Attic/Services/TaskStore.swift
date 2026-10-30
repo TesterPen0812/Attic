@@ -150,6 +150,7 @@ private struct TaskReplicaSnapshot: Equatable {
     let doneLoggedAt: Date?
     let tagsRaw: String
     let dueDayRaw: String?
+    let dueTimeMinutesRaw: Int?
     let completedFromRaw: String?
     let completedFromOrder: Int64?
 
@@ -178,6 +179,7 @@ private struct TaskReplicaSnapshot: Equatable {
         doneLoggedAt = task.doneLoggedAt
         tagsRaw = task.tagsRaw
         dueDayRaw = task.dueDayRaw
+        dueTimeMinutesRaw = task.dueTimeMinutesRaw
         completedFromRaw = task.completedFromRaw
         completedFromOrder = task.completedFromOrder
     }
@@ -198,6 +200,7 @@ struct TaskContentSnapshot: Equatable {
     let doneLoggedAt: Date?
     let tagsRaw: String
     let dueDayRaw: String?
+    let dueTimeMinutesRaw: Int?
     let completedFromRaw: String?
     let completedFromOrder: Int64?
 
@@ -214,6 +217,7 @@ struct TaskContentSnapshot: Equatable {
         doneLoggedAt = task.doneLoggedAt
         tagsRaw = task.tagsRaw
         dueDayRaw = task.dueDayRaw
+        dueTimeMinutesRaw = task.dueTimeMinutesRaw
         completedFromRaw = task.completedFromRaw
         completedFromOrder = task.completedFromOrder
     }
@@ -230,6 +234,7 @@ struct TaskEditableState: Equatable {
     let manualOrder: Int64?
     let tagsRaw: String
     let dueDayRaw: String?
+    let dueTimeMinutesRaw: Int?
     /// Where a finished task was finished from (see `TaskItem`): part of
     /// its completion, so an undo puts it back with the state.
     let completedFromRaw: String?
@@ -248,10 +253,18 @@ struct TaskEditableState: Equatable {
         manualOrder = task.manualOrder
         tagsRaw = task.tagsRaw
         dueDayRaw = task.dueDayRaw
+        dueTimeMinutesRaw = task.dueTimeMinutesRaw
         completedFromRaw = task.completedFromRaw
         completedFromOrder = task.completedFromOrder
         parentID = task.parentID
     }
+}
+
+private struct TaskSchedule: Equatable {
+    let day: String?
+    let time: Int?
+    init(_ task: TaskItem) { day = task.dueDayRaw; time = task.dueTimeMinutesRaw }
+    init(_ state: TaskEditableState) { day = state.dueDayRaw; time = state.dueTimeMinutesRaw }
 }
 
 enum TaskReplicaMutationError: LocalizedError {
@@ -842,6 +855,7 @@ final class TaskStore: ObservableObject {
                 )
                 task.tags = draft.tags
                 task.dueDay = draft.dueDay
+                task.dueTimeMinutes = draft.dueTimeMinutes
                 task.listOrderVersion = TaskItem.currentListOrderVersion
                 // References the composer already imported are bound in this
                 // same save, so a new task never exists without them (or they
@@ -926,6 +940,7 @@ final class TaskStore: ObservableObject {
         status: TaskStatus? = nil,
         tags: [String]? = nil,
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         allowingUnfinishedSubtasks: Bool = false
     ) -> Bool {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
@@ -937,7 +952,7 @@ final class TaskStore: ObservableObject {
         let changed: Bool
         do {
             changed = try stageUpdate(task, title: title, priority: priority, status: status, tags: tags,
-                                      dueDay: dueDay, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
+                                      dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
         } catch {
             context.rollback()
             report(error, owner: owner)
@@ -963,6 +978,7 @@ final class TaskStore: ObservableObject {
         status: TaskStatus? = nil,
         tags: [String]? = nil,
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         allowingUnfinishedSubtasks: Bool = false,
         at fixedTimestamp: Date? = nil
     ) throws -> Bool {
@@ -978,7 +994,17 @@ final class TaskStore: ObservableObject {
         let destinationPriority = priority ?? task.priority
         let destinationStatus = status ?? task.status
         let destinationTagsRaw = tags.map { AtticTag.encode($0) } ?? task.tagsRaw
-        let destinationDueDayRaw = dueDay.map { $0?.rawValue } ?? task.dueDayRaw
+        let movesToLater = destinationStatus == .backlog && task.status != .backlog
+        let destinationDueDayRaw = movesToLater ? nil : (dueDay.map { $0?.rawValue } ?? task.dueDayRaw)
+        if let requested = dueTimeMinutes, let minutes = requested,
+           !movesToLater && (destinationDueDayRaw == nil || !(0..<1440).contains(minutes)) {
+            throw TaskEditRefusal("A task time needs a date and a valid time of day.")
+        }
+        if let requested = dueTimeMinutes, requested != nil, dueDay == nil, !movesToLater,
+           replicas.contains(where: { $0.dueDay == nil }) {
+            throw TaskEditRefusal("Set a date on every copy before adding a task time.")
+        }
+        let destinationTime = destinationDueDayRaw == nil ? nil : (dueTimeMinutes ?? task.dueTimeMinutes)
         // Status rules are checked against every stored replica, but only
         // the rows they concern: a title or priority edit fetches nothing.
         if destinationStatus != task.status {
@@ -1012,7 +1038,11 @@ final class TaskStore: ObservableObject {
         let statusChanged = destinationStatus != task.status
         let tagsChanged = destinationTagsRaw != task.tagsRaw
         let dueChanged = destinationDueDayRaw != task.dueDayRaw
-        guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged else {
+            || (dueDay != nil && replicas.contains { $0.dueDayRaw != destinationDueDayRaw })
+        let clearsDate = destinationDueDayRaw == nil && dueDay != nil
+        let timeChanged = destinationTime != task.dueTimeMinutes
+            || ((dueTimeMinutes != nil || clearsDate) && replicas.contains { $0.dueTimeMinutesRaw != destinationTime })
+        guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged || timeChanged else {
             return false
         }
 
@@ -1058,7 +1088,9 @@ final class TaskStore: ObservableObject {
                 }
             }
             if tagsChanged { replica.tagsRaw = destinationTagsRaw }
-            if dueChanged { replica.dueDayRaw = destinationDueDayRaw }
+            if dueChanged || movesToLater { replica.dueDay = destinationDueDayRaw.flatMap(DueDay.init(rawValue:)) }
+            if timeChanged || dueTimeMinutes != nil { replica.dueTimeMinutes = destinationTime }
+            if destinationDueDayRaw == nil && dueDay != nil { replica.dueDay = nil }
             if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
         }
         return true
@@ -1112,6 +1144,7 @@ final class TaskStore: ObservableObject {
     func updateBatchFields(
         _ ids: [UUID],
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         addingTag: String? = nil,
         removingTag: String? = nil
     ) -> Bool {
@@ -1126,7 +1159,7 @@ final class TaskStore: ObservableObject {
                     let removed = (tags ?? task.tags).filter { $0.caseInsensitiveCompare(removingTag) != .orderedSame }
                     tags = removed
                 }
-                changed = try stageUpdate(task, tags: tags, dueDay: dueDay, allowingUnfinishedSubtasks: true) || changed
+                changed = try stageUpdate(task, tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, allowingUnfinishedSubtasks: true) || changed
             }
         } catch {
             context.rollback()
@@ -1295,7 +1328,12 @@ final class TaskStore: ObservableObject {
             }
             field({ $0.manualOrder }, from.manualOrder, state.manualOrder) { $0.manualOrder = state.manualOrder }
             field({ $0.parentID }, from.parentID, state.parentID) { $0.parentID = state.parentID }
-            field({ $0.dueDayRaw }, from.dueDayRaw, state.dueDayRaw) { $0.dueDayRaw = state.dueDayRaw }
+            // Date and clock form one schedule. Never transplant an old
+            // clock onto a concurrently edited date, or create an orphan.
+            field({ TaskSchedule($0) }, TaskSchedule(from), TaskSchedule(state)) {
+                $0.dueDayRaw = state.dueDayRaw
+                $0.dueTimeMinutesRaw = state.dueTimeMinutesRaw
+            }
             let fromTags = Set(AtticTag.decode(from.tagsRaw))
             let toTags = Set(AtticTag.decode(state.tagsRaw))
             if fromTags != toTags {
@@ -2944,14 +2982,15 @@ final class TaskStore: ObservableObject {
         priority: TaskPriority? = nil,
         status: TaskStatus,
         tags: [String]? = nil,
-        dueDay: DueDay?? = nil
+        dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil
     ) -> Bool {
         do {
             guard let logged = listedTask(withID: id), logged.doneLoggedAt != nil, status != .done else {
                 throw TaskEditRefusal("The task must be in the Done log and reopen to an unfinished state.")
             }
             _ = try stageUpdate(logged, title: title, priority: priority, status: status,
-                                tags: tags, dueDay: dueDay)
+                                tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes)
             try returnFamiliesFromDoneLog([logged.parentID ?? id])
         } catch {
             context.rollback()
@@ -3224,6 +3263,7 @@ final class TaskStore: ObservableObject {
                                     completedAt: nil, manualOrder: order, parentID: nil)
                 copy.tags = source.tags
                 copy.dueDay = source.dueDay
+                copy.dueTimeMinutes = source.dueTimeMinutes
                 copy.listOrderVersion = TaskItem.currentListOrderVersion
                 context.insert(copy)
                 tasks.append(copy)
@@ -3237,6 +3277,7 @@ final class TaskStore: ObservableObject {
                                         parentID: copy.id)
                     item.tags = child.tags
                     item.dueDay = child.dueDay
+                    item.dueTimeMinutes = child.dueTimeMinutes
                     item.listOrderVersion = TaskItem.currentListOrderVersion
                     context.insert(item)
                     tasks.append(item)
@@ -3264,6 +3305,7 @@ final class TaskStore: ObservableObject {
         priority: TaskPriority? = nil,
         tags: [String]? = nil,
         dueDay: DueDay?? = nil,
+        dueTimeMinutes: Int?? = nil,
         addingTag: String? = nil,
         removingTag: String? = nil
     ) -> Bool {
@@ -3277,7 +3319,7 @@ final class TaskStore: ObservableObject {
                 if let removingTag {
                     newTags = (newTags ?? task.tags).filter { $0.caseInsensitiveCompare(removingTag) != .orderedSame }
                 }
-                changed = try stageUpdate(task, title: title, priority: priority, tags: newTags, dueDay: dueDay,
+                changed = try stageUpdate(task, title: title, priority: priority, tags: newTags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes,
                                           allowingUnfinishedSubtasks: true) || changed
             }
         } catch {
@@ -3459,11 +3501,13 @@ final class TaskStore: ObservableObject {
             // change its answer for the copies after it.
             let changesStatus = status != task.status
             // Parent and placement only: a copy's own state (completion,
-            // title, tags…) is never written by a move, and a field that
+            // title, tags…) is never written by a move, except that a
+            // transition into Later clears its date and time. A field that
             // already holds its value is left alone.
             for replica in replicas {
                 if replica.parentID != newParentID { replica.parentID = newParentID }
                 if changesStatus, replica.status != status { replica.status = status }
+                if changesStatus && status == .backlog { replica.dueDay = nil }
                 if replica.manualOrder != order { replica.manualOrder = order }
                 if replica.listOrderVersion != TaskItem.currentListOrderVersion {
                     replica.listOrderVersion = TaskItem.currentListOrderVersion
