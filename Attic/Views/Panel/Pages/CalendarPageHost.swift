@@ -50,6 +50,13 @@ struct CalendarPageHost: View {
                 if let taskNotes { taskNotes.open(id, String(localized: "Back to Calendar")) }
                 else { uiState.openTaskNote(id, from: .calendar, row: id, backTitle: String(localized: "Back to Calendar")) }
             },
+            rename: { [store] id, title in
+                let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, let task = store.task(withID: id) else { return false }
+                guard trimmed != task.title else { return true }
+                if let library = store.commandLibrary { return library.updateTask(id, title: trimmed).isApplied }
+                return store.rename(task, to: trimmed)
+            },
             removeFromTasks: taskNotes?.removeFromTasks,
             canRemoveFromTasks: { id in
                 store.listedTask(withID: id)?.parentID == nil && taskNotes?.canRemoveFromTasks?(id) == true

@@ -19,6 +19,8 @@ struct CalendarPage: View {
     @State private var flags = ScrollFlags()
     @State private var searchOpen = false
     @State private var searchFocused = false
+    /// The keyboard's task row in the agenda (Return renames, ⇧⌘I opens).
+    @FocusState private var taskFocus: AtticRowFocusID?
 
     /// What the scroll position decides: whether the selected week is pinned
     /// and whether the page shows only the week. Written only when one of
@@ -53,6 +55,8 @@ struct CalendarPage: View {
         .atticDesignCorners()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { model.pageAppeared() }
+        // Another day: the agenda's task selection lets go.
+        .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
         .onChange(of: snapshot.weeks.count) { _, count in
             // The week view stays the week view when the month changes
             // (a month of another length has another offset).
@@ -113,6 +117,7 @@ struct CalendarPage: View {
                 switch entry {
                 case let .day(group):
                     CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
+                                      rows: model.taskRows, focus: $taskFocus, focused: taskFocus,
                                       onSelectDay: model.select)
                 case let .free(run):
                     CalendarFreeDaysLine(run: run, onSelectDay: model.select)

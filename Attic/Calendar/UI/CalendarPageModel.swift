@@ -34,6 +34,8 @@ final class CalendarPageModel: ObservableObject {
     static let searchDelay: Duration = .milliseconds(150)
 
     let store: TaskStore
+    /// The agenda's task rows' selection and rename (kept across Back).
+    let taskRows = CalendarTaskRowState()
     private(set) var source: CalendarEventSource
     let calendar: Calendar
     private let now: () -> Date

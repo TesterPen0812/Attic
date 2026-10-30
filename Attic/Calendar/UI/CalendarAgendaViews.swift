@@ -5,6 +5,8 @@ import SwiftUI
 struct CalendarTaskRowActions {
     let toggleDone: (UUID) -> Void
     let open: (UUID) -> Void
+    /// Return's rename: saves the title; false keeps the field open.
+    var rename: ((UUID, String) -> Bool)?
     var removeFromTasks: ((UUID) -> Void)?
     var canRemoveFromTasks: (UUID) -> Bool = { _ in false }
     var addFiles: ((UUID) -> Void)?
@@ -24,6 +26,34 @@ struct CalendarTaskRowActions {
     }
 }
 
+/// The agenda's task rows as the Tasks rows behave (Accepted 2026-10-30,
+/// "Going into a task's page"): a click selects, Return renames the
+/// selected task. Kept by the page's model, so Back from a task's page
+/// finds the selection as it was.
+@MainActor
+final class CalendarTaskRowState: ObservableObject {
+    @Published private(set) var selected: UUID?
+    @Published private(set) var renaming: UUID?
+    @Published var draft = ""
+
+    func select(_ id: UUID) {
+        if renaming != nil, renaming != id { renaming = nil }
+        if selected != id { selected = id }
+    }
+
+    func clearSelection() {
+        if renaming == nil, selected != nil { selected = nil }
+    }
+
+    func beginRename(_ id: UUID, title: String) {
+        select(id)
+        draft = title
+        renaming = id
+    }
+
+    func endRename() { renaming = nil }
+}
+
 /// One day of the agenda: the date on the left, the day's rows on the
 /// right; today's day on the white card (Accepted 2026-10-30: the only
 /// tile), a squircle surface at the card radius (Shapes).
@@ -31,7 +61,15 @@ struct CalendarAgendaDay: View {
     let group: CalendarAgendaGroup
     let today: DueDay
     let taskActions: CalendarTaskRowActions
+    @ObservedObject var rows = CalendarTaskRowState()
+    /// The page's keyboard focus for its task rows (Return, ⇧⌘I); nil
+    /// leaves each row its own.
+    var focus: FocusState<AtticRowFocusID?>.Binding? = nil
+    var focused: AtticRowFocusID? = nil
     let onSelectDay: (DueDay) -> Void
+
+    /// The agenda's rows' page in `AtticRowFocusID` (the Tasks tabs use 0–2).
+    static let focusPage = 90
 
     var body: some View {
         HStack(alignment: .top, spacing: CalendarDesign.tileToRows) {
@@ -69,13 +107,42 @@ struct CalendarAgendaDay: View {
     /// Only today's day is on a card.
     static func hasCard(_ group: CalendarAgendaGroup) -> Bool { group.isToday }
 
+    /// The Tasks rows' way in (Accepted 2026-10-30): a click selects (the
+    /// selected look), Return renames, the ›, a double-click, ⇧⌘I and
+    /// ⌘Return open the page.
     func taskRow(_ task: CalendarTaskEntry) -> AtticTaskRow {
-        AtticTaskRow(model: task.row,
-            actions: AtticTaskActions(toggleDone: { taskActions.toggleDone(task.id) },
-                                      openPage: { taskActions.open(task.id) }),
-            // The Tasks rows' way in (Accepted 2026-10-30): the › and a
-            // double-click open the page; a single click selects nothing here.
-            onToggleExpanded: {}, onSelect: {}, onOpenPage: { taskActions.open(task.id) })
+        let id = task.id
+        let focusID = AtticRowFocusID(page: Self.focusPage, id: id)
+        let focus = self.focus
+        let rows = self.rows
+        let actions = taskActions
+        let open = { rows.select(id); actions.open(id) }
+        return AtticTaskRow(model: task.row,
+            isSelected: rows.selected == id,
+            actions: AtticTaskActions(toggleDone: { actions.toggleDone(id) }, openPage: open,
+                                      editTitle: actions.rename == nil ? nil : {
+                                          rows.beginRename(id, title: task.row.title)
+                                      }),
+            onToggleExpanded: {},
+            onSelect: {
+                rows.select(id)
+                focus?.wrappedValue = focusID
+            },
+            onOpenPage: open,
+            focus: focus.map { AtticRowFocus(binding: $0, id: focusID, isFocused: focused == focusID) },
+            titleEditing: rows.renaming == id ? AtticTitleEditing(
+                text: $rows.draft,
+                commit: {
+                    guard rows.renaming == id else { return true }
+                    guard actions.rename?(id, rows.draft) == true else { return false }
+                    rows.endRename()
+                    focus?.wrappedValue = focusID
+                    return true
+                },
+                cancel: {
+                    rows.endRename()
+                    focus?.wrappedValue = focusID
+                }) : nil)
     }
 
 }
