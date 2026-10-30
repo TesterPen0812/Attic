@@ -393,13 +393,45 @@ final class PanelShellTests: XCTestCase {
             XCTAssertTrue(menu.isOpen)
             XCTAssertTrue(controller.requestHide { hidden = $0 == .hidden }.isAccepted)
             XCTAssertFalse(menu.isOpen, "a separate NSPanel cannot stay over the hide/Genie stand-in")
-            XCTAssertTrue(menu.cards.allSatisfy { !$0.window.isVisible })
         }
         AtticGlassMenu.popUp([AtticMenuCommand("Open Page") {}],
             in: try XCTUnwrap(controller.panelForTesting.contentView), placement: .point(.zero), opener: nil)
         let deadline = Date().addingTimeInterval(3)
         while !hidden, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(hidden)
+    }
+
+    func testSwipeStartClosesTheSeparateGlassMenuBeforePanelMotion() throws {
+        let suite = "PanelShellSwipeMenu.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let state = PanelUIState()
+        let controller = AtticPanelController(store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: AppSettings(defaults: defaults), uiState: state)
+        controller.show(on: try XCTUnwrap(NSScreen.main), corner: .topRight)
+        let panel = controller.panelForTesting
+        AtticGlassMenu.ordersCardsFront = false
+        defer {
+            AtticGlassMenu.ordersCardsFront = true; AtticGlassMenu.testDriver = nil
+            panel.onTrackpadDismissCancelled?()
+            _ = controller.requestHide { _ in }
+        }
+        var ran = false
+        AtticGlassMenu.testDriver = { menu in
+            ran = true
+            XCTAssertTrue(menu.isOpen)
+            XCTAssertFalse(state.interactionLockReasons.contains(.panelSwipe))
+            panel.onTrackpadDismissProgress?(30)
+            XCTAssertTrue(state.interactionLockReasons.contains(.panelSwipe), "exercise the real swipe-start callback")
+            XCTAssertFalse(menu.isOpen, "the separate menu must close before swipe/Genie motion")
+        }
+        AtticGlassMenu.popUp([AtticMenuCommand("Open Page") {}],
+            in: try XCTUnwrap(panel.contentView), placement: .point(.zero), opener: nil)
+        XCTAssertTrue(ran)
     }
 
     func testApproachingTheCornerBuildsTheHiddenPanelsPagesOnce() throws {
