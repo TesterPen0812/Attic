@@ -121,13 +121,57 @@ private struct PanelPinFoldObserver<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     @Environment(\.atticDesign) private var design
+    /// The pin sits in the header's glass group, which ignores an opacity
+    /// set on its members from outside, so its glass folds with the switch
+    /// and ••• through `atticControlAway` (faded in the search's motion)
+    /// and then `atticControlGone` (no glass left once the fade is over).
+    @State private var away = false
+    @State private var gone = false
 
     var body: some View {
         let searching = state.isSearching(page)
+        #if DEBUG
+        let _ = PanelPinFoldProbe.record(away: away, gone: gone)
+        #endif
         content()
+            .environment(\.atticControlAway, away)
+            .environment(\.atticControlGone, gone)
+            // The drawn controls (not glass) fade by opacity.
             .opacity(searching ? 0 : 1)
             .allowsHitTesting(!searching)
             .accessibilityHidden(searching)
-            .animation(PanelTopRowLayout.searchAnimation(shown: searching, reduceMotion: design.reduceMotion), value: searching)
+            .animation(animation(searching), value: searching)
+            .onChange(of: searching, initial: true) { _, now in fold(now) }
+    }
+
+    private func animation(_ searching: Bool) -> Animation {
+        PanelTopRowLayout.searchAnimation(shown: searching, reduceMotion: design.reduceMotion)
+    }
+
+    private func fold(_ searching: Bool) {
+        guard searching != away else { return }
+        if searching {
+            withAnimation(animation(true)) { away = true } completion: {
+                if state.isSearching(page) { gone = true }
+            }
+        } else {
+            // Glass first (without animation), then it fades back in.
+            gone = false
+            withAnimation(animation(false)) { away = false }
+        }
     }
 }
+
+#if DEBUG
+/// Test seam: what the pin's glass was last told (`PanelChromeTests`).
+@MainActor
+enum PanelPinFoldProbe {
+    static private(set) var away = false
+    static private(set) var gone = false
+
+    static func record(away: Bool, gone: Bool) {
+        self.away = away
+        self.gone = gone
+    }
+}
+#endif
