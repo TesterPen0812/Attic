@@ -81,7 +81,7 @@ final class AtticGlassMenuTests: XCTestCase {
         }
         XCTAssertEqual(kinds, ["Complete", "Disabled", "Date", "—", "Tags", "—", "Delete"], "a separator starts each section")
         XCTAssertEqual(layout.entries[0].frame.height, 32, "32 pt rows")
-        XCTAssertEqual(layout.entries[0].frame.minY, 4, "rows 4 pt in")
+        XCTAssertEqual(layout.entries[0].frame.minY, 3, "Accepted Shapes: 6 design px padding")
         XCTAssertEqual(layout.entries[3].frame.height, 8.5, "a 0.5 pt hairline with 4 pt above and below")
         XCTAssertEqual(layout.size.width, AtticMenuMetrics.commandWidth, "a command menu is 184 pt")
         let submenu = AtticGlassMenuCard.layout(commands()[2].children)
@@ -92,6 +92,37 @@ final class AtticGlassMenuTests: XCTestCase {
         let hinted = AtticGlassMenuCard.layout([AtticMenuCommand(verbatim: "A very long command title here",
                                                                  shortcut: KeyboardShortcut("d", modifiers: [.command, .option])) {}])
         XCTAssertEqual(plain.size, hinted.size, "shortcut hints are not drawn (draft C), so they take no room")
+    }
+
+    func testMenuSecondaryInksReadThroughGlass() {
+        for mode in AtticDesignContext.Mode.allCases {
+            for surface in [PanelSurfaceStyle.glass, .solid] {
+                for reduced in [false, true] {
+                    let style = AtticGlassMenuStyle(design: AtticDesignContext(mode: mode, surface: surface, reduceTransparency: reduced))
+                    XCTAssertEqual(style.detail, TasksPanelDesign.toneInk(.meta, tokens: style.tokens).nsColor)
+                    XCTAssertEqual(style.header, TasksPanelDesign.toneInk(.groupHeader, tokens: style.tokens).nsColor)
+                    XCTAssertEqual(style.disabled, TasksPanelDesign.toneInk(.meta, tokens: style.tokens).nsColor)
+                    XCTAssertEqual(style.destructive, TasksPanelDesign.vivid(style.tokens.ink(.dueText), tokens: style.tokens).nsColor)
+                }
+            }
+        }
+    }
+
+    func testMenuRowsStayClippedToTheSquircleWhenTheCardIsShortened() throws {
+        let menu = open(commands())
+        defer { menu.close(animated: false) }
+        let root = try XCTUnwrap(menu.cards.first?.window.contentView)
+        root.layoutSubtreeIfNeeded()
+        let mask = try XCTUnwrap(root.layer?.mask as? CAShapeLayer)
+        let path = try XCTUnwrap(mask.path)
+        XCTAssertFalse(path.contains(.zero))
+        XCTAssertTrue(path.contains(CGPoint(x: 2, y: 2)), "the Accepted squircle, rather than circular corners")
+        XCTAssertEqual(path.boundingBoxOfPath, root.bounds)
+        root.setFrameSize(CGSize(width: root.bounds.width, height: 90))
+        root.layoutSubtreeIfNeeded()
+        XCTAssertEqual(mask.path?.boundingBoxOfPath, root.bounds, "scrolling rows remain within a capped card")
+        XCTAssertEqual(AtticGlassMenuShape.radius, 14)
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius, 11)
     }
 
     // MARK: Content rules (Dropdown content: answers, owner, 2026-10-24)

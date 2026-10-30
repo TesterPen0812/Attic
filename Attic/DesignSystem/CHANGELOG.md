@@ -1,3 +1,19 @@
+## 2026-10-30 · One Item on the panel design (w1-oneitem)
+
+Merged C2 at `83d14431`, retaining pd's row geometry and Notes library layout.
+Notes ••• uses libraryRowCommands for Add to Tasks / Remove from Tasks and
+Delete, with no Task note wording in rows or VoiceOver. Calendar rows use the
+glass command menu, Open Page and Add Files preserve Calendar as the origin,
+and ⌘Return opens from Notes too. Task title clicks are unchanged; Calendar
+has no title-click opener pending wave 2.
+
+Accepted Shapes: the command-menu card is a Squircle with 14 pt corners,
+3 pt padding and 11 pt row corners. Its system glass is drawn in that shape;
+Solid and Reduce Transparency keep the opaque fallback. Detail/header/disabled
+inks use toneInk; swatches, Delete red and !! use vivid. Shared dropdown tokens
+and motion are unchanged. Hide/swipe close the separate menu windows before
+the panel moves. No flags, separate link field or 10-25 row rounds.
+
 ## 2026-10-24 · C2: one-item rows in the new menus
 
 The drafted rows are in (Dropdown content: answers, owner, 2026-10-24; names from the one-item owner answers of 2026-10-23). Task menu: Open Page first in the Edit Title group, Remove from Tasks before Delete, Add Files… in More beside Show Files. Subtask menu: Make Checkbox after Make Standalone Task. Note row and note ⋯: Add to Tasks (or Remove from Tasks), and "Delete Note" is now Delete. New icons: checkmark.circle, minus.circle, checkmark.square, doc.badge.plus. All notes rows lose the "Task note" wording; sizes and colours are unchanged. Dimmed rows carry a reason for VoiceOver.

@@ -7,7 +7,7 @@ import SwiftUI
 /// look good"; superseding the native `NSMenu` look for row menus): the
 /// right-click menus, ⋯ and ⇧⌘I, and every other menu built from
 /// `AtticMenuCommand`s. Each level is its own floating card of real system
-/// glass (`NSGlassEffectView`, regular) with draft C's corners, rim, rows,
+/// glass (regular) with the Accepted squircle corners and draft C’s rim, rows,
 /// icons, hairline separators and section headers; a submenu is a separate
 /// card beside its row. Shortcut hints are not drawn (as drawn in draft C);
 /// the shortcuts still work, in the menu and outside it.
@@ -639,6 +639,7 @@ enum AtticMenuSymbols {
 // MARK: - Style
 
 /// The colours and fonts a glass menu draws with: draft C on Attic's tokens.
+@MainActor
 struct AtticGlassMenuStyle {
     let design: AtticDesignContext
     let tokens: AtticColorTokens
@@ -655,10 +656,10 @@ struct AtticGlassMenuStyle {
     var isGlass: Bool { AtticDropdownSurface.isGlass(design, capture: false) }
     var title: NSColor { tokens.ink(.body).nsColor }
     var icon: NSColor { tokens.ink(.icon).nsColor }
-    var detail: NSColor { tokens.ink(.helper).nsColor }
-    var header: NSColor { tokens.ink(.helper).nsColor }
-    var disabled: NSColor { tokens.ink(.disabledText).nsColor }
-    var destructive: NSColor { tokens.ink(.dueText).nsColor }
+    var detail: NSColor { TasksPanelDesign.toneInk(.meta, tokens: tokens).nsColor }
+    var header: NSColor { TasksPanelDesign.toneInk(.groupHeader, tokens: tokens).nsColor }
+    var disabled: NSColor { TasksPanelDesign.toneInk(.meta, tokens: tokens).nsColor }
+    var destructive: NSColor { TasksPanelDesign.vivid(tokens.ink(.dueText), tokens: tokens).nsColor }
     var highlight: NSColor { tokens.dropdownHighlight.nsColor }
     var separator: NSColor { tokens.dropdownRule.nsColor }
     var fill: NSColor { tokens.popoverFill.nsColor }
@@ -685,6 +686,14 @@ struct AtticGlassMenuStyle {
     }
 
     @MainActor private static var symbols: [String: NSImage] = [:]
+}
+
+/// Accepted Shapes (30 Oct), halved from design px. Local to the menu
+/// card: dropdown tokens are owned by the parallel chrome work.
+enum AtticGlassMenuShape {
+    static let radius: CGFloat = 14
+    static let inset: CGFloat = 3
+    static let rowRadius: CGFloat = 11
 }
 
 // MARK: - Card
@@ -755,7 +764,7 @@ final class AtticGlassMenuCard {
         let hasIcons: Bool
     }
 
-    /// Draft C's layout: rows 32 pt, 4 pt in; a separator (0.5 pt with 4 pt
+    /// Draft C's 32 pt rows, 3 pt in per Accepted Shapes; a separator (0.5 pt with 4 pt
     /// above and below) before each new section; a header row (26 pt) for
     /// a titled section. Two widths, not content-fit (Dropdown content:
     /// answers, owner, 2026-10-24, rule 1): `width` when the menu names one
@@ -781,9 +790,9 @@ final class AtticGlassMenuCard {
             widest = max(widest, leading + ceil(measure(command.title, command.titleFont ?? AtticGlassMenuStyle.titleFont))
                          + trailingWidth(command) + m.rowPadding)
         }
-        var y = m.inset
+        var y = AtticGlassMenuShape.inset
         var entries: [Entry] = []
-        let width = declared ?? (ceil(widest + m.inset * 2) <= AtticMenuMetrics.commandWidth
+        let width = declared ?? (ceil(widest + AtticGlassMenuShape.inset * 2) <= AtticMenuMetrics.commandWidth
                                  ? AtticMenuMetrics.commandWidth : AtticMenuMetrics.wideWidth)
         for kind in kinds {
             let height: CGFloat
@@ -792,10 +801,10 @@ final class AtticGlassMenuCard {
             case .header: height = m.sectionHeaderHeight
             case .separator: height = m.separatorHeight
             }
-            entries.append(Entry(kind: kind, frame: NSRect(x: m.inset, y: y, width: width - m.inset * 2, height: height)))
+            entries.append(Entry(kind: kind, frame: NSRect(x: AtticGlassMenuShape.inset, y: y, width: width - AtticGlassMenuShape.inset * 2, height: height)))
             y += height
         }
-        return Layout(entries: entries, size: CGSize(width: width, height: y + m.inset), hasIcons: hasIcons)
+        return Layout(entries: entries, size: CGSize(width: width, height: y + AtticGlassMenuShape.inset), hasIcons: hasIcons)
     }
 
     /// What follows a row's title: a submenu's chevron, a detail, a tick.
@@ -942,36 +951,67 @@ final class AtticGlassMenuWindow: NSPanel {
 
     /// The card: glass (or the opaque fallback), its rim, then the rows.
     @MainActor func install(_ rows: AtticGlassMenuView, style: AtticGlassMenuStyle) {
-        let radius = AtticDropdownMetrics.cornerRadius
-        let root = NSView(frame: rows.frame)
+        let root = AtticGlassMenuRootView(frame: rows.frame)
         root.wantsLayer = true
         root.autoresizingMask = [.width, .height]
         rows.autoresizingMask = [.width, .height]
-        if style.isGlass {
-            let glass = NSGlassEffectView(frame: root.bounds)
-            glass.cornerRadius = radius
-            glass.style = .regular
-            glass.autoresizingMask = [.width, .height]
-            glass.contentView = rows
-            root.addSubview(glass)
-        } else {
-            root.layer?.backgroundColor = style.fill.cgColor
-            root.layer?.cornerRadius = radius
-            root.layer?.cornerCurve = .continuous
-            root.layer?.masksToBounds = true
-            root.addSubview(rows)
-        }
-        let rim = NSView(frame: root.bounds)
-        rim.wantsLayer = true
-        rim.autoresizingMask = [.width, .height]
-        rim.layer?.cornerRadius = radius
-        rim.layer?.cornerCurve = .continuous
-        rim.layer?.borderWidth = style.rimWidth
-        rim.layer?.borderColor = style.rim.cgColor
-        rim.setAccessibilityElement(false)
-        root.addSubview(rim)
+        // SwiftUI supplies the shaped system material; rows remain AppKit's
+        // single drawn view with the existing native menu accessibility.
+        let face = NSHostingView(rootView: AtticGlassMenuSurface(style: style))
+        face.frame = root.bounds
+        face.autoresizingMask = [.width, .height]
+        root.addSubview(face)
+        root.addSubview(rows)
         contentView = root
         appearance = NSAppearance(named: style.dark ? .darkAqua : .aqua)
+    }
+}
+
+/// Rows and material share one contour, including when placement caps a
+/// long card's height. No scrolled highlight may draw past that contour.
+private final class AtticGlassMenuRootView: NSView {
+    private let clip = CAShapeLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.mask = clip
+        needsLayout = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        clip.frame = bounds
+        clip.path = Squircle(cornerRadius: AtticGlassMenuShape.radius).path(in: bounds).cgPath
+        CATransaction.commit()
+    }
+}
+
+/// Its own window keeps this glass separate from the panel's container.
+private struct AtticGlassMenuSurface: View {
+    let style: AtticGlassMenuStyle
+
+    var body: some View {
+        let shape = Squircle(cornerRadius: AtticGlassMenuShape.radius)
+        Group {
+            if style.isGlass {
+                Color.clear.glassEffect(.regular, in: shape)
+            } else {
+                shape.fill(Color(nsColor: style.fill))
+            }
+        }
+        .overlay {
+            shape.inset(by: style.rimWidth / 2)
+                .stroke(Color(nsColor: style.rim), lineWidth: style.rimWidth)
+        }
+        .environment(\.colorScheme, style.dark ? .dark : .light)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -1021,7 +1061,7 @@ final class AtticGlassMenuView: NSView {
                 let lit = card.highlighted == index || card.child?.parentRow == index
                 if lit, !command.isDisabled {
                     style.highlight.setFill()
-                    NSBezierPath(roundedRect: frame, xRadius: m.highlightRadius, yRadius: m.highlightRadius).fill()
+                    NSBezierPath(cgPath: Squircle(cornerRadius: AtticGlassMenuShape.rowRadius).path(in: frame).cgPath).fill()
                 }
                 drawItem(command, in: frame, card: card, style: style)
             }
@@ -1046,7 +1086,7 @@ final class AtticGlassMenuView: NSView {
                 drawPriority(priority, in: slot, disabled: command.isDisabled, style: style)
             } else if let swatch = command.swatch {
                 let dot = NSRect(x: slot.midX - m.dotSize / 2, y: slot.midY - m.dotSize / 2, width: m.dotSize, height: m.dotSize)
-                style.tokens.tagInk(swatch).nsColor.setFill()
+                TasksPanelDesign.vivid(style.tokens.tagInk(swatch), tokens: style.tokens).nsColor.setFill()
                 NSBezierPath(ovalIn: dot).fill()
             }
             x += m.iconSlot + m.columnGap
@@ -1086,7 +1126,7 @@ final class AtticGlassMenuView: NSView {
         case .medium: text = "!"
         case .high: text = "!!"
         }
-        let ink = disabled ? style.disabled : (priority == .high ? style.tokens.ink(.priorityMark).nsColor : style.detail)
+        let ink = disabled ? style.disabled : (priority == .high ? TasksPanelDesign.vivid(style.tokens.ink(.priorityMark), tokens: style.tokens).nsColor : style.detail)
         let font = AtticTextStyle.priorityMark.nsFont
         let width = ceil(AtticGlassMenuCard.measure(text, font))
         let height = font.ascender - font.descender
