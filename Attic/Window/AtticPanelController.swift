@@ -959,7 +959,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func updateWindowDrag(frame: CGRect, pointer: CGPoint) -> CGRect {
-        guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
+        guard let screen = self.screen(containing: pointer) ?? panel.screen ?? currentScreen else {
             return frame
         }
         let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
@@ -989,7 +989,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         translation: CGPoint
     ) {
         isWindowDragging = false
-        guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
+        guard let screen = self.screen(containing: pointer) ?? panel.screen ?? currentScreen else {
             uiState.dockingPreviewCorner = nil
             uiState.setInteractionLock(.windowMove, isActive: false)
             return

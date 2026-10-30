@@ -1304,7 +1304,7 @@ enum AtticContextMenus {
 
     private static func route(_ event: NSEvent) -> NSEvent? {
         guard isContextPress(event), AtticGlassMenu.current == nil, let window = event.window,
-              let anchor = anchor(for: event) else { return event }
+              let anchor = self.anchor(for: event) else { return event }
         // An editable or selectable text view keeps its own menu (Cut, Copy,
         // Paste, Spelling).
         if let hit = window.contentView?.hitTest(window.contentView?.convert(event.locationInWindow, from: nil) ?? .zero) {
