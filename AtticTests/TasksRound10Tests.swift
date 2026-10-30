@@ -481,7 +481,8 @@ final class TasksRound10Tests: XCTestCase {
         }
         XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("d"), characters: "d", modifiers: .command, listCommands: true), .duplicate)
         XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("c"), characters: "c", modifiers: .command, listCommands: true), .copy)
-        XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("I"), characters: "I", modifiers: [.command, .shift], listCommands: true), .showActions)
+        XCTAssertEqual(AtticTaskKeys.command(key: KeyEquivalent("I"), characters: "I", modifiers: [.command, .shift], listCommands: true), .openPage,
+                       "⇧⌘I opens the page (Accepted 2026-10-30); Show actions stays on the button and VoiceOver")
         AtticTaskKeys.perform(.duplicate, actions)
         AtticTaskKeys.perform(.showActions, actions)
         XCTAssertEqual(fired, ["dup", "menu"])
