@@ -82,8 +82,15 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(box.height, 60, accuracy: 2)
         XCTAssertLessThan(try alpha(selected, px: Int(box.minX) + 2, py: Int(box.minY) + 2), 0.01,
                           "a whole superellipse: its corner is open")
-        XCTAssertGreaterThan(try alpha(selected, px: Int(box.midX) - 22, py: Int(box.midY)), 0.03, "a grey fill")
-        XCTAssertLessThan(try alpha(selected, px: Int(box.midX) - 22, py: Int(box.midY)), 0.2, "grey, not ink")
+        // The shared selection marker's grey: the design's 6 % heading ink,
+        // not the row-selection token (7.5 % in Light).
+        XCTAssertEqual(try alpha(selected, px: Int(box.midX) - 22, py: Int(box.midY)), AtticSelectionMarker.fillAlpha,
+                       accuracy: 0.008, "the selection marker's 6 % grey")
+        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
+            let tokens = AtticColorTokens.resolve(context)
+            XCTAssertEqual(CalendarKeyButtonStyle.fill(style: .selected, isPressed: false, tokens: tokens),
+                           AtticSelectionMarker.fill(tokens), "the key is the shared selection marker, light and dark")
+        }
         for plain in [day(2026, 10, 30), day(2026, 10, 28), day(2026, 10, 29)] {
             let image = try render(key(plain, today: day(2026, 10, 29), selected: day(2026, 10, 31)))
             let ink = try XCTUnwrap(inkBox(image, minAlpha: 0.02))
@@ -479,12 +486,22 @@ final class CalendarPageTests: XCTestCase {
         let ids = model.snapshot.entries.map(\.id)
         let scroller = try XCTUnwrap(Self.scrollView(in: host), "the page's scroller")
         let beforeScroll = CalendarPage.bodyEvaluations
+        // The agenda's fade is the mounted scroller's mask: unpinned at the
+        // top, the gradient once the week pins, and not re-run per frame.
+        XCTAssertEqual(CalendarScrollMask.renders.last, false, "the mounted scroller carries the fade mask, unpinned at rest")
+        let masksBefore = CalendarScrollMask.renders.count
+        var pinnedMaskSeen = false
         for y in Array(stride(from: 0.0, through: 400.0, by: 10.0)) + Array(stride(from: 400.0, through: 0.0, by: -20.0)) {
             scroller.contentView.scroll(to: NSPoint(x: 0, y: y))
             scroller.reflectScrolledClipView(scroller.contentView)
             settle(0.02)
+            if y == 400 { pinnedMaskSeen = CalendarScrollMask.renders.last == true }
         }
         settle(0.3)
+        XCTAssertTrue(pinnedMaskSeen, "scrolled past the pin, the mounted mask is the pinned gradient")
+        XCTAssertEqual(CalendarScrollMask.renders.last, false, "back at the top, the fade goes")
+        XCTAssertLessThanOrEqual(CalendarScrollMask.renders.count - masksBefore, 8,
+                                 "the mask re-runs only when the week pins or unpins, not per scroll frame")
         XCTAssertEqual(model.snapshot.entries.map(\.id), ids, "stable ids while scrolling")
         XCTAssertLessThanOrEqual(CalendarPage.bodyEvaluations - beforeScroll, 12,
                                  "61 scroll steps re-run the page only at the pin and week-view changes")

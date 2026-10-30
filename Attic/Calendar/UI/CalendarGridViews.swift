@@ -142,7 +142,9 @@ struct CalendarDayMarksView: View {
 }
 
 /// The selected day's grey key, and a press on any day: the same 30 pt
-/// key, centred in the day's cell. No raised material in the grid.
+/// key, centred in the day's cell. No raised material in the grid. The
+/// selected key is the shared selection marker (`AtticSelectionMarker`,
+/// the design's 6 % heading ink), on curve 1.4.
 struct CalendarKeyButtonStyle: ButtonStyle {
     let style: CalendarKeyStyle
 
@@ -150,10 +152,10 @@ struct CalendarKeyButtonStyle: ButtonStyle {
         CalendarKeyFace(configuration: configuration, style: style)
     }
 
-    /// The key's fill: the selection grey, the press grey, or none.
+    /// The key's fill: the press grey, the selection marker's grey, or none.
     static func fill(style: CalendarKeyStyle, isPressed: Bool, tokens: AtticColorTokens) -> AtticRGBA? {
         if isPressed { return tokens.pressed }
-        return style == .selected ? tokens.selected : nil
+        return style == .selected ? AtticSelectionMarker.fill(tokens) : nil
     }
 }
 
@@ -167,8 +169,12 @@ private struct CalendarKeyFace: View {
         let fill = CalendarKeyButtonStyle.fill(style: style, isPressed: configuration.isPressed, tokens: design.tokens)
         configuration.label
             .background {
-                if let fill {
+                if configuration.isPressed, let fill {
                     CalendarKey.keyShape.fill(fill.color)
+                        .frame(width: CalendarDesign.keySize, height: CalendarDesign.keySize)
+                } else if style == .selected {
+                    AtticSelectionMarker(cornerRadius: CalendarDesign.keyCornerRadius)
+                        .environment(\.atticControlCornerExponent, CalendarDesign.keyExponent)
                         .frame(width: CalendarDesign.keySize, height: CalendarDesign.keySize)
                 }
             }
