@@ -620,10 +620,22 @@ extension AtticDesignSystemHostedTests {
     }
 
     /// The horizontal extent of the coloured (chromatic) pixels, in points.
-    private func colouredExtent(_ hosting: NSView, size: CGSize) throws -> ClosedRange<CGFloat>? {
-        let (bitmap, scale) = try snapshot(hosting)
+    /// Drawn by `ImageRenderer`: the solid cards' squircle (Shapes) and
+    /// its shadow are rendered by SwiftUI itself, which an AppKit
+    /// `cacheDisplay` snapshot does not capture (it reads back a flat
+    /// placeholder). As a capture, so any glass is drawn by its recipe
+    /// (`ImageRenderer` cannot draw glass). From `top` down: `ImageRenderer`
+    /// draws an AppKit field (the picker's header) as a placeholder.
+    private func colouredExtent<V: View>(_ view: V, size: CGSize, context: AtticDesignContext,
+                                         top: CGFloat = 0) throws -> ClosedRange<CGFloat>? {
+        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height)
+            .background(context.tokens.panel.base.color).atticDesign(context)
+            .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .desktop(.midGrey))))
+        renderer.scale = 2
+        let bitmap = try XCTUnwrap(AtticBitmap(image: try XCTUnwrap(renderer.cgImage)))
+        let scale: CGFloat = 2
         var low = CGFloat.infinity, high = -CGFloat.infinity
-        var y: CGFloat = 0
+        var y: CGFloat = top
         while y < size.height {
             var x: CGFloat = 0
             while x < size.width {
@@ -650,10 +662,11 @@ extension AtticDesignSystemHostedTests {
         let size = CGSize(width: 240, height: 120)
         let suggestions = AtticTagSuggestionList(suggestions: [AtticTagSuggestion(name: name, count: 3, isNew: false)],
                                                  highlighted: -1, onPick: { _ in })
-        for (label, view) in [("suggestions", AnyView(suggestions)), ("picker", AnyView(TagPickerProbe(name: name)))] {
-            let (_, hosting) = host(view.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading), size: size,
-                                    context: context)
-            let extent = try XCTUnwrap(try colouredExtent(hosting, size: size), "\(label): the dot is coloured")
+        // The picker's rows start under its field's header.
+        let header = AtticDropdownMetrics.inset + AtticDropdownMetrics.fieldHeaderHeight
+        for (label, view, top) in [("suggestions", AnyView(suggestions), CGFloat(0)), ("picker", AnyView(TagPickerProbe(name: name)), header)] {
+            let extent = try XCTUnwrap(try colouredExtent(view.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading),
+                                                          size: size, context: context, top: top), "\(label): the dot is coloured")
             XCTAssertLessThan(extent.upperBound - extent.lowerBound, AtticDropdownMetrics.dotSize + 2,
                               "\(label): only the dot is coloured, not the # or the name (\(extent))")
         }
