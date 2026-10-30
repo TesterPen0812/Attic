@@ -50,6 +50,7 @@ extension TasksPageModel {
             : library.updateTaskFields(live, dueDay: .some(day))
         if reachesDoneLogAfterEdit(live) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
+        if day != nil { followDatedOutOfLater(live) }
         let message: String
         if let day {
             let text = TaskRowPresentation.due(day, today: dateChoices.today, calendar: services.calendar(), locale: services.locale).text
