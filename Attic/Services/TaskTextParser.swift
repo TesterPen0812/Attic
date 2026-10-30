@@ -63,7 +63,7 @@ struct ParsedTaskText: Equatable {
 ///   means next year. Only the first date is recognised; later ones stay text.
 ///   The short weekday forms that are everyday words ("sun", "sat", "wed")
 ///   are not dates; their full names are.
-/// - Time: `4pm`, `4:30 pm`, `16:30` or `16.30`, in local minutes
+/// - Time: `4pm`, `4:30 pm`, `16:30`, in local minutes
 ///   since midnight. The first free clock counts; task ranges stay text.
 ///   A clock without a typed day means today.
 /// - Priority: a standalone `!` (medium) or `!!` (high). "Call mom!" stays
@@ -122,7 +122,7 @@ struct TaskTextParser {
 
         // Parse clocks only in free text, after tags and the existing day
         // parser. Task ranges are blocked, as in parseComposerTitle; tasks
-        // have one clock, not a duration. Dot clocks follow parseWhen.
+        // have one clock, not a duration. Title clocks use colons, never decimals.
         if let token = Self.timeToken(in: text, excluding: tokens.map(\.range)) { tokens.append(token) }
         tokens.sort { $0.range.lowerBound < $1.range.lowerBound }
         let hasTime = tokens.contains { if case .time = $0.value { true } else { false } }
@@ -145,12 +145,12 @@ struct TaskTextParser {
     // MARK: - Time
 
     private static let clockPattern = try! NSRegularExpression(
-        pattern: #"(?<![\p{L}\p{N}_#:.\/-])(?:[0-9]{1,2}[:.][0-9]{2}(?:\s*(?:am|pm))?|[0-9]{1,2}\s*(?:am|pm))(?![\p{L}\p{N}_:\/-]|\.[0-9])"#,
+        pattern: #"(?<![\p{L}\p{N}_#:.\/-])(?:[0-9]{1,2}:[0-9]{2}(?:\s*(?:am|pm))?|[0-9]{1,2}\s*(?:am|pm))(?![\p{L}\p{N}_:\/-]|\.[0-9])"#,
         options: .caseInsensitive)
     private static let clockParts = try! NSRegularExpression(
-        pattern: #"^([0-9]{1,2})(?:[:.]([0-9]{2}))?\s*(am|pm)?$"#, options: .caseInsensitive)
+        pattern: #"^([0-9]{1,2})(?::([0-9]{2}))?\s*(am|pm)?$"#, options: .caseInsensitive)
     private static let timeRangePattern = try! NSRegularExpression(
-        pattern: #"\b[0-9]{1,2}(?:[:.][0-9]{2})?\s*(?:am|pm)?\s*[–—-]\s*[0-9]{1,2}(?:[:.][0-9]{2})?\s*(?:am|pm)?\b"#,
+        pattern: #"\b[0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?\s*[–—-]\s*[0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?\b"#,
         options: .caseInsensitive)
 
     private static func timeToken(in text: String, excluding: [Range<String.Index>]) -> ParsedTaskToken? {

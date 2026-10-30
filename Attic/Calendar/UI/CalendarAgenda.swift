@@ -150,6 +150,7 @@ enum CalendarAgenda {
             return a.offset < b.offset
         }.map(\.element)
         var items = allDay.map(CalendarAgendaItem.event) + carried.map(CalendarAgendaItem.task)
+            + untimed.map(CalendarAgendaItem.task)
         var nowPlaced = !showsNow
         for entry in timeline {
             if !nowPlaced, entry.date > clock.now {
@@ -159,7 +160,6 @@ enum CalendarAgenda {
             items.append(entry.item)
         }
         if !nowPlaced { items.append(.now) }
-        items += untimed.map(CalendarAgendaItem.task)
         let group = CalendarAgendaGroup(day: day, relative: relative(day, today: clock.today, calendar: calendar), items: items)
         // A day with nothing on it shows its tile alone (no lone now line).
         return group.hasRows ? group : CalendarAgendaGroup(day: day, relative: group.relative, items: [])
