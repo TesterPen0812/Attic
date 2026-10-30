@@ -37,11 +37,19 @@ final class NotesLibraryModel: ObservableObject {
     private let preferences: UserDefaults?
     /// The board's column for each card, kept while the cards and their
     /// notes stay the same (estimated from content, never measured).
-    private var boardCache: (key: BoardKey, columns: [Int])?
+    private var boardCache: (key: BoardKey, order: [Int], columns: [Int])?
     private struct BoardKey: Equatable {
         let ids: [UUID]
         let revision: UInt64
         let taskRevision: UInt64
+        /// A never-saved draft's estimate inputs: its edits move no store
+        /// revision, so its title, text and images key the board.
+        let drafts: [DraftEstimate]
+    }
+    private struct DraftEstimate: Equatable {
+        let title: Int
+        let snippet: Int
+        let images: Int
     }
 
     /// What the search field holds.
@@ -476,27 +484,41 @@ final class NotesLibraryModel: ObservableObject {
 
     /// The rows the keyboard and the actions reach: the board has no
     /// headings, so nothing on it is folded away.
-    func navigable(_ groups: [Group], layout: NotesLibraryLayout) -> [Group] {
-        layout == .board ? groups : unfolded(groups)
+    func navigable(_ groups: [Group], layout: NotesLibraryLayout, store: NoteStore) -> [Group] {
+        guard layout == .board else { return unfolded(groups) }
+        return [Group(id: "board", title: "", rows: board(groups, store: store).rows)]
     }
 
     // MARK: Board
 
-    /// The board's two columns: the rows in list order (pinned first, no
-    /// sections), each card in the shorter column by its estimated height.
+    /// The board's two columns: the rows in list order with the pinned
+    /// first (search results too), no sections, each card in the shorter
+    /// column by its estimated height.
     func boardColumns(_ groups: [Group], store: NoteStore) -> [[AtticNoteRowModel]] {
-        let rows = groups.flatMap(\.rows)
-        let key = BoardKey(ids: rows.map(\.id), revision: store.revision, taskRevision: taskRevision)
-        let assignment: [Int]
-        if let boardCache, boardCache.key == key {
-            assignment = boardCache.columns
-        } else {
-            assignment = NotesBoardLayout.columns(heights: rows.map { boardEstimate($0, store: store) })
-            boardCache = (key, assignment)
-        }
+        let board = board(groups, store: store)
         var columns = [[AtticNoteRowModel]](repeating: [], count: NotesBoardMetrics.columns)
-        for (row, column) in zip(rows, assignment) { columns[column].append(row) }
+        for (row, column) in zip(board.rows, board.columns) { columns[column].append(row) }
         return columns
+    }
+
+    /// The board's flow (pinned first, stable) and each card's column,
+    /// kept while the cards and what their estimates read stay the same.
+    private func board(_ groups: [Group], store: NoteStore) -> (rows: [AtticNoteRowModel], columns: [Int]) {
+        let rows = groups.flatMap(\.rows)
+        let drafts = rows.compactMap { row in
+            store.note(withID: row.id) == nil
+                ? DraftEstimate(title: row.title.utf16.count, snippet: row.preview.utf16.count, images: row.images) : nil
+        }
+        let key = BoardKey(ids: rows.map(\.id), revision: store.revision, taskRevision: taskRevision, drafts: drafts)
+        if let boardCache, boardCache.key == key {
+            return (boardCache.order.map { rows[$0] }, boardCache.columns)
+        }
+        let pinned = rows.map { store.note(withID: $0.id)?.isPinned == true }
+        let order = rows.indices.filter { pinned[$0] } + rows.indices.filter { !pinned[$0] }
+        let flow = order.map { rows[$0] }
+        let columns = NotesBoardLayout.columns(heights: flow.map { boardEstimate($0, store: store) })
+        boardCache = (key, order, columns)
+        return (flow, columns)
     }
 
     /// A card's height from its content alone: the title, the stored plain

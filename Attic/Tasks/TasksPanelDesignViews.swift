@@ -191,6 +191,12 @@ struct TasksTopTabs: View {
 
     typealias M = TasksTopTabsMetrics
 
+    /// A change of tab, as the footer tabs' thumb changed (pd-combined):
+    /// a 160 ms fade between the cells; Reduce Motion at once.
+    static func selectionAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.16)
+    }
+
     var body: some View {
         let tokens = design.tokens
         let tabs = TasksTab.allCases
