@@ -103,6 +103,111 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    // MARK: - Agenda task rows (w2-tasks review 4)
+
+    private func seedAgendaTask(_ id: UUID) -> (TaskStore) throws -> Void {
+        { store in
+            let context = ModelContext(store.container)
+            let task = TaskItem(id: id, title: "Agenda task", createdAt: self.date(2026, 10, 1))
+            task.listOrderVersion = TaskItem.currentListOrderVersion
+            task.dueDay = self.day(2026, 10, 29)
+            context.insert(task)
+            try context.save()
+            store.refresh()
+        }
+    }
+
+    private func agendaActions(opened: @escaping (UUID) -> Void) -> (TaskStore) -> CalendarTaskRowActions {
+        { store in
+            CalendarTaskRowActions(toggleDone: { _ in }, open: opened, rename: { id, title in
+                guard let task = store.task(withID: id) else { return false }
+                return store.rename(task, to: title)
+            })
+        }
+    }
+
+    /// The mounted row's frame in window coordinates and its title's point.
+    private func agendaRow(_ page: MountedPage, _ id: UUID) throws -> (element: AnyObject, title: CGPoint) {
+        let row = try XCTUnwrap(page.element("calendar-task-\(id.uuidString)"), "the task's row in the agenda")
+        let screen = try XCTUnwrap((row as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+        let frame = page.window.convertFromScreen(screen)
+        return (row, CGPoint(x: frame.minX + TasksDesignMetrics.textX + 8, y: frame.maxY - TasksRowDesign.paddingY - TasksRowDesign.line / 2))
+    }
+
+    /// Runs one of the mounted row's own commands (VoiceOver's actions: the
+    /// same closures its keys run).
+    private func perform(_ name: String, on element: AnyObject, line: UInt = #line) {
+        let actions = (element as? NSObject)?.value(forKey: "accessibilityCustomActions") as? [NSAccessibilityCustomAction] ?? []
+        guard let action = actions.first(where: { $0.name == name }) else {
+            return XCTFail("no \(name) in \(actions.map(\.name))", line: line)
+        }
+        if let handler = action.handler { _ = handler() } else if let target = action.target as? NSObject {
+            _ = target.perform(action.selector, with: action)
+        }
+    }
+
+    /// The agenda's task rows behave as the Tasks rows do, in the mounted
+    /// page: a real click on the title selects, Return's command renames
+    /// the selected task, Open page and a real double-click open it.
+    func testAgendaTaskRowsSelectOnAClickRenameAndOpenInTheMountedPage() throws {
+        let id = UUID()
+        var opened: [UUID] = []
+        let makeActions = agendaActions { opened.append($0) }
+        try withPage(events: [], seed: seedAgendaTask(id), taskActions: makeActions) { page in
+            let rows = page.model.taskRows
+            var (row, title) = try agendaRow(page, id)
+            page.click(at: title, count: 1)
+            XCTAssertEqual(rows.selected, id, "a real click on the title selects")
+            XCTAssertEqual(opened, [], "and opens nothing")
+            XCTAssertNil(rows.renaming)
+            (row, title) = try agendaRow(page, id)
+            perform("Edit title", on: row)
+            page.settle()
+            XCTAssertEqual(rows.renaming, id, "Return's command renames the selected task")
+            XCTAssertEqual(rows.draft, "Agenda task")
+            // The field's Return saves: the row's own editing commit.
+            rows.draft = "Renamed in Calendar"
+            let task = try XCTUnwrap(page.model.snapshot.groups.flatMap(\.items).compactMap { item -> CalendarTaskEntry? in
+                if case let .task(task) = item, task.id == id { task } else { nil }
+            }.first)
+            let group = try XCTUnwrap(page.model.snapshot.groups.first { $0.day == self.day(2026, 10, 29) })
+            let editing = try XCTUnwrap(CalendarAgendaDay(group: group, today: group.day, taskActions: makeActions(page.model.store),
+                                                          rows: rows, onSelectDay: { _ in }).taskRow(task).titleEditing)
+            XCTAssertTrue(editing.commit())
+            page.settle()
+            XCTAssertNil(rows.renaming, "saved")
+            XCTAssertEqual(page.model.store.task(withID: id)?.title, "Renamed in Calendar")
+            XCTAssertEqual(rows.selected, id, "still selected")
+            (row, title) = try agendaRow(page, id)
+            perform("Open page", on: row)
+            XCTAssertEqual(opened, [id], "⇧⌘I's command opens its page")
+            page.click(at: title, count: 1)
+            page.click(at: title, count: 2)
+            page.settle()
+            XCTAssertEqual(opened, [id, id], "a real double-click opens it")
+            XCTAssertNil(rows.renaming, "and does not rename")
+        }
+    }
+
+    /// The same with real keys (needs a key window and the desktop).
+    func testAgendaTaskRowsAnswerRealReturnAndShiftCommandI() throws {
+        try requireKeyWindowTests()
+        let id = UUID()
+        var opened: [UUID] = []
+        let makeActions = agendaActions { opened.append($0) }
+        try withPage(events: [], seed: seedAgendaTask(id), taskActions: makeActions, keyWindow: true) { page in
+            let rows = page.model.taskRows
+            page.click(at: try agendaRow(page, id).title, count: 1)
+            XCTAssertEqual(rows.selected, id)
+            page.press("\r", keyCode: 36)
+            XCTAssertEqual(rows.renaming, id, "Return renames")
+            page.press("\u{1b}", keyCode: 53)
+            XCTAssertNil(rows.renaming, "Esc cancels")
+            page.press("i", keyCode: 34, modifiers: [.command, .shift])
+            XCTAssertEqual(opened, [id], "⇧⌘I opens")
+        }
+    }
+
     // MARK: - Mounting
 
     @MainActor private struct MountedPage {
@@ -115,6 +220,31 @@ final class CalendarPageHostedTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(seconds))
             host.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
+        }
+
+        /// A real click (window coordinates), through the app's queue.
+        func click(at point: CGPoint, count: Int) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                               context: nil, eventNumber: 9, clickCount: count, pressure: type == .leftMouseDown ? 1 : 0)!
+                NSApp.postEvent(event, atStart: false)
+            }
+            Hosted.pumpEvents()
+            settle(0.3)
+        }
+
+        /// A real key press, through the app's queue.
+        func press(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                                             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                             context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                             isARepeat: false, keyCode: keyCode)!
+                NSApp.postEvent(event, atStart: false)
+                Hosted.pumpEvents()
+            }
+            settle(0.4)
         }
 
         var scroller: NSScrollView? { Self.scrollView(in: host) }
@@ -159,23 +289,34 @@ final class CalendarPageHostedTests: XCTestCase {
 
     /// Today is 29 Oct 2026 at noon and selected. The window is tall enough
     /// that all seven agenda days are drawn.
-    private func withPage(events: [CalendarEvent], _ body: (MountedPage) throws -> Void) throws {
+    private final class KeyPanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+    }
+
+    private func withPage(events: [CalendarEvent], seed: (TaskStore) throws -> Void = { _ in },
+                          taskActions: ((TaskStore) -> CalendarTaskRowActions)? = nil, keyWindow: Bool = false,
+                          _ body: (MountedPage) throws -> Void) throws {
         let store = try makeTestStore()
+        try seed(store)
         let source = CalendarEventSourceStub(events: events)
         let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) })
         let size = CGSize(width: 320, height: 900)
         let layout = PanelPageLayout(cornerSize: 28, panelSize: size)
         let page = CalendarPage(model: model, layout: layout,
-                                taskActions: CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }),
+                                taskActions: taskActions?(store) ?? CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }),
                                 onNewTask: { _ in })
             .atticDesign(AtticDesignContext(mode: .light))
             .frame(width: size.width, height: size.height)
-        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let window: NSWindow = keyWindow
+            ? KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            : NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                       styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: AnyView(page))
         window.contentView = host
         window.orderFront(nil)
+        if keyWindow { window.makeKey() }
         defer { window.orderOut(nil) }
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
