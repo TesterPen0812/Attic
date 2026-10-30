@@ -370,12 +370,21 @@ struct AtticPanelView: View {
     /// controls: the pin and any text after it, and the switch, ••• and
     /// Search; while the search is open, of the whole row.
     private func syncTopRowFootprint() {
-        let page = currentPage
+        Self.syncTopRowFootprint(topRowState, uiState: uiState, settings: settings,
+                                 chrome: chromeInteractionState)
+    }
+
+    /// Static so the top-row state's callback holds no copy of the view: a
+    /// copy keeps the panel's stores and sessions alive after the panel goes.
+    private static func syncTopRowFootprint(_ topRowState: PanelTopRowState, uiState: PanelUIState,
+                                            settings: AppSettings, chrome: PanelChromeInteractionState) {
+        let page = PanelPage(uiState.selectedSection)
+        let insets = PanelPageLayout(cornerSize: settings.panelCornerSize, panelSize: uiState.panelSize).chromeInsets
         let footprint = topRowState.footprints[page]
         let searching = topRowState.isSearching(page)
-        let leading = max(0, (footprint?.leading ?? 0) - chromeInsets.leading)
-        let trailing = searching ? panelSize.width : max(0, (footprint?.trailing ?? 0) - chromeInsets.trailing)
-        chromeInteractionState.setTopRowControls(leading: leading, trailing: trailing)
+        let leading = max(0, (footprint?.leading ?? 0) - insets.leading)
+        let trailing = searching ? uiState.panelSize.width : max(0, (footprint?.trailing ?? 0) - insets.trailing)
+        chrome.setTopRowControls(leading: leading, trailing: trailing)
     }
 
     // MARK: Surface, observation and theme
@@ -416,7 +425,10 @@ struct AtticPanelView: View {
     private var interactionObservedPanel: some View {
         storeObservedPanel
             .onAppear {
-                topRowState.onFootprintChange = { syncTopRowFootprint() }
+                topRowState.onFootprintChange = { [weak topRowState, weak uiState, weak settings, weak chromeInteractionState] in
+                    guard let topRowState, let uiState, let settings, let chromeInteractionState else { return }
+                    Self.syncTopRowFootprint(topRowState, uiState: uiState, settings: settings, chrome: chromeInteractionState)
+                }
                 syncTopRowFootprint()
                 syncBottomControlsHeight()
                 syncNoteDraftInteractionLocks()
