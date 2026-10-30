@@ -70,12 +70,11 @@ struct CalendarPage: View {
         let pinnedIndex = snapshot.pinnedWeekIndex
         return ScrollView(.vertical) {
             VStack(spacing: 0) {
-                AtticControlGroup {
-                    VStack(spacing: 0) {
-                        ForEach(weeks) { week in
-                            CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: model.select)
-                                .equatable()
-                        }
+                // Flat days (Accepted 2026-10-30): no glass in the grid.
+                VStack(spacing: 0) {
+                    ForEach(weeks) { week in
+                        CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: model.select)
+                            .equatable()
                     }
                 }
                 agenda(snapshot)
@@ -84,6 +83,8 @@ struct CalendarPage: View {
             .padding(.bottom, CalendarDesign.agendaBottom)
         }
         .scrollIndicators(.never)
+        // Clean cut (3 Oct): the native soft scroll edge stays off.
+        .atticScrollEdgeEffect()
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ScrollFlags.self) { geometry in
             let offset = geometry.contentOffset.y + geometry.contentInsets.top
@@ -92,20 +93,14 @@ struct CalendarPage: View {
         } action: { _, new in
             if flags != new { flags = new }
         }
-        // While the selected week is pinned, what scrolls under it is cut at
-        // its bottom edge, and its copy stays put above.
-        .mask(alignment: .top) {
-            VStack(spacing: 0) {
-                Color.clear.frame(height: flags.pinned ? CalendarDesign.weekPitch : 0)
-                Color.black
-            }
-        }
+        // While the selected week is pinned, what scrolls under it is hidden
+        // behind it and fades in below it (a static gradient), and its copy
+        // stays put above.
+        .mask(alignment: .top) { CalendarScrollMask(pinned: flags.pinned) }
         .overlay(alignment: .top) {
             if flags.pinned, let pinnedIndex, weeks.indices.contains(pinnedIndex) {
-                AtticControlGroup {
-                    CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: model.select)
-                        .equatable()
-                }
+                CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: model.select)
+                    .equatable()
             }
         }
         .accessibilityIdentifier("calendar-scroll")
@@ -114,9 +109,14 @@ struct CalendarPage: View {
     @ViewBuilder
     private func agenda(_ snapshot: CalendarPageSnapshot) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(snapshot.groups) { group in
-                CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
-                                  onSelectDay: model.select)
+            ForEach(snapshot.entries) { entry in
+                switch entry {
+                case let .day(group):
+                    CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
+                                      onSelectDay: model.select)
+                case let .free(run):
+                    CalendarFreeDaysLine(run: run, onSelectDay: model.select)
+                }
             }
             if snapshot.showsNoMatches {
                 Text("No matches")
@@ -186,29 +186,15 @@ struct CalendarPage: View {
     // MARK: Footer
 
     private func footer(_ snapshot: CalendarPageSnapshot) -> some View {
-        let tokens = design.tokens
         let flat = design.effectiveControls != .liquidGlass
-        let onToday = snapshot.selected == snapshot.today
         let height = CalendarDesign.footerHeight
         // The bottom bar (Accepted 2026-10-29/30): the page switch, Today,
         // then "+".
         return AtticControlGroup {
             HStack(spacing: TasksDesignMetrics.footerGap) {
                 PanelPageSwitcher(page: .calendar)
-                Button {
-                    model.goToToday()
-                } label: {
-                    Text("Today")
-                        .font(.system(size: CalendarDesign.todayFont, weight: .medium))
-                        .foregroundStyle(onToday ? TasksPanelDesign.toneInk(.meta, tokens: tokens).color : tokens.ink(.heading).color)
-                        .padding(.horizontal, CalendarDesign.todayPaddingX)
-                        .frame(height: height)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(AtticRaisedButtonStyle(cornerRadius: TasksDesignMetrics.footerRadius, flat: flat))
-                .focusEffectDisabled()
-                .help(String(localized: "Go to today"))
-                .accessibilityIdentifier("calendar-today")
+                CalendarTodayButton(isShown: CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today),
+                                    flat: flat, action: model.goToToday)
                 Spacer(minLength: 0)
                 AtticRaisedButton(systemName: "plus", label: "New task", size: CGSize(width: height, height: height),
                                   emphasisedGlyph: true, flat: flat, cornerRadius: TasksDesignMetrics.footerRadius) {
@@ -220,5 +206,81 @@ struct CalendarPage: View {
         .atticDesignCorners()
         .padding(.horizontal, layout.chromeInsets.leading)
         .padding(.bottom, layout.chromeInsets.bottom)
+    }
+}
+
+/// The agenda's mask: everything shows until the selected week pins; then
+/// what scrolls under the pinned week is hidden and fades in over
+/// `CalendarDesign.agendaFade` below it (Accepted 2026-10-30, "Scrolling").
+/// A static gradient: it changes only when the week pins or unpins.
+/// The fade itself comes and goes in the hover motion (the design's quick
+/// fade); the cut under the pinned week is immediate, as the pinned copy is.
+struct CalendarScrollMask: View {
+    let pinned: Bool
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: pinned ? CalendarDesign.weekPitch : 0)
+            LinearGradient(colors: [.black.opacity(pinned ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: CalendarDesign.agendaFade)
+                .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: pinned)
+            Color.black
+        }
+    }
+}
+
+/// Today in the bottom bar (Accepted 2026-10-30): shown only while another
+/// day is selected, fading in and out. It keeps its place while hidden. A
+/// glass group ignores a plain opacity on its members, so it fades out of
+/// its glass (`atticControlAway`) and then drops the glass (`atticControlGone`).
+struct CalendarTodayButton: View {
+    let isShown: Bool
+    let flat: Bool
+    let action: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @State private var away: Bool
+    @State private var gone: Bool
+
+    init(isShown: Bool, flat: Bool, action: @escaping () -> Void) {
+        self.isShown = isShown
+        self.flat = flat
+        self.action = action
+        _away = State(initialValue: !isShown)
+        _gone = State(initialValue: !isShown)
+    }
+
+    static func isShown(selected: DueDay, today: DueDay) -> Bool { selected != today }
+
+    var body: some View {
+        let tokens = design.tokens
+        Button(action: action) {
+            Text("Today")
+                .font(.system(size: CalendarDesign.todayFont, weight: .medium))
+                .foregroundStyle(tokens.ink(.heading).color)
+                .padding(.horizontal, CalendarDesign.todayPaddingX)
+                .frame(height: CalendarDesign.footerHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(AtticRaisedButtonStyle(cornerRadius: TasksDesignMetrics.footerRadius, flat: flat))
+        .focusEffectDisabled()
+        .environment(\.atticControlAway, away)
+        .environment(\.atticControlGone, gone)
+        .opacity(away ? 0 : 1)
+        .allowsHitTesting(isShown)
+        .accessibilityHidden(!isShown)
+        .help(String(localized: "Go to today"))
+        .accessibilityIdentifier("calendar-today")
+        .onChange(of: isShown) { _, shown in
+            let animation = AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown)
+            if shown {
+                gone = false
+                withAnimation(animation) { away = false }
+            } else {
+                withAnimation(animation) { away = true } completion: { if away { gone = true } }
+            }
+        }
     }
 }
