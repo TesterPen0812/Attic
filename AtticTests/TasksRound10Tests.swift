@@ -501,7 +501,7 @@ final class TasksRound10Tests: XCTestCase {
             .submenu("Tags", [tagged, AtticMenuCommand(verbatim: "#work", state: .on) {}]),
             AtticMenuCommand(verbatim: "Move Up", shortcut: AtticTaskShortcut.moveUp, isDisabled: true, startsSection: true) {},
             AtticMenuCommand(verbatim: "Tomorrow", detail: "Tue") {},
-            AtticMenuCommand(verbatim: "Actions", shortcut: AtticTaskShortcut.actions) {}
+            AtticMenuCommand(verbatim: "Actions", shortcut: AtticTaskShortcut.page) {}
         ]
         let menu = AtticNativeMenu.make(commands)
         XCTAssertTrue(menu.items[0].isSectionHeader)

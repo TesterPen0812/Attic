@@ -97,7 +97,10 @@ enum AtticTaskShortcut {
     static let moveDown = KeyboardShortcut(.downArrow, modifiers: .command)
     static let copy = KeyboardShortcut("c", modifiers: .command)
     static let duplicate = KeyboardShortcut("d", modifiers: .command)
-    static let actions = KeyboardShortcut("i", modifiers: [.command, .shift])
+    /// ⇧⌘I opens the selected task's page (Accepted 2026-10-30, "Tasks:
+    /// going into a task's page"); a task's actions stay on right-click and
+    /// •••. A subtask line, which has no page, keeps it for its menu.
+    static let page = KeyboardShortcut("i", modifiers: [.command, .shift])
     /// Priority (follow-up part 2): ⌥⌘0 No Priority, ⌥⌘1 Low, ⌥⌘2 Medium,
     /// ⌥⌘3 High.
     static let priorityNone = KeyboardShortcut("0", modifiers: [.command, .option])
@@ -249,8 +252,14 @@ enum AtticTaskKeys {
         // Round 10: copy, duplicate and the actions menu.
         if relevant == .command, key.character == "c" || characters.lowercased() == "c" { return .copy }
         if relevant == .command, key.character == "d" || characters.lowercased() == "d" { return .duplicate }
-        if relevant == [.command, .shift], key.character.lowercased() == "i" || characters.lowercased() == "i" { return .showActions }
+        if isShiftCommandI(key: key, characters: characters, modifiers: modifiers) { return .openPage }
         return nil
+    }
+
+    /// ⇧⌘I (`AtticTaskShortcut.page`).
+    static func isShiftCommandI(key: KeyEquivalent, characters: String, modifiers: EventModifiers) -> Bool {
+        modifiers.intersection([.command, .option, .control, .shift]) == [.command, .shift]
+            && (key.character.lowercased() == "i" || characters.lowercased() == "i")
     }
 
     /// Whether `actions` offer the command (a key for a command the task
@@ -1276,6 +1285,27 @@ struct AtticTaskRow: View {
         forced == .focused || keyboardFocused
     }
 
+    /// Whether the › shows (Accepted 2026-10-30): while the row is hovered
+    /// or selected, never while its title is being renamed.
+    nonisolated static func showsOpenButton(hovered: Bool, selected: Bool, renaming: Bool, opens: Bool) -> Bool {
+        opens && !renaming && (hovered || selected)
+    }
+
+    enum ClickRoute: Equatable { case select, open }
+
+    /// What a click on the row (not on its ring, date or buttons, which take
+    /// their own clicks) does: the second click of a double-click opens the
+    /// page; any other click selects.
+    nonisolated static func clickRoute(clickCount: Int, opens: Bool) -> ClickRoute {
+        opens && clickCount >= 2 ? .open : .select
+    }
+
+    /// How far the date slides left while the › shows: the ›'s 18 and the
+    /// 6 between them (the design's 36 + 12 px).
+    nonisolated static func dateSlide(showsOpen: Bool) -> CGFloat {
+        showsOpen ? AtticRowOpenMetrics.room : 0
+    }
+
     /// The row's own coordinate space, for its controls' frames.
     static let space = NamedCoordinateSpace.named("AtticTaskRow")
 
@@ -1296,10 +1326,12 @@ struct AtticTaskRow: View {
     /// A click on the row (Phase 1: selects; the page arrives in Phase 3).
     /// nil opens the page, as the spec's row does.
     var onSelect: (() -> Void)? = nil
-    /// A plain click on the title (Phase 3): opens the task's page, as a
-    /// card's title does (P1). ⌘- and ⇧-clicks on the title still select;
-    /// nil leaves the title to `onSelect`.
-    var onOpenTitle: (() -> Void)? = nil
+    /// Going into the task's page (Accepted 2026-10-30): the › shown while
+    /// the row is hovered or selected, and a double-click anywhere on the
+    /// row but its ring, date and other buttons. A click on the title just
+    /// selects, as the rest of the row does. Nil draws no › and leaves a
+    /// double-click to `onSelect`.
+    var onOpenPage: (() -> Void)? = nil
     /// The list's focus for this row (↑ ↓ move it); nil keeps its own.
     var focus: AtticRowFocus? = nil
     /// Editing the title in place.
@@ -1326,7 +1358,15 @@ struct AtticTaskRow: View {
     @State private var dateHovered = false
     @State private var probeID = UUID()
 
+    #if DEBUG
+    /// Test seam: how many times each row's body ran (bounded-update tests).
+    static var evaluations: [UUID: Int] = [:]
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.evaluations[model.id, default: 0] += 1
+        #endif
         let tokens = design.tokens
         let m = AtticTaskRowMetrics.self
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: false).state
@@ -1355,6 +1395,8 @@ struct AtticTaskRow: View {
             nil
         }
         let disabled = state == .disabled
+        let showsOpen = Self.showsOpenButton(hovered: hovered || forced == .hover, selected: isSelected,
+                                             renaming: titleEditing != nil, opens: onOpenPage != nil && !disabled)
 
         ZStack(alignment: .topLeading) {
             Group {
@@ -1409,8 +1451,6 @@ struct AtticTaskRow: View {
                             // The title gives way first (review 13).
                             .layoutPriority(-1)
                             .help(model.title)
-                            .modifier(AtticTitleOpenTap(open: capture == nil && !disabled ? onOpenTitle : nil,
-                                                        select: { if !disabled { (onSelect ?? actions.openPage)() } }))
                             if !done {
                                 AtticPriorityMark(priority: model.priority, disabled: disabled)
                             }
@@ -1425,10 +1465,16 @@ struct AtticTaskRow: View {
                             .padding(.leading, AtticRowActionsMetrics.gap)
                             .transition(.opacity)
                     }
+                    if onOpenPage != nil {
+                        openButton(shown: showsOpen, disabled: disabled)
+                    }
                 }
                 .frame(height: d.line)
                 .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false),
                            value: showsFocusRing)
+                // The › makes room: the date slides left while it shows.
+                .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false),
+                           value: showsOpen)
                 if twoLine {
                     AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded,
                                      isFilesExpanded: isFilesExpanded, onToggleFiles: capture == nil ? onToggleFiles : nil,
@@ -1475,7 +1521,13 @@ struct AtticTaskRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
-        .onTapGesture { if isEnabled { (onSelect ?? actions.openPage)() } }
+        .onTapGesture {
+            guard isEnabled else { return }
+            switch Self.clickRoute(clickCount: NSApp.currentEvent?.clickCount ?? 1, opens: onOpenPage != nil && capture == nil) {
+            case .open: onOpenPage?()
+            case .select: (onSelect ?? actions.openPage)()
+            }
+        }
         .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true,
                         live: capture == nil, external: focus, answersKeys: titleEditing == nil)
         // While the title is edited, its field is its own element, so
@@ -1538,6 +1590,21 @@ struct AtticTaskRow: View {
         }
     }
 
+    /// The ›, at the end of the title line. Its room grows from nothing to
+    /// `AtticRowOpenMetrics.room`, so the date slides left rather than being
+    /// covered; the › itself sits on the row's padding, past the date's
+    /// text inset, as the design's button sits past the date's capsule.
+    private func openButton(shown: Bool, disabled: Bool) -> some View {
+        let inset = TasksRowDesign.dateInset
+        return AtticRowOpenButton(action: { if !disabled { onOpenPage?() } })
+            .opacity(shown ? 1 : 0)
+            .frame(width: Self.dateSlide(showsOpen: shown) + inset, height: TasksRowDesign.line, alignment: .trailing)
+            .clipped()
+            .padding(.trailing, -inset)
+            .allowsHitTesting(shown && capture == nil)
+            .accessibilityHidden(!shown)
+    }
+
     /// The tag list's presentation, attached where it points: the tags on
     /// the details line, or under the title when there are none.
     private func tagsPresented(twoLine attachedToDetails: Bool) -> Binding<Bool> {
@@ -1573,9 +1640,74 @@ struct AtticRowActionsButton: View {
         .onHover { hovered = $0 }
         .background(AtticMenuAnchor(holder: anchor))
         .atticRowControl()
-        .help(String(localized: "Actions (⇧⌘I)"))
+        .help(String(localized: "Actions"))
         .accessibilityHidden(true)
         .accessibilityIdentifier("task-row-actions")
+    }
+}
+
+/// The ›'s size and room (Accepted 2026-10-30; the design's 36 px button
+/// 12 px after the date, its 10 × 16 px chevron; half in points).
+enum AtticRowOpenMetrics {
+    static let size: CGFloat = 18
+    static let gap: CGFloat = 6
+    /// What the › takes from the line while it shows: the date slides left
+    /// by this much.
+    static let room: CGFloat = size + gap
+    /// Its grey fill on white, at rest and under the pointer (5 % and 9 %).
+    static let fill = 0.05
+    static let hoverFill = 0.09
+    /// The chevron: the design's 2,2 9,10 2,18 on a 20 px tall box drawn
+    /// 16 px tall, stroke 2.6 (so 2.8 × 6.4 pt, a 1.04 pt line).
+    static let chevronWidth: CGFloat = 2.8
+    static let chevronHeight: CGFloat = 6.4
+    static let chevronLine: CGFloat = 1.04
+}
+
+/// The row's › (Accepted 2026-10-30): an 18 pt whole superellipse on curve
+/// 1.4, a grey fill and chevron in the see-through inks on glass. It opens
+/// the task's page; it never takes the keyboard (⇧⌘I does that).
+struct AtticRowOpenButton: View {
+    let action: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticForcedState) private var forced
+    @State private var hovered = false
+
+    var body: some View {
+        let m = AtticRowOpenMetrics.self
+        let tokens = design.tokens
+        Button(action: action) {
+            ZStack {
+                Squircle(cornerRadius: AtticShape.controlRadius(height: m.size), exponent: AtticShape.controlExponent)
+                    .fill(tokens.ink(.heading).withAlpha(hovered || forced == .hover ? m.hoverFill : m.fill).color)
+                AtticRowOpenChevron()
+                    .stroke(TasksPanelDesign.toneInk(.groupHeader, tokens: tokens).color,
+                            style: StrokeStyle(lineWidth: m.chevronLine, lineCap: .round, lineJoin: .round))
+                    .frame(width: m.chevronWidth, height: m.chevronHeight)
+            }
+            .frame(width: m.size, height: m.size)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .focusEffectDisabled()
+        .onHover { hovered = $0 }
+        .animation(design.reduceMotion ? nil : AtticMotionPreset.hover.animation(reduceMotion: false), value: hovered)
+        .atticRowControl()
+        .accessibilityLabel(String(localized: "Open page"))
+        .accessibilityIdentifier("task-row-open")
+    }
+}
+
+/// The ›'s chevron, in its own box.
+struct AtticRowOpenChevron: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        return path
     }
 }
 
@@ -2896,26 +3028,3 @@ final class AtticSubtaskFieldEditor: NSTextView {
 }
 
 
-/// The row title's own click (Phase 3): a plain click opens the task's page;
-/// a ⌘- or ⇧-click, or a second click, selects as the rest of the row does.
-struct AtticTitleOpenTap: ViewModifier {
-    let open: (() -> Void)?
-    let select: () -> Void
-
-    func body(content: Content) -> some View {
-        if let open {
-            content
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    let flags = NSApp.currentEvent?.modifierFlags ?? []
-                    if flags.contains(.command) || flags.contains(.shift) {
-                        select()
-                    } else {
-                        open()
-                    }
-                }
-        } else {
-            content
-        }
-    }
-}
