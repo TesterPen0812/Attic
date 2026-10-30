@@ -279,7 +279,11 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertFalse(bare.commands(for: id).contains { $0.title == "Remove from Tasks" })
     }
 
-    func testCalendarRowKeepsClickEntryAndCommandReturnOpensItsPage() throws {
+    /// The Calendar agenda's task rows go into the page the Tasks rows'
+    /// way (Accepted 2026-10-30, through the shared row): the › and a
+    /// double-click open it, a single click opens nothing, and ⌘Return and
+    /// ⇧⌘I open it from the keyboard.
+    func testCalendarRowOpensLikeATasksRowAndBothKeysOpenItsPage() throws {
         let id = UUID(), today = day(2026, 10, 29)
         let task = CalendarTaskEntry(id: id, title: "A Calendar task", due: today, isOpen: true)
         var opened: [UUID] = []
@@ -287,10 +291,14 @@ final class CalendarPageTests: XCTestCase {
         let group = CalendarAgenda.groups(selected: today, clock: .init(today: today, now: date(2026, 10, 29, 12)),
             events: [], tasks: [task], calendar: calendar)[0]
         let row = CalendarAgendaDay(group: group, today: today, taskActions: actions, onSelectDay: { _ in }).taskRow(task)
-        XCTAssertNil(row.onSelect, "base wiring: the row click falls back to Open Page")
-        (row.onSelect ?? row.actions.openPage)()
-        XCTAssertNotNil(row.onOpenTitle)
-        row.onOpenTitle?()
+        let click = try XCTUnwrap(row.onSelect, "a single click no longer falls back to Open Page")
+        click()
+        XCTAssertEqual(opened, [], "a single click opens nothing")
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, opens: row.onOpenPage != nil), .open, "a double-click opens")
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 1, opens: row.onOpenPage != nil), .select)
+        XCTAssertTrue(AtticTaskRow.showsOpenButton(hovered: true, selected: false, renaming: false, opens: row.onOpenPage != nil),
+                      "the › shows on a hovered Calendar row")
+        row.onOpenPage?()
         let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
             timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
             isARepeat: false, keyCode: 36))
@@ -299,7 +307,11 @@ final class CalendarPageTests: XCTestCase {
             modifiers: EventModifiers(event.modifierFlags), listCommands: true))
         XCTAssertTrue(AtticTaskKeys.offers(command, row.actions))
         AtticTaskKeys.perform(command, row.actions)
-        XCTAssertEqual(opened, [id, id, id], "row click, title click and ⌘Return share the Calendar route")
+        let page = try XCTUnwrap(AtticTaskKeys.command(key: KeyEquivalent("i"), characters: "I", modifiers: [.command, .shift],
+                                                       listCommands: true))
+        XCTAssertEqual(page, .openPage, "⇧⌘I opens the page")
+        AtticTaskKeys.perform(page, row.actions)
+        XCTAssertEqual(opened, [id, id, id], "the ›, ⌘Return and ⇧⌘I share the Calendar route")
     }
 
     func testTypingIsDebouncedIntoOneSearch() async throws {

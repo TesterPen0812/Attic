@@ -1629,11 +1629,11 @@ struct AtticMenuCommand: Identifiable {
     /// the first subtask) still takes its key and does nothing, so the key
     /// never falls through to the list and moves the main task instead.
     /// ⇧⌘I opens the line's whole menu (`showActions`, control audit item
-    /// 5), as it does a task row's.
+    /// 5); a subtask has no page of its own to open.
     static func performSubtaskKey(key: KeyEquivalent, characters: String, modifiers: EventModifiers,
                                   in commands: [AtticMenuCommand], showActions: (() -> Void)? = nil) -> KeyPress.Result {
         if let showActions, !commands.isEmpty,
-           AtticTaskKeys.command(key: key, characters: characters, modifiers: modifiers, listCommands: true) == .showActions {
+           AtticTaskKeys.isShiftCommandI(key: key, characters: characters, modifiers: modifiers) {
             showActions()
             return .handled
         }

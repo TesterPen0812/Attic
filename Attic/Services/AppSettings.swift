@@ -81,6 +81,7 @@ final class AppSettings: ObservableObject {
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
         static let hapticsEnabled = "hapticsEnabled"
+        static let nextEventInNow = "nextEventInNow"
         static let animations = "animations"
         static let hideAnimation = "panelHideAnimation"
         static let hideSpeedLab = "motionLabHideSpeeds"
@@ -192,6 +193,13 @@ final class AppSettings: ObservableObject {
     /// snaps into place (spec § Touch and sound). On by default.
     @Published var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
+    }
+
+    /// "Next event in Now" (Accepted 2026-10-29): today's next event at the
+    /// top of Now's Today, once Calendar access has been granted. On by
+    /// default, as the design's switch is.
+    @Published var nextEventInNow: Bool {
+        didSet { defaults.set(nextEventInNow, forKey: Key.nextEventInNow) }
     }
 
     /// Lively (the default) or Subtle springs, or Reduced motion (round 9,
@@ -382,6 +390,7 @@ final class AppSettings: ObservableObject {
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
+        nextEventInNow = (defaults.object(forKey: Key.nextEventInNow) as? Bool) ?? true
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
         revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true
         revealModifier = RevealModifier(rawValue: defaults.string(forKey: Key.revealModifier) ?? "") ?? .none

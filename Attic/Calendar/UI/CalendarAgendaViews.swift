@@ -73,7 +73,9 @@ struct CalendarAgendaDay: View {
         AtticTaskRow(model: task.row,
             actions: AtticTaskActions(toggleDone: { taskActions.toggleDone(task.id) },
                                       openPage: { taskActions.open(task.id) }),
-            onToggleExpanded: {}, onOpenTitle: { taskActions.open(task.id) })
+            // The Tasks rows' way in (Accepted 2026-10-30): the › and a
+            // double-click open the page; a single click selects nothing here.
+            onToggleExpanded: {}, onSelect: {}, onOpenPage: { taskActions.open(task.id) })
     }
 
 }
