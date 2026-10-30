@@ -550,6 +550,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard noteDraft.prepareToLeave(.hide) else {
             return .rejected(.draftFlushFailed)
         }
+        // Menu cards are separate windows; they cannot ride the panel's
+        // hide/Genie stand-in. Close synchronously after the save accepts.
+        AtticGlassMenu.current?.close(animated: false)
         clearInteractiveDismissal()
         stopPanelMotion()
         panel.cancelTrackpadSwipe()
@@ -1045,6 +1048,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         #endif
         if !isInteractiveDismissal {
+            AtticGlassMenu.current?.close(animated: false)
             // A swipe that takes over a release motion starts where that
             // motion had the panel, with its speed (owner, 2026-10-22).
             let takeover = panel.swipeTakeover

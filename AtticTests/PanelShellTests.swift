@@ -375,6 +375,33 @@ final class PanelShellTests: XCTestCase {
         _ = controller.requestHide { _ in }
     }
 
+    func testHideClosesTheSeparateGlassMenuBeforePanelMotion() throws {
+        let suite = "PanelShellTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let controller = AtticPanelController(store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: AppSettings(defaults: defaults), uiState: PanelUIState())
+        controller.show(on: try XCTUnwrap(NSScreen.main), corner: .topRight)
+        AtticGlassMenu.ordersCardsFront = false
+        defer { AtticGlassMenu.ordersCardsFront = true; AtticGlassMenu.testDriver = nil }
+        var hidden = false
+        AtticGlassMenu.testDriver = { menu in
+            XCTAssertTrue(menu.isOpen)
+            XCTAssertTrue(controller.requestHide { hidden = $0 == .hidden }.isAccepted)
+            XCTAssertFalse(menu.isOpen, "a separate NSPanel cannot stay over the hide/Genie stand-in")
+            XCTAssertTrue(menu.cards.allSatisfy { !$0.window.isVisible })
+        }
+        AtticGlassMenu.popUp([AtticMenuCommand("Open Page") {}],
+            in: try XCTUnwrap(controller.panelForTesting.contentView), placement: .point(.zero), opener: nil)
+        let deadline = Date().addingTimeInterval(3)
+        while !hidden, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(hidden)
+    }
+
     func testApproachingTheCornerBuildsTheHiddenPanelsPagesOnce() throws {
         let suite = "PanelShellTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
