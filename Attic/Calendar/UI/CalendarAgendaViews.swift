@@ -40,12 +40,7 @@ struct CalendarAgendaDay: View {
                 ForEach(group.items) { item in
                     switch item {
                     case let .task(task):
-                        AtticTaskRow(
-                            model: task.row,
-                            actions: AtticTaskActions(toggleDone: { taskActions.toggleDone(task.id) },
-                                                      openPage: { taskActions.open(task.id) }),
-                            onToggleExpanded: {}, onSelect: {}
-                        )
+                        taskRow(task)
                         .atticContextMenu { taskActions.commands(for: task.id) }
                         .accessibilityIdentifier("calendar-task-\(task.id.uuidString)")
                     case let .event(event):
@@ -69,6 +64,13 @@ struct CalendarAgendaDay: View {
         .padding(.bottom, CalendarDesign.dayGap)
         .accessibilityElement(children: .contain)
     }
+    func taskRow(_ task: CalendarTaskEntry) -> AtticTaskRow {
+        AtticTaskRow(model: task.row,
+            actions: AtticTaskActions(toggleDone: { taskActions.toggleDone(task.id) },
+                                      openPage: { taskActions.open(task.id) }),
+            onToggleExpanded: {}, onOpenTitle: { taskActions.open(task.id) })
+    }
+
 }
 
 /// The date, Today / Tomorrow / Yesterday, and the weekday. Tapping it

@@ -204,7 +204,11 @@ final class CalendarPageTests: XCTestCase {
         let model = CalendarPageModel(store: tasks, source: CalendarEventSourceStub(), calendar: calendar,
                                       now: { self.date(2026, 10, 29, 12) })
         model.setQuery("boathouse"); model.commitSearch()
-        XCTAssertEqual(model.snapshot.groups.flatMap(\.items).map(\.id), ["task-" + task.id.uuidString])
+        let results = model.snapshot.groups.flatMap(\.items)
+        XCTAssertEqual(results.map(\.id), ["task-" + task.id.uuidString])
+        guard case let .task(result) = try XCTUnwrap(results.first) else { return XCTFail("the matching task") }
+        XCTAssertEqual(result.title, task.title)
+        XCTAssertEqual(result.row.title, task.title)
     }
 
     func testCalendarMenuUsesTheSharedRemovalRuleAndRoutesOpenAndFiles() throws {
@@ -228,6 +232,29 @@ final class CalendarPageTests: XCTestCase {
         var bare = actions
         bare.canRemoveFromTasks = { _ in false }
         XCTAssertFalse(bare.commands(for: id).contains { $0.title == "Remove from Tasks" })
+    }
+
+    func testCalendarRowKeepsClickEntryAndCommandReturnOpensItsPage() throws {
+        let id = UUID(), today = day(2026, 10, 29)
+        let task = CalendarTaskEntry(id: id, title: "A Calendar task", due: today, isOpen: true)
+        var opened: [UUID] = []
+        let actions = CalendarTaskRowActions(toggleDone: { _ in }, open: { opened.append($0) })
+        let group = CalendarAgenda.groups(selected: today, clock: .init(today: today, now: date(2026, 10, 29, 12)),
+            events: [], tasks: [task], calendar: calendar)[0]
+        let row = CalendarAgendaDay(group: group, today: today, taskActions: actions, onSelectDay: { _ in }).taskRow(task)
+        XCTAssertNil(row.onSelect, "base wiring: the row click falls back to Open Page")
+        (row.onSelect ?? row.actions.openPage)()
+        XCTAssertNotNil(row.onOpenTitle)
+        row.onOpenTitle?()
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+            isARepeat: false, keyCode: 36))
+        // The row's shared focused-key dispatcher, using this Calendar row's actions.
+        let command = try XCTUnwrap(AtticTaskKeys.command(key: .return, characters: event.characters ?? "",
+            modifiers: EventModifiers(event.modifierFlags), listCommands: true))
+        XCTAssertTrue(AtticTaskKeys.offers(command, row.actions))
+        AtticTaskKeys.perform(command, row.actions)
+        XCTAssertEqual(opened, [id, id, id], "row click, title click and ⌘Return share the Calendar route")
     }
 
     func testTypingIsDebouncedIntoOneSearch() async throws {
