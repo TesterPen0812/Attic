@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -182,6 +183,51 @@ final class CalendarPageTests: XCTestCase {
         model.setQuery("")
         XCTAssertFalse(model.snapshot.isSearching, "clearing applies at once")
         XCTAssertEqual(model.snapshot.groups.count, CalendarAgenda.dayCount)
+    }
+
+    func testSameTaskAppearsOnceInNotesAndCalendarSearch() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let context = ModelContext(container)
+        let task = TaskItem(title: "Book the boathouse")
+        task.dueDay = day(2026, 12, 1)
+        context.insert(task)
+        try context.save()
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
+        let id = UUID()
+        _ = try notes.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Old compatibility title"), .text("Call the venue")]), taskOwner: task.id).get()
+        let tasks = TaskStore(container: container)
+        let matches = try await notes.searchNoteIDs(matching: "boathouse")
+        XCTAssertEqual(matches, [id])
+        let library = NotesLibraryModel(search: { try await notes.searchNoteIDs(matching: $0) }, store: notes, taskStore: tasks)
+        let row = try XCTUnwrap(library.groups(store: notes, drafts: []).flatMap(\.rows).first { $0.id == id })
+        XCTAssertEqual(library.preparedRow(row, store: notes).title, task.title)
+        let model = CalendarPageModel(store: tasks, source: CalendarEventSourceStub(), calendar: calendar,
+                                      now: { self.date(2026, 10, 29, 12) })
+        model.setQuery("boathouse"); model.commitSearch()
+        XCTAssertEqual(model.snapshot.groups.flatMap(\.items).map(\.id), ["task-" + task.id.uuidString])
+    }
+
+    func testCalendarMenuUsesTheSharedRemovalRuleAndRoutesOpenAndFiles() throws {
+        let id = UUID(), state = PanelUIState()
+        state.selectSection(.calendar)
+        var removed: [UUID] = [], files: [UUID] = []
+        let actions = CalendarTaskRowActions(toggleDone: { _ in }, open: {
+            state.openTaskNote($0, from: .calendar, row: $0, backTitle: "Back to Calendar")
+        }, removeFromTasks: { removed.append($0) }, canRemoveFromTasks: { _ in true }, addFiles: { files.append($0) })
+        let menu = actions.commands(for: id)
+        XCTAssertEqual(menu.map(\.title), ["Open Page", "More", "Remove from Tasks"])
+        XCTAssertEqual(menu[0].shortcut, AtticTaskShortcut.openPage)
+        XCTAssertEqual(AtticMenuSymbols.rowsWithoutIcons(menu), [])
+        menu[0].action()
+        XCTAssertEqual(state.taskNoteOrigin, .calendar)
+        XCTAssertEqual(PanelPage(state.selectedSection), .calendar)
+        XCTAssertEqual(state.taskNoteBackTitle, "Back to Calendar")
+        try XCTUnwrap(menu.first { $0.title == "Remove from Tasks" }).action()
+        try XCTUnwrap(menu.first { $0.title == "More" }?.children.first { $0.title == "Add Files…" }).action()
+        XCTAssertEqual(removed, [id]); XCTAssertEqual(files, [id])
+        var bare = actions
+        bare.canRemoveFromTasks = { _ in false }
+        XCTAssertFalse(bare.commands(for: id).contains { $0.title == "Remove from Tasks" })
     }
 
     func testTypingIsDebouncedIntoOneSearch() async throws {

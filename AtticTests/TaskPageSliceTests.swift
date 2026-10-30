@@ -478,17 +478,26 @@ final class TaskPageSliceTests: XCTestCase {
     // MARK: Route: over the origin, Back returns
 
     func testATaskPageOpensOverTasksKeepsTheListBuiltAndBackReturns() async throws {
+        try await assertTaskPageKeepsOriginAndBackReturns(.tasks)
+    }
+
+    func testATaskPageOpensOverCalendarAndBackKeepsTheAgenda() async throws {
+        try await assertTaskPageKeepsOriginAndBackReturns(.calendar)
+    }
+
+    private func assertTaskPageKeepsOriginAndBackReturns(_ origin: PanelPage) async throws {
         let id = try seed(.boundary)
         let draft = NoteDraftController(noteStore: notes.store)
         notes = draft.pages
         notes.attachUndoRoute(library.undo)
         let uiState = PanelUIState()
         uiState.loadPageContent()
-        uiState.openTaskNote(id, from: .tasks, row: id, backTitle: "Back to Now")
-        XCTAssertEqual(uiState.taskNoteOrigin, .tasks)
-        XCTAssertEqual(uiState.taskNoteBackTitle, "Back to Now")
+        uiState.selectSection(origin.section)
+        uiState.openTaskNote(id, from: origin, row: id, backTitle: origin == .calendar ? "Back to Calendar" : "Back to Now")
+        XCTAssertEqual(uiState.taskNoteOrigin, origin)
+        XCTAssertEqual(uiState.taskNoteBackTitle, origin == .calendar ? "Back to Calendar" : "Back to Now")
         let covered = CoverProbe()
-        let host = TaskNoteRouteHost(page: .tasks, noteStore: notes.store, taskStore: tasks, noteDraft: draft, uiState: uiState,
+        let host = TaskNoteRouteHost(page: origin, noteStore: notes.store, taskStore: tasks, noteDraft: draft, uiState: uiState,
                                      layout: PanelPageLayout(cornerSize: 52, panelSize: panel), isReady: true) { isCovered in
             CoverProbeView(probe: covered, covered: isCovered)
         }
@@ -527,6 +536,7 @@ final class TaskPageSliceTests: XCTestCase {
         XCTAssertEqual(covered.values.last, false, "Back uncovers the same list")
         XCTAssertEqual(covered.mounts, 1, "Back returns to the list as it was: the same view, never rebuilt")
         XCTAssertEqual(uiState.taskNoteReturnRow, id, "the anchor row takes the keyboard again")
+        XCTAssertEqual(PanelPage(uiState.selectedSection), origin)
     }
 
     /// ⌘Return, a click on the title and VoiceOver's Open page (the menu's

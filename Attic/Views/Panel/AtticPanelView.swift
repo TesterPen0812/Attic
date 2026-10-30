@@ -230,7 +230,7 @@ struct AtticPanelView: View {
             TaskNoteRouteHost(page: .calendar, noteStore: noteStore, taskStore: store, noteDraft: noteDraft,
                               uiState: uiState, layout: pageLayout, isReady: hasRestoredNoteSession) { _ in
                 CalendarPageHost(store: store, state: calendarPageState, uiState: uiState, layout: pageLayout,
-                                 onNewTask: startNewTask)
+                                 onNewTask: startNewTask, taskNotes: calendarTaskNoteEntryServices)
             }
             .transition(pageTransition(.calendar))
         }
@@ -272,6 +272,23 @@ struct AtticPanelView: View {
                 .map { Set($0.compactMap(\.taskID)) }
                 .removeDuplicates()
                 .eraseToAnyPublisher())
+    }
+
+    private var calendarTaskNoteEntryServices: TaskNoteEntryServices {
+        let services = taskNoteEntryServices
+        return TaskNoteEntryServices(
+            open: { [uiState, calendarPageState, store, weak pages = noteDraft.pages] id, backTitle in
+                let query = calendarPageState.model(store: store).searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                pages?.pendingTaskSearchQuery = query.isEmpty ? nil : query
+                uiState.openTaskNote(id, from: .calendar, row: id, backTitle: backTitle)
+            },
+            addFiles: { [noteDraft, store, toasts, uiState] id, staging in
+                TaskNoteFiles.add(staging, to: id, tasks: store, controller: noteDraft.pages, toasts: toasts) {
+                    uiState.openTaskNote(id, from: .calendar, row: id, backTitle: String(localized: "Back to Calendar"))
+                }
+            },
+            removeFromTasks: services.removeFromTasks, canRemoveFromTasks: services.canRemoveFromTasks,
+            noteOwners: services.noteOwners)
     }
 
     /// A purge made an open task's note ordinary (§ 2.7.2): its page leaves

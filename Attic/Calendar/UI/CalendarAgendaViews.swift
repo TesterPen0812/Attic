@@ -1,9 +1,27 @@
 import SwiftUI
 
 /// What the agenda's task rows do: the Tasks page's own commands.
+@MainActor
 struct CalendarTaskRowActions {
     let toggleDone: (UUID) -> Void
     let open: (UUID) -> Void
+    var removeFromTasks: ((UUID) -> Void)?
+    var canRemoveFromTasks: (UUID) -> Bool = { _ in false }
+    var addFiles: ((UUID) -> Void)?
+
+    func commands(for id: UUID) -> [AtticMenuCommand] {
+        var commands = [AtticMenuCommand("Open Page", shortcut: AtticTaskShortcut.openPage) { open(id) }]
+        if let addFiles {
+            commands.append(.submenu("More", [AtticMenuCommand("Add Files…") { addFiles(id) }]))
+        }
+        if let removeFromTasks {
+            var conversion = TaskNoteConversion.commands(taskID: id, hasWriting: canRemoveFromTasks(id),
+                isSubtask: false, add: {}, remove: { removeFromTasks(id) })
+            if !conversion.isEmpty { conversion[0].startsSection = true }
+            commands += conversion
+        }
+        return commands
+    }
 }
 
 /// One day of the agenda: the date tile on the left, the day's rows on the
@@ -26,9 +44,9 @@ struct CalendarAgendaDay: View {
                             model: task.row,
                             actions: AtticTaskActions(toggleDone: { taskActions.toggleDone(task.id) },
                                                       openPage: { taskActions.open(task.id) }),
-                            onToggleExpanded: {},
-                            onOpenTitle: { taskActions.open(task.id) }
+                            onToggleExpanded: {}, onSelect: {}
                         )
+                        .atticContextMenu { taskActions.commands(for: task.id) }
                         .accessibilityIdentifier("calendar-task-\(task.id.uuidString)")
                     case let .event(event):
                         CalendarEventRow(event: event, day: group.day, today: today)
