@@ -34,7 +34,6 @@ final class PanelShellUITests: XCTestCase {
     /// focus ring.
     private func closeTheCardIfOpen() {
         let open = addBar.waitForExistence(timeout: 2)
-        print("CARD open at launch: \(open)")
         guard open else { return }
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(addBar.waitForNonExistence(timeout: 3), "Escape closes the card")
@@ -200,10 +199,6 @@ final class PanelShellUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.6)
         let before = pageButton.screenshot()
         pageButton.hover()
-        if !page("notes").waitForExistence(timeout: 2) || !page("notes").isHittable {
-            _ = atticHitReport(app, pageButton, "page-switch")
-            _ = atticHitReport(app, page("notes"), "page-notes")
-        }
         waitFor(page("notes").isHittable, "it opens")
         page("notes").click()
         // An open note's bar has no page switch; ⌘1 (no navigation key, so

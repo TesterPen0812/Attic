@@ -88,9 +88,6 @@ final class ScrollEdgeUITests: XCTestCase {
         // Find, over the rows: its button and its field take their clicks.
         let findButton = app.buttons["tasks-find-button"]
         XCTAssertTrue(findButton.waitForExistence(timeout: 3))
-        if !findButton.isHittable {
-            atticHitReport(app, findButton, "find")
-        }
         XCTAssertTrue(findButton.isHittable, "Find's button has a hit point over scrolled rows")
         findButton.click()
         let find = app.descendants(matching: .any).matching(identifier: "tasks-find").firstMatch
@@ -143,7 +140,7 @@ final class ScrollEdgeUITests: XCTestCase {
             let controls = identifiers.map { app.descendants(matching: .any).matching(identifier: $0).firstMatch }
             let frames = controls.map(\.frame)
             for (index, control) in controls.enumerated() where !control.isHittable {
-                XCTFail("\(identifiers[index]) has a hit point at rest: " + atticHitReport(app, control, identifiers[index]))
+                XCTFail("\(identifiers[index]) has a hit point at rest: \(control.frame)")
             }
             let tabs = frames[0].union(frames[1]).union(frames[2])
             XCTAssertEqual(tabs.height, 21, accuracy: 0.5, "the tabs are the top row's 21 pt chips")
@@ -168,7 +165,7 @@ final class ScrollEdgeUITests: XCTestCase {
                     XCTAssertEqual(actual.width, expected.width, accuracy: 0.5, identifiers[index])
                     XCTAssertEqual(actual.height, expected.height, accuracy: 0.5, identifiers[index])
                     if !control.isHittable {
-                        XCTFail("\(identifiers[index]) keeps its hit point after scrolling: " + atticHitReport(app, control, identifiers[index]))
+                        XCTFail("\(identifiers[index]) keeps its hit point after scrolling: \(control.frame)")
                     }
                 }
                 save(panel.screenshot(), name: "floating-glass-\(surface)-\(mode)-\(delta)")
@@ -305,19 +302,5 @@ final class ScrollEdgeUITests: XCTestCase {
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"), options: .atomic)
-    }
-}
-
-/// Diagnostics for "Not hittable": the app's own probe (DEBUG, the panel's
-/// "attic-hit-probe") runs the system's accessibility hit test at each
-/// watched control's and open menu item's centre and says what it found.
-extension XCTestCase {
-    @discardableResult
-    func atticHitReport(_ app: XCUIApplication, _ element: XCUIElement, _ name: String) -> String {
-        let probe = app.descendants(matching: .any).matching(identifier: "attic-hit-probe").firstMatch
-        let found = probe.exists ? (probe.value as? String ?? "no value") : "no probe"
-        let report = "HIT \(name) frame=\(element.exists ? element.frame : .zero) hittable=\(element.exists && element.isHittable)\nPROBE\n\(found)"
-        print(report)
-        return name
     }
 }

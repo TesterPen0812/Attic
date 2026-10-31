@@ -156,9 +156,6 @@ struct AtticPanelView: View {
                     .allowsHitTesting(false)
                     .accessibilityIdentifier("panel-key-state")
                     .accessibilityValue(uiState.isPanelKey ? "key" : "not key")
-                #if DEBUG
-                AtticHitProbe().frame(width: 1, height: 1).allowsHitTesting(false)
-                #endif
             }
         }
         .overlay(alignment: .bottom) {
@@ -943,80 +940,3 @@ extension AtticPanelView {
         }
     }
 }
-
-#if DEBUG
-/// UI-test diagnostics: reading its value runs the app's own accessibility
-/// hit test (the system's path: the window server's window under the
-/// point, then that window's hit test) at the centre of the controls UI
-/// tests click and of every open menu item, and reports what it finds.
-struct AtticHitProbe: NSViewRepresentable {
-    final class Probe: NSView {
-        override func isAccessibilityElement() -> Bool { true }
-        override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
-        override func accessibilityIdentifier() -> String { "attic-hit-probe" }
-        override func accessibilityValue() -> Any? { MainActor.assumeIsolated { Self.report() } }
-
-        static let watched: Set<String> = ["panel-pin-button", "tasks-page-now", "panel-section-picker", "tasks-new-task", "tasks-find-button"]
-
-        /// The hit and its ancestors: what covers the control.
-        static func chain(_ start: AnyObject?) -> String {
-            var parts: [String] = []
-            var current = start
-            for _ in 0..<6 {
-                guard let node = current else { break }
-                let role = (node.accessibilityRole?() ?? nil)?.rawValue ?? ""
-                let id = (node.accessibilityIdentifier?() ?? nil) ?? ""
-                let label = (node.accessibilityLabel?() ?? nil) ?? ""
-                let frame = node.accessibilityFrame?() ?? .zero
-                let hidden = (node as? NSObject)?.value(forKey: "accessibilityElement") as? Bool
-                parts.append("   ^ \(type(of: node)) \(role) id=\(id) label=\(label.prefix(30)) \(frame) el=\(hidden.map(String.init) ?? "?") \(String(describing: node).prefix(120))")
-                current = node.accessibilityParent?() as AnyObject?
-            }
-            return parts.joined(separator: "\n")
-        }
-
-        static func report() -> String {
-            var lines: [String] = []
-            var seen = 0
-            func walk(_ element: AnyObject, depth: Int) {
-                guard depth < 40, seen < 4000 else { return }
-                seen += 1
-                let any = element
-                let id = (any.accessibilityIdentifier?() ?? nil) ?? ""
-                let role = (any.accessibilityRole?() ?? nil)?.rawValue ?? ""
-                if watched.contains(id) || role == NSAccessibility.Role.menuItem.rawValue {
-                    let frame = any.accessibilityFrame?() ?? .zero
-                    let point = NSPoint(x: frame.midX, y: frame.midY)
-                    let hit = NSApp.accessibilityHitTest(point) as AnyObject?
-                    let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
-                    let ours = NSApp.window(withWindowNumber: number)
-                    let hitID = (hit?.accessibilityIdentifier?() ?? nil) ?? ""
-                    let hitRole = (hit?.accessibilityRole?() ?? nil)?.rawValue ?? ""
-                    let label = id.isEmpty ? ((any.accessibilityTitle?() ?? nil) ?? "") : id
-                    lines.append("\(label) \(frame) -> \(hit.map { String(describing: type(of: $0)) } ?? "nil") \(hitRole) \(hitID) win=\(number) ours=\(ours.map { String(describing: type(of: $0)) } ?? "no") lvl=\(ours?.level.rawValue ?? -1)")
-                    if hitID != id { lines.append(chain(hit)) }
-                }
-                for child in (any.accessibilityChildren?() ?? nil) ?? [] {
-                    walk(child as AnyObject, depth: depth + 1)
-                }
-            }
-            if let menu = AtticGlassMenu.current {
-                for card in menu.cards {
-                    for row in card.entries.indices {
-                        guard let element = card.view.element(for: row) else { continue }
-                        walk(element, depth: 0)
-                    }
-                }
-            }
-            for window in NSApp.windows where window.isVisible {
-                lines.append("WIN \(type(of: window)) n=\(window.windowNumber) lvl=\(window.level.rawValue) ign=\(window.ignoresMouseEvents) \(window.frame)")
-                if let content = window.contentView { walk(content, depth: 0) }
-            }
-            return lines.joined(separator: "\n")
-        }
-    }
-
-    func makeNSView(context: Context) -> Probe { Probe() }
-    func updateNSView(_ view: Probe, context: Context) {}
-}
-#endif
