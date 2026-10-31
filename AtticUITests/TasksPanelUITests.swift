@@ -349,6 +349,7 @@ final class TasksPanelUITests: XCTestCase {
         hoverGlassMenuItem(openFiles, titled: "Show Files", in: app)
         printGlassMenuTrace(app, "before Return")
         app.typeKey(.return, modifierFlags: [])
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
         printGlassMenuTrace(app, "after Return")
         assertFilesListStaysOpen("native Show Files after Find, with real auto-hide")
     }

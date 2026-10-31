@@ -2109,6 +2109,9 @@ struct TasksPage: View {
     }
 
     private func openFiles(_ id: UUID) {
+        #if DEBUG
+        AtticGlassMenuTrace.note("FILES asked owns=\(AtticTextInput.ownsCurrentKey) live=\(store.task(withID: id) != nil) open=\(model.expandedFiles.contains(id))")
+        #endif
         guard !AtticTextInput.ownsCurrentKey else {
             Self.log.notice("Show Files \(id, privacy: .public) refused: the key belongs to a typing field")
             return
@@ -2118,6 +2121,9 @@ struct TasksPage: View {
             MainActor.assumeIsolated {
                 // A live task's files open or close under its row (A1).
                 if store.task(withID: id) != nil { toggleFiles(id) } else { model.openPage(id) }
+                #if DEBUG
+                AtticGlassMenuTrace.note("FILES ran open=\(model.expandedFiles.contains(id))")
+                #endif
             }
         }
         CFRunLoopWakeUp(CFRunLoopGetMain())
