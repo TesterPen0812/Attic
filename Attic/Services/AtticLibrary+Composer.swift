@@ -5,7 +5,7 @@ import Foundation
 /// history of the page it was made on.
 extension AtticLibrary {
     /// A task and the writing typed under its title are one item (One
-    /// Item): one save each, recorded as one step. Undo moves both to
+    /// Item): one save for both, recorded as one step. Undo moves both to
     /// Recently Deleted; Redo brings both back. With no writing it is
     /// `createTasks` exactly.
     @discardableResult
@@ -16,18 +16,17 @@ extension AtticLibrary {
         let serial = tasks.errorSerial
         defer { if created == nil { _ = taskOutcome(false, since: serial, ids: []) } }
         undo.perform(in: history) {
-            guard let task = self.tasks.commit([draft])?.first else { return nil }
-            guard let document = try? NoteAgentTextParser.document(title: task.title, body: body, base: .blank)
-                    .taskSnapshot(title: task.title),
-                  case .success = notes.createDocumentNote(id: UUID(), document: document, taskOwner: task.id) else {
-                // Never a task without the writing it was given: the half
-                // that saved goes again, and the draft stays in the card.
-                _ = deleteFamiliesFromHistory([task.id], owning: itemOwnership(liveFamilyMembers(of: [task.id]), deleted: false))
-                refreshItemStores()
-                return nil
-            }
+            // One save for the task, its writing and their association: a
+            // failed save leaves no rows, no Recently Deleted entry and no step.
+            let taskID = UUID()
+            guard let document = try? NoteAgentTextParser.document(title: draft.title, body: body, base: .blank)
+                    .taskSnapshot(title: draft.title),
+                  case .success = notes.createDocumentNote(id: UUID(), document: document, taskOwner: taskID, creatingTask: draft)
+            else { return nil }
+            self.tasks.refresh()
+            guard let task = self.tasks.task(withID: taskID) else { return nil }
             created = task
-            let ids = [task.id]
+            let ids = [taskID]
             let owned = itemOwnership(liveFamilyMembers(of: ids), deleted: false)
             return UndoStep(
                 name: "Add Task",
@@ -39,7 +38,7 @@ extension AtticLibrary {
         return created
     }
 
-    /// A quick note: title, writing, tags and pin in one step. Undo moves it
+    /// A quick note: title, writing, tags and pin in one save and one step. Undo moves it
     /// to Recently Deleted; Redo restores it. Nil when nothing was saved.
     @discardableResult
     func createNote(title: String, body: String, tags: [String], pinned: Bool, in history: UndoHistoryID) -> UUID? {
@@ -51,8 +50,8 @@ extension AtticLibrary {
         undo.perform(in: history) {
             guard let document = try? NoteAgentTextParser.document(title: trimmedTitle, body: trimmedBody, base: .blank),
                   case let .success((noteID, _)) = notes.createDocumentNote(
-                    id: UUID(), document: document, tags: tags.isEmpty ? nil : AtticTag.normalizedSet(tags)) else { return nil }
-            if pinned { _ = notes.setPinnedOutcome(true, noteID: noteID) }
+                    id: UUID(), document: document, tags: tags.isEmpty ? nil : AtticTag.normalizedSet(tags),
+                    pinned: pinned) else { return nil }
             created = noteID
             let ref = AtticItemRef(.note, noteID)
             let owned = itemOwnership(ownedMembers(of: ref), deleted: false, noteID: noteID)

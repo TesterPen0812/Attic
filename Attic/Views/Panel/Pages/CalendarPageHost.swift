@@ -36,27 +36,14 @@ struct CalendarPageHost: View {
 
     private var taskActions: CalendarTaskRowActions {
         CalendarTaskRowActions(
-            toggleDone: { [store] id in
-                guard let task = store.listedTask(withID: id) else { return }
-                if let library = store.commandLibrary {
-                    _ = task.status == .done ? library.reopenTasks([id]) : library.completeTask(id)
-                } else {
-                    _ = store.setStatus(task.status == .done ? .todo : .done, for: task)
-                }
-            },
+            toggleDone: { [store] id in CalendarAgendaCommands.toggleDone(id, store: store) },
             open: { [uiState, state, store] id in
                 let query = state.model(store: store).searchText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if TaskNoteWindows.shared.bringForward(id, searchQuery: query) { return }
                 if let taskNotes { taskNotes.open(id, String(localized: "Back to Calendar")) }
                 else { uiState.openTaskNote(id, from: .calendar, row: id, backTitle: String(localized: "Back to Calendar")) }
             },
-            rename: { [store] id, title in
-                let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty, let task = store.task(withID: id) else { return false }
-                guard trimmed != task.title else { return true }
-                if let library = store.commandLibrary { return library.updateTask(id, title: trimmed).isApplied }
-                return store.rename(task, to: trimmed)
-            },
+            rename: { [store] id, title in CalendarAgendaCommands.rename(id, to: title, store: store) },
             removeFromTasks: taskNotes?.removeFromTasks,
             canRemoveFromTasks: { id in
                 store.listedTask(withID: id)?.parentID == nil && taskNotes?.canRemoveFromTasks?(id) == true
@@ -73,5 +60,32 @@ struct CalendarPageHost: View {
                 }
             }
         )
+    }
+}
+
+
+/// The agenda's own edits are steps in Calendar's history, beside the "+"
+/// card's events, tasks and notes made there: ⌘Z on Calendar undoes the
+/// newest thing done on Calendar, whatever its kind (w3 composer).
+enum CalendarAgendaCommands {
+    static let history: UndoHistoryID = .calendar
+
+    @MainActor
+    static func toggleDone(_ id: UUID, store: TaskStore) {
+        guard let task = store.listedTask(withID: id) else { return }
+        if let library = store.commandLibrary {
+            _ = task.status == .done ? library.reopenTasks([id], in: history) : library.completeTask(id, in: history)
+        } else {
+            _ = store.setStatus(task.status == .done ? .todo : .done, for: task)
+        }
+    }
+
+    @MainActor
+    static func rename(_ id: UUID, to title: String, store: TaskStore) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let task = store.task(withID: id) else { return false }
+        guard trimmed != task.title else { return true }
+        if let library = store.commandLibrary { return library.updateTask(id, title: trimmed, in: history).isApplied }
+        return store.rename(task, to: trimmed)
     }
 }

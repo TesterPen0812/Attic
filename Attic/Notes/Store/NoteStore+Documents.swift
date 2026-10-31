@@ -532,7 +532,9 @@ extension NoteStore {
         prepared: PreparedNoteDocument? = nil,
         tags: [String]? = nil,
         resolvingProposal: UUID? = nil,
-        taskOwner: UUID? = nil
+        taskOwner: UUID? = nil,
+        creatingTask: TaskDraft? = nil,
+        pinned: Bool = false
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
@@ -575,7 +577,21 @@ extension NoteStore {
             }
             family.forEach { WorkspaceLegacyBridge.delete($0, in: context) }
         }
+        if pinned { note.pinnedAt = timestamp }
         context.insert(note)
+        if let creatingTask {
+            // The "+" card (w3): the task, its writing and their association
+            // stage together and commit in this one save, or none of them do.
+            guard let taskOwner else {
+                context.rollback()
+                return .failure(.saveFailed("A new task needs its id."))
+            }
+            do { _ = try TaskStore.stageCreation(in: context, drafts: [creatingTask], ids: [taskOwner], timestamp: timestamp) }
+            catch {
+                context.rollback()
+                return .failure(.saveFailed(error.localizedDescription))
+            }
+        }
         if let taskOwner {
             // Phase 3 lazy creation (UX plan § 2.1): the task's own note and
             // its association commit together through the same gated save.

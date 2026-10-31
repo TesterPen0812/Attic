@@ -268,6 +268,10 @@ final class ComposerModel: ObservableObject {
 
     private func createEvent(openingPage: Bool) -> Bool {
         guard let writer = loadWriter(), let calendar = selectedCalendar else { return false }
+        // As for a task: a day typed last replaces the picked one, even with
+        // its word still at the caret; a lone time keeps the picked day.
+        var finished = tasks.addBar
+        if finished.typedReplacesPicks(parser: tasks.parser, caret: nil) { tasks.addBar = finished }
         let values = values
         let clock = tasks.services.calendar()
         let day = values.day ?? tasks.parser.today

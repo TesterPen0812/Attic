@@ -154,9 +154,10 @@ enum PanelHideRequestResult: Equatable {
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
     /// The history ⌘Z reaches with the keyboard nowhere in a page.
-    private var unhandledUndoHistory: UndoHistoryID? {
-        let section = uiState.selectedSection
-        return section.isTaskBased ? .tasks : section.isCalendar ? .calendar : nil
+    private var unhandledUndoHistory: UndoHistoryID? { Self.unhandledUndoHistory(for: uiState.selectedSection) }
+
+    static func unhandledUndoHistory(for section: PanelSection) -> UndoHistoryID? {
+        section.isTaskBased ? .tasks : section.isCalendar ? CalendarAgendaCommands.history : nil
     }
 
     private let panel: AtticPanel

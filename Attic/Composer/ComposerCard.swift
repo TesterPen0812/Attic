@@ -34,6 +34,15 @@ enum ComposerMetrics {
     }
 }
 
+/// The card's motion on the app's existing curve for a card that grows
+/// (`expand`); instant under Reduce Motion.
+enum ComposerMotion {
+    @MainActor
+    static func animation(showing: Bool = true) -> Animation? {
+        AtticMotionPreset.expand.animation(reduceMotion: AtticMotionPreference.reducesMotion, showing: showing)
+    }
+}
+
 /// The "+" card: the title line with its live tints, the writing, one row of
 /// chips and Create, and the kind switch in the top-right corner. It mounts on
 /// its own; the panel decides where it sits and how it grows.
@@ -72,6 +81,7 @@ struct ComposerCard: View {
                     .padding(.trailing, ComposerMetrics.padding.trailing)
             }
         }
+        .animation(ComposerMotion.animation(), value: kind)
         .atticRaisedMaterial(cornerRadius: ComposerMetrics.radius, interactive: false)
         .atticDesignCorners()
         .onKeyPress(.escape) {

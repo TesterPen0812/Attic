@@ -20,6 +20,8 @@ final class ComposerTests: XCTestCase {
     private var openedEvents: [CalendarOwnedEvent] = []
     private var toasts: [String] = []
     private var windows: [NSWindow] = []
+    private final class Switch { var on = false }
+    private let saveFailure = Switch()
     private let clock: Calendar = Calendar.autoupdatingCurrent
     private lazy var now: Date = clock.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 10))!
     private var today: DueDay { DueDay(date: now, calendar: clock) }
@@ -30,7 +32,11 @@ final class ComposerTests: XCTestCase {
         _ = try WorkspaceLegacyBridge.coordinator(for: container)
         let fixed = now
         tasks = TaskStore(container: container, now: { fixed })
-        notes = NoteStore(container: container, now: { fixed }, attachmentFileStore: makeTestAttachmentFileStore())
+        let failing = saveFailure
+        notes = NoteStore(container: container, now: { fixed }, persist: { context in
+            if failing.on { throw CocoaError(.fileWriteUnknown) }
+            try context.save()
+        }, attachmentFileStore: makeTestAttachmentFileStore())
         library = AtticLibrary(tasks: tasks, notes: notes)
         page = TasksPageModel(library: library, services: TasksPageServices(now: { fixed }))
         events.availableCalendars = [
@@ -50,6 +56,7 @@ final class ComposerTests: XCTestCase {
     }
 
     override func tearDown() {
+        AtticMotionPreference.systemReduceMotionOverride = nil
         windows.forEach { $0.contentView = nil; $0.close() }
         windows.removeAll()
     }
@@ -314,6 +321,185 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(model.create(openingPage: true))
         XCTAssertEqual(openedNotes.count, 1)
         XCTAssertTrue(toasts.isEmpty)
+    }
+
+    // MARK: Phase A fixes (review of 15109359)
+
+    private func rows<T: PersistentModel>(_ type: T.Type) throws -> [T] {
+        try ModelContext(container).fetch(FetchDescriptor<T>())
+    }
+
+    func testAFailedSaveLeavesNoTaskNoWritingNoStepAndARetryMakesOne() throws {
+        model.open(on: .tasks(.now))
+        type("Pay rent")
+        model.writing = "Bank details"
+        saveFailure.on = true
+        XCTAssertFalse(model.create())
+        XCTAssertTrue(try rows(TaskItem.self).isEmpty, "no live or Recently Deleted task")
+        XCTAssertTrue(try rows(NoteItem.self).isEmpty)
+        XCTAssertTrue(try rows(TaskNoteAssociation.self).isEmpty)
+        XCTAssertFalse(library.undo.canUndo(in: .tasks))
+        XCTAssertTrue(model.isOpen)
+        XCTAssertTrue(model.failed)
+        XCTAssertEqual(page.addBar.text, "Pay rent")
+        XCTAssertEqual(model.writing, "Bank details")
+
+        saveFailure.on = false
+        XCTAssertTrue(model.create())
+        XCTAssertEqual(try rows(TaskItem.self).count, 1)
+        let task = try XCTUnwrap(liveTasks().first)
+        XCTAssertTrue(TaskNoteConversion.hasWriting(task.id, in: ModelContext(container)))
+        XCTAssertEqual(library.undo(in: .tasks), .applied)
+        XCTAssertTrue(liveTasks().isEmpty)
+    }
+
+    func testAPinThatCannotSaveKeepsTheCardOpenWithTheDraft() throws {
+        model.open(on: .tasks(.now), as: .note)
+        type("Pinned idea")
+        model.pinned = true
+        saveFailure.on = true
+        XCTAssertFalse(model.create())
+        XCTAssertTrue(model.isOpen)
+        XCTAssertTrue(model.failed)
+        XCTAssertTrue(model.pinned)
+        XCTAssertTrue(try rows(NoteItem.self).isEmpty)
+        XCTAssertTrue(toasts.isEmpty)
+
+        saveFailure.on = false
+        XCTAssertTrue(model.create())
+        XCTAssertTrue(try XCTUnwrap(notes.notes.first).isPinned)
+    }
+
+    func testATypedDayReplacesCalendarsPickedDayEvenAtTheCaret() throws {
+        model.open(on: .calendar(selected: today))
+        type("Lunch tomorrow")
+        XCTAssertTrue(model.create(openingPage: true))
+        let event = try XCTUnwrap(events.events.values.first)
+        XCTAssertEqual(event.draft.title, "Lunch")
+        XCTAssertEqual(DueDay(date: event.draft.start, calendar: clock), day(1))
+    }
+
+    func testCalendarUndoReachesTheNewestCalendarActionWhateverItsKind() throws {
+        let b = try XCTUnwrap(library.createTasks([TaskDraft(title: "B")])?.first)
+        model.open(on: .calendar(selected: today))
+        type("A 1pm")
+        XCTAssertTrue(model.create())
+        XCTAssertEqual(events.events.count, 1)
+        CalendarAgendaCommands.toggleDone(b.id, store: tasks)
+        XCTAssertEqual(tasks.listedTask(withID: b.id)?.status, .done)
+
+        let history = try XCTUnwrap(AtticPanelController.unhandledUndoHistory(for: .calendar))
+        XCTAssertEqual(library.undo(in: history), .applied)
+        XCTAssertEqual(tasks.listedTask(withID: b.id)?.status, .todo, "B is reopened")
+        XCTAssertEqual(events.events.count, 1, "A stays")
+        XCTAssertEqual(library.undo(in: history), .applied)
+        XCTAssertTrue(events.events.isEmpty, "then A goes")
+        XCTAssertNotNil(tasks.task(withID: b.id), "B's own creation belongs to Tasks")
+        XCTAssertEqual(AtticPanelController.unhandledUndoHistory(for: .tasks), .tasks)
+    }
+
+    func testAnAgendaRenameIsACalendarStep() throws {
+        let b = try XCTUnwrap(library.createTasks([TaskDraft(title: "Old")])?.first)
+        XCTAssertTrue(CalendarAgendaCommands.rename(b.id, to: " New ", store: tasks))
+        XCTAssertEqual(tasks.task(withID: b.id)?.title, "New")
+        XCTAssertEqual(library.undo(in: .calendar), .applied)
+        XCTAssertEqual(tasks.task(withID: b.id)?.title, "Old")
+    }
+
+    // MARK: Keys through the mounted card
+
+    private final class KeyWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+        override var isKeyWindow: Bool { true }
+    }
+
+    private func spin(_ seconds: TimeInterval = 0.15) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+
+    private func mountForKeys(on composerPage: ComposerPage) throws -> (NSWindow, NSView, NSTextView) {
+        try requireKeyWindowTests()
+        model.open(on: composerPage)
+        let hosting = NSHostingView(rootView: ComposerCard(model: model))
+        hosting.frame = CGRect(x: 0, y: 0, width: 320, height: 200)
+        let window = KeyWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.makeKeyAndOrderFront(nil)
+        window.becomeKey()
+        windows.append(window)
+        spin()
+        let field = try XCTUnwrap(model.editor.textView, "the title field is live")
+        window.makeFirstResponder(field)
+        spin()
+        return (window, hosting, field)
+    }
+
+    private func key(_ window: NSWindow, _ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                         context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                         isARepeat: false, keyCode: code)!
+            window.sendEvent(event)
+        }
+        spin(0.1)
+    }
+
+    private func typeKeys(_ field: NSTextView, _ text: String) {
+        field.insertText(text, replacementRange: field.selectedRange())
+        spin(0.1)
+    }
+
+    func testReturnInTheTitleCreatesAndClosesTheCard() throws {
+        let (window, _, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Call Sam")
+        key(window, "\r", code: 36)
+        XCTAssertEqual(liveTasks().map(\.title), ["Call Sam"])
+        XCTAssertFalse(model.isOpen)
+        XCTAssertTrue(opened.isEmpty)
+    }
+
+    func testCommandReturnInTheTitleCreatesAndOpens() throws {
+        let (window, _, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Open me")
+        key(window, "\r", code: 36, modifiers: .command)
+        XCTAssertEqual(opened, liveTasks().map(\.id))
+        XCTAssertEqual(opened.count, 1)
+    }
+
+    func testEscapeInTheTitleClosesAndKeepsTheDraft() throws {
+        let (window, _, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Keep me")
+        key(window, "\u{1B}", code: 53)
+        XCTAssertFalse(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "Keep me")
+        XCTAssertTrue(liveTasks().isEmpty)
+    }
+
+    func testTabTakesASuggestionThenMovesOnFromTheTitle() throws {
+        XCTAssertNotNil(library.createTasks([TaskDraft(title: "Seed", tags: ["home"])]))
+        let (window, hosting, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Buy #ho")
+        XCTAssertNotNil(model.suggestion(focused: true))
+        key(window, "\t", code: 48)
+        XCTAssertTrue(page.addBar.text.hasPrefix("Buy #home"), page.addBar.text)
+        XCTAssertTrue(window.firstResponder === field, "taking a suggestion keeps the keyboard in the title")
+        // No list now: Tab moves on to the card's next control.
+        typeKeys(field, " ")
+        key(window, "\t", code: 48)
+        let next = try XCTUnwrap(window.firstResponder as? NSView)
+        XCTAssertFalse(next === field)
+        XCTAssertTrue(next.isDescendant(of: hosting))
+    }
+
+    func testReduceMotionMakesTheCardInstant() {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        XCTAssertNil(ComposerMotion.animation())
+        XCTAssertNil(ComposerMotion.animation(showing: false))
+        AtticMotionPreference.systemReduceMotionOverride = false
+        let level = AtticMotionPreference.level
+        defer { AtticMotionPreference.level = level }
+        AtticMotionPreference.level = .lively
+        XCTAssertNotNil(ComposerMotion.animation())
     }
 
     // MARK: The card
