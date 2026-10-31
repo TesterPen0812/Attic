@@ -372,6 +372,7 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertGreaterThan(text.maxX, host.bounds.width - insets.trailing - 40, "the field fills the row to the right inset")
             XCTAssertLessThanOrEqual(text.maxX, host.bounds.width - insets.trailing + 0.5)
             XCTAssertNil(element("panel-pin-button", in: host), "Pin folds away")
+            print("W4DIAG rm=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) rt=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency) ic=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast) states=\(AtticMaterialProbe.states) log=\(AtticMaterialProbe.w4Log.filter { $0.hasPrefix("panel-pin") }.suffix(12)) corners=\(AtticMaterialProbe.corners.count)")
             XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "and so does its glass")
             XCTAssertNil(element("tasks-page-tabs", in: host), "the switch folds away")
             XCTAssertNil(element("panel-settings-button", in: host), "••• folds away")
@@ -427,6 +428,7 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertTrue(searchButton.accessibilityPerformPress?() ?? false)
             spin(0.8)
             XCTAssertNotNil(element("tasks-find", in: host), "the search is open")
+            print("W4DIAG rm=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) rt=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency) ic=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast) states=\(AtticMaterialProbe.states) log=\(AtticMaterialProbe.w4Log.filter { $0.hasPrefix("panel-pin") }.suffix(12)) corners=\(AtticMaterialProbe.corners.count)")
             XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "the pin's glass is gone")
             let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: host, placeholder: model.searchPlaceholder(for: .now)))
             let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "the field has the keyboard")
@@ -589,6 +591,7 @@ final class PanelChromeTests: XCTestCase {
             spin(1.0)
             host.display()
         }
+        print("W4DIAG rm=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) rt=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency) ic=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast) states=\(AtticMaterialProbe.states) log=\(AtticMaterialProbe.w4Log.filter { $0.hasPrefix("panel-pin") }.suffix(12)) corners=\(AtticMaterialProbe.corners.count)")
         XCTAssertGreaterThan(AtticMaterialProbe.corners.count, 10, "controls drawn")
         XCTAssertEqual(AtticMaterialProbe.corners.filter { $0 == nil }.count, 0, "no control on the continuous (circle) corner")
     }

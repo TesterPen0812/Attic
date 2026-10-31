@@ -364,7 +364,11 @@ enum AtticMaterialProbe {
     struct State: Equatable { var away: Bool; var gone: Bool }
     static private(set) var states: [String: State] = [:]
 
-    static func record(_ id: String, away: Bool, gone: Bool) { states[id] = State(away: away, gone: gone) }
+    static func record(_ id: String, away: Bool, gone: Bool) {
+        states[id] = State(away: away, gone: gone)
+        w4Log.append("\(id):\(away ? 1 : 0)\(gone ? 1 : 0)")  // W4DIAG (temporary)
+    }
+    static var w4Log: [String] = []
     static func reset() { states = [:] }
     /// Every raised control's corner since `resetCorners()` (nil: Apple's
     /// continuous corner, which draws a square control as a circle).

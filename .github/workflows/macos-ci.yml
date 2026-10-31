@@ -648,10 +648,14 @@ jobs:
             shard_flags=()
             for t in $UI_TESTS; do shard_flags+=("-only-testing:$t"); done
           fi
+          # Hosted identifiers (AtticTests/...) run in the Attic scheme.
+          ui_scheme=AtticUI
+          skip_flags=(-skip-testing:AtticUITests/PerformanceUITests)
+          case " $UI_TESTS" in *" AtticTests/"*) ui_scheme=Attic; skip_flags=() ;; esac
           ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
           Scripts/xcodebuild_locked.sh \
             -project Attic.xcodeproj \
-            -scheme AtticUI \
+            -scheme "$ui_scheme" \
             -configuration Local \
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
@@ -659,7 +663,7 @@ jobs:
             ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ci.ui \
             CODE_SIGNING_ALLOWED=NO \
             "${shard_flags[@]}" \
-            -skip-testing:AtticUITests/PerformanceUITests \
+            "${skip_flags[@]}" \
             test
 
       - name: Print macOS UI-test summary
