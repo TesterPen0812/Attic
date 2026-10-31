@@ -232,7 +232,7 @@ struct TasksPage: View {
                 setTargeted: { on in if composerDropTargeted != on { composerDropTargeted = on } },
                 perform: { providers in
                     model.addComposerFiles(providers)
-                    addBarFocused = true
+                    if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
                 }
             )
         ))
@@ -560,6 +560,16 @@ struct TasksPage: View {
             setFocus(row)
         } else {
             focusedRow = nil
+            focusNewTaskStop()
+        }
+    }
+
+    /// Where a new task starts, as a keyboard stop: the panel's "+" (the
+    /// card replaced the add bar there), or the add bar.
+    private func focusNewTaskStop() {
+        if panelComposer != nil {
+            DispatchQueue.main.async { focusRequests.focus(PanelPlusFocusID()) }
+        } else {
             addBarFocused = true
         }
     }
@@ -979,6 +989,8 @@ struct TasksPage: View {
         // list takes it (review 15).
         if AtticTextInput.hasKeyboard, !addBarFocused, !searchFocused { return false }
         if addBarFocused, TasksAddBar.showsSuggestion(model: model, text: model.addBarState) { return false }
+        // The panel's card, open over the page, keeps its own Tab.
+        if panelComposer?.isOpen() == true { return false }
         let stops = tabStops()
         let current = currentTabStop(in: stops)
         guard let next = TasksTabOrder.next(after: current, in: stops, forward: modifiers.isEmpty) else { return false }
@@ -1002,13 +1014,15 @@ struct TasksPage: View {
             (id, model.expandedFiles.contains(id) ? pointer.fileTabStops[TasksRowID(tab: tab, id: id)] ?? [] : [])
         })
         return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) }, files: files,
-                                   strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled)
+                                   strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled,
+                                   plus: panelComposer != nil)
     }
 
     /// Where the keyboard is among `stops`, if it is on one.
     private func currentTabStop(in stops: [TasksTabStop]) -> TasksTabStop? {
         if searchFocused { return .find }
         if addBarFocused { return .addBar }
+        if focusRequests.current?.base is PanelPlusFocusID { return .plus }
         if let strip = focusRequests.current?.base as? AtticStripFocusID { return .strip(strip) }
         if let file = focusRequests.current?.base as? TasksFileFocusID, stops.contains(.file(file)) { return .file(file) }
         if let subtask = model.focusedSubtaskID, stops.contains(.subtask(subtask)) { return .subtask(subtask) }
@@ -1065,6 +1079,11 @@ struct TasksPage: View {
                            revealing: parent) {
                 focusRequests.focus(AtticSubtaskFocusID(id: id))
             }
+        case .plus:
+            focusedRow = nil
+            searchFocused = false
+            addBarFocused = false
+            DispatchQueue.main.async { focusRequests.focus(PanelPlusFocusID()) }
         }
     }
 
@@ -5146,6 +5165,8 @@ enum TasksTabStop: Hashable {
     case file(TasksFileFocusID)
     case addBar
     case strip(AtticStripFocusID)
+    /// In the panel: the shared bar's "+" (the card replaces the add bar).
+    case plus
 }
 
 /// The Tasks page's Tab order (A10), restoring Phase 1's: top to bottom as
@@ -5156,12 +5177,17 @@ enum TasksTabStop: Hashable {
 /// navigation is on (buttons are Tab stops on the Mac only then). Tab after
 /// the last stop goes round to the first: never to an unseen stop.
 enum TasksTabOrder {
-    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], files: [UUID: [TasksFileFocusID]] = [:], strip: Bool) -> [TasksTabStop] {
+    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], files: [UUID: [TasksFileFocusID]] = [:], strip: Bool,
+                      plus: Bool = false) -> [TasksTabStop] {
         var stops: [TasksTabStop] = find ? [.find] : []
         for row in rows {
             stops.append(.row(row.id))
             stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
             stops.append(contentsOf: (files[row.id] ?? []).map(TasksTabStop.file))
+        }
+        if plus {
+            stops.append(.plus)
+            return stops
         }
         stops.append(.addBar)
         if strip { stops.append(contentsOf: AtticStripFocusID.all.map(TasksTabStop.strip)) }

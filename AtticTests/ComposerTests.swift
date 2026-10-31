@@ -19,6 +19,7 @@ final class ComposerTests: XCTestCase {
     private var openedNotes: [UUID] = []
     private var openedEvents: [CalendarOwnedEvent] = []
     private var toasts: [String] = []
+    private var toastUndos: [@MainActor () -> CommandOutcome] = []
     private var windows: [NSWindow] = []
     private final class Switch { var on = false }
     private let saveFailure = Switch()
@@ -52,7 +53,7 @@ final class ComposerTests: XCTestCase {
             openTaskPage: { [unowned self] in opened.append($0) },
             openNote: { [unowned self] in openedNotes.append($0) },
             openEvent: { [unowned self] in openedEvents.append($0) },
-            toast: { [unowned self] in toasts.append($0) }))
+            toast: { [unowned self] message, undo in toasts.append(message); toastUndos.append(undo) }))
     }
 
     override func tearDown() {
@@ -201,6 +202,16 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(toasts, ["Added to Now"])
     }
 
+    /// Review B-4: once closing starts, nothing creates.
+    func testAClosedCardCreatesNothing() {
+        model.open(on: .tasks(.now))
+        type("Not yet")
+        model.close()
+        XCTAssertFalse(model.create())
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertEqual(page.addBar.text, "Not yet", "the draft is kept")
+    }
+
     func testEscapeKeepsTheDraftAndAnEmptyTitleCannotCreate() {
         model.open(on: .tasks(.now))
         XCTAssertFalse(model.create())
@@ -313,6 +324,20 @@ final class ComposerTests: XCTestCase {
 
         XCTAssertEqual(library.undo(in: .tasks), .applied)
         XCTAssertNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil })
+    }
+
+    /// Review B-1: the toast undoes the history its creation went into,
+    /// even after the card moved to another page.
+    func testAToastsUndoUndoesTheHistoryItsCreationWentInto() throws {
+        model.open(on: .tasks(.now), as: .note)
+        type("Tasks-side idea")
+        XCTAssertTrue(model.create())
+        let note = try XCTUnwrap(notes.notes.first { $0.deletedAt == nil })
+        let undo = try XCTUnwrap(toastUndos.last)
+        model.open(on: .calendar(selected: today))
+        model.close()
+        XCTAssertEqual(undo(), .applied)
+        XCTAssertNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil }, "the note went, not a Calendar step")
     }
 
     func testCommandReturnOpensTheNoteInNotes() throws {
@@ -475,6 +500,18 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(liveTasks().isEmpty)
     }
 
+    /// Review B-4: Escape then Return at once (the shrink still drawing)
+    /// creates nothing, and the keyboard has left the card.
+    func testReturnRightAfterEscapeCreatesNothing() throws {
+        let (window, _, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Keep me too")
+        key(window, "\u{1B}", code: 53)
+        key(window, "\r", code: 36)
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertFalse(window.firstResponder === field, "the keyboard leaves the card as it closes")
+        XCTAssertEqual(page.addBar.text, "Keep me too")
+    }
+
     func testTabTakesASuggestionThenMovesOnFromTheTitle() throws {
         XCTAssertNotNil(library.createTasks([TaskDraft(title: "Seed", tags: ["home"])]))
         let (window, hosting, field) = try mountForKeys(on: .tasks(.now))
@@ -519,6 +556,17 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(ComposerGrow.geometry(progress: 2, card: card), open, "clamped")
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
         XCTAssertEqual(ComposerGrow.anchor(layout: layout), PanelSharedBottomBar.plusInsets(layout: layout))
+    }
+
+    /// Review B-2: in the panel, Tab after the last row reaches the shown
+    /// "+", never the add bar or its strip that the panel no longer draws.
+    func testInThePanelTabReachesThePlusNotTheAddBar() {
+        let a = UUID(), b = UUID()
+        let stops = TasksTabOrder.stops(find: true, rows: [(a, []), (b, [])], strip: true, plus: true)
+        XCTAssertEqual(stops, [.find, .row(a), .row(b), .plus])
+        XCTAssertEqual(TasksTabOrder.next(after: .row(b), in: stops, forward: true), .plus)
+        XCTAssertEqual(TasksTabOrder.next(after: .plus, in: stops, forward: true), .find)
+        XCTAssertEqual(TasksTabOrder.stops(find: false, rows: [(a, [])], strip: false), [.row(a), .addBar], "hosted on its own: as before")
     }
 
     // MARK: The card

@@ -102,6 +102,8 @@ struct ComposerCard: View {
         }
         .animation(ComposerMotion.animation(), value: kind)
         .modifier(ComposerChrome(drawn: drawsChrome))
+        // Closing: still drawn for the shrink, but takes no input.
+        .disabled(!model.isOpen)
         .onChange(of: model.focusRequest) { _, _ in
             titleFocused = true
             if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {

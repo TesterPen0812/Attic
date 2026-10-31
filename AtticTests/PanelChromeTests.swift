@@ -606,6 +606,62 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
+    /// Review B-3/B-5: sampled through the grow, the shrink and a page
+    /// switch, one "+" surface is drawn at a time, its corner never moves,
+    /// and the bottom bar and top row stay still.
+    func testTheGrowAndShrinkDrawOneSurfaceOnAFixedCornerWithTheBarsStill() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        try withPanel { host, state, _, _, _, _ in
+            state.selectSection(.tasks)
+            spin(1.0)
+            let still = ["panel-pin-button", "panel-section-picker"]
+            let before = try barFrames(still, in: host)
+            let plusFrame = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
+            ComposerOverlay.surfaces = []
+            ComposerOverlay.corners = []
+            var doubled = 0
+            var samples = 0
+            @MainActor func sample(for seconds: TimeInterval, plus: String) throws {
+                let end = Date().addingTimeInterval(seconds)
+                while Date() < end {
+                    spin(0.012)
+                    samples += 1
+                    if ComposerOverlay.isPresented && PanelSharedBottomBar.drawsPlus { doubled += 1 }
+                    assertSameFrames(before, try barFrames(still, in: host), "the bars stay still (sample \(samples))")
+                    let now = try XCTUnwrap(frame(of: plus, in: host))
+                    XCTAssertEqual(now.maxX, plusFrame.maxX, accuracy: 0.5)
+                    XCTAssertEqual(now.maxY, plusFrame.maxY, accuracy: 0.5)
+                }
+            }
+            let plus = try XCTUnwrap(element("tasks-new-task", in: host))
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            try sample(for: 0.8, plus: "tasks-new-task")
+            let opening = ComposerOverlay.surfaces
+            XCTAssertTrue(opening.contains { $0.size.width > 30 && $0.size.width < 285 },
+                          "an in-between frame on the way open: \(opening.map(\.size.width))")
+            XCTAssertEqual(opening.last?.size.width ?? 0, 289, accuracy: 0.5)
+            ComposerOverlay.surfaces = []
+            // Closing through a page switch.
+            state.selectSection(.calendar)
+            try sample(for: 0.8, plus: "calendar-new-task")
+            let closing = ComposerOverlay.surfaces
+            XCTAssertTrue(closing.contains { $0.size.width > 30 && $0.size.width < 285 },
+                          "an in-between frame on the way back: \(closing.map(\.size.width))")
+            XCTAssertEqual(doubled, 0, "never two \"+\"s: the bar's own hides while the grow draws")
+            XCTAssertFalse(ComposerOverlay.isPresented)
+            XCTAssertTrue(PanelSharedBottomBar.drawsPlus, "the bar's \"+\" is back once the shrink ends")
+            let corners = ComposerOverlay.corners
+            XCTAssertFalse(corners.isEmpty)
+            for corner in corners {
+                XCTAssertEqual(corner.x, corners[0].x, accuracy: 0.5, "the corner stays on the \"+\"")
+                XCTAssertEqual(corner.y, corners[0].y, accuracy: 0.5, "the corner stays on the \"+\"")
+            }
+            XCTAssertEqual(corners[0].x, plusFrame.maxX, accuracy: 1)
+            XCTAssertEqual(corners[0].y, plusFrame.maxY, accuracy: 1)
+        }
+    }
+
     func testTheCalendarPlusOpensTheCardOnEventAndReduceMotionIsInstant() throws {
         AtticMotionPreference.systemReduceMotionOverride = true
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }

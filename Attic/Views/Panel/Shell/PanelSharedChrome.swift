@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The controls every page shares, drawn once by the shell above the pages
@@ -20,6 +21,10 @@ final class PanelSharedChrome: ObservableObject {
     @Published private(set) var topRows: [PanelPage: PanelTopRowLook] = [:]
     /// The pages a task's page covers (its own bars replace the shared ones).
     @Published private(set) var covered: Set<PanelPage> = []
+    /// The "+" card's grow draws the "+" from the moment it opens until its
+    /// shrink ends: the bar keeps the slot but draws nothing there, so there
+    /// is never a second "+" under the card.
+    @Published var plusHandedOver = false
 
     /// What the controls do, per page. Not observable: only a click reads them.
     private var barActions: [PanelPage: PanelBottomBarActions] = [:]
@@ -130,6 +135,42 @@ struct PanelBottomBarActions {
     var selectTag: (String?) -> Void = { _ in }
     var today: () -> Void = {}
     var plus: () -> Void = {}
+    /// The page's own Tab order, which reaches "+" after its last row.
+    var focusRequests: AtticFocusRequests? = nil
+}
+
+/// The shared "+" as a stop in a page's Tab order (`TasksTabStop.plus`).
+struct PanelPlusFocusID: Hashable {}
+
+private struct PanelPlusFocus: ViewModifier {
+    let requests: AtticFocusRequests?
+    let action: () -> Void
+    @FocusState private var focused: Bool
+    /// Focusable only once the page's Tab asks for it, so the panel's own
+    /// key loop (a reveal, a page switch) never lands on "+" by itself.
+    @State private var armed = false
+
+    /// One structure on every page (only Tasks lends its Tab order): a
+    /// branch here would rebuild the "+" on each page switch.
+    func body(content: Content) -> some View {
+        content
+            .focusable(armed && requests != nil, interactions: .activate)
+            .focused($focused)
+            .onKeyPress(keys: [.space, .return]) { _ in
+                guard focused else { return .ignored }
+                action()
+                return .handled
+            }
+            .onReceive(requests?.requests.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { asked in
+                guard asked == AnyHashable(PanelPlusFocusID()) else { return }
+                armed = true
+                DispatchQueue.main.async { focused = true }
+            }
+            .onChange(of: focused) { _, now in
+                requests?.note(PanelPlusFocusID(), focused: now)
+                if !now { armed = false }
+            }
+    }
 }
 
 /// What a page's top row lends the shell: whether it has one, and its
@@ -200,6 +241,8 @@ struct PanelSharedBottomBar: View {
     #if DEBUG
     /// Test seam: how many times the bar's body has run.
     static var bodyEvaluations = 0
+    /// Test seam: whether the bar drew its own "+" last time.
+    static var drawsPlus = false
     #endif
 
     var body: some View {
@@ -211,6 +254,9 @@ struct PanelSharedBottomBar: View {
         let side = AtticControlSize.headerControl
         let gap = TasksDesignMetrics.footerGap
         let folded = look.folded
+        #if DEBUG
+        let _ = Self.drawsPlus = look.plus != nil && !folded && !chrome.plusHandedOver
+        #endif
         HStack(alignment: .bottom, spacing: 0) {
             HStack(spacing: gap) {
                 // Accessibility state goes on each control, never on this
@@ -232,6 +278,9 @@ struct PanelSharedBottomBar: View {
                                           flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
                                           action: actions.plus)
                             .atticDesignCorners()
+                            .modifier(PanelPlusFocus(requests: actions.focusRequests, action: actions.plus))
+                            .opacity(chrome.plusHandedOver ? 0 : 1)
+                            .animation(nil, value: chrome.plusHandedOver)
                             .accessibilityIdentifier(plus.identifier)
                             .accessibilityHidden(!look.shown)
                             .transition(.opacity)

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -65,7 +66,8 @@ struct ComposerServices {
     var openTaskPage: (UUID) -> Void = { _ in }
     var openNote: (UUID) -> Void = { _ in }
     var openEvent: (CalendarOwnedEvent) -> Void = { _ in }
-    var toast: (String) -> Void = { _ in }
+    /// A creation's notice and its Undo.
+    var toast: (String, @escaping @MainActor () -> CommandOutcome) -> Void = { _, _ in }
 }
 
 /// The "+" card's state. It lives as long as the panel, so a draft dismissed
@@ -131,13 +133,34 @@ final class ComposerModel: ObservableObject {
         fillCalendarDay()
         if kind == .event { loadCalendars() }
         failed = false
+        if !isOpen { returnFocus = NSApp.keyWindow?.firstResponder }
         isOpen = true
         focusRequest &+= 1
     }
 
     /// Escape or a click outside: the card closes and keeps the draft.
     func close() {
+        guard isOpen else { return }
         isOpen = false
+        restoreFocus()
+    }
+
+    /// What had the keyboard before the card opened.
+    private weak var returnFocus: NSResponder?
+
+    /// Closing starts: the keyboard leaves the card at once (it stays on
+    /// screen only for the shrink), back to where it was if that is still
+    /// in the panel.
+    private func restoreFocus() {
+        guard let field = editor.textView, let window = field.window else { return }
+        let holder = window.firstResponder
+        let inCard = holder === field || (holder as? NSTextView)?.isFieldEditor == true
+        guard inCard else { return }
+        if let back = returnFocus as? NSView, back.window === window, back !== field {
+            window.makeFirstResponder(back)
+        } else {
+            window.makeFirstResponder(nil)
+        }
     }
 
     func choose(_ newKind: ComposerKind) {
@@ -234,6 +257,8 @@ final class ComposerModel: ObservableObject {
     /// closes on success and keeps the draft (and says so) on failure.
     @discardableResult
     func create(openingPage: Bool = false) -> Bool {
+        // Closing has started (Escape, a click outside): nothing creates.
+        guard isOpen else { return false }
         guard canCreate else { return false }
         let made: Bool = switch kind {
         case .task: createTask(openingPage: openingPage)
@@ -262,7 +287,7 @@ final class ComposerModel: ObservableObject {
             services.openTaskPage(task.id)
         } else if case let .tasks(tab) = page {
             if tab == .done || (tab == .backlog && status == .todo) {
-                services.toast(String(localized: "Added to Now"))
+                services.toast(String(localized: "Added to Now"), undoCreation())
             } else {
                 tasks.addedRequest = TasksPageModel.ScrollRequest(id: task.id)
             }
@@ -315,7 +340,7 @@ final class ComposerModel: ObservableObject {
         let title = values.title.isEmpty ? TaskDraftBuilder.collapsed(tasks.addBar.text) : values.title
         guard let id = tasks.library.createNote(title: title, body: writing, tags: values.tags,
                                                 pinned: pinned, in: page.history) else { return false }
-        if openingPage { services.openNote(id) } else { services.toast(String(localized: "Added to Notes")) }
+        if openingPage { services.openNote(id) } else { services.toast(String(localized: "Added to Notes"), undoCreation()) }
         return true
     }
 
@@ -349,6 +374,14 @@ final class ComposerModel: ObservableObject {
     /// ⌘Return on an event: Calendar.app at it, through the card's writer.
     func openInCalendar(_ event: CalendarOwnedEvent) {
         try? loadWriter()?.openInCalendar(event.occurrenceID)
+    }
+
+    /// The Undo a creation's toast offers: the history the creation went
+    /// into, fixed now (the card may be on another page by the click).
+    private func undoCreation() -> @MainActor () -> CommandOutcome {
+        let library = tasks.library
+        let history = page.history
+        return { library.undo(in: history) }
     }
 
     func undoPage() { _ = tasks.library.undo(in: page.history) }

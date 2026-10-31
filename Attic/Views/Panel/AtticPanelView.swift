@@ -140,7 +140,7 @@ struct AtticPanelView: View {
             // Over the bar, never in it: the bar stays still while the "+"
             // grows into the card and back.
             if uiState.isPageContentLoaded {
-                ComposerOverlay(model: composer, layout: pageLayout)
+                ComposerOverlay(model: composer, layout: pageLayout, chrome: sharedChrome)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -278,7 +278,8 @@ struct AtticPanelView: View {
     }
 
     private var composerRoute: PanelComposerRoute {
-        PanelComposerRoute { [composerState] page, kind in composerState.model?.open(on: page, as: kind) }
+        PanelComposerRoute(open: { [composerState] page, kind in composerState.model?.open(on: page, as: kind) },
+                           isOpen: { [composerState] in composerState.model?.isOpen ?? false })
     }
 
     /// The card's kind for this page; nil where it has none (Canvas).
@@ -316,8 +317,8 @@ struct AtticPanelView: View {
                 }
             },
             openEvent: { [composerState] event in composerState.model?.openInCalendar(event) },
-            toast: { [toasts, composerState] message in
-                toasts.show(message) { composerState.model?.undoPage() }
+            toast: { [toasts] message, undo in
+                toasts.show(message, performing: undo)
             })
     }
 

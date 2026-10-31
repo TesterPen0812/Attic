@@ -4,6 +4,8 @@ import SwiftUI
 /// card for every page, attached to the shared bottom bar's "+".
 struct PanelComposerRoute {
     let open: (ComposerPage, ComposerKind?) -> Void
+    /// Whether the card is open (it then keeps Tab to itself).
+    var isOpen: () -> Bool = { false }
 
     func open(on page: ComposerPage, as kind: ComposerKind? = nil) { open(page, kind) }
 }
@@ -74,6 +76,9 @@ private struct ComposerGrowFrame: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         let geometry = ComposerGrow.geometry(progress: progress, card: card)
+        #if DEBUG
+        let _ = ComposerOverlay.surfaces.append(geometry)
+        #endif
         let shape = AtticControlShape.shape(cornerRadius: geometry.cornerRadius, exponent: AtticShape.controlExponent)
         content
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomTrailing)
@@ -88,9 +93,18 @@ private struct ComposerGrowFrame: ViewModifier, Animatable {
 struct ComposerOverlay: View {
     @ObservedObject var model: ComposerModel
     let layout: PanelPageLayout
+    /// Told when the grow takes the "+" over and hands it back.
+    var chrome: PanelSharedChrome? = nil
 
     @State private var presented = false
     @State private var expanded = false
+
+    #if DEBUG
+    /// Test seams: whether the grow is drawn, and each frame it drew.
+    static var isPresented = false
+    static var surfaces: [ComposerGrow.Geometry] = []
+    static var corners: [CGPoint] = []
+    #endif
     /// The card's own size, measured at full width (it grows with its
     /// writing); a first guess before the first measure.
     @State private var card = CGSize(width: ComposerMetrics.width, height: 130)
@@ -120,21 +134,29 @@ struct ComposerOverlay: View {
                         .allowsHitTesting(expanded)
                 }
                 .modifier(ComposerGrowFrame(progress: expanded ? 1 : 0, card: card))
+                #if DEBUG
+                .onGeometryChange(for: CGPoint.self, of: { CGPoint(x: $0.frame(in: .global).maxX, y: $0.frame(in: .global).maxY) }) {
+                    Self.corners.append($0)
+                }
+                #endif
                 .padding(ComposerGrow.anchor(layout: layout))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .onChange(of: model.isOpen, initial: true) { _, open in transition(open) }
+        #if DEBUG
+        .onChange(of: presented, initial: true) { _, now in Self.isPresented = now }
+        #endif
     }
 
     private func transition(_ open: Bool) {
         guard let animation = ComposerMotion.animation(showing: open) else {
-            presented = open
+            present(open)
             expanded = open
             return
         }
         if open {
-            presented = true
+            present(true)
             // One frame at the "+" first, then the grow.
             DispatchQueue.main.async {
                 guard model.isOpen else { return }
@@ -144,8 +166,14 @@ struct ComposerOverlay: View {
             withAnimation(animation, completionCriteria: .logicallyComplete) {
                 expanded = false
             } completion: {
-                if !model.isOpen { presented = false }
+                if !model.isOpen { present(false) }
             }
         }
+    }
+
+    /// The grow and the bar's "+" swap in one update: one "+" at a time.
+    private func present(_ shown: Bool) {
+        presented = shown
+        if chrome?.plusHandedOver != shown { chrome?.plusHandedOver = shown }
     }
 }

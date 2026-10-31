@@ -293,6 +293,8 @@ struct TasksBottomBar<AddBar: View>: View {
     /// There "+" opens the shell's card (Phase B), so the bar never folds
     /// into the add field; hosted on its own it still does.
     @Environment(\.panelSharedChrome) private var sharedChrome
+    /// The page's Tab order, lent to the shared "+" (`TasksTabStop.plus`).
+    @Environment(\.atticFocusRequests) private var focusRequests
 
     var body: some View {
         let hasDraft = !text.text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -347,7 +349,7 @@ struct TasksBottomBar<AddBar: View>: View {
                         look: PanelBottomBarLook(middle: .tags(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar",
                                                                shown: tagsShown),
                                                  plus: PanelBottomBarLook.tasksPlus, folded: folded),
-                        actions: PanelBottomBarActions(selectTag: onSelectTag, plus: onPlus))
+                        actions: PanelBottomBarActions(selectTag: onSelectTag, plus: onPlus, focusRequests: focusRequests))
     }
 
     /// "+" expanding into the field and back: the bar's fold token.
