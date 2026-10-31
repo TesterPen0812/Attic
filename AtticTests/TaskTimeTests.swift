@@ -332,6 +332,46 @@ final class TaskTimeTests: XCTestCase {
         XCTAssertFalse(library.undo(in: .tasks).isApplied)
     }
 
+    func testRefusedEditsKeepValuesRefreshedByTheirFetchAfterAnotherWriterCommits() throws {
+        for command in ["time", "undo", "completeFamily", "promote"] {
+            var fails = false
+            let store = try makeTestStore(persist: { context in
+                if fails { throw CocoaError(.fileWriteUnknown) }
+                try context.save()
+            })
+            let parent = try XCTUnwrap(store.commit([TaskDraft(title: "Parent", dueDay: today, dueTimeMinutes: 60)])?.first)
+            let child = try XCTUnwrap(store.create(title: "Child", parentID: parent.id))
+            let library = AtticLibrary(tasks: store)
+            if command == "undo" {
+                XCTAssertTrue(library.updateTask(parent.id, dueTimeMinutes: .some(120)).isApplied)
+            }
+            let shown = [try XCTUnwrap(store.task(withID: parent.id)),
+                         try XCTUnwrap(store.subtasks(of: parent.id).first)]
+            let writer = ModelContext(store.container)
+            writer.autosaveEnabled = false
+            let committed = try writer.fetch(FetchDescriptor<TaskItem>())
+            for row in committed { row.title += " from another writer" }
+            try writer.save()
+            let expected = try Dictionary(uniqueKeysWithValues: committed.map {
+                ($0.persistentModelID, try WorkspaceModelFields.read($0))
+            })
+            XCTAssertEqual(shown[0].title, "Parent", "the command starts with a stale presented object")
+            fails = true
+            store.listRefreshFailures = 1
+            switch command {
+            case "undo": XCTAssertFalse(library.undo(in: .tasks).isApplied)
+            case "completeFamily": XCTAssertFalse(store.updateBatch([parent.id], status: .done))
+            case "promote": XCTAssertFalse(library.moveSubtask(child.id, toTask: nil).isApplied)
+            default: XCTAssertFalse(library.updateTask(parent.id, dueTimeMinutes: .some(180)).isApplied)
+            }
+            let touched = command == "promote" ? [shown[1]] : command == "completeFamily" ? shown : [shown[0]]
+            for row in touched {
+                XCTAssertEqual(try WorkspaceModelFields.read(row), expected[row.persistentModelID], command)
+            }
+            XCTAssertEqual(try persistedTaskFields(in: store), expected, command)
+        }
+    }
+
     func testFailedScheduleSavesRestoreRetainedReplicasAndAllowNextWrite() throws {
         let tomorrow = DueDay(year: 2026, month: 10, day: 31)!
         for edit in ["time", "dateAndTime", "clearDate", "later"] {
