@@ -212,9 +212,15 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     @Environment(\.atticControlGone) private var gone
     @Environment(\.atticControlReveal) private var reveal
     @Environment(\.atticControlCornerExponent) private var cornerExponent
+    #if DEBUG
+    @Environment(\.atticMaterialProbeID) private var probeID
+    #endif
 
     func body(content: Content) -> some View {
         let shape = AtticControlShape.shape(cornerRadius: cornerRadius, exponent: cornerExponent)
+        #if DEBUG
+        let _ = probeID.map { AtticMaterialProbe.record($0, away: away, gone: gone) }
+        #endif
         if gone {
             // Away and settled: no glass at all, so not even the faint rim
             // an identity glass keeps while it fades stays in the group.
@@ -325,6 +331,42 @@ extension EnvironmentValues {
 private struct AtticControlGoneKey: EnvironmentKey {
     static let defaultValue = false
 }
+
+extension View {
+    /// Test seam: names the raised material below so a test can read what
+    /// it was told (`AtticMaterialProbe`). Nothing in release builds.
+    func atticMaterialProbe(_ id: String) -> some View {
+        #if DEBUG
+        environment(\.atticMaterialProbeID, id)
+        #else
+        self
+        #endif
+    }
+}
+
+#if DEBUG
+private struct AtticMaterialProbeIDKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    fileprivate var atticMaterialProbeID: String? {
+        get { self[AtticMaterialProbeIDKey.self] }
+        set { self[AtticMaterialProbeIDKey.self] = newValue }
+    }
+}
+
+/// Test seam: the away and gone state each probed raised material last
+/// received (`PanelChromeTests`).
+@MainActor
+enum AtticMaterialProbe {
+    struct State: Equatable { var away: Bool; var gone: Bool }
+    static private(set) var states: [String: State] = [:]
+
+    static func record(_ id: String, away: Bool, gone: Bool) { states[id] = State(away: away, gone: gone) }
+    static func reset() { states = [:] }
+}
+#endif
 
 private struct AtticControlRevealKey: EnvironmentKey {
     static let defaultValue: AtticControlReveal? = nil

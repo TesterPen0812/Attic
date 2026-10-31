@@ -94,13 +94,15 @@ final class PanelChromeTests: XCTestCase {
 
     /// The pin's glass folds with the switch and ••• while the search is
     /// open (a glass group ignores an opacity set on its members from
-    /// outside), and comes back when Escape closes the field.
+    /// outside), as its raised material receives it, and only for this
+    /// page's search. Escape, through the field, is in the panel test.
     func testThePinsGlassFoldsWithTheSearchAndComesBack() throws {
         let state = PanelTopRowState()
         let header = PanelHeader(isPinned: false, page: .tasks, onTogglePin: {}, onSelectPage: { _ in })
             .environment(\.panelTopRowState, state)
             .atticDesign(.default)
             .frame(width: 340, height: 40)
+        AtticMaterialProbe.reset()
         let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 340, height: 40), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -108,24 +110,22 @@ final class PanelChromeTests: XCTestCase {
         window.orderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         spin(0.3)
-        XCTAssertFalse(PanelPinFoldProbe.away)
-        XCTAssertFalse(PanelPinFoldProbe.gone)
+        func pin() throws -> AtticMaterialProbe.State {
+            try XCTUnwrap(AtticMaterialProbe.states["panel-pin"], "the pin's material is drawn")
+        }
+        XCTAssertEqual(try pin(), .init(away: false, gone: false))
         state.setSearching(true, on: .tasks)
         spin(0.05)
-        XCTAssertTrue(PanelPinFoldProbe.away, "the pin's glass fades as the search opens")
+        XCTAssertTrue(try pin().away, "the pin's glass fades as the search opens")
         spin(0.6)
-        XCTAssertTrue(PanelPinFoldProbe.away)
-        XCTAssertTrue(PanelPinFoldProbe.gone, "and is gone once the fade is over")
-        // Escape: the row reports its search closed.
+        XCTAssertEqual(try pin(), .init(away: true, gone: true), "and is gone once the fade is over")
         state.setSearching(false, on: .tasks)
         spin(0.6)
-        XCTAssertFalse(PanelPinFoldProbe.away, "Escape brings the pin back")
-        XCTAssertFalse(PanelPinFoldProbe.gone)
+        XCTAssertEqual(try pin(), .init(away: false, gone: false), "closing the search brings it back")
         // Another page's search leaves this page's pin alone.
         state.setSearching(true, on: .notes)
         spin(0.6)
-        XCTAssertFalse(PanelPinFoldProbe.away)
-        XCTAssertFalse(PanelPinFoldProbe.gone)
+        XCTAssertEqual(try pin(), .init(away: false, gone: false))
     }
 
     /// Shut, the page switch still shows the current page on the grey chip
@@ -145,6 +145,30 @@ final class PanelChromeTests: XCTestCase {
             let chip = try level(3 + 10.5, 6)
             let surface = try level(28.5, 6)
             XCTAssertGreaterThan(abs(chip - surface), 0.005, "\(context.caption): the current page sits on the marker while shut")
+        }
+    }
+
+    /// The page switch's marker moves with the one selection motion: a
+    /// per-cell crossfade in 160 ms ease-out, at once under Reduce Motion,
+    /// whatever motion the page change itself carries (here the
+    /// page-navigation spring, as the switch's own click sends it).
+    func testThePageSwitchMarkerCrossfadesOnTheSelectionMotion() throws {
+        let M = AtticPageButtonMetrics.self
+        let points = (0 ..< 3).map { CGPoint(x: M.inset + CGFloat($0) * (M.segment + M.gap) + M.segment / 2, y: M.inset + 1.5) }
+        for reduceMotion in [false, true] {
+            let design = AtticDesignContext(mode: .light, reduceMotion: reduceMotion, controls: .craft)
+            let frames = try SelectionMarkerMotionProbe.run(
+                size: CGSize(width: AtticPageButton<Int>.width(open: true, count: 3), height: AtticControlSize.headerControl),
+                points: points, from: 0, to: 2,
+                change: { probe in
+                    withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion)) { probe.index = 2 }
+                }) { probe in
+                    AtticPageButton(items: AtticGallerySamples.pages,
+                                    selection: Binding(get: { probe.index }, set: { probe.index = $0 }),
+                                    pinnedOpen: true, flat: true)
+                        .atticDesign(design)
+                }
+            assertSelectionCrossfade(frames, from: 0, to: 2, reduceMotion: reduceMotion, "page switch, reduce \(reduceMotion)")
         }
     }
 
@@ -313,10 +337,44 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertGreaterThan(text.maxX, host.bounds.width - insets.trailing - 40, "the field fills the row to the right inset")
             XCTAssertLessThanOrEqual(text.maxX, host.bounds.width - insets.trailing + 0.5)
             XCTAssertNil(element("panel-pin-button", in: host), "Pin folds away")
-            XCTAssertTrue(PanelPinFoldProbe.away && PanelPinFoldProbe.gone, "and so does its glass")
+            XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "and so does its glass")
             XCTAssertNil(element("tasks-page-tabs", in: host), "the switch folds away")
             XCTAssertNil(element("panel-settings-button", in: host), "••• folds away")
             XCTAssertEqual(chrome.modeDockWidth, host.bounds.width, "no drag lane under the open field")
+        }
+    }
+
+    /// A real Escape in the open search field (the key-window route of
+    /// `TasksRound12Tests`) closes the search and brings Pin back, its
+    /// raised material told to draw its glass again.
+    func testEscapeInTheSearchBringsThePinAndItsGlassBack() throws {
+        try requireKeyWindowTests()
+        try withPanel { host, state, tasksState, store, _, _ in
+            state.selectSection(.tasks)
+            spin(1.0)
+            let window = try XCTUnwrap(host.window)
+            window.makeKey()
+            @MainActor func send(_ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) throws {
+                let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+                NSApp.postEvent(event, atStart: false)
+                Hosted.pumpEvents()
+            }
+            let model = tasksState.model(for: store, toasts: nil)
+            let searchButton = try XCTUnwrap(element("tasks-find-button", in: host))
+            XCTAssertTrue(searchButton.accessibilityPerformPress?() ?? false)
+            spin(0.8)
+            XCTAssertNotNil(element("tasks-find", in: host), "the search is open")
+            XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "the pin's glass is gone")
+            let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: host, placeholder: model.searchPlaceholder(for: .now)))
+            let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "the field has the keyboard")
+            XCTAssertTrue(editor.delegate as? NSTextField === field, "the hosted search field's own editor")
+            try send("\u{1b}", code: 53)
+            spin(0.8)
+            XCTAssertNil(element("tasks-find", in: host), "Escape closes the search")
+            XCTAssertNotNil(element("panel-pin-button", in: host), "Pin is back")
+            XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: false, gone: false), "and so is its glass")
         }
     }
 
@@ -348,7 +406,9 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertEqual(next.midX - previous.midX, 21 + 1, accuracy: 0.5, "21 pt cells 1 pt apart")
             XCTAssertGreaterThan(previous.midX - 10.5, calTop[1].maxX)
             XCTAssertEqual(calTop[2].minX - (next.midX + 10.5), 3 + 3, accuracy: 0.5, "the capsule's inset, then a 6 px gap")
-            _ = try assertRow(["panel-section-picker", "calendar-today", "calendar-new-task"], in: host)
+            // Today keeps its place but is hidden while today is the day
+            // shown (w2-calendar), so the row reads switch, then "+".
+            _ = try assertRow(["panel-section-picker", "calendar-new-task"], in: host)
         }
     }
 
@@ -394,5 +454,104 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertNil(element("notes-layout-switch", in: host), "only on the notes list")
             XCTAssertNotNil(element("notes-search-button", in: host))
         }
+    }
+}
+
+// MARK: - One selection motion
+
+/// What a switch's marker does over a change of choice, sampled live in an
+/// off-screen window: each cell's darkening at its marker's top edge (above
+/// the word or glyph) against its own unselected level, as a fraction of the
+/// full marker, per frame. A crossfade lights the old and new cells at once
+/// and never the cells between; a slide crosses the cells between.
+@MainActor
+final class SelectionMarkerMotionProbe: ObservableObject {
+    @Published var index = 0
+
+    struct Frame { let time: TimeInterval; let presence: [CGFloat] }
+
+    /// `points` are the cells' sample points (pt, top-left); `from` and `to`
+    /// index into them; `change` makes the change as the control's caller does.
+    static func run<V: View>(size: CGSize, points: [CGPoint], from: Int, to: Int,
+                             change: @escaping (SelectionMarkerMotionProbe) -> Void,
+                             @ViewBuilder view: @escaping (SelectionMarkerMotionProbe) -> V) throws -> [Frame] {
+        let probe = SelectionMarkerMotionProbe()
+        probe.index = from
+        let host = NSHostingView(rootView: SelectionMarkerMotionRoot(probe: probe, content: view))
+        host.frame = CGRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        func spin(_ s: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
+        func levels() throws -> [CGFloat] {
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / host.bounds.width
+            return try points.map { p in
+                let c = try XCTUnwrap(rep.colorAt(x: Int(p.x * scale), y: Int(p.y * scale))?.usingColorSpace(.sRGB))
+                return (c.redComponent + c.greenComponent + c.blueComponent) / 3
+            }
+        }
+        spin(0.4)
+        let before = try levels()
+        let start = Date()
+        change(probe)
+        var raw: [(TimeInterval, [CGFloat])] = []
+        while Date().timeIntervalSince(start) < 0.6 {
+            spin(0.008)
+            raw.append((Date().timeIntervalSince(start), try levels()))
+        }
+        let after = try XCTUnwrap(raw.last?.1)
+        // Each cell's unselected level: the old cell's after, the others' before.
+        let off = points.indices.map { $0 == from ? after[$0] : before[$0] }
+        let full = max(off[to] - after[to], 0.001)
+        XCTAssertGreaterThan(full, 0.02, "the marker is visible on its cell")
+        return raw.map { time, level in
+            Frame(time: time, presence: points.indices.map { (off[$0] - level[$0]) / full })
+        }
+    }
+}
+
+private struct SelectionMarkerMotionRoot<V: View>: View {
+    @ObservedObject var probe: SelectionMarkerMotionProbe
+    let content: (SelectionMarkerMotionProbe) -> V
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.white
+            content(probe)
+        }
+    }
+}
+
+/// The one selection motion: a crossfade between the cells (never through
+/// the ones between), over by 0.22 s, and at once under Reduce Motion.
+@MainActor
+func assertSelectionCrossfade(_ frames: [SelectionMarkerMotionProbe.Frame], from: Int, to: Int, reduceMotion: Bool,
+                              _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+    let between = Array(min(from, to) + 1 ..< max(from, to))
+    for frame in frames {
+        for cell in between {
+            XCTAssertLessThan(frame.presence[cell], 0.25,
+                              "\(label): the marker never crosses cell \(cell) (t = \(Int(frame.time * 1000)) ms)", file: file, line: line)
+        }
+    }
+    let settled = frames.filter { $0.time >= (reduceMotion ? 0.05 : 0.22) }
+    XCTAssertFalse(settled.isEmpty, file: file, line: line)
+    for frame in settled {
+        XCTAssertGreaterThan(frame.presence[to], 0.85, "\(label): settled on the new cell by \(Int(frame.time * 1000)) ms",
+                             file: file, line: line)
+        XCTAssertLessThan(frame.presence[from], 0.15, "\(label): gone from the old cell by \(Int(frame.time * 1000)) ms",
+                          file: file, line: line)
+    }
+    if !reduceMotion {
+        XCTAssertTrue(frames.contains { $0.presence[from] > 0.15 && $0.presence[to] > 0.15 },
+                      "\(label): old and new cells are lit together mid-change (a crossfade); presence old/new: "
+                      + frames.prefix(20).map { String(format: "%.2f/%.2f", $0.presence[from], $0.presence[to]) }.joined(separator: " "),
+                      file: file, line: line)
     }
 }

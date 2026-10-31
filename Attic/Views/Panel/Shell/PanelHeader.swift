@@ -65,6 +65,7 @@ struct PanelHeader: View {
                         glyphRotation: isPinned ? 0 : 30,
                         action: onTogglePin
                     )
+                    .atticMaterialProbe("panel-pin")
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .accessibilityIdentifier("panel-pin-button")
@@ -130,9 +131,6 @@ private struct PanelPinFoldObserver<Content: View>: View {
 
     var body: some View {
         let searching = state.isSearching(page)
-        #if DEBUG
-        let _ = PanelPinFoldProbe.record(away: away, gone: gone)
-        #endif
         content()
             .environment(\.atticControlAway, away)
             .environment(\.atticControlGone, gone)
@@ -162,16 +160,3 @@ private struct PanelPinFoldObserver<Content: View>: View {
     }
 }
 
-#if DEBUG
-/// Test seam: what the pin's glass was last told (`PanelChromeTests`).
-@MainActor
-enum PanelPinFoldProbe {
-    static private(set) var away = false
-    static private(set) var gone = false
-
-    static func record(away: Bool, gone: Bool) {
-        self.away = away
-        self.gone = gone
-    }
-}
-#endif
