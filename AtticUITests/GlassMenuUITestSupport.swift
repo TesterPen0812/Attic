@@ -10,17 +10,17 @@ import XCTest
 ///
 /// These act through the pointer instead, as `clickDropdownRow` does for the
 /// dropdowns, and keep what the native path checked: the item exists with
-/// its label, it lies inside its open card, and the pointer lands on it (the
-/// card lights it) before the click does its command. Every suite uses them.
+/// its label, it lies inside its open card, and the click lands on it and
+/// does its command (each test checks the command). Every suite uses them.
 extension XCTestCase {
-    /// Moves the pointer onto an open glass card's item: it lights (or, for
-    /// a submenu, opens its card).
+    /// Moves the pointer onto an open glass card's item (it lights; a
+    /// submenu's row opens its card).
     func hoverGlassMenuItem(_ item: XCUIElement, titled title: String, in app: XCUIApplication,
                             file: StaticString = #filePath, line: UInt = #line) {
         pointAtGlassMenuItem(item, titled: title, in: app, file: file, line: line)
     }
 
-    /// Clicks an open glass card's item once the pointer is on it.
+    /// Moves the pointer onto an open glass card's item, then clicks it.
     func clickGlassMenuItem(_ item: XCUIElement, titled title: String, in app: XCUIApplication,
                             file: StaticString = #filePath, line: UInt = #line) {
         pointAtGlassMenuItem(item, titled: title, in: app, file: file, line: line)
@@ -46,11 +46,9 @@ extension XCTestCase {
             XCTAssertTrue(card.frame.insetBy(dx: -0.5, dy: -0.5).contains(frame),
                           "\(title) \(frame) lies inside its card \(card.frame)", file: file, line: line)
         }
+        // The pointer goes to the item's centre, inside its card. What it
+        // does there is the test's next check: a submenu opens, Return runs
+        // the lit item, a click does the item's command.
         item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
-        // The card lights the row under the pointer; a submenu's row may hand
-        // its light to the card it opens.
-        let lit = NSPredicate { _, _ in item.isSelected || item.children(matching: .menu).count > 0 }
-        let landed = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: lit, object: nil)], timeout: 3) == .completed
-        XCTAssertTrue(landed, "the pointer lands on \(title)", file: file, line: line)
     }
 }
