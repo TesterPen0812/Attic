@@ -246,8 +246,8 @@ struct ComposerCard: View {
 
     // MARK: Writing
 
-    /// The task's or note's writing. An event has none to save yet, so its
-    /// line keeps its room without taking text.
+    /// The writing, for every kind: a task's or note's writing, an event's
+    /// notes.
     private func writingLine(_ kind: ComposerKind) -> some View {
         TextField(String(localized: "Notes"), text: $model.writing, axis: .vertical)
             .textFieldStyle(.plain)
@@ -261,9 +261,6 @@ struct ComposerCard: View {
                 model.create(openingPage: press.modifiers.contains(.command))
                 return .handled
             }
-            .opacity(kind == .event ? 0 : 1)
-            .allowsHitTesting(kind != .event)
-            .accessibilityHidden(kind == .event)
             .accessibilityIdentifier("composer-writing")
     }
 

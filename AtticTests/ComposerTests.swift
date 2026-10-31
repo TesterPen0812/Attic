@@ -221,6 +221,7 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(event.draft.title, "Lunch with Ana")
         XCTAssertEqual(event.draft.calendarID, "work")
         XCTAssertFalse(event.draft.isAllDay)
+        XCTAssertNil(event.draft.notes, "an empty writing line writes no notes")
         var start = DateComponents(year: day(2).year, month: day(2).month, day: day(2).day, hour: 13)
         start.calendar = clock
         XCTAssertEqual(event.draft.start, clock.date(from: start))
@@ -230,6 +231,28 @@ final class ComposerTests: XCTestCase {
 
         XCTAssertEqual(library.undo(in: .calendar), .applied)
         XCTAssertTrue(events.events.isEmpty)
+    }
+
+    func testAnEventsWritingLineBecomesItsNotesAndUndoStillRemovesIt() throws {
+        model.open(on: .calendar(selected: day(1)))
+        type("Dentist 9am")
+        model.writing = "  Bring the form\nRoom 4  "
+        XCTAssertTrue(model.create())
+        let event = try XCTUnwrap(events.events.values.first)
+        XCTAssertEqual(event.draft.notes, "Bring the form\nRoom 4")
+        XCTAssertEqual(model.writing, "")
+        XCTAssertEqual(library.undo(in: .calendar), .applied)
+        XCTAssertTrue(events.events.isEmpty)
+        XCTAssertEqual(library.redo(in: .calendar), .applied)
+        XCTAssertEqual(events.events.values.first?.draft.notes, "Bring the form\nRoom 4")
+    }
+
+    func testAWhitespaceWritingLineWritesNoNotes() throws {
+        model.open(on: .calendar(selected: day(1)))
+        type("Gym")
+        model.writing = " \n "
+        XCTAssertTrue(model.create())
+        XCTAssertNil(try XCTUnwrap(events.events.values.first).draft.notes)
     }
 
     func testAnEventWithNoTimeIsAllDayAndCommandReturnOpensIt() throws {

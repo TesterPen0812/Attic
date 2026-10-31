@@ -123,6 +123,7 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
         }
         event.calendar = calendar
         event.title = draft.title
+        if let notes = draft.notes { event.notes = notes.isEmpty ? nil : notes }
         event.timeZone = draft.isAllDay ? nil : TimeZone(identifier: draft.timeZoneID)
         event.isAllDay = draft.isAllDay
         if draft.isAllDay {
@@ -157,7 +158,8 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
             last = dates.date(byAdding: .day, value: 1, to: lastDay) ?? end
         } else { last = end }
         let draft = CalendarEventDraft(title: event.title ?? "", start: first, end: last,
-            isAllDay: event.isAllDay, calendarID: calendar.calendarIdentifier, timeZoneID: zone.identifier)
+            isAllDay: event.isAllDay, calendarID: calendar.calendarIdentifier, timeZoneID: zone.identifier,
+            notes: event.notes.flatMap { $0.isEmpty ? nil : $0 })
         // Refuse to destroy metadata added outside Attic. EventKit's revision
         // timestamp is intentionally excluded: commit/sync changes it itself.
         let metadata: [String: Any] = [

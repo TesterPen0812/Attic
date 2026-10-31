@@ -80,7 +80,7 @@ final class ComposerModel: ObservableObject {
     @Published private(set) var isOpen = false
     @Published private(set) var page: ComposerPage = .tasks(.now)
     @Published private(set) var kind: ComposerKind = .task
-    /// The second line: the task's or note's writing.
+    /// The second line: the task's, event's or note's writing.
     @Published var writing = ""
     @Published var pinned = false
     /// An event's length in minutes, for a timed event.
@@ -273,7 +273,7 @@ final class ComposerModel: ObservableObject {
         let day = values.day ?? tasks.parser.today
         guard let draft = Self.eventDraft(title: values.title.isEmpty ? TaskDraftBuilder.collapsed(tasks.addBar.text) : values.title,
                                           day: day, time: values.time, length: eventLength,
-                                          calendarID: calendar.id, calendar: clock),
+                                          calendarID: calendar.id, calendar: clock, notes: writing),
               let made = try? writer.create(draft) else { return false }
         calendarID = calendar.id
         if openingPage { services.openEvent(made) }
@@ -283,19 +283,23 @@ final class ComposerModel: ObservableObject {
     /// A timed event lasts `length` minutes; one with no time is all day
     /// (end exclusive, the next local midnight).
     nonisolated static func eventDraft(title: String, day: DueDay, time: Int?, length: Int,
-                                       calendarID: String, calendar: Calendar) -> CalendarEventDraft? {
+                                       calendarID: String, calendar: Calendar, notes: String = "") -> CalendarEventDraft? {
         let zone = calendar.timeZone.identifier
+        // The writing line becomes the event's notes; an empty line writes none.
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = trimmed.isEmpty ? nil : trimmed
         var components = DateComponents(year: day.year, month: day.month, day: day.day)
         if let time {
             components.hour = time / 60
             components.minute = time % 60
             guard let start = calendar.date(from: components) else { return nil }
             return CalendarEventDraft(title: title, start: start, length: TimeInterval(length * 60),
-                                      calendarID: calendarID, timeZoneID: zone)
+                                      calendarID: calendarID, timeZoneID: zone, notes: notes)
         }
         guard let start = calendar.date(from: components),
               let end = calendar.date(byAdding: .day, value: 1, to: start) else { return nil }
-        return CalendarEventDraft(title: title, start: start, end: end, isAllDay: true, calendarID: calendarID, timeZoneID: zone)
+        return CalendarEventDraft(title: title, start: start, end: end, isAllDay: true, calendarID: calendarID,
+                                  timeZoneID: zone, notes: notes)
     }
 
     private func createNote(openingPage: Bool) -> Bool {

@@ -19,21 +19,26 @@ struct CalendarEventDraft: Codable, Equatable, Sendable {
     var isAllDay: Bool
     var calendarID: String
     var timeZoneID: String
+    /// The event's notes: the "+" card's writing line. nil leaves the
+    /// event's notes as they are. Plain writing only: Attic never puts a
+    /// marker here (ownership stays in the local record).
+    var notes: String?
 
     init(title: String, start: Date, end: Date, isAllDay: Bool = false,
-         calendarID: String, timeZoneID: String = TimeZone.current.identifier) {
+         calendarID: String, timeZoneID: String = TimeZone.current.identifier, notes: String? = nil) {
         self.title = title
         self.start = start
         self.end = end
         self.isAllDay = isAllDay
         self.calendarID = calendarID
         self.timeZoneID = timeZoneID
+        self.notes = notes
     }
 
     init(title: String, start: Date, length: TimeInterval, calendarID: String,
-         timeZoneID: String = TimeZone.current.identifier) {
+         timeZoneID: String = TimeZone.current.identifier, notes: String? = nil) {
         self.init(title: title, start: start, end: start.addingTimeInterval(length),
-                  calendarID: calendarID, timeZoneID: timeZoneID)
+                  calendarID: calendarID, timeZoneID: timeZoneID, notes: notes)
     }
 
     /// Match civil dates for floating all-day events, independent of travel.
