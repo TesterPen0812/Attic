@@ -245,6 +245,7 @@ final class AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             guard let task = tasks.task(withID: id), let before = tasks.editableState(of: id),
                   tasks.update(
                     task,
@@ -280,6 +281,7 @@ final class AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             guard let before = tasks.listedEditableState(of: id),
                   let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt,
                   tasks.restoreAndUpdateTask(id, title: title, priority: priority, status: status,
@@ -321,6 +323,7 @@ final class AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             guard let task = tasks.task(withID: id) else { return nil }
             let group = tasks.orderGroup(of: task).map(\.id)
             let before = group.compactMap(tasks.editableState(of:))
@@ -339,6 +342,7 @@ final class AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             guard let task = tasks.task(withID: id) else { return nil }
             let family = [id] + (tasks.parent(of: task) == nil ? tasks.subtasks(of: id).map(\.id) : [])
             let before = family.compactMap(tasks.editableState(of:))
@@ -367,6 +371,7 @@ final class AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             // Completing a main task takes its open subtasks along, as the
             // circle does; their states are part of the step.
             var touched = ids
@@ -431,6 +436,7 @@ final class AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             let before = ids.compactMap(tasks.listedEditableState(of:))
             guard before.count == ids.count else { return nil }
             var logging: [UUID: Date] = [:]
@@ -464,6 +470,7 @@ final class AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             let before = ids.flatMap(tasks.listedFamilyStates(of:))
             guard !before.isEmpty, before.count >= ids.count else { return nil }
             let logged = ids.compactMap { id in tasks.listedTask(withID: id).flatMap { $0.doneLoggedAt.map { (id, $0) } } }
@@ -851,6 +858,7 @@ final class AtticLibrary {
     func setTags(_ newTags: [String], on ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         var succeeded = false
         undo.perform(in: history ?? Self.defaultHistory(for: ref)) {
+            guard ref.kind != .task || tasks.prepareTaskEdit() else { return nil }
             guard let before = currentTags(of: ref) else {
                 _ = fail("No \(ref.kind.rawValue) exists with id \(ref.id.uuidString).")
                 return nil

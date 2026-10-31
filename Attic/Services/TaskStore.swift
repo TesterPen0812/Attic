@@ -395,6 +395,7 @@ final class TaskStore: ObservableObject {
 
     let container: ModelContainer
     private var context: ModelContext
+    private var taskEditNeedsReload = false
     private let now: () -> Date
     let taskImageFiles: TaskImageFiles
     @Published private(set) var importingAttachmentTaskIDs: Set<UUID> = []
@@ -943,28 +944,134 @@ final class TaskStore: ObservableObject {
         dueTimeMinutes: Int?? = nil,
         allowingUnfinishedSubtasks: Bool = false
     ) -> Bool {
+        guard prepareTaskEdit(owner: familyOwner(of: task)) else { return false }
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
         // Every refusal and every failure below concerns this row, so they all
         // belong to the surface that owns it: a child's family panel, or the
         // main panel for a root.
         let owner = familyOwner(of: task)
         if let title, Self.normalized(title).isEmpty { return false }
+        let retainedEdits = RetainedTaskEdits()
         let changed: Bool
         do {
             changed = try stageUpdate(task, title: title, priority: priority, status: status, tags: tags,
-                                      dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
+                                      dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks, retaining: retainedEdits)
         } catch {
-            context.rollback()
+            if rollback(retaining: retainedEdits) { try? reloadTasks() }
             report(error, owner: owner)
             return false
         }
-        return changed ? save(owner: owner) : true
+        return changed ? save(owner: owner, retaining: retainedEdits) : true
     }
 
     /// A refused edit: the reason is shown to the person.
     private struct TaskEditRefusal: LocalizedError {
         let errorDescription: String?
         init(_ message: String) { errorDescription = message }
+    }
+
+    /// SwiftData on macOS 26 can roll back its context without reverting
+    /// retained model instances. Keep each instance's own values, including
+    /// divergent replicas, until the edit's save outcome is known.
+    final class RetainedTaskEdits {
+        /// One typed field table drives capture, change detection and restore.
+        /// Keep the raw clock after the day: the day's observer can clear it.
+        private static let fields: [Field] = [
+            Field("title", \.title),
+            Field("statusRaw", \.statusRaw),
+            Field("priorityRaw", \.priorityRaw),
+            Field("completedAt", \.completedAt),
+            Field("manualOrder", \.manualOrder),
+            Field("parentID", \.parentID),
+            Field("tagsRaw", \.tagsRaw),
+            Field("dueDayRaw", \.dueDayRaw),
+            Field("dueTimeMinutesRaw", \.dueTimeMinutesRaw),
+            Field("completedFromRaw", \.completedFromRaw),
+            Field("completedFromOrder", \.completedFromOrder),
+            Field("updatedAt", \.updatedAt),
+            Field("listOrderVersion", \.listOrderVersion),
+            Field("doneLoggedAt", \.doneLoggedAt)
+        ]
+        static var restoredFields: Set<String> { Set(fields.map(\.name)) }
+
+        /// Guarded edit commands do not write these fields. The schema test
+        /// requires every new stored attribute or relationship to be decided.
+        static let notWrittenByEditCommands: [String: String] = [
+            "id": "Edits preserve the task's logical identity.",
+            "createdAt": "Edits preserve the original creation time.",
+            "associationGeneration": "Only workspace association and lifecycle commands bump this generation.",
+            "imageReferencesData": "Only attachment commands change file references.",
+            "removedAttachmentsData": "Only attachment commands change removed-file history.",
+            "deletedAt": "Only lifecycle commands change soft deletion.",
+            "deletionGroupID": "Only lifecycle commands change deletion groups.",
+            "deletionRootID": "Only lifecycle commands change deletion roots.",
+            "deletionMembersRaw": "Only lifecycle commands change deletion membership."
+        ]
+
+        private struct CapturedField {
+            let hasChanged: () -> Bool
+            let apply: () -> Void
+        }
+
+        private struct Field {
+            let name: String
+            let capture: (TaskItem) -> CapturedField
+
+            init<Value: Equatable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<TaskItem, Value>) {
+                self.name = name
+                capture = { task in
+                    let value = task[keyPath: keyPath]
+                    return CapturedField(hasChanged: { task[keyPath: keyPath] != value },
+                                         apply: { task[keyPath: keyPath] = value })
+                }
+            }
+        }
+
+        private var restorations: [ObjectIdentifier: () -> Bool] = [:]
+
+        func capture(_ task: TaskItem) {
+            let key = ObjectIdentifier(task)
+            guard restorations[key] == nil else { return }
+            let snapshot = Self.fields.map { $0.capture(task) }
+            restorations[key] = {
+                guard snapshot.contains(where: { $0.hasChanged() }) else { return false }
+                snapshot.forEach { $0.apply() }
+                return true
+            }
+        }
+
+        func capture(_ tasks: [TaskItem]) { tasks.forEach(capture) }
+        func restore() -> Bool {
+            var restored = false
+            for restoration in restorations.values {
+                if restoration() { restored = true }
+            }
+            return restored
+        }
+    }
+
+    @discardableResult
+    private func rollback(retaining edits: RetainedTaskEdits?) -> Bool {
+        context.rollback()
+        guard edits?.restore() == true else { return false }
+        // Restoration setters dirty the old context. Abandon it even when
+        // the following presentation reload fails; never save these values.
+        context = Self.makeStoreContext(container)
+        taskEditNeedsReload = true
+        return true
+    }
+
+    /// Command entry points recover once before collecting Undo snapshots
+    /// or deriving a family scope. UI and snapshot lookups stay read-only.
+    func prepareTaskEdit(owner: UUID? = nil) -> Bool {
+        guard taskEditNeedsReload else { return true }
+        do {
+            try reloadTasks()
+            return true
+        } catch {
+            report(error.localizedDescription, owner: owner)
+            return false
+        }
     }
 
     /// Writes one edit into the context without saving (see `update`), so a
@@ -980,15 +1087,17 @@ final class TaskStore: ObservableObject {
         dueDay: DueDay?? = nil,
         dueTimeMinutes: Int?? = nil,
         allowingUnfinishedSubtasks: Bool = false,
-        at fixedTimestamp: Date? = nil
+        at fixedTimestamp: Date? = nil,
+        retaining edits: RetainedTaskEdits? = nil
     ) throws -> Bool {
         let normalizedTitle = title.map(Self.normalized)
         if let normalizedTitle, normalizedTitle.isEmpty { throw TaskEditRefusal("A task needs a title.") }
-        // A family fetch can refresh resident values after another writer's
-        // commit. Freeze the presented family before that fetch, so the exact
-        // fallback still compares against the values the edit began with.
+        // The workspace guard compares against the presented baseline, but
+        // refusal restoration must keep any values refreshed by this fetch.
         WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
         let replicas = try storedTasks(matching: task.id)
+        edits?.capture(replicas)
+        edits?.capture(task)
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
@@ -1071,7 +1180,7 @@ final class TaskStore: ObservableObject {
                 status: destinationStatus,
                 parentID: task.parentID,
                 excluding: task.id,
-                updatedAt: timestamp
+                updatedAt: timestamp, retaining: edits
             )
         }
         let destinationCompletedAt: Date? = destinationStatus == .done ? timestamp : nil
@@ -1125,27 +1234,29 @@ final class TaskStore: ObservableObject {
         addingTag: String? = nil
     ) -> Bool {
         guard !ids.isEmpty else { return false }
+        guard prepareTaskEdit() else { return false }
+        let retainedEdits = RetainedTaskEdits()
         var changed = false
         do {
             for id in ids {
                 guard let task = task(withID: id) else { throw TaskReplicaMutationError.missingReplica(id) }
                 if status == .done, priority == nil, addingTag == nil {
-                    changed = try stageCompleteFamily(task) || changed
+                    changed = try stageCompleteFamily(task, retaining: retainedEdits) || changed
                 } else {
                     changed = try stageUpdate(
                         task, priority: priority, status: status,
                         tags: addingTag.map { AtticTag.normalizedSet(task.tags + [$0]) },
-                        allowingUnfinishedSubtasks: true
+                        allowingUnfinishedSubtasks: true, retaining: retainedEdits
                     ) || changed
                 }
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             try? reloadTasks()
             report(error, owner: nil)
             return false
         }
-        return changed ? save(owner: nil) : true
+        return changed ? save(owner: nil, retaining: retainedEdits) : true
     }
 
     @discardableResult
@@ -1165,6 +1276,8 @@ final class TaskStore: ObservableObject {
         removingTag: String? = nil
     ) -> Bool {
         guard !ids.isEmpty else { return false }
+        guard prepareTaskEdit() else { return false }
+        let retainedEdits = RetainedTaskEdits()
         var changed = false
         do {
             for id in ids {
@@ -1175,15 +1288,15 @@ final class TaskStore: ObservableObject {
                     let removed = (tags ?? task.tags).filter { $0.caseInsensitiveCompare(removingTag) != .orderedSame }
                     tags = removed
                 }
-                changed = try stageUpdate(task, tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, allowingUnfinishedSubtasks: true) || changed
+                changed = try stageUpdate(task, tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, allowingUnfinishedSubtasks: true, retaining: retainedEdits) || changed
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             try? reloadTasks()
             report(error.localizedDescription, owner: nil)
             return false
         }
-        return changed ? save(owner: nil) : true
+        return changed ? save(owner: nil, retaining: retainedEdits) : true
     }
 
     /// The editable fields of a visible task, for an undo step.
@@ -1222,11 +1335,14 @@ final class TaskStore: ObservableObject {
     ) -> UndoOutcome {
         guard !target.isEmpty else { return .applied }
         let owner = target.count == 1 ? familyOwner(forTaskID: target[0].id) : nil
+        guard prepareTaskEdit(owner: owner) else { return .failed }
+        let retainedEdits = RetainedTaskEdits()
         let staged: EditableTransitionStage
         do {
-            staged = try stageEditableTransition(from: expected, to: target)
+            staged = try stageEditableTransition(from: expected, to: target, retaining: retainedEdits)
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
+            try? reloadTasks()
             report(error.localizedDescription, owner: owner)
             return .failed
         }
@@ -1237,7 +1353,7 @@ final class TaskStore: ObservableObject {
             report(message, owner: owner, retryable: false)
             return .obsolete
         case let .staged(returningFamilies):
-            guard save(owner: owner) else { return .failed }
+            guard save(owner: owner, retaining: retainedEdits) else { return .failed }
             if !returningFamilies.isEmpty {
                 do {
                     try reloadTasks()
@@ -1264,7 +1380,8 @@ final class TaskStore: ObservableObject {
     /// fails; the caller rolls the context back.
     private func stageEditableTransition(
         from expected: [TaskEditableState],
-        to target: [TaskEditableState]
+        to target: [TaskEditableState],
+        retaining edits: RetainedTaskEdits? = nil
     ) throws -> EditableTransitionStage {
         guard !target.isEmpty else { return .nothingToWrite }
         let expectedByID = Dictionary(expected.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1272,6 +1389,8 @@ final class TaskStore: ObservableObject {
         let groups: [UUID: [TaskItem]] = Dictionary(grouping: try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { ids.contains($0.id) }
         )), by: \.id)
+        edits?.capture(groups.values.flatMap { $0 })
+        edits?.capture(target.compactMap { task(withID: $0.id) })
         WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         var winners: [UUID: TaskItem] = [:]
         for state in target {
@@ -1382,14 +1501,14 @@ final class TaskStore: ObservableObject {
         guard wroteAny else {
             return conflicted ? .obsolete("The task changed since, so this step can no longer be undone.") : .nothingToWrite
         }
-        try returnFamiliesFromDoneLog(returningFamilies)
+        try returnFamiliesFromDoneLog(returningFamilies, retaining: edits)
         return .staged(returningFamilies: returningFamilies)
     }
 
     /// Brings each family (a main task and its subtasks, every replica) the
     /// daily cleanup moved to the Done log back to the list. Rows in
     /// Recently Deleted stay there. Not saved here.
-    private func returnFamiliesFromDoneLog(_ rootIDs: Set<UUID>) throws {
+    private func returnFamiliesFromDoneLog(_ rootIDs: Set<UUID>, retaining edits: RetainedTaskEdits? = nil) throws {
         guard !rootIDs.isEmpty else { return }
         let roots = Array(rootIDs)
         let linked = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { roots.contains($0.id) }))
@@ -1403,6 +1522,7 @@ final class TaskStore: ObservableObject {
             predicate: #Predicate { childIDs.contains($0.id) }
         ))
         for row in linked + childReplicas where row.doneLoggedAt != nil && row.deletedAt == nil {
+            edits?.capture(row)
             WorkspaceLegacyBridge.prepareMutation(row, in: context)
             row.doneLoggedAt = nil
         }
@@ -3001,20 +3121,22 @@ final class TaskStore: ObservableObject {
         dueDay: DueDay?? = nil,
         dueTimeMinutes: Int?? = nil
     ) -> Bool {
+        guard prepareTaskEdit() else { return false }
+        let retainedEdits = RetainedTaskEdits()
         do {
             guard let logged = listedTask(withID: id), logged.doneLoggedAt != nil, status != .done else {
                 throw TaskEditRefusal("The task must be in the Done log and reopen to an unfinished state.")
             }
             _ = try stageUpdate(logged, title: title, priority: priority, status: status,
-                                tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes)
-            try returnFamiliesFromDoneLog([logged.parentID ?? id])
+                                tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, retaining: retainedEdits)
+            try returnFamiliesFromDoneLog([logged.parentID ?? id], retaining: retainedEdits)
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             try? reloadTasks()
             report(error, owner: nil)
             return false
         }
-        return save(owner: nil, presentationFailure: "Updated, but the list could not be refreshed")
+        return save(owner: nil, presentationFailure: "Updated, but the list could not be refreshed", retaining: retainedEdits)
     }
 
     /// Puts a family that `restoreToNow` brought back into the Done log
@@ -3023,7 +3145,7 @@ final class TaskStore: ObservableObject {
 
     /// Stages a return to the Done log without saving. False when a row
     /// of the family is no longer finished, or is already in the log.
-    private func stageReturnToDoneLog(taskID: UUID, loggedAt: Date) throws -> Bool {
+    private func stageReturnToDoneLog(taskID: UUID, loggedAt: Date, retaining edits: RetainedTaskEdits? = nil) throws -> Bool {
         let family = try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { $0.id == taskID || $0.parentID == taskID }
         ))
@@ -3034,6 +3156,7 @@ final class TaskStore: ObservableObject {
         guard !shown.isEmpty, shown.allSatisfy({ $0.status == .done && $0.doneLoggedAt == nil }) else {
             return false
         }
+        edits?.capture(replicas)
         WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
         for replica in replicas where replica.doneLoggedAt == nil {
             WorkspaceLegacyBridge.prepareMutation(replica, in: context)
@@ -3150,23 +3273,26 @@ final class TaskStore: ObservableObject {
     /// Undoes a return from the Done log: `logging` maps each main task
     /// that came from the Done log to the time it was logged. One save.
     func undoReturnFromDoneLog(from after: [TaskEditableState], to before: [TaskEditableState], logging: [UUID: Date]) -> UndoOutcome {
+        guard prepareTaskEdit() else { return .failed }
+        let retainedEdits = RetainedTaskEdits()
         let staged: EditableTransitionStage
         do {
-            staged = try stageEditableTransition(from: after, to: before)
+            staged = try stageEditableTransition(from: after, to: before, retaining: retainedEdits)
             if case let .obsolete(message) = staged {
                 report(message, owner: nil, retryable: false)
                 return .obsolete
             }
             for (taskID, loggedAt) in logging {
-                _ = try stageReturnToDoneLog(taskID: taskID, loggedAt: loggedAt)
+                _ = try stageReturnToDoneLog(taskID: taskID, loggedAt: loggedAt, retaining: retainedEdits)
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
+            try? reloadTasks()
             report(error.localizedDescription, owner: nil)
             return .failed
         }
         guard context.hasChanges else { return .applied }
-        guard save(owner: nil, presentationFailure: "Undone, but the list could not be refreshed") else { return .failed }
+        guard save(owner: nil, presentationFailure: "Undone, but the list could not be refreshed", retaining: retainedEdits) else { return .failed }
         return .applied
     }
 
@@ -3199,10 +3325,10 @@ final class TaskStore: ObservableObject {
     /// copy is left to block the daily cleanup. Copies that disagree about
     /// which main task a subtask belongs to make the family ambiguous, and
     /// the completion is refused.
-    private func stageCompleteFamily(_ task: TaskItem) throws -> Bool {
+    private func stageCompleteFamily(_ task: TaskItem, retaining edits: RetainedTaskEdits? = nil) throws -> Bool {
         guard task.status != .done else { return false }
         guard parent(of: task) == nil else {
-            return try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true)
+            return try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true, retaining: edits)
         }
         let taskID = task.id
         let linked = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == taskID }))
@@ -3223,7 +3349,11 @@ final class TaskStore: ObservableObject {
         // One completion time for the family: reopening the main task
         // reopens exactly the subtasks finished with it (Astra 20).
         let timestamp = now()
-        _ = try storedTasks(matching: taskID)
+        let replicas = try storedTasks(matching: taskID)
+        edits?.capture(replicas)
+        edits?.capture(childReplicas)
+        edits?.capture(task)
+        edits?.capture(subtasks(of: task.id))
         WorkspaceLegacyBridge.prepareMutations(openChildren.values.flatMap { $0 }, in: context)
         for (id, copies) in openChildren {
             let shownRow = self.task(withID: id)
@@ -3238,7 +3368,7 @@ final class TaskStore: ObservableObject {
                 if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         }
-        _ = try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true, at: timestamp)
+        _ = try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true, at: timestamp, retaining: edits)
         return true
     }
 
@@ -3326,6 +3456,8 @@ final class TaskStore: ObservableObject {
         removingTag: String? = nil
     ) -> Bool {
         guard !ids.isEmpty else { return false }
+        guard prepareTaskEdit() else { return false }
+        let retainedEdits = RetainedTaskEdits()
         var changed = false
         do {
             for id in ids {
@@ -3336,15 +3468,15 @@ final class TaskStore: ObservableObject {
                     newTags = (newTags ?? task.tags).filter { $0.caseInsensitiveCompare(removingTag) != .orderedSame }
                 }
                 changed = try stageUpdate(task, title: title, priority: priority, tags: newTags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes,
-                                          allowingUnfinishedSubtasks: true) || changed
+                                          allowingUnfinishedSubtasks: true, retaining: retainedEdits) || changed
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             try? reloadTasks()
             report(error.localizedDescription, owner: nil)
             return false
         }
-        return changed ? save(owner: nil) : true
+        return changed ? save(owner: nil, retaining: retainedEdits) : true
     }
 
     /// A subtask one place up or down among its siblings (round 10: the
@@ -3442,6 +3574,7 @@ final class TaskStore: ObservableObject {
     /// about where the subtask belongs.
     @discardableResult
     func reparentSubtask(_ id: UUID, to newParentID: UUID?) -> Bool {
+        guard prepareTaskEdit(owner: task(withID: id)?.parentID) else { return false }
         guard let task = tasks.first(where: { $0.id == id }), let oldParentID = task.parentID,
               let oldParent = parent(of: task) else {
             report("Only a subtask can move to another task or become a task of its own.", owner: nil, retryable: false)
@@ -3452,10 +3585,13 @@ final class TaskStore: ObservableObject {
         let timestamp = now()
         // A refusal is decided before anything is written: only a failure
         // after the first write needs the list reloaded.
+        let retainedEdits = RetainedTaskEdits()
         var wrote = false
         do {
             WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
             let replicas = try storedTasks(matching: id)
+            retainedEdits.capture(replicas)
+            retainedEdits.capture(task)
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             guard Set(replicas.map(\.parentID)).count == 1 else {
                 throw TaskEditRefusal("This subtask’s copies disagree about where it belongs. Refresh and try again.")
@@ -3479,7 +3615,7 @@ final class TaskStore: ObservableObject {
                 order = sparseManualOrder(at: placed.count - 1, in: placed)
                 if order == nil {
                     wrote = true
-                    try assignSpacedManualOrders(to: placed, updatedAt: timestamp)
+                    try assignSpacedManualOrders(to: placed, updatedAt: timestamp, retaining: retainedEdits)
                     order = Self.manualOrderStride
                 }
             } else {
@@ -3504,13 +3640,13 @@ final class TaskStore: ObservableObject {
                         // the group around the insertion point rather than
                         // dropping the task at the top of it.
                         wrote = true
-                        try assignSpacedManualOrders(to: placed, updatedAt: timestamp)
+                        try assignSpacedManualOrders(to: placed, updatedAt: timestamp, retaining: retainedEdits)
                         order = Int64(placed.count - (index + 1)) * Self.manualOrderStride
                     }
                 }
                 if order == nil {
                     wrote = true
-                    order = try nextManualOrder(status: status, excluding: id, updatedAt: timestamp)
+                    order = try nextManualOrder(status: status, excluding: id, updatedAt: timestamp, retaining: retainedEdits)
                 }
             }
             wrote = true
@@ -3538,12 +3674,12 @@ final class TaskStore: ObservableObject {
                 if agreeing.contains(replica.persistentModelID) { replica.updatedAt = max(replica.updatedAt, timestamp) }
             }
         } catch {
-            context.rollback()
+            rollback(retaining: retainedEdits)
             if wrote { try? reloadTasks() }
             report(error, owner: owner)
             return false
         }
-        return save(owner: owner)
+        return save(owner: owner, retaining: retainedEdits)
     }
 
     /// A task's state of completion, as one comparable value.
@@ -3764,7 +3900,8 @@ final class TaskStore: ObservableObject {
     /// `owner` is the surface a failed save belongs to, decided by the
     /// operation that asked for it; a success clears any notice outright.
     @discardableResult
-    private func save(owner: UUID? = nil, presentationFailure: String = "Saved, but presentation is still updating") -> Bool {
+    private func save(owner: UUID? = nil, presentationFailure: String = "Saved, but presentation is still updating",
+                      retaining edits: RetainedTaskEdits? = nil) -> Bool {
         tagInventoryWillSave(context)
         do {
             let removedRows = context.deletedModelsArray.contains { $0 is TaskItem }
@@ -3853,12 +3990,13 @@ final class TaskStore: ObservableObject {
             let saveError = error is WorkspaceLegacyBridge.CommitHeld
                 ? "The save outcome is still being checked. This item is held."
                 : error.localizedDescription
-            context.rollback()
+            rollback(retaining: edits)
             tagInventoryDidRefresh()
             do {
                 try reloadTasks()
                 report(saveError, owner: owner)
             } catch {
+                taskEditNeedsReload = true
                 report("\(saveError) · Reload failed: \(error.localizedDescription)", owner: owner)
             }
             return false
@@ -3908,6 +4046,7 @@ final class TaskStore: ObservableObject {
         try WorkspaceLegacyBridge.establishScopeBaseline(refreshedContext, roots: fetched, entities: [.task])
         let unique = Self.canonicalReplicas(from: fetched)
         context = refreshedContext
+        taskEditNeedsReload = false
         // Deduplicate first, then hide: the replica presentation would show
         // decides whether the logical task is in Recently Deleted or the Done
         // log, exactly as it decides every other field.
@@ -4150,7 +4289,8 @@ final class TaskStore: ObservableObject {
         status: TaskStatus,
         parentID: UUID? = nil,
         excluding excludedID: UUID? = nil,
-        updatedAt: Date
+        updatedAt: Date,
+        retaining edits: RetainedTaskEdits? = nil
     ) throws -> Int64? {
         let group = tasks.filter {
             $0.id != excludedID && $0.listedStatus == status && $0.parentID == parentID
@@ -4162,7 +4302,7 @@ final class TaskStore: ObservableObject {
             let orderedGroup = (parentID.map(subtasks(of:)) ?? orderedTasks(for: status)).filter {
                 $0.id != excludedID && $0.listedStatus == status && $0.parentID == parentID
             }
-            try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
+            try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt, retaining: edits)
             return Int64(orderedGroup.count + 1) * Self.manualOrderStride
         }
         return maximum + Self.manualOrderStride
@@ -4219,10 +4359,13 @@ final class TaskStore: ObservableObject {
     /// only copies that agreed with the shown one take the new time.
     private func assignSpacedManualOrders(
         to orderedGroup: [TaskItem],
-        updatedAt: Date
+        updatedAt: Date,
+        retaining edits: RetainedTaskEdits? = nil
     ) throws {
         WorkspaceLegacyBridge.captureBeforeMutations(orderedGroup, in: context)
         let groups = try storedTaskGroups(matching: Set(orderedGroup.map(\.id)))
+        edits?.capture(groups.values.flatMap { $0 })
+        edits?.capture(orderedGroup)
         WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         for (index, item) in orderedGroup.enumerated() {
             let order = Int64(orderedGroup.count - index) * Self.manualOrderStride

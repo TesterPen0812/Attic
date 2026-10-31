@@ -19,6 +19,7 @@ extension AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             let before = ids.compactMap(tasks.editableState(of:))
             guard tasks.updateBatchFields(ids, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes, addingTag: addingTag, removingTag: removingTag) else { return nil }
             succeeded = true

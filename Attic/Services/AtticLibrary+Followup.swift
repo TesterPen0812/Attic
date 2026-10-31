@@ -18,6 +18,7 @@ extension AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             guard let task = tasks.task(withID: id), let oldParentID = task.parentID else { return nil }
             let scope = Array(Set(tasks.reparentScope(of: id, to: newParentID) + [id]))
             let scopeBefore = scope.compactMap(tasks.editableState(of:))
