@@ -453,8 +453,7 @@ enum AtticDropdownMetrics {
     /// 8 pt in. The month title (13 medium) in a 28 pt header with ‹ ⦿ ›
     /// in 24 x 28 frames; a 20 pt weekday strip after a 4 pt gap; six
     /// weeks of 29.7 x 26.7 cells (no gap), whose marks are 25.7 x 22.7
-    /// rounded squares (6 pt corners); then Clear Date, a 32 pt row with
-    /// 10 pt corners, 8 pt below the grid.
+    /// on curve 1.4; then Clear Date, a 32 pt row, 8 pt below the grid.
     static let dateCardWidth: CGFloat = 224
     static let dateBodyInset: CGFloat = 8
     static let monthHeaderHeight: CGFloat = 28
@@ -468,10 +467,13 @@ enum AtticDropdownMetrics {
     static let monthCellHeight: CGFloat = 26.7
     static let monthMarkWidth: CGFloat = monthCellWidth - 4
     static let monthMarkHeight: CGFloat = monthCellHeight - 4
-    static let monthMarkRadius: CGFloat = 6
+    /// Shapes (Accepted 2026-10-30): the days are controls on curve 1.4,
+    /// rounded by half their height (‹ ⦿ ›'s 22 pt marks are whole).
+    static let monthMarkRadius: CGFloat = monthMarkHeight / 2
     static let clearGap: CGFloat = 8
     static let clearHeight: CGFloat = 32
-    static let clearRadius: CGFloat = 10
+    /// Clear Date is one of the card's rows: an 11 pt squircle.
+    static let clearRadius: CGFloat = highlightRadius
     /// How long a closing card stays in the overlay for its leave motion.
     static let leaveCleanup: TimeInterval = 0.3
 }

@@ -447,8 +447,28 @@ final class TasksPanelDesignTests: XCTestCase {
     func testTheCurrentTabIsTheFlatGreyMarker() {
         let tokens = AtticColorTokens.resolve(AtticDesignContext(mode: .light))
         XCTAssertEqual(AtticSelectionMarker.fill(tokens).alpha, 0.06, accuracy: 0.001)
-        XCTAssertEqual(TasksTopTabsMetrics.markerOffset(index: 0), 0)
-        XCTAssertEqual(TasksTopTabsMetrics.markerOffset(index: 2), 2 * (42 + 1), "the marker slides under the words")
+        // The one selection motion: the old thumb's 160 ms ease-out (motion unchanged).
+        XCTAssertEqual(AtticSelectionMarker.animation(reduceMotion: false), .easeOut(duration: 0.16))
+        XCTAssertNil(AtticSelectionMarker.animation(reduceMotion: true))
+    }
+
+    /// Now → Done crossfades the marker between the two cells as the old
+    /// thumb did (a slide would cross Later), in 160 ms, at once under
+    /// Reduce Motion.
+    func testTheTabsMarkerCrossfadesAndNeverSlides() throws {
+        let M = TasksTopTabsMetrics.self
+        let points = (0 ..< 3).map { CGPoint(x: M.inset + CGFloat($0) * (M.cell.width + M.gap) + M.cell.width / 2, y: M.inset + 1.5) }
+        for reduceMotion in [false, true] {
+            let design = AtticDesignContext(mode: .light, reduceMotion: reduceMotion, controls: .craft)
+            let frames = try SelectionMarkerMotionProbe.run(
+                size: CGSize(width: M.width, height: AtticControlSize.headerControl), points: points, from: 0, to: 2,
+                change: { probe in probe.index = 2 }) { probe in
+                    TasksTopTabs(selection: Binding(get: { TasksTab.allCases[probe.index] },
+                                                    set: { probe.index = TasksTab.allCases.firstIndex(of: $0) ?? 0 }))
+                        .atticDesign(design)
+                }
+            assertSelectionCrossfade(frames, from: 0, to: 2, reduceMotion: reduceMotion, "tabs, reduce \(reduceMotion)")
+        }
     }
 
     func testTheSubtaskCountIsTheDesigns() {

@@ -653,7 +653,7 @@ struct AtticGlassMenuStyle {
     var reduceMotion: Bool { design.reduceMotion }
     /// Real glass, unless Reduce Transparency or the solid controls setting
     /// asks for the opaque card.
-    var isGlass: Bool { AtticDropdownSurface.isGlass(design, capture: false) }
+    var isGlass: Bool { design.effectiveControls == .liquidGlass }
     var title: NSColor { tokens.ink(.body).nsColor }
     var icon: NSColor { tokens.ink(.icon).nsColor }
     var detail: NSColor { secondary(.meta) }

@@ -611,6 +611,48 @@ final class AtticDropdownTests: XCTestCase {
 
     // MARK: The capture seam
 
+    /// The pickers stay solid (owner, 28 Oct): with the controls on Liquid
+    /// Glass, outside a capture, the priority picker's card is still the
+    /// opaque `popoverFill` over whatever lies behind it, in both modes.
+    func testAGlassConfiguredPickerStaysSolid() throws {
+        for mode in [AtticDesignContext.Mode.light, .dark] {
+            let design = AtticDesignContext(mode: mode, controls: .liquidGlass)
+            XCTAssertEqual(design.effectiveControls, .liquidGlass)
+            let margin: CGFloat = 30
+            let cardWidth = AtticDropdownMetrics.commandCardWidth
+            // A swatch of `popoverFill` beside the card, through the same
+            // renderer, is the reference.
+            let view = ZStack(alignment: .topLeading) {
+                Color(red: 1, green: 0, blue: 1)
+                HStack(alignment: .top, spacing: margin) {
+                    AtticDropdownCard { TaskPriorityPickerView(current: .high, onPick: { _ in }) }
+                        .frame(width: cardWidth)
+                    Rectangle().fill(design.tokens.popoverFill.color).frame(width: 20, height: 20)
+                }
+                .padding(margin)
+            }
+            .fixedSize()
+            .atticDesign(design)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.cgImage)
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            func colour(_ p: CGPoint) throws -> NSColor {
+                try XCTUnwrap(bitmap.colorAt(x: Int(p.x * 2), y: Int(p.y * 2))?.usingColorSpace(.sRGB))
+            }
+            let height = CGFloat(image.height) / 2
+            let fill = try colour(CGPoint(x: margin + cardWidth + margin + 10, y: margin + 10))
+            // Inside the card's top and bottom edges, clear of its corners and rows.
+            for point in [CGPoint(x: margin + cardWidth / 2, y: margin + 1.5), CGPoint(x: margin + cardWidth / 2, y: height - margin - 1.5)] {
+                let c = try colour(point)
+                XCTAssertEqual(Double(c.alphaComponent), 1, accuracy: 0.01, "\(mode): opaque at \(point)")
+                XCTAssertEqual(Double(c.redComponent), Double(fill.redComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
+                XCTAssertEqual(Double(c.greenComponent), Double(fill.greenComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
+                XCTAssertEqual(Double(c.blueComponent), Double(fill.blueComponent), accuracy: 0.02, "\(mode): popoverFill at \(point)")
+            }
+        }
+    }
+
     func testTheCaptureSeamIsForPreviewIdentitiesOnly() {
         let environment = ["ATTIC_UI_TESTING": "1", "ATTIC_UI_TEST_POPOVER": "slash-da"]
         XCTAssertEqual(AtticDropdownCaptureSeam.resolve(environment: environment, bundleIdentifier: "com.taha.Attic.preview.notes"), .slashDa)
@@ -2431,7 +2473,7 @@ final class AtticDateCardTests: XCTestCase {
         XCTAssertEqual(AtticTextStyle.dropdownDay.spec.size, 13)
         XCTAssertEqual(AtticTextStyle.dropdownWeekday.spec.size, 10)
         XCTAssertEqual(AtticTextStyle.dropdownSection.spec.size, 11)
-        XCTAssertEqual(m.monthMarkRadius, 6)
+        XCTAssertEqual(m.monthMarkRadius, m.monthMarkHeight / 2, "Shapes: the day marks on curve 1.4, half their height")
         XCTAssertEqual(AtticPickerMetrics.tagListMaxHeight, 6 * m.rowHeight + 4, "six rows before the tag list scrolls")
         XCTAssertEqual(m.monthCellWidth * 7 + m.dateBodyInset * 2, m.dateCardWidth, accuracy: 0.01, "draft C's 224 pt card")
     }
@@ -2636,7 +2678,7 @@ extension AtticDropdownTests {
 
     /// Draft C (owner, 2026-10-23) on the Craft spec supersedes O14-09's
     /// square grid: 29.7 x 26.7 cells with no gap, each holding a mark 4 pt
-    /// smaller each way (6 pt corners); the weekdays small, semibold and
+    /// smaller each way (on curve 1.4 since Shapes); the weekdays small, semibold and
     /// quieter than the days; the month header 28 pt with ‹ ⦿ › in 24 pt
     /// columns.
     func testDraftCTheCalendarGrid() {

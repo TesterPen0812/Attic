@@ -258,8 +258,22 @@ struct AtticSelectedChip: View {
 /// every switch marks its current choice with the same flat grey chip, the
 /// tag bar's (the design's rgba(0, 0, 0, 0.06) in the primary ink), in the
 /// control's own corner. Hover is a step lighter (0.045).
+///
+/// One selection motion: the marker lives in the current cell, and a change
+/// of choice crossfades it between the cells (`transition`) in 160 ms
+/// ease-out, at once under Reduce Motion (`animation`), as the Tasks tabs'
+/// thumb did in the owner's app (pd-combined). A switch applies it to the
+/// marker alone, so whatever else the change moves keeps its own motion.
 struct AtticSelectionMarker: View {
     var cornerRadius: CGFloat
+
+    /// A change of choice: 160 ms ease-out; Reduce Motion, at once.
+    static func animation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.16)
+    }
+
+    /// The marker leaves one cell and arrives in the next by fading.
+    static let transition: AnyTransition = .opacity
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
@@ -290,7 +304,8 @@ enum AtticHoverGate {
 
 /// The header's page button (Phase 0's mode dock, brought into Direction
 /// A, 2026-09-26): at rest a square the size and shape of the pin, showing
-/// only the current page's icon, plain as the pin's (D-11). Under the
+/// only the current page's icon, on the grey selection marker (Accepted
+/// 2026-10-30; it was plain as the pin's, D-11). Under the
 /// pointer or keyboard focus it opens leftward into all the pages' icons
 /// (the current one on the chip, each with a tooltip and its shortcut); a
 /// click goes there, and it folds back when the pointer leaves. 36 pt,
@@ -322,7 +337,7 @@ struct AtticPageButton<Page: Hashable>: View {
     /// The pointer arrived: the caller can build the other pages early.
     var onApproach: () -> Void = {}
     /// L3: the flat corner surface; the current page's glyph sits on it
-    /// with no inner chip (open, the chip still marks it among the others).
+    /// on the grey selection marker, shut or open.
     var flat = false
 
     @Environment(\.atticDesign) private var design
@@ -358,15 +373,12 @@ struct AtticPageButton<Page: Hashable>: View {
                 Button { select(item.page) } label: {
                     ZStack {
                         let shape = AtticControlShape.shape(cornerRadius: chipRadius, exponent: cornerExponent)
-                        if isSelected, !open {
-                            // Shut, the current page's glyph sits plain, as the
-                            // pin's does (D-11, owner 2026-10-11): the chip
-                            // means "on" only for a pinned pin, and marks the
-                            // current page only among the others once open.
-                        } else if isSelected {
+                        if isSelected {
                             // One selection marker (Accepted 2026-10-30):
-                            // every switch's flat grey chip.
+                            // every switch's flat grey chip, shut too ("with
+                            // the current page on a grey chip").
                             AtticSelectionMarker(cornerRadius: chipRadius)
+                                .transition(AtticSelectionMarker.transition)
                         } else if hoveredPage == item.page {
                             shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
                         }
@@ -374,6 +386,10 @@ struct AtticPageButton<Page: Hashable>: View {
                                                solid: design.effectiveSurface == .solid)
                         AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
                     }
+                    // The one selection motion, inside the cell only: the
+                    // page change's own transaction (the page-navigation
+                    // motion) still moves the pages and the switch's width.
+                    .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: isSelected)
                     .frame(width: M.segment, height: M.segment)
                     // 24 pt chips (chrome B) still answer a 28 pt target,
                     // reaching into the gap and the capsule's inset.
@@ -400,7 +416,11 @@ struct AtticPageButton<Page: Hashable>: View {
             // The owner's panel design: shut, a small chevron after the
             // current page says it opens.
             if !open {
+                // The marker sits just before it and the button's rim just
+                // after, so the check reads its own surface inside the
+                // chevron's frame, where the V never draws.
                 AtticIcon(systemName: "chevron.down", size: 7, weight: .semibold, ink: .chevron)
+                    .probeBackground([CGPoint(x: 0.5, y: 0.06), CGPoint(x: 0.06, y: 0.94), CGPoint(x: 0.94, y: 0.94)])
                     .frame(width: M.chevronWidth, height: M.segment)
                     .transition(.opacity)
                     .accessibilityHidden(true)

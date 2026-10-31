@@ -100,9 +100,21 @@ struct AtticIcon: View {
     let ink: AtticInk
     /// Drawn in this colour instead of the role's ink (nil: the ink).
     var colour: AtticRGBA? = nil
+    /// Where the appearance check reads the background, inside the glyph's
+    /// frame (nil: around it; `AtticProbe.backgroundSamples`).
+    var probeBackground: [CGPoint]? = nil
 
     @Environment(\.atticDesign) private var design
     @State private var probeID = UUID()
+
+    /// The appearance check reads this glyph's background at `points`
+    /// (unit coordinates of its frame, where it never draws): for a glyph
+    /// whose neighbours sit closer than the check's corner samples.
+    func probeBackground(_ points: [CGPoint]) -> AtticIcon {
+        var copy = self
+        copy.probeBackground = points
+        return copy
+    }
 
     /// The same role drawn in `colour` (nil: the role's own ink).
     func colour(_ colour: AtticRGBA?) -> AtticIcon {
@@ -117,8 +129,9 @@ struct AtticIcon: View {
             .font(.system(size: size, weight: weight))
             .foregroundStyle(color.color)
             .accessibilityHidden(true)
-            .atticProbe { [probeID, systemName, ink] specimen in
-                AtticProbe(id: probeID, kind: .icon(name: systemName), ink: ink, foreground: color, specimen: specimen)
+            .atticProbe { [probeID, systemName, ink, probeBackground] specimen in
+                AtticProbe(id: probeID, kind: .icon(name: systemName), ink: ink, foreground: color, specimen: specimen,
+                           backgroundSamples: probeBackground)
             }
     }
 }
