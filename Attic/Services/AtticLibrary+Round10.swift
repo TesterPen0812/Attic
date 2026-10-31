@@ -55,6 +55,7 @@ extension AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             let before = ids.compactMap(tasks.listedEditableState(of:))
             guard tasks.updateListed(ids, title: title, priority: priority, tags: tags, dueDay: dueDay, dueTimeMinutes: dueTimeMinutes,
                                      addingTag: addingTag, removingTag: removingTag) else { return nil }
@@ -103,6 +104,7 @@ extension AtticLibrary {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
+            guard tasks.prepareTaskEdit() else { return nil }
             guard let task = tasks.task(withID: id), let parentID = task.parentID else { return nil }
             let family = tasks.subtasks(of: parentID).map(\.id)
             let before = family.compactMap(tasks.editableState(of:))
