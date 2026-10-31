@@ -72,6 +72,7 @@ final class AtticNativeMenuUITests: XCTestCase {
         let duplicate = open(title, expecting: "Duplicate")
         XCTAssertTrue(duplicate.exists, "The title menu opens a native menu with its commands")
         XCTAssertTrue(menuItem("Delete").exists)
+        if !duplicate.isHittable { atticHitReport(app, duplicate, "menu-duplicate") }
         duplicate.click()
         let changed = NSPredicate { _, _ in self.state().hasPrefix("Duplicate") }
         wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 5)

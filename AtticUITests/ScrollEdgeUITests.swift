@@ -89,9 +89,7 @@ final class ScrollEdgeUITests: XCTestCase {
         let findButton = app.buttons["tasks-find-button"]
         XCTAssertTrue(findButton.waitForExistence(timeout: 3))
         if !findButton.isHittable {
-            _ = atticHitReport(app, findButton, "find")
-            _ = atticHitReport(app, pin, "pin")
-            _ = atticHitReport(app, plus, "plus")
+            atticHitReport(app, findButton, "find")
         }
         XCTAssertTrue(findButton.isHittable, "Find's button has a hit point over scrolled rows")
         findButton.click()
@@ -306,55 +304,16 @@ final class ScrollEdgeUITests: XCTestCase {
     }
 }
 
-/// Diagnostics for "Not hittable": what the system's accessibility hit test
-/// (the one XCUITest's hit point uses) returns at an element's centre, and
-/// which of the app's windows the window server has under that point.
+/// Diagnostics for "Not hittable": the app's own probe (DEBUG, the panel's
+/// "attic-hit-probe") runs the system's accessibility hit test at each
+/// watched control's and open menu item's centre and says what it found.
 extension XCTestCase {
+    @discardableResult
     func atticHitReport(_ app: XCUIApplication, _ element: XCUIElement, _ name: String) -> String {
-        guard element.exists else { return "HIT \(name): missing" }
-        let frame = element.frame
-        let point = CGPoint(x: frame.midX, y: frame.midY)
-        let pid = (app.value(forKey: "processID") as? Int32) ?? 0
-        var report = "HIT \(name) frame=\(frame) hittable=\(element.isHittable) trusted=\(AXIsProcessTrusted())"
-        var hit: AXUIElement?
-        let error = AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &hit)
-        if error == .success, var current = hit {
-            for depth in 0..<5 {
-                report += "\n  [\(depth)] \(Self.atticDescribe(current))"
-                var parent: CFTypeRef?
-                guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parent) == .success,
-                      let next = parent, CFGetTypeID(next) == AXUIElementGetTypeID() else { break }
-                current = next as! AXUIElement
-            }
-        } else {
-            report += "\n  AX error \(error.rawValue)"
-        }
-        let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
-        for window in windows {
-            guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
-                  CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0).contains(point)
-            else { continue }
-            report += "\n  win pid=\(window[kCGWindowOwnerPID as String] ?? "?") owner=\(window[kCGWindowOwnerName as String] ?? "?") layer=\(window[kCGWindowLayer as String] ?? "?") alpha=\(window[kCGWindowAlpha as String] ?? "?") bounds=\(bounds)"
-        }
+        let probe = app.descendants(matching: .any).matching(identifier: "attic-hit-probe").firstMatch
+        let found = probe.exists ? (probe.value as? String ?? "no value") : "no probe"
+        let report = "HIT \(name) frame=\(element.exists ? element.frame : .zero) hittable=\(element.exists && element.isHittable)\nPROBE\n\(found)"
         print(report)
-        return report
-    }
-
-    private static func atticDescribe(_ element: AXUIElement) -> String {
-        func string(_ attribute: String) -> String {
-            var value: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value else { return "" }
-            return String(describing: value).replacingOccurrences(of: "\n", with: " ").prefix(60).description
-        }
-        var frame = ""
-        var position: CFTypeRef?, size: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
-           AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success {
-            var p = CGPoint.zero, s = CGSize.zero
-            AXValueGetValue(position as! AXValue, .cgPoint, &p)
-            AXValueGetValue(size as! AXValue, .cgSize, &s)
-            frame = "\(CGRect(origin: p, size: s))"
-        }
-        return "\(string(kAXRoleAttribute)) id=\(string("AXIdentifier")) label=\(string(kAXDescriptionAttribute)) title=\(string(kAXTitleAttribute)) \(frame)"
+        return name
     }
 }

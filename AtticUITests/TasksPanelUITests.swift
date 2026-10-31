@@ -341,6 +341,7 @@ final class TasksPanelUITests: XCTestCase {
         row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
         let more = openMenuItem("More")
         XCTAssertTrue(more.waitForExistence(timeout: 5))
+        if !more.isHittable { atticHitReport(app, more, "menu-more") }
         more.hover()
         let openFiles = openMenuItem("Show Files")
         XCTAssertTrue(openFiles.waitForExistence(timeout: 5))
