@@ -83,7 +83,12 @@ final class DeepReviewFixTests: XCTestCase {
     // MARK: - Revised scroll-under: full ink under glass, faint at labels and edges
 
     func testTheViewportTracksFindTheStripSelectionAndPasteOffer() throws {
-        let hosted = try Hosted(height: 520, long: true, keyWindow: false)
+        // The capture's environment, stated: drawn controls, no live glass.
+        // The bottom bar is now a full row of glass cards (Accepted "Top row
+        // and bottom bar"), and an in-process capture draws live glass as
+        // opaque artefacts over its whole band, hiding the rows under it
+        // (w4: every pixel identical at both scroll positions).
+        let hosted = try Hosted(height: 520, long: true, keyWindow: false, design: AtticDesignContext(mode: .light, controls: .craft))
         defer { hosted.close() }
         XCTAssertFalse(hosted.window.isKeyWindow)
         let list = try shownList(hosted)
