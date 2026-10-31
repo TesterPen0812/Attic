@@ -341,11 +341,12 @@ final class TasksPanelUITests: XCTestCase {
         row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
         let more = openMenuItem("More")
         XCTAssertTrue(more.waitForExistence(timeout: 5))
-        if !more.isHittable { atticHitReport(app, more, "menu-more") }
-        more.hover()
+        // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
+        // clicked through the pointer (`GlassMenuUITestSupport`).
+        hoverGlassMenuItem(more, titled: "More", in: app)
         let openFiles = openMenuItem("Show Files")
         XCTAssertTrue(openFiles.waitForExistence(timeout: 5))
-        openFiles.hover()
+        hoverGlassMenuItem(openFiles, titled: "Show Files", in: app)
         app.typeKey(.return, modifierFlags: [])
         assertFilesListStaysOpen("native Show Files after Find, with real auto-hide")
     }
