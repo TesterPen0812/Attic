@@ -482,23 +482,31 @@ enum PanelCollapseGeometry {
     /// A swipe's close or spring-back under Reduced motion: a short fade.
     static let reducedFadeDuration: TimeInterval = 0.18
 
+    /// `anchor` is the point the panel shrinks into, in the layer's bounds
+    /// coordinates; nil is the surface's own corner. The docked panel
+    /// passes the island's outer corner (Accepted "Tall island", "Hiding
+    /// and showing as one shape").
     static func transform(
         progress: CGFloat, visibleBounds: CGRect, layerBounds: CGRect,
-        corner: ScreenCorner, reduceMotion: Bool = false, layerAnchor: CGPoint? = nil
+        corner: ScreenCorner, reduceMotion: Bool = false, layerAnchor: CGPoint? = nil, anchor: CGPoint? = nil
     ) -> CGAffineTransform {
         guard !reduceMotion else { return .identity }
         let progress = progress.isFinite ? min(1, max(0, progress)) : 0
         let scale = 1 - progress * (1 - collapsedScale)
-        let right = corner == .topRight || corner == .bottomRight
-        let top = corner == .topRight || corner == .topLeft
-        let anchor = CGPoint(x: right ? visibleBounds.maxX : visibleBounds.minX,
-                             y: top ? visibleBounds.maxY : visibleBounds.minY)
+        let anchor = anchor ?? cornerPoint(of: visibleBounds, corner: corner)
         let pivot = layerAnchor ?? CGPoint(x: layerBounds.midX, y: layerBounds.midY)
         return CGAffineTransform(
             a: scale, b: 0, c: 0, d: scale,
             tx: (anchor.x - pivot.x) * (1 - scale),
             ty: (anchor.y - pivot.y) * (1 - scale)
         )
+    }
+
+    /// `rect`'s corner on `corner`'s side.
+    static func cornerPoint(of rect: CGRect, corner: ScreenCorner) -> CGPoint {
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topRight || corner == .topLeft
+        return CGPoint(x: right ? rect.maxX : rect.minX, y: top ? rect.maxY : rect.minY)
     }
 }
 
