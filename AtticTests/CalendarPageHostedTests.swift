@@ -147,8 +147,8 @@ final class CalendarPageHostedTests: XCTestCase {
     }
 
     /// The agenda's task rows behave as the Tasks rows do, in the mounted
-    /// page: a real click on the title selects, Return's command renames
-    /// the selected task, Open page and a real double-click open it.
+    /// page: a real click on the title selects, Return's command and a real
+    /// double-click rename the task, Open page opens it.
     func testAgendaTaskRowsSelectOnAClickRenameAndOpenInTheMountedPage() throws {
         let id = UUID()
         var opened: [UUID] = []
@@ -184,8 +184,8 @@ final class CalendarPageHostedTests: XCTestCase {
             page.click(at: title, count: 1)
             page.click(at: title, count: 2)
             page.settle()
-            XCTAssertEqual(opened, [id, id], "a real double-click opens it")
-            XCTAssertNil(rows.renaming, "and does not rename")
+            XCTAssertEqual(rows.renaming, id, "a real double-click edits the title (owner, 2026-10-31)")
+            XCTAssertEqual(opened, [id], "and opens nothing")
         }
     }
 

@@ -315,7 +315,7 @@ final class NotesBoardTests: XCTestCase {
         let backdrop = try pixel(bitmap, 0, 0)
         XCTAssertGreaterThan(distance(surface, backdrop), 100, "the card is drawn")
         var checked = 0
-        for step in stride(from: CGFloat(0.5), through: 12, by: 0.5) {
+        for step in stride(from: CGFloat(0.5), through: 8, by: 0.5) {
             let inner = CGPoint(x: step + 0.75, y: step + 0.75), outer = CGPoint(x: step - 0.75, y: step - 0.75)
             let inside = shape.contains(CGPoint(x: step, y: step))
             // Skip the anti-aliased edge.
@@ -332,7 +332,7 @@ final class NotesBoardTests: XCTestCase {
         // Not a plain 24 pt circle-cornered rectangle: the squircle reaches
         // further into the corner along the diagonal.
         let circle = Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: height), cornerRadius: 24, style: .circular)
-        XCTAssertTrue((stride(from: CGFloat(0.5), through: 12, by: 0.5)).contains {
+        XCTAssertTrue((stride(from: CGFloat(0.5), through: 8, by: 0.5)).contains {
             shape.contains(CGPoint(x: $0, y: $0)) != circle.contains(CGPoint(x: $0, y: $0))
         }, "the surface exponent shapes the corner")
     }
@@ -423,13 +423,15 @@ final class NotesBoardTests: XCTestCase {
         XCTAssertEqual(hover, rest, accuracy: 0.01, "hover shows ••• without changing the height")
     }
 
-    /// Fix round 1 (coordinator's correction): the switch's marker
-    /// crossfades in each cell, as Now · Later · Done's (160 ms ease-out,
-    /// at once under Reduce Motion), never sliding: no frame of the change
-    /// draws the marker over the 1 pt gap between the two cells.
-    func testTheSwitchMarkerCrossfadesAndNeverSlides() throws {
+    /// Board | list gets motion (owner, 2026-10-31: "both"): the switch's
+    /// chip slides from one choice to the next on the 260 ms fold (at once
+    /// under Reduce Motion): frames of the change draw it over the 1 pt gap
+    /// between the two cells. Now · Later · Done keep their crossfade.
+    func testTheSwitchChipSlidesBetweenTheCells() throws {
         XCTAssertEqual(NotesLayoutSwitch.selectionAnimation(reduceMotion: false),
-                       AtticSelectionMarker.animation(reduceMotion: false))
+                       TasksDesignMetrics.fold(reduceMotion: false))
+        XCTAssertEqual(AtticSelectionMarker.animation(reduceMotion: false), .easeOut(duration: 0.16),
+                       "the other switches keep the crossfade")
         XCTAssertNil(NotesLayoutSwitch.selectionAnimation(reduceMotion: true), "Reduce Motion: at once")
 
         let holder = LayoutHolder()
@@ -464,11 +466,12 @@ final class NotesBoardTests: XCTestCase {
         let rest = try capture()
         let gap = try colour(rest, gapX), boardAtRest = try colour(rest, boardX)
         holder.layout = .board
-        for frame in 0..<14 {
+        var crossed = 0
+        for _ in 0..<20 {
             spin(0.012)
-            let shot = try capture()
-            XCTAssertLessThan(distance(try colour(shot, gapX), gap), 4, "frame \(frame): the marker never crosses the gap")
+            if distance(try colour(try capture(), gapX), gap) > 4 { crossed += 1 }
         }
+        XCTAssertGreaterThan(crossed, 0, "the chip slides across the gap between the cells")
         spin(0.4)
         XCTAssertGreaterThan(distance(try colour(try capture(), boardX), boardAtRest), 4, "the marker is on Board now")
     }

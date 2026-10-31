@@ -70,10 +70,12 @@ final class TasksGoingInTests: XCTestCase {
         XCTAssertEqual(AtticShape.controlRadius(height: AtticRowOpenMetrics.size), 9, "a whole superellipse")
     }
 
-    func testOnlyTheSecondClickOfADoubleClickOpens() {
-        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 1, opens: true), .select, "a click (the title's too) selects")
-        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, opens: true), .open)
-        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, opens: false), .select, "no page: the row's own double-click")
+    /// Owner, 2026-10-31: a double-click edits the title in place, as
+    /// Return does (it replaces "a double-click opens the page").
+    func testTheSecondClickOfADoubleClickEditsTheTitle() {
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 1, edits: true), .select, "a click (the title's too) selects")
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, edits: true), .editTitle)
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, edits: false), .select, "no title editing: it selects")
     }
 
     /// Drawn: the selected row's date ends 24 pt left of an unselected
@@ -444,7 +446,9 @@ final class TasksGoingInHostedTests: XCTestCase {
         return (row.id, try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row.id)]))
     }
 
-    func testADoubleClickOnTheRowOpensThePageButNotOnItsRingOrDate() throws {
+    /// Owner, 2026-10-31: a double-click on the row (not its ring or date)
+    /// edits the title in place; it no longer opens the page.
+    func testADoubleClickOnTheRowEditsTheTitleButNotOnItsRingOrDate() throws {
         let hosted = try hosted()
         defer { hosted.close() }
         let (id, frame) = try datedRow(hosted)
@@ -460,12 +464,14 @@ final class TasksGoingInHostedTests: XCTestCase {
         XCTAssertEqual(hosted.model.selection, [id], "a click on the title selects")
         XCTAssertEqual(opened, [], "and opens nothing")
         XCTAssertNil(hosted.model.editingTitleID)
-        // The second click of a double-click anywhere else on the row opens it.
+        // The second click of a double-click anywhere else on the row edits
+        // its title.
         post(hosted, at: title, clickCount: 2)
         hosted.spin(0.3)
-        XCTAssertEqual(opened, [id], "a double-click opens the page")
-        XCTAssertNil(hosted.model.editingTitleID, "it no longer renames")
-        XCTAssertEqual(hosted.model.selection, [id], "the row stays the anchor Back returns to")
+        XCTAssertEqual(hosted.model.editingTitleID, id, "a double-click edits the title")
+        XCTAssertEqual(opened, [], "and opens nothing")
+        XCTAssertEqual(hosted.model.selection, [id])
+        hosted.model.cancelEditing()
         XCTAssertEqual(hosted.model.tab, .now)
         // The date takes its own clicks too (with no selection it is back
         // in its place).
@@ -608,8 +614,8 @@ final class TasksGoingInHostedTests: XCTestCase {
 
     // MARK: - Done (review 3)
 
-    /// Done's rows go in the same way: the ›, a double-click and ⇧⌘I open
-    /// the task's page; its details stay in the menu.
+    /// Done's rows go in the same way: the › and ⇧⌘I open the task's page
+    /// (a double-click edits the title); its details stay in the menu.
     func testDoneRowsOpenTheirPageLikeNowAndLater() throws {
         let hosted = try hosted()
         defer { hosted.close() }
@@ -625,8 +631,9 @@ final class TasksGoingInHostedTests: XCTestCase {
         hosted.model.clearSelection()
         let line = frame.minY + TasksRowDesign.paddingY + TasksRowDesign.line / 2
         doubleClick(hosted, at: CGPoint(x: frame.minX + TasksDesignMetrics.textX + 8, y: line))
-        XCTAssertEqual(opened, [row.id, row.id], "a double-click opens it")
-        XCTAssertNil(hosted.model.editingTitleID, "and no longer renames")
+        XCTAssertEqual(hosted.model.editingTitleID, row.id, "a double-click edits its title (owner, 2026-10-31)")
+        XCTAssertEqual(opened, [row.id], "and opens nothing")
+        hosted.model.cancelEditing()
         // Selected, its › shows.
         hosted.model.selectOnly(row.id)
         hosted.spin(0.6)

@@ -41,6 +41,8 @@ struct NotesLibraryView: View {
     }
     @StateObject var keys = NotesLibraryKeys()
     @State private var keyOwner = UUID()
+    /// Board | list: the notes move between their rows and cards.
+    @Namespace private var layoutMotion
     /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
     @State private var anchors = AtticNoteRowAnchors()
     @State private var reveal = NotesLibraryReveal()
@@ -435,6 +437,7 @@ struct NotesLibraryView: View {
                                         // Rows sit 2 apart, no dividers.
                                         .padding(.top, row.id == group.rows.first?.id ? 0 : NotesLibraryRowMetrics.rowGap)
                                         .padding(.horizontal, AtticNoteMetrics.libraryHighlightInset)
+                                        .matchedGeometryEffect(id: row.id, in: layoutMotion)
                                         .id(row.id)
                                         .background { NotesRevealAnchor(id: row.id, reveal: reveal) }
                                         .atticContextMenu { rowCommands(row.id) }
@@ -524,6 +527,9 @@ struct NotesLibraryView: View {
                             commands: { rowCommands(row.id) }, anchors: anchors,
                             onShowActions: { showActions(for: row.id, menu: .hover) }, onOpen: { onOpen(row.id) })
                             .equatable()
+                            // Board | list (owner, 2026-10-31): each note moves
+                            // from its row to its card and back.
+                            .matchedGeometryEffect(id: row.id, in: layoutMotion)
                             .id(row.id)
                             .background { NotesRevealAnchor(id: row.id, reveal: reveal) }
                             .atticContextMenu { rowCommands(row.id) }

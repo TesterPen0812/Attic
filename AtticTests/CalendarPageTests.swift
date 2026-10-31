@@ -294,8 +294,8 @@ final class CalendarPageTests: XCTestCase {
         let click = try XCTUnwrap(row.onSelect, "a single click no longer falls back to Open Page")
         click()
         XCTAssertEqual(opened, [], "a single click opens nothing")
-        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, opens: row.onOpenPage != nil), .open, "a double-click opens")
-        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 1, opens: row.onOpenPage != nil), .select)
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 2, edits: true), .editTitle, "a double-click edits the title")
+        XCTAssertEqual(AtticTaskRow.clickRoute(clickCount: 1, edits: true), .select)
         XCTAssertTrue(AtticTaskRow.showsOpenButton(hovered: true, selected: false, renaming: false, opens: row.onOpenPage != nil),
                       "the › shows on a hovered Calendar row")
         row.onOpenPage?()
