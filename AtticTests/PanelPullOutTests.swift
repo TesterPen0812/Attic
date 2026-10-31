@@ -171,7 +171,7 @@ final class PanelPullOutTests: XCTestCase {
 /// The pull-out with real panels in the invisible test host.
 @MainActor
 final class PanelPullOutHostedTests: XCTestCase {
-    private struct Rig {
+    @MainActor private struct Rig {
         let controller: AtticPanelController
         let state: PanelUIState
         let panel: AtticPanel
@@ -242,7 +242,8 @@ final class PanelPullOutHostedTests: XCTestCase {
             let item = try XCTUnwrap(elements(rig.island.island.contentView!).first {
                 ($0.accessibilityIdentifier?() ?? "") == PanelPage.tasks.accessibilityIdentifier })
             XCTAssertEqual(item.accessibilityLabel?(), "Tasks")
-            XCTAssertEqual(item.accessibilityValue?() as? String, "In its own panel")
+            XCTAssertEqual((item as? NSObject)?.perform(Selector(("accessibilityValue")))?.takeUnretainedValue() as? String,
+                           "In its own panel")
             // VoiceOver's press (a click) brings its panel forward.
             XCTAssertTrue(item.accessibilityPerformPress?() ?? false)
             spin(0.2)
@@ -293,7 +294,7 @@ final class PanelPullOutHostedTests: XCTestCase {
             // Anywhere else: it stays where it was dropped.
             try pull(.notes, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
             let notes = try XCTUnwrap(rig.pullOut.panel(for: .notes))
-            let away = notes.visibleFrame.offsetBy(dx: 60, dy: -50)
+            let away = notes.visibleFrame.offsetBy(dx: 60, dy: 50)
             notes.hostingViewForTesting.onWindowDragBegan?()
             let moved = try XCTUnwrap(notes.hostingViewForTesting.onWindowDragChanged)(away, CGPoint(x: away.midX, y: away.maxY - 21))
             notes.setFrame(moved)
@@ -366,7 +367,7 @@ final class PanelPullOutHostedTests: XCTestCase {
             spin(1.0)
             let host = floating.hostingViewForTesting
             let docked = try XCTUnwrap((rig.panel.contentView as? AtticPanelContentContainer)?.hostingView)
-            func element(_ id: String, in view: NSView) -> AnyObject? {
+            @MainActor func element(_ id: String, in view: NSView) -> AnyObject? {
                 elements(view).first { ($0.accessibilityIdentifier?() ?? "") == id }
             }
             // "+" opens the card in this panel, on Tasks.
