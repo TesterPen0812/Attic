@@ -414,19 +414,24 @@ struct AtticPageButton<Page: Hashable>: View {
                 .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
             // The owner's panel design: shut, a small chevron after the
-            // current page says it opens.
-            if !open {
-                // The marker sits just before it and the button's rim just
-                // after, so the check reads its own surface inside the
-                // chevron's frame, where the V never draws.
-                AtticIcon(systemName: "chevron.down", size: 7, weight: .semibold, ink: .chevron)
-                    .probeBackground([CGPoint(x: 0.5, y: 0.06), CGPoint(x: 0.06, y: 0.94), CGPoint(x: 0.94, y: 0.94)])
-                    .frame(width: M.chevronWidth, height: M.segment)
-                    .transition(.opacity)
-                    .accessibilityHidden(true)
-            }
+            // current page says it opens. It narrows away in the open's own
+            // motion (never a fade left where the pages now grow), so the
+            // button's edge and what follows it move as one.
+            // The marker sits just before it and the button's rim just
+            // after, so the check reads its own surface inside the
+            // chevron's frame, where the V never draws.
+            AtticIcon(systemName: "chevron.down", size: 7, weight: .semibold, ink: .chevron)
+                .probeBackground([CGPoint(x: 0.5, y: 0.06), CGPoint(x: 0.06, y: 0.94), CGPoint(x: 0.94, y: 0.94)])
+                .frame(width: M.chevronWidth, height: M.segment)
+                .frame(width: open ? 0 : M.chevronWidth, alignment: .leading)
+                .opacity(open ? 0 : 1)
+                .clipped()
+                .accessibilityHidden(true)
         }
         .padding(M.inset)
+        // The icons come and go inside the button's own bounds: nothing
+        // draws past its edge onto the bar it pushes (owner, 2026-10-31).
+        .clipped()
         .frame(height: size)
         .modifier(AtticPageButtonSurface(flat: flat, cornerRadius: radius, hovered: hovering))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: radius)
@@ -439,14 +444,17 @@ struct AtticPageButton<Page: Hashable>: View {
             switch phase {
             case .active:
                 guard !hovering, AtticHoverGate.opens(pressedButtons: NSEvent.pressedMouseButtons) else { return }
-                hovering = true
+                // One transaction for the open and whatever it pushes: the
+                // bar after it follows its edge on every frame, both ways
+                // (owner, 2026-10-31), on the open's own motion.
+                withAnimation(expandAnimation) { hovering = true }
                 onApproach()
             case .ended:
-                if hovering { hovering = false }
+                if hovering { withAnimation(expandAnimation) { hovering = false } }
                 hoveredPage = nil
             }
         }
-        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: open)
+        .animation(expandAnimation, value: open)
         // The header title makes room while it is open (OD-11).
         .onChange(of: open) { _, isOpen in presence?.set(isOpen) }
         .onDisappear { presence?.set(false) }
@@ -465,6 +473,11 @@ struct AtticPageButton<Page: Hashable>: View {
         .accessibilityLabel(String(localized: "Pages"))
         .atticControlProbe("Page button", id: probeID, expectedSize: open ? nil : CGSize(width: Self.width(open: false, count: items.count), height: size),
                            radius: radius, expectedRadius: AtticRadius.header)
+    }
+
+    /// The open and the fold (the expand preset, as before).
+    private var expandAnimation: Animation? {
+        AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)
     }
 
     private func select(_ page: Page) {
