@@ -72,9 +72,6 @@ enum CalendarDesign {
     static let freeGap: CGFloat = 7
     static let freeHairline: CGFloat = 0.5
 
-    /// The agenda fades in over 40 px under the pinned week (Accepted
-    /// 2026-10-30, "Scrolling": a plain gradient, no native soft edge).
-    static let agendaFade: CGFloat = 20
 
     // Event rows: padding 12 × 14 px, the 28 px dot column, 20 px to the
     // title; dot 12 px; title 24 px (500) on 30 px; second line 22 px on

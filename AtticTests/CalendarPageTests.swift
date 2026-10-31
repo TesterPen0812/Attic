@@ -434,15 +434,16 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertTrue(CalendarTodayButton.isShown(selected: day(2026, 9, 1), today: day(2026, 10, 29)))
     }
 
-    func testAgendaFadesUnderThePinnedWeekAsAGradientWithNoSoftEdge() throws {
+    /// No fade under the bars (owner, 2026-10-31): the agenda is cut clean
+    /// under the pinned week, at full strength right below it.
+    func testAgendaIsCutCleanUnderThePinnedWeekWithNoFade() throws {
         let size = CGSize(width: 40, height: 120)
         let pinned = try render(AnyView(CalendarScrollMask(pinned: true)), size: size)
         let top = CalendarDesign.weekPitch
         func a(_ y: CGFloat) throws -> Double { try alpha(pinned, px: 40, py: Int(y * 2)) }
         XCTAssertLessThan(try a(top - 2), 0.01, "hidden under the pinned week")
-        XCTAssertEqual(try a(top + CalendarDesign.agendaFade / 2), 0.5, accuracy: 0.15, "half way through the fade")
-        XCTAssertGreaterThan(try a(top + CalendarDesign.agendaFade + 2), 0.99, "full below the fade")
-        XCTAssertEqual(CalendarDesign.agendaFade, 20, "a 40 px fade")
+        XCTAssertGreaterThan(try a(top + 1), 0.99, "full right below it: no fade")
+        XCTAssertGreaterThan(try a(top + 10), 0.99)
         let unpinned = try render(AnyView(CalendarScrollMask(pinned: false)), size: size)
         XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: 4), 0.99, "nothing hidden before the week pins")
         XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: 40), 0.99)

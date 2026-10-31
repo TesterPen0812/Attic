@@ -98,8 +98,7 @@ struct CalendarPage: View {
             if flags != new { flags = new }
         }
         // While the selected week is pinned, what scrolls under it is hidden
-        // behind it and fades in below it (a static gradient), and its copy
-        // stays put above.
+        // behind it, cut clean (no fade), and its copy stays put above.
         .mask(alignment: .top) { CalendarScrollMask(pinned: flags.pinned) }
         .overlay(alignment: .top) {
             if flags.pinned, let pinnedIndex, weeks.indices.contains(pinnedIndex) {
@@ -215,15 +214,12 @@ struct CalendarPage: View {
 }
 
 /// The agenda's mask: everything shows until the selected week pins; then
-/// what scrolls under the pinned week is hidden and fades in over
-/// `CalendarDesign.agendaFade` below it (Accepted 2026-10-30, "Scrolling").
-/// A static gradient: it changes only when the week pins or unpins.
-/// The fade itself comes and goes in the hover motion (the design's quick
-/// fade); the cut under the pinned week is immediate, as the pinned copy is.
+/// what scrolls under the pinned week is hidden, cut clean at its edge with
+/// no fade (owner, 2026-10-31: "no fade under the bars", Clean cut; it
+/// replaces the 40 px fade of Accepted 2026-10-30 "Scrolling"). The cut is
+/// immediate, as the pinned copy is.
 struct CalendarScrollMask: View {
     let pinned: Bool
-
-    @Environment(\.atticDesign) private var design
 
     #if DEBUG
     /// Test seam: the `pinned` of each body run, so a hosted test can see
@@ -237,9 +233,6 @@ struct CalendarScrollMask: View {
         #endif
         VStack(spacing: 0) {
             Color.clear.frame(height: pinned ? CalendarDesign.weekPitch : 0)
-            LinearGradient(colors: [.black.opacity(pinned ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
-                .frame(height: CalendarDesign.agendaFade)
-                .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: pinned)
             Color.black
         }
     }
