@@ -195,7 +195,7 @@ final class PanelPullOutHostedTests: XCTestCase {
             rig.state.selectSection(.tasks)
             spin(0.3)
             let start = rig.itemCentre(.tasks)
-            let drop = CGPoint(x: rig.workArea.midX - 200, y: rig.workArea.midY + 100)
+            let drop = CGPoint(x: rig.workArea.midX - 200, y: rig.workArea.midY)
             rig.island.handlePointer(.down(start))
             rig.island.handlePointer(.dragged(CGPoint(x: start.x - 5, y: start.y)))
             XCTAssertNil(rig.pullOut.panel(for: .tasks), "5 pt is still a press")
