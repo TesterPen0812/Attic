@@ -179,6 +179,9 @@ final class PanelIslandModel: ObservableObject {
 struct PanelIslandView: View {
     @ObservedObject var model: PanelIslandModel
     @ObservedObject var focusTracker: AtticKeyboardFocusTracker
+    /// The stand-in that flies with the panel's hide and reveal: the same
+    /// drawing, but nothing to press, point at, focus or hear.
+    var isStandIn = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
@@ -190,47 +193,13 @@ struct PanelIslandView: View {
     var body: some View {
         let radius = AtticRadius.header
         let chipRadius = AtticRadius.nested(outer: radius, gap: L.inset) ?? radius
-        let shape = AtticControlShape.shape(cornerRadius: chipRadius, exponent: cornerExponent)
         VStack(spacing: L.gap) {
             ForEach(L.pages) { page in
-                let isSelected = page == model.page
-                Button { model.click(page) } label: {
-                    ZStack {
-                        if isSelected {
-                            AtticSelectionMarker(cornerRadius: chipRadius)
-                                .transition(AtticSelectionMarker.transition)
-                        } else if model.pointed == page {
-                            shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
-                        }
-                        let face = L.face(isSelected: isSelected, solid: design.effectiveSurface == .solid)
-                        AtticIcon(systemName: page.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
-                        // A page that's out: a 4 pt blue dot at the item's
-                        // top-right corner (the design's 8 px, 6 px in).
-                        Circle()
-                            .fill(PanelPullOutLayout.blue)
-                            .frame(width: PanelPullOutLayout.outDot, height: PanelPullOutLayout.outDot)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                            .padding(PanelPullOutLayout.outDotInset)
-                            .opacity(model.outPages.contains(page) ? 1 : 0)
-                            .accessibilityHidden(true)
-                    }
-                    .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: isSelected)
-                    .frame(width: L.item, height: L.item)
-                    .contentShape(Rectangle())
+                if isStandIn {
+                    face(page, chipRadius: chipRadius)
+                } else {
+                    item(page, chipRadius: chipRadius)
                 }
-                .buttonStyle(.plain)
-                .focused($focused, equals: page)
-                .focusEffectDisabled()
-                // Outlines are for keyboard focus only (Owner notes on
-                // Attic Wave 2, "No outline from a click").
-                .atticFocusRing(focused == page && focusTracker.isKeyboardDriving, cornerRadius: chipRadius)
-                .onHover { inside in
-                    if inside { model.point(at: page) } else { model.leave(page) }
-                }
-                .accessibilityLabel(page.title)
-                .accessibilityValue(model.outPages.contains(page) ? String(localized: "In its own panel") : "")
-                .accessibilityIdentifier(page.accessibilityIdentifier)
-                .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
         }
         .padding(L.inset)
@@ -256,9 +225,59 @@ struct PanelIslandView: View {
         }
         .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: cornerExponent))
         .padding(L.windowMargin)
-        .accessibilityElement(children: .contain)
+        .accessibilityElement(children: isStandIn ? .ignore : .contain)
         .accessibilityLabel(String(localized: "Pages"))
-        .accessibilityIdentifier("panel-section-picker")
+        .accessibilityIdentifier(isStandIn ? "" : "panel-section-picker")
+        .accessibilityHidden(isStandIn)
+        .allowsHitTesting(!isStandIn)
+    }
+
+    /// An item as drawn: the chip or hover fill, the icon and the out dot.
+    private func face(_ page: PanelPage, chipRadius: CGFloat) -> some View {
+        let isSelected = page == model.page
+        let shape = AtticControlShape.shape(cornerRadius: chipRadius, exponent: cornerExponent)
+        return ZStack {
+            if isSelected {
+                AtticSelectionMarker(cornerRadius: chipRadius)
+                    .transition(AtticSelectionMarker.transition)
+            } else if model.pointed == page {
+                shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
+            }
+            let face = L.face(isSelected: isSelected, solid: design.effectiveSurface == .solid)
+            AtticIcon(systemName: page.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
+            // A page that's out: a 4 pt blue dot at the item's
+            // top-right corner (the design's 8 px, 6 px in).
+            Circle()
+                .fill(PanelPullOutLayout.blue)
+                .frame(width: PanelPullOutLayout.outDot, height: PanelPullOutLayout.outDot)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(PanelPullOutLayout.outDotInset)
+                .opacity(model.outPages.contains(page) ? 1 : 0)
+                .accessibilityHidden(true)
+        }
+        .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: isSelected)
+        .frame(width: L.item, height: L.item)
+        .contentShape(Rectangle())
+    }
+
+    private func item(_ page: PanelPage, chipRadius: CGFloat) -> some View {
+        let isSelected = page == model.page
+        return Button { model.click(page) } label: {
+            face(page, chipRadius: chipRadius)
+        }
+        .buttonStyle(.plain)
+        .focused($focused, equals: page)
+        .focusEffectDisabled()
+        // Outlines are for keyboard focus only (Owner notes on
+        // Attic Wave 2, "No outline from a click").
+        .atticFocusRing(focused == page && focusTracker.isKeyboardDriving, cornerRadius: chipRadius)
+        .onHover { inside in
+            if inside { model.point(at: page) } else { model.leave(page) }
+        }
+        .accessibilityLabel(page.title)
+        .accessibilityValue(model.outPages.contains(page) ? String(localized: "In its own panel") : "")
+        .accessibilityIdentifier(page.accessibilityIdentifier)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }
 
@@ -432,6 +451,18 @@ private final class PanelIslandHostingView<Root: View>: NSHostingView<Root> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// The island's stand-in in the panel's motion layer: never hit, never an
+/// accessibility element, so at rest the island windows stay the live
+/// island.
+private final class PanelIslandStandInHostingView<Root: View>: NSHostingView<Root> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? { nil }
+    override var acceptsFirstResponder: Bool { false }
+    override var canBecomeKeyView: Bool { false }
+}
+
 /// The island and its label, child windows of the Attic panel (Accepted
 /// "Tall island": "it shows, hides and moves with the panel"). The panel's
 /// controller places them from the panel's frame, shows and hides them with
@@ -447,6 +478,14 @@ final class PanelIslandWindows {
     /// Pulls off the island (the pull-out answers them).
     var onPull: ((PanelIslandPull) -> Void)?
     private var pullTracker = PanelIslandPullTracker()
+    /// The island drawn in the panel's motion layer, so it hides and shows
+    /// as one shape with the panel (Accepted "Tall island", "Hiding and
+    /// showing as one shape"). The panel's content container places it
+    /// over the island window and shows it only while the panel moves.
+    let standIn: NSView
+    /// While the stand-in shows the island: how shown the island is meant
+    /// to be (the motion's end), in place of the windows' own content.
+    private(set) var handedOffShown: CGFloat?
 
     init(model: PanelIslandModel, uiState: PanelUIState, settings: AppSettings) {
         self.model = model
@@ -475,7 +514,29 @@ final class PanelIslandWindows {
         label.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
             settings: settings, model: model, uiState: uiState, content: PanelIslandLabels(model: model)))
         label.setAccessibilityElement(false)
+        let standIn = PanelIslandStandInHostingView(rootView: PanelIslandKeyed(
+            settings: settings, model: model, uiState: uiState,
+            content: PanelIslandView(model: model, focusTracker: uiState.keyboardFocus, isStandIn: true)))
+        standIn.setAccessibilityElement(false)
+        self.standIn = standIn
         island.onPointer = { [weak self] pointer in self?.handlePointer(pointer) }
+    }
+
+    /// The panel starts to move: the stand-in in its motion layer takes
+    /// over (the caller shows it in the same transaction) and the windows'
+    /// content goes. `shown` is where the motion takes the island.
+    func handOff(shown: CGFloat) {
+        let already = handedOffShown != nil
+        handedOffShown = min(max(shown, 0), 1)
+        // A swipe calls this on every event: the windows' content goes once.
+        if !already { setPresentation(0) }
+    }
+
+    /// The motion has ended with the panel shown: the windows are the live
+    /// island again (the caller hides the stand-in in the same transaction).
+    func takeBack() {
+        handedOffShown = nil
+        setPresentation(1)
     }
 
     /// A press on an item may pull its page out; while it does, the press's
@@ -582,8 +643,9 @@ final class PanelIslandWindows {
 
     private static let fadeKey = "attic.island.presentation"
 
-    /// How shown the island is meant to be (the fade's end).
-    var shownAlpha: CGFloat { island.contentView?.alphaValue ?? 0 }
+    /// How shown the island is meant to be (the fade's end, or the motion's
+    /// while the stand-in shows it).
+    var shownAlpha: CGFloat { handedOffShown ?? island.contentView?.alphaValue ?? 0 }
 
     /// Whether `point` (screen) is on the island's capsule while it shows.
     func contains(_ point: CGPoint) -> Bool {

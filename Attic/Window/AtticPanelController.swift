@@ -313,6 +313,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self?.updateDockingIndicator(corner: corner)
             self?.layoutIsland(previewCorner: corner)
         }.store(in: &cancellables)
+        // The island flies in Genie's snapshot (its stand-in): what it
+        // shows makes a snapshot taken before stale.
+        uiState.island.$page.removeDuplicates().map { _ in false }
+            .merge(with: uiState.island.$outPages.removeDuplicates().map { _ in false },
+                   uiState.island.$pointed.removeDuplicates().map { _ in true })
+            .dropFirst(3)
+            .sink { [weak self] hoverOnly in self?.contentContainer?.noteContentMayChange(hoverOnly: hoverOnly) }
+            .store(in: &cancellables)
         // Saved data may change what the panel shows, hidden or not: a
         // snapshot taken before it is stale.
         NotificationCenter.default.publisher(for: ModelContext.didSave).receive(on: RunLoop.main)
@@ -504,6 +512,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             if mustEstablishOnTargetDisplay {
                 panel.setVisibleContentFrame(finalFrame, display: true)
                 prepareCollapsedPresentation(corner: corner)
+                handIslandToMotion(shown: 1)
             }
 
             if makeKey {
@@ -522,8 +531,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.setVisibleContentFrame(finalFrame, display: true)
         prepareCollapsedPresentation(corner: corner)
         panel.alphaValue = 1
-        // A reveal from hidden: the island comes in on the panel's motion.
-        islandWindows.setPresentation(0)
+        // A reveal from hidden: the island grows out of the corner with the
+        // panel, drawn by its stand-in in the motion layer.
+        handIslandToMotion(shown: 1)
 
         performanceVisibilityChanges += 1
 
@@ -555,6 +565,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 guard self.visibilityTransition.completeTransition(generation) else { return }
                 self.isShowing = false
+                // Shown and at rest: the island's windows are the live island again.
+                self.handIslandBackToWindows()
                 self.scheduleIdlePrepare()
                 if self.needsResizeAfterShowing {
                     self.needsResizeAfterShowing = false
@@ -623,6 +635,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         hideFadesWhenReduced = false
         // Unpinned floating panels hide with it; pinned ones stay.
         pullOut.dockedWillHide(duration: settings.hideMotionDuration(.slide, hiding: true))
+        // The island shrinks into the corner with the panel, as one shape.
+        handIslandToMotion(shown: 0)
         animatePanel(to: targetFrame, collapseProgress: 1,
                      duration: settings.hideMotionDuration(.slide, hiding: true), reducedFade: reducedFade) { [weak self] in
             MainActor.assumeIsolated {
@@ -645,13 +659,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func configurePanel() {
         let visibleFrame = panel.frame
         panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
-        panel.surfaceMargin = AtticStyle.panelElevationMargin
+        // Room for the island's region too: the panel and the island hide
+        // into the island's outer corner, inside this window.
+        panel.surfaceMargin = AtticStyle.dockedPanelMargin
         panel.setVisibleContentFrame(visibleFrame, display: false)
-        panel.contentView = AtticPanelContentContainer(
+        let container = AtticPanelContentContainer(
             hostingView: hostingView,
             visibleSize: visibleFrame.size,
             perimeter: panel.nativeMargin
         )
+        container.installIslandStandIn(islandWindows.standIn)
+        panel.contentView = container
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = AtticStyle.panelUsesSystemShadow
@@ -1127,6 +1145,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 ))
             }
             uiState.setInteractionLock(.panelSwipe, isActive: true)
+            // The island goes with the panel under the fingers, as one shape.
+            handIslandToMotion(shown: 1)
         }
         lastSwipeDistance = distance
         #if DEBUG
@@ -1142,8 +1162,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     @discardableResult
     private func applyInteractiveDismissal(recordsSample: Bool) -> CGFloat {
         let collapse = followInteractiveDismissal(recordsSample: recordsSample)
-        // The island goes with the panel under the fingers.
-        islandWindows.setPresentation(1 - collapse)
+        // The island goes with the panel under the fingers (its stand-in
+        // is in the motion layer); how shown it is meant to be follows.
+        islandWindows.handOff(shown: 1 - collapse)
         return collapse
     }
 
@@ -1264,8 +1285,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func restoreFullPresentation() {
         clearInteractiveDismissal()
-        islandWindows.setPresentation(1)
         contentContainer?.setCollapseProgress(0, corner: currentCorner, reduceMotion: true)
+        handIslandBackToWindows()
         contentContainer?.allowsContentInteraction = true
     }
 
@@ -1398,11 +1419,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             } completionHandler: {
                 MainActor.assumeIsolated { finishes.finishFrame() }
             }
-            // The island fades alongside, on the animation's own time and
-            // curve (Swoop's hide eases in and out).
-            islandWindows.setPresentation(1 - collapseProgress, duration: duration, timing: hiding
-                ? CAMediaTimingFunction(controlPoints: 0.42, 0, 0.58, 1)
-                : CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1))
+            // The island's stand-in is in the motion layer: it moves with
+            // the panel on this run (`handIslandToMotion`).
             return
         }
         let duration = fades ? PanelCollapseGeometry.reducedFadeDuration
@@ -1434,9 +1452,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
         )
         if contentContainer == nil { finishes.finishPresentation() }
-        // The island fades with the panel's own duration and curve.
-        islandWindows.setPresentation(1 - collapseProgress, duration: duration,
-                                      timing: CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1))
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
@@ -1580,6 +1595,48 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func layoutIsland(previewCorner: ScreenCorner?? = nil) {
         let corner = (previewCorner ?? uiState.dockingPreviewCorner) ?? currentCorner
         islandWindows.layout(panelFrame: panel.visibleContentFrame, corner: corner)
+        // The stand-in waits over the island window, transparent (a Genie
+        // snapshot taken at rest draws it).
+        if contentContainer?.isIslandStandInShown == false { contentContainer?.placeIslandStandIn(corner: corner) }
+    }
+
+    /// The panel starts to move (a hide, a reveal from hidden or a swipe):
+    /// the island's stand-in in the panel's motion layer takes over from
+    /// its windows in one transaction, so the two hide and show as one
+    /// shape, on one transform, with no window moves (Accepted "Tall
+    /// island", "Hiding and showing as one shape"). `shown`: where the
+    /// motion takes the island (1 shown, 0 hidden).
+    private func handIslandToMotion(shown: CGFloat) {
+        let swaps = contentContainer?.isIslandStandInShown == false
+        if swaps { islandSwapProbe?(false, true) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // Placed for this motion's corner (a reveal may be in a new one).
+        contentContainer?.placeIslandStandIn(corner: currentCorner)
+        if swaps { contentContainer?.setIslandStandInShown(true) }
+        islandWindows.handOff(shown: shown)
+        CATransaction.commit()
+        if swaps { islandSwapProbe?(true, true) }
+    }
+
+    /// Tests: called just before (`after` false) and just after each swap
+    /// between the island's windows and its stand-in (`toMotion`: to the
+    /// stand-in).
+    var islandSwapProbe: ((_ after: Bool, _ toMotion: Bool) -> Void)?
+
+    /// The panel is shown and at rest again: the island's windows are the
+    /// live island and the stand-in steps back, in one transaction.
+    private func handIslandBackToWindows() {
+        guard islandWindows.handedOffShown != nil || contentContainer?.isIslandStandInShown == true else { return }
+        layoutIsland()
+        islandSwapProbe?(false, false)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        islandWindows.takeBack()
+        contentContainer?.setIslandStandInShown(false)
+        CATransaction.commit()
+        islandSwapProbe?(true, false)
+        contentContainer?.placeIslandStandIn(corner: islandWindows.corner)
     }
 
     private func showIsland() {

@@ -1149,6 +1149,85 @@ final class AtticPanelContentContainer: NSView {
     /// bottom row): they move with the panel and are hit-tested first.
     var overlayLayer: NSView { motionView }
 
+    // MARK: The island's stand-in (Accepted "Tall island", "Hiding and showing as one shape")
+
+    /// The docked panel's island, drawn in the motion layer while the panel
+    /// hides, shows or follows a swipe, so the two move as one shape. At
+    /// rest it is transparent and the island's own windows are the live
+    /// island; it never takes a hit or an accessibility element. Nil for a
+    /// floating panel, which hides into its own corner.
+    private(set) var islandStandIn: NSView?
+
+    func installIslandStandIn(_ view: NSView) {
+        view.wantsLayer = true
+        view.layer?.opacity = 0
+        motionView.addSubview(view, positioned: .above, relativeTo: hostingView)
+        islandStandIn = view
+    }
+
+    /// Puts the stand-in exactly over the island's window: beside the
+    /// surface on `corner`'s side, with the window's clear margin.
+    func placeIslandStandIn(corner: ScreenCorner) {
+        guard let view = islandStandIn else { return }
+        let capsule = PanelIslandLayout.islandFrame(panelFrame: hostingView.frame, corner: corner)
+        let frame = capsule.insetBy(dx: -PanelIslandLayout.windowMargin, dy: -PanelIslandLayout.windowMargin)
+        if view.frame != frame { view.frame = frame }
+        // It keeps to the surface's corner as the panel resizes.
+        view.autoresizingMask = [PanelIslandLayout.isOnRight(corner) ? .minXMargin : .maxXMargin,
+                                 PanelIslandLayout.isTop(corner) ? .minYMargin : .maxYMargin]
+    }
+
+    /// Whether the stand-in draws the island (in the caller's transaction).
+    var isIslandStandInShown: Bool { (islandStandIn?.layer?.opacity ?? 0) > 0.5 }
+
+    func setIslandStandInShown(_ shown: Bool) {
+        guard let layer = islandStandIn?.layer else { return }
+        let opacity: Float = shown ? 1 : 0
+        guard layer.opacity != opacity else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.opacity = opacity
+        CATransaction.commit()
+    }
+
+    /// The point the panel hides into, in the motion layer's bounds: the
+    /// island's outer corner on `corner`'s side (nil without an island:
+    /// the surface's own corner).
+    func collapseAnchor(corner: ScreenCorner) -> CGPoint? {
+        guard islandStandIn != nil else { return nil }
+        let island = PanelIslandLayout.islandFrame(panelFrame: hostingView.frame, corner: corner)
+        return PanelCollapseGeometry.cornerPoint(of: island, corner: corner)
+    }
+
+    /// Tests: where the motion layer draws `point` (in its bounds, which
+    /// are this view's) now: through its presented transform, or its model's.
+    func drawnPoint(_ point: CGPoint, presented: Bool = true) -> CGPoint {
+        guard let layer = motionView.layer else { return point }
+        let transform = presented ? (layer.presentation()?.transform ?? layer.transform) : layer.transform
+        let anchor = CGPoint(x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
+                             y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height)
+        let drawn = PanelSwoopGeometry.project(CGPoint(x: point.x - anchor.x, y: point.y - anchor.y), transform)
+        return CGPoint(x: drawn.x + anchor.x, y: drawn.y + anchor.y)
+    }
+
+    /// Tests: the motion layer's opacity (presented, or its model's) and
+    /// whether its transform is the identity.
+    func motionOpacity(presented: Bool = true) -> Float {
+        guard let layer = motionView.layer else { return 1 }
+        return presented ? (layer.presentation()?.opacity ?? layer.opacity) : layer.opacity
+    }
+    var motionIsAtRest: Bool { motionView.layer.map { CATransform3DIsIdentity($0.transform) && $0.opacity == 1 } ?? true }
+
+    /// Genie's mouth ends at `collapseAnchor`: its inset from the mesh
+    /// view's corner, as fractions of the view.
+    private func genieAnchorInset(corner: ScreenCorner) -> SIMD2<Float> {
+        let box = bounds
+        guard let anchor = collapseAnchor(corner: corner), box.width > 0, box.height > 0 else { return .zero }
+        let x = PanelIslandLayout.isOnRight(corner) ? box.maxX - anchor.x : anchor.x - box.minX
+        let y = PanelIslandLayout.isTop(corner) ? box.maxY - anchor.y : anchor.y - box.minY
+        return SIMD2(Float(max(0, x) / box.width), Float(max(0, y) / box.height))
+    }
+
     var presentationTransform: CATransform3D {
         guard let layer = motionView.layer else { return CATransform3DIdentity }
         // Finger-driven updates write the model immediately. The presentation
@@ -1229,7 +1308,8 @@ final class AtticPanelContentContainer: NSView {
             layerAnchor: CGPoint(
                 x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
                 y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height
-            )
+            ),
+            anchor: collapseAnchor(corner: corner)
         ))
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1345,6 +1425,7 @@ final class AtticPanelContentContainer: NSView {
         }
         switch mode {
         case .genieLiveGlass:
+            genieView.anchorInset = genieAnchorInset(corner: corner)
             return genieView.animate(to: target, curve: curve, corner: corner, completion: finish)
         case .swoop:
             return animateSwoop(to: target, curve: curve, corner: corner, completion: finish)
@@ -1366,6 +1447,7 @@ final class AtticPanelContentContainer: NSView {
         switch mode {
         case .genieLiveGlass:
             genieView.stop()
+            genieView.anchorInset = genieAnchorInset(corner: corner)
             genieView.show(progress: progress, corner: corner)
         case .swoop:
             guard let layer = motionView.layer else { return }
@@ -1473,10 +1555,21 @@ final class AtticPanelContentContainer: NSView {
             CATransaction.commit()
         }
         let live = surface?.live
+        // The island flies with the panel: its stand-in is drawn into the
+        // snapshot (shown for the capture only; the render reads the model
+        // tree, so this transaction never reaches the screen).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let standInLayer = islandStandIn?.layer
+        let standInOpacity = standInLayer?.opacity ?? 0
+        standInLayer?.opacity = 1
+        let extras = islandStandIn.flatMap { view in view.layer.map { [(layer: $0, clip: view.frame)] } } ?? []
         genieView.captureSnapshot(of: motionView, tiers: hostingView.layer, surfaceRect: hostingView.frame,
                                   cornerRadius: hostingView.panelCornerRadius,
                                   dark: hostingView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
-                                  hidesSurfaceMaterial: live?.kind == .frosted)
+                                  hidesSurfaceMaterial: live?.kind == .frosted, extras: extras)
+        standInLayer?.opacity = standInOpacity
+        CATransaction.commit()
         if opacity != 1 {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -1549,6 +1642,7 @@ final class AtticPanelContentContainer: NSView {
             CATransaction.setDisableActions(true)
             liveGlassView.isEngaged = false
             if window?.isVisible != true { layer.opacity = Self.genieBackdropKeepAliveOpacity }
+            genieView.anchorInset = genieAnchorInset(corner: corner)
             genieView.beginFlight(progress: progress, corner: corner, takeOver: takeOver)
             CATransaction.commit()
         case .swoop:
@@ -1571,7 +1665,7 @@ final class AtticPanelContentContainer: NSView {
                 x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
                 y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height
             ),
-            corner: corner
+            corner: corner, anchor: collapseAnchor(corner: corner)
         )
     }
 
