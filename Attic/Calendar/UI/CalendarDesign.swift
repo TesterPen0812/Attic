@@ -37,6 +37,9 @@ enum CalendarDesign {
     // room at the end for the footer.
     static let agendaInset: CGFloat = 10
     static let agendaTop: CGFloat = 4
+    /// How far back past its threshold the page must scroll before the
+    /// pin's fade or the week view lets go (item 14, owner 2026-10-31).
+    static let foldHysteresis: CGFloat = 4
     static let agendaBottom: CGFloat = 80
     // A day: 8 px apart, radius 48 px (so padding 13 px), 10 px tile to rows.
     static let dayPadding: CGFloat = dayPadding(radius: dayRadius)

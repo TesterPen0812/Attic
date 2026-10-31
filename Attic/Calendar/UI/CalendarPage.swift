@@ -72,7 +72,8 @@ struct CalendarPage: View {
 
     private func scroller(_ snapshot: CalendarPageSnapshot, viewport: CGFloat) -> some View {
         let weeks = snapshot.weeks
-        let pinnedIndex = snapshot.pinnedWeekIndex
+        let pinnedIndex = snapshot.pinnedWeekIndex.flatMap { weeks.indices.contains($0) ? $0 : nil }
+        let rowTop = pinnedIndex.map { CGFloat($0) * CalendarDesign.weekPitch }
         return ScrollView(.vertical) {
             VStack(spacing: 0) {
                 // Flat days (Accepted 2026-10-30): no glass in the grid.
@@ -80,12 +81,29 @@ struct CalendarPage: View {
                     ForEach(weeks) { week in
                         CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: model.select)
                             .equatable()
+                            // The selected week is drawn once, by its held row.
+                            .accessibilityHidden(week.containsSelection)
                     }
                 }
                 agenda(snapshot)
                     .frame(minHeight: viewport, alignment: .top)
             }
             .padding(.bottom, CalendarDesign.agendaBottom)
+            // What scrolls under the selected week is hidden behind it and
+            // fades in below it once it is held (item 14, owner 2026-10-31).
+            // Both the cut and the held row follow the scroll in the same
+            // frame, so each frame draws the week once.
+            .mask(alignment: .top) { CalendarScrollMask(rowTop: rowTop, pinned: flags.pinned) }
+            .overlay(alignment: .top) {
+                if let pinnedIndex, let rowTop {
+                    CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: model.select)
+                        .equatable()
+                        .visualEffect { content, proxy in
+                            content.offset(y: CalendarMonthMath.heldRowTop(
+                                rowTop: rowTop, contentTop: proxy.frame(in: .scrollView).minY))
+                        }
+                }
+            }
         }
         .scrollIndicators(.never)
         // Clean cut (3 Oct): the native soft scroll edge stays off.
@@ -93,21 +111,13 @@ struct CalendarPage: View {
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ScrollFlags.self) { geometry in
             let offset = geometry.contentOffset.y + geometry.contentInsets.top
-            return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex),
-                               weekView: CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count))
+            return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex, was: flags.pinned),
+                               weekView: CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count, was: flags.weekView))
         } action: { _, new in
             if flags != new { flags = new }
         }
-        // While the selected week is pinned, what scrolls under it is hidden
-        // behind it and fades in below it (a static gradient), and its copy
-        // stays put above.
-        .mask(alignment: .top) { CalendarScrollMask(pinned: flags.pinned) }
-        .overlay(alignment: .top) {
-            if flags.pinned, let pinnedIndex, weeks.indices.contains(pinnedIndex) {
-                CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: model.select)
-                    .equatable()
-            }
-        }
+        // The grid is cut at the weekday letters: nothing scrolls up under them.
+        .clipped()
         .accessibilityIdentifier("calendar-scroll")
     }
 
@@ -229,13 +239,17 @@ struct CalendarPage: View {
     }
 }
 
-/// The agenda's mask: everything shows until the selected week pins; then
-/// what scrolls under the pinned week is hidden and fades in over
-/// `CalendarDesign.agendaFade` below it (Accepted 2026-10-30, "Scrolling").
-/// A static gradient: it changes only when the week pins or unpins.
-/// The fade itself comes and goes in the hover motion (the design's quick
-/// fade); the cut under the pinned week is immediate, as the pinned copy is.
+/// The agenda's mask, in the scrolled content: what lies under the selected
+/// week's held row is cut, and below it the agenda fades in over
+/// `CalendarDesign.agendaFade` once the week is held (Accepted 2026-10-30,
+/// "Scrolling"). The cut follows the held row in the same frame as the
+/// scroll (`CalendarMonthMath.heldRowTop`); before the week is held it is
+/// the week's own row, which the held row covers exactly. The body re-runs
+/// only when the week pins or unpins; the fade comes and goes in the hover
+/// motion (the design's quick fade).
 struct CalendarScrollMask: View {
+    /// The selected week's row top in the content; nil when none is shown.
+    let rowTop: CGFloat?
     let pinned: Bool
 
     @Environment(\.atticDesign) private var design
@@ -250,13 +264,23 @@ struct CalendarScrollMask: View {
         #if DEBUG
         let _ = Self.renders.append(pinned)
         #endif
-        VStack(spacing: 0) {
-            Color.clear.frame(height: pinned ? CalendarDesign.weekPitch : 0)
-            LinearGradient(colors: [.black.opacity(pinned ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
-                .frame(height: CalendarDesign.agendaFade)
-                .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: pinned)
+        ZStack(alignment: .top) {
             Color.black
+            if let rowTop {
+                VStack(spacing: 0) {
+                    Color.black.frame(height: CalendarDesign.weekPitch)
+                    LinearGradient(colors: [.black.opacity(pinned ? 1 : 0), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: CalendarDesign.agendaFade)
+                        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: pinned)
+                }
+                .visualEffect { content, proxy in
+                    content.offset(y: CalendarMonthMath.heldRowTop(
+                        rowTop: rowTop, contentTop: proxy.frame(in: .scrollView).minY))
+                }
+                .blendMode(.destinationOut)
+            }
         }
+        .compositingGroup()
     }
 }
 

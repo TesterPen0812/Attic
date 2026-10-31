@@ -152,14 +152,30 @@ enum CalendarMonthMath {
     }
 
     /// The week view shows once the page has scrolled (nearly) that far.
-    static func isWeekView(offset: CGFloat, weekCount: Int) -> Bool {
-        offset >= weekViewOffset(weekCount: weekCount) - 2
+    /// Once shown (`was`), it holds until the page has scrolled back
+    /// `CalendarDesign.foldHysteresis` further, so a small scroll at the
+    /// edge does not flick the title and the neighbouring days on and off.
+    static func isWeekView(offset: CGFloat, weekCount: Int, was: Bool = false) -> Bool {
+        let threshold = weekViewOffset(weekCount: weekCount) - 2
+        return offset >= threshold - (was ? CalendarDesign.foldHysteresis : 0)
     }
 
-    /// The selected week is pinned once its row reaches the weekday letters.
-    static func isPinned(offset: CGFloat, pinnedIndex: Int?) -> Bool {
+    /// The selected week is pinned once its row reaches the weekday letters;
+    /// once pinned (`was`), it holds for `CalendarDesign.foldHysteresis` back.
+    /// This drives only the fade; where the row is drawn follows the scroll
+    /// itself (`heldRowTop`).
+    static func isPinned(offset: CGFloat, pinnedIndex: Int?, was: Bool = false) -> Bool {
         guard let pinnedIndex else { return false }
-        return offset > CGFloat(pinnedIndex) * CalendarDesign.weekPitch + 0.5
+        let threshold = CGFloat(pinnedIndex) * CalendarDesign.weekPitch + 0.5
+        return offset > threshold - (was ? CalendarDesign.foldHysteresis : 0)
+    }
+
+    /// Where the selected week is drawn, in the scrolled content: at its own
+    /// row until that row reaches the weekday letters, then held under them.
+    /// `contentTop` is the content's top in the scroller (minus the scroll),
+    /// read in the same frame as the scroll, so the row never lags it.
+    static func heldRowTop(rowTop: CGFloat, contentTop: CGFloat) -> CGFloat {
+        max(rowTop, -contentTop)
     }
 
     /// Previous and next: a month (to its first day, or today in today's

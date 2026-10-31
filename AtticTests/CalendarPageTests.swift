@@ -126,6 +126,39 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertFalse(CalendarMonthMath.isWeekView(offset: 100, weekCount: 5))
     }
 
+    /// Item 14 (owner rec2, 31 Oct): a small scroll at a threshold does not
+    /// flick the pin's fade or the week view on and off; each holds for
+    /// `foldHysteresis` back past where it turned on.
+    func testPinAndWeekViewHoldBackPastTheirThresholds() {
+        let pin = 4 * CalendarDesign.weekPitch
+        XCTAssertEqual(CalendarDesign.foldHysteresis, 4)
+        XCTAssertFalse(CalendarMonthMath.isPinned(offset: pin, pinnedIndex: 4, was: false))
+        XCTAssertTrue(CalendarMonthMath.isPinned(offset: pin + 1, pinnedIndex: 4, was: false))
+        XCTAssertTrue(CalendarMonthMath.isPinned(offset: pin - 3, pinnedIndex: 4, was: true), "held while within the band")
+        XCTAssertFalse(CalendarMonthMath.isPinned(offset: pin - 4, pinnedIndex: 4, was: true), "lets go past the band")
+        XCTAssertFalse(CalendarMonthMath.isPinned(offset: 500, pinnedIndex: nil, was: true))
+        let week = CalendarMonthMath.weekViewOffset(weekCount: 5)
+        XCTAssertFalse(CalendarMonthMath.isWeekView(offset: week - 3, weekCount: 5, was: false))
+        XCTAssertTrue(CalendarMonthMath.isWeekView(offset: week - 2, weekCount: 5, was: false))
+        XCTAssertTrue(CalendarMonthMath.isWeekView(offset: week - 5, weekCount: 5, was: true), "held while within the band")
+        XCTAssertFalse(CalendarMonthMath.isWeekView(offset: week - 6.5, weekCount: 5, was: true), "lets go past the band")
+        // A jitter of ±2 pt about either threshold changes nothing once on.
+        for jitter in stride(from: -2.0, through: 2.0, by: 0.5) {
+            XCTAssertTrue(CalendarMonthMath.isPinned(offset: pin + 0.5 + jitter, pinnedIndex: 4, was: true))
+            XCTAssertTrue(CalendarMonthMath.isWeekView(offset: week - 2 + jitter, weekCount: 5, was: true))
+        }
+    }
+
+    /// Where the selected week is drawn: at its row until the scroll reaches
+    /// it, then held at the scrolled top, read from the same frame's geometry.
+    func testTheHeldRowFollowsTheScroll() {
+        XCTAssertEqual(CalendarMonthMath.heldRowTop(rowTop: 138, contentTop: 0), 138)
+        XCTAssertEqual(CalendarMonthMath.heldRowTop(rowTop: 138, contentTop: -100), 138)
+        XCTAssertEqual(CalendarMonthMath.heldRowTop(rowTop: 138, contentTop: -138), 138)
+        XCTAssertEqual(CalendarMonthMath.heldRowTop(rowTop: 138, contentTop: -150), 150)
+        XCTAssertEqual(CalendarMonthMath.heldRowTop(rowTop: 0, contentTop: -40), 40)
+    }
+
     func testPreviousAndNextMoveByMonthOrWeek() {
         let today = day(2026, 10, 29)
         XCTAssertEqual(CalendarMonthMath.shifted(today, by: 1, weekView: false, today: today, calendar: calendar), day(2026, 11, 1))
@@ -400,16 +433,21 @@ final class CalendarPageTests: XCTestCase {
 
     func testAgendaFadesUnderThePinnedWeekAsAGradientWithNoSoftEdge() throws {
         let size = CGSize(width: 40, height: 120)
-        let pinned = try render(AnyView(CalendarScrollMask(pinned: true)), size: size)
+        let pinned = try render(AnyView(CalendarScrollMask(rowTop: 0, pinned: true)), size: size)
         let top = CalendarDesign.weekPitch
         func a(_ y: CGFloat) throws -> Double { try alpha(pinned, px: 40, py: Int(y * 2)) }
         XCTAssertLessThan(try a(top - 2), 0.01, "hidden under the pinned week")
         XCTAssertEqual(try a(top + CalendarDesign.agendaFade / 2), 0.5, accuracy: 0.15, "half way through the fade")
         XCTAssertGreaterThan(try a(top + CalendarDesign.agendaFade + 2), 0.99, "full below the fade")
         XCTAssertEqual(CalendarDesign.agendaFade, 20, "a 40 px fade")
-        let unpinned = try render(AnyView(CalendarScrollMask(pinned: false)), size: size)
-        XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: 4), 0.99, "nothing hidden before the week pins")
-        XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: 40), 0.99)
+        // Before the week is held, only its own row is cut (the held row
+        // covers it exactly) and nothing fades.
+        let unpinned = try render(AnyView(CalendarScrollMask(rowTop: 0, pinned: false)), size: size)
+        XCTAssertLessThan(try alpha(unpinned, px: 40, py: Int((top - 2) * 2)), 0.01, "the week's own row, under its held copy")
+        XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: Int((top + 2) * 2)), 0.99, "no fade before the week pins")
+        XCTAssertGreaterThan(try alpha(unpinned, px: 40, py: Int((top + CalendarDesign.agendaFade / 2) * 2)), 0.99)
+        let none = try render(AnyView(CalendarScrollMask(rowTop: nil, pinned: false)), size: size)
+        XCTAssertGreaterThan(try alpha(none, px: 40, py: 4), 0.99, "no selected week shown: nothing cut")
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Attic/Calendar/UI/CalendarPage.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains(".atticScrollEdgeEffect()"), "Clean cut: the native soft scroll edge stays off")
