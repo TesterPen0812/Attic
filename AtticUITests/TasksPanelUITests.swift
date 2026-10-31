@@ -45,6 +45,22 @@ final class TasksPanelUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
     }
 
+    /// The "+" card's title and the shared "+" that opens it (Accepted
+    /// 2026-10-29 "The '+' card": the card replaced the add bar).
+    private var cardTitle: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+    }
+
+    private var plus: XCUIElement { app.buttons["tasks-new-task"] }
+
+    /// "+" opens the card with the keyboard in its title.
+    private func openCard(file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(plus.waitForExistence(timeout: 3), file: file, line: line)
+        plus.click()
+        XCTAssertTrue(cardTitle.waitForExistence(timeout: 3), "\"+\" opens the card", file: file, line: line)
+        waitFor((cardTitle.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the title has the keyboard", file: file, line: line)
+    }
+
     private func tab(_ page: String) -> XCUIElement {
         app.buttons["tasks-page-\(page)"]
     }
@@ -135,10 +151,11 @@ final class TasksPanelUITests: XCTestCase {
     /// whole title is the row's accessibility label.
     func testALongTitleStaysOnOneRowAndIsReadInFull() throws {
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
-        XCTAssertTrue(addBar.waitForExistence(timeout: 3))
-        addBar.click()
+        // Return creates and closes the card (Accepted "The '+' card").
+        openCard()
         app.typeText("Short\r")
         waitFor(row("Short").exists, "the short task is listed")
+        openCard()
         app.typeText(longTitle + "\r")
         waitFor(row(longTitle).exists, "the full title is the row's accessibility label")
         XCTAssertEqual(row(longTitle).frame.height, row("Short").frame.height, accuracy: 1,
@@ -291,6 +308,12 @@ final class TasksPanelUITests: XCTestCase {
     /// The ordinary app's auto-hide is active, the composer is clean, and
     /// Find has rebuilt this row before the native submenu is selected.
     func testNativeContextMenuAfterFindOpensFilesWithRealAutoHide() throws {
+        // The launch is an explicit open, which opens the "+" card (Accepted
+        // "The '+' card" took over the add bar). Escape closes it and keeps
+        // its draft; its scrim would otherwise take the click on the pin.
+        XCTAssertTrue(cardTitle.waitForExistence(timeout: 10))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(cardTitle.waitForNonExistence(timeout: 5), "Escape closes the card")
         app.typeKey("f", modifierFlags: .command)
         let search = app.textFields["tasks-find"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))

@@ -38,7 +38,7 @@ final class ScrollEdgeUITests: XCTestCase {
         }
     }
 
-    /// Far down the long list, rows lie under Find and the add bar: both
+    /// Far down the long list, rows lie under Find and the "+": both
     /// still take their clicks (deep review P2-02's hit points), and a query
     /// typed from there shows its match and its count (P2-01: the list
     /// stayed far down, past the matches, and showed nothing). The strip
@@ -65,18 +65,25 @@ final class ScrollEdgeUITests: XCTestCase {
         }
         XCTAssertTrue(!first.exists || first.frame.minY < resting - 200, "the list is far down (\(first.frame.minY), resting \(resting))")
 
-        // The add bar, over the rows: hittable, and a click gives it the keyboard.
-        let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
-        XCTAssertTrue(addBar.waitForExistence(timeout: 3))
-        XCTAssertTrue(addBar.isHittable, "the add bar has a hit point over scrolled rows: \(addBar.frame)")
-        addBar.click()
-        XCTAssertTrue(waitFor { (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true }, "the click gives the add bar the keyboard")
+        // "+", over the rows: hittable, and a click opens the card with the
+        // keyboard in its title (Accepted 2026-10-29 "The '+' card": the
+        // card replaced the add bar).
+        let plus = app.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 3))
+        XCTAssertTrue(plus.isHittable, "\"+\" has a hit point over scrolled rows: \(plus.frame)")
+        plus.click()
+        let addBar = app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+        XCTAssertTrue(addBar.waitForExistence(timeout: 3), "the card opens")
+        XCTAssertTrue(waitFor { (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true }, "the card's title has the keyboard")
         app.typeText("Water the plants tomorrow #home !!")
-        XCTAssertTrue(waitFor { (addBar.value as? String)?.contains("Water the plants") == true }, "typing lands in the add bar")
+        XCTAssertTrue(waitFor { (addBar.value as? String)?.contains("Water the plants") == true }, "typing lands in the title")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
-        save(panel.screenshot(), name: "scroll-edges-glass-light-strip-over-rows")
+        save(panel.screenshot(), name: "scroll-edges-glass-light-card-over-rows")
         addBar.typeKey("a", modifierFlags: .command)
         addBar.typeKey(.delete, modifierFlags: [])
+        // Escape closes the card (Accepted: it keeps the draft, empty here).
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(addBar.waitForNonExistence(timeout: 3), "Escape closes the card")
 
         // Find, over the rows: its button and its field take their clicks.
         let findButton = app.buttons["tasks-find-button"]

@@ -62,9 +62,11 @@ final class AtticKeyWindowUITests: XCTestCase {
     }
 
     /// An explicit open on Tasks (quick capture, Show Attic) puts the
-    /// keyboard in the add bar, and the add bar draws no focus ring: text
-    /// typed right away lands there. (`ATTIC_UI_TEST_HOVER_MONITOR` opens
-    /// the panel the way quick capture does.)
+    /// keyboard where a new task is typed, with no focus ring: text typed
+    /// right away lands there. That is the "+" card's title now (Accepted
+    /// 2026-10-29 "The '+' card": the card replaced the add bar, and an
+    /// explicit open opens it on the tab). (`ATTIC_UI_TEST_HOVER_MONITOR`
+    /// opens the panel the way quick capture does.)
     func testAnExplicitOpenFocusesTheAddBarWithoutARing() throws {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -77,18 +79,18 @@ final class AtticKeyWindowUITests: XCTestCase {
         app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
         app.launch()
         app.activate()
-        let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
+        let addBar = app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
         let focused = NSPredicate { _, _ in
             addBar.exists && addBar.isHittable && (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true
         }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 10), .completed,
-                       "the explicit open shows a hittable add bar with the keyboard")
+                       "the explicit open shows the card's title, hittable, with the keyboard")
 
         app.typeText("Typed on open")
         let typed = NSPredicate(format: "value CONTAINS %@", "Typed on open")
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 10), .completed,
-                       "what is typed on open lands in the add bar")
-        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "and the add bar keeps the keyboard")
+                       "what is typed on open lands in the card's title")
+        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "and the title keeps the keyboard")
 
         let image = addBar.screenshot().image
         attach(image, name: "add-bar-on-open")
