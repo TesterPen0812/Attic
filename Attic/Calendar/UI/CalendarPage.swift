@@ -15,6 +15,7 @@ struct CalendarPage: View {
     let onNewTask: (DueDay) -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.panelSharedChrome) private var sharedChrome
     @State private var scrollPosition = ScrollPosition(y: 0)
     @State private var flags = ScrollFlags()
     @State private var searchOpen = false
@@ -158,8 +159,7 @@ struct CalendarPage: View {
                     .accessibilityIdentifier("calendar-search")
                     .transition(PanelTopRowLayout.fieldTransition)
             } else {
-                PanelTopRowSearchButton(label: "Search", action: beginSearch)
-                    .accessibilityIdentifier("calendar-search-button")
+                PanelTopRowSearchButton(label: "Search", identifier: "calendar-search-button", action: beginSearch)
                     .transition(.opacity)
             }
         }
@@ -190,11 +190,29 @@ struct CalendarPage: View {
 
     // MARK: Footer
 
+    /// The bottom bar (Accepted 2026-10-29/30): the page switch, Today,
+    /// then "+". In the panel the shell draws it once for every page
+    /// (owner, 2026-10-31); the page lends it Today and "+".
+    @ViewBuilder
     private func footer(_ snapshot: CalendarPageSnapshot) -> some View {
+        let todayShown = CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today)
+        ZStack {
+            if sharedChrome == nil {
+                ownFooter(snapshot)
+            } else {
+                // A view for the lending to hang on (an empty group has none).
+                Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+            }
+        }
+        .panelBottomBar(.calendar,
+                        look: PanelBottomBarLook(middle: .today(shown: todayShown), plus: PanelBottomBarLook.calendarPlus),
+                        actions: PanelBottomBarActions(today: { [model] in model.goToToday() },
+                                                       plus: { [model] in onNewTask(model.newTaskDay) }))
+    }
+
+    private func ownFooter(_ snapshot: CalendarPageSnapshot) -> some View {
         let flat = design.effectiveControls != .liquidGlass
         let height = CalendarDesign.footerHeight
-        // The bottom bar (Accepted 2026-10-29/30): the page switch, Today,
-        // then "+".
         return AtticControlGroup {
             HStack(spacing: TasksDesignMetrics.footerGap) {
                 PanelPageSwitcher(page: .calendar)

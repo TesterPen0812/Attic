@@ -9,9 +9,12 @@ import SwiftUI
 /// fold away and the field fills the row, with the chrome inset on both
 /// sides. Escape brings them back.
 ///
-/// Each page draws this row over its own content, so its switch and search
-/// travel with their page; the shell's pin reads `PanelTopRowState` to fold
-/// with the current page's search.
+/// Each page draws this row over its own content, so its leading text, its
+/// switch and its open field travel with their page. The pin, ••• and the
+/// search button are the shell's (`PanelSharedChrome`), drawn once, so a
+/// page switch never moves them: here they are clear stand-ins that keep
+/// the row's places, and they fold with the current page's search through
+/// `PanelTopRowState`.
 enum PanelTopRowLayout {
     /// Between the switch, ••• and Search (6 px).
     static let gap: CGFloat = TasksDesignMetrics.headerGap
@@ -146,7 +149,19 @@ private struct PanelTopRowPageKey: EnvironmentKey {
     static let defaultValue: PanelPage? = nil
 }
 
+private struct PanelPageTravelKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
 extension EnvironmentValues {
+    /// How far the shell has moved this page sideways for a page switch
+    /// (0 at rest). The top row moves back by as much, in the same
+    /// transaction, so it changes in place while the page travels.
+    var panelPageTravel: CGFloat {
+        get { self[PanelPageTravelKey.self] }
+        set { self[PanelPageTravelKey.self] = newValue }
+    }
+
     /// The page whose top row this is (nil outside a top row).
     var panelTopRowPage: PanelPage? {
         get { self[PanelTopRowPageKey.self] }
@@ -175,6 +190,8 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
     @ViewBuilder var search: () -> Search
 
     @Environment(\.panelTopRowState) private var state
+    @Environment(\.panelSharedChrome) private var chrome
+    @Environment(\.panelPageTravel) private var travel
 
     var body: some View {
         let control = PanelTopRowLayout.control
@@ -212,8 +229,16 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
         .padding(.leading, layout.chromeInsets.leading)
         .padding(.trailing, layout.chromeInsets.trailing)
         .frame(maxWidth: .infinity, alignment: .top)
+        // Owner, 2026-10-31: the row stays in place through a page switch;
+        // only what differs (the page's switch and leading text) changes,
+        // fading with its page.
+        .offset(x: -travel)
         .onChange(of: searchOpen, initial: true) { _, open in state?.setSearching(open, on: page) }
-        .onDisappear { state?.setSearching(false, on: page) }
+        .onAppear { chrome?.setTopRowShown(true, for: page) }
+        .onDisappear {
+            state?.setSearching(false, on: page)
+            chrome?.removeTopRow(for: page)
+        }
     }
 
     private func report(leading maxX: CGFloat) {
@@ -242,37 +267,75 @@ extension PanelTopRow where Leading == EmptyView, Switch == EmptyView {
 }
 
 /// The top row's search button: the header's 27 pt control, as the pin,
-/// with the magnifier.
+/// with the magnifier. In the panel the shell draws it (`shared`), so it
+/// stays still while pages switch: a page's own is a clear stand-in that
+/// lends the shell its words and its action.
 struct PanelTopRowSearchButton: View {
-    let label: String.LocalizationValue
+    let label: String
+    var identifier: String
+    /// The shell's own button (drawn), not a page's stand-in.
+    var shared = false
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.panelSharedChrome) private var chrome
+    @Environment(\.panelTopRowPage) private var page
+
+    init(label: String.LocalizationValue, identifier: String, action: @escaping () -> Void) {
+        self.init(label: String(localized: label), identifier: identifier, shared: false, action: action)
+    }
+
+    init(label: String, identifier: String, shared: Bool, action: @escaping () -> Void) {
+        self.label = label
+        self.identifier = identifier
+        self.shared = shared
+        self.action = action
+    }
 
     var body: some View {
         let side = AtticControlSize.headerControl
-        AtticRaisedButton(systemName: "magnifyingglass", label: label, size: CGSize(width: side, height: side),
-                          emphasisedGlyph: true, flat: design.effectiveControls != .liquidGlass,
-                          cornerRadius: AtticRadius.header, action: action)
-            .atticDesignCorners()
+        if !shared, let chrome, let page {
+            Color.clear
+                .frame(width: side, height: side)
+                .accessibilityHidden(true)
+                .onChange(of: "\(identifier)|\(label)", initial: true) { _, _ in
+                    chrome.setSearch(label: label, identifier: identifier, action: action, for: page)
+                }
+        } else {
+            AtticRaisedButton(systemName: "magnifyingglass", label: String.LocalizationValue(stringLiteral: label),
+                              size: CGSize(width: side, height: side),
+                              emphasisedGlyph: true, flat: design.effectiveControls != .liquidGlass,
+                              cornerRadius: AtticRadius.header, action: action)
+                .atticDesignCorners()
+                .accessibilityIdentifier(identifier)
+        }
     }
 }
 
 /// ••• on the top row: Settings, in place of the gear (Accepted
-/// 2026-10-29/30). It opens the Settings window.
+/// 2026-10-29/30). It opens the Settings window. In the panel the shell
+/// draws it (`shared`); a page's own is a clear stand-in.
 struct PanelTopRowMoreButton: View {
+    var shared = false
     var action: () -> Void = { AppCoordinator.shared?.openSettings() }
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.panelSharedChrome) private var chrome
 
     var body: some View {
         let side = AtticControlSize.headerControl
-        AtticRaisedButton(systemName: "ellipsis.circle", label: "Settings", size: CGSize(width: side, height: side),
-                          help: String(localized: "Settings (⌘,)"), emphasisedGlyph: true,
-                          flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
-                          action: action)
-            .atticDesignCorners()
-            .accessibilityIdentifier("panel-settings-button")
+        if !shared, chrome != nil {
+            Color.clear
+                .frame(width: side, height: side)
+                .accessibilityHidden(true)
+        } else {
+            AtticRaisedButton(systemName: "ellipsis.circle", label: "Settings", size: CGSize(width: side, height: side),
+                              help: String(localized: "Settings (⌘,)"), emphasisedGlyph: true,
+                              flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
+                              action: action)
+                .atticDesignCorners()
+                .accessibilityIdentifier("panel-settings-button")
+        }
     }
 }
 

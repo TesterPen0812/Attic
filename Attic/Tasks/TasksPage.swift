@@ -742,8 +742,8 @@ struct TasksPage: View {
                 } else {
                     // Find (⌘F) on every page: Done's search.
                     PanelTopRowSearchButton(label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
+                                            identifier: model.tab == .done ? "tasks-done-search-button" : "tasks-find-button",
                                             action: beginSearch)
-                        .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
                         .transition(.opacity)
                 }
             }
