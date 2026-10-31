@@ -256,6 +256,14 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertEqual(next.midX - previous.midX, 21 + 1, accuracy: 0.5, "21 pt cells 1 pt apart")
             XCTAssertGreaterThan(previous.midX - 10.5, calTop[1].maxX)
             XCTAssertEqual(calTop[2].minX - (next.midX + 10.5), 3 + 3, accuracy: 0.5, "the capsule's inset, then a 6 px gap")
+            // Today shows only while another day is selected (Accepted
+            // "Calendar page", the Today button).
+            XCTAssertNil(element("calendar-today", in: host), "no Today button while today is selected")
+            let today = DueDay(date: Date(), calendar: CalendarMonthMath.calendar())
+            let other = try XCTUnwrap(DueDay(year: today.year, month: today.month, day: today.day == 1 ? 2 : today.day - 1))
+            let otherCell = try XCTUnwrap(element("calendar-day-\(other.rawValue)", in: host))
+            XCTAssertTrue(otherCell.accessibilityPerformPress?() ?? false)
+            spin(1.0)
             _ = try assertRow(["panel-section-picker", "calendar-today", "calendar-new-task"], in: host)
         }
     }
