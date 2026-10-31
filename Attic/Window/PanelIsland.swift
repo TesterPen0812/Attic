@@ -47,7 +47,9 @@ enum PanelIslandLayout {
 
     /// Whether a label fades as it goes (else it goes at once), with
     /// `pointed` the item under the pointer now.
-    static func labelFadesOut(pointed: PanelPage?) -> Bool { true }
+    /// Pointing at another item takes the old label away at once, so only
+    /// one name is ever on screen (the owner's recording of build 1).
+    static func labelFadesOut(pointed: PanelPage?) -> Bool { pointed == nil }
 
     static func height(count: Int = PanelPage.allCases.count) -> CGFloat {
         2 * inset + CGFloat(count) * item + CGFloat(max(count - 1, 0)) * gap
