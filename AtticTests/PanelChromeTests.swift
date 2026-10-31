@@ -443,6 +443,16 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
+    /// Tag bar fades (owner, 2026-10-31): each edge fades only while tags
+    /// are cut off there, over 14 pt (the HTML's 28 px), on every page's bar.
+    func testTheTagBarFadesOnlyWhereTagsAreCutOff() {
+        XCTAssertEqual(NotesBarMetrics.endFade, 14)
+        XCTAssertEqual(NotesTagBarCutOff(offset: 0, visible: 200, content: 180), .init(), "all fit: no fade")
+        XCTAssertEqual(NotesTagBarCutOff(offset: 0, visible: 200, content: 400), .init(trailing: true), "at the start: trailing only")
+        XCTAssertEqual(NotesTagBarCutOff(offset: 80, visible: 200, content: 400), .init(leading: true, trailing: true), "midway: both")
+        XCTAssertEqual(NotesTagBarCutOff(offset: 200, visible: 200, content: 400), .init(leading: true), "at the end: leading only")
+    }
+
     func testNotesLayoutSwitchOnlyOnTheListAndFoldsWithSearch() throws {
         XCTAssertEqual(NotesBarMetrics.newNoteSymbol, "plus", "the bottom bar ends with +")
         XCTAssertEqual(NotesLayoutSwitchMetrics.width, 3 + 21 + 1 + 21 + 3)
