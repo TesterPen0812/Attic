@@ -414,6 +414,25 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual((home as? AtticGlassMenuItemElement)?.command.title, "#home")
     }
 
+    /// Each item reports its own row's frame on screen (VoiceOver's box,
+    /// XCUITest's hit point). The rows' view is flipped; the items' frames
+    /// came out mirrored top to bottom, so CI's pointer at "Duplicate"
+    /// (the first row) landed on "Delete" (the last) and chose it (w4 trace,
+    /// run 41196043594).
+    func testEveryItemsFrameIsItsOwnRowOnScreen() throws {
+        let menu = open(commands())
+        for card in [menu.cards[0]] {
+            for row in card.entries.indices {
+                guard let element = card.view.element(for: row) else { continue }
+                let frame = element.accessibilityFrame()
+                let center = center(of: row, in: card)
+                XCTAssertEqual(frame.midY, center.y, accuracy: 0.5, "\(element.command.title): \(frame) is its row (centre \(center))")
+                XCTAssertEqual(frame.midX, center.x, accuracy: 0.5, element.command.title)
+                XCTAssertEqual(frame.height, card.entries[row].frame.height, accuracy: 0.5, element.command.title)
+            }
+        }
+    }
+
     /// XCUITest's hit point goes through the system, not the card's window:
     /// the window server picks the window under the point, then the app's
     /// accessibility hit test asks it. A clear, non-opaque window lets the

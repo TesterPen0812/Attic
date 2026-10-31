@@ -849,6 +849,16 @@ final class AtticGlassMenuCard {
         return entries.indices.first { entries[$0].frame.minY <= y && y < entries[$0].frame.maxY && x >= entries[$0].frame.minX && x <= entries[$0].frame.maxX }
     }
 
+    /// A row's frame in the rows' view, for its accessibility element.
+    /// AppKit reads an element's frame in its parent's space bottom-up,
+    /// whatever the view's flip, so the row is turned over here (flipped,
+    /// every item reported its mirror row, and a pointer sent to the first
+    /// item landed on the last).
+    func accessibilityFrame(ofRow row: Int) -> NSRect {
+        let entry = entries[row].frame.offsetBy(dx: 0, dy: -scrollOffset)
+        return NSRect(x: entry.minX, y: view.bounds.height - entry.maxY, width: entry.width, height: entry.height)
+    }
+
     /// A row's top edge in screen coordinates.
     func screenTop(ofRow row: Int) -> CGFloat {
         window.frame.maxY - (entries[row].frame.minY - scrollOffset)
@@ -1205,7 +1215,7 @@ final class AtticGlassMenuView: NSView {
         guard let card else { return }
         for (row, element) in elements {
             element.setAccessibilitySelected(card.highlighted == row)
-            element.setAccessibilityFrameInParentSpace(card.entries[row].frame.offsetBy(dx: 0, dy: -card.scrollOffset))
+            element.setAccessibilityFrameInParentSpace(card.accessibilityFrame(ofRow: row))
         }
     }
 
@@ -1235,7 +1245,7 @@ final class AtticGlassMenuItemElement: NSAccessibilityElement {
         setAccessibilityParent(view)
         if let identifier = command.identifier { setAccessibilityIdentifier(identifier) }
         if let card = view.card {
-            setAccessibilityFrameInParentSpace(card.entries[row].frame.offsetBy(dx: 0, dy: -card.scrollOffset))
+            setAccessibilityFrameInParentSpace(card.accessibilityFrame(ofRow: row))
             setAccessibilitySelected(card.highlighted == row)
         }
         if command.state == .mixed { setAccessibilityValue(String(localized: "some selected tasks")) }

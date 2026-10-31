@@ -12,6 +12,10 @@ import XCTest
 /// dropdowns, and keep what the native path checked: the item exists with
 /// its label, it lies inside its open card, and the click lands on it and
 /// does its command (each test checks the command). Every suite uses them.
+/// The pointer goes to the item's own accessibility frame: until w4 those
+/// frames were mirrored top to bottom inside the card, so the pointer sent
+/// to the first item chose the last (`AtticGlassMenuTests
+/// .testEveryItemsFrameIsItsOwnRowOnScreen`).
 extension XCTestCase {
     /// Moves the pointer onto an open glass card's item (it lights; a
     /// submenu's row opens its card).

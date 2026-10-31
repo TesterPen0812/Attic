@@ -753,7 +753,12 @@ final class TasksRound12Tests: XCTestCase {
     private func bandShares(clipBands: Bool = false) throws
         -> (moved: Double, top: Double, bottom: Double, strongTop: Double, strongBottom: Double) {
         let height: CGFloat = 520
-        let hosted = try Hosted(height: height, long: true)
+        // The capture's environment, stated: drawn controls, no live glass.
+        // The bottom bar is now a full row of glass cards (Accepted "Top row
+        // and bottom bar"), and an in-process capture draws live glass as
+        // opaque artefacts over its whole band, hiding the rows under it
+        // (w4: every pixel identical at both scroll positions).
+        let hosted = try Hosted(height: height, long: true, design: AtticDesignContext(mode: .light, controls: .craft))
         defer { hosted.close() }
         hosted.spin(1.5)
         let content = try XCTUnwrap(hosted.window.contentView)

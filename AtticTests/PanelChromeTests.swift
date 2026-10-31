@@ -325,6 +325,11 @@ final class PanelChromeTests: XCTestCase {
     }
 
     func testTasksTopRowBottomBarSearchAndTagBar() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         // The motion path, stated (GitHub's runners turn Reduce Motion on).
         AtticMotionPreference.systemReduceMotionOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
@@ -386,6 +391,11 @@ final class PanelChromeTests: XCTestCase {
     /// search is open (no glass or hit target left behind) and come back
     /// when it closes, at once rather than in the search's motion.
     func testUnderReduceMotionThePinsGlassFoldsWithTheSearchAndComesBack() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         AtticMotionPreference.systemReduceMotionOverride = true
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         try withPanel { host, state, _, _, _, _ in
@@ -406,6 +416,11 @@ final class PanelChromeTests: XCTestCase {
     }
 
     func testEscapeInTheSearchBringsThePinAndItsGlassBack() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         // The motion path, stated (GitHub's runners turn Reduce Motion on).
         AtticMotionPreference.systemReduceMotionOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
@@ -577,6 +592,11 @@ final class PanelChromeTests: XCTestCase {
     /// the composer, "+" and the note and task pages' bottom buttons
     /// included, draws on curve 1.4, never Apple's continuous corner.
     func testEveryRaisedControlOnThePanelIsOnCurveOnePointFour() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         AtticMaterialProbe.resetCorners()
         try withPanel { host, state, tasks, store, _, _ in
             for section in [PanelSection.notes, .calendar, .tasks] {

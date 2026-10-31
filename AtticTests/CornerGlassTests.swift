@@ -239,8 +239,12 @@ final class CornerGlassTests: XCTestCase {
         state.isPanelPinned = true
         spin(0.3)
         XCTAssertGreaterThan(PanelHeader.bodyEvaluations, 0, "the counter sees the header's own changes")
+        // Accepted "The '+' card" (2026-10-29/30) replaced the add bar: in
+        // the panel the bar's add field is never built (the card is the
+        // composer, built only while open), so even a real draft edit
+        // renders no add bar, and the zeros above hold for it by design.
         model.addBar = TaskAddBarText(text: "A real composer edit #work !!")
         spin(0.3)
-        XCTAssertGreaterThan(AtticAddBar.bodyEvaluations, 0, "real text edits still render the composer")
+        XCTAssertEqual(AtticAddBar.bodyEvaluations, 0, "the panel builds no add bar: the '+' card is its composer")
     }
 }

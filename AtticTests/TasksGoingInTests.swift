@@ -479,7 +479,12 @@ final class TasksGoingInHostedTests: XCTestCase {
         hosted.spin(0.4)
         let dateEnd = frame.maxX - AtticLayout.rowHighlightInset - TasksRowDesign.paddingX - TasksRowDesign.dateInset
         doubleClick(hosted, at: CGPoint(x: dateEnd - 4, y: line))
-        XCTAssertEqual(opened, [id], "a double-click on the date opens nothing")
+        // Accepted 2026-10-31 ("Owner notes on Attic Wave 2", Double-click
+        // edits a task's title, except on its ring, date and buttons): the
+        // title's double-click above no longer opens the page, so nothing
+        // is opened at all.
+        XCTAssertEqual(opened, [], "a double-click on the date opens nothing")
+        XCTAssertNil(hosted.model.editingTitleID, "nor edits the title")
     }
 
     /// Return renames the selected task and ⇧⌘I opens its page (the keys'
