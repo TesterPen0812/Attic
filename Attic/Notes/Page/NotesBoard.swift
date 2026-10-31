@@ -61,10 +61,6 @@ enum NotesBoardMetrics {
     /// Where "•••" shows, the title (and the pin) fade out under it over
     /// this much, so the resting title keeps the card's whole width.
     static let actionsFade: CGFloat = 6
-    /// The selected (or keyboard's) card: inset 0 0 0 2px
-    /// rgba(29,29,31,0.45), a 1 pt ring in the title's ink.
-    static let ringWidth: CGFloat = 1
-    static let ringAlpha: Double = 0.45
     /// Images: a striped block 112 px tall (150 from three images), its
     /// lower corners 6 px; the count 15 px, 8 × 12 px in.
     static let imageHeight: CGFloat = 56
@@ -188,16 +184,15 @@ struct NotesBoardCard: View {
     }
 
     /// The raised surface (glass where the controls are glass), the hover
-    /// on it, and the selected or keyboard card's 1 pt ring (the design's
-    /// 2 px inset ring, drawn inside the edge).
+    /// on it, and the selected or keyboard card's light grey fill, as a
+    /// selected task row's (owner, 2026-10-31: it replaces the 1 pt ring).
     private func surface(shape: Squircle, hover: Bool) -> some View {
         Color.clear
             .atticRaisedMaterial(cornerRadius: M.radius, state: hover ? .hover : .rest, interactive: false)
             .environment(\.atticControlCornerExponent, M.cornerExponent)
             .overlay {
                 if isSelected || isHighlighted {
-                    shape.stroke(design.tokens.ink(.heading).withAlpha(M.ringAlpha).color, lineWidth: M.ringWidth * 2)
-                        .clipShape(shape)
+                    shape.fill(design.tokens.selected.color)
                 }
             }
             .allowsHitTesting(false)

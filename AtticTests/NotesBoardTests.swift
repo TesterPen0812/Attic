@@ -337,28 +337,22 @@ final class NotesBoardTests: XCTestCase {
         }, "the surface exponent shapes the corner")
     }
 
-    /// Fix round 1 (should-fix 4): the selected card and the keyboard's
-    /// card take the design's 2 px (1 pt) ring, inset 0 0 0 2px
-    /// rgba(29,29,31,0.45), not a fill.
-    func testTheSelectedCardIsAOnePointRingNotAFill() throws {
+    /// Owner, 2026-10-31: the selected card and the keyboard's card take a
+    /// light grey fill, like a selected task row, and no outline: the
+    /// inside is darker than at rest, evenly, and the edge has no ring.
+    func testTheSelectedCardIsALightGreyFillNotARing() throws {
         let width: CGFloat = 140
-        let size = CGSize(width: width, height: fit(card(title: "Ring", preview: ""), width: width).height)
-        let rest = try render(card(title: "Ring", preview: ""), size: size, context: solid)
-        for (name, view) in [("selected", card(title: "Ring", preview: "", selected: true)),
-                             ("keyboard", card(title: "Ring", preview: "", highlighted: true))] {
+        let size = CGSize(width: width, height: fit(card(title: "Fill", preview: ""), width: width).height)
+        let rest = try render(card(title: "Fill", preview: ""), size: size, context: solid)
+        for (name, view) in [("selected", card(title: "Fill", preview: "", selected: true)),
+                             ("keyboard", card(title: "Fill", preview: "", highlighted: true))] {
             let marked = try render(view, size: size, context: solid)
-            // Inside: the surface as at rest (no fill).
-            for point in [CGPoint(x: width / 2, y: size.height - 4), CGPoint(x: width * 0.6, y: size.height / 2)] {
-                XCTAssertLessThan(distance(try pixel(marked, point.x, point.y), try pixel(rest, point.x, point.y)), 3,
-                                  "\(name): no fill at \(point)")
-            }
-            // The edge, half a point in: the ring.
-            let edge = try pixel(marked, 0.5, size.height / 2)
-            let restEdge = try pixel(rest, 0.5, size.height / 2)
-            XCTAssertGreaterThan(distance(edge, restEdge), 40, "\(name): a ring on the edge")
-            // Two points in, it has ended (1 pt wide).
-            XCTAssertLessThan(distance(try pixel(marked, 2.25, size.height / 2), try pixel(rest, 2.25, size.height / 2)), 3,
-                              "\(name): the ring is 1 pt")
+            let inside = try pixel(marked, width / 2, size.height - 4)
+            XCTAssertGreaterThan(distance(inside, try pixel(rest, width / 2, size.height - 4)), 3, "\(name): a fill")
+            XCTAssertLessThan(distance(inside, try pixel(marked, width * 0.6, size.height / 2)), 3, "\(name): even")
+            // No ring: half a point in is the fill, not a darker line.
+            XCTAssertLessThan(distance(try pixel(marked, 1.5, size.height / 2), try pixel(marked, 4, size.height / 2)), 6,
+                              "\(name): no outline on the edge")
         }
     }
 

@@ -508,6 +508,27 @@ final class PanelChromeTests: XCTestCase {
         }
     }
 
+    /// Square controls are not circles (owner, 2026-10-31; Accepted
+    /// "Shapes"): every raised control on the panel, on every page and bar,
+    /// the composer, "+" and the note and task pages' bottom buttons
+    /// included, draws on curve 1.4, never Apple's continuous corner.
+    func testEveryRaisedControlOnThePanelIsOnCurveOnePointFour() throws {
+        AtticMaterialProbe.resetCorners()
+        try withPanel { host, state, tasks, store, _, _ in
+            for section in [PanelSection.notes, .calendar, .tasks] {
+                state.selectSection(section)
+                spin(1.0)
+            }
+            // A task's page (its ‹ and Aa).
+            let model = tasks.model(for: store, toasts: nil)
+            model.openPage(try XCTUnwrap(model.rows(for: .now).first?.id))
+            spin(1.0)
+            host.display()
+        }
+        XCTAssertGreaterThan(AtticMaterialProbe.corners.count, 10, "controls drawn")
+        XCTAssertEqual(AtticMaterialProbe.corners.filter { $0 == nil }.count, 0, "no control on the continuous (circle) corner")
+    }
+
     func testNotesLayoutSwitchOnlyOnTheListAndFoldsWithSearch() throws {
         XCTAssertEqual(NotesBarMetrics.newNoteSymbol, "plus", "the bottom bar ends with +")
         XCTAssertEqual(NotesLayoutSwitchMetrics.width, 3 + 21 + 1 + 21 + 3)

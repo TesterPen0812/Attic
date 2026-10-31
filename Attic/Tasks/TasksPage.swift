@@ -1953,7 +1953,7 @@ struct TasksPage: View {
 
     private func rowClicked(_ id: UUID, tab: TasksTab) {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
-        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+        if AtticTaskRow.currentClickCount >= 2 {
             model.selectOnly(id)
             model.beginEditingTitle(id)
             return

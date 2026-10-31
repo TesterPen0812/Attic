@@ -447,6 +447,13 @@ struct AtticPanelView: View {
     private var themedPanel: some View {
         interactionObservedPanel
             .atticKeyboardFocusTracking(uiState.keyboardFocus)
+            // Shapes (Accepted 2026-10-30; owner, 2026-10-31: "the shape of
+            // these controls in a circle too"): every control on the panel is
+            // on curve 1.4, so a square one is a whole superellipse and never
+            // a circle, the composer and "+" included, whatever page or bar it
+            // is on. Surfaces set their own squircle; rings and dots stay
+            // circles (they draw `Circle`).
+            .atticDesignCorners()
             .environment(\.atticPanelThemePalette, panelThemePalette)
             .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)

@@ -220,6 +220,7 @@ struct AtticRaisedMaterialModifier: ViewModifier {
         let shape = AtticControlShape.shape(cornerRadius: cornerRadius, exponent: cornerExponent)
         #if DEBUG
         let _ = probeID.map { AtticMaterialProbe.record($0, away: away, gone: gone) }
+        let _ = AtticMaterialProbe.recordCorner(cornerExponent)
         #endif
         if gone {
             // Away and settled: no glass at all, so not even the faint rim
@@ -365,6 +366,11 @@ enum AtticMaterialProbe {
 
     static func record(_ id: String, away: Bool, gone: Bool) { states[id] = State(away: away, gone: gone) }
     static func reset() { states = [:] }
+    /// Every raised control's corner since `resetCorners()` (nil: Apple's
+    /// continuous corner, which draws a square control as a circle).
+    static private(set) var corners: [CGFloat?] = []
+    static func recordCorner(_ exponent: CGFloat?) { corners.append(exponent) }
+    static func resetCorners() { corners = [] }
 }
 #endif
 

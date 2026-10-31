@@ -698,6 +698,7 @@ struct AtticAddBar: View {
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
     @FocusState private var focused: Bool
     @State private var hovered = false
     @State private var probeID = UUID()
@@ -899,7 +900,9 @@ struct AtticAddBar: View {
     private func sendButton(radius: CGFloat) -> some View {
         let size = AtticControlSize.sendButton
         let inner = AtticRadius.nested(outer: radius, gap: AtticControlSize.sendInset) ?? radius
-        let shape = RoundedRectangle(cornerRadius: inner, style: .continuous)
+        // A square control in the composer: curve 1.4 where the panel's
+        // controls are (Shapes), as the "+" it grows out of.
+        let shape = AtticControlShape.shape(cornerRadius: inner, exponent: cornerExponent)
         return Button(action: onSubmit) {
             AtticIcon(systemName: "arrow.up", size: AtticAddBarMetrics.sendGlyphSize, weight: .semibold, ink: .onInverse)
                 .frame(width: size.width, height: size.height)
