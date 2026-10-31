@@ -394,7 +394,8 @@ final class Hosted {
     let focus = Focus()
 
     init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false, keyWindow: Bool = true,
-         chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices()) throws {
+         chrome: TasksPageChrome = TasksPageChrome(), services: TasksPageServices = TasksPageServices(),
+         design: AtticDesignContext = AtticDesignContext(mode: .light)) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
@@ -409,7 +410,7 @@ final class Hosted {
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light)).frame(width: size.width, height: size.height))
+        window.contentView = NSHostingView(rootView: page.atticDesign(design).frame(width: size.width, height: size.height))
         window.orderFront(nil)
         if keyWindow { window.makeKey() }
         spin(1)

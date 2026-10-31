@@ -14,12 +14,29 @@ final class TasksPanelDesignTests: XCTestCase {
     /// The strip over the hosted add bar is hidden from VoiceOver (and UI
     /// tests) while the bar is empty: only its buttons' look is kept built.
     func testTheEmptyBarsStripIsHiddenFromAccessibility() throws {
+        try assertTheEmptyBarsStripIsHidden(reduceMotion: false)
+    }
+
+    /// The same under Reduce Motion, as on GitHub's runners: the strip's
+    /// hide takes the fade path there (no rise, no scale), and it must stay
+    /// out of the tree too.
+    func testTheEmptyBarsStripIsHiddenFromAccessibilityUnderReduceMotion() throws {
+        try assertTheEmptyBarsStripIsHidden(reduceMotion: true)
+    }
+
+    private func assertTheEmptyBarsStripIsHidden(reduceMotion: Bool, file: StaticString = #filePath, line: UInt = #line) throws {
+        AtticMotionPreference.systemReduceMotionOverride = reduceMotion
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         // As under VoiceOver or a UI test: SwiftUI builds its full tree.
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced)
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
         defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
-        let hosted = try Hosted(height: 520)
+        // The rig's stated Reduce Motion, and the context the panel derives
+        // from it (`AtticSystemDesignModifier`).
+        var design = AtticDesignContext(mode: .light)
+        design.reduceMotion = reduceMotion
+        let hosted = try Hosted(height: 520, design: design)
         defer { hosted.close() }
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         var chain: [String] = []
@@ -32,7 +49,8 @@ final class TasksPanelDesignTests: XCTestCase {
         }
         let found = find(try XCTUnwrap(hosted.window.contentView), depth: 0, path: [])
         if found { print("STRIPCHAIN\n" + chain.suffix(8).joined(separator: "\n")) }
-        XCTAssertFalse(found, "no strip in the accessibility tree while the bar is empty")
+        XCTAssertFalse(found, "no strip in the accessibility tree while the bar is empty (Reduce Motion \(reduceMotion))",
+                       file: file, line: line)
     }
 
     /// Mon 21 Sep 2026, 14:13 UTC.
