@@ -95,18 +95,22 @@ final class ScrollEdgeUITests: XCTestCase {
         findButton.click()
         let find = app.descendants(matching: .any).matching(identifier: "tasks-find").firstMatch
         XCTAssertTrue(find.waitForExistence(timeout: 3), "Find opens")
+        // While searching, Pin folds away (Accepted 2026-10-29 "Top row and
+        // bottom bar": "Pin, the switch and ••• fold away"): the panel is
+        // the dialog holding "+" from here.
+        let searchingPanel = app.dialogs.containing(.button, identifier: "tasks-new-task").firstMatch
         XCTAssertTrue(find.isHittable, "Find's field has a hit point over scrolled rows: \(find.frame)")
         find.click()
         app.typeText("Ship")
         let match = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Ship appearance PR,")).firstMatch
         XCTAssertTrue(match.waitForExistence(timeout: 3), "the match is listed")
-        XCTAssertTrue(waitFor { match.isHittable && panel.frame.contains(CGPoint(x: match.frame.midX, y: match.frame.midY)) },
+        XCTAssertTrue(waitFor { match.isHittable && searchingPanel.frame.contains(CGPoint(x: match.frame.midX, y: match.frame.midY)) },
                       "and in view, not past the list's end: \(match.frame)")
         let count = app.descendants(matching: .any).matching(identifier: "tasks-find-count").firstMatch
         XCTAssertTrue(count.waitForExistence(timeout: 3), "the count shows")
         let counted = [count.label, count.value as? String ?? ""].joined(separator: " ")
         XCTAssertTrue(counted.contains("1 of "), "the count says one: \(counted)")
-        save(panel.screenshot(), name: "scroll-edges-glass-light-find-from-far-down")
+        save(searchingPanel.screenshot(), name: "scroll-edges-glass-light-find-from-far-down")
         app.typeKey(.escape, modifierFlags: [])
     }
 
