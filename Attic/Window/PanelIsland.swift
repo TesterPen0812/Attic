@@ -38,9 +38,11 @@ enum PanelIslandLayout {
 
     static var pages: [PanelPage] { PanelPage.allCases }
 
-    /// An item's icon face.
-    static func face(isSelected: Bool, solid: Bool) -> (weight: Font.Weight, ink: AtticInk) {
-        AtticPageButtonMetrics.glyphFace(isSelected: isSelected, open: true, accent: false, solid: solid)
+    /// An item's icon face: every item in full ink (the design's `isl.ink`),
+    /// the chip alone marking the current page (the owner's recording of
+    /// build 1: the outline icons read faint).
+    static func face(isSelected _: Bool, solid: Bool) -> (weight: Font.Weight, ink: AtticInk) {
+        AtticPageButtonMetrics.glyphFace(isSelected: true, open: true, accent: false, solid: solid)
     }
 
     /// Whether a label fades as it goes (else it goes at once), with
@@ -231,7 +233,13 @@ struct PanelIslandView: View {
         }
         .padding(L.inset)
         .frame(width: L.width, height: L.height())
-        .modifier(PanelIslandSurface(flat: design.effectiveControls != .liquidGlass, cornerRadius: radius))
+        // The surface sits behind the items rather than wrapping them, so
+        // the glass does not tint the icons and chip (the owner's recording
+        // of build 1: the island read faint), as the top-line tabs do.
+        .background {
+            Color.clear
+                .modifier(PanelIslandSurface(flat: design.effectiveControls != .liquidGlass, cornerRadius: radius))
+        }
         .overlay {
             // A floating panel dragged near: a solid blue ring (the
             // design's 4 px at 55 %, outside the capsule).
