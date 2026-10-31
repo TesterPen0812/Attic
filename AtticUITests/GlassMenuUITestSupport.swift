@@ -29,6 +29,7 @@ extension XCTestCase {
 
     private func pointAtGlassMenuItem(_ item: XCUIElement, titled title: String, in app: XCUIApplication,
                                       file: StaticString, line: UInt) {
+        printGlassMenuTraceOnFailure(app)
         XCTAssertTrue(item.waitForExistence(timeout: 3), "the menu offers \(title)", file: file, line: line)
         let label = item.label
         XCTAssertTrue(label.hasPrefix(title), "the item reads \(title): \(label)", file: file, line: line)
@@ -51,4 +52,19 @@ extension XCTestCase {
         // the lit item, a click does the item's command.
         item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
     }
+
+    /// W4 diagnostics (temporary): when the test fails, prints the app's
+    /// glass menu trace ("attic-menu-trace", DEBUG UI-testing launches).
+    private func printGlassMenuTraceOnFailure(_ app: XCUIApplication) {
+        guard !glassMenuTraced.contains(name) else { return }
+        glassMenuTraced.insert(name)
+        addTeardownBlock { [weak self] in
+            guard self?.testRun?.hasSucceeded == false else { return }
+            let probe = app.descendants(matching: .any)["attic-menu-trace"].firstMatch
+            let value = probe.exists ? (probe.value as? String ?? "no value") : "no probe"
+            print("MENUTRACE BEGIN\n\(value)\nMENUTRACE END")
+        }
+    }
 }
+
+nonisolated(unsafe) private var glassMenuTraced = Set<String>()

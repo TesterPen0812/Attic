@@ -209,11 +209,23 @@ final class AtticGlassMenu {
     /// first, so no view, key monitor or shortcut under it sees one.
     private func track() {
         installObservers()
+        #if DEBUG
+        AtticGlassMenuTrace.installSendMonitor()
+        trace(traceBegin())
+        #endif
         while isOpen {
             guard let event = NSApp.nextEvent(matching: .any, until: .distantFuture, inMode: .eventTracking, dequeue: true) else { continue }
+            #if DEBUG
+            let traced = event.type != .periodic && event.type != .applicationDefined
+            let before = traced ? traceEvent(event) : ""
             handle(event)
-            if isOpen, source.map({ !$0.isVisible }) == true { close() }
+            if traced { trace(before + traceAfter()) }
+            #else
+            handle(event)
+            #endif
+            if isOpen, source.map({ !$0.isVisible }) == true { trace("CLOSE source hidden"); close() }
         }
+        trace("TRACK end chosen=\(chosen?.title ?? "nil")")
         removeObservers()
     }
 
@@ -221,17 +233,17 @@ final class AtticGlassMenu {
         let center = NotificationCenter.default
         for name in [NSApplication.didResignActiveNotification, NSApplication.didHideNotification] {
             observers.append(center.addObserver(forName: name, object: NSApp, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.close() }
+                MainActor.assumeIsolated { self?.trace("CLOSE \(name.rawValue)"); self?.close() }
             })
         }
         if let source {
             observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: source, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.close() }
+                MainActor.assumeIsolated { self?.trace("CLOSE source closes"); self?.close() }
             })
         }
         // A click in another app (Attic's panel need not have activated it).
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
-            MainActor.assumeIsolated { self?.close() }
+            MainActor.assumeIsolated { self?.trace("CLOSE global click"); self?.close() }
         }
     }
 
@@ -253,6 +265,7 @@ final class AtticGlassMenu {
             if locate(Self.screenPoint(of: event)) == nil, cardIndex(at: Self.screenPoint(of: event)) == nil {
                 // A click outside closes the menu and goes nowhere else,
                 // as a native menu's does.
+                trace("CLOSE click outside")
                 close()
             }
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
@@ -485,7 +498,10 @@ final class AtticGlassMenu {
         // The release of the press that opened the menu chooses nothing
         // unless the pointer was held and dragged to a row (press, drag,
         // release, as in a native menu).
-        if openerReleasePending, let opener, timestamp - opener.timestamp < 0.35 { return }
+        if openerReleasePending, let opener, timestamp - opener.timestamp < 0.35 {
+            trace("RELEASE swallowed by the opener guard")
+            return
+        }
         activate(card: index, row: row, byKeyboard: false)
     }
 
@@ -1488,3 +1504,91 @@ private struct AtticContextMenuModifier: ViewModifier {
             }
     }
 }
+
+// MARK: - W4 pointer trace (DEBUG, UI-testing launches only; temporary)
+
+extension AtticGlassMenu {
+    /// Notes a line in the trace (DEBUG UI-testing launches only).
+    func trace(_ line: @autoclosure () -> String) {
+        #if DEBUG
+        AtticGlassMenuTrace.note(line())
+        #endif
+    }
+
+    #if DEBUG
+    fileprivate func traceState() -> String {
+        let opened = opener.map { "\($0.type.rawValue)@\(AtticGlassMenuTrace.fmt($0.timestamp))" } ?? "nil"
+        return "pending=\(openerReleasePending) opener=\(opened) active=\(NSApp.isActive) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil")"
+    }
+
+    fileprivate func traceEvent(_ event: NSEvent) -> String {
+        let point = Self.screenPoint(of: event)
+        let located = locate(point).map { "\($0.card).\($0.row)" } ?? "nil"
+        let card = cardIndex(at: point).map(String.init) ?? "nil"
+        let dt = opener.map { AtticGlassMenuTrace.fmt(event.timestamp - $0.timestamp) } ?? "-"
+        return "EV \(AtticGlassMenuTrace.describe(event)) locate=\(located) card=\(card) pending=\(openerReleasePending) dtOpener=\(dt)"
+    }
+
+    fileprivate func traceAfter() -> String {
+        " -> hl=\(cards.map { $0.highlighted.map(String.init) ?? "-" }) open=\(isOpen) chosen=\(chosen?.title ?? "nil")"
+    }
+
+    fileprivate func traceBegin() -> String {
+        "TRACK begin \(traceState()) cards=\(cards.map { AtticGlassMenuTrace.fmt($0.window.frame) }) vis=\(cards.map { $0.window.isVisible })"
+    }
+    #endif
+}
+
+#if DEBUG
+/// The last 40 lines of the trace, read by UI tests through
+/// `AtticMenuTraceProbe` ("attic-menu-trace") when they fail.
+@MainActor
+enum AtticGlassMenuTrace {
+    static let isOn = ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
+    private(set) static var lines: [String] = []
+    private static var monitor: Any?
+
+    static func note(_ line: String) {
+        guard isOn else { return }
+        lines.append(fmt(ProcessInfo.processInfo.systemUptime) + " " + line)
+        if lines.count > 40 { lines.removeFirst(lines.count - 40) }
+    }
+
+    /// Mouse events dispatched through `sendEvent` (outside the menu's loop).
+    static func installSendMonitor() {
+        guard isOn, monitor == nil else { return }
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .mouseMoved]
+        monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
+            MainActor.assumeIsolated {
+                let open = AtticGlassMenu.current != nil
+                if event.type != .mouseMoved || open { note("SEND \(describe(event)) menuOpen=\(open)") }
+            }
+            return event
+        }
+    }
+
+    static func describe(_ event: NSEvent) -> String {
+        let window = event.window.map { "\(type(of: $0))#\($0.windowNumber)" } ?? "nil(wn=\(event.windowNumber))"
+        return "t\(event.type.rawValue) ts=\(fmt(event.timestamp)) at=\(fmt(AtticGlassMenu.screenPoint(of: event))) win=\(window) inWin=\(fmt(event.locationInWindow)) mouse=\(fmt(NSEvent.mouseLocation))"
+    }
+
+    static func fmt(_ value: Double) -> String { String(format: "%.3f", value) }
+    static func fmt(_ point: NSPoint) -> String { String(format: "(%.1f,%.1f)", point.x, point.y) }
+    static func fmt(_ rect: NSRect) -> String { String(format: "[%.1f,%.1f %.1fx%.1f]", rect.minX, rect.minY, rect.width, rect.height) }
+}
+
+/// UI-test diagnostics: its value is the glass menu trace.
+struct AtticMenuTraceProbe: NSViewRepresentable {
+    final class Probe: NSView {
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
+        override func accessibilityIdentifier() -> String { "attic-menu-trace" }
+        override func accessibilityValue() -> Any? {
+            MainActor.assumeIsolated { AtticGlassMenuTrace.lines.isEmpty ? "empty" : AtticGlassMenuTrace.lines.joined(separator: "\n") }
+        }
+    }
+
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) {}
+}
+#endif

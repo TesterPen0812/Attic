@@ -113,6 +113,11 @@ enum AtticGalleryLaunch {
         window.title = title
         window.identifier = NSUserInterfaceItemIdentifier(title)
         window.isReleasedWhenClosed = false
+        #if DEBUG
+        let root = AtticGlassMenuTrace.isOn
+            ? AnyView(root.overlay(alignment: .topLeading) { AtticMenuTraceProbe().frame(width: 1, height: 1).allowsHitTesting(false) })
+            : root
+        #endif
         window.contentView = NSHostingView(rootView: root)
         window.center()
         self.window = window
