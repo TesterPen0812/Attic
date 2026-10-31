@@ -946,8 +946,13 @@ struct AtticTabsSearchField: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
+    @Environment(\.panelTopRowState) private var topRow
+    @Environment(\.panelTopRowPage) private var topRowPage
     @FocusState private var focused: Bool
     @State private var claim = AtticFieldClaim()
+    /// This field, as the top row knows it (its Escape ends the search on
+    /// a click on the page's empty space).
+    @State private var fieldID = UUID()
 
     /// The field's height: floating, the Medium height.
     static func height(floating: Bool) -> CGFloat {
@@ -995,6 +1000,18 @@ struct AtticTabsSearchField: View {
                 if let accessory {
                     accessory.padding(.trailing, 3)
                 }
+                // The × ends the search, as Escape does (owner, 2026-10-31).
+                if capture == nil {
+                    Button(action: onEscape) {
+                        AtticIcon(systemName: "xmark", size: AtticTabsSearchMetrics.closeGlyph, weight: AtticIconWeight.outline, ink: .glyph)
+                            .frame(width: AtticControlSize.headerControl, height: AtticControlSize.headerControl)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .accessibilityLabel(String(localized: "End search"))
+                    .accessibilityIdentifier("search-close")
+                }
             } else {
             Button(action: onEscape) {
                 AtticText(verbatim: String(localized: "Esc"), style: .shortcut, ink: .helper)
@@ -1024,8 +1041,12 @@ struct AtticTabsSearchField: View {
         }
         .onAppear {
             if isFocused?.wrappedValue == true { requestKeyboard() }
+            if let topRowPage { topRow?.setSearchEnder(onEscape, field: fieldID, on: topRowPage) }
         }
-        .onDisappear { claim.cancelFocusRequest() }
+        .onDisappear {
+            claim.cancelFocusRequest()
+            if let topRowPage { topRow?.clearSearchEnder(field: fieldID, on: topRowPage) }
+        }
         .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }
         .onChange(of: isFocused?.wrappedValue) { _, wanted in
             if wanted == true, !focused { requestKeyboard() }

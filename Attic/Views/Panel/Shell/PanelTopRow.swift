@@ -91,6 +91,26 @@ final class PanelTopRowState: ObservableObject {
     /// AppKit's hit testing follows the footprint (not observable).
     var onFootprintChange: (() -> Void)?
 
+    /// Each page's open search's own end (Escape's), keyed by the field
+    /// that registered it: a field replaced mid-transition never clears
+    /// its successor's. Not observable.
+    private var searchEnders: [PanelPage: (field: UUID, end: () -> Void)] = [:]
+
+    func setSearchEnder(_ end: @escaping () -> Void, field: UUID, on page: PanelPage) {
+        searchEnders[page] = (field, end)
+    }
+
+    func clearSearchEnder(field: UUID, on page: PanelPage) {
+        if searchEnders[page]?.field == field { searchEnders[page] = nil }
+    }
+
+    /// A click on the page's empty space while its search is open: the
+    /// search ends, as Escape ends it (owner, 2026-10-31).
+    func endSearch(on page: PanelPage) {
+        guard isSearching(page) else { return }
+        searchEnders[page]?.end()
+    }
+
     func setSearching(_ searching: Bool, on page: PanelPage) {
         if searching, !searchingPages.contains(page) { searchingPages.insert(page) }
         if !searching, searchingPages.contains(page) { searchingPages.remove(page) }
@@ -122,7 +142,17 @@ private struct PanelTopRowStateKey: EnvironmentKey {
     static let defaultValue: PanelTopRowState? = nil
 }
 
+private struct PanelTopRowPageKey: EnvironmentKey {
+    static let defaultValue: PanelPage? = nil
+}
+
 extension EnvironmentValues {
+    /// The page whose top row this is (nil outside a top row).
+    var panelTopRowPage: PanelPage? {
+        get { self[PanelTopRowPageKey.self] }
+        set { self[PanelTopRowPageKey.self] = newValue }
+    }
+
     /// The shell's top row state (nil in the gallery, captures and tests
     /// that host a page alone).
     var panelTopRowState: PanelTopRowState? {
@@ -174,6 +204,7 @@ struct PanelTopRow<Leading: View, Switch: View, Search: View>: View {
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 search()
+                    .environment(\.panelTopRowPage, page)
             }
         }
         .frame(height: control)
@@ -242,5 +273,21 @@ struct PanelTopRowMoreButton: View {
                           action: action)
             .atticDesignCorners()
             .accessibilityIdentifier("panel-settings-button")
+    }
+}
+
+/// A page while its search is open: a click on the page's empty space
+/// (not a row, card or control, whose own gestures take their clicks first)
+/// ends the search, as Escape does (owner, 2026-10-31). The tap sits on the
+/// page itself, so it also hears clicks on a list's bare scroll space, and
+/// it is off while the search is closed. Observes the top row alone, so
+/// opening a search redraws only this.
+struct PanelSearchDismissOnEmptyClick: ViewModifier {
+    @ObservedObject var state: PanelTopRowState
+    let page: PanelPage
+
+    func body(content: Content) -> some View {
+        content.gesture(TapGesture().onEnded { state.endSearch(on: page) },
+                        including: state.isSearching(page) ? .all : .subviews)
     }
 }

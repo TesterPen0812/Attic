@@ -453,6 +453,61 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(NotesTagBarCutOff(offset: 200, visible: 200, content: 400), .init(leading: true), "at the end: leading only")
     }
 
+    /// Expanded things close with one click (owner, 2026-10-31): an open
+    /// search has an × at its end that ends it like Escape, and a click on
+    /// the page's empty space ends it too, on Tasks, Notes and Calendar.
+    func testTheSearchClosesFromItsCrossAndFromAClickOnEmptySpace() throws {
+        try withPanel { host, state, _, _, draft, _ in
+            let window = try XCTUnwrap(host.window)
+            @MainActor func click(_ point: CGPoint) throws {
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                        with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                        pressure: type == .leftMouseDown ? 1 : 0)))
+                }
+                spin(0.6)
+            }
+            let pages: [(PanelSection, String, String)] = [(.tasks, "tasks-find-button", "tasks-find"),
+                                                           (.notes, "notes-search-button", "notes-search"),
+                                                           (.calendar, "calendar-search-button", "calendar-search")]
+            for (section, button, field) in pages {
+                state.selectSection(section)
+                spin(1.0)
+                if section == .notes { XCTAssertTrue(draft.pages.showLibrary()); spin(0.8) }
+                @MainActor func open() throws {
+                    XCTAssertTrue(try XCTUnwrap(element(button, in: host), "\(section): the search button").accessibilityPerformPress?() ?? false)
+                    spin(0.8)
+                    XCTAssertNotNil(element(field, in: host), "\(section): the search is open")
+                }
+                try open()
+                let cross = try XCTUnwrap(elements(host).first { ($0.accessibilityLabel?() ?? "") == "End search" },
+                                          "\(section): an × at the field's end")
+                let crossFrame = try XCTUnwrap(frame(ofElement: cross, in: host))
+                let insets = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size).chromeInsets
+                XCTAssertEqual(crossFrame.maxX, host.bounds.width - insets.trailing, accuracy: 0.5, "\(section): at the trailing end")
+                window.makeKey()
+                try click(CGPoint(x: crossFrame.midX, y: host.bounds.height - crossFrame.midY))
+                XCTAssertNil(element(field, in: host), "\(section): the × ends the search")
+                XCTAssertNotNil(element(button, in: host), "\(section): and the button is back")
+
+                try open()
+                window.makeKey()
+                if section == .tasks {
+                    // A row takes its own click: the search stays.
+                    let row = try XCTUnwrap(elements(host).first { ($0.accessibilityLabel?() ?? "").hasPrefix("Return books") }
+                        .flatMap { frame(ofElement: $0, in: host) }, "a row")
+                    try click(CGPoint(x: row.midX, y: host.bounds.height - row.midY))
+                    XCTAssertNotNil(element(field, in: host), "a click on a row keeps the search")
+                }
+                // Empty page space, low in the list, above the bottom bar
+                // (window coordinates, from the bottom).
+                try click(CGPoint(x: host.bounds.midX, y: 150))
+                XCTAssertNil(element(field, in: host), "\(section): a click on empty space ends the search")
+            }
+        }
+    }
+
     func testNotesLayoutSwitchOnlyOnTheListAndFoldsWithSearch() throws {
         XCTAssertEqual(NotesBarMetrics.newNoteSymbol, "plus", "the bottom bar ends with +")
         XCTAssertEqual(NotesLayoutSwitchMetrics.width, 3 + 21 + 1 + 21 + 3)

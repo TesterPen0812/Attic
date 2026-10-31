@@ -104,6 +104,7 @@ struct AtticPanelView: View {
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage || uiState.builtPages.contains(page) {
                         pageHost(page)
+                            .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
                             .modifier(PanelPageVisibility(
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the

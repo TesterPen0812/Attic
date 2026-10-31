@@ -360,6 +360,9 @@ enum AtticTabsSearchMetrics {
     static let iconSize: CGFloat = 13
     /// The "Esc" hint's padding inside the field's end.
     static let hintPadding: CGFloat = 10
+    /// The top-row field's × (owner, 2026-10-31), in a 27 pt cell like the
+    /// magnifier's: 10 pt, so it weighs as the 12 pt magnifier does.
+    static let closeGlyph: CGFloat = 10
 }
 
 /// Title menus and Attic's own pop-overs (radius 20).
