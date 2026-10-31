@@ -45,6 +45,22 @@ final class TasksPanelUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
     }
 
+    /// The "+" card's title and the shared "+" that opens it (Accepted
+    /// 2026-10-29 "The '+' card": the card replaced the add bar).
+    private var cardTitle: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+    }
+
+    private var plus: XCUIElement { app.buttons["tasks-new-task"] }
+
+    /// "+" opens the card with the keyboard in its title.
+    private func openCard(file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(plus.waitForExistence(timeout: 3), file: file, line: line)
+        plus.click()
+        XCTAssertTrue(cardTitle.waitForExistence(timeout: 3), "\"+\" opens the card", file: file, line: line)
+        waitFor((cardTitle.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the title has the keyboard", file: file, line: line)
+    }
+
     private func tab(_ page: String) -> XCUIElement {
         app.buttons["tasks-page-\(page)"]
     }
@@ -135,10 +151,11 @@ final class TasksPanelUITests: XCTestCase {
     /// whole title is the row's accessibility label.
     func testALongTitleStaysOnOneRowAndIsReadInFull() throws {
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
-        XCTAssertTrue(addBar.waitForExistence(timeout: 3))
-        addBar.click()
+        // Return creates and closes the card (Accepted "The '+' card").
+        openCard()
         app.typeText("Short\r")
         waitFor(row("Short").exists, "the short task is listed")
+        openCard()
         app.typeText(longTitle + "\r")
         waitFor(row(longTitle).exists, "the full title is the row's accessibility label")
         XCTAssertEqual(row(longTitle).frame.height, row("Short").frame.height, accuracy: 1,
@@ -263,19 +280,26 @@ final class TasksPanelUITests: XCTestCase {
         closeFilesList(of: "Book dentist")
     }
 
-    /// Unlike the mouse-only case, Return selects the native submenu item
-    /// while the composer remains first responder underneath the NSMenu.
-    /// This was the real-app route that silently rejected Show Files.
+    /// Return in a row's menu opened while the "+" card had a draft and the
+    /// keyboard: Return chooses the menu's Show Files and submits nothing.
+    /// The right-click on the row is a click outside the card (orchestrator
+    /// decision, w3 UI tests round 2, under Accepted 2026-10-29 "The '+'
+    /// card": "Escape or a click outside keeps the draft"): the card closes
+    /// with its draft kept, and the row's menu opens in the same right-click.
     func testNativeContextMenuReturnOpensFilesWhileTheComposerHasFocus() throws {
-        XCTAssertTrue(addBar.waitForExistence(timeout: 10))
+        // The launch is an explicit open, which opens the card; Escape closes
+        // it so the pin can be clicked.
+        XCTAssertTrue(cardTitle.waitForExistence(timeout: 10))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(cardTitle.waitForNonExistence(timeout: 5), "Escape closes the card")
         unpin()
-        addBar.click()
-        addBar.typeText("Keep this draft")
-        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true)
-        XCTAssertEqual(addBar.value as? String, "Keep this draft")
+        openCard()
+        app.typeText("Keep this draft")
+        XCTAssertEqual(cardTitle.value as? String, "Keep this draft")
 
         row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
-        XCTAssertTrue(openMenuItem("More").waitForExistence(timeout: 5))
+        XCTAssertTrue(cardTitle.waitForNonExistence(timeout: 5), "the right-click is a click outside: the card closes")
+        XCTAssertTrue(openMenuItem("More").waitForExistence(timeout: 5), "and the row's menu opens in the same right-click")
         // From no highlighted item: Up selects Delete, Up selects More,
         // Right enters its submenu, and Return chooses Show Files.
         app.typeKey(.upArrow, modifierFlags: [])
@@ -283,14 +307,24 @@ final class TasksPanelUITests: XCTestCase {
         app.typeKey(.rightArrow, modifierFlags: [])
         XCTAssertTrue(openMenuItem("Show Files").waitForExistence(timeout: 5))
         app.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(openMenuItem("More").waitForNonExistence(timeout: 5), "the native context menu closes")
-        assertFilesListStaysOpen("Return on the native More › Show Files")
-        XCTAssertEqual(addBar.value as? String, "Keep this draft", "the menu's Return did not submit the composer")
+        XCTAssertTrue(openMenuItem("More").waitForNonExistence(timeout: 5), "the context menu closes")
+        assertFilesListStaysOpen("Return on the More › Show Files")
+        XCTAssertFalse(row("Keep this draft").exists, "the menu's Return created no task")
+        plus.click()
+        XCTAssertTrue(cardTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(cardTitle.value as? String, "Keep this draft", "the card kept its draft")
+        app.typeKey(.escape, modifierFlags: [])
     }
 
     /// The ordinary app's auto-hide is active, the composer is clean, and
     /// Find has rebuilt this row before the native submenu is selected.
     func testNativeContextMenuAfterFindOpensFilesWithRealAutoHide() throws {
+        // The launch is an explicit open, which opens the "+" card (Accepted
+        // "The '+' card" took over the add bar). Escape closes it and keeps
+        // its draft; its scrim would otherwise take the click on the pin.
+        XCTAssertTrue(cardTitle.waitForExistence(timeout: 10))
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(cardTitle.waitForNonExistence(timeout: 5), "Escape closes the card")
         app.typeKey("f", modifierFlags: .command)
         let search = app.textFields["tasks-find"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
@@ -307,10 +341,12 @@ final class TasksPanelUITests: XCTestCase {
         row("Book dentist").coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).rightClick()
         let more = openMenuItem("More")
         XCTAssertTrue(more.waitForExistence(timeout: 5))
-        more.hover()
+        // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
+        // clicked through the pointer (`GlassMenuUITestSupport`).
+        hoverGlassMenuItem(more, titled: "More", in: app)
         let openFiles = openMenuItem("Show Files")
         XCTAssertTrue(openFiles.waitForExistence(timeout: 5))
-        openFiles.hover()
+        hoverGlassMenuItem(openFiles, titled: "Show Files", in: app)
         app.typeKey(.return, modifierFlags: [])
         assertFilesListStaysOpen("native Show Files after Find, with real auto-hide")
     }

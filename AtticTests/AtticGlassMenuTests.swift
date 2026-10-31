@@ -392,6 +392,97 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(menu.chosen?.title, "#home")
     }
 
+    /// What is under the pointer is the row's menu item, as with `NSMenu`:
+    /// the accessibility hit test (VoiceOver's pointer, and the UI tests'
+    /// "hittable" check) lands on the item, not on the card's window. The
+    /// rows' view takes no AppKit hits (the menu tracks the pointer itself).
+    func testThePointOverARowHitsItsMenuItem() throws {
+        let menu = open(commands())
+        let card = menu.cards[0]
+        for title in ["Complete", "Date", "Delete"] {
+            let point = center(of: row(titled: title, in: card), in: card)
+            let hit = card.window.accessibilityHitTest(point)
+            XCTAssertEqual((hit as? AtticGlassMenuItemElement)?.command.title, title,
+                           "\(title): the hit test finds its item (got \(String(describing: hit)))")
+        }
+        // A submenu's card answers for its own rows.
+        menu.handle(key(125))
+        menu.handle(key(125)); menu.handle(key(125)); menu.handle(key(125))
+        XCTAssertTrue(card.view.element(for: row(titled: "Tags", in: card))!.accessibilityPerformPress())
+        let submenu = try XCTUnwrap(menu.cards.last)
+        let home = submenu.window.accessibilityHitTest(center(of: row(titled: "#home", in: submenu), in: submenu))
+        XCTAssertEqual((home as? AtticGlassMenuItemElement)?.command.title, "#home")
+    }
+
+    /// XCUITest's hit point goes through the system, not the card's window:
+    /// the window server picks the window under the point, then the app's
+    /// accessibility hit test asks it. A clear, non-opaque window lets the
+    /// window server pass a point over see-through pixels (the glass is drawn
+    /// by the window server, not into the window) to the window below, so
+    /// every glass menu item was "Not hittable" on CI.
+    func testTheSystemsHitAtARowIsTheCardAndItsMenuItem() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("needs a window on screen (CI and the Air)")
+        }
+        AtticGlassMenu.ordersCardsFront = true
+        let visible = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let menu = AtticGlassMenu(commands(), appearance: NSAppearance(named: .aqua), opener: nil)
+        menu.open(.point(CGPoint(x: visible.midX, y: visible.midY + 100)), visible: visible, source: nil)
+        defer { menu.close(animated: false) }
+        let card = menu.cards[0]
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertFalse(card.window.ignoresMouseEvents, "the card takes the pointer")
+        for title in ["Complete", "Date", "Delete"] {
+            let point = center(of: row(titled: title, in: card), in: card)
+            let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+            XCTAssertEqual(number, card.window.windowNumber, "\(title): the window server finds the card's window")
+            let hit = NSApp.accessibilityHitTest(point)
+            XCTAssertEqual((hit as? AtticGlassMenuItemElement)?.command.title, title,
+                           "\(title): the app's hit test finds its item (got \(String(describing: hit)))")
+        }
+    }
+
+    /// The "+" card over the rows (orchestrator decision, w3 UI tests round 2,
+    /// under Accepted 2026-10-29 "The '+' card"): a right-click on the card
+    /// opens no row's menu under it; one on a row outside it closes the card
+    /// as a click outside does and opens that row's menu in the same press.
+    func testARightClickOutsideAnOpenCardClosesItAndOpensTheRowsMenu() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        window.contentView = content
+        let anchor = AtticContextMenuAnchor.AnchorView(frame: content.bounds)
+        anchor.build = { [AtticMenuCommand(verbatim: "Row menu") {}] }
+        content.addSubview(anchor)
+        var cardOpen = true
+        var closes = 0
+        let card = AtticPressShield(frame: NSRect(x: 150, y: 0, width: 150, height: 150))
+        card.isActive = { cardOpen }
+        card.onOutsidePress = { closes += 1; cardOpen = false }
+        content.addSubview(card)
+        var opened: [String] = []
+        AtticGlassMenu.testDriver = { opened.append(contentsOf: $0.commands.map(\.title)) }
+        func press(_ x: CGFloat, _ y: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: x, y: y), modifierFlags: [], timestamp: 1,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        func spin() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+
+        XCTAssertNil(AtticContextMenus.commands(for: press(200, 50)), "the card hides the row under it")
+        _ = AtticContextMenus.route(press(200, 50))
+        spin()
+        XCTAssertEqual(closes, 0, "a press on the card keeps it open")
+        XCTAssertEqual(opened, [], "and opens no row's menu")
+
+        _ = AtticContextMenus.route(press(50, 250))
+        spin()
+        XCTAssertEqual(closes, 1, "a press on a row outside closes the card")
+        XCTAssertEqual(opened, ["Row menu"], "and opens the row's menu in the same press")
+
+        // Closed, the card shields nothing.
+        XCTAssertNotNil(AtticContextMenus.commands(for: press(200, 50)))
+    }
+
     // MARK: Date card
 
     private var calendar: Calendar {

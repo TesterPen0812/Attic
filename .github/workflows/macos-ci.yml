@@ -39,6 +39,12 @@ on:
         default: false
         type: boolean
 
+      ui_tests:
+        description: Space-separated -only-testing identifiers for a focused UI run (lane=full; skips every other job)
+        required: false
+        default: ''
+        type: string
+
       inspect_dropdown_sampling:
         description: Record repeated old/paired priority estimates on the same runner
         required: false
@@ -91,7 +97,7 @@ jobs:
 
   fka:
     needs: validate-inputs
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.lane == 'fka' || inputs.lane == 'full' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lane == 'fka' || inputs.lane == 'full') && !inputs.ui_tests }}
     name: Focused Full Keyboard Access verification
     runs-on: macos-26
     timeout-minutes: 40
@@ -175,7 +181,7 @@ jobs:
 
   round-trips:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Generated models, matrices, stress, and Notes round trips
     runs-on: macos-26
     # The complete successful generated suite plus compilation exceeded the
@@ -223,7 +229,7 @@ jobs:
 
   macos:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
     timeout-minutes: 180
@@ -584,7 +590,7 @@ jobs:
 
   required:
     needs: [validate-inputs, macos, round-trips]
-    if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ always() && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Require macOS and generated coverage
     runs-on: ubuntu-latest
     steps:
@@ -606,7 +612,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        # A focused run (ui_tests set) needs one runner.
+        shard: ${{ fromJSON(inputs.ui_tests && '[1]' || '[1, 2]') }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
@@ -620,6 +627,8 @@ jobs:
         # 35 min allows ~1,307 s at the slower runtime + 180 s build + 600 s
         # bundle/runner headroom. Separate runners shorten the critical path.
         timeout-minutes: 35
+        env:
+          UI_TESTS: ${{ inputs.ui_tests }}
         run: |
           rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
           rm -rf "$RUNNER_TEMP/attic-visual-uat"
@@ -634,6 +643,10 @@ jobs:
           done
           if [ "${{ matrix.shard }}" = 2 ]; then
             shard_flags+=(-only-testing:AtticUITests)
+          fi
+          if [ -n "$UI_TESTS" ]; then
+            shard_flags=()
+            for t in $UI_TESTS; do shard_flags+=("-only-testing:$t"); done
           fi
           ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
           Scripts/xcodebuild_locked.sh \
@@ -681,7 +694,7 @@ jobs:
 
   costs:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Optimized costs and opt-in soak retention gates
     runs-on: macos-26
     timeout-minutes: 90
@@ -918,7 +931,7 @@ jobs:
 
   performance:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Observe seeded performance on a fresh macOS runner
     runs-on: macos-26
     timeout-minutes: 180
@@ -1006,7 +1019,7 @@ jobs:
 
   appearance:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
@@ -1067,7 +1080,7 @@ jobs:
   iphone:
     needs: validate-inputs
     name: Build Attic for iPhone Simulator
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone && inputs.lane != 'fast' && inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -1184,7 +1197,7 @@ jobs:
 
   canvas-lab:
     needs: validate-inputs
-    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' }}
+    if: ${{ inputs.lane != 'costs' && inputs.lane != 'fka' && !inputs.ui_tests }}
     name: Canvas lab headless renderer and analysis
     runs-on: macos-26
     timeout-minutes: 15

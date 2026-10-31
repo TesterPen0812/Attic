@@ -1767,6 +1767,49 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         AtticOverlayHierarchy.layoutPass { super.layout() }
     }
 
+    /// The accessibility hit test (VoiceOver's pointer, XCUITest's hit
+    /// point): SwiftUI answers with the first node in tree order under the
+    /// point, even an ignored one with no role (a page's clear stand-in for
+    /// a bar, the tabs' click band) or a row scrolled under the bars. Those
+    /// lie under the shell's controls, which are drawn later, above them, so
+    /// every top-row control and the page switch were "Not hittable". The
+    /// answer is the topmost real element under the point: the last in tree
+    /// order, as drawing goes.
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        let hit = super.accessibilityHitTest(point)
+        return Self.topmostElement(in: self, at: point) ?? hit
+    }
+
+    /// No role and nothing inside: what SwiftUI leaves for a hidden or
+    /// clear view.
+    private static func isPlaceholder(_ node: AnyObject) -> Bool {
+        let role = node.accessibilityRole?() ?? nil
+        guard role == nil || role == .unknown else { return false }
+        return ((node.accessibilityChildren?() ?? nil) ?? []).isEmpty
+    }
+
+    /// The last element in tree order (drawn above the earlier ones), deepest
+    /// first, whose frame holds `point`.
+    static func topmostElement(in root: AnyObject, at point: NSPoint) -> AnyObject? {
+        var best: AnyObject?
+        var visited = 0
+        func visit(_ node: AnyObject, depth: Int) {
+            guard depth < 64, visited < 20_000 else { return }
+            visited += 1
+            for child in (node.accessibilityChildren?() ?? nil) ?? [] {
+                let element = child as AnyObject
+                let frame = element.accessibilityFrame?() ?? .zero
+                // A framed element holds its own: nothing under it lies
+                // outside it (a frameless group is looked into).
+                guard frame.isEmpty || frame.contains(point) else { continue }
+                if !frame.isEmpty, !isPlaceholder(element) { best = element }
+                visit(element, depth: depth + 1)
+            }
+        }
+        visit(root, depth: 0)
+        return best
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let localPoint = convert(point, from: superview)
         let policyPoint = AtticPanelCoordinateSpace.policyPoint(

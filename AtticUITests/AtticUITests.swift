@@ -351,8 +351,19 @@ final class AtticUITests: XCTestCase {
                        "the editor has the expected value", file: file, line: line)
     }
 
+    /// The "+" card's title, where a new task is typed (Accepted 2026-10-29
+    /// "The '+' card": it replaced the add bar and keeps its draft).
+    private var cardTitle: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+    }
+
+    /// A kept task draft holds the panel open on idle; once it is cleared,
+    /// the idle panel hides. The launch is an explicit open, which opens the
+    /// card; Escape closes it and keeps the draft (Accepted "The '+' card"),
+    /// and the card's scrim would take a click on the pin, so the card is
+    /// closed before unpinning.
     func testMainPanelIdleRetainsTaskDraftThenHidesCleanEditor() throws {
-        let field = addBar
+        let field = cardTitle
         // Cold accessibility startup can outlast the explicit-open grace.
         // Set up under the real pin, then test idle behavior unpinned.
         XCTAssertTrue(field.waitForExistence(timeout: 10))
@@ -360,23 +371,30 @@ final class AtticUITests: XCTestCase {
         field.click()
         field.typeText("Keep this unfinished draft")
         waitForValue("Keep this unfinished draft", in: field)
+        field.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5), "Escape closes the card")
         let pin = app.buttons["panel-pin-button"]
+        let plus = app.buttons["tasks-new-task"]
         XCTAssertTrue(pin.isSelected)
         pin.click()
         XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
         let outside = app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220))
         outside.hover()
-        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !field.exists }, object: nil)
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !plus.exists }, object: nil)
         hidden.isInverted = true
         wait(for: [hidden], timeout: 4)
-        XCTAssertEqual(field.value as? String, "Keep this unfinished draft")
+        plus.click()
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "\"+\" opens the card again")
+        waitForValue("Keep this unfinished draft", in: field)
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeKey(.delete, modifierFlags: [])
         waitForValue("", in: field)
+        field.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5), "Escape closes the empty card")
         outside.hover()
-        XCTAssertTrue(field.waitForNonExistence(timeout: 8), "A clean idle main entry must stop acting as a pin")
+        XCTAssertTrue(plus.waitForNonExistence(timeout: 8), "A clean idle main entry must stop acting as a pin")
     }
 
     func testMainPanelIdleHidesAutosavedNoteWithEditorFocus() throws {

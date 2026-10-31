@@ -21,8 +21,22 @@ final class PanelShellUITests: XCTestCase {
         app?.terminate()
     }
 
+    /// The "+" card's title (Accepted 2026-10-29 "The '+' card": the card
+    /// replaced the add bar).
     private var addBar: XCUIElement {
-        app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
+        app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+    }
+
+    /// The launch is an explicit open, which opens the "+" card on Tasks
+    /// (the composer job); its scrim takes the pointer over the whole panel.
+    /// Escape closes it (Accepted 2026-10-29 "The '+' card": Escape keeps
+    /// the draft, none here). Escape is no navigation key, so it shows no
+    /// focus ring.
+    private func closeTheCardIfOpen() {
+        let open = addBar.waitForExistence(timeout: 2)
+        guard open else { return }
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(addBar.waitForNonExistence(timeout: 3), "Escape closes the card")
     }
 
     private func waitForFocus(_ focused: Bool, on element: XCUIElement,
@@ -34,19 +48,26 @@ final class PanelShellUITests: XCTestCase {
                        .completed, "keyboard focus \(focused ? "in" : "out of") the field", file: file, line: line)
     }
 
-    /// First Esc leaves the add bar (what was typed stays), the next closes
-    /// an open menu, and only an Esc with nothing left to close hides.
+    /// First Esc closes the "+" card (what was typed stays: Accepted "The
+    /// '+' card", "Escape or a click outside keeps the draft"), the next
+    /// closes an open menu, and only an Esc with nothing left to close hides.
     func testEscapeLeavesTheFieldThenClosesTheMenuThenHidesThePanel() throws {
         let pin = app.buttons["panel-pin-button"]
-        XCTAssertTrue(addBar.waitForExistence(timeout: 3))
-        addBar.click()
+        let plus = app.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 3))
+        plus.click()
+        XCTAssertTrue(addBar.waitForExistence(timeout: 3), "\"+\" opens the card")
         waitForFocus(true, on: addBar)
         app.typeText("Draft kept")
 
         app.typeKey(.escape, modifierFlags: [])
-        waitForFocus(false, on: addBar)
-        XCTAssertTrue(pin.exists, "the first Esc only leaves the field")
-        XCTAssertEqual(addBar.value as? String, "Draft kept")
+        XCTAssertTrue(addBar.waitForNonExistence(timeout: 3), "the first Esc closes the card")
+        XCTAssertTrue(pin.exists, "the first Esc only closes the card")
+        plus.click()
+        XCTAssertTrue(addBar.waitForExistence(timeout: 3))
+        XCTAssertEqual(addBar.value as? String, "Draft kept", "the card keeps its draft")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(addBar.waitForNonExistence(timeout: 3))
 
         // The panel's own menu: Esc closes it and nothing else.
         pin.coordinate(withNormalizedOffset: CGVector(dx: 2.6, dy: 0.5)).rightClick()
@@ -173,13 +194,21 @@ final class PanelShellUITests: XCTestCase {
     func testClickingThePageButtonShowsNoFocusRing() throws {
         let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pageButton.waitForExistence(timeout: 3))
+        closeTheCardIfOpen()
         pin.hover()
         Thread.sleep(forTimeInterval: 0.6)
         let before = pageButton.screenshot()
         pageButton.hover()
         waitFor(page("notes").isHittable, "it opens")
         page("notes").click()
-        page("tasks").click()
+        // An open note's bar has no page switch; ⌘1 (no navigation key, so
+        // no ring) comes back from there.
+        if page("tasks").waitForExistence(timeout: 2) {
+            page("tasks").click()
+        } else {
+            app.typeKey("1", modifierFlags: .command)
+        }
+        XCTAssertTrue(app.buttons["tasks-new-task"].waitForExistence(timeout: 3), "back on Tasks")
         pin.hover()
         Thread.sleep(forTimeInterval: 0.8)
         let after = pageButton.screenshot()

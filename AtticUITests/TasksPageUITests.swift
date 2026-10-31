@@ -243,7 +243,9 @@ final class TasksPageUITests: XCTestCase {
         row("Book dentist").rightClick()
         let move = app.menuItems["Move to Later"]
         XCTAssertTrue(move.waitForExistence(timeout: 3))
-        move.click()
+        // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
+        // clicked through the pointer (`GlassMenuUITestSupport`).
+        clickGlassMenuItem(move, titled: "Move to Later", in: app)
         waitFor(!row("Book dentist").exists, "it leaves Now")
         let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Moved to Later")).firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 3), "the Undo toast shows")
@@ -607,7 +609,9 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(high.waitForExistence(timeout: 3), "its priority menu opens")
         XCTAssertTrue(app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "Low")).firstMatch.exists,
                       "Low is offered to a mixed selection (follow-up part 2)")
-        high.click()
+        // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
+        // clicked through the pointer (`GlassMenuUITestSupport`).
+        clickGlassMenuItem(high, titled: "High", in: app)
         waitFor(label("Call the plumber").contains("high priority") && label("Email beta testers").contains("high priority"),
                 "the bar set both to High")
         XCTAssertTrue(move.waitForExistence(timeout: 3))
@@ -772,7 +776,9 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(menuItem("Edit Title").waitForExistence(timeout: 3), "its menu offers Edit Title")
         XCTAssertTrue(menuItem("Delete").exists)
         XCTAssertTrue(menuItem("Move Up").exists)
-        openItem("Edit Title").click()
+        // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
+        // clicked through the pointer (`GlassMenuUITestSupport`).
+        clickGlassMenuItem(openItem("Edit Title"), titled: "Edit Title", in: app)
         let field = app.textFields.matching(NSPredicate(format: "label == %@", "Rename subtask")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the title is edited in place")
         field.typeKey("a", modifierFlags: .command)
@@ -888,9 +894,11 @@ final class TasksPageUITests: XCTestCase {
     func testKeysTypedInTheTagPickerStayInItsField() throws {
         row("Call the plumber").rightClick()
         XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
-        menuItem("Tags").hover()
+        // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
+        // clicked through the pointer (`GlassMenuUITestSupport`).
+        hoverGlassMenuItem(menuItem("Tags"), titled: "Tags", in: app)
         XCTAssertTrue(menuItem("All Tags…").waitForExistence(timeout: 3))
-        menuItem("All Tags…").click()
+        clickGlassMenuItem(menuItem("All Tags…"), titled: "All Tags…", in: app)
         let field = app.descendants(matching: .textField)
             .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens with its field")
@@ -969,8 +977,14 @@ final class TasksPageUITests: XCTestCase {
     /// Round 5: the add bar's suggestion list keeps the keys in the draft.
     func testKeysTypedWithTheSuggestionsShowingStayInTheDraft() throws {
         select("Call the plumber")
+        // With the keyboard on a row the bar ends in "+" (Accepted
+        // 2026-10-29 "Top row and bottom bar"); "+" opens the add field
+        // with the keyboard in it.
+        let plus = window.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 5))
+        plus.click()
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
-        addBar.click()
+        waitFor((addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true, "\"+\" gives the add field the keyboard")
         addBar.typeText("Buy #la")
         let suggestion = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 3), "the suggestions show")
@@ -1031,9 +1045,11 @@ final class TasksPageUITests: XCTestCase {
     func testTheTagPopoverOpensFromTheClickedTags() throws {
         row("Call the plumber").rightClick()
         XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
-        menuItem("Tags").hover()
+        // Outdated: glass menus (`37174a4d`, Accepted Shapes/Radii): its items are
+        // clicked through the pointer (`GlassMenuUITestSupport`).
+        hoverGlassMenuItem(menuItem("Tags"), titled: "Tags", in: app)
         XCTAssertTrue(menuItem("#launch").waitForExistence(timeout: 3))
-        menuItem("#launch").click()
+        clickGlassMenuItem(menuItem("#launch"), titled: "#launch", in: app)
         waitFor(label("Call the plumber").contains("tagged launch"), "the tag is added")
         // The tags lead the details line, under the title's start (text at
         // 44 pt; the details line is the row's lower line).

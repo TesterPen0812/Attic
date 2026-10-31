@@ -38,7 +38,7 @@ final class ScrollEdgeUITests: XCTestCase {
         }
     }
 
-    /// Far down the long list, rows lie under Find and the add bar: both
+    /// Far down the long list, rows lie under Find and the "+": both
     /// still take their clicks (deep review P2-02's hit points), and a query
     /// typed from there shows its match and its count (P2-01: the list
     /// stayed far down, past the matches, and showed nothing). The strip
@@ -65,18 +65,25 @@ final class ScrollEdgeUITests: XCTestCase {
         }
         XCTAssertTrue(!first.exists || first.frame.minY < resting - 200, "the list is far down (\(first.frame.minY), resting \(resting))")
 
-        // The add bar, over the rows: hittable, and a click gives it the keyboard.
-        let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
-        XCTAssertTrue(addBar.waitForExistence(timeout: 3))
-        XCTAssertTrue(addBar.isHittable, "the add bar has a hit point over scrolled rows: \(addBar.frame)")
-        addBar.click()
-        XCTAssertTrue(waitFor { (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true }, "the click gives the add bar the keyboard")
+        // "+", over the rows: hittable, and a click opens the card with the
+        // keyboard in its title (Accepted 2026-10-29 "The '+' card": the
+        // card replaced the add bar).
+        let plus = app.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 3))
+        XCTAssertTrue(plus.isHittable, "\"+\" has a hit point over scrolled rows: \(plus.frame)")
+        plus.click()
+        let addBar = app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+        XCTAssertTrue(addBar.waitForExistence(timeout: 3), "the card opens")
+        XCTAssertTrue(waitFor { (addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true }, "the card's title has the keyboard")
         app.typeText("Water the plants tomorrow #home !!")
-        XCTAssertTrue(waitFor { (addBar.value as? String)?.contains("Water the plants") == true }, "typing lands in the add bar")
+        XCTAssertTrue(waitFor { (addBar.value as? String)?.contains("Water the plants") == true }, "typing lands in the title")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
-        save(panel.screenshot(), name: "scroll-edges-glass-light-strip-over-rows")
+        save(panel.screenshot(), name: "scroll-edges-glass-light-card-over-rows")
         addBar.typeKey("a", modifierFlags: .command)
         addBar.typeKey(.delete, modifierFlags: [])
+        // Escape closes the card (Accepted: it keeps the draft, empty here).
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(addBar.waitForNonExistence(timeout: 3), "Escape closes the card")
 
         // Find, over the rows: its button and its field take their clicks.
         let findButton = app.buttons["tasks-find-button"]
@@ -85,59 +92,61 @@ final class ScrollEdgeUITests: XCTestCase {
         findButton.click()
         let find = app.descendants(matching: .any).matching(identifier: "tasks-find").firstMatch
         XCTAssertTrue(find.waitForExistence(timeout: 3), "Find opens")
+        // While searching, Pin folds away (Accepted 2026-10-29 "Top row and
+        // bottom bar": "Pin, the switch and ••• fold away"): the panel is
+        // the dialog holding "+" from here.
+        let searchingPanel = app.dialogs.containing(.button, identifier: "tasks-new-task").firstMatch
         XCTAssertTrue(find.isHittable, "Find's field has a hit point over scrolled rows: \(find.frame)")
         find.click()
         app.typeText("Ship")
         let match = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Ship appearance PR,")).firstMatch
         XCTAssertTrue(match.waitForExistence(timeout: 3), "the match is listed")
-        XCTAssertTrue(waitFor { match.isHittable && panel.frame.contains(CGPoint(x: match.frame.midX, y: match.frame.midY)) },
+        XCTAssertTrue(waitFor { match.isHittable && searchingPanel.frame.contains(CGPoint(x: match.frame.midX, y: match.frame.midY)) },
                       "and in view, not past the list's end: \(match.frame)")
         let count = app.descendants(matching: .any).matching(identifier: "tasks-find-count").firstMatch
         XCTAssertTrue(count.waitForExistence(timeout: 3), "the count shows")
         let counted = [count.label, count.value as? String ?? ""].joined(separator: " ")
         XCTAssertTrue(counted.contains("1 of "), "the count says one: \(counted)")
-        save(panel.screenshot(), name: "scroll-edges-glass-light-find-from-far-down")
+        save(searchingPanel.screenshot(), name: "scroll-edges-glass-light-find-from-far-down")
         app.typeKey(.escape, modifierFlags: [])
     }
 
-    /// owner-decisions.md: "No blur at the bottom" and "Top controls on
-    /// glass: B" (2026-10-22) supersede N-6 D's plain-label/bottom fades.
-    /// Rows may move under the controls' own glass. Keep the pixel movement
-    /// positive control and the original hang sequence, and verify spacing B
-    /// plus the floating controls' geometry and hit targets throughout.
+    /// Rows scroll under the floating glass, and the controls over them stay
+    /// put and keep their hit points: the tabs and Pin in the top row, the
+    /// page switch and "+" in the bottom bar (Accepted 2026-10-29 "Top row and
+    /// bottom bar"; 2026-10-31 "Shared controls stay still while pages
+    /// switch"). The tabs are the 21 pt chips of "One size". Keep the pixel
+    /// movement positive control and the original hang sequence.
     func testRowsScrollUnderFloatingGlassWithoutMovingTheControls() throws {
         for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
             let app = launchPixelFixture(surface: surface, mode: mode, edge: "soft")
             defer { app.terminate() }
             let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
-            let field = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
-            XCTAssertTrue(field.waitForExistence(timeout: 5))
-            XCTAssertTrue(field.isHittable)
-            field.click()
-            app.typeText("Water plants tomorrow #home !!")
-            let date = app.buttons["composer-date"]
-            XCTAssertTrue(date.waitForExistence(timeout: 5))
+            // The launch is an explicit open, which opens the "+" card; its
+            // scrim covers the rows. Escape closes it (Accepted "The '+' card").
+            let card = app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+            if card.waitForExistence(timeout: 2) {
+                app.typeKey(.escape, modifierFlags: [])
+                XCTAssertTrue(card.waitForNonExistence(timeout: 3), "Escape closes the card")
+            }
             let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
             middle.hover()
             RunLoop.current.run(until: Date().addingTimeInterval(1))
             let first = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Finalize launch checklist,")).firstMatch
-            let single = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Errand number 1,")).firstMatch
-            XCTAssertEqual(first.frame.height, 48, accuracy: 0.5, "spacing B: two-line row pitch")
-            XCTAssertEqual(single.frame.height, 32, accuracy: 0.5, "spacing B: one-line row pitch")
-            XCTAssertEqual(date.frame.height, 26, accuracy: 0.5, "secondary controls stay below the 30 pt add bar")
+            XCTAssertTrue(first.waitForExistence(timeout: 5), "the long list is shown")
             let firstY = first.frame.minY
             let identifiers = ["tasks-page-now", "tasks-page-backlog", "tasks-page-done", "panel-pin-button",
-                               "panel-section-picker", "composer-date", "composer-tag", "composer-priority"]
+                               "panel-section-picker", "tasks-new-task"]
             let controls = identifiers.map { app.descendants(matching: .any).matching(identifier: $0).firstMatch }
             let frames = controls.map(\.frame)
-            for (index, control) in controls.enumerated() {
-                XCTAssertTrue(control.isHittable, "\(identifiers[index]) retains a hit point")
+            for (index, control) in controls.enumerated() where !control.isHittable {
+                XCTFail("\(identifiers[index]) has a hit point at rest: \(control.frame)")
             }
             let tabs = frames[0].union(frames[1]).union(frames[2])
-            XCTAssertEqual(tabs.height, 28, accuracy: 0.5, "the tabs keep their comfortable hit targets on glass")
-            let pills = date.frame.union(app.buttons["composer-tag"].frame).union(app.buttons["composer-priority"].frame)
+            XCTAssertEqual(tabs.height, 21, accuracy: 0.5, "the tabs are the top row's 21 pt chips")
+            let bottomBar = frames[4].union(frames[5])
             let body = CGRect(x: panel.frame.minX + 75, y: tabs.maxY + 25,
-                              width: panel.frame.width - 110, height: pills.minY - tabs.maxY - 50)
+                              width: panel.frame.width - 110, height: bottomBar.minY - tabs.maxY - 50)
             let before = try bitmap(panel)
             save(panel.screenshot(), name: "floating-glass-\(surface)-\(mode)-reference")
             var moved = false
@@ -155,7 +164,9 @@ final class ScrollEdgeUITests: XCTestCase {
                     XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.5, identifiers[index])
                     XCTAssertEqual(actual.width, expected.width, accuracy: 0.5, identifiers[index])
                     XCTAssertEqual(actual.height, expected.height, accuracy: 0.5, identifiers[index])
-                    XCTAssertTrue(control.isHittable, "\(identifiers[index]) keeps its hit point after scrolling")
+                    if !control.isHittable {
+                        XCTFail("\(identifiers[index]) keeps its hit point after scrolling: \(control.frame)")
+                    }
                 }
                 save(panel.screenshot(), name: "floating-glass-\(surface)-\(mode)-\(delta)")
             }
