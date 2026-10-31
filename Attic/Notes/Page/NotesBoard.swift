@@ -402,10 +402,10 @@ struct NotesLayoutSwitch: View {
 
     private typealias M = NotesLayoutSwitchMetrics
 
-    /// A change of layout: the Tasks tabs' own (a 160 ms crossfade in the
+    /// A change of layout: the shared selection motion (a 160 ms crossfade in the
     /// cells; Reduce Motion at once).
     static func selectionAnimation(reduceMotion: Bool) -> Animation? {
-        TasksTopTabs.selectionAnimation(reduceMotion: reduceMotion)
+        AtticSelectionMarker.animation(reduceMotion: reduceMotion)
     }
 
     var body: some View {

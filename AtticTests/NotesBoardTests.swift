@@ -429,7 +429,7 @@ final class NotesBoardTests: XCTestCase {
     /// draws the marker over the 1 pt gap between the two cells.
     func testTheSwitchMarkerCrossfadesAndNeverSlides() throws {
         XCTAssertEqual(NotesLayoutSwitch.selectionAnimation(reduceMotion: false),
-                       TasksTopTabs.selectionAnimation(reduceMotion: false))
+                       AtticSelectionMarker.animation(reduceMotion: false))
         XCTAssertNil(NotesLayoutSwitch.selectionAnimation(reduceMotion: true), "Reduce Motion: at once")
 
         let holder = LayoutHolder()
