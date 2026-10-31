@@ -375,7 +375,7 @@ final class TasksPageModel: ObservableObject {
     /// Giving a Later task a date moves it to Now under that day (the
     /// store's rule), and the page follows it there, as the design does.
     func followDatedOutOfLater(_ ids: [UUID]) {
-        guard tab == .backlog, ids.contains(where: { store.task(withID: $0)?.status == .todo }) else { return }
+        guard tab == .backlog, ids.contains(where: { store.task(withID: $0)?.listedStatus == .todo }) else { return }
         let keep = selection
         select(tab: .now)
         guard self.tab == .now else { return }
@@ -598,7 +598,7 @@ final class TasksPageModel: ObservableObject {
         return TasksListRow(
             id: task.id,
             model: model,
-            status: task.status,
+            status: task.listedStatus,
             subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : [],
             files: filesOpen ? files : [],
             due: task.dueDay
@@ -1274,7 +1274,7 @@ final class TasksPageModel: ObservableObject {
         let archived = store.task(withID: task.id) == nil
         // The owner's panel design: a task finished today lives in Done too.
         let finishedToday = !archived && task.status == .done && held[task.id] == nil
-        let target: TasksTab = task.status == .backlog ? .backlog : (archived || finishedToday ? .done : .now)
+        let target: TasksTab = task.listedStatus == .backlog ? .backlog : (archived || finishedToday ? .done : .now)
         // An edit that can't be saved keeps the page where it is: the
         // request is deferred (review 2) and the caller keeps it.
         guard finishEditing() else { return .blocked }
@@ -1654,7 +1654,7 @@ final class TasksPageModel: ObservableObject {
     /// ⌘B and the menu: to Later (the backlog), with an Undo toast (a move).
     @discardableResult
     func moveToBacklog(_ ids: [UUID]) -> CommandOutcome {
-        let movable = ids.filter { store.task(withID: $0).map { $0.status != .backlog } == true }
+        let movable = ids.filter { store.task(withID: $0).map { $0.listedStatus != .backlog } == true }
         guard !movable.isEmpty else { return .applied }
         let succeeded = movable.count == 1
             ? library.updateTask(movable[0], status: .backlog, allowingUnfinishedSubtasks: true)
@@ -1668,7 +1668,7 @@ final class TasksPageModel: ObservableObject {
     /// Back to Now as to do (from Later), with an Undo toast.
     @discardableResult
     func moveToNow(_ ids: [UUID]) -> CommandOutcome {
-        let movable = ids.filter { store.task(withID: $0)?.status == .backlog }
+        let movable = ids.filter { store.task(withID: $0)?.listedStatus == .backlog }
         guard !movable.isEmpty else { return .applied }
         let succeeded = movable.count == 1
             ? library.updateTask(movable[0], status: .todo)

@@ -386,8 +386,8 @@ struct TasksPage: View {
         .onChange(of: model.returnFocusRequest) { _, _ in
             guard let id = model.returnFocusRow else { return }
             DispatchQueue.main.async {
-                guard model.isPageShown, model.rows(for: model.tab).contains(where: { $0.id == id }) else { return }
-                model.selectOnly(id)
+                guard model.isPageShown, visibleIDs().contains(id) else { return }
+                if !model.selection.contains(id) { model.selectOnly(id) }
                 setFocus(id)
             }
         }
@@ -1666,7 +1666,8 @@ struct TasksPage: View {
                         actions: actions(for: id, in: tab),
                         onToggleExpanded: { toggleExpanded(id) },
                         onSelect: { rowClicked(id, tab: tab) },
-                        onOpenPage: opensTaskNotes && tab != .done ? { openTaskNote(id) } : nil,
+                        // Done's rows too (the design's goOn and double-click).
+                        onOpenPage: opensTaskNotes ? { openTaskNote(id) } : nil,
                         focus: live.focus,
                         titleEditing: editing ? titleEditing(for: id) : nil,
                         // Every row, done ones too (round 10): a finished task shows
@@ -1988,7 +1989,9 @@ struct TasksPage: View {
                     let targets = commandTargets(for: id)
                     model.report(model.toggleDone(targets), on: id) { [weak model] in model?.toggleDone(targets) ?? .failed(.taskGone) }
                 },
-                openPage: { toggleDetails(id) },
+                // ⇧⌘I and a double-click open the task's page, as on Now and
+                // Later (the design's goOn); its details stay in the menu.
+                openPage: { opensTaskNotes ? openTaskNote(id) : toggleDetails(id) },
                 // Round 10: Delete (to Recently Deleted), Edit Title and the
                 // metadata edits, without changing completion.
                 delete: { deleteAndMoveFocus(model.targets(for: id)) },
@@ -2004,7 +2007,7 @@ struct TasksPage: View {
                 duplicate: { runCommand(on: id) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) } },
                 changePriority: { showPriority(for: id) },
                 showActions: { showActions(for: id, anchor: nil, tab: tab) },
-                names: .init(openPage: detailsActionName(for: id))
+                names: .init(openPage: opensTaskNotes ? String(localized: "Open page") : detailsActionName(for: id))
             )
         }
         let unfinished = store.task(withID: id).map { $0.status != .done } == true
@@ -2073,9 +2076,11 @@ struct TasksPage: View {
     /// finished tracking, and a typing field's key never opens it.
     private func openTaskNote(_ id: UUID) {
         guard !AtticTextInput.ownsCurrentKey else { return }
-        guard store.task(withID: id) != nil, let open = model.services.openTaskNote else { return }
+        guard store.listedTask(withID: id) != nil, let open = model.services.openTaskNote else { return }
         pointer.endInvocation()
-        model.selectOnly(id)
+        // Back returns to the selection it left (one of several selected
+        // keeps them all).
+        if !model.selection.contains(id) { model.selectOnly(id) }
         RunLoop.main.perform(inModes: [.default]) {
             MainActor.assumeIsolated { open(id) }
         }
@@ -2172,7 +2177,7 @@ struct TasksPage: View {
                 menuCommand(key) { [weak model] targets in model?.toggleDone(targets) ?? .failed(.taskGone) }
             })
             if single {
-                list.append(AtticMenuCommand(verbatim: detailsMenuTitle(for: id), shortcut: AtticTaskShortcut.openPage) {
+                list.append(AtticMenuCommand(verbatim: detailsMenuTitle(for: id), shortcut: opensTaskNotes ? nil : AtticTaskShortcut.openPage) {
                     guard !AtticTextInput.ownsCurrentKey else { return }
                     toggleDetails(menuRowID(key))
                 })
@@ -2201,7 +2206,7 @@ struct TasksPage: View {
         // More ›, with Show Files and Move Up/Down; a selection, which has
         // no More ›, keeps them on the root.
         var opensGroup = true
-        if single, tab != .done, opensTaskNotes {
+        if single, opensTaskNotes {
             // Open Page (One item: owner answers, 2026-10-23, answer 3):
             // ⌘Return, a title click and VoiceOver open the same page.
             list.append(AtticMenuCommand(verbatim: String(localized: "Open Page"), shortcut: AtticTaskShortcut.openPage,

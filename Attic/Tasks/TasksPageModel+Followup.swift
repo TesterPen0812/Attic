@@ -11,7 +11,7 @@ extension TasksPageModel {
     /// 2026-10-24, sheet 3), each group in the store's order.
     func moveChoices(forSubtask id: UUID) -> [AtticTaskPicker.Choice] {
         let targets = store.moveTargets(forSubtask: id)
-        let now = targets.filter { $0.status != .backlog }, later = targets.filter { $0.status == .backlog }
+        let now = targets.filter { $0.listedStatus != .backlog }, later = targets.filter { $0.listedStatus == .backlog }
         return now.map { AtticTaskPicker.Choice(id: $0.id, title: $0.title, group: String(localized: "Now")) }
             + later.map { AtticTaskPicker.Choice(id: $0.id, title: $0.title, group: String(localized: "Later")) }
     }
@@ -43,7 +43,7 @@ extension TasksPageModel {
         if focusedSubtaskID == id { focusedSubtaskID = nil }
         selectOnly(id)
         addedRequest = ScrollRequest(id: id)
-        let listed = store.task(withID: id)?.status == .backlog ? String(localized: "Later") : String(localized: "Now")
+        let listed = store.task(withID: id)?.listedStatus == .backlog ? String(localized: "Later") : String(localized: "Now")
         showToast(String(localized: "“\(title)” is now a task in \(listed)"))
         return outcome
     }

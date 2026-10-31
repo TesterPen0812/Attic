@@ -55,7 +55,7 @@ final class PanelAgentPresenter: AgentPanelPresenting {
             switch ref.kind {
             case .task:
                 guard let task = store.listedTask(withID: ref.id) else { return .notFound("task") }
-                let section: PanelSection = task.status == .backlog ? .backlog : .tasks
+                let section: PanelSection = task.listedStatus == .backlog ? .backlog : .tasks
                 if case let .refused(refusal) = reveal(section) { return .failed(refusal.explanation) }
                 // The Tasks page selects the row on its tab and scrolls to it.
                 uiState.showItem(ref)

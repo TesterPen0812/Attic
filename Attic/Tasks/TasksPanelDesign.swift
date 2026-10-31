@@ -266,15 +266,17 @@ extension TasksPanelDesign.GroupKind {
 // MARK: - The design's greys under the title
 
 /// The quieter text of the panel design, each a step under the title:
-/// the group headers rgb(72,74,78), the dates rgb(110,112,116) and the
-/// meta line rgb(128,130,133), against the title's rgb(29,29,31) on white.
+/// the group headers rgb(72,74,78), the next event's time rgb(86,88,92),
+/// the dates rgb(110,112,116) and the meta line rgb(128,130,133), against
+/// the title's rgb(29,29,31) on white. In that order, loudest first.
 enum TasksDesignTone: CaseIterable, Sendable {
-    case groupHeader, date, meta
+    case groupHeader, nextEventTime, date, meta
 
     /// The design's colour (it is drawn on white).
     var designColour: AtticRGBA {
         switch self {
         case .groupHeader: AtticRGBA(red: 72 / 255, green: 74 / 255, blue: 78 / 255, alpha: 1)
+        case .nextEventTime: AtticRGBA(red: 86 / 255, green: 88 / 255, blue: 92 / 255, alpha: 1)
         case .date: AtticRGBA(red: 110 / 255, green: 112 / 255, blue: 116 / 255, alpha: 1)
         case .meta: AtticRGBA(red: 128 / 255, green: 130 / 255, blue: 133 / 255, alpha: 1)
         }
@@ -319,7 +321,8 @@ extension TasksPanelDesign {
         // a date never stronger than the header, the meta than a date.
         let louder: TasksDesignTone? = switch tone {
         case .groupHeader: nil
-        case .date: .groupHeader
+        case .nextEventTime: .groupHeader
+        case .date: .nextEventTime
         case .meta: .date
         }
         if let louder {

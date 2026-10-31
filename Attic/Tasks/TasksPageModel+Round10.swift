@@ -63,7 +63,7 @@ extension TasksPageModel {
         // The copies are where the person is: selected, on their list's
         // page (a copy from Done goes to Now's to do).
         if let first = copies.first {
-            let target: TasksTab = first.status == .backlog ? .backlog : .now
+            let target: TasksTab = first.listedStatus == .backlog ? .backlog : .now
             if tab != target { select(tab: target) }
             selectCopies(copyIDs)
             addedRequest = ScrollRequest(id: first.id)

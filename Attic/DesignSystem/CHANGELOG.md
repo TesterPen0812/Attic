@@ -1,3 +1,9 @@
+## 2026-10-31 · Tasks fix round 1 merge
+
+The next event's time uses rgb(86,88,92) through `toneInk`, between the
+header and date tones. This records the incoming Tasks fix at `0246eb53`;
+row geometry and motion retain the panel design's existing values.
+
 ## 2026-10-30 · One Item fix round 1
 
 Restored Calendar's base row/title click entry until wave 2. Notes' plain
