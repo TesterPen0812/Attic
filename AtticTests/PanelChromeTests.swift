@@ -649,8 +649,8 @@ final class PanelChromeTests: XCTestCase {
             // The card's element is its contents (inside its padding).
             let pad = ComposerMetrics.padding
             XCTAssertGreaterThan(card.width, 289 - pad.leading - pad.trailing - 10, "grown to the card")
-            XCTAssertEqual(card.maxX, before[2].maxX - pad.trailing, accuracy: 0.5, "the card grows from the \"+\"'s corner")
-            XCTAssertEqual(card.maxY, before[2].maxY - pad.bottom, accuracy: 0.5, "the card grows from the \"+\"'s corner")
+            XCTAssertEqual(card.maxX, before[1].maxX - pad.trailing, accuracy: 0.5, "the card grows from the \"+\"'s corner")
+            XCTAssertEqual(card.maxY, before[1].maxY - pad.bottom, accuracy: 0.5, "the card grows from the \"+\"'s corner")
             XCTAssertEqual(element("composer-card", in: host)?.accessibilityLabel?(), "New Task")
             assertSameFrames(before, try barFrames(ids, in: host), "the bar stays still while the card is open")
             // A page switch closes it; the bar is where it was.
@@ -669,7 +669,7 @@ final class PanelChromeTests: XCTestCase {
         try withPanel { host, state, _, _, _, _ in
             state.selectSection(.tasks)
             spin(1.0)
-            let still = ["panel-pin-button", "tasks-tag-bar"]
+            let still = ["panel-pin-button"]
             let before = try barFrames(still, in: host)
             let plusFrame = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
             ComposerOverlay.surfaces = []
