@@ -961,6 +961,16 @@ final class AtticGlassMenuWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    /// The pointer's accessibility hit is the row's menu item, as over an
+    /// `NSMenu` (VoiceOver's pointer, a UI test's hit point). The rows'
+    /// view takes no AppKit hits, so the window's own hit test stopped at
+    /// the material's hosting view, which is hidden from accessibility.
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        guard frame.contains(point), let rows = contentView?.subviews.lazy.compactMap({ $0 as? AtticGlassMenuView }).first
+        else { return super.accessibilityHitTest(point) }
+        return rows.accessibilityHitTest(point)
+    }
+
     /// The card: glass (or the opaque fallback), its rim, then the rows.
     @MainActor func install(_ rows: AtticGlassMenuView, style: AtticGlassMenuStyle) {
         let root = AtticGlassMenuRootView(frame: rows.frame)
@@ -1170,6 +1180,12 @@ final class AtticGlassMenuView: NSView {
         return card.entries.indices.compactMap { element(for: $0) }
     }
 
+    /// `point` is in screen coordinates: the item under it, else the menu.
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        guard let card, let row = card.row(at: point), let element = element(for: row) else { return self }
+        return element
+    }
+
     func element(for row: Int) -> AtticGlassMenuItemElement? {
         guard let card, card.entries.indices.contains(row), case let .item(command) = card.entries[row].kind else { return nil }
         if let element = elements[row] { return element }
@@ -1220,6 +1236,8 @@ final class AtticGlassMenuItemElement: NSAccessibilityElement {
         if let detail = command.detail { setAccessibilityHelp(detail) }
         if command.isDisabled, let reason = command.disabledReason { setAccessibilityHelp(reason) }
     }
+
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? { self }
 
     override func accessibilityPerformPress() -> Bool {
         MainActor.assumeIsolated {

@@ -392,6 +392,28 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual(menu.chosen?.title, "#home")
     }
 
+    /// What is under the pointer is the row's menu item, as with `NSMenu`:
+    /// the accessibility hit test (VoiceOver's pointer, and the UI tests'
+    /// "hittable" check) lands on the item, not on the card's window. The
+    /// rows' view takes no AppKit hits (the menu tracks the pointer itself).
+    func testThePointOverARowHitsItsMenuItem() throws {
+        let menu = open(commands())
+        let card = menu.cards[0]
+        for title in ["Complete", "Date", "Delete"] {
+            let point = center(of: row(titled: title, in: card), in: card)
+            let hit = card.window.accessibilityHitTest(point)
+            XCTAssertEqual((hit as? AtticGlassMenuItemElement)?.command.title, title,
+                           "\(title): the hit test finds its item (got \(String(describing: hit)))")
+        }
+        // A submenu's card answers for its own rows.
+        menu.handle(key(125))
+        menu.handle(key(125)); menu.handle(key(125)); menu.handle(key(125))
+        XCTAssertTrue(card.view.element(for: row(titled: "Tags", in: card))!.accessibilityPerformPress())
+        let submenu = try XCTUnwrap(menu.cards.last)
+        let home = submenu.window.accessibilityHitTest(center(of: row(titled: "#home", in: submenu), in: submenu))
+        XCTAssertEqual((home as? AtticGlassMenuItemElement)?.command.title, "#home")
+    }
+
     // MARK: Date card
 
     private var calendar: Calendar {
