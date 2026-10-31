@@ -426,6 +426,8 @@ struct AtticPageButton<Page: Hashable>: View {
                 .frame(width: open ? 0 : M.chevronWidth, alignment: .leading)
                 .opacity(open ? 0 : 1)
                 .clipped()
+                // Narrowed away it draws nothing to check (as a folded page).
+                .transformEnvironment(\.atticProbesDisabled) { if open { $0 = true } }
                 .accessibilityHidden(true)
         }
         .padding(M.inset)
