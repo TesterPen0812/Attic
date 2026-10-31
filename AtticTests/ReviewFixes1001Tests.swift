@@ -229,7 +229,7 @@ final class SwipeToCloseIntegrationTests: XCTestCase {
 
     /// A fresh two-finger pull toward the right edge over the header.
     private func swipe(_ panel: AtticPanel) throws {
-        let point = CGPoint(x: panel.frame.width / 2, y: panel.frame.height - AtticStyle.panelElevationMargin - 20)
+        let point = CGPoint(x: panel.frame.width / 2, y: panel.frame.height - panel.nativeMargin - 20)
         func scroll(_ dx: Int32, phase: Int64) throws -> NSEvent {
             let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: dx, wheel3: 0))
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)

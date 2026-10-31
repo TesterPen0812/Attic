@@ -226,10 +226,13 @@ final class PanelIslandTests: XCTestCase {
             spin(0.05)
             assertBeside(.topRight, "back on the docked corner's side")
 
-            // The swipe that dismisses: it goes with the panel under the fingers.
+            // The swipe that dismisses: it goes with the panel under the
+            // fingers, drawn by its stand-in in the panel's motion layer
+            // (Accepted "Tall island", "Hiding and showing as one shape").
             panel.onTrackpadDismissProgress?(120)
             spin(0.05)
-            XCTAssertLessThan(windows.presentedOpacity, 1, "fading with the panel's collapse")
+            XCTAssertTrue(try content(panel).isIslandStandInShown, "with the panel's collapse")
+            XCTAssertLessThan(windows.presentedOpacity, 0.01, "its windows step aside")
             panel.onTrackpadDismissCancelled?()
             spin(0.8)
             XCTAssertEqual(windows.presentedOpacity, 1, accuracy: 0.01, "back with the panel")
@@ -319,11 +322,17 @@ final class PanelIslandTests: XCTestCase {
 
     // MARK: Hide timing (the owner's recording of build 1, 31 Oct)
 
-    /// A Swoop hide takes Swoop's own 0.22 s, and the island fades out
-    /// alongside the panel instead of staying until the panel vanishes.
+    /// A Swoop hide takes Swoop's own 0.22 s, and the island goes with the
+    /// panel instead of staying until the panel vanishes. Since Accepted
+    /// "Tall island", "Hiding and showing as one shape" ("the panel and the
+    /// island shrink together, on the same curve and time"), the island no
+    /// longer fades on its own: its stand-in is in the panel's motion layer,
+    /// and fades only at the very end, as the panel does.
     func testASwoopHideTakesSwoopsTimeAndTheIslandFadesAlongside() throws {
         try withController(configure: { $0.hideAnimation = .swoop }) { controller, _, panel in
             let windows = controller.islandWindowsForTesting
+            let container = try content(panel)
+            var standInShown = false, motionAlpha: Float = 0
             let duration = PanelHideAnimation.swoop.defaultHideDuration
             let start = CACurrentMediaTime()
             var hiddenAt: CFTimeInterval?
@@ -342,17 +351,418 @@ final class PanelIslandTests: XCTestCase {
                 if progress == 0, now >= duration * 0.6 {
                     progress = controller.displayedProgressForProbe
                     alpha = windows.presentedOpacity
+                    standInShown = container.isIslandStandInShown
+                    motionAlpha = container.motionOpacity()
                 }
                 trace += String(format: " %.0f:%.2f/%.2f", now * 1000, controller.displayedProgressForProbe, windows.presentedOpacity)
             }
             let took = try XCTUnwrap(hiddenAt) - start
             XCTAssertLessThan(took, duration + 0.12, "hidden in Swoop's own time (took \(took) s;\(trace))")
             XCTAssertGreaterThan(progress, 0.3, "well on its way at 60 % of the time (\(trace))")
-            XCTAssertLessThan(alpha, 0.85, "the island fades alongside (\(alpha) at 60 %;\(trace))")
-            XCTAssertGreaterThan(alpha, 0.03, "fading, not gone at once (\(alpha) at 60 %;\(trace))")
+            XCTAssertTrue(standInShown, "the island is drawn in the panel's motion layer (\(trace))")
+            XCTAssertLessThan(alpha, 0.01, "its windows are empty while the panel moves (\(alpha) at 60 %)")
+            XCTAssertGreaterThan(motionAlpha, 0.85, "not fading on its own: one shape with the panel (\(motionAlpha) at 60 %)")
             XCTAssertFalse(windows.island.isVisible)
             XCTAssertFalse(panel.isVisible)
         }
+    }
+
+    // MARK: Hiding and showing as one shape
+
+    // Planning.md, Accepted "Tall island", "Hiding and showing as one
+    // shape": the panel and the island shrink together, on the same curve
+    // and time, toward the island's outer corner, and grow back out of it,
+    // for every hide animation and the dismissing swipe; under Reduce
+    // Motion both fade together.
+
+    /// The docked panel's window holds the island's region (its margin is
+    /// 40 pt, a floating panel's 28), and the extra margin is click-through
+    /// like the rest of it.
+    func testTheDockedPanelsMarginHoldsTheIslandAndLetsClicksThrough() throws {
+        try withController { controller, _, panel in
+            let container = try content(panel)
+            XCTAssertEqual(AtticStyle.dockedPanelMargin, 40)
+            XCTAssertEqual(AtticStyle.panelElevationMargin, 28, "floating panels keep 28")
+            XCTAssertEqual(panel.nativeMargin, AtticStyle.dockedPanelMargin)
+            let surface = panel.visibleContentFrame
+            let island = controller.islandWindowsForTesting.islandFrame
+            XCTAssertTrue(panel.frame.contains(island), "the island's region is inside the panel's window")
+            // Between 28 and 40 pt out, off the island and its gap.
+            let outside = [CGPoint(x: surface.midX, y: surface.maxY + 34), CGPoint(x: surface.midX, y: surface.minY - 34),
+                           CGPoint(x: surface.minX - 34, y: surface.midY), CGPoint(x: surface.maxX + 20, y: surface.minY + 40),
+                           CGPoint(x: island.maxX + 3, y: island.midY), CGPoint(x: surface.minX - 30, y: surface.maxY + 30)]
+            for point in outside {
+                XCTAssertTrue(panel.frame.contains(point), "\(point) is in the window's margin")
+                controller.updateMousePassthrough(at: point)
+                XCTAssertTrue(panel.ignoresMouseEvents, "the margin at \(point) lets clicks through")
+                XCTAssertFalse(controller.containsScreenPoint(point))
+                let local = CGPoint(x: point.x - panel.frame.minX, y: point.y - panel.frame.minY)
+                XCTAssertNil(container.hitTest(local), "nothing in the window takes \(point)")
+            }
+            controller.updateMousePassthrough(at: CGPoint(x: surface.midX, y: surface.midY))
+            XCTAssertFalse(panel.ignoresMouseEvents, "the surface takes the pointer")
+        }
+    }
+
+    /// At rest the stand-in draws nothing, takes no hit and is no
+    /// accessibility element: the island's windows are the live island.
+    func testAtRestTheStandInTakesNoHitsAndIsNoAccessibilityElement() throws {
+        try withController { controller, _, panel in
+            let container = try content(panel)
+            let windows = controller.islandWindowsForTesting
+            let standIn = windows.standIn
+            XCTAssertTrue(standIn.isDescendant(of: container), "in the panel's motion layer")
+            XCTAssertFalse(container.isIslandStandInShown)
+            XCTAssertEqual(standIn.layer?.opacity, 0)
+            XCTAssertEqual(windows.presentedOpacity, 1, accuracy: 0.01, "the windows are the island")
+            XCTAssertEqual(local(standIn.frame, in: panel, toScreen: true), windows.island.frame, "over the island window")
+            let item = PanelIslandLayout.itemFrame(0, in: windows.islandFrame)
+            let point = CGPoint(x: item.midX - panel.frame.minX, y: item.midY - panel.frame.minY)
+            XCTAssertNil(container.hitTest(point), "the stand-in takes no hit")
+            XCTAssertFalse(standIn.isAccessibilityElement())
+            XCTAssertTrue((standIn.accessibilityChildren() ?? []).isEmpty)
+            XCTAssertNil(standIn.accessibilityHitTest(CGPoint(x: item.midX, y: item.midY)))
+            let ids = elements(panel).compactMap { $0.accessibilityIdentifier?() }
+            for page in PanelPage.allCases {
+                XCTAssertFalse(ids.contains(page.accessibilityIdentifier), "the panel window has no \(page) item")
+            }
+        }
+    }
+
+    /// Slide and Swoop, from every corner: at 30 % and 70 % of a hide and
+    /// back on the reveal, the island's stand-in shows (the windows are
+    /// empty) and is drawn by the panel's own transform about the island's
+    /// outer corner, in screen points.
+    func testSlideAndSwoopHideTheIslandWithThePanelIntoItsOuterCornerAndBackOut() throws {
+        for mode in [PanelHideAnimation.slide, .swoop] {
+            try withController(configure: { $0.hideAnimation = mode }) { controller, _, panel in
+                let screen = try XCTUnwrap(controller.currentScreen)
+                @MainActor func hide(_ corner: ScreenCorner) throws {
+                    var hidden = false
+                    var checked: [Double] = []
+                    _ = controller.requestHide { hidden = $0 == .hidden }
+                    let start = Date()
+                    while !hidden, Date().timeIntervalSince(start) < 3 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.003))
+                        let p = controller.displayedProgressForProbe
+                        for fraction in [0.3, 0.7] where !checked.contains(fraction) && p >= fraction && p < 0.97 && !hidden {
+                            try assertOneShape(controller, panel, mode: mode, corner: corner, "\(mode) \(corner) hide at \(p)",
+                                               keyframed: true)
+                            checked.append(fraction)
+                        }
+                    }
+                    XCTAssertTrue(hidden, "\(mode) \(corner)")
+                    XCTAssertEqual(checked.sorted(), [0.3, 0.7], "\(mode) \(corner): sampled the hide")
+                }
+                // The reveal grows both back out of the same point.
+                @MainActor func reveal(_ corner: ScreenCorner) throws {
+                    var checked: [Double] = []
+                    XCTAssertTrue(controller.show(on: screen, corner: corner))
+                    let start = Date()
+                    let container = try content(panel)
+                    while Date().timeIntervalSince(start) < 2, container.isIslandStandInShown {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.003))
+                        let p = controller.displayedProgressForProbe
+                        for fraction in [0.7, 0.3] where !checked.contains(fraction) && p <= fraction && p > 0.03
+                            && container.isIslandStandInShown {
+                            try assertOneShape(controller, panel, mode: mode, corner: corner, "\(mode) \(corner) reveal at \(p)",
+                                               keyframed: true)
+                            checked.append(fraction)
+                        }
+                    }
+                    XCTAssertEqual(checked.sorted(), [0.3, 0.7], "\(mode) \(corner): sampled the reveal")
+                    spin(0.05)
+                    XCTAssertFalse(try content(panel).isIslandStandInShown, "\(mode) \(corner): handed back at rest")
+                    XCTAssertEqual(controller.islandWindowsForTesting.presentedOpacity, 1, accuracy: 0.01, "\(mode) \(corner)")
+                    XCTAssertTrue(try content(panel).motionIsAtRest, "\(mode) \(corner)")
+                }
+                let corners = [ScreenCorner.topRight, .bottomRight, .bottomLeft, .topLeft]
+                try hide(.topRight)
+                for corner in corners.dropFirst() {
+                    try reveal(corner)
+                    try hide(corner)
+                }
+                try reveal(.topRight)
+            }
+        }
+    }
+
+    /// The dismissing swipe: under the fingers the island goes with the
+    /// panel's collapse on the same transform (Slide and Swoop), and it
+    /// springs back with the panel on release.
+    func testTheSwipeMovesTheIslandWithThePanelAndSpringsBackWithIt() throws {
+        for mode in [PanelHideAnimation.slide, .swoop] {
+            try withController(configure: { $0.hideAnimation = mode }) { controller, _, panel in
+                let windows = controller.islandWindowsForTesting
+                panel.onTrackpadDismissProgress?(120)
+                spin(0.05)
+                let collapse = controller.displayedProgressForProbe
+                XCTAssertGreaterThan(collapse, 0.05, "\(mode): the fingers collapse it")
+                try assertOneShape(controller, panel, mode: mode, corner: .topRight, "\(mode) swipe", presented: false)
+                XCTAssertEqual(windows.shownAlpha, CGFloat(1 - collapse), accuracy: 0.02, "\(mode): the island still counts as shown")
+                panel.onTrackpadDismissCancelled?()
+                spin(until: { !((try? self.content(panel))?.isIslandStandInShown ?? true) })
+                spin(0.05)
+                XCTAssertEqual(windows.presentedOpacity, 1, accuracy: 0.01, "\(mode): back with the panel")
+                XCTAssertTrue(try content(panel).motionIsAtRest, "\(mode)")
+            }
+        }
+    }
+
+    /// Reduce Motion: the panel and the island fade together, in place.
+    func testUnderReduceMotionThePanelAndTheIslandFadeTogether() throws {
+        try withController(configure: { $0.hideAnimation = .swoop }) { controller, _, panel in
+            AtticMotionPreference.systemReduceMotionOverride = true
+            AtticTransparencySeam.systemOverride = true
+            let container = try content(panel)
+            let windows = controller.islandWindowsForTesting
+            let capsule = local(windows.islandFrame, in: panel)
+            @MainActor func assertFadingTogether(_ note: String) {
+                XCTAssertTrue(container.isIslandStandInShown, "\(note): the island fades in the panel's layer")
+                XCTAssertEqual(windows.island.contentView?.layer?.opacity ?? 1, 0, "\(note)")
+                let opacity = container.motionOpacity()
+                XCTAssertGreaterThan(opacity, 0.03, "\(note): fading (\(opacity))")
+                XCTAssertLessThan(opacity, 0.97, "\(note): fading (\(opacity))")
+                for point in corners(capsule) {
+                    let drawn = container.drawnPoint(point)
+                    XCTAssertEqual(drawn.x, point.x, accuracy: 0.5, "\(note): in place")
+                    XCTAssertEqual(drawn.y, point.y, accuracy: 0.5, "\(note): in place")
+                }
+            }
+            var hidden = false
+            _ = controller.requestHide { hidden = $0 == .hidden }
+            spin(0.07)
+            assertFadingTogether("hide")
+            spin(until: { hidden })
+            let screen = try XCTUnwrap(controller.currentScreen)
+            XCTAssertTrue(controller.show(on: screen, corner: .topRight))
+            spin(0.07)
+            assertFadingTogether("reveal")
+            spin(until: { !container.isIslandStandInShown })
+            spin(0.05)
+            XCTAssertEqual(windows.presentedOpacity, 1, accuracy: 0.01)
+        }
+    }
+
+    /// Genie: the island goes through the funnel with the panel. Its
+    /// stand-in is in the snapshot, and the funnel's mouth ends at the
+    /// island's outer corner.
+    func testGenieTakesTheIslandThroughTheFunnelIntoItsOuterCorner() throws {
+        for reduceTransparency in [false, true] {
+            try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel in
+                AtticTransparencySeam.systemOverride = reduceTransparency
+                let container = try content(panel)
+                // Genie's reveal (0.8 s) has ended: the windows are the island.
+                spin(until: { !container.isIslandStandInShown })
+                spin(0.2)
+                let windows = controller.islandWindowsForTesting
+                container.prepareAlternateSnapshot(.genieLiveGlass, surface: nil)
+                let genie = container.genieForTesting
+                let note = "reduce transparency \(reduceTransparency)"
+                XCTAssertFalse(container.isIslandStandInShown, "\(note): nothing changes on screen")
+                for index in 0..<PanelPage.allCases.count {
+                    let item = local(PanelIslandLayout.itemFrame(index, in: windows.islandFrame), in: panel)
+                    let alpha = try XCTUnwrap(genie.snapshotAlpha(around: CGPoint(x: item.midX, y: item.midY)), note)
+                    XCTAssertGreaterThan(alpha, 60, "\(note): item \(index) is in the snapshot")
+                }
+                var hidden = false
+                _ = controller.requestHide { hidden = $0 == .hidden }
+                spin(0.03)
+                XCTAssertTrue(container.isIslandStandInShown, "\(note)")
+                XCTAssertEqual(windows.island.contentView?.layer?.opacity ?? 1, 0, "\(note): the windows are empty")
+                let anchor = islandAnchor(panel, .topRight)
+                let box = container.bounds
+                XCTAssertEqual(CGFloat(genie.anchorInset.x), (box.maxX - anchor.x) / box.width, accuracy: 0.001, note)
+                XCTAssertEqual(CGFloat(genie.anchorInset.y), (box.maxY - anchor.y) / box.height, accuracy: 0.001, note)
+                spin(until: { hidden })
+                XCTAssertTrue(hidden, note)
+            }
+        }
+    }
+
+    /// No flash at a swap (motion start, reveal end, spring-back end): just
+    /// before and just after it, the island's region draws the same, with
+    /// the stand-in showing the same page, chip and look, and no label.
+    func testTheSwapsBetweenTheIslandAndItsStandInShowNoChange() throws {
+        try withController { controller, _, panel in
+            // Off-screen glass renders as artefacts: compare the flat look.
+            AtticTransparencySeam.systemOverride = true
+            spin(0.3)
+            let container = try content(panel)
+            let windows = controller.islandWindowsForTesting
+            var looks: [(after: Bool, toMotion: Bool, pixels: [UInt8])] = []
+            var failures: [String] = []
+            controller.islandSwapProbe = { after, toMotion in
+                MainActor.assumeIsolated {
+                    if !container.motionIsAtRest { failures.append("motion not at rest at a swap (\(after), \(toMotion))") }
+                    if self.local(windows.standIn.frame, in: panel, toScreen: true) != windows.island.frame {
+                        failures.append("stand-in \(windows.standIn.frame) off the island window \(windows.island.frame)")
+                    }
+                    if after, toMotion, (windows.label.contentView?.layer?.opacity ?? 1) != 0 { failures.append("a label shows") }
+                    do { looks.append((after, toMotion, try self.islandRegion(windows, container))) } catch {
+                        failures.append("\(error)")
+                    }
+                }
+            }
+            defer { controller.islandSwapProbe = nil }
+            var hidden = false
+            _ = controller.requestHide { hidden = $0 == .hidden }
+            spin(until: { hidden })
+            let screen = try XCTUnwrap(controller.currentScreen)
+            XCTAssertTrue(controller.show(on: screen, corner: .topRight))
+            spin(until: { !container.isIslandStandInShown })
+            panel.onTrackpadDismissProgress?(100)
+            spin(0.05)
+            panel.onTrackpadDismissCancelled?()
+            spin(until: { !container.isIslandStandInShown })
+            XCTAssertEqual(failures, [])
+            XCTAssertEqual(looks.map { "\($0.toMotion ? "in" : "out")\($0.after ? "+" : "-")" },
+                           ["in-", "in+", "out-", "out+", "in-", "in+", "out-", "out+"],
+                           "hide start, reveal end, swipe start, spring-back end")
+            for pair in stride(from: 0, to: looks.count - 1, by: 2) {
+                let before = looks[pair].pixels, after = looks[pair + 1].pixels
+                XCTAssertEqual(before.count, after.count)
+                let differences = zip(before, after).map { abs(Int($0) - Int($1)) }
+                let largest = differences.max() ?? 0
+                let mean = Double(differences.reduce(0, +)) / Double(max(1, differences.count))
+                print(String(format: "ISLAND_SWAP %d largest=%d mean=%.4f", pair / 2, largest, mean))
+                XCTAssertLessThanOrEqual(largest, 24, "swap \(pair / 2): largest channel change \(largest)")
+                XCTAssertLessThan(mean, 1.0, "swap \(pair / 2): mean change \(mean)")
+                XCTAssertGreaterThan(before.enumerated().filter { $0.offset % 4 == 3 }.map(\.element).max() ?? 0, 100,
+                                     "swap \(pair / 2): the island is drawn")
+            }
+        }
+    }
+
+    // MARK: Helpers (one shape)
+
+    private func content(_ panel: AtticPanel) throws -> AtticPanelContentContainer {
+        try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
+    }
+
+    /// `rect` from screen points to the panel window's (or back).
+    private func local(_ rect: CGRect, in panel: AtticPanel, toScreen: Bool = false) -> CGRect {
+        toScreen ? rect.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
+            : rect.offsetBy(dx: -panel.frame.minX, dy: -panel.frame.minY)
+    }
+
+    private func corners(_ rect: CGRect) -> [CGPoint] {
+        [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+         CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY)]
+    }
+
+    /// The island's outer corner on `corner`'s side, in the panel window's points.
+    private func islandAnchor(_ panel: AtticPanel, _ corner: ScreenCorner) -> CGPoint {
+        let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner)
+        let point = PanelCollapseGeometry.cornerPoint(of: island, corner: corner)
+        return CGPoint(x: point.x - panel.frame.minX, y: point.y - panel.frame.minY)
+    }
+
+    /// The island is drawn by its stand-in (the windows are empty), over the
+    /// island window, by the panel's own motion about the island's outer
+    /// corner: Slide's scale, or Swoop's transform with that anchor.
+    private func assertOneShape(_ controller: AtticPanelController, _ panel: AtticPanel, mode: PanelHideAnimation,
+                                corner: ScreenCorner, _ note: String, presented: Bool = true, keyframed: Bool = false,
+                                file: StaticString = #filePath, line: UInt = #line) throws {
+        let container = try content(panel)
+        let windows = controller.islandWindowsForTesting
+        XCTAssertTrue(container.isIslandStandInShown, "\(note): the stand-in draws the island", file: file, line: line)
+        XCTAssertEqual(windows.island.contentView?.layer?.opacity ?? 1, 0, "\(note): the window is empty", file: file, line: line)
+        let surface = local(panel.visibleContentFrame, in: panel)
+        let capsule = local(L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner), in: panel)
+        let standIn = windows.standIn.frame
+        let margin = L.windowMargin
+        XCTAssertEqual(standIn.minX, capsule.minX - margin, accuracy: 0.5, "\(note): over the island", file: file, line: line)
+        XCTAssertEqual(standIn.minY, capsule.minY - margin, accuracy: 0.5, "\(note): over the island", file: file, line: line)
+        let anchor = islandAnchor(panel, corner)
+        let island = corners(capsule), panelCorners = corners(surface)
+        let drawnIsland = island.map { container.drawnPoint($0, presented: presented) }
+        let drawnPanel = panelCorners.map { container.drawnPoint($0, presented: presented) }
+        func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
+        switch mode {
+        case .slide:
+            let scale = (drawnPanel[1].x - drawnPanel[0].x) / surface.width
+            XCTAssertLessThan(scale, 0.97, "\(note): collapsing", file: file, line: line)
+            let fixed = container.drawnPoint(anchor, presented: presented)
+            XCTAssertLessThan(distance(fixed, anchor), 0.75, "\(note): the island's corner stays put (\(fixed) vs \(anchor))",
+                              file: file, line: line)
+            for (point, drawn) in zip(island + panelCorners, drawnIsland + drawnPanel) {
+                let expected = CGPoint(x: anchor.x + scale * (point.x - anchor.x), y: anchor.y + scale * (point.y - anchor.y))
+                XCTAssertLessThan(distance(drawn, expected), 0.75, "\(note): \(point) scaled about the island's corner",
+                                  file: file, line: line)
+            }
+        case .swoop:
+            let host = container.bounds
+            func expected(_ p: Double) -> CATransform3D {
+                PanelSwoopGeometry.transform(progress: p, visibleBounds: surface, hostBounds: host, layerAnchor: .zero,
+                                             corner: corner, anchor: anchor)
+            }
+            // The progress the panel is drawn at, then the island at it.
+            var best = (p: 0.0, error: CGFloat.greatestFiniteMagnitude)
+            for step in 0...500 {
+                let p = Double(step) / 500
+                let transform = expected(p)
+                let error = zip(panelCorners, drawnPanel).map { distance(PanelSwoopGeometry.project($0, transform), $1) }.max() ?? 0
+                if error < best.error { best = (p, error) }
+            }
+            // A timed run draws Core Animation's keyframes (30, interpolated
+            // between, not along the exact curve): the drawn shape strays
+            // from it by up to about 3 % of the panel's size, most on the
+            // reveal's fast start (the island strays with it, on the same
+            // transform). The swipe checks the exact curve (1.5 pt).
+            let tolerance = keyframed ? max(1.5, 0.04 * hypot(surface.width, surface.height)) : 1.5
+            XCTAssertLessThan(best.error, tolerance, "\(note): the panel is Swoop about the island's corner (\(best))",
+                              file: file, line: line)
+            // Mid-flight (the presentation runs a frame or two behind the
+            // run's clock, so it is not compared with the probe's progress).
+            XCTAssertGreaterThan(best.p, 0.02, "\(note)", file: file, line: line)
+            XCTAssertLessThan(best.p, 0.98, "\(note)", file: file, line: line)
+            let transform = expected(best.p)
+            for (point, drawn) in zip(island, drawnIsland) {
+                XCTAssertLessThan(distance(drawn, PanelSwoopGeometry.project(point, transform)), tolerance,
+                                  "\(note): the island goes with it", file: file, line: line)
+            }
+        case .genieLiveGlass:
+            XCTFail("Genie draws a mesh", file: file, line: line)
+        }
+    }
+
+    /// What the island's region draws now: the island window's content and
+    /// the stand-in (each rendered opaque, then weighted by its own opacity
+    /// in its window), premultiplied RGBA at 2x.
+    private func islandRegion(_ windows: PanelIslandWindows, _ container: AtticPanelContentContainer) throws -> [UInt8] {
+        let live = try XCTUnwrap(windows.island.contentView)
+        let liveOpacity = CGFloat(live.layer?.opacity ?? 1) * windows.island.alphaValue
+        let standInOpacity = CGFloat(windows.standIn.layer?.opacity ?? 0) * CGFloat(container.motionOpacity(presented: false))
+        let a = try opaquePixels(live), b = try opaquePixels(windows.standIn)
+        XCTAssertEqual(a.count, b.count)
+        return zip(a, b).map { UInt8(min(255, (CGFloat($0) * liveOpacity + CGFloat($1) * standInOpacity).rounded())) }
+    }
+
+    private func opaquePixels(_ view: NSView) throws -> [UInt8] {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let layer = view.layer
+        let opacity = layer?.opacity ?? 1
+        layer?.opacity = 1
+        defer {
+            layer?.opacity = opacity
+            CATransaction.commit()
+        }
+        view.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let image = try XCTUnwrap(rep.cgImage)
+        let width = Int((view.bounds.width * 2).rounded()), height = Int((view.bounds.height * 2).rounded())
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        data.withUnsafeMutableBytes { bytes in
+            let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                    bytesPerRow: width * 4, space: space,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return data
     }
 
     // MARK: Helpers

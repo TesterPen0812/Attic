@@ -296,7 +296,7 @@ final class PanelSwipeTakeoverTests: XCTestCase {
             // A real event's time (a made one has none, and the release's
             // speed is timed by the events' own times).
             event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
-            let point = CGPoint(x: panel.frame.width / 2, y: panel.frame.height - AtticStyle.panelElevationMargin - 20)
+            let point = CGPoint(x: panel.frame.width / 2, y: panel.frame.height - panel.nativeMargin - 20)
             let screen = panel.convertPoint(toScreen: point)
             event.location = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.height ?? 0) - screen.y)
             return event
