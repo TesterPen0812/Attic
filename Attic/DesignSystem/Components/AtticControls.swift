@@ -258,8 +258,22 @@ struct AtticSelectedChip: View {
 /// every switch marks its current choice with the same flat grey chip, the
 /// tag bar's (the design's rgba(0, 0, 0, 0.06) in the primary ink), in the
 /// control's own corner. Hover is a step lighter (0.045).
+///
+/// One selection motion: the marker lives in the current cell, and a change
+/// of choice crossfades it between the cells (`transition`) in 160 ms
+/// ease-out, at once under Reduce Motion (`animation`), as the Tasks tabs'
+/// thumb did in the owner's app (pd-combined). A switch applies it to the
+/// marker alone, so whatever else the change moves keeps its own motion.
 struct AtticSelectionMarker: View {
     var cornerRadius: CGFloat
+
+    /// A change of choice: 160 ms ease-out; Reduce Motion, at once.
+    static func animation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.16)
+    }
+
+    /// The marker leaves one cell and arrives in the next by fading.
+    static let transition: AnyTransition = .opacity
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticControlCornerExponent) private var cornerExponent
@@ -364,6 +378,7 @@ struct AtticPageButton<Page: Hashable>: View {
                             // every switch's flat grey chip, shut too ("with
                             // the current page on a grey chip").
                             AtticSelectionMarker(cornerRadius: chipRadius)
+                                .transition(AtticSelectionMarker.transition)
                         } else if hoveredPage == item.page {
                             shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
                         }
@@ -371,6 +386,10 @@ struct AtticPageButton<Page: Hashable>: View {
                                                solid: design.effectiveSurface == .solid)
                         AtticIcon(systemName: item.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
                     }
+                    // The one selection motion, inside the cell only: the
+                    // page change's own transaction (the page-navigation
+                    // motion) still moves the pages and the switch's width.
+                    .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: isSelected)
                     .frame(width: M.segment, height: M.segment)
                     // 24 pt chips (chrome B) still answer a 28 pt target,
                     // reaching into the gap and the capsule's inset.

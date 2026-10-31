@@ -198,12 +198,6 @@ struct TasksTopTabs: View {
 
     typealias M = TasksTopTabsMetrics
 
-    /// A change of tab, as the footer tabs' thumb changed (pd-combined):
-    /// a 160 ms fade between the cells; Reduce Motion at once.
-    static func selectionAnimation(reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.16)
-    }
-
     var body: some View {
         let tokens = design.tokens
         let tabs = TasksTab.allCases
@@ -223,7 +217,9 @@ struct TasksTopTabs: View {
                         .frame(width: M.cell.width, height: M.cell.height)
                         // In the current cell, as the old thumb was: a
                         // change of tab crossfades it between the cells.
-                        .background { if on { AtticSelectionMarker(cornerRadius: chipRadius) } }
+                        .background {
+                            if on { AtticSelectionMarker(cornerRadius: chipRadius).transition(AtticSelectionMarker.transition) }
+                        }
                         .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
                 }
                 .buttonStyle(.plain)
@@ -240,7 +236,7 @@ struct TasksTopTabs: View {
         .frame(height: AtticControlSize.headerControl)
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: AtticRadius.header)
-        .animation(Self.selectionAnimation(reduceMotion: design.reduceMotion), value: selection)
+        .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: selection)
         .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
