@@ -424,15 +424,11 @@ struct AtticPanelView: View {
     }
 
     /// The chrome controls' frames in panel coordinates (top-left origin):
-    /// the pin, and the page switch at the bottom left, open.
+    /// the pin. The page switch is the Tall island now, outside the panel
+    /// (Accepted 2026-10-31).
     private var headerControlRects: [CGRect] {
-        let switchWidth = PanelPageSwitcher.width(open: true)
-        return [
-            CGRect(x: chromeInsets.leading, y: chromeInsets.top,
-                   width: PanelHeaderLayout.pinSize.width, height: PanelHeaderLayout.height),
-            CGRect(x: chromeInsets.leading, y: panelSize.height - chromeInsets.bottom - PanelHeaderLayout.height,
-                   width: switchWidth, height: PanelHeaderLayout.height)
-        ]
+        [CGRect(x: chromeInsets.leading, y: chromeInsets.top,
+                width: PanelHeaderLayout.pinSize.width, height: PanelHeaderLayout.height)]
     }
 
     /// AppKit's top drag lane keeps clear of the current page's top-row
@@ -530,8 +526,11 @@ struct AtticPanelView: View {
             .environment(\.panelTopRowState, topRowState)
             .environment(\.panelSharedChrome, sharedChrome)
             .environment(\.panelComposer, composerRoute)
-            .environment(\.panelPageSwitch, PanelPageSwitchContext(page: currentPage, select: selectPage,
-                                                                   approach: prepareOtherPages))
+            // The Tall island (Accepted 2026-10-31) is another window: its
+            // clicks come here, to the one page-switch path, and pointing
+            // at it builds the other pages early, as the old switch did.
+            .onReceive(uiState.island.requests) { selectPage($0) }
+            .onReceive(uiState.island.approaches) { prepareOtherPages() }
             .atticTagColours(store.commandLibrary)
             .tint(panelAccentColor)
             .accentColor(panelAccentColor)

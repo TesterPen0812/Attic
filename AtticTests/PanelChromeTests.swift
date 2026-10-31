@@ -301,7 +301,7 @@ final class PanelChromeTests: XCTestCase {
     func testTheBarsControlsAreWhatTheAccessibilityHitTestFinds() throws {
         try withPanel { host, _, _, _, _, _ in
             var report: [String] = []
-            for id in ["panel-pin-button", "tasks-page-now", "tasks-find-button", "panel-section-picker", "tasks-new-task"] {
+            for id in ["panel-pin-button", "tasks-page-now", "tasks-find-button", "tasks-new-task"] {
                 let control = try XCTUnwrap(element(id, in: host), "\(id) is there")
                 let frame = try XCTUnwrap(control.accessibilityFrame?())
                 let hit = host.accessibilityHitTest(NSPoint(x: frame.midX, y: frame.midY)) as AnyObject?
@@ -347,10 +347,12 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertNil(element("tasks-view-options", in: host), "no filter button")
             // AppKit's drag lane keeps clear of the right-hand controls.
             XCTAssertEqual(chrome.modeDockWidth, host.bounds.width - insets.trailing - top[1].minX, accuracy: 1)
-            // Bottom bar: the page switch, the tag bar, "+".
-            let bottom = try assertRow(["panel-section-picker", "tasks-tag-bar", "tasks-new-task"], in: host)
-            XCTAssertEqual(bottom[0].minX, insets.leading, accuracy: 0.5, "the page switch on the left")
-            XCTAssertEqual(bottom[2].maxX, host.bounds.width - insets.trailing, accuracy: 0.5, "\"+\" on the right")
+            // Bottom bar: the tag bar on the left, then "+" (Accepted
+            // 2026-10-31 "Tall island": the page switch left the bar).
+            XCTAssertNil(element("panel-section-picker", in: host), "no page switch in the bar")
+            let bottom = try assertRow(["tasks-tag-bar", "tasks-new-task"], in: host)
+            XCTAssertEqual(bottom[0].minX, insets.leading, accuracy: 0.5, "the tag bar on the left")
+            XCTAssertEqual(bottom[1].maxX, host.bounds.width - insets.trailing, accuracy: 0.5, "\"+\" on the right")
 
             // The tag bar filters the list.
             let model = tasksState.model(for: store, toasts: nil)
@@ -464,7 +466,7 @@ final class PanelChromeTests: XCTestCase {
             let insets = layout.chromeInsets
             let notesTop = try assertRow(["panel-pin-button", "panel-settings-button", "notes-search-button"], in: host)
             XCTAssertEqual(notesTop[2].maxX, host.bounds.width - insets.trailing, accuracy: 0.5)
-            let notesBottom = try assertRow(["panel-section-picker", "notes-tag-bar", "notes-new-note"], in: host)
+            let notesBottom = try assertRow(["notes-tag-bar", "notes-new-note"], in: host)
             XCTAssertEqual(notesBottom[0].minX, insets.leading, accuracy: 0.5)
             let tag = try XCTUnwrap(frame(of: "notes-tag-bar-launch", in: host))
             XCTAssertEqual(tag.height, 21, accuracy: 0.5, "21 pt tags")
@@ -483,16 +485,18 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertGreaterThan(previous.midX - 10.5, calTop[1].maxX)
             XCTAssertEqual(calTop[2].minX - (next.midX + 10.5), 3 + 3, accuracy: 0.5, "the capsule's inset, then a 6 px gap")
             // Today shows only while another day is selected (Accepted
-            // "Calendar page", the Today button), so the row reads switch,
-            // then "+".
+            // "Calendar page", the Today button), so the row is "+" alone
+            // (Accepted 2026-10-31 "Tall island": no switch in the bar).
             XCTAssertNil(element("calendar-today", in: host), "no Today button while today is selected")
-            _ = try assertRow(["panel-section-picker", "calendar-new-task"], in: host)
+            XCTAssertNil(element("panel-section-picker", in: host), "no page switch in the bar")
+            _ = try assertRow(["calendar-new-task"], in: host)
             let today = DueDay(date: Date(), calendar: CalendarMonthMath.calendar())
             let other = try XCTUnwrap(DueDay(year: today.year, month: today.month, day: today.day == 1 ? 2 : today.day - 1))
             let otherCell = try XCTUnwrap(element("calendar-day-\(other.rawValue)", in: host))
             XCTAssertTrue(otherCell.accessibilityPerformPress?() ?? false)
             spin(1.0)
-            _ = try assertRow(["panel-section-picker", "calendar-today", "calendar-new-task"], in: host)
+            let calBottom = try assertRow(["calendar-today", "calendar-new-task"], in: host)
+            XCTAssertEqual(calBottom[0].minX, insets.leading, accuracy: 0.5, "Today on the left")
         }
     }
 
@@ -635,7 +639,7 @@ final class PanelChromeTests: XCTestCase {
         try withPanel { host, state, _, _, _, _ in
             state.selectSection(.tasks)
             spin(1.0)
-            let ids = ["panel-section-picker", "tasks-tag-bar", "tasks-new-task"]
+            let ids = ["tasks-tag-bar", "tasks-new-task"]
             let before = try barFrames(ids, in: host)
             XCTAssertNil(element("composer-card", in: host), "no card before \"+\"")
             let plus = try XCTUnwrap(element("tasks-new-task", in: host))
@@ -665,7 +669,7 @@ final class PanelChromeTests: XCTestCase {
         try withPanel { host, state, _, _, _, _ in
             state.selectSection(.tasks)
             spin(1.0)
-            let still = ["panel-pin-button", "panel-section-picker"]
+            let still = ["panel-pin-button", "tasks-tag-bar"]
             let before = try barFrames(still, in: host)
             let plusFrame = try XCTUnwrap(frame(of: "tasks-new-task", in: host))
             ComposerOverlay.surfaces = []
@@ -746,7 +750,7 @@ final class PanelChromeTests: XCTestCase {
                                     in: host)
             XCTAssertEqual(top[1].width, NotesLayoutSwitchMetrics.width, accuracy: 0.5)
             XCTAssertEqual(top[2].minX - top[1].maxX, 3, accuracy: 0.5, "a 6 px gap before •••")
-            _ = try assertRow(["panel-section-picker", "notes-tag-bar", "notes-new-note"], in: host)
+            _ = try assertRow(["notes-tag-bar", "notes-new-note"], in: host)
             XCTAssertNotNil(element("notes-library-group-today", in: host), "the list, with its sections")
 
             // Board: the cards, no headings.

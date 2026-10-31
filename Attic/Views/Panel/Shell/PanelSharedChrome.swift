@@ -226,11 +226,10 @@ private struct PanelBottomBarRegistration: ViewModifier {
 
 // MARK: - The shared bottom bar
 
-/// The bottom bar on every page (Accepted 2026-10-29/30, "Top row and bottom
-/// bar"), drawn once: the page switch, the page's middle (the tag bar card,
-/// or Calendar's Today), then "+". The switch opens on hover and pushes the
-/// rest along in its own transaction, so the bar's leading edge follows it
-/// on every frame.
+/// The bottom bar on every page (Built "Top row and bottom bar", as Accepted
+/// 2026-10-31 "Tall island" updates it), drawn once: the page's middle on
+/// the left (the tag bar card, or Calendar's Today), then "+". The page
+/// switch left the bar for the island.
 struct PanelSharedBottomBar: View {
     @ObservedObject var chrome: PanelSharedChrome
     let page: PanelPage
@@ -262,8 +261,6 @@ struct PanelSharedBottomBar: View {
                 // Accessibility state goes on each control, never on this
                 // stack (which would make it an element wearing the
                 // switch's identifier).
-                PanelPageSwitcher(page: page)
-                    .accessibilityHidden(folded || !look.shown)
                 middle(look.middle, actions: actions, hidden: folded || !look.shown)
             }
             .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)

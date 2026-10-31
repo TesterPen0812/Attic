@@ -308,7 +308,8 @@ struct TasksBottomBar<AddBar: View>: View {
                 if shared {
                     Color.clear.frame(height: side)
                 } else {
-                    PanelPageSwitcher(page: .tasks)
+                    // The page switch is the Tall island (Accepted
+                    // 2026-10-31): the tag bar sits on the left.
                     PanelTagBar(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar", onSelect: onSelectTag)
                         .opacity(tagsShown ? 1 : 0)
                         .allowsHitTesting(tagsShown)

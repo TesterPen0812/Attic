@@ -222,7 +222,7 @@ struct CalendarPage: View {
         let height = CalendarDesign.footerHeight
         return AtticControlGroup {
             HStack(spacing: TasksDesignMetrics.footerGap) {
-                PanelPageSwitcher(page: .calendar)
+                // The page switch is the Tall island (Accepted 2026-10-31).
                 CalendarTodayButton(isShown: CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today),
                                     flat: flat, action: model.goToToday)
                 Spacer(minLength: 0)

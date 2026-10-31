@@ -72,7 +72,6 @@ final class PanelSharedChromeTests: XCTestCase {
         // page passing behind them never changes their pixels.
         settings.panelSurfaceStyle = .solid
         let draft = NoteDraftController(noteStore: notes)
-        let baseline = PanelPageSwitcher.liveCount
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(store: store, noteStore: notes,
                                      canvasSession: CanvasSession(store: CanvasStore(container: container)),
@@ -102,7 +101,9 @@ final class PanelSharedChromeTests: XCTestCase {
             spin(0.8)
             if section == .notes { XCTAssertTrue(draft.pages.showLibrary()); spin(0.8) }
         }
-        XCTAssertEqual(PanelPageSwitcher.liveCount - baseline, 1, "one page switch for the whole panel, whatever pages are built")
+        // Accepted 2026-10-31 "Tall island": the page switch left the
+        // bottom bar for the island beside the panel.
+        XCTAssertNil(frame(of: "panel-section-picker", in: host), "no page switch in the bar")
 
         let plusIDs: [PanelSection: String] = [.tasks: "tasks-new-task", .notes: "notes-new-note", .calendar: "calendar-new-task"]
         let searchIDs: [PanelSection: String] = [.tasks: "tasks-find-button", .notes: "notes-search-button",
@@ -112,15 +113,12 @@ final class PanelSharedChromeTests: XCTestCase {
             let pin = try XCTUnwrap(frame(of: "panel-pin-button", in: host), "\(from): the pin")
             let more = try XCTUnwrap(frame(of: "panel-settings-button", in: host), "\(from): •••")
             let search = try XCTUnwrap(frame(of: try XCTUnwrap(searchIDs[from]), in: host), "\(from): Search")
-            let pageSwitch = try XCTUnwrap(frame(of: "panel-section-picker", in: host), "\(from): the page switch")
             let plus = try XCTUnwrap(frame(of: try XCTUnwrap(plusIDs[from]), in: host), "\(from): +")
-            let M = AtticPageButtonMetrics.self
             var boxes = [box(around: CGPoint(x: pin.midX, y: pin.midY)),
                          box(around: CGPoint(x: more.midX, y: more.midY)),
                          box(around: CGPoint(x: search.midX, y: search.midY)),
-                         box(around: CGPoint(x: pageSwitch.maxX - M.inset - M.chevronWidth / 2, y: pageSwitch.midY), side: 4),
                          box(around: CGPoint(x: plus.midX, y: plus.midY))]
-            var names = ["pin", "•••", "Search", "switch", "+"]
+            var names = ["pin", "•••", "Search", "+"]
             // The tag bar card's empty end, where both pages draw no tag.
             if let fromBar = tagBarIDs[from], tagBarIDs[to] != nil {
                 let bar = try XCTUnwrap(frame(of: fromBar, in: host), "\(from): the tag bar")
@@ -162,14 +160,13 @@ final class PanelSharedChromeTests: XCTestCase {
                 XCTAssertLessThan(worst, 0.04, "\(from) → \(to): \(name) keeps its place and look on every frame "
                                   + "(worst \(worst) outside \(before[index])…\(after[index]);\(trace))")
             }
-            for (id, was) in [("panel-section-picker", pageSwitch), (try XCTUnwrap(plusIDs[to]), plus),
+            for (id, was) in [(try XCTUnwrap(plusIDs[to]), plus),
                               (try XCTUnwrap(searchIDs[to]), search), ("panel-settings-button", more), ("panel-pin-button", pin)] {
                 let now = try XCTUnwrap(frame(of: id, in: host), "\(from) → \(to): \(id) is drawn")
                 for (a, b) in [(now.minX, was.minX), (now.minY, was.minY), (now.width, was.width), (now.height, was.height)] {
                     XCTAssertEqual(a, b, accuracy: 0.5, "\(from) → \(to): \(id) keeps its frame (\(now) vs \(was))")
                 }
             }
-            XCTAssertEqual(PanelPageSwitcher.liveCount - baseline, 1, "\(from) → \(to): the same switch, never rebuilt")
         }
     }
 
@@ -252,56 +249,8 @@ final class PanelSharedChromeTests: XCTestCase {
         return Edges(switchEnd: CGFloat(end + 1) / scale, barStart: CGFloat(barEdge) / scale)
     }
 
-    /// The page switch opens on hover and pushes the bar after it; it folds
-    /// when the pointer leaves (owner, 2026-10-31, rec1): on every frame both
-    /// ways the bar's leading edge stays one gap after the switch's trailing
-    /// edge (nothing covers its icons, no gap opens), and its icons stay
-    /// inside its own bounds.
-    func testTheOpenSwitchAndTheBarMoveAsOneEveryFrame() throws {
-        let gap = TasksDesignMetrics.footerGap
-        let side = AtticControlSize.headerControl
-        let size = CGSize(width: 260, height: side + 20)
-        let design = AtticDesignContext(mode: .light, reduceMotion: false, controls: .craft)
-        let root = ZStack(alignment: .topLeading) {
-            Color.white
-            HStack(spacing: gap) {
-                AtticPageButton(items: PanelPageSwitcher.items, selection: .constant(PanelPage.tasks), flat: true)
-                Color(red: 1, green: 0, blue: 0).frame(height: side)
-            }
-            .padding(10)
-        }
-        .atticDesign(design)
-        let host = NSHostingView(rootView: root)
-        host.frame = CGRect(origin: .zero, size: size)
-        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size), styleMask: [.borderless],
-                              backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        window.orderFront(nil)
-        defer { window.orderOut(nil); window.contentView = nil; window.close() }
-        spin(0.5)
-        let y = 10 + side / 2
-        let shut = try XCTUnwrap(try edges(host, y: y, from: 10), "the bar is drawn")
-        XCTAssertEqual(shut.barStart - shut.switchEnd, gap, accuracy: 1.5, "shut: one gap")
-
-        for (label, point) in [("opening", CGPoint(x: 10 + 8, y: y) as CGPoint?), ("folding", nil)] {
-            try hover(host, at: point)
-            let start = Date()
-            var widths: [CGFloat] = []
-            while Date().timeIntervalSince(start) < 0.6 {
-                spin(0.008)
-                guard let frame = try edges(host, y: y, from: 10) else { continue }
-                widths.append(frame.switchEnd)
-                let between = frame.barStart - frame.switchEnd
-                XCTAssertGreaterThanOrEqual(between, gap - 1.5,
-                                            "\(label), t = \(Int(Date().timeIntervalSince(start) * 1000)) ms: the bar never covers the switch (\(between) pt)")
-                XCTAssertLessThanOrEqual(between, gap + 1.5,
-                                         "\(label), t = \(Int(Date().timeIntervalSince(start) * 1000)) ms: no gap opens (\(between) pt)")
-            }
-            let distinct = Set(widths.map { Int($0.rounded()) })
-            XCTAssertGreaterThan(distinct.count, 3, "\(label): sampled the motion itself (\(distinct.sorted()))")
-        }
-        let open = PanelPageSwitcher.width(open: true)
-        XCTAssertGreaterThan(open, PanelPageSwitcher.width(open: false))
-    }
+    // The page switch that opened on hover and pushed the bar along is
+    // gone: Accepted 2026-10-31 "Tall island" moves the switch out of the
+    // bottom bar ("the hover-to-open switch is gone"), so its open-and-push
+    // test went with it. `PanelIslandTests` covers the island.
 }
