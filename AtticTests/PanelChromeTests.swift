@@ -424,6 +424,25 @@ final class PanelChromeTests: XCTestCase {
     /// page-switch slot, only on the notes list, 27 pt like the Tasks tabs,
     /// the current one on the selection marker; it folds with the search.
     /// The bottom bar ends with "+".
+    /// No outline from a click (owner, 2026-10-31): one keyboard tracker at
+    /// the panel's root, so the Notes and Calendar pages, the top row and the
+    /// bottom bar show rings only while the keyboard drives, as Tasks did. A
+    /// click on any page turns them off; Tab turns them on.
+    func testOneFocusTrackerForTheWholePanelAClickHidesRings() throws {
+        try withPanel { host, state, _, _, _, _ in
+            for section in [PanelSection.notes, .calendar, .tasks] {
+                state.selectSection(section)
+                spin(1.0)
+                XCTAssertTrue(state.keyboardFocus.isTracking, "\(section): the panel's tracker watches clicks and keys")
+            }
+            // What it does with them (TasksRound5Tests): Tab on, a click off.
+            state.keyboardFocus.observe(.keyDown, keyCode: 48)
+            XCTAssertTrue(state.keyboardFocus.isKeyboardDriving)
+            state.keyboardFocus.observe(.leftMouseDown, keyCode: nil)
+            XCTAssertFalse(state.keyboardFocus.isKeyboardDriving)
+        }
+    }
+
     func testNotesLayoutSwitchOnlyOnTheListAndFoldsWithSearch() throws {
         XCTAssertEqual(NotesBarMetrics.newNoteSymbol, "plus", "the bottom bar ends with +")
         XCTAssertEqual(NotesLayoutSwitchMetrics.width, 3 + 21 + 1 + 21 + 3)

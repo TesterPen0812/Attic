@@ -1419,6 +1419,7 @@ private struct NotesKeyboardStop: ViewModifier {
     func body(content: Content) -> some View {
         content
             .focusable(enabled)
+            .focusEffectDisabled()
             .focused(focus, equals: stop)
     }
 }

@@ -445,6 +445,7 @@ struct AtticPanelView: View {
 
     private var themedPanel: some View {
         interactionObservedPanel
+            .atticKeyboardFocusTracking(uiState.keyboardFocus)
             .environment(\.atticPanelThemePalette, panelThemePalette)
             .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
