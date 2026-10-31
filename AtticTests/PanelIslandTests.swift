@@ -200,7 +200,7 @@ final class PanelIslandTests: XCTestCase {
             XCTAssertTrue(windows.label.isVisible)
             XCTAssertTrue(windows.island.parent === panel, "a child window of the panel")
             XCTAssertTrue(windows.label.ignoresMouseEvents, "the label never takes the pointer")
-            XCTAssertEqual(windows.island.alphaValue, 1, accuracy: 0.01)
+            XCTAssertEqual(windows.presentedOpacity, 1, accuracy: 0.01)
             @MainActor func assertBeside(_ corner: ScreenCorner, _ note: String) {
                 let surface = controller.panelVisibleFrameForTesting
                 let capsule = windows.islandFrame
@@ -229,10 +229,10 @@ final class PanelIslandTests: XCTestCase {
             // The swipe that dismisses: it goes with the panel under the fingers.
             panel.onTrackpadDismissProgress?(120)
             spin(0.05)
-            XCTAssertLessThan(windows.island.alphaValue, 1, "fading with the panel's collapse")
+            XCTAssertLessThan(windows.presentedOpacity, 1, "fading with the panel's collapse")
             panel.onTrackpadDismissCancelled?()
             spin(0.8)
-            XCTAssertEqual(windows.island.alphaValue, 1, accuracy: 0.01, "back with the panel")
+            XCTAssertEqual(windows.presentedOpacity, 1, accuracy: 0.01, "back with the panel")
 
             // Hidden with the panel, shown with it again.
             var hidden = false
@@ -244,7 +244,7 @@ final class PanelIslandTests: XCTestCase {
             XCTAssertTrue(controller.show(on: screen, corner: .bottomLeft))
             spin(0.8)
             XCTAssertTrue(windows.island.isVisible, "and shown with it")
-            XCTAssertEqual(windows.island.alphaValue, 1, accuracy: 0.01)
+            XCTAssertEqual(windows.presentedOpacity, 1, accuracy: 0.01)
             assertBeside(.bottomLeft, "docked bottom left")
         }
     }
@@ -263,9 +263,69 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    // MARK: The owner's recording of build 1 (31 Oct)
+
+    /// Every item's icon has the same ink and weight, as the design draws
+    /// them (`isl.ink`); only the current page sits on the chip.
+    func testEveryItemsIconHasTheSameInk() {
+        for solid in [true, false] {
+            let selected = L.face(isSelected: true, solid: solid)
+            let other = L.face(isSelected: false, solid: solid)
+            XCTAssertEqual(selected.ink, other.ink, "one ink (solid \(solid))")
+            XCTAssertEqual(selected.weight, other.weight, "one weight (solid \(solid))")
+            XCTAssertEqual(other.ink, .glyph, "full ink")
+        }
+    }
+
+    /// One name label on screen: pointing at the next item takes the last
+    /// one away at once; leaving the island lets it fade.
+    func testOnlyOneLabelShowsAtATime() {
+        XCTAssertFalse(L.labelFadesOut(pointed: .notes), "another item pointed: the old label goes at once")
+        XCTAssertTrue(L.labelFadesOut(pointed: nil), "off the island: it fades")
+    }
+
+    // MARK: Hide timing (the owner's recording of build 1, 31 Oct)
+
+    /// A Swoop hide takes Swoop's own 0.22 s, and the island fades out
+    /// alongside the panel instead of staying until the panel vanishes.
+    func testASwoopHideTakesSwoopsTimeAndTheIslandFadesAlongside() throws {
+        try withController(configure: { $0.hideAnimation = .swoop }) { controller, _, panel in
+            let windows = controller.islandWindowsForTesting
+            let duration = PanelHideAnimation.swoop.defaultHideDuration
+            let start = CACurrentMediaTime()
+            var hiddenAt: CFTimeInterval?
+            _ = controller.requestHide { if $0 == .hidden { hiddenAt = CACurrentMediaTime() } }
+            // The pointer keeps moving away as the hide runs (the global
+            // pointer monitor sees every move).
+            let from = CGPoint(x: panel.visibleContentFrame.minX - 20, y: panel.visibleContentFrame.midY)
+            var trace = ""
+            var progress = 0.0, alpha: CGFloat = 1
+            var step = 0
+            while hiddenAt == nil, CACurrentMediaTime() - start < 3 {
+                step += 1
+                controller.updateMousePassthrough(at: CGPoint(x: from.x - CGFloat(step) * 6, y: from.y - CGFloat(step) * 2))
+                RunLoop.current.run(until: Date().addingTimeInterval(0.016))
+                let now = CACurrentMediaTime() - start
+                if progress == 0, now >= duration * 0.6 {
+                    progress = controller.displayedProgressForProbe
+                    alpha = windows.presentedOpacity
+                }
+                trace += String(format: " %.0f:%.2f/%.2f", now * 1000, controller.displayedProgressForProbe, windows.presentedOpacity)
+            }
+            let took = try XCTUnwrap(hiddenAt) - start
+            XCTAssertLessThan(took, duration + 0.12, "hidden in Swoop's own time (took \(took) s;\(trace))")
+            XCTAssertGreaterThan(progress, 0.3, "well on its way at 60 % of the time (\(trace))")
+            XCTAssertLessThan(alpha, 0.85, "the island fades alongside (\(alpha) at 60 %;\(trace))")
+            XCTAssertGreaterThan(alpha, 0.03, "fading, not gone at once (\(alpha) at 60 %;\(trace))")
+            XCTAssertFalse(windows.island.isVisible)
+            XCTAssertFalse(panel.isVisible)
+        }
+    }
+
     // MARK: Helpers
 
-    private func withController(_ body: @MainActor (AtticPanelController, PanelUIState, AtticPanel) throws -> Void) throws {
+    private func withController(configure: (AppSettings) -> Void = { _ in },
+                                _ body: @MainActor (AtticPanelController, PanelUIState, AtticPanel) throws -> Void) throws {
         // GitHub's runners turn both on; these tests state them.
         AtticMotionPreference.systemReduceMotionOverride = false
         AtticTransparencySeam.systemOverride = false
@@ -280,10 +340,12 @@ final class PanelIslandTests: XCTestCase {
         let store = TaskStore(container: container)
         let notes = trackAttachmentReconciliation(of: NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore()))
         let state = PanelUIState()
+        let settings = AppSettings(defaults: defaults)
+        configure(settings)
         let existing = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
         let controller = AtticPanelController(
             store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: container)),
-            noteDraft: NoteDraftController(noteStore: notes), settings: AppSettings(defaults: defaults), uiState: state
+            noteDraft: NoteDraftController(noteStore: notes), settings: settings, uiState: state
         )
         let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
             .first { !existing.contains(ObjectIdentifier($0)) })

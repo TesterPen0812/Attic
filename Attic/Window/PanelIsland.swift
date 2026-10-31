@@ -38,6 +38,15 @@ enum PanelIslandLayout {
 
     static var pages: [PanelPage] { PanelPage.allCases }
 
+    /// An item's icon face.
+    static func face(isSelected: Bool, solid: Bool) -> (weight: Font.Weight, ink: AtticInk) {
+        AtticPageButtonMetrics.glyphFace(isSelected: isSelected, open: true, accent: false, solid: solid)
+    }
+
+    /// Whether a label fades as it goes (else it goes at once), with
+    /// `pointed` the item under the pointer now.
+    static func labelFadesOut(pointed: PanelPage?) -> Bool { true }
+
     static func height(count: Int = PanelPage.allCases.count) -> CGFloat {
         2 * inset + CGFloat(count) * item + CGFloat(max(count - 1, 0)) * gap
     }
@@ -189,8 +198,7 @@ struct PanelIslandView: View {
                         } else if model.pointed == page {
                             shape.fill(AtticSelectionMarker.hoverFill(design.tokens).color)
                         }
-                        let face = M.glyphFace(isSelected: isSelected, open: true, accent: false,
-                                               solid: design.effectiveSurface == .solid)
+                        let face = L.face(isSelected: isSelected, solid: design.effectiveSurface == .solid)
                         AtticIcon(systemName: page.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
                         // A page that's out: a 4 pt blue dot at the item's
                         // top-right corner (the design's 8 px, 6 px in).
@@ -285,7 +293,8 @@ struct PanelIslandLabels: View {
                                                  cornerRadius: L.labelHeight / 2))
                     .opacity(shown ? 1 : 0)
                     .offset(x: shown ? 0 : towardIsland)
-                    .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown),
+                    .animation(shown || L.labelFadesOut(pointed: model.pointed)
+                               ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown) : nil,
                                value: shown)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
                     .frame(height: L.item)
@@ -485,6 +494,14 @@ final class PanelIslandWindows {
 
     var isVisible: Bool { island.isVisible }
 
+    /// How shown the island is on screen now (its window and its content,
+    /// mid-animation included).
+    var presentedOpacity: CGFloat {
+        let layer = island.contentView?.layer
+        let content = CGFloat(layer?.presentation()?.opacity ?? layer?.opacity ?? 1)
+        return island.alphaValue * content
+    }
+
     /// Orders both in above `parent`, attached so they keep its ordering.
     func show(attachedTo parent: NSWindow) {
         if island.parent !== parent { parent.addChildWindow(island, ordered: .above) }
@@ -502,31 +519,44 @@ final class PanelIslandWindows {
     }
 
     /// How shown the island is (1 shown, 0 hidden), animated over
-    /// `duration` on `timing` (the panel motion's own), or at once.
+    /// `duration` on `timing` (the panel motion's own), or at once. The
+    /// windows stay opaque and their content fades on Core Animation, so
+    /// the fade runs on the render server with the panel's own motion
+    /// (a window's animated alpha did not: the owner's recording of build
+    /// 1 showed the island staying until the panel vanished).
     func setPresentation(_ shown: CGFloat, duration: TimeInterval = 0,
                          timing: CAMediaTimingFunction? = nil) {
         let alpha = min(max(shown, 0), 1)
-        guard duration > 0 else {
-            // A zero-duration animator update also stops one in flight.
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                island.animator().alphaValue = alpha
-                label.animator().alphaValue = alpha
+        for window in [island, label] {
+            if window.alphaValue != 1 { window.alphaValue = 1 }
+            guard let view = window.contentView else { continue }
+            view.wantsLayer = true
+            let layer = view.layer
+            let from = layer?.presentation()?.opacity ?? Float(view.alphaValue)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.removeAnimation(forKey: Self.fadeKey)
+            view.alphaValue = alpha
+            layer?.opacity = Float(alpha)
+            if duration > 0, abs(from - Float(alpha)) > 0.001, let layer {
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = from
+                fade.toValue = Float(alpha)
+                fade.duration = duration
+                fade.timingFunction = timing
+                layer.add(fade, forKey: Self.fadeKey)
             }
-            island.alphaValue = alpha
-            label.alphaValue = alpha
-            return
-        }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = timing
-            island.animator().alphaValue = alpha
-            label.animator().alphaValue = alpha
+            CATransaction.commit()
         }
     }
 
+    private static let fadeKey = "attic.island.presentation"
+
+    /// How shown the island is meant to be (the fade's end).
+    var shownAlpha: CGFloat { island.contentView?.alphaValue ?? 0 }
+
     /// Whether `point` (screen) is on the island's capsule while it shows.
     func contains(_ point: CGPoint) -> Bool {
-        island.isVisible && island.alphaValue > 0.01 && islandFrame.contains(point)
+        island.isVisible && shownAlpha > 0.01 && islandFrame.contains(point)
     }
 }

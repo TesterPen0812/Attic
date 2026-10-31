@@ -198,7 +198,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     let toasts: PanelToastCenter
     private var cancellables: Set<AnyCancellable> = []
     private var isShowing = false
-    private var isPanelMotionActive = false
+    private var isPanelMotionActive = false {
+        // The island skips the motion's frames (it is a child window, so
+        // it moves with the panel) and settles beside it when it ends.
+        didSet { if oldValue, !isPanelMotionActive { layoutIsland() } }
+    }
     private var isInteractiveDismissal = false
     private var interactiveSwipeStartProgress: CGFloat = 0
     /// The hide animation a swipe drives (nil: Slide),
@@ -923,12 +927,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let resizedPanel = notification.object as? NSWindow else { return }
         uiState.updatePanelSize(((resizedPanel as? AtticPanel)?.visibleContentFrame ?? resizedPanel.frame).size)
-        layoutIsland()
+        if !isPanelMotionActive { layoutIsland() }
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidMove(_ notification: Notification) {
-        layoutIsland()
+        // A child window moves with the panel; laying it out again on every
+        // frame of the panel's own motion only adds work to that motion.
+        if !isPanelMotionActive { layoutIsland() }
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
@@ -1391,8 +1397,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             } completionHandler: {
                 MainActor.assumeIsolated { finishes.finishFrame() }
             }
-            islandWindows.setPresentation(1 - collapseProgress, duration: duration,
-                                          timing: CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1))
+            // The island fades alongside, on the animation's own time and
+            // curve (Swoop's hide eases in and out).
+            islandWindows.setPresentation(1 - collapseProgress, duration: duration, timing: hiding
+                ? CAMediaTimingFunction(controlPoints: 0.42, 0, 0.58, 1)
+                : CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1))
             return
         }
         let duration = fades ? PanelCollapseGeometry.reducedFadeDuration
@@ -1581,7 +1590,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     /// The 8 pt between the panel and the island, at the island's height.
     private func islandGapContains(_ point: CGPoint) -> Bool {
-        guard islandWindows.isVisible, islandWindows.island.alphaValue > 0.01 else { return false }
+        guard islandWindows.isVisible, islandWindows.shownAlpha > 0.01 else { return false }
         return PanelIslandLayout.gapFrame(panelFrame: panel.visibleContentFrame, corner: islandWindows.corner)
             .contains(point)
     }
