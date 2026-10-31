@@ -27,6 +27,8 @@ struct AtticPanelView: View {
     @StateObject private var tasksPageState = TasksPageState()
     /// What the Calendar page keeps while another page shows.
     @StateObject private var calendarPageState = CalendarPageState()
+    /// The "+" card every page shares (Phase B), with its kept draft.
+    @StateObject private var composerState = PanelComposerState()
     /// Whether the page switcher is open, for the header titles that make
     /// room for it. Not observed here: only those titles are.
     /// The top row's search and footprint, shared by the pages and the pin.
@@ -134,6 +136,13 @@ struct AtticPanelView: View {
                 PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout)
             }
         }
+        .overlay {
+            // Over the bar, never in it: the bar stays still while the "+"
+            // grows into the card and back.
+            if uiState.isPageContentLoaded {
+                ComposerOverlay(model: composer, layout: pageLayout)
+            }
+        }
         .overlay(alignment: .topLeading) {
             if Self.exposesKeyStateForUITesting {
                 // UI tests read whether the panel is key (the drawn or the
@@ -170,7 +179,8 @@ struct AtticPanelView: View {
             isPinned: uiState.isPanelPinned,
             page: currentPage,
             onTogglePin: { uiState.isPanelPinned.toggle() },
-            onSelectPage: selectPage
+            onSelectPage: selectPage,
+            onNewNote: newQuickNote
         )
         .padding(.leading, chromeInsets.leading)
         .padding(.trailing, chromeInsets.trailing)
@@ -256,12 +266,59 @@ struct AtticPanelView: View {
         selectSection(.calendar)
     }
 
-    /// The Calendar's "+": the Tasks page's add bar, with the keyboard in it.
-    /// The add bar has no way yet to take a due day from outside, so the
-    /// day is not filled in (reported for the composer's design).
+    /// The Calendar's "+": the card, on that day.
     private func startNewTask(_ day: DueDay) {
-        selectSection(.tasks)
-        DispatchQueue.main.async { uiState.requestPrimaryInputFocus() }
+        composer.open(on: .calendar(selected: day))
+    }
+
+    // MARK: The "+" card
+
+    private var composer: ComposerModel {
+        composerState.model(tasks: tasksPageState.model(for: store, toasts: toasts), services: composerServices)
+    }
+
+    private var composerRoute: PanelComposerRoute {
+        PanelComposerRoute { [composerState] page, kind in composerState.model?.open(on: page, as: kind) }
+    }
+
+    /// The card's kind for this page; nil where it has none (Canvas).
+    private var composerPage: ComposerPage? {
+        switch currentPage {
+        case .tasks: .tasks(tasksPageState.model(for: store, toasts: toasts).tab)
+        case .calendar: .calendar(selected: calendarPageState.model(store: store).newTaskDay)
+        case .notes: .notes
+        default: nil
+        }
+    }
+
+    /// ⇧⌘N in the panel: the card on Note; Canvas keeps the Notes page.
+    private func newQuickNote() {
+        guard let page = composerPage else {
+            AppCoordinator.shared?.showNewNote()
+            return
+        }
+        composer.open(on: page, as: .note)
+    }
+
+    private var composerServices: ComposerServices {
+        let library = tasksPageState.model(for: store, toasts: toasts).library
+        return ComposerServices(
+            makeWriter: { try CalendarEventWriters.makeDefault(undoRoute: library.undo) },
+            openTaskPage: { [uiState] id in
+                let page = PanelPage(uiState.selectedSection)
+                uiState.openTaskNote(id, from: page == .calendar ? .calendar : .tasks, row: id)
+            },
+            openNote: { [noteDraft] id in
+                selectSection(.notes)
+                DispatchQueue.main.async {
+                    guard noteDraft.pages.open(noteID: id) else { return }
+                    noteDraft.pages.dismissLibrary()
+                }
+            },
+            openEvent: { [composerState] event in composerState.model?.openInCalendar(event) },
+            toast: { [toasts, composerState] message in
+                toasts.show(message) { composerState.model?.undoPage() }
+            })
     }
 
     /// Open Task Note and a row's file drop (Phase 3).
@@ -415,6 +472,7 @@ struct AtticPanelView: View {
     private var storeObservedPanel: some View {
         surfacedPanel
             .onChange(of: uiState.selectedSection) { _, _ in
+                composerState.model?.close()
                 syncBottomControlsHeight()
                 syncTopRowFootprint()
                 releaseTaskEntryInteractionLocks()
@@ -470,6 +528,7 @@ struct AtticPanelView: View {
             .environment(\.atticPanelToasts, toasts)
             .environment(\.panelTopRowState, topRowState)
             .environment(\.panelSharedChrome, sharedChrome)
+            .environment(\.panelComposer, composerRoute)
             .environment(\.panelPageSwitch, PanelPageSwitchContext(page: currentPage, select: selectPage,
                                                                    approach: prepareOtherPages))
             .atticTagColours(store.commandLibrary)

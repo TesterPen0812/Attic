@@ -245,11 +245,19 @@ struct PanelSharedBottomBar: View {
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: todayShown(look)),
                    value: todayShown(look))
         .frame(height: side)
-        .padding(.horizontal, max(AtticSpacing.panelMargin, layout.chromeInsets.leading))
-        .padding(.bottom, max(AtticSpacing.panelMargin, layout.chromeInsets.bottom))
+        .padding(.horizontal, Self.plusInsets(layout: layout).trailing)
+        .padding(.bottom, Self.plusInsets(layout: layout).bottom)
         .opacity(look.shown ? 1 : 0)
         .allowsHitTesting(look.shown)
         .animation(PanelTopRowLayout.searchAnimation(shown: look.shown, reduceMotion: design.reduceMotion), value: look.shown)
+    }
+
+    /// Where the bar sits in the panel; the "+" card grows from this
+    /// corner (`ComposerGrow.anchor`).
+    static func plusInsets(layout: PanelPageLayout) -> EdgeInsets {
+        let side = max(AtticSpacing.panelMargin, layout.chromeInsets.leading)
+        return EdgeInsets(top: 0, leading: side, bottom: max(AtticSpacing.panelMargin, layout.chromeInsets.bottom),
+                          trailing: side)
     }
 
     private func todayShown(_ look: PanelBottomBarLook) -> Bool {

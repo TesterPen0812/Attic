@@ -78,6 +78,9 @@ final class ComposerModel: ObservableObject {
     var services: ComposerServices
 
     @Published private(set) var isOpen = false
+    /// Bumped by every open, even on an open card: the keyboard goes back
+    /// to the title (the hotkey pressed again after a click elsewhere).
+    @Published private(set) var focusRequest = 0
     @Published private(set) var page: ComposerPage = .tasks(.now)
     @Published private(set) var kind: ComposerKind = .task
     /// The second line: the task's, event's or note's writing.
@@ -129,6 +132,7 @@ final class ComposerModel: ObservableObject {
         if kind == .event { loadCalendars() }
         failed = false
         isOpen = true
+        focusRequest &+= 1
     }
 
     /// Escape or a click outside: the card closes and keeps the draft.
@@ -342,6 +346,11 @@ final class ComposerModel: ObservableObject {
     // MARK: Undo
 
     /// ⌘Z past the title's own typing: the page's history.
+    /// ⌘Return on an event: Calendar.app at it, through the card's writer.
+    func openInCalendar(_ event: CalendarOwnedEvent) {
+        try? loadWriter()?.openInCalendar(event.occurrenceID)
+    }
+
     func undoPage() { _ = tasks.library.undo(in: page.history) }
     func redoPage() { _ = tasks.library.redo(in: page.history) }
 }

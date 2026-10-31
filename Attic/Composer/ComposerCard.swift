@@ -5,7 +5,7 @@ import SwiftUI
 enum ComposerMetrics {
     static let width: CGFloat = 289
     /// Curve 1.4, as the "+" it grows out of (Shapes; owner notes 31 Oct).
-    static let radius: CGFloat = 22
+    static let radius: CGFloat = ComposerGrow.openRadius
     static let padding = EdgeInsets(top: 11, leading: 14, bottom: 11, trailing: 11)
     static let kindInset: CGFloat = 2
     static let kindButton: CGFloat = 18
@@ -46,6 +46,20 @@ enum ComposerMotion {
 /// The "+" card: the title line with its live tints, the writing, one row of
 /// chips and Create, and the kind switch in the top-right corner. It mounts on
 /// its own; the panel decides where it sits and how it grows.
+private struct ComposerChrome: ViewModifier {
+    let drawn: Bool
+
+    func body(content: Content) -> some View {
+        if drawn {
+            content
+                .atticRaisedMaterial(cornerRadius: ComposerMetrics.radius, interactive: false)
+                .atticDesignCorners()
+        } else {
+            content
+        }
+    }
+}
+
 struct ComposerCard: View {
     @ObservedObject var model: ComposerModel
     @ObservedObject var title: TasksAddBarState
@@ -57,9 +71,14 @@ struct ComposerCard: View {
 
     enum Chip: Hashable { case date, priority, tags, pin, length, calendar }
 
-    init(model: ComposerModel) {
+    /// False inside the panel's grow (`ComposerOverlay`), which draws the
+    /// material itself so size and radius move together.
+    let drawsChrome: Bool
+
+    init(model: ComposerModel, drawsChrome: Bool = true) {
         self.model = model
         self.title = model.title
+        self.drawsChrome = drawsChrome
     }
 
     var body: some View {
@@ -82,8 +101,13 @@ struct ComposerCard: View {
             }
         }
         .animation(ComposerMotion.animation(), value: kind)
-        .atticRaisedMaterial(cornerRadius: ComposerMetrics.radius, interactive: false)
-        .atticDesignCorners()
+        .modifier(ComposerChrome(drawn: drawsChrome))
+        .onChange(of: model.focusRequest) { _, _ in
+            titleFocused = true
+            if let field = model.editor.textView, let window = field.window, window.firstResponder !== field {
+                window.makeFirstResponder(field)
+            }
+        }
         .onKeyPress(.escape) {
             guard open == nil else { return .ignored }
             model.close()

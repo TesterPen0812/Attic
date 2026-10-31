@@ -563,6 +563,71 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticMaterialProbe.corners.filter { $0 == nil }.count, 0, "no control on the continuous (circle) corner")
     }
 
+    // MARK: The "+" card (Phase B)
+
+    private func barFrames(_ ids: [String], in host: AtticPanelHostingView) throws -> [CGRect] {
+        try ids.map { try XCTUnwrap(frame(of: $0, in: host), "\($0) is drawn") }
+    }
+
+    private func assertSameFrames(_ a: [CGRect], _ b: [CGRect], _ message: String,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(a.count, b.count, file: file, line: line)
+        for (x, y) in zip(a, b) {
+            XCTAssertEqual(x.minX, y.minX, accuracy: 0.5, message, file: file, line: line)
+            XCTAssertEqual(x.minY, y.minY, accuracy: 0.5, message, file: file, line: line)
+            XCTAssertEqual(x.width, y.width, accuracy: 0.5, message, file: file, line: line)
+        }
+    }
+
+    func testTheTasksPlusGrowsIntoTheCardOnItsCornerAndTheBarStaysStill() throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        try withPanel { host, state, _, _, _, _ in
+            state.selectSection(.tasks)
+            spin(1.0)
+            let ids = ["panel-section-picker", "tasks-tag-bar", "tasks-new-task"]
+            let before = try barFrames(ids, in: host)
+            XCTAssertNil(element("composer-card", in: host), "no card before \"+\"")
+            let plus = try XCTUnwrap(element("tasks-new-task", in: host))
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(1.0)
+            let card = try XCTUnwrap(frame(of: "composer-card", in: host), "\"+\" opens the card")
+            // The card's element is its contents (inside its padding).
+            let pad = ComposerMetrics.padding
+            XCTAssertGreaterThan(card.width, 289 - pad.leading - pad.trailing - 10, "grown to the card")
+            XCTAssertEqual(card.maxX, before[2].maxX - pad.trailing, accuracy: 0.5, "the card grows from the \"+\"'s corner")
+            XCTAssertEqual(card.maxY, before[2].maxY - pad.bottom, accuracy: 0.5, "the card grows from the \"+\"'s corner")
+            XCTAssertEqual(element("composer-card", in: host)?.accessibilityLabel?(), "New Task")
+            assertSameFrames(before, try barFrames(ids, in: host), "the bar stays still while the card is open")
+            // A page switch closes it; the bar is where it was.
+            state.selectSection(.calendar)
+            spin(1.0)
+            XCTAssertNil(element("composer-card", in: host), "the card shrinks back into the \"+\"")
+        }
+    }
+
+    func testTheCalendarPlusOpensTheCardOnEventAndReduceMotionIsInstant() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        try withPanel { host, state, _, _, _, _ in
+            state.selectSection(.calendar)
+            spin(1.0)
+            let plusFrame = try XCTUnwrap(frame(of: "calendar-new-task", in: host))
+            let plus = try XCTUnwrap(element("calendar-new-task", in: host))
+            XCTAssertTrue(plus.accessibilityPerformPress?() ?? false)
+            spin(0.02)
+            let card = try XCTUnwrap(frame(of: "composer-card", in: host), "Reduce Motion: the card is there at once")
+            let pad = ComposerMetrics.padding
+            XCTAssertGreaterThan(card.width, 289 - pad.leading - pad.trailing - 10, "Reduce Motion: no grow")
+            XCTAssertEqual(card.maxX, plusFrame.maxX - pad.trailing, accuracy: 0.5)
+            XCTAssertEqual(element("composer-card", in: host)?.accessibilityLabel?(), "New Event")
+            XCTAssertEqual(state.selectedSection, .calendar, "the Calendar \"+\" stays on the Calendar")
+            state.selectSection(.tasks)
+            spin(0.02)
+            XCTAssertNil(element("composer-card", in: host), "Reduce Motion: it goes at once")
+        }
+    }
+
     func testNotesLayoutSwitchOnlyOnTheListAndFoldsWithSearch() throws {
         XCTAssertEqual(NotesBarMetrics.newNoteSymbol, "plus", "the bottom bar ends with +")
         XCTAssertEqual(NotesLayoutSwitchMetrics.width, 3 + 21 + 1 + 21 + 3)

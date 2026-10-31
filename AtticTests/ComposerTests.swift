@@ -502,6 +502,25 @@ final class ComposerTests: XCTestCase {
         XCTAssertNotNil(ComposerMotion.animation())
     }
 
+    /// The HTML's `cp` box: 54 → 578 design px, radius 32 → 44 (16 → 22 pt),
+    /// curve 1.4, one progress for size and radius, on the bar's own corner.
+    func testTheGrowRunsFromThePlusToTheCardOnOneProgress() {
+        let card = CGSize(width: ComposerMetrics.width, height: 131)
+        let closed = ComposerGrow.geometry(progress: 0, card: card)
+        XCTAssertEqual(closed.size, CGSize(width: AtticControlSize.headerControl, height: AtticControlSize.headerControl))
+        XCTAssertEqual(closed.cornerRadius, 16)
+        let open = ComposerGrow.geometry(progress: 1, card: card)
+        XCTAssertEqual(open.size, card)
+        XCTAssertEqual(open.cornerRadius, 22)
+        XCTAssertEqual(ComposerMetrics.radius, 22)
+        let half = ComposerGrow.geometry(progress: 0.5, card: card)
+        XCTAssertEqual(half.size.width, (27 + 289) / 2, accuracy: 0.01)
+        XCTAssertEqual(half.cornerRadius, 19, accuracy: 0.01)
+        XCTAssertEqual(ComposerGrow.geometry(progress: 2, card: card), open, "clamped")
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 340, height: 560))
+        XCTAssertEqual(ComposerGrow.anchor(layout: layout), PanelSharedBottomBar.plusInsets(layout: layout))
+    }
+
     // MARK: The card
 
     private func host(_ kind: ComposerKind?, on composerPage: ComposerPage) -> NSHostingView<some View> {

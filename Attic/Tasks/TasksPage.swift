@@ -33,6 +33,8 @@ struct TasksPage: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var tagColouring
+    /// In the panel, "+" opens the shell's card instead of the add bar.
+    @Environment(\.panelComposer) private var panelComposer
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     /// The subtask lines' and strip buttons' own focus, reached by the
     /// page's Tab order (A10). Not observed.
@@ -3188,7 +3190,9 @@ struct TasksPage: View {
             // tag bar and "+", which opens into the add field.
             TasksBottomBar(text: model.addBarState, addFocused: addBarFocused, tab: model.tab,
                            tags: model.tagChips(), tagSelection: model.tagFilter(on: model.tab),
-                           onSelectTag: { model.chooseTagChip($0) }, onPlus: { addBarFocused = true }) {
+                           onSelectTag: { model.chooseTagChip($0) }, onPlus: {
+                               if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
+                           }) {
                 addBar
             }
         }
