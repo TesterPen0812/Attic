@@ -12,6 +12,10 @@ import XCTest
 /// dropdowns, and keep what the native path checked: the item exists with
 /// its label, it lies inside its open card, and the click lands on it and
 /// does its command (each test checks the command). Every suite uses them.
+/// The pointer goes to the item's own accessibility frame: until w4 those
+/// frames were mirrored top to bottom inside the card, so the pointer sent
+/// to the first item chose the last (`AtticGlassMenuTests
+/// .testEveryItemsFrameIsItsOwnRowOnScreen`).
 extension XCTestCase {
     /// Moves the pointer onto an open glass card's item (it lights; a
     /// submenu's row opens its card).
@@ -29,7 +33,6 @@ extension XCTestCase {
 
     private func pointAtGlassMenuItem(_ item: XCUIElement, titled title: String, in app: XCUIApplication,
                                       file: StaticString, line: UInt) {
-        printGlassMenuTraceOnFailure(app)
         XCTAssertTrue(item.waitForExistence(timeout: 3), "the menu offers \(title)", file: file, line: line)
         let label = item.label
         XCTAssertTrue(label.hasPrefix(title), "the item reads \(title): \(label)", file: file, line: line)
@@ -52,26 +55,4 @@ extension XCTestCase {
         // the lit item, a click does the item's command.
         item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
     }
-
-    /// W4 diagnostics (temporary): prints the app's glass menu trace now.
-    func printGlassMenuTrace(_ app: XCUIApplication, _ tag: String) {
-        let probe = app.descendants(matching: .any)["attic-menu-trace"].firstMatch
-        let value = probe.exists ? (probe.value as? String ?? "no value") : "no probe"
-        print("MENUTRACE \(tag) BEGIN\n\(value)\nMENUTRACE END")
-    }
-
-    /// W4 diagnostics (temporary): when the test fails, prints the app's
-    /// glass menu trace ("attic-menu-trace", DEBUG UI-testing launches).
-    private func printGlassMenuTraceOnFailure(_ app: XCUIApplication) {
-        guard !glassMenuTraced.contains(name) else { return }
-        glassMenuTraced.insert(name)
-        addTeardownBlock { [weak self] in
-            guard self?.testRun?.hasSucceeded == false else { return }
-            let probe = app.descendants(matching: .any)["attic-menu-trace"].firstMatch
-            let value = probe.exists ? (probe.value as? String ?? "no value") : "no probe"
-            print("MENUTRACE BEGIN\n\(value)\nMENUTRACE END")
-        }
-    }
 }
-
-nonisolated(unsafe) private var glassMenuTraced = Set<String>()

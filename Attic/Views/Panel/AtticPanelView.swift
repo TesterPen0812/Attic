@@ -158,13 +158,6 @@ struct AtticPanelView: View {
                     .accessibilityValue(uiState.isPanelKey ? "key" : "not key")
             }
         }
-        #if DEBUG
-        .overlay(alignment: .topLeading) {
-            if AtticGlassMenuTrace.isOn {
-                AtticMenuTraceProbe().frame(width: 1, height: 1).allowsHitTesting(false)
-            }
-        }
-        #endif
         .overlay(alignment: .bottom) {
             notices
         }
