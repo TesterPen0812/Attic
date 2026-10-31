@@ -287,6 +287,12 @@ final class PanelIslandTests: XCTestCase {
             let item = PanelIslandLayout.itemFrame(0, in: capsule)
             controller.updateMousePassthrough(at: CGPoint(x: item.midX, y: item.midY))
             XCTAssertFalse(windows.island.ignoresMouseEvents, "an item takes the pointer")
+            // Pointing elsewhere (here, the panel) leaves the capsule
+            // hittable, for a click or an accessibility hit test there.
+            controller.updateMousePassthrough(at: CGPoint(x: windows.island.frame.maxX + 40, y: capsule.midY))
+            controller.updateMousePassthrough(at: CGPoint(x: capsule.maxX + margin / 2, y: capsule.midY))
+            controller.updateMousePassthrough(at: CGPoint(x: windows.island.frame.minX - 40, y: capsule.midY))
+            XCTAssertFalse(windows.island.ignoresMouseEvents, "off the island window, it still takes the pointer")
         }
     }
 
