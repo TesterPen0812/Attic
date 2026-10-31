@@ -105,8 +105,11 @@ struct AtticPanelView: View {
                 // The current page, over any page kept built behind it (a
                 // switch back only shows it). Only the current page takes
                 // clicks, keys, VoiceOver and the notices' clearance.
+                // A page pulled out lives in its own panel only (Accepted
+                // "Tall island": pull a page out), never here as well.
                 ForEach(PanelPage.allCases) { page in
-                    if page == currentPage || uiState.builtPages.contains(page) {
+                    if page == currentPage
+                        || (uiState.builtPages.contains(page) && !uiState.pagesElsewhere.contains(page)) {
                         pageHost(page)
                             .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
                             .modifier(PanelPageVisibility(
@@ -307,10 +310,20 @@ struct AtticPanelView: View {
             makeWriter: { try CalendarEventWriters.makeDefault(undoRoute: library.undo) },
             openTaskPage: { [uiState] id in
                 let page = PanelPage(uiState.selectedSection)
+                // A floating panel opens a task's page over its own page
+                // only, never over one it doesn't host.
+                if uiState.isFloating, page != .tasks, page != .calendar { return }
                 uiState.openTaskNote(id, from: page == .calendar ? .calendar : .tasks, row: id)
             },
-            openNote: { [noteDraft] id in
-                selectSection(.notes)
+            openNote: { [noteDraft, uiState] id in
+                if uiState.isElsewhere(.notes) {
+                    // Notes out in its own panel comes forward with the
+                    // note; a floating panel's ⌘Return never switches the
+                    // docked panel's page.
+                    guard uiState.openElsewhere(.notes, switchesDocked: !uiState.isFloating) else { return }
+                } else {
+                    selectSection(.notes)
+                }
                 DispatchQueue.main.async {
                     guard noteDraft.pages.open(noteID: id) else { return }
                     noteDraft.pages.dismissLibrary()
@@ -498,7 +511,11 @@ struct AtticPanelView: View {
                 syncTopRowFootprint()
                 syncBottomControlsHeight()
                 syncNoteDraftInteractionLocks()
-                installTaskNotePurgePresentation()
+                // The Notes session's hooks belong to the panel Notes is in.
+                if !uiState.isElsewhere(.notes) { installTaskNotePurgePresentation() }
+            }
+            .onChange(of: uiState.pagesElsewhere.contains(.notes)) { _, away in
+                if !away { installTaskNotePurgePresentation() }
             }
             .onChange(of: noteDraft.isDirty) { _, _ in syncNoteDraftInteractionLocks() }
             .onChange(of: noteDraft.hasConflict) { _, _ in syncNoteDraftInteractionLocks() }
@@ -599,6 +616,8 @@ struct AtticPanelView: View {
 
     func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
+        // A page out in its own panel: that panel comes forward instead.
+        if uiState.routeElsewhere(section) { return }
         // O4-02: a drag tracked on the page being left is cancelled, not
         // committed when its button comes up on another page.
         AtticDragTracking.cancelAll()

@@ -56,6 +56,51 @@ final class PanelUIState: ObservableObject {
     /// The Tall island's state (Accepted 2026-10-31): the page it marks,
     /// the item under the pointer, and its clicks' page requests.
     let island = PanelIslandModel()
+    /// The pages another panel hosts (Accepted "Tall island", "Pull a page
+    /// out, snap it back in"): on the docked panel, the pages that are out;
+    /// on a floating panel, every page but its own. A page lives in one
+    /// panel at a time, so this panel never builds them.
+    @Published private(set) var pagesElsewhere: Set<PanelPage> = []
+    /// A floating panel's state (its one page); false on the docked panel.
+    private(set) var isFloating = false
+    /// Asked to show a page another panel hosts: that panel answers (it
+    /// comes forward) instead of this one switching.
+    var onPageElsewhere: ((PanelPage) -> Void)?
+
+    func setPagesElsewhere(_ pages: Set<PanelPage>) {
+        let kept = pages.subtracting([PanelPage(selectedSection)])
+        if pagesElsewhere != kept { pagesElsewhere = kept }
+        if island.outPages != pages { island.setOut(pages) }
+    }
+
+    /// Makes this the state of a floating panel holding `page` only.
+    func becomeFloating(on page: PanelPage) {
+        isFloating = true
+        selectSection(page.section)
+        setPagesElsewhere(Set(PanelPage.allCases).subtracting([page]))
+    }
+
+    /// Like `onPageElsewhere`, but says whether the page now shows, and
+    /// may leave the docked panel's page alone (`switchesDocked` false: a
+    /// floating panel's ⌘Return never switches the docked panel).
+    var onOpenElsewhere: ((PanelPage, _ switchesDocked: Bool) -> Bool)?
+
+    /// Shows `section`'s page in the panel that hosts it. True when it shows.
+    func openElsewhere(_ section: PanelSection, switchesDocked: Bool) -> Bool {
+        guard isElsewhere(section) else { return false }
+        return onOpenElsewhere?(PanelPage(section), switchesDocked) ?? false
+    }
+
+    func isElsewhere(_ section: PanelSection) -> Bool { pagesElsewhere.contains(PanelPage(section)) }
+
+    /// Routes a request for a page another panel hosts to that panel.
+    /// Returns true when it did (and this panel must not switch).
+    @discardableResult
+    func routeElsewhere(_ section: PanelSection) -> Bool {
+        guard isElsewhere(section) else { return false }
+        onPageElsewhere?(PanelPage(section))
+        return true
+    }
     var editingDraftTitle: String {
         get { renameDraft.title }
         set { renameDraft.title = newValue }
@@ -244,7 +289,7 @@ final class PanelUIState: ObservableObject {
     /// switch with `motion` (and `alongside` in the same transaction), and
     /// records it for the pages' transitions.
     func switchPage(to section: PanelSection, motion: PanelPageMotion, alongside: () -> Void = {}) {
-        guard selectedSection != section else { return }
+        guard selectedSection != section, !routeElsewhere(section) else { return }
         lastPageSwitch = PanelPageSwitch(from: PanelPage(selectedSection), to: PanelPage(section), motion: motion)
         withAnimation(motion.animation) {
             selectSection(section)
@@ -253,7 +298,7 @@ final class PanelUIState: ObservableObject {
     }
 
     func selectSection(_ section: PanelSection) {
-        guard selectedSection != section else { return }
+        guard selectedSection != section, !routeElsewhere(section) else { return }
         if isPageContentLoaded {
             // The page being left stays built behind the new one unless it
             // is one that is never kept.

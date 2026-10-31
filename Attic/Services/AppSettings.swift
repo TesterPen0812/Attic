@@ -489,6 +489,13 @@ final class AppSettings: ObservableObject {
     /// Called once after AppKit finishes a manual live resize. Keeping this
     /// separate from live layout updates avoids continuously writing defaults
     /// while the pointer is moving.
+    /// The pages pulled out into their own panels, with their frames and
+    /// pins (`PanelPullOutState`), restored at the next launch.
+    var floatingPanelsData: Data? {
+        get { defaults.data(forKey: "panelFloatingPages") }
+        set { defaults.set(newValue, forKey: "panelFloatingPages") }
+    }
+
     func persistPanelSize(_ size: CGSize) {
         let clamped = PanelGeometry.clampedPanelSize(size)
         if panelContentSize != clamped.width {

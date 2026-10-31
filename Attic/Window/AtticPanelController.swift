@@ -164,6 +164,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// The Tall island beside the panel (Accepted 2026-10-31): two child
     /// windows the controller places, shows, hides and fades with it.
     private let islandWindows: PanelIslandWindows
+    /// Pages pulled off the island into their own panels (Accepted "Tall
+    /// island", "Pull a page out, snap it back in").
+    let pullOut: PanelPullOutController
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
@@ -293,8 +296,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
 
         islandWindows = PanelIslandWindows(model: uiState.island, uiState: uiState, settings: settings)
+        pullOut = PanelPullOutController(docked: uiState, dependencies: PanelPageDependencies(
+            store: store, noteStore: noteStore, canvasSession: canvasSession, noteDraft: noteDraft,
+            settings: settings, tasksMemory: tasksMemory))
 
         super.init()
+        configurePullOut()
         configurePanel()
         bindContentSize()
         uiState.island.onClick = { [weak self] in self?.activateFromIsland() }
@@ -365,8 +372,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
 
     func containsScreenPoint(_ point: CGPoint) -> Bool {
-        // The island is part of the panel: pointing at it never hides it.
-        if panel.isVisible, islandWindows.contains(point) { return true }
+        // The island, the 8 pt gap to it and every floating panel are part
+        // of the panel: pointing at them never hides it.
+        if panel.isVisible, islandWindows.contains(point) || islandGapContains(point) || pullOut.contains(point) {
+            return true
+        }
         guard panel.isVisible, panel.frame.contains(point) else { return false }
         let localPoint = CGPoint(
             x: point.x - panel.visibleContentFrame.minX,
@@ -570,8 +580,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let screen = panel.screen ?? currentScreen else {
             return .rejected(.missingUsableScreen)
         }
-        guard noteDraft.prepareToLeave(.hide) else {
-            return .rejected(.draftFlushFailed)
+        // Notes floating in a pinned panel stays on screen and in use.
+        if !pullOut.notesStaysOnScreen {
+            guard noteDraft.prepareToLeave(.hide) else {
+                return .rejected(.draftFlushFailed)
+            }
         }
         // Menu cards are separate windows; they cannot ride the panel's
         // hide/Genie stand-in. Close synchronously after the save accepts.
@@ -603,6 +616,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
         let reducedFade = hideFadesWhenReduced
         hideFadesWhenReduced = false
+        // Unpinned floating panels hide with it; pinned ones stay.
+        pullOut.dockedWillHide(duration: settings.hideMotionDuration(.slide, hiding: true))
         animatePanel(to: targetFrame, collapseProgress: 1,
                      duration: settings.hideMotionDuration(.slide, hiding: true), reducedFade: reducedFade) { [weak self] in
             MainActor.assumeIsolated {
@@ -1560,7 +1575,42 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func showIsland() {
         layoutIsland()
         islandWindows.show(attachedTo: panel)
+        // The floating panels come back with it, in front of it.
+        pullOut.dockedDidShow()
     }
+
+    /// The 8 pt between the panel and the island, at the island's height.
+    private func islandGapContains(_ point: CGPoint) -> Bool {
+        guard islandWindows.isVisible, islandWindows.island.alphaValue > 0.01 else { return false }
+        return PanelIslandLayout.gapFrame(panelFrame: panel.visibleContentFrame, corner: islandWindows.corner)
+            .contains(point)
+    }
+
+    private func configurePullOut() {
+        islandWindows.onPull = { [weak self] pull in self?.pullOut.handle(pull) }
+        pullOut.dockedFrame = { [weak self] in
+            guard let self, panel.isVisible else { return nil }
+            return panel.visibleContentFrame
+        }
+        pullOut.islandFrame = { [weak self] in
+            guard let self, panel.isVisible, islandWindows.isVisible else { return nil }
+            return islandWindows.islandFrame
+        }
+        pullOut.workArea = { [weak self] point in
+            guard let self, let screen = screen(containing: point) else { return nil }
+            return TestPresentationPolicy.placementFrame(screen.visibleFrame)
+        }
+        pullOut.workAreas = { NSScreen.screens.map { TestPresentationPolicy.placementFrame($0.visibleFrame) } }
+        pullOut.makeDockedKey = { [weak self] in
+            guard let self, panel.isVisible, panel.canBecomeKey, !panel.isKeyWindow else { return }
+            panel.makeKey()
+        }
+        pullOut.restore()
+    }
+
+    /// What holds the unpinned floating panels open counts as holding this
+    /// one (they hide together).
+    var floatingInteractionLockReasons: Set<PanelInteractionLockReason> { pullOut.interactionLockReasons }
 
     /// One click makes the panel active (Owner notes on Attic Wave 2): a
     /// click on the island gives the panel the keyboard, as one on the

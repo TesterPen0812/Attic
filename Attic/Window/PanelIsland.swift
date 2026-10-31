@@ -72,6 +72,14 @@ enum PanelIslandLayout {
         return CGRect(x: x, y: y, width: width, height: height)
     }
 
+    /// The gap between the panel and the island, at the island's height:
+    /// crossing it from the panel to the island stays on the panel.
+    static func gapFrame(panelFrame: CGRect, corner: ScreenCorner) -> CGRect {
+        let island = islandFrame(panelFrame: panelFrame, corner: corner)
+        let x = isOnRight(corner) ? panelFrame.maxX : island.maxX
+        return CGRect(x: x, y: island.minY, width: panelGap, height: island.height)
+    }
+
     /// An item's square in screen points (items run top to bottom).
     static func itemFrame(_ index: Int, in island: CGRect) -> CGRect {
         CGRect(x: island.minX + inset, y: island.maxY - inset - CGFloat(index + 1) * item - CGFloat(index) * gap,
@@ -98,6 +106,14 @@ final class PanelIslandModel: ObservableObject {
     @Published private(set) var pointed: PanelPage?
     /// Which side of the island faces the panel (the label goes there).
     @Published private(set) var labelOnLeft = true
+    /// The pages pulled out into their own panels: their items carry the
+    /// out dot (Accepted "Tall island", "Pull a page out, snap it back in").
+    @Published private(set) var outPages: Set<PanelPage> = []
+    /// A floating panel dragged near: the island shows its blue ring.
+    @Published private(set) var isSnapTarget = false
+    /// A drag pulled a page off the island: the press's release is not a
+    /// click.
+    var suppressesClicks = false
 
     /// A click asked for this page.
     let requests = PassthroughSubject<PanelPage, Never>()
@@ -108,6 +124,14 @@ final class PanelIslandModel: ObservableObject {
 
     func show(_ page: PanelPage) {
         if self.page != page { self.page = page }
+    }
+
+    func setOut(_ pages: Set<PanelPage>) {
+        if outPages != pages { outPages = pages }
+    }
+
+    func setSnapTarget(_ target: Bool) {
+        if isSnapTarget != target { isSnapTarget = target }
     }
 
     func setCorner(_ corner: ScreenCorner) {
@@ -127,6 +151,7 @@ final class PanelIslandModel: ObservableObject {
     }
 
     func click(_ page: PanelPage) {
+        guard !suppressesClicks else { return }
         onClick?()
         requests.send(page)
     }
@@ -167,6 +192,15 @@ struct PanelIslandView: View {
                         let face = M.glyphFace(isSelected: isSelected, open: true, accent: false,
                                                solid: design.effectiveSurface == .solid)
                         AtticIcon(systemName: page.systemName, size: M.iconSize, weight: face.weight, ink: face.ink)
+                        // A page that's out: a 4 pt blue dot at the item's
+                        // top-right corner (the design's 8 px, 6 px in).
+                        Circle()
+                            .fill(PanelPullOutLayout.blue)
+                            .frame(width: PanelPullOutLayout.outDot, height: PanelPullOutLayout.outDot)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .padding(PanelPullOutLayout.outDotInset)
+                            .opacity(model.outPages.contains(page) ? 1 : 0)
+                            .accessibilityHidden(true)
                     }
                     .animation(AtticSelectionMarker.animation(reduceMotion: design.reduceMotion), value: isSelected)
                     .frame(width: L.item, height: L.item)
@@ -182,6 +216,7 @@ struct PanelIslandView: View {
                     if inside { model.point(at: page) } else { model.leave(page) }
                 }
                 .accessibilityLabel(page.title)
+                .accessibilityValue(model.outPages.contains(page) ? String(localized: "In its own panel") : "")
                 .accessibilityIdentifier(page.accessibilityIdentifier)
                 .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
@@ -189,6 +224,18 @@ struct PanelIslandView: View {
         .padding(L.inset)
         .frame(width: L.width, height: L.height())
         .modifier(PanelIslandSurface(flat: design.effectiveControls != .liquidGlass, cornerRadius: radius))
+        .overlay {
+            // A floating panel dragged near: a solid blue ring (the
+            // design's 4 px at 55 %, outside the capsule).
+            AtticControlShape.shape(cornerRadius: radius + PanelPullOutLayout.ringWidth, exponent: cornerExponent)
+                .strokeBorder(PanelPullOutLayout.blue.opacity(0.55), lineWidth: PanelPullOutLayout.ringWidth)
+                .padding(-PanelPullOutLayout.ringWidth)
+                .opacity(model.isSnapTarget ? 1 : 0)
+                .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion,
+                                                               showing: model.isSnapTarget), value: model.isSnapTarget)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .contentShape(AtticControlShape.shape(cornerRadius: radius, exponent: cornerExponent))
         .padding(L.windowMargin)
         .accessibilityElement(children: .contain)
@@ -299,9 +346,66 @@ final class PanelIslandWindow: NSPanel {
     /// The island can take the keyboard (Full Keyboard Access, VoiceOver);
     /// the label window never can.
     var allowsKey = false
+    /// The left button's presses, drags and releases, in screen points,
+    /// before SwiftUI sees them (pulling a page off the island).
+    var onPointer: ((PanelIslandPointer) -> Void)?
+
+    override func sendEvent(_ event: NSEvent) {
+        let point = convertPoint(toScreen: event.locationInWindow)
+        switch event.type {
+        case .leftMouseDown: onPointer?(.down(point))
+        case .leftMouseDragged: onPointer?(.dragged(point))
+        case .leftMouseUp:
+            super.sendEvent(event)
+            onPointer?(.up(point))
+            return
+        default: break
+        }
+        super.sendEvent(event)
+    }
     override var canBecomeKey: Bool { allowsKey && !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { false }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
+enum PanelIslandPointer: Equatable {
+    case down(CGPoint), dragged(CGPoint), up(CGPoint)
+}
+
+/// A pull off the island, as the pull-out sees it.
+enum PanelIslandPull: Equatable {
+    case began(PanelPage, CGPoint), moved(CGPoint), ended(CGPoint)
+}
+
+/// Turns presses on the island's items into pulls: a press on an item that
+/// travels more than `PanelPullOutLayout.pullThreshold` pulls that page.
+struct PanelIslandPullTracker {
+    private var pressed: (page: PanelPage, start: CGPoint)?
+    private(set) var pulling = false
+
+    /// What `pointer` does, given the island's capsule (screen points).
+    mutating func handle(_ pointer: PanelIslandPointer, island: CGRect) -> PanelIslandPull? {
+        switch pointer {
+        case let .down(point):
+            pulling = false
+            pressed = Self.page(at: point, in: island).map { ($0, point) }
+            return nil
+        case let .dragged(point):
+            if pulling { return .moved(point) }
+            guard let pressed, hypot(point.x - pressed.start.x, point.y - pressed.start.y)
+                    > PanelPullOutLayout.pullThreshold else { return nil }
+            pulling = true
+            return .began(pressed.page, point)
+        case let .up(point):
+            defer { pressed = nil; pulling = false }
+            return pulling ? .ended(point) : nil
+        }
+    }
+
+    static func page(at point: CGPoint, in island: CGRect) -> PanelPage? {
+        PanelIslandLayout.pages.indices.first { PanelIslandLayout.itemFrame($0, in: island).contains(point) }
+            .map { PanelIslandLayout.pages[$0] }
+    }
 }
 
 /// A click on the island works on its first press, whichever app is active.
@@ -321,6 +425,9 @@ final class PanelIslandWindows {
     private(set) var corner: ScreenCorner = .topRight
     /// The capsule in screen points (not the window's transparent margin).
     private(set) var islandFrame: CGRect = .zero
+    /// Pulls off the island (the pull-out answers them).
+    var onPull: ((PanelIslandPull) -> Void)?
+    private var pullTracker = PanelIslandPullTracker()
 
     init(model: PanelIslandModel, uiState: PanelUIState, settings: AppSettings) {
         self.model = model
@@ -349,6 +456,19 @@ final class PanelIslandWindows {
         label.contentView = PanelIslandHostingView(rootView: PanelIslandKeyed(
             settings: settings, model: model, uiState: uiState, content: PanelIslandLabels(model: model)))
         label.setAccessibilityElement(false)
+        island.onPointer = { [weak self] pointer in self?.handlePointer(pointer) }
+    }
+
+    /// A press on an item may pull its page out; while it does, the press's
+    /// release is not a click.
+    func handlePointer(_ pointer: PanelIslandPointer) {
+        guard let pull = pullTracker.handle(pointer, island: islandFrame) else { return }
+        if case .began = pull { model.suppressesClicks = true; model.point(at: nil) }
+        onPull?(pull)
+        if case .ended = pull {
+            // The release reaches SwiftUI first; clicks count again after.
+            DispatchQueue.main.async { [weak model] in model?.suppressesClicks = false }
+        }
     }
 
     /// Places both windows beside `panelFrame` on `corner`'s side.
