@@ -62,24 +62,21 @@ struct CalendarWeekRow: View, Equatable {
 
 /// A day (Accepted 2026-10-30, "Calendar page: Grid"): flat in every
 /// month. The number (today red, past days grey, the rest ink) and its
-/// event dots and open-task ring under it; the selected day alone sits on a
-/// grey key.
+/// event dots and open-task ring under it. The selected day is the older
+/// big key (owner, 2026-10-31): ink with a white number, red when it is
+/// today.
 struct CalendarKey: View {
     let day: CalendarGridDay
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
 
-    /// The selected day's key: a 30 pt whole superellipse on curve 1.4.
-    static var keyShape: AtticControlOutline {
-        AtticControlShape.shape(cornerRadius: CalendarDesign.keyCornerRadius, exponent: CalendarDesign.keyExponent)
-    }
-
     static func numberColour(_ number: CalendarKeyNumber, tokens: AtticColorTokens) -> AtticRGBA {
         switch number {
         case .red: TasksPanelDesign.vivid(CalendarDesign.red, tokens: tokens)
         case .grey: TasksPanelDesign.toneInk(.meta, tokens: tokens)
         case .ink: tokens.ink(.heading)
+        case .white: AtticRGBA(red: 1, green: 1, blue: 1)
         }
     }
 
@@ -141,10 +138,10 @@ struct CalendarDayMarksView: View {
     }
 }
 
-/// The selected day's grey key, and a press on any day: the same 30 pt
-/// key, centred in the day's cell. No raised material in the grid. The
-/// selected key is the shared selection marker (`AtticSelectionMarker`,
-/// the design's 6 % heading ink), on curve 1.4.
+/// The selected day's key, as the older page drew it (owner, 2026-10-31):
+/// the whole cell, radius 10 pt, filled ink (red on today) and darkened
+/// from its top edge; a press on another day shows the press grey there.
+/// No raised material in the grid.
 struct CalendarKeyButtonStyle: ButtonStyle {
     let style: CalendarKeyStyle
 
@@ -152,10 +149,13 @@ struct CalendarKeyButtonStyle: ButtonStyle {
         CalendarKeyFace(configuration: configuration, style: style)
     }
 
-    /// The key's fill: the press grey, the selection marker's grey, or none.
+    /// The key's fill: the selected ink or red, the press grey, or none.
     static func fill(style: CalendarKeyStyle, isPressed: Bool, tokens: AtticColorTokens) -> AtticRGBA? {
-        if isPressed { return tokens.pressed }
-        return style == .selected ? AtticSelectionMarker.fill(tokens) : nil
+        switch style {
+        case .selected: tokens.ink(.heading)
+        case .selectedToday: CalendarDesign.red
+        case .plain: isPressed ? tokens.pressed : nil
+        }
     }
 }
 
@@ -164,19 +164,25 @@ private struct CalendarKeyFace: View {
     let style: CalendarKeyStyle
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     var body: some View {
+        let shape = AtticControlShape.shape(cornerRadius: CalendarDesign.keyRadius, exponent: cornerExponent)
         let fill = CalendarKeyButtonStyle.fill(style: style, isPressed: configuration.isPressed, tokens: design.tokens)
         configuration.label
             .background {
-                if configuration.isPressed, let fill {
-                    CalendarKey.keyShape.fill(fill.color)
-                        .frame(width: CalendarDesign.keySize, height: CalendarDesign.keySize)
-                } else if style == .selected {
-                    AtticSelectionMarker(cornerRadius: CalendarDesign.keyCornerRadius)
-                        .environment(\.atticControlCornerExponent, CalendarDesign.keyExponent)
-                        .frame(width: CalendarDesign.keySize, height: CalendarDesign.keySize)
+                if let fill {
+                    shape.fill(fill.color)
+                        .overlay {
+                            if style != .plain {
+                                // The pressed key: darkened from the top edge
+                                // (the design's inset shadow).
+                                shape.fill(LinearGradient(colors: [.black.opacity(0.22), .clear],
+                                                          startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.25)))
+                            }
+                        }
                 }
             }
+            .contentShape(shape)
     }
 }

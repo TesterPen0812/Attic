@@ -6,14 +6,11 @@ import XCTest
 
 /// The Calendar page mounted in an off-screen window (Accepted 2026-10-30,
 /// "Calendar page"): what the page itself shows and does, not only its
-/// helpers. Today in the bottom bar comes and goes with the selection, the
-/// free-days line selects its first day, and free-day runs re-form as
-/// events load while the selection and scroll position hold and the page
-/// updates a bounded number of times.
-///
-/// Uses only the page, its model and accessibility identifiers, so the
-/// suite also runs against the page before the free-days line and the
-/// Today fade were built.
+/// helpers. Today in the bottom bar comes and goes with the selection,
+/// every day keeps its own date tile (empty days too, owner 2026-10-31: the
+/// older agenda) and a tile selects its day, and events loading keep the
+/// tiles, the selection and the scroll position while the page updates a
+/// bounded number of times.
 @MainActor
 final class CalendarPageHostedTests: XCTestCase {
     private let calendar = CalendarMonthMath.calendar(timeZone: TimeZone(identifier: "Europe/London")!)
@@ -46,40 +43,40 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
-    // MARK: - Free days
+    // MARK: - Every day's tile
 
-    func testClickingTheFreeDaysLineSelectsItsFirstDay() throws {
-        // 30 Oct–4 Nov are free: one line, "free-2026-10-30".
+    func testEmptyDaysKeepTheirOwnTileAndATileSelectsItsDay() throws {
+        // 30 Oct onward are empty: each keeps its own tile, nothing folds.
         try withPage(events: [event("s", on: 29)]) { page in
-            let line = try XCTUnwrap(page.element("calendar-free-2026-10-30"), "the free days fold into one line")
-            XCTAssertNil(page.element("calendar-tile-2026-10-31"), "the run's other days have no tile")
-            XCTAssertTrue(line.accessibilityPerformPress?() ?? false, "the line takes a click")
+            XCTAssertTrue(page.ids("calendar-free-").isEmpty, "no free-days line")
+            let tiles = page.tiles()
+            XCTAssertTrue(["2026-10-29", "2026-10-30", "2026-10-31"].allSatisfy(tiles.contains),
+                          "today and the empty days after it, one tile each: \(tiles)")
+            let tile = try XCTUnwrap(page.element("calendar-tile-2026-10-31"), "an empty day's tile")
+            XCTAssertTrue(tile.accessibilityPerformPress?() ?? false, "the tile takes a click")
             page.settle()
-            XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 30), "the click selects the run's first day")
+            XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 31), "the click selects its day")
         }
     }
 
-    /// Events loading while the page is scrolled: one landing on a run's
-    /// first day, on its last day, splitting a run, and one going so two
-    /// runs merge. The runs re-form with unique ids, the selected day and
-    /// the scroll position hold, and each load updates the page boundedly.
-    func testFreeRunsReformAsEventsLoadWhileSelectionAndScrollHold() throws {
+    /// Events loading while the page is scrolled: the days keep their tiles
+    /// with unique ids, the selected day and the scroll position hold, and
+    /// each load updates the page boundedly.
+    func testEventsLoadingKeepTilesSelectionAndScroll() throws {
         let base = event("s", on: 29)
         try withPage(events: [base]) { page in
-            XCTAssertEqual(page.freeLines(), ["2026-10-30"], "30 Oct–4 Nov: one run")
             page.scroll(to: 60)
             let offset = page.offset
             XCTAssertEqual(offset, 60, accuracy: 0.5, "scrolled into the month")
+            let tiles = page.tiles()
+            XCTAssertFalse(tiles.isEmpty)
 
-            @MainActor func load(_ events: [CalendarEvent], free expected: [String], days: [String],
-                      _ message: String, line: UInt = #line) {
+            @MainActor func load(_ events: [CalendarEvent], _ message: String, line: UInt = #line) {
                 let before = CalendarPage.bodyEvaluations
                 page.source.replace(events)
                 page.settle()
-                XCTAssertEqual(page.freeLines(), expected, "\(message): free runs", line: line)
-                XCTAssertEqual(page.tiles(), days, "\(message): day tiles", line: line)
-                let ids = page.freeLines() + page.tiles()
-                XCTAssertEqual(Set(ids).count, ids.count, "\(message): unique ids", line: line)
+                XCTAssertEqual(page.tiles(), tiles, "\(message): the same day tiles", line: line)
+                XCTAssertTrue(page.ids("calendar-free-").isEmpty, "\(message): nothing folds", line: line)
                 XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 29), "\(message): the selection holds", line: line)
                 XCTAssertEqual(page.offset, offset, accuracy: 0.5, "\(message): the scroll position holds", line: line)
                 let updates = CalendarPage.bodyEvaluations - before
@@ -90,17 +87,120 @@ final class CalendarPageHostedTests: XCTestCase {
             }
 
             let split = event("split", on: 1, month: 11)
-            load([base, split], free: ["2026-10-30", "2026-11-02"], days: ["2026-10-29", "2026-11-01"],
-                 "an event splitting the run")
+            load([base, split], "an event on an empty day")
             let first = event("first", on: 30)
-            load([base, split, first], free: ["2026-10-31", "2026-11-02"],
-                 days: ["2026-10-29", "2026-10-30", "2026-11-01"], "an event on a run's first day")
-            let last = event("last", on: 4, month: 11)
-            load([base, split, first, last], free: ["2026-10-31", "2026-11-02"],
-                 days: ["2026-10-29", "2026-10-30", "2026-11-01", "2026-11-04"], "an event on a run's last day")
-            load([base, first, last], free: ["2026-10-31"], days: ["2026-10-29", "2026-10-30", "2026-11-04"],
-                 "an event going, so two runs merge")
+            load([base, split, first], "another")
+            load([base, first], "an event going")
         }
+    }
+
+    // MARK: - Folding (item 14, owner rec2 2026-10-31)
+
+    /// While the agenda scrolls the grid away, every frame draws the selected
+    /// week once: at its place until it reaches the weekday letters, then
+    /// held under them. Each offset is captured straight after the scroll
+    /// (before any deferred state update) and again settled, and the scroll
+    /// jumps back down past the pin as a fast flick does.
+    func testTheSelectedWeekIsDrawnOnceAtEveryScrollOffset() throws {
+        try withPage(events: []) { page in
+            let top = try XCTUnwrap(page.scrollerTop)
+            for y in [0, 60, 120, 136, 140, 142, 160, 200, 60, 150, 20, 175, 100, 0] as [CGFloat] {
+                page.jump(to: y)
+                try assertOneSelectedWeek(page, offset: y, viewportTop: top, "straight after a scroll to \(y)")
+                page.settle(0.05)
+                try assertOneSelectedWeek(page, offset: page.offset, viewportTop: top, "settled at \(y)")
+            }
+        }
+    }
+
+    /// The fold itself (the month title): every frame of the animation draws
+    /// the selected week once, both ways.
+    func testTheFoldAnimationDrawsTheSelectedWeekOnceInEveryFrame() throws {
+        try withPage(events: []) { page in
+            let top = try XCTUnwrap(page.scrollerTop)
+            for direction in ["folding", "unfolding"] {
+                let pill = try XCTUnwrap(page.element("calendar-month-pill"), "the month title")
+                XCTAssertTrue(pill.accessibilityPerformPress?() ?? false, "\(direction): pressed")
+                var frames = 0
+                let end = Date().addingTimeInterval(0.8)
+                while Date() < end {
+                    RunLoop.current.run(until: Date().addingTimeInterval(1.0 / 120))
+                    page.window.displayIfNeeded()
+                    try assertOneSelectedWeek(page, offset: page.offset, viewportTop: top, "\(direction) frame \(frames)")
+                    frames += 1
+                }
+                XCTAssertGreaterThan(frames, 5, "\(direction): frames sampled")
+                page.settle()
+            }
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5, "unfolded back to the month")
+        }
+    }
+
+    /// Nothing scrolls up under the weekday letters: the grid is cut at the
+    /// top of its scroller, so the letters' band looks the same at any
+    /// offset.
+    func testNothingShowsUnderTheWeekdayLetters() throws {
+        try withPage(events: []) { page in
+            let top = try XCTUnwrap(page.scrollerTop)
+            let band = (top - CalendarDesign.weekdayRowHeight - 2)..<(top - 0.5)
+            let rest = try page.capture()
+            for y in [20, 60, 100, 136, 142, 200] as [CGFloat] {
+                page.jump(to: y)
+                let scrolled = try page.capture()
+                page.settle(0.05)
+                let settled = try page.capture()
+                for (name, image) in [("straight after", scrolled), ("settled", settled)] {
+                    let diff = try Self.maxDifference(rest, image, band: band)
+                    XCTAssertLessThan(diff, 0.02, "\(name) a scroll to \(y): the letters' band is unchanged (\(diff))")
+                }
+            }
+        }
+    }
+
+    /// The selected day (today, so its key is the red one) in its column,
+    /// left of the number: one red run of a key's height, where the week sits.
+    private func assertOneSelectedWeek(_ page: MountedPage, offset: CGFloat, viewportTop: CGFloat,
+                                       _ message: String, line: UInt = #line) throws {
+        let image = try page.capture()
+        let width = page.host.bounds.width
+        let key = (width - 2 * CalendarDesign.gridInset - 6 * CalendarDesign.keyGap) / 7
+        let x = CalendarDesign.gridInset + 3 * (key + CalendarDesign.keyGap) + key / 2 - 12
+        let scale = CGFloat(image.pixelsHigh) / page.host.bounds.height
+        let from = Int((viewportTop - CalendarDesign.weekdayRowHeight - 10) * scale)
+        // Down to the grid's end (the agenda's red today tile lies below).
+        let gridEnd = max(CalendarDesign.weekPitch, 5 * CalendarDesign.weekPitch - offset)
+        let to = Int((viewportTop + gridEnd + 2) * scale)
+        var runs: [(start: CGFloat, length: CGFloat)] = []
+        var start: Int?
+        for py in from...to {
+            let c = try XCTUnwrap(image.colorAt(x: Int(x * scale), y: py)?.usingColorSpace(.sRGB))
+            let red = c.redComponent - (c.greenComponent + c.blueComponent) / 2 > 0.25 && c.alphaComponent > 0.5
+            if red, start == nil { start = py }
+            if !red || py == to, let s = start {
+                runs.append((CGFloat(s) / scale, CGFloat(py - s) / scale)); start = nil
+            }
+        }
+        let keys = runs.filter { $0.length >= 8 }
+        XCTAssertEqual(keys.count, 1, "\(message): one selected week drawn, runs \(runs)", line: line)
+        let expected = viewportTop + max(0, 4 * CalendarDesign.weekPitch - offset) + CalendarDesign.weekTop
+        if let first = keys.first {
+            XCTAssertEqual(first.start, expected, accuracy: 2, "\(message): where the week sits", line: line)
+            XCTAssertGreaterThan(first.length, CalendarDesign.keyHeight * 0.7, "\(message): the whole key", line: line)
+        }
+    }
+
+    private static func maxDifference(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, band: Range<CGFloat>) throws -> CGFloat {
+        let scale = CGFloat(a.pixelsHigh) / a.size.height
+        var worst: CGFloat = 0
+        for py in Int(band.lowerBound * scale)..<Int(band.upperBound * scale) {
+            for px in stride(from: 0, to: a.pixelsWide, by: 2) {
+                let p = try XCTUnwrap(a.colorAt(x: px, y: py)?.usingColorSpace(.sRGB))
+                let q = try XCTUnwrap(b.colorAt(x: px, y: py)?.usingColorSpace(.sRGB))
+                worst = max(worst, abs(p.redComponent - q.redComponent), abs(p.greenComponent - q.greenComponent),
+                            abs(p.blueComponent - q.blueComponent), abs(p.alphaComponent - q.alphaComponent))
+            }
+        }
+        return worst
     }
 
     // MARK: - Agenda task rows (w2-tasks review 4)
@@ -147,8 +247,8 @@ final class CalendarPageHostedTests: XCTestCase {
     }
 
     /// The agenda's task rows behave as the Tasks rows do, in the mounted
-    /// page: a real click on the title selects, Return's command renames
-    /// the selected task, Open page and a real double-click open it.
+    /// page: a real click on the title selects, Return's command and a real
+    /// double-click rename the task, Open page opens it.
     func testAgendaTaskRowsSelectOnAClickRenameAndOpenInTheMountedPage() throws {
         let id = UUID()
         var opened: [UUID] = []
@@ -184,8 +284,8 @@ final class CalendarPageHostedTests: XCTestCase {
             page.click(at: title, count: 1)
             page.click(at: title, count: 2)
             page.settle()
-            XCTAssertEqual(opened, [id, id], "a real double-click opens it")
-            XCTAssertNil(rows.renaming, "and does not rename")
+            XCTAssertEqual(rows.renaming, id, "a real double-click edits the title (owner, 2026-10-31)")
+            XCTAssertEqual(opened, [id], "and opens nothing")
         }
     }
 
@@ -249,6 +349,30 @@ final class CalendarPageHostedTests: XCTestCase {
 
         var scroller: NSScrollView? { Self.scrollView(in: host) }
 
+        /// The top of the scroller (where the grid starts), in the host's
+        /// flipped coordinates.
+        var scrollerTop: CGFloat? {
+            host.layoutSubtreeIfNeeded()
+            guard let scroller else { return nil }
+            return host.convert(scroller.bounds, from: scroller).minY
+        }
+
+        /// A scroll without letting the run loop turn: what the very next
+        /// frame shows, before any deferred state update.
+        func jump(to y: CGFloat) {
+            guard let scroller else { return XCTFail("the page's scroller") }
+            scroller.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroller.reflectScrolledClipView(scroller.contentView)
+            host.layoutSubtreeIfNeeded()
+        }
+
+        func capture() throws -> NSBitmapImageRep {
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            return rep
+        }
+
         var offset: CGFloat { scroller?.contentView.bounds.origin.y ?? -1 }
 
         func scroll(to y: CGFloat) {
@@ -272,7 +396,6 @@ final class CalendarPageHostedTests: XCTestCase {
             return ids.filter { seen.insert($0).inserted }.sorted()
         }
 
-        func freeLines() -> [String] { ids("calendar-free-") }
         func tiles() -> [String] { ids("calendar-tile-") }
 
         private static func elements(_ root: AnyObject) -> [AnyObject] {

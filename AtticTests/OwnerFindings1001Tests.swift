@@ -91,6 +91,12 @@ final class O14FirstMouseTests: XCTestCase {
         XCTAssertFalse(scroll.acceptsFirstMouse(for: nil), "moving out restores the native answer, even after repeated hits")
     }
 
+    /// Owner, 2026-10-31 ("one click makes the panel active"): every view a
+    /// press can reach on the panel accepts the first press, on every page
+    /// and state: Tasks (Now, Later, Done, a task's page), the Notes list,
+    /// board and a note, the Calendar page, each page's open search, and the
+    /// top row and bottom bar. Every class counts, SwiftUI's and AppKit's own
+    /// included: any one that refuses spends the press on activation.
     func testEveryViewUnderAPressOnThePanelAcceptsTheFirstMouse() throws {
         let suite = "O14FirstMouse.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -99,18 +105,23 @@ final class O14FirstMouseTests: XCTestCase {
         try TasksPagePreview.seedDemo(in: container, long: true)
         let store = TaskStore(container: container)
         let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        for title in ["Launch plan", "Groceries", "Reading list"] {
+            _ = try notes.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [.text(title)]), tags: ["home"]).get()
+        }
         let state = PanelUIState()
         let size = CGSize(width: 340, height: 560)
         state.updatePanelSize(size)
         state.loadPageContent()
         let chrome = PanelChromeInteractionState()
         let settings = AppSettings(defaults: defaults)
+        let tasksState = TasksPageState()
+        let draft = NoteDraftController(noteStore: notes)
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(store: store, noteStore: notes,
                                      canvasSession: CanvasSession(store: CanvasStore(container: container)),
-                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     noteDraft: draft,
                                      chromeInteractionState: chrome, uiState: state, settings: settings,
-                                     tasksPageState: TasksPageState()),
+                                     tasksPageState: tasksState),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
         let content = AtticPanelContentContainer(hostingView: host, visibleSize: size, perimeter: 0)
         let panel = AtticPanel(contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
@@ -119,29 +130,79 @@ final class O14FirstMouseTests: XCTestCase {
         panel.contentView = content
         panel.orderFront(nil)
         defer { host.cancelActiveInteraction(reason: .lostWindow); state.releasePageContent(); panel.close() }
-        for section in [PanelSection.tasks, .notes] {
-            state.selectSection(section)
-            RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        let model = tasksState.model(for: store, toasts: nil)
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+
+        func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        func press(_ identifier: String) throws {
+            let element = try XCTUnwrap(elements(host).first { ($0.accessibilityIdentifier?() ?? "") == identifier },
+                                        "\(identifier) is on the panel")
+            XCTAssertTrue(element.accessibilityPerformPress?() ?? false, "\(identifier) presses")
+            spin(0.8)
+        }
+        // A press every 6 pt over the whole panel, top row and bottom bar
+        // included, as the window would deliver it.
+        func assertEveryViewAccepts(_ name: String) {
             content.layoutSubtreeIfNeeded()
-            // A press every 8 pt over the page, as the window would deliver
-            // it: the panel's AppKit views must all take it.
-            var appKitRefusing: [String: Int] = [:]
+            var refusing: [String: Int] = [:]
             let bounds = content.bounds
-            for x in stride(from: bounds.minX + 30, to: bounds.maxX - 30, by: 8) {
-                for y in stride(from: bounds.minY + 30, to: bounds.maxY - 30, by: 8) {
+            for x in stride(from: bounds.minX + 4, to: bounds.maxX - 4, by: 6) {
+                for y in stride(from: bounds.minY + 4, to: bounds.maxY - 4, by: 6) {
                     let point = CGPoint(x: x, y: y)
                     guard let hit = content.hitTest(point) else { continue }
                     let event = NSEvent.mouseEvent(with: .leftMouseDown, location: content.convert(point, to: nil), modifierFlags: [],
                                                    timestamp: 0, windowNumber: panel.windowNumber, context: nil,
                                                    eventNumber: 0, clickCount: 1, pressure: 1)
-                    let accepts = hit.acceptsFirstMouse(for: event)
-                    if Bundle(for: type(of: hit)) == Bundle.main || hit is NSTextView || hit is NSScrollView || hit is NSClipView {
-                        if !accepts { appKitRefusing[String(describing: type(of: hit)), default: 0] += 1 }
-                    }
+                    if !hit.acceptsFirstMouse(for: event) { refusing[String(describing: type(of: hit)), default: 0] += 1 }
                 }
             }
-            XCTAssertEqual(appKitRefusing, [:], "\(section): AppKit views that would spend the first click")
+            XCTAssertEqual(refusing, [:], "\(name): views that would spend the first click on activation")
         }
+
+        state.selectSection(.tasks)
+        spin(1.5)
+        for tab in TasksTab.allCases {
+            model.tab = tab
+            spin(0.8)
+            assertEveryViewAccepts("Tasks \(tab)")
+        }
+        model.tab = .now
+        spin(0.5)
+        try press("tasks-find-button")
+        assertEveryViewAccepts("Tasks search")
+        host.cancelActiveInteraction(reason: .lostWindow)
+        if let id = model.rows(for: .now).first?.model.id {
+            model.openPage(id)
+            spin(1.0)
+            assertEveryViewAccepts("a task's page")
+        } else {
+            XCTFail("the demo has a task in Now")
+        }
+
+        // Notes opens on a note; Back shows the list.
+        state.selectSection(.notes)
+        spin(1.5)
+        XCTAssertFalse(draft.pages.isLibraryPresented, "a note is open")
+        assertEveryViewAccepts("a note")
+        XCTAssertTrue(draft.pages.showLibrary())
+        spin(1.0)
+        assertEveryViewAccepts("Notes list")
+        try press("notes-layout-board")
+        assertEveryViewAccepts("Notes board")
+        try press("notes-search-button")
+        assertEveryViewAccepts("Notes search")
+
+        state.selectSection(.calendar)
+        spin(1.5)
+        assertEveryViewAccepts("Calendar")
+        try press("calendar-search-button")
+        assertEveryViewAccepts("Calendar search")
     }
 }
 

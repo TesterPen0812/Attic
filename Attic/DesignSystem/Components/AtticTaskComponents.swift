@@ -1291,13 +1291,24 @@ struct AtticTaskRow: View {
         opens && !renaming && (hovered || selected)
     }
 
-    enum ClickRoute: Equatable { case select, open }
+    enum ClickRoute: Equatable { case select, editTitle }
 
     /// What a click on the row (not on its ring, date or buttons, which take
-    /// their own clicks) does: the second click of a double-click opens the
-    /// page; any other click selects.
-    nonisolated static func clickRoute(clickCount: Int, opens: Bool) -> ClickRoute {
-        opens && clickCount >= 2 ? .open : .select
+    /// their own clicks) does: the second click of a double-click edits the
+    /// title in place, as Return does (owner, 2026-10-31; it replaces "a
+    /// double-click opens the page" of 30 Oct); any other click selects.
+    /// The › and ⇧⌘I still open the page.
+    nonisolated static func clickRoute(clickCount: Int, edits: Bool) -> ClickRoute {
+        edits && clickCount >= 2 ? .editTitle : .select
+    }
+
+    /// The click count of the press being handled; 1 when the current event
+    /// is not a mouse press (AppKit raises on any other event's count).
+    @MainActor static var currentClickCount: Int {
+        guard let event = NSApp.currentEvent,
+              [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp].contains(event.type)
+        else { return 1 }
+        return event.clickCount
     }
 
     /// How far the date slides left while the › shows: the ›'s 18 and the
@@ -1327,10 +1338,9 @@ struct AtticTaskRow: View {
     /// nil opens the page, as the spec's row does.
     var onSelect: (() -> Void)? = nil
     /// Going into the task's page (Accepted 2026-10-30): the › shown while
-    /// the row is hovered or selected, and a double-click anywhere on the
-    /// row but its ring, date and other buttons. A click on the title just
-    /// selects, as the rest of the row does. Nil draws no › and leaves a
-    /// double-click to `onSelect`.
+    /// the row is hovered or selected (and ⇧⌘I). A click on the title just
+    /// selects, as the rest of the row does; a double-click edits the title
+    /// (owner, 2026-10-31). Nil draws no ›.
     var onOpenPage: (() -> Void)? = nil
     /// The list's focus for this row (↑ ↓ move it); nil keeps its own.
     var focus: AtticRowFocus? = nil
@@ -1528,8 +1538,8 @@ struct AtticTaskRow: View {
         .onHover { hovered = $0 }
         .onTapGesture {
             guard isEnabled else { return }
-            switch Self.clickRoute(clickCount: NSApp.currentEvent?.clickCount ?? 1, opens: onOpenPage != nil && capture == nil) {
-            case .open: onOpenPage?()
+            switch Self.clickRoute(clickCount: Self.currentClickCount, edits: actions.editTitle != nil && capture == nil) {
+            case .editTitle: actions.editTitle?()
             case .select: (onSelect ?? actions.openPage)()
             }
         }

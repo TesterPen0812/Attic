@@ -133,13 +133,13 @@ final class AtticGlassMenuTests: XCTestCase {
         let mask = try XCTUnwrap(root.layer?.mask as? CAShapeLayer)
         let path = try XCTUnwrap(mask.path)
         XCTAssertFalse(path.contains(.zero))
-        XCTAssertTrue(path.contains(CGPoint(x: 2, y: 2)), "the Accepted squircle, rather than circular corners")
+        XCTAssertTrue(path.contains(CGPoint(x: 2.3, y: 2.3)), "a squircle at the menu radius, rather than circular corners")
         XCTAssertEqual(path.boundingBoxOfPath, root.bounds)
         root.setFrameSize(CGSize(width: root.bounds.width, height: 90))
         root.layoutSubtreeIfNeeded()
         XCTAssertEqual(mask.path?.boundingBoxOfPath, root.bounds, "scrolling rows remain within a capped card")
-        XCTAssertEqual(AtticGlassMenuShape.radius, 14)
-        XCTAssertEqual(AtticGlassMenuShape.rowRadius, 11)
+        XCTAssertEqual(AtticGlassMenuShape.radius, 16, "the owner's 16 pt menus (2026-10-31)")
+        XCTAssertEqual(AtticGlassMenuShape.rowRadius, 13, "concentric: 16 − 3")
     }
 
     // MARK: Content rules (Dropdown content: answers, owner, 2026-10-24)

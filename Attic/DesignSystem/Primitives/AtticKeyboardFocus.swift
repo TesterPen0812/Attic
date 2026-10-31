@@ -26,6 +26,8 @@ extension EnvironmentValues {
 final class AtticKeyboardFocusTracker: ObservableObject {
     @Published private(set) var isKeyboardDriving = false
     private var monitor: Any?
+    /// Whether it is watching events (on screen).
+    var isTracking: Bool { monitor != nil }
 
     /// Tab, and the four arrows.
     static let navigationKeyCodes: Set<UInt16> = [48, 123, 124, 125, 126]

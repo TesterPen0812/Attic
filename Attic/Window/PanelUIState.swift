@@ -48,6 +48,11 @@ final class PanelUIState: ObservableObject {
     /// hosting-view replacement mid-edit. It lives in its own observable so
     /// each keystroke re-renders the editing field alone, never every row.
     let renameDraft = TaskRenameDraft()
+    /// Whether focus rings show, for the whole panel: the keyboard turns
+    /// them on, a click off (owner, 2026-10-31: "no outline from a click").
+    /// One tracker at the panel's root, so every page and bar, new ones
+    /// included, follows it without opting in.
+    let keyboardFocus = AtticKeyboardFocusTracker()
     var editingDraftTitle: String {
         get { renameDraft.title }
         set { renameDraft.title = newValue }

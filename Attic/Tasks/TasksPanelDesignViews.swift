@@ -288,6 +288,10 @@ struct TasksBottomBar<AddBar: View>: View {
     @ViewBuilder var addBar: () -> AddBar
 
     @Environment(\.atticDesign) private var design
+    /// In the panel the shell draws the switch, the tag bar and "+" once
+    /// for every page (owner, 2026-10-31): here they are clear stand-ins,
+    /// and the add field folds out over them as before.
+    @Environment(\.panelSharedChrome) private var sharedChrome
 
     var body: some View {
         let hasDraft = !text.text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -295,13 +299,18 @@ struct TasksBottomBar<AddBar: View>: View {
         let side = AtticControlSize.headerControl
         // Done has no tag filter: its bar keeps its place, empty.
         let tagsShown = tab != .done
+        let shared = sharedChrome != nil
         HStack(alignment: .bottom, spacing: 0) {
             HStack(spacing: TasksDesignMetrics.footerGap) {
-                PanelPageSwitcher(page: .tasks)
-                PanelTagBar(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar", onSelect: onSelectTag)
-                    .opacity(tagsShown ? 1 : 0)
-                    .allowsHitTesting(tagsShown)
-                    .accessibilityHidden(!tagsShown)
+                if shared {
+                    Color.clear.frame(height: side)
+                } else {
+                    PanelPageSwitcher(page: .tasks)
+                    PanelTagBar(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar", onSelect: onSelectTag)
+                        .opacity(tagsShown ? 1 : 0)
+                        .allowsHitTesting(tagsShown)
+                        .accessibilityHidden(!tagsShown)
+                }
             }
             .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)
             .opacity(folded ? 0 : 1)
@@ -314,7 +323,9 @@ struct TasksBottomBar<AddBar: View>: View {
                     .opacity(folded ? 1 : 0)
                     .allowsHitTesting(folded)
                     .accessibilityHidden(!folded)
-                if !folded {
+                if !folded, shared {
+                    Color.clear.frame(width: side, height: side)
+                } else if !folded {
                     AtticRaisedButton(systemName: "plus", label: "New task", size: CGSize(width: side, height: side),
                                       help: String(localized: "New task"), emphasisedGlyph: true,
                                       flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header,
@@ -328,6 +339,11 @@ struct TasksBottomBar<AddBar: View>: View {
             .frame(maxWidth: folded ? .infinity : side, alignment: .trailing)
         }
         .animation(Self.foldAnimation(reduceMotion: design.reduceMotion), value: folded)
+        .panelBottomBar(.tasks,
+                        look: PanelBottomBarLook(middle: .tags(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar",
+                                                               shown: tagsShown),
+                                                 plus: PanelBottomBarLook.tasksPlus, folded: folded),
+                        actions: PanelBottomBarActions(selectTag: onSelectTag, plus: onPlus))
     }
 
     /// "+" expanding into the field and back: the bar's fold token.

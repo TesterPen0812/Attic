@@ -51,7 +51,17 @@ struct PanelPageSwitcher: View {
         )
         .atticDesignCorners()
         .accessibilityIdentifier("panel-section-picker")
+        #if DEBUG
+        .onAppear { Self.liveCount += 1 }
+        .onDisappear { Self.liveCount -= 1 }
+        #endif
     }
+
+    #if DEBUG
+    /// Test seam: how many switches are on screen. The shell draws one for
+    /// every page, so a page switch keeps it (and its open state).
+    static var liveCount = 0
+    #endif
 
     /// Its width shut and open.
     static func width(open: Bool) -> CGFloat {

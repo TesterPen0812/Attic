@@ -19,6 +19,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
     @ViewBuilder let origin: (_ covered: Bool) -> Origin
 
     @Environment(\.atticDesign) private var design
+    /// The shell's shared bars give way while a task's page covers this one.
+    @Environment(\.panelSharedChrome) private var sharedChrome
     @State private var presentedTaskID: UUID?
     @State private var taskRouteGeneration = 0
 
@@ -50,6 +52,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
                 .id("\(taskID)-\(taskRouteGeneration)")
             }
         }
+        .onChange(of: shown != nil, initial: true) { _, covered in sharedChrome?.setCovered(covered, page: page) }
+        .onDisappear { sharedChrome?.setCovered(false, page: page) }
         .task(id: requestedID) {
             let requested = requestedID
             // Not this page's route, and none shown here: nothing to hand off.
