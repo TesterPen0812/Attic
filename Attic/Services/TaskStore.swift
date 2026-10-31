@@ -1058,13 +1058,12 @@ final class TaskStore: ObservableObject {
     ) throws -> Bool {
         let normalizedTitle = title.map(Self.normalized)
         if let normalizedTitle, normalizedTitle.isEmpty { throw TaskEditRefusal("A task needs a title.") }
-        // A family fetch can refresh resident values after another writer's
-        // commit. Freeze the presented family before that fetch, so the exact
-        // fallback still compares against the values the edit began with.
-        edits?.capture(task)
+        // The workspace guard compares against the presented baseline, but
+        // refusal restoration must keep any values refreshed by this fetch.
         WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
         let replicas = try storedTasks(matching: task.id)
         edits?.capture(replicas)
+        edits?.capture(task)
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
@@ -1351,13 +1350,13 @@ final class TaskStore: ObservableObject {
         retaining edits: RetainedTaskEdits? = nil
     ) throws -> EditableTransitionStage {
         guard !target.isEmpty else { return .nothingToWrite }
-        edits?.capture(target.compactMap { task(withID: $0.id) })
         let expectedByID = Dictionary(expected.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let ids = Array(Set(target.map(\.id)))
         let groups: [UUID: [TaskItem]] = Dictionary(grouping: try context.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { ids.contains($0.id) }
         )), by: \.id)
         edits?.capture(groups.values.flatMap { $0 })
+        edits?.capture(target.compactMap { task(withID: $0.id) })
         WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         var winners: [UUID: TaskItem] = [:]
         for state in target {
@@ -3297,8 +3296,6 @@ final class TaskStore: ObservableObject {
         guard parent(of: task) == nil else {
             return try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true, retaining: edits)
         }
-        edits?.capture(task)
-        edits?.capture(subtasks(of: task.id))
         let taskID = task.id
         let linked = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == taskID }))
         let childIDs = Array(Set(linked.map(\.id)))
@@ -3318,8 +3315,11 @@ final class TaskStore: ObservableObject {
         // One completion time for the family: reopening the main task
         // reopens exactly the subtasks finished with it (Astra 20).
         let timestamp = now()
-        _ = try storedTasks(matching: taskID)
-        edits?.capture(openChildren.values.flatMap { $0 })
+        let replicas = try storedTasks(matching: taskID)
+        edits?.capture(replicas)
+        edits?.capture(childReplicas)
+        edits?.capture(task)
+        edits?.capture(subtasks(of: task.id))
         WorkspaceLegacyBridge.prepareMutations(openChildren.values.flatMap { $0 }, in: context)
         for (id, copies) in openChildren {
             let shownRow = self.task(withID: id)
@@ -3552,12 +3552,12 @@ final class TaskStore: ObservableObject {
         // A refusal is decided before anything is written: only a failure
         // after the first write needs the list reloaded.
         let retainedEdits = RetainedTaskEdits()
-        retainedEdits.capture(task)
         var wrote = false
         do {
             WorkspaceLegacyBridge.captureBeforeMutation(task, in: context)
             let replicas = try storedTasks(matching: id)
             retainedEdits.capture(replicas)
+            retainedEdits.capture(task)
             WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
             guard Set(replicas.map(\.parentID)).count == 1 else {
                 throw TaskEditRefusal("This subtask’s copies disagree about where it belongs. Refresh and try again.")
@@ -4328,10 +4328,10 @@ final class TaskStore: ObservableObject {
         updatedAt: Date,
         retaining edits: RetainedTaskEdits? = nil
     ) throws {
-        edits?.capture(orderedGroup)
         WorkspaceLegacyBridge.captureBeforeMutations(orderedGroup, in: context)
         let groups = try storedTaskGroups(matching: Set(orderedGroup.map(\.id)))
         edits?.capture(groups.values.flatMap { $0 })
+        edits?.capture(orderedGroup)
         WorkspaceLegacyBridge.prepareMutations(groups.values.flatMap { $0 }, in: context)
         for (index, item) in orderedGroup.enumerated() {
             let order = Int64(orderedGroup.count - index) * Self.manualOrderStride
