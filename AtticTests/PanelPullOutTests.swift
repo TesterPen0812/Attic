@@ -195,7 +195,10 @@ final class PanelPullOutHostedTests: XCTestCase {
             rig.state.selectSection(.tasks)
             spin(0.3)
             let start = rig.itemCentre(.tasks)
-            let drop = CGPoint(x: rig.workArea.midX - 200, y: rig.workArea.midY)
+            // Near the top, so the panel's top row clears the 8 pt inset and
+            // a short runner screen never pushes it up from the bottom.
+            let drop = CGPoint(x: rig.workArea.midX - 200,
+                               y: rig.workArea.maxY - PanelPullOutLayout.screenInset - 21 - 20)
             rig.island.handlePointer(.down(start))
             rig.island.handlePointer(.dragged(CGPoint(x: start.x - 5, y: start.y)))
             XCTAssertNil(rig.pullOut.panel(for: .tasks), "5 pt is still a press")
