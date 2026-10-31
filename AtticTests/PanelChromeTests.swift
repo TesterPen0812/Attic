@@ -294,6 +294,36 @@ final class PanelChromeTests: XCTestCase {
         return frames
     }
 
+    /// XCUITest's hit point: the accessibility hit test at a control's
+    /// centre must find the control. On CI the top row's controls and the
+    /// page switch hit an unnamed node spanning their bar instead, so every
+    /// one of them was "Not hittable".
+    func testTheBarsControlsAreWhatTheAccessibilityHitTestFinds() throws {
+        try withPanel { host, _, _, _, _, _ in
+            var report: [String] = []
+            for id in ["panel-pin-button", "tasks-page-now", "tasks-find-button", "panel-section-picker", "tasks-new-task"] {
+                let control = try XCTUnwrap(element(id, in: host), "\(id) is there")
+                let frame = try XCTUnwrap(control.accessibilityFrame?())
+                let hit = host.accessibilityHitTest(NSPoint(x: frame.midX, y: frame.midY)) as AnyObject?
+                var found = false
+                var node = hit
+                for _ in 0..<4 {
+                    if node === control { found = true }
+                    node = node?.accessibilityParent?() as AnyObject?
+                }
+                if !found {
+                    let children = ((hit?.accessibilityChildren?() ?? nil) ?? []).map { child -> String in
+                        let c = child as AnyObject
+                        return "\((c.accessibilityRole?() ?? nil)?.rawValue ?? "") \((c.accessibilityIdentifier?() ?? nil) ?? "") \(c.accessibilityFrame?() ?? .zero)"
+                    }
+                    report.append("\(id) \(frame) hit \(hit.map { String(describing: type(of: $0)) } ?? "nil") \((hit?.accessibilityRole?() ?? nil)?.rawValue ?? "") \(hit?.accessibilityFrame?() ?? .zero) children: \(children)")
+                }
+                XCTAssertTrue(found, "\(id): the hit test finds it")
+            }
+            if !report.isEmpty { print("HITTEST\n" + report.joined(separator: "\n")) }
+        }
+    }
+
     func testTasksTopRowBottomBarSearchAndTagBar() throws {
         // The motion path, stated (GitHub's runners turn Reduce Motion on).
         AtticMotionPreference.systemReduceMotionOverride = false

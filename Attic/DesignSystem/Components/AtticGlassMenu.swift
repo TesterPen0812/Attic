@@ -1245,6 +1245,11 @@ final class AtticGlassMenuItemElement: NSAccessibilityElement {
 
     override func accessibilityHitTest(_ point: NSPoint) -> Any? { self }
 
+    /// Its card's window, as an `NSMenu` item reports its menu's (XCUITest
+    /// places a menu item's hit point in its window).
+    override func accessibilityWindow() -> Any? { MainActor.assumeIsolated { view?.window } }
+    override func accessibilityTopLevelUIElement() -> Any? { MainActor.assumeIsolated { view?.window } }
+
     override func accessibilityPerformPress() -> Bool {
         MainActor.assumeIsolated {
             guard let view, let card = view.card, let index = card.menu.cards.firstIndex(where: { $0 === card }) else { return false }
