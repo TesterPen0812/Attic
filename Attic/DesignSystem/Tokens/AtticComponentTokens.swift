@@ -394,7 +394,7 @@ enum AtticDropdownMetrics {
     static let inset: CGFloat = AtticRadius.menuPadding
     static let rowHeight: CGFloat = 32
     static let rowPadding: CGFloat = 10
-    /// Shapes (Accepted 2026-10-30): concentric with the 14 pt card.
+    /// Shapes: concentric with the 16 pt card (13 pt).
     static let highlightRadius: CGFloat = AtticRadius.menuRow
     static let iconSize: CGFloat = 13
     static let iconSlot: CGFloat = 14
@@ -411,10 +411,11 @@ enum AtticDropdownMetrics {
     static let markSlot: CGFloat = 15
     /// The least room before a trailing detail (Fri, 2 Oct).
     static let detailGap: CGFloat = 14
-    /// The field (Date, Tag): 30 pt with 12 pt corners, 5 pt in from the
-    /// card's edge, in a 40 pt header ruled off by a full-width hairline.
+    /// The field (Date, Tag): 30 pt, 5 pt in from the card's edge and
+    /// concentric with it (16 − 5 = 11 pt corners), in a 40 pt header
+    /// ruled off by a full-width hairline.
     static let fieldHeight: CGFloat = 30
-    static let fieldRadius: CGFloat = 12
+    static let fieldRadius: CGFloat = AtticRadius.concentric(outer: cornerRadius, padding: inset + fieldInset)
     static let fieldHeaderHeight: CGFloat = 40
     /// The field is this much further in than the rows (5 pt from the edge).
     static let fieldInset: CGFloat = 2

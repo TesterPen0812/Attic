@@ -45,11 +45,13 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticRadius.row, 12)
         XCTAssertEqual(TasksRowDesign.radius, 12)
         XCTAssertEqual(NotesLibraryRowMetrics.radius, 12)
-        XCTAssertEqual(AtticRadius.menu, 14)
-        XCTAssertEqual(AtticRadius.popover, 14)
-        XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 14, "the solid pickers: 28 px")
+        XCTAssertEqual(AtticRadius.menu, 16, "32 px menus (owner, 2026-10-31)")
+        XCTAssertEqual(AtticRadius.popover, 16)
+        XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 16, "the solid pickers: 32 px")
         XCTAssertEqual(AtticDropdownMetrics.inset, 3, "6 px padding")
-        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 11, "22 px rows")
+        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 13, "concentric rows: 16 − 3")
+        XCTAssertEqual(AtticDropdownMetrics.clearRadius, 13, "Clear Date as a row")
+        XCTAssertEqual(AtticDropdownMetrics.fieldRadius, 11, "the field, 5 pt in: 16 − 5")
         XCTAssertEqual(AtticRadius.noteBlock, 10)
         XCTAssertEqual(AtticNoteObjectMetrics.blockRadius, 10)
         XCTAssertEqual(AtticRadius.small, 6)
@@ -173,17 +175,17 @@ final class PanelChromeTests: XCTestCase {
     }
 
     /// Shapes on the solid pickers: the cards and their rows are surface
-    /// squircles at the menu radius (14 pt, rows 11 pt), and the date
+    /// squircles at the menu radius (16 pt, rows 13 pt), and the date
     /// picker's day marks whole superellipses on curve 1.4.
     func testPickerCardsRowsAndDayMarksFollowShapes() {
         let d = AtticDropdownMetrics.self
         let card = CGRect(x: 0, y: 0, width: 224, height: 260)
         XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
-                       Squircle(cornerRadius: 14, exponent: AtticShape.surfaceExponent).path(in: card),
+                       Squircle(cornerRadius: 16, exponent: AtticShape.surfaceExponent).path(in: card),
                        "the card: a surface squircle at the menu radius")
         let row = CGRect(x: 3, y: 3, width: 218, height: 32)
         XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
-                       Squircle(cornerRadius: 11, exponent: AtticShape.surfaceExponent).path(in: row), "a row: 11 pt squircle")
+                       Squircle(cornerRadius: 13, exponent: AtticShape.surfaceExponent).path(in: row), "a row: 13 pt squircle")
         XCTAssertEqual(d.clearRadius, d.highlightRadius, "Clear Date is a row")
         XCTAssertEqual(d.monthMarkRadius, d.monthMarkHeight / 2, "a day mark is rounded by half its height")
         let mark = CGRect(x: 0, y: 0, width: d.monthMarkWidth, height: d.monthMarkHeight)

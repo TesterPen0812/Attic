@@ -70,10 +70,12 @@ enum AtticRadius {
     static let card: CGFloat = 24
     /// Rows: 24 px.
     static let row: CGFloat = 12
-    /// Menus and popovers: 28 px, with 6 px padding and 22 px rows.
-    static let menu: CGFloat = 14
+    /// Menus and popovers: 32 px (owner, 2026-10-31: "back to what it
+    /// was", the 16 pt of b74eee51), with 6 px padding; rows concentric,
+    /// 32 − 6 = 26 px.
+    static let menu: CGFloat = 16
     static let menuPadding: CGFloat = 3
-    static let menuRow: CGFloat = 11
+    static let menuRow: CGFloat = concentric(outer: menu, padding: menuPadding)
     /// Note blocks: 20 px.
     static let noteBlock: CGFloat = 10
     /// Small objects (thumbnails, file tiles): 12 px.

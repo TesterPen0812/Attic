@@ -2457,10 +2457,10 @@ final class AtticDateCardTests: XCTestCase {
     func testDraftCSizeTokens() {
         let m = AtticDropdownMetrics.self
         XCTAssertEqual(m.rowHeight, 32)
-        XCTAssertEqual(m.cornerRadius, 14)
+        XCTAssertEqual(m.cornerRadius, 16, "the owner's 16 pt menus (2026-10-31)")
         XCTAssertEqual(m.inset, 3)
         XCTAssertEqual(m.rowPadding, 10)
-        XCTAssertEqual(m.highlightRadius, 11)
+        XCTAssertEqual(m.highlightRadius, 13)
         XCTAssertEqual(m.cornerRadius - m.inset, m.highlightRadius)
         XCTAssertEqual(m.fieldHeight, 30)
         XCTAssertEqual(m.fieldHeaderHeight, 40)
