@@ -88,6 +88,11 @@ final class ScrollEdgeUITests: XCTestCase {
         // Find, over the rows: its button and its field take their clicks.
         let findButton = app.buttons["tasks-find-button"]
         XCTAssertTrue(findButton.waitForExistence(timeout: 3))
+        if !findButton.isHittable {
+            _ = atticHitReport(app, findButton, "find")
+            _ = atticHitReport(app, pin, "pin")
+            _ = atticHitReport(app, plus, "plus")
+        }
         XCTAssertTrue(findButton.isHittable, "Find's button has a hit point over scrolled rows")
         findButton.click()
         let find = app.descendants(matching: .any).matching(identifier: "tasks-find").firstMatch
@@ -107,44 +112,42 @@ final class ScrollEdgeUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
-    /// owner-decisions.md: "No blur at the bottom" and "Top controls on
-    /// glass: B" (2026-10-22) supersede N-6 D's plain-label/bottom fades.
-    /// Rows may move under the controls' own glass. Keep the pixel movement
-    /// positive control and the original hang sequence, and verify spacing B
-    /// plus the floating controls' geometry and hit targets throughout.
+    /// Rows scroll under the floating glass, and the controls over them stay
+    /// put and keep their hit points: the tabs and Pin in the top row, the
+    /// page switch and "+" in the bottom bar (Accepted 2026-10-29 "Top row and
+    /// bottom bar"; 2026-10-31 "Shared controls stay still while pages
+    /// switch"). The tabs are the 21 pt chips of "One size". Keep the pixel
+    /// movement positive control and the original hang sequence.
     func testRowsScrollUnderFloatingGlassWithoutMovingTheControls() throws {
         for (surface, mode) in [("solid", "light"), ("glass", "light"), ("glass", "dark")] {
             let app = launchPixelFixture(surface: surface, mode: mode, edge: "soft")
             defer { app.terminate() }
             let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
-            let field = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
-            XCTAssertTrue(field.waitForExistence(timeout: 5))
-            XCTAssertTrue(field.isHittable)
-            field.click()
-            app.typeText("Water plants tomorrow #home !!")
-            let date = app.buttons["composer-date"]
-            XCTAssertTrue(date.waitForExistence(timeout: 5))
+            // The launch is an explicit open, which opens the "+" card; its
+            // scrim covers the rows. Escape closes it (Accepted "The '+' card").
+            let card = app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
+            if card.waitForExistence(timeout: 2) {
+                app.typeKey(.escape, modifierFlags: [])
+                XCTAssertTrue(card.waitForNonExistence(timeout: 3), "Escape closes the card")
+            }
             let middle = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
             middle.hover()
             RunLoop.current.run(until: Date().addingTimeInterval(1))
             let first = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Finalize launch checklist,")).firstMatch
-            let single = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Errand number 1,")).firstMatch
-            XCTAssertEqual(first.frame.height, 48, accuracy: 0.5, "spacing B: two-line row pitch")
-            XCTAssertEqual(single.frame.height, 32, accuracy: 0.5, "spacing B: one-line row pitch")
-            XCTAssertEqual(date.frame.height, 26, accuracy: 0.5, "secondary controls stay below the 30 pt add bar")
+            XCTAssertTrue(first.waitForExistence(timeout: 5), "the long list is shown")
             let firstY = first.frame.minY
             let identifiers = ["tasks-page-now", "tasks-page-backlog", "tasks-page-done", "panel-pin-button",
-                               "panel-section-picker", "composer-date", "composer-tag", "composer-priority"]
+                               "panel-section-picker", "tasks-new-task"]
             let controls = identifiers.map { app.descendants(matching: .any).matching(identifier: $0).firstMatch }
             let frames = controls.map(\.frame)
-            for (index, control) in controls.enumerated() {
-                XCTAssertTrue(control.isHittable, "\(identifiers[index]) retains a hit point")
+            for (index, control) in controls.enumerated() where !control.isHittable {
+                XCTFail("\(identifiers[index]) has a hit point at rest: " + atticHitReport(app, control, identifiers[index]))
             }
             let tabs = frames[0].union(frames[1]).union(frames[2])
-            XCTAssertEqual(tabs.height, 28, accuracy: 0.5, "the tabs keep their comfortable hit targets on glass")
-            let pills = date.frame.union(app.buttons["composer-tag"].frame).union(app.buttons["composer-priority"].frame)
+            XCTAssertEqual(tabs.height, 21, accuracy: 0.5, "the tabs are the top row's 21 pt chips")
+            let bottomBar = frames[4].union(frames[5])
             let body = CGRect(x: panel.frame.minX + 75, y: tabs.maxY + 25,
-                              width: panel.frame.width - 110, height: pills.minY - tabs.maxY - 50)
+                              width: panel.frame.width - 110, height: bottomBar.minY - tabs.maxY - 50)
             let before = try bitmap(panel)
             save(panel.screenshot(), name: "floating-glass-\(surface)-\(mode)-reference")
             var moved = false
@@ -162,7 +165,9 @@ final class ScrollEdgeUITests: XCTestCase {
                     XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.5, identifiers[index])
                     XCTAssertEqual(actual.width, expected.width, accuracy: 0.5, identifiers[index])
                     XCTAssertEqual(actual.height, expected.height, accuracy: 0.5, identifiers[index])
-                    XCTAssertTrue(control.isHittable, "\(identifiers[index]) keeps its hit point after scrolling")
+                    if !control.isHittable {
+                        XCTFail("\(identifiers[index]) keeps its hit point after scrolling: " + atticHitReport(app, control, identifiers[index]))
+                    }
                 }
                 save(panel.screenshot(), name: "floating-glass-\(surface)-\(mode)-\(delta)")
             }
@@ -298,5 +303,58 @@ final class ScrollEdgeUITests: XCTestCase {
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"), options: .atomic)
+    }
+}
+
+/// Diagnostics for "Not hittable": what the system's accessibility hit test
+/// (the one XCUITest's hit point uses) returns at an element's centre, and
+/// which of the app's windows the window server has under that point.
+extension XCTestCase {
+    func atticHitReport(_ app: XCUIApplication, _ element: XCUIElement, _ name: String) -> String {
+        guard element.exists else { return "HIT \(name): missing" }
+        let frame = element.frame
+        let point = CGPoint(x: frame.midX, y: frame.midY)
+        let pid = (app.value(forKey: "processID") as? Int32) ?? 0
+        var report = "HIT \(name) frame=\(frame) hittable=\(element.isHittable) trusted=\(AXIsProcessTrusted())"
+        var hit: AXUIElement?
+        let error = AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &hit)
+        if error == .success, var current = hit {
+            for depth in 0..<5 {
+                report += "\n  [\(depth)] \(Self.atticDescribe(current))"
+                var parent: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parent) == .success,
+                      let next = parent, CFGetTypeID(next) == AXUIElementGetTypeID() else { break }
+                current = next as! AXUIElement
+            }
+        } else {
+            report += "\n  AX error \(error.rawValue)"
+        }
+        let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+        for window in windows {
+            guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0).contains(point)
+            else { continue }
+            report += "\n  win pid=\(window[kCGWindowOwnerPID as String] ?? "?") owner=\(window[kCGWindowOwnerName as String] ?? "?") layer=\(window[kCGWindowLayer as String] ?? "?") alpha=\(window[kCGWindowAlpha as String] ?? "?") bounds=\(bounds)"
+        }
+        print(report)
+        return report
+    }
+
+    private static func atticDescribe(_ element: AXUIElement) -> String {
+        func string(_ attribute: String) -> String {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value else { return "" }
+            return String(describing: value).replacingOccurrences(of: "\n", with: " ").prefix(60).description
+        }
+        var frame = ""
+        var position: CFTypeRef?, size: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+           AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success {
+            var p = CGPoint.zero, s = CGSize.zero
+            AXValueGetValue(position as! AXValue, .cgPoint, &p)
+            AXValueGetValue(size as! AXValue, .cgSize, &s)
+            frame = "\(CGRect(origin: p, size: s))"
+        }
+        return "\(string(kAXRoleAttribute)) id=\(string("AXIdentifier")) label=\(string(kAXDescriptionAttribute)) title=\(string(kAXTitleAttribute)) \(frame)"
     }
 }

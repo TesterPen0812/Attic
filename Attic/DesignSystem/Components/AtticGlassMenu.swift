@@ -1335,18 +1335,42 @@ enum AtticContextMenus {
     /// The commands a press would open (the menus, and tests in place of
     /// `NSView.menu(for:)`).
     static func commands(for event: NSEvent) -> [AtticMenuCommand]? {
-        anchor(for: event)?.build?()
+        target(for: event)?.build?()
     }
 
-    private static func route(_ event: NSEvent) -> NSEvent? {
+    /// The open cards in the press's window.
+    private static func activeShields(for event: NSEvent) -> [AtticPressShield] {
+        guard let window = event.window else { return [] }
+        return shields.allObjects.filter { $0.window === window && $0.isActive() }
+    }
+
+    /// The anchor a press opens: none on an open card (what is under it is
+    /// covered), else the innermost one under the pointer.
+    static func target(for event: NSEvent) -> AtticContextMenuAnchor.AnchorView? {
+        if activeShields(for: event).contains(where: { $0.contains(event) }) { return nil }
+        return anchor(for: event)
+    }
+
+    /// The open cards (the "+" card) that shield what is under them.
+    private static let shields = NSHashTable<AtticPressShield>.weakObjects()
+
+    static func register(_ shield: AtticPressShield) {
+        shields.add(shield)
+    }
+
+    /// One press, as the monitor sees it (tests call it in its place).
+    static func route(_ event: NSEvent) -> NSEvent? {
         guard isContextPress(event), AtticGlassMenu.current == nil, let window = event.window,
-              let anchor = self.anchor(for: event) else { return event }
+              let anchor = self.target(for: event) else { return event }
         // An editable or selectable text view keeps its own menu (Cut, Copy,
         // Paste, Spelling).
         if let hit = window.contentView?.hitTest(window.contentView?.convert(event.locationInWindow, from: nil) ?? .zero) {
             if let text = hit as? NSTextView, text.isEditable || text.isSelectable { return event }
             if let field = hit as? NSTextField, field.isEditable { return event }
         }
+        // A row's menu outside an open card: the press is also a click
+        // outside the card, which closes it (keeping its draft) first.
+        for shield in activeShields(for: event) { shield.onOutsidePress() }
         let location = event.locationInWindow
         DispatchQueue.main.async {
             guard let content = anchor.window?.contentView, let commands = anchor.build?(), !commands.isEmpty else { return }
@@ -1358,6 +1382,48 @@ enum AtticContextMenus {
         return NSEvent.mouseEvent(with: .rightMouseDown, location: location, modifierFlags: event.modifierFlags.subtracting(.control),
                                   timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
                                   eventNumber: event.eventNumber, clickCount: 1, pressure: event.pressure) ?? event
+    }
+}
+
+/// The view behind an open card drawn over the panel (the "+" card): a
+/// right-click on the card opens no menu of a row under it, and one on a
+/// row outside it counts as a click outside the card (it closes, keeping
+/// its draft) and still opens that row's menu, in the same press
+/// (orchestrator decision, w3 UI tests round 2, under Accepted 2026-10-29
+/// "The '+' card": "Escape or a click outside keeps the draft").
+final class AtticPressShield: NSView {
+    /// Whether the card is open (it stays drawn while it shrinks away).
+    var isActive: @MainActor () -> Bool = { false }
+    /// A context press outside the card: close it, as a click outside does.
+    var onOutsidePress: @MainActor () -> Void = {}
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { AtticContextMenus.register(self) }
+    }
+
+    /// The press is on the card.
+    func contains(_ event: NSEvent) -> Bool {
+        bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+}
+
+/// `AtticPressShield` in SwiftUI: put it behind the card.
+struct AtticPressShieldView: NSViewRepresentable {
+    let isActive: @MainActor () -> Bool
+    let onOutsidePress: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> AtticPressShield {
+        let view = AtticPressShield()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: AtticPressShield, context: Context) {
+        view.isActive = isActive
+        view.onOutsidePress = onOutsidePress
     }
 }
 

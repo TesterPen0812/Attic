@@ -127,6 +127,13 @@ struct ComposerOverlay: View {
                         .accessibilityHidden(true)
                     ComposerCard(model: model, drawsChrome: false)
                         .fixedSize(horizontal: false, vertical: true)
+                        // A right-click on a row outside the card is a click
+                        // outside: the card closes, keeping its draft, and
+                        // the row's menu opens (orchestrator decision under
+                        // Accepted "The '+' card").
+                        .background(AtticPressShieldView(isActive: { [model] in model.isOpen },
+                                                         onOutsidePress: { [model] in model.close() })
+                            .accessibilityHidden(true))
                         .onGeometryChange(for: CGSize.self, of: \.size) { size in
                             if size != card { card = size }
                         }

@@ -494,6 +494,12 @@ final class TasksPageUITests: XCTestCase {
         let date = window.buttons["composer-date"]
         let tag = window.buttons["composer-tag"]
         let priority = window.buttons["composer-priority"]
+        if date.exists {
+            let matches = window.descendants(matching: .any).matching(identifier: "composer-date").allElementsBoundByIndex
+            print("STRIP composer-date matches=\(matches.count) " + matches.map { "\($0.elementType.rawValue) \($0.frame) hittable=\($0.isHittable)" }.joined(separator: "; "))
+            print("STRIP field frame=\(addBar.frame) window=\(window.frame)")
+            _ = atticHitReport(app, date, "strip-date")
+        }
         XCTAssertFalse(date.exists, "no strip while the bar is empty")
         addBar.click()
         addBar.typeText("Water the ferns")

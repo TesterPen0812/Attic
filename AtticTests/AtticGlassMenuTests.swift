@@ -442,6 +442,47 @@ final class AtticGlassMenuTests: XCTestCase {
         }
     }
 
+    /// The "+" card over the rows (orchestrator decision, w3 UI tests round 2,
+    /// under Accepted 2026-10-29 "The '+' card"): a right-click on the card
+    /// opens no row's menu under it; one on a row outside it closes the card
+    /// as a click outside does and opens that row's menu in the same press.
+    func testARightClickOutsideAnOpenCardClosesItAndOpensTheRowsMenu() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        window.contentView = content
+        let anchor = AtticContextMenuAnchor.AnchorView(frame: content.bounds)
+        anchor.build = { [AtticMenuCommand(verbatim: "Row menu") {}] }
+        content.addSubview(anchor)
+        var cardOpen = true
+        var closes = 0
+        let card = AtticPressShield(frame: NSRect(x: 150, y: 0, width: 150, height: 150))
+        card.isActive = { cardOpen }
+        card.onOutsidePress = { closes += 1; cardOpen = false }
+        content.addSubview(card)
+        var opened: [String] = []
+        AtticGlassMenu.testDriver = { opened.append(contentsOf: $0.commands.map(\.title)) }
+        func press(_ x: CGFloat, _ y: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: x, y: y), modifierFlags: [], timestamp: 1,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        func spin() { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+
+        XCTAssertNil(AtticContextMenus.commands(for: press(200, 50)), "the card hides the row under it")
+        _ = AtticContextMenus.route(press(200, 50))
+        spin()
+        XCTAssertEqual(closes, 0, "a press on the card keeps it open")
+        XCTAssertEqual(opened, [], "and opens no row's menu")
+
+        _ = AtticContextMenus.route(press(50, 250))
+        spin()
+        XCTAssertEqual(closes, 1, "a press on a row outside closes the card")
+        XCTAssertEqual(opened, ["Row menu"], "and opens the row's menu in the same press")
+
+        // Closed, the card shields nothing.
+        XCTAssertNotNil(AtticContextMenus.commands(for: press(200, 50)))
+    }
+
     // MARK: Date card
 
     private var calendar: Calendar {

@@ -27,6 +27,19 @@ final class PanelShellUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "composer-title").firstMatch
     }
 
+    /// The launch is an explicit open, which opens the "+" card on Tasks
+    /// (the composer job); its scrim takes the pointer over the whole panel.
+    /// Escape closes it (Accepted 2026-10-29 "The '+' card": Escape keeps
+    /// the draft, none here). Escape is no navigation key, so it shows no
+    /// focus ring.
+    private func closeTheCardIfOpen() {
+        let open = addBar.waitForExistence(timeout: 2)
+        print("CARD open at launch: \(open)")
+        guard open else { return }
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(addBar.waitForNonExistence(timeout: 3), "Escape closes the card")
+    }
+
     private func waitForFocus(_ focused: Bool, on element: XCUIElement,
                               file: StaticString = #filePath, line: UInt = #line) {
         let predicate = NSPredicate { object, _ in
@@ -182,10 +195,15 @@ final class PanelShellUITests: XCTestCase {
     func testClickingThePageButtonShowsNoFocusRing() throws {
         let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pageButton.waitForExistence(timeout: 3))
+        closeTheCardIfOpen()
         pin.hover()
         Thread.sleep(forTimeInterval: 0.6)
         let before = pageButton.screenshot()
         pageButton.hover()
+        if !page("notes").waitForExistence(timeout: 2) || !page("notes").isHittable {
+            _ = atticHitReport(app, pageButton, "page-switch")
+            _ = atticHitReport(app, page("notes"), "page-notes")
+        }
         waitFor(page("notes").isHittable, "it opens")
         page("notes").click()
         page("tasks").click()
