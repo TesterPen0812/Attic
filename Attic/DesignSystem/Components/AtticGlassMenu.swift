@@ -956,6 +956,12 @@ final class AtticGlassMenuWindow: NSPanel {
         animationBehavior = .none
         collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary, .moveToActiveSpace]
         acceptsMouseMovedEvents = true
+        // Set explicitly: by default the window server passes a point over
+        // this clear window's see-through pixels (the glass is composited by
+        // the window server, not drawn into the window) to the window below.
+        // The system's accessibility hit test (VoiceOver's pointer, a UI
+        // test's hit point) then finds the panel, not the card's item.
+        ignoresMouseEvents = false
     }
 
     override var canBecomeKey: Bool { false }

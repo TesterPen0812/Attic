@@ -414,6 +414,34 @@ final class AtticGlassMenuTests: XCTestCase {
         XCTAssertEqual((home as? AtticGlassMenuItemElement)?.command.title, "#home")
     }
 
+    /// XCUITest's hit point goes through the system, not the card's window:
+    /// the window server picks the window under the point, then the app's
+    /// accessibility hit test asks it. A clear, non-opaque window lets the
+    /// window server pass a point over see-through pixels (the glass is drawn
+    /// by the window server, not into the window) to the window below, so
+    /// every glass menu item was "Not hittable" on CI.
+    func testTheSystemsHitAtARowIsTheCardAndItsMenuItem() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("needs a window on screen (CI and the Air)")
+        }
+        AtticGlassMenu.ordersCardsFront = true
+        let visible = try XCTUnwrap(NSScreen.main?.visibleFrame)
+        let menu = AtticGlassMenu(commands(), appearance: NSAppearance(named: .aqua), opener: nil)
+        menu.open(.point(CGPoint(x: visible.midX, y: visible.midY + 100)), visible: visible, source: nil)
+        defer { menu.close(animated: false) }
+        let card = menu.cards[0]
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertFalse(card.window.ignoresMouseEvents, "the card takes the pointer")
+        for title in ["Complete", "Date", "Delete"] {
+            let point = center(of: row(titled: title, in: card), in: card)
+            let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+            XCTAssertEqual(number, card.window.windowNumber, "\(title): the window server finds the card's window")
+            let hit = NSApp.accessibilityHitTest(point)
+            XCTAssertEqual((hit as? AtticGlassMenuItemElement)?.command.title, title,
+                           "\(title): the app's hit test finds its item (got \(String(describing: hit)))")
+        }
+    }
+
     // MARK: Date card
 
     private var calendar: Calendar {
