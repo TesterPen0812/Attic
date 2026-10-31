@@ -405,6 +405,22 @@ final class PanelIslandWindows {
         }
     }
 
+    /// Only the capsule takes the pointer. The window's clear margin (room
+    /// for the focus ring) passes clicks and hit-testing to the window under
+    /// it, as the panel's clear corners do. Leaving the capsule also clears
+    /// the pointed item, since the island then hears no exit of its own.
+    func updatePassthrough(at point: CGPoint) {
+        let ignores = !islandFrame.contains(point)
+        guard island.ignoresMouseEvents != ignores else { return }
+        island.ignoresMouseEvents = ignores
+        if ignores { model.point(at: nil) }
+    }
+
+    /// The island takes the pointer everywhere again (monitoring stopped).
+    func stopPassthrough() {
+        if island.ignoresMouseEvents { island.ignoresMouseEvents = false }
+    }
+
     /// Whether `point` (screen) is on the island's capsule while it shows.
     func contains(_ point: CGPoint) -> Bool {
         island.isVisible && island.alphaValue > 0.01 && islandFrame.contains(point)
