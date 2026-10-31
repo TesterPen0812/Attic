@@ -130,31 +130,38 @@ final class PanelSharedChromeTests: XCTestCase {
             let before = try levels(host, boxes)
             let start = Date()
             state.switchPage(to: to, motion: PanelPageMotion.current(reduceMotion: false))
-            var frames = 0
-            var worst = [CGFloat](repeating: 0, count: boxes.count)
-            var traces = [String](repeating: "", count: boxes.count)
+            var samples: [(ms: Int, levels: [CGFloat])] = []
             while Date().timeIntervalSince(start) < 0.7 {
                 spin(0.008)
-                let now = try levels(host, boxes)
-                let ms = Int(Date().timeIntervalSince(start) * 1000)
-                for index in boxes.indices {
-                    worst[index] = max(worst[index], abs(now[index] - before[index]))
-                    if abs(now[index] - before[index]) >= 0.02 { traces[index] += String(format: " %d:%+.2f", ms, now[index] - before[index]) }
-                }
-                frames += 1
+                samples.append((Int(Date().timeIntervalSince(start) * 1000), try levels(host, boxes)))
             }
-            XCTAssertGreaterThan(frames, 10, "sampled the switch's frames")
-            for (index, (name, change)) in zip(names, worst).enumerated() {
+            XCTAssertGreaterThan(samples.count, 10, "sampled the switch's frames")
+            spin(0.4)
+            // A box may settle to another level when the arriving page draws
+            // something else under a translucent control (Calendar's agenda
+            // reaches under the switch, owner 2026-10-31: every day listed).
+            // Staying still means no frame leaves the span between the level
+            // before and the level after: no replayed opening, no jump.
+            let after = try levels(host, boxes)
+            for (index, name) in names.enumerated() {
                 // Known limit: Notes is never kept built, so it comes in by
                 // the shell's insertion transition, which its top row cannot
                 // counter; its board | list passes under the translucent •••
                 // and Search for a frame. The controls themselves stay put
                 // (their frames are checked below).
                 if to == .notes, name == "•••" || name == "Search" { continue }
-                XCTAssertLessThan(change, 0.04, "\(from) → \(to): \(name) keeps its place and look on every frame "
-                                  + "(worst \(change), before \(before[index]);\(traces[index]))")
+                let low = min(before[index], after[index]), high = max(before[index], after[index])
+                var worst: CGFloat = 0
+                var trace = ""
+                for sample in samples {
+                    let level = sample.levels[index]
+                    let outside = max(0, low - level, level - high)
+                    worst = max(worst, outside)
+                    if outside >= 0.02 { trace += String(format: " %d:%.2f", sample.ms, level) }
+                }
+                XCTAssertLessThan(worst, 0.04, "\(from) → \(to): \(name) keeps its place and look on every frame "
+                                  + "(worst \(worst) outside \(before[index])…\(after[index]);\(trace))")
             }
-            spin(0.4)
             for (id, was) in [("panel-section-picker", pageSwitch), (try XCTUnwrap(plusIDs[to]), plus),
                               (try XCTUnwrap(searchIDs[to]), search), ("panel-settings-button", more), ("panel-pin-button", pin)] {
                 let now = try XCTUnwrap(frame(of: id, in: host), "\(from) → \(to): \(id) is drawn")
