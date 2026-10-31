@@ -9,8 +9,8 @@ import SwiftUI
 // card. The command menus (right-click, ⋯, ⇧⌘I) are glass cards too, drawn
 // by `AtticGlassMenu` on the same metrics and tokens.
 //
-// - `AtticDropdownCard`: real system glass (Liquid Glass, regular) with 18 pt
-//   corners, a light hairline rim and a soft shadow; rows 4 pt in.
+// - `AtticDropdownCard`: a solid card (owner, 28 Oct: the pickers stay
+//   solid) in the Shapes squircle, a hairline rim and a soft shadow.
 // - `AtticDropdownRow`: a 32 pt row, touching its neighbours; the soft fill
 //   is the whole row. One highlight per list, which the keyboard and the
 //   pointer share (`onHover` moves the list's).
@@ -29,47 +29,32 @@ import SwiftUI
 // `dropdownShadow`, `dropdownContactShadow`; `popoverFill` and
 // `popoverOuterRim` for the opaque fallback).
 
-/// The card's face: regular system glass (draft C on real glass), a light
-/// 0.5 pt rim just inside its edge (1 pt in the contrast edge's ink under
-/// Increase Contrast) and its soft shadow. Under Reduce Transparency, with
-/// the solid controls setting, and in `ImageRenderer` captures (which
-/// cannot draw glass) the face is the opaque `popoverFill` with
-/// `popoverOuterRim`.
+/// The card's face: always solid (owner, 28 Oct: the date, tag and
+/// priority pickers stay solid, whatever the controls' material), the
+/// opaque `popoverFill` with `popoverOuterRim` wholly outside it (1 pt
+/// under Increase Contrast) and its soft shadow, in the Shapes squircle.
+/// The command menus' glass is `AtticGlassMenu`'s own.
 ///
 /// While the card fades in or out (`AtticDropdownReveal`) the face goes
 /// with it, as one piece.
 struct AtticDropdownSurface: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticUnfold) private var unfold
-    @Environment(\.atticCapture) private var capture
-
-    /// Whether the face is glass for this design (and not a capture).
-    static func isGlass(_ design: AtticDesignContext, capture: Bool) -> Bool {
-        !capture && design.effectiveControls == .liquidGlass
-    }
 
     var body: some View {
         let tokens = design.tokens
         let shape = AtticUnfoldShape(cornerRadius: AtticDropdownMetrics.cornerRadius, reveal: unfold?.reveal ?? 1,
                                      fromTop: unfold?.fromTop ?? true)
-        let contrast = design.increaseContrast
-        let edge = contrast ? AtticHairline.widthIncreased : AtticHairline.width
+        let edge = design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width
         let shadow = Double(unfold?.shadow ?? 1)
         ZStack {
             AtticOutsideShadow(shape: shape, color: tokens.dropdownShadow.withAlpha(tokens.dropdownShadow.alpha * shadow),
                                spec: AtticShadows.dropdown)
             AtticOutsideShadow(shape: shape, color: tokens.dropdownContactShadow.withAlpha(tokens.dropdownContactShadow.alpha * shadow),
                                spec: AtticShadows.dropdownContact)
-            if Self.isGlass(design, capture: capture != nil) {
-                Color.clear.glassEffect(.regular, in: shape)
-                shape.inset(by: edge / 2)
-                    .stroke((contrast ? AtticGlassModel.contrastEdge(dark: design.mode == .dark) : tokens.dropdownRim).color,
-                            lineWidth: edge)
-            } else {
-                shape.fill(tokens.popoverFill.color)
-                // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
-                shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
-            }
+            shape.fill(tokens.popoverFill.color)
+            // CSS's `0 0 0 .5px`: a ring wholly outside the fill.
+            shape.inset(by: -edge / 2).stroke(tokens.popoverOuterRim.color, lineWidth: edge)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
