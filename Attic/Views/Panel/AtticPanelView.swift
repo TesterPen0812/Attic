@@ -31,6 +31,8 @@ struct AtticPanelView: View {
     /// room for it. Not observed here: only those titles are.
     /// The top row's search and footprint, shared by the pages and the pin.
     @State private var topRowState = PanelTopRowState()
+    /// The bars every page shares, drawn once above the pages.
+    @State private var sharedChrome = PanelSharedChrome()
     @State private var noticeHeight: CGFloat = 0
     @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
     @State var hasRestoredNoteSession = false
@@ -104,6 +106,7 @@ struct AtticPanelView: View {
                 ForEach(PanelPage.allCases) { page in
                     if page == currentPage || uiState.builtPages.contains(page) {
                         pageHost(page)
+                            .modifier(PanelSearchDismissOnEmptyClick(state: topRowState, page: page))
                             .modifier(PanelPageVisibility(
                                 isCurrent: page == currentPage,
                                 // A page kept built rests on its side of the
@@ -123,6 +126,13 @@ struct AtticPanelView: View {
         .coordinateSpace(PanelPageLayout.coordinateSpace)
         .overlay(alignment: .top) {
             header
+        }
+        .overlay(alignment: .bottom) {
+            // The bottom bar every page shares (owner, 2026-10-31): drawn
+            // once, so a page switch never moves, fades or rebuilds it.
+            if uiState.isPageContentLoaded {
+                PanelSharedBottomBar(chrome: sharedChrome, page: currentPage, layout: pageLayout)
+            }
         }
         .overlay(alignment: .topLeading) {
             if Self.exposesKeyStateForUITesting {
@@ -162,7 +172,8 @@ struct AtticPanelView: View {
             onTogglePin: { uiState.isPanelPinned.toggle() },
             onSelectPage: selectPage
         )
-        .padding(.horizontal, chromeInsets.leading)
+        .padding(.leading, chromeInsets.leading)
+        .padding(.trailing, chromeInsets.trailing)
         .padding(.top, chromeInsets.top)
         .frame(maxWidth: .infinity)
     }
@@ -445,11 +456,20 @@ struct AtticPanelView: View {
 
     private var themedPanel: some View {
         interactionObservedPanel
+            .atticKeyboardFocusTracking(uiState.keyboardFocus)
+            // Shapes (Accepted 2026-10-30; owner, 2026-10-31: "the shape of
+            // these controls in a circle too"): every control on the panel is
+            // on curve 1.4, so a square one is a whole superellipse and never
+            // a circle, the composer and "+" included, whatever page or bar it
+            // is on. Surfaces set their own squircle; rings and dots stay
+            // circles (they draw `Circle`).
+            .atticDesignCorners()
             .environment(\.atticPanelThemePalette, panelThemePalette)
             .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
             .environment(\.atticPanelUsesSystemOpaqueSurface, panelSurfaceTreatment.usesSystemOpaqueSurface)
             .environment(\.atticPanelToasts, toasts)
             .environment(\.panelTopRowState, topRowState)
+            .environment(\.panelSharedChrome, sharedChrome)
             .environment(\.panelPageSwitch, PanelPageSwitchContext(page: currentPage, select: selectPage,
                                                                    approach: prepareOtherPages))
             .atticTagColours(store.commandLibrary)
@@ -629,6 +649,7 @@ struct PanelPageVisibility: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.atticPanelPageIsCurrent, isCurrent)
+            .transformEnvironment(\.panelPageTravel) { $0 += isCurrent ? 0 : restingOffset }
             .offset(x: isCurrent ? 0 : restingOffset)
             .opacity(isCurrent ? 1 : 0)
             .allowsHitTesting(isCurrent)
@@ -653,8 +674,10 @@ private struct PanelPageTravel: ViewModifier {
     let isAway: Bool
 
     func body(content: Content) -> some View {
+        let travel = isAway ? (uiState.lastPageSwitch?.restingSide(of: page) ?? 0) * width : 0
         content
-            .offset(x: isAway ? (uiState.lastPageSwitch?.restingSide(of: page) ?? 0) * width : 0)
+            .transformEnvironment(\.panelPageTravel) { $0 += travel }
+            .offset(x: travel)
             .opacity(isAway ? 0 : 1)
     }
 }

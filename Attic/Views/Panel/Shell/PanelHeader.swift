@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The panel's header: the pin on the top row's left (Accepted 2026-10-29/30,
+/// The panel's header: the pin on the top row's left and the shared ••• and
+/// Search on its right (Accepted 2026-10-29/30 and 2026-10-31,
 /// "Top row and bottom bar"; the page switch moved to the pages' bottom
 /// bars, `PanelPageSwitch`). ⌘1–⌘4 select a page and ⇧⌘P pins.
 ///
@@ -89,6 +90,9 @@ struct PanelHeader: View {
                     .accessibilityHidden(true)
                 }
                 Spacer(minLength: 0)
+                // ••• and Search, drawn once for every page (owner,
+                // 2026-10-31): a page switch never moves or fades them.
+                PanelSharedTopControls(page: page)
             }
         }
         // The owner's panel design: the pin in the design's superellipse(1.4)

@@ -1802,11 +1802,15 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return self
         }
         let hit = super.hitTest(point) ?? self
-        // SwiftUI owns the scroll view, including the bare content-margin
-        // strips. Its activation-events modifier does not reach those strips.
-        // Keep the native scroll target (and its scrolling) while giving it
-        // the same first-press policy as the panel's own native editors.
-        if hit is NSScrollView || hit is NSClipView {
+        // O14-01 at the cause (owner, 2026-10-31: "clicking the panel just
+        // once should make it active"): whatever view a press lands on, the
+        // panel's first press is accepted. SwiftUI makes its own native
+        // views (`PlatformGroupContainer` under a page, its scroll and clip
+        // views, hosted controls) that refuse it, and every new surface can
+        // bring another, so the policy goes to the hit view's class here,
+        // by default, rather than to each view in turn. Other windows keep
+        // the native answer.
+        if hit !== self {
             AtticPanelFirstMouseHooks.install(on: hit)
         }
         return hit
@@ -2389,8 +2393,8 @@ enum AtticHostDragHooks {
 }
 
 
-/// SwiftUI creates its scroll/clip view classes itself, so they cannot be
-/// supplied as Attic subclasses. Add the panel policy to each encountered
+/// SwiftUI creates its native view classes itself (scroll, clip, group
+/// containers), so they cannot be supplied as Attic subclasses. Add the panel policy to each encountered
 /// native class once; preserve its original answer in every other window.
 @MainActor
 enum AtticPanelFirstMouseHooks {

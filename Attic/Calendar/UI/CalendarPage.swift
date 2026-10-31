@@ -15,6 +15,7 @@ struct CalendarPage: View {
     let onNewTask: (DueDay) -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.panelSharedChrome) private var sharedChrome
     @State private var scrollPosition = ScrollPosition(y: 0)
     @State private var flags = ScrollFlags()
     @State private var searchOpen = false
@@ -71,7 +72,8 @@ struct CalendarPage: View {
 
     private func scroller(_ snapshot: CalendarPageSnapshot, viewport: CGFloat) -> some View {
         let weeks = snapshot.weeks
-        let pinnedIndex = snapshot.pinnedWeekIndex
+        let pinnedIndex = snapshot.pinnedWeekIndex.flatMap { weeks.indices.contains($0) ? $0 : nil }
+        let rowTop = pinnedIndex.map { CGFloat($0) * CalendarDesign.weekPitch }
         return ScrollView(.vertical) {
             VStack(spacing: 0) {
                 // Flat days (Accepted 2026-10-30): no glass in the grid.
@@ -79,12 +81,29 @@ struct CalendarPage: View {
                     ForEach(weeks) { week in
                         CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: model.select)
                             .equatable()
+                            // The selected week is drawn once, by its held row.
+                            .accessibilityHidden(week.containsSelection)
                     }
                 }
                 agenda(snapshot)
                     .frame(minHeight: viewport, alignment: .top)
             }
             .padding(.bottom, CalendarDesign.agendaBottom)
+            // What scrolls under the selected week is hidden behind it and
+            // fades in below it once it is held (item 14, owner 2026-10-31).
+            // Both the cut and the held row follow the scroll in the same
+            // frame, so each frame draws the week once.
+            .mask(alignment: .top) { CalendarScrollMask(rowTop: rowTop, pinned: flags.pinned) }
+            .overlay(alignment: .top) {
+                if let pinnedIndex, let rowTop {
+                    CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: model.select)
+                        .equatable()
+                        .visualEffect { content, proxy in
+                            content.offset(y: CalendarMonthMath.heldRowTop(
+                                rowTop: rowTop, contentTop: proxy.frame(in: .scrollView).minY))
+                        }
+                }
+            }
         }
         .scrollIndicators(.never)
         // Clean cut (3 Oct): the native soft scroll edge stays off.
@@ -92,36 +111,25 @@ struct CalendarPage: View {
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ScrollFlags.self) { geometry in
             let offset = geometry.contentOffset.y + geometry.contentInsets.top
-            return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex),
-                               weekView: CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count))
+            return ScrollFlags(pinned: CalendarMonthMath.isPinned(offset: offset, pinnedIndex: pinnedIndex, was: flags.pinned),
+                               weekView: CalendarMonthMath.isWeekView(offset: offset, weekCount: weeks.count, was: flags.weekView))
         } action: { _, new in
             if flags != new { flags = new }
         }
-        // While the selected week is pinned, what scrolls under it is hidden
-        // behind it and fades in below it (a static gradient), and its copy
-        // stays put above.
-        .mask(alignment: .top) { CalendarScrollMask(pinned: flags.pinned) }
-        .overlay(alignment: .top) {
-            if flags.pinned, let pinnedIndex, weeks.indices.contains(pinnedIndex) {
-                CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: model.select)
-                    .equatable()
-            }
-        }
+        // The grid is cut at the weekday letters: nothing scrolls up under them.
+        .clipped()
         .accessibilityIdentifier("calendar-scroll")
     }
 
     @ViewBuilder
     private func agenda(_ snapshot: CalendarPageSnapshot) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(snapshot.entries) { entry in
-                switch entry {
-                case let .day(group):
-                    CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
-                                      rows: model.taskRows, focus: $taskFocus, focused: taskFocus,
-                                      onSelectDay: model.select)
-                case let .free(run):
-                    CalendarFreeDaysLine(run: run, onSelectDay: model.select)
-                }
+            // Every day on its own, each with its grey date tile, empty days
+            // too (owner, 2026-10-31: the older agenda).
+            ForEach(snapshot.groups) { group in
+                CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
+                                  rows: model.taskRows, focus: $taskFocus, focused: taskFocus,
+                                  onSelectDay: model.select)
             }
             if snapshot.showsNoMatches {
                 Text("No matches")
@@ -158,8 +166,7 @@ struct CalendarPage: View {
                     .accessibilityIdentifier("calendar-search")
                     .transition(PanelTopRowLayout.fieldTransition)
             } else {
-                PanelTopRowSearchButton(label: "Search", action: beginSearch)
-                    .accessibilityIdentifier("calendar-search-button")
+                PanelTopRowSearchButton(label: "Search", identifier: "calendar-search-button", action: beginSearch)
                     .transition(.opacity)
             }
         }
@@ -190,11 +197,29 @@ struct CalendarPage: View {
 
     // MARK: Footer
 
+    /// The bottom bar (Accepted 2026-10-29/30): the page switch, Today,
+    /// then "+". In the panel the shell draws it once for every page
+    /// (owner, 2026-10-31); the page lends it Today and "+".
+    @ViewBuilder
     private func footer(_ snapshot: CalendarPageSnapshot) -> some View {
+        let todayShown = CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today)
+        ZStack {
+            if sharedChrome == nil {
+                ownFooter(snapshot)
+            } else {
+                // A view for the lending to hang on (an empty group has none).
+                Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
+            }
+        }
+        .panelBottomBar(.calendar,
+                        look: PanelBottomBarLook(middle: .today(shown: todayShown), plus: PanelBottomBarLook.calendarPlus),
+                        actions: PanelBottomBarActions(today: { [model] in model.goToToday() },
+                                                       plus: { [model] in onNewTask(model.newTaskDay) }))
+    }
+
+    private func ownFooter(_ snapshot: CalendarPageSnapshot) -> some View {
         let flat = design.effectiveControls != .liquidGlass
         let height = CalendarDesign.footerHeight
-        // The bottom bar (Accepted 2026-10-29/30): the page switch, Today,
-        // then "+".
         return AtticControlGroup {
             HStack(spacing: TasksDesignMetrics.footerGap) {
                 PanelPageSwitcher(page: .calendar)
@@ -214,13 +239,17 @@ struct CalendarPage: View {
     }
 }
 
-/// The agenda's mask: everything shows until the selected week pins; then
-/// what scrolls under the pinned week is hidden and fades in over
-/// `CalendarDesign.agendaFade` below it (Accepted 2026-10-30, "Scrolling").
-/// A static gradient: it changes only when the week pins or unpins.
-/// The fade itself comes and goes in the hover motion (the design's quick
-/// fade); the cut under the pinned week is immediate, as the pinned copy is.
+/// The agenda's mask, in the scrolled content: what lies under the selected
+/// week's held row is cut, and below it the agenda fades in over
+/// `CalendarDesign.agendaFade` once the week is held (Accepted 2026-10-30,
+/// "Scrolling"). The cut follows the held row in the same frame as the
+/// scroll (`CalendarMonthMath.heldRowTop`); before the week is held it is
+/// the week's own row, which the held row covers exactly. The body re-runs
+/// only when the week pins or unpins; the fade comes and goes in the hover
+/// motion (the design's quick fade).
 struct CalendarScrollMask: View {
+    /// The selected week's row top in the content; nil when none is shown.
+    let rowTop: CGFloat?
     let pinned: Bool
 
     @Environment(\.atticDesign) private var design
@@ -235,13 +264,23 @@ struct CalendarScrollMask: View {
         #if DEBUG
         let _ = Self.renders.append(pinned)
         #endif
-        VStack(spacing: 0) {
-            Color.clear.frame(height: pinned ? CalendarDesign.weekPitch : 0)
-            LinearGradient(colors: [.black.opacity(pinned ? 0 : 1), .black], startPoint: .top, endPoint: .bottom)
-                .frame(height: CalendarDesign.agendaFade)
-                .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: pinned)
+        ZStack(alignment: .top) {
             Color.black
+            if let rowTop {
+                VStack(spacing: 0) {
+                    Color.black.frame(height: CalendarDesign.weekPitch)
+                    LinearGradient(colors: [.black.opacity(pinned ? 1 : 0), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: CalendarDesign.agendaFade)
+                        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: pinned)
+                }
+                .visualEffect { content, proxy in
+                    content.offset(y: CalendarMonthMath.heldRowTop(
+                        rowTop: rowTop, contentTop: proxy.frame(in: .scrollView).minY))
+                }
+                .blendMode(.destinationOut)
+            }
         }
+        .compositingGroup()
     }
 }
 

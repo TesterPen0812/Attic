@@ -9,7 +9,7 @@ import XCTest
 /// two-column board with no headings, pinned first with a small grey pin,
 /// each card in the shorter column by a height estimated from its content
 /// (never measured, so layout can't feed back into itself); cards on the
-/// 18 pt surface squircle; long links wrap; the list keeps its sections.
+/// 24 pt surface squircle; long links wrap; the list keeps its sections.
 @MainActor
 final class NotesBoardTests: XCTestCase {
     private var store: NoteStore!
@@ -296,26 +296,26 @@ final class NotesBoardTests: XCTestCase {
         NSHostingController(rootView: view.atticDesign(.default)).sizeThatFits(in: CGSize(width: width, height: 10_000))
     }
 
-    func testCardsAreEighteenPointSurfaceSquircles() throws {
+    func testCardsAreTwentyFourPointSurfaceSquircles() throws {
         XCTAssertEqual(NotesBoardMetrics.radius, AtticRadius.card)
-        XCTAssertEqual(NotesBoardMetrics.radius, 18, "36 px")
+        XCTAssertEqual(NotesBoardMetrics.radius, 24, "48 px (owner, 2026-10-31)")
         XCTAssertEqual(NotesBoardMetrics.columnGap, 6)
         XCTAssertEqual(NotesBoardMetrics.cardGap, 6)
 
         // A drawn card: where its corner is surface and where it is the
-        // backdrop matches the 18 pt surface squircle, point by point.
+        // backdrop matches the 24 pt surface squircle, point by point.
         let width: CGFloat = 140
         let height = fit(card(title: "Shape", preview: "A card"), width: width).height
         let bitmap = try render(card(title: "Shape", preview: "A card"), size: CGSize(width: width, height: height), context: solid)
-        let shape = Squircle(cornerRadius: 18, exponent: AtticShape.surfaceExponent)
+        let shape = Squircle(cornerRadius: 24, exponent: AtticShape.surfaceExponent)
             .path(in: CGRect(x: 0, y: 0, width: width, height: height))
         let surface = try pixel(bitmap, width / 2, height - 3)
         // The backdrop as this render draws it (its colour space), from
-        // the corner pixel, outside any 18 pt corner.
+        // the corner pixel, outside any 24 pt corner.
         let backdrop = try pixel(bitmap, 0, 0)
         XCTAssertGreaterThan(distance(surface, backdrop), 100, "the card is drawn")
         var checked = 0
-        for step in stride(from: CGFloat(0.5), through: 9, by: 0.5) {
+        for step in stride(from: CGFloat(0.5), through: 8, by: 0.5) {
             let inner = CGPoint(x: step + 0.75, y: step + 0.75), outer = CGPoint(x: step - 0.75, y: step - 0.75)
             let inside = shape.contains(CGPoint(x: step, y: step))
             // Skip the anti-aliased edge.
@@ -329,36 +329,30 @@ final class NotesBoardTests: XCTestCase {
             checked += 1
         }
         XCTAssertGreaterThan(checked, 8)
-        // Not a plain 18 pt circle-cornered rectangle: the squircle reaches
+        // Not a plain 24 pt circle-cornered rectangle: the squircle reaches
         // further into the corner along the diagonal.
-        let circle = Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: height), cornerRadius: 18, style: .circular)
-        XCTAssertTrue((stride(from: CGFloat(0.5), through: 9, by: 0.5)).contains {
+        let circle = Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: height), cornerRadius: 24, style: .circular)
+        XCTAssertTrue((stride(from: CGFloat(0.5), through: 8, by: 0.5)).contains {
             shape.contains(CGPoint(x: $0, y: $0)) != circle.contains(CGPoint(x: $0, y: $0))
         }, "the surface exponent shapes the corner")
     }
 
-    /// Fix round 1 (should-fix 4): the selected card and the keyboard's
-    /// card take the design's 2 px (1 pt) ring, inset 0 0 0 2px
-    /// rgba(29,29,31,0.45), not a fill.
-    func testTheSelectedCardIsAOnePointRingNotAFill() throws {
+    /// Owner, 2026-10-31: the selected card and the keyboard's card take a
+    /// light grey fill, like a selected task row, and no outline: the
+    /// inside is darker than at rest, evenly, and the edge has no ring.
+    func testTheSelectedCardIsALightGreyFillNotARing() throws {
         let width: CGFloat = 140
-        let size = CGSize(width: width, height: fit(card(title: "Ring", preview: ""), width: width).height)
-        let rest = try render(card(title: "Ring", preview: ""), size: size, context: solid)
-        for (name, view) in [("selected", card(title: "Ring", preview: "", selected: true)),
-                             ("keyboard", card(title: "Ring", preview: "", highlighted: true))] {
+        let size = CGSize(width: width, height: fit(card(title: "Fill", preview: ""), width: width).height)
+        let rest = try render(card(title: "Fill", preview: ""), size: size, context: solid)
+        for (name, view) in [("selected", card(title: "Fill", preview: "", selected: true)),
+                             ("keyboard", card(title: "Fill", preview: "", highlighted: true))] {
             let marked = try render(view, size: size, context: solid)
-            // Inside: the surface as at rest (no fill).
-            for point in [CGPoint(x: width / 2, y: size.height - 4), CGPoint(x: width * 0.6, y: size.height / 2)] {
-                XCTAssertLessThan(distance(try pixel(marked, point.x, point.y), try pixel(rest, point.x, point.y)), 3,
-                                  "\(name): no fill at \(point)")
-            }
-            // The edge, half a point in: the ring.
-            let edge = try pixel(marked, 0.5, size.height / 2)
-            let restEdge = try pixel(rest, 0.5, size.height / 2)
-            XCTAssertGreaterThan(distance(edge, restEdge), 40, "\(name): a ring on the edge")
-            // Two points in, it has ended (1 pt wide).
-            XCTAssertLessThan(distance(try pixel(marked, 2.25, size.height / 2), try pixel(rest, 2.25, size.height / 2)), 3,
-                              "\(name): the ring is 1 pt")
+            let inside = try pixel(marked, width / 2, size.height - 4)
+            XCTAssertGreaterThan(distance(inside, try pixel(rest, width / 2, size.height - 4)), 3, "\(name): a fill")
+            XCTAssertLessThan(distance(inside, try pixel(marked, width * 0.6, size.height / 2)), 3, "\(name): even")
+            // No ring: half a point in is the fill, not a darker line.
+            XCTAssertLessThan(distance(try pixel(marked, 1.5, size.height / 2), try pixel(marked, 4, size.height / 2)), 6,
+                              "\(name): no outline on the edge")
         }
     }
 
@@ -423,13 +417,15 @@ final class NotesBoardTests: XCTestCase {
         XCTAssertEqual(hover, rest, accuracy: 0.01, "hover shows ••• without changing the height")
     }
 
-    /// Fix round 1 (coordinator's correction): the switch's marker
-    /// crossfades in each cell, as Now · Later · Done's (160 ms ease-out,
-    /// at once under Reduce Motion), never sliding: no frame of the change
-    /// draws the marker over the 1 pt gap between the two cells.
-    func testTheSwitchMarkerCrossfadesAndNeverSlides() throws {
+    /// Board | list gets motion (owner, 2026-10-31: "both"): the switch's
+    /// chip slides from one choice to the next on the 260 ms fold (at once
+    /// under Reduce Motion): frames of the change draw it over the 1 pt gap
+    /// between the two cells. Now · Later · Done keep their crossfade.
+    func testTheSwitchChipSlidesBetweenTheCells() throws {
         XCTAssertEqual(NotesLayoutSwitch.selectionAnimation(reduceMotion: false),
-                       AtticSelectionMarker.animation(reduceMotion: false))
+                       TasksDesignMetrics.fold(reduceMotion: false))
+        XCTAssertEqual(AtticSelectionMarker.animation(reduceMotion: false), .easeOut(duration: 0.16),
+                       "the other switches keep the crossfade")
         XCTAssertNil(NotesLayoutSwitch.selectionAnimation(reduceMotion: true), "Reduce Motion: at once")
 
         let holder = LayoutHolder()
@@ -464,11 +460,12 @@ final class NotesBoardTests: XCTestCase {
         let rest = try capture()
         let gap = try colour(rest, gapX), boardAtRest = try colour(rest, boardX)
         holder.layout = .board
-        for frame in 0..<14 {
+        var crossed = 0
+        for _ in 0..<20 {
             spin(0.012)
-            let shot = try capture()
-            XCTAssertLessThan(distance(try colour(shot, gapX), gap), 4, "frame \(frame): the marker never crosses the gap")
+            if distance(try colour(try capture(), gapX), gap) > 4 { crossed += 1 }
         }
+        XCTAssertGreaterThan(crossed, 0, "the chip slides across the gap between the cells")
         spin(0.4)
         XCTAssertGreaterThan(distance(try colour(try capture(), boardX), boardAtRest), 4, "the marker is on Board now")
     }

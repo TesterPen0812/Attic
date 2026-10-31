@@ -61,10 +61,6 @@ enum NotesBoardMetrics {
     /// Where "•••" shows, the title (and the pin) fade out under it over
     /// this much, so the resting title keeps the card's whole width.
     static let actionsFade: CGFloat = 6
-    /// The selected (or keyboard's) card: inset 0 0 0 2px
-    /// rgba(29,29,31,0.45), a 1 pt ring in the title's ink.
-    static let ringWidth: CGFloat = 1
-    static let ringAlpha: Double = 0.45
     /// Images: a striped block 112 px tall (150 from three images), its
     /// lower corners 6 px; the count 15 px, 8 × 12 px in.
     static let imageHeight: CGFloat = 56
@@ -188,16 +184,15 @@ struct NotesBoardCard: View {
     }
 
     /// The raised surface (glass where the controls are glass), the hover
-    /// on it, and the selected or keyboard card's 1 pt ring (the design's
-    /// 2 px inset ring, drawn inside the edge).
+    /// on it, and the selected or keyboard card's light grey fill, as a
+    /// selected task row's (owner, 2026-10-31: it replaces the 1 pt ring).
     private func surface(shape: Squircle, hover: Bool) -> some View {
         Color.clear
             .atticRaisedMaterial(cornerRadius: M.radius, state: hover ? .hover : .rest, interactive: false)
             .environment(\.atticControlCornerExponent, M.cornerExponent)
             .overlay {
                 if isSelected || isHighlighted {
-                    shape.stroke(design.tokens.ink(.heading).withAlpha(M.ringAlpha).color, lineWidth: M.ringWidth * 2)
-                        .clipShape(shape)
+                    shape.fill(design.tokens.selected.color)
                 }
             }
             .allowsHitTesting(false)
@@ -402,10 +397,17 @@ struct NotesLayoutSwitch: View {
 
     private typealias M = NotesLayoutSwitchMetrics
 
-    /// A change of layout: the shared selection motion (a 160 ms crossfade in the
-    /// cells; Reduce Motion at once).
+    /// A change of layout (owner, 2026-10-31: "both"): the chip slides to
+    /// the new choice and the notes move into their new places, on the
+    /// bottom bar's 260 ms fold; Reduce Motion at once. Only this switch:
+    /// Now · Later · Done and the page switch keep their crossfade.
     static func selectionAnimation(reduceMotion: Bool) -> Animation? {
-        AtticSelectionMarker.animation(reduceMotion: reduceMotion)
+        reduceMotion ? nil : TasksDesignMetrics.fold(reduceMotion: false)
+    }
+
+    private func choose(_ layout: NotesLibraryLayout) {
+        guard layout != selection else { return }
+        withAnimation(Self.selectionAnimation(reduceMotion: design.reduceMotion)) { selection = layout }
     }
 
     var body: some View {
@@ -418,14 +420,12 @@ struct NotesLayoutSwitch: View {
                 let on = layout == selection
                 let ink = on || hovered == layout ? tokens.ink(.heading).color
                     : TasksPanelDesign.toneInk(.meta, tokens: tokens).color
-                Button { selection = layout } label: {
+                Button { choose(layout) } label: {
                     NotesLayoutGlyph(layout: layout)
                         .stroke(ink, style: StrokeStyle(lineWidth: layout == .board ? 0.9 : 1, lineCap: .round, lineJoin: .round))
                         .frame(width: M.glyph, height: M.glyph)
                         .frame(width: M.cell, height: M.cell)
-                        // In the current cell, as Now · Later · Done's: a
-                        // change crossfades it between the cells, never a slide.
-                        .background { if on { AtticSelectionMarker(cornerRadius: chipRadius) } }
+
                         .contentShape(AtticControlShape.shape(cornerRadius: chipRadius, exponent: AtticShape.controlExponent))
                 }
                 .buttonStyle(.plain)
@@ -439,6 +439,12 @@ struct NotesLayoutSwitch: View {
                 .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
             }
         }
+        // One chip under the cells, sliding from one to the next.
+        .background(alignment: .leading) {
+            AtticSelectionMarker(cornerRadius: chipRadius)
+                .frame(width: M.cell, height: M.cell)
+                .offset(x: CGFloat(selected) * (M.cell + M.gap))
+        }
         .padding(M.inset)
         .frame(height: AtticControlSize.headerControl)
         .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
@@ -450,7 +456,7 @@ struct NotesLayoutSwitch: View {
         .onKeyPress(phases: .down) { press in
             guard let next = AtticPageArrows.next(from: selected, key: press.key, modifiers: press.modifiers, count: layouts.count)
             else { return .ignored }
-            if next != selected { selection = layouts[next] }
+            if next != selected { choose(layouts[next]) }
             return .handled
         }
         .accessibilityElement(children: .contain)

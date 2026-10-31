@@ -742,8 +742,8 @@ struct TasksPage: View {
                 } else {
                     // Find (⌘F) on every page: Done's search.
                     PanelTopRowSearchButton(label: model.tab == .done ? "Search done tasks (⌘F)" : "Find (⌘F)",
+                                            identifier: model.tab == .done ? "tasks-done-search-button" : "tasks-find-button",
                                             action: beginSearch)
-                        .accessibilityIdentifier(model.tab == .done ? "tasks-done-search-button" : "tasks-find-button")
                         .transition(.opacity)
                 }
             }
@@ -1953,7 +1953,7 @@ struct TasksPage: View {
 
     private func rowClicked(_ id: UUID, tab: TasksTab) {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
-        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+        if AtticTaskRow.currentClickCount >= 2 {
             model.selectOnly(id)
             model.beginEditingTitle(id)
             return

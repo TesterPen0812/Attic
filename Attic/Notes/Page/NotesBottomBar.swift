@@ -49,6 +49,8 @@ struct NotesTagBar: View {
     let onSelect: (String?) -> Void
 
     @Environment(\.atticDesign) private var design
+    /// Which edges have tags cut off (owner, 2026-10-31): each fades only then.
+    @State private var cutOff = NotesTagBarCutOff()
 
     private var allID: String { "\(idPrefix)-all" }
 
@@ -74,6 +76,12 @@ struct NotesTagBar: View {
                 .padding(.horizontal, m.tagBarPadding)
                 .frame(height: m.control)
             }
+            .onScrollGeometryChange(for: NotesTagBarCutOff.self) { geometry in
+                NotesTagBarCutOff(offset: geometry.contentOffset.x, visible: geometry.containerSize.width,
+                                  content: geometry.contentSize.width)
+            } action: { _, edges in
+                cutOff = edges
+            }
             // The chosen tag comes into view.
             .onChange(of: selection) { _, chosen in
                 withAnimation(motion) { proxy.scrollTo(chosen ?? allID, anchor: .center) }
@@ -81,8 +89,12 @@ struct NotesTagBar: View {
         }
         .mask {
             HStack(spacing: 0) {
+                LinearGradient(colors: [.black.opacity(cutOff.leading ? 0 : 1), .black],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: m.endFade)
                 Rectangle()
-                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                LinearGradient(colors: [.black, .black.opacity(cutOff.trailing ? 0 : 1)],
+                               startPoint: .leading, endPoint: .trailing)
                     .frame(width: m.endFade)
             }
         }
@@ -94,6 +106,24 @@ struct NotesTagBar: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
         .accessibilityIdentifier(idPrefix)
+    }
+}
+
+/// The tag bar's cut-off edges: the leading one once it has scrolled from
+/// the start, the trailing one while more tags lie beyond (each fades over
+/// `NotesBarMetrics.endFade`, the HTML's 28 px).
+struct NotesTagBarCutOff: Equatable {
+    var leading = false
+    var trailing = false
+
+    init(leading: Bool = false, trailing: Bool = false) {
+        self.leading = leading
+        self.trailing = trailing
+    }
+
+    init(offset: CGFloat, visible: CGFloat, content: CGFloat) {
+        leading = offset > 0.5
+        trailing = offset + visible < content - 0.5
     }
 }
 

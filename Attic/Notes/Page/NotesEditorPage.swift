@@ -33,6 +33,9 @@ struct NotesEditorPage: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticTagColouring) private var tagColouring
     @Environment(\.atticPanelToasts) private var toasts
+    /// In the panel the shell draws the library's switch, tag bar and "+"
+    /// once for every page (owner, 2026-10-31); here they are a stand-in.
+    @Environment(\.panelSharedChrome) private var sharedChrome
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var library: NotesLibraryModel
     @StateObject private var damagedRecovery: NoteDamagedRecoveryExit
@@ -387,8 +390,9 @@ struct NotesEditorPage: View {
                     .accessibilityIdentifier("notes-search")
                     .transition(PanelTopRowLayout.fieldTransition)
             } else {
-                PanelTopRowSearchButton(label: "Search notes (⌘F)") { showLibrary(focusSearch: true) }
-                    .accessibilityIdentifier("notes-search-button")
+                PanelTopRowSearchButton(label: "Search notes (⌘F)", identifier: "notes-search-button") {
+                    showLibrary(focusSearch: true)
+                }
                     .transition(.opacity)
             }
         }
@@ -413,6 +417,13 @@ struct NotesEditorPage: View {
                 bottomButtons
             }
         }
+        .panelBottomBar(.notes,
+                        look: PanelBottomBarLook(middle: .tags(tags: library.recentTags(store: noteStore),
+                                                               selection: library.tagFilter, idPrefix: "notes-tag-bar",
+                                                               shown: true),
+                                                 plus: PanelBottomBarLook.notesPlus, shown: controller.isLibraryPresented),
+                        actions: PanelBottomBarActions(selectTag: { [library] tag in library.tagFilter = tag },
+                                                       plus: { newNote() }))
     }
 
     /// In Dark the bottom row's glyphs take the strong ink (A39 F13): the
@@ -434,7 +445,18 @@ struct NotesEditorPage: View {
         .frame(height: buttonHeight)
     }
 
+    @ViewBuilder
     private var libraryBar: some View {
+        if sharedChrome != nil {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .transition(.opacity)
+        } else {
+            ownLibraryBar
+        }
+    }
+
+    private var ownLibraryBar: some View {
         HStack(spacing: NotesBarMetrics.gap) {
             PanelPageSwitcher(page: .notes)
             NotesTagBar(tags: library.recentTags(store: noteStore), selection: library.tagFilter) { tag in
@@ -1419,6 +1441,7 @@ private struct NotesKeyboardStop: ViewModifier {
     func body(content: Content) -> some View {
         content
             .focusable(enabled)
+            .focusEffectDisabled()
             .focused(focus, equals: stop)
     }
 }

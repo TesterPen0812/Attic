@@ -700,12 +700,12 @@ struct AtticGlassMenuStyle {
     @MainActor private static var symbols: [String: NSImage] = [:]
 }
 
-/// Accepted Shapes (30 Oct), halved from design px. Local to the menu
-/// card: dropdown tokens are owned by the parallel chrome work.
+/// The menus' radius (owner, 2026-10-31: 16 pt, as before Shapes), with
+/// the dropdown cards' padding and concentric rows.
 enum AtticGlassMenuShape {
-    static let radius: CGFloat = 14
-    static let inset: CGFloat = 3
-    static let rowRadius: CGFloat = 11
+    static let radius: CGFloat = AtticRadius.menu
+    static let inset: CGFloat = AtticRadius.menuPadding
+    static let rowRadius: CGFloat = AtticRadius.menuRow
 }
 
 // MARK: - Card

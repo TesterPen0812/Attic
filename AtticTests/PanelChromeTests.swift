@@ -40,16 +40,18 @@ final class PanelChromeTests: XCTestCase {
         // Surfaces (design px, half in points).
         XCTAssertEqual(AtticRadius.shell, 52)
         XCTAssertEqual(PanelCornerSize.defaultValue, 52, "104 px panel")
-        XCTAssertEqual(AtticRadius.card, 18, "36 px cards")
+        XCTAssertEqual(AtticRadius.card, 24, "48 px cards (owner, 2026-10-31)")
         XCTAssertEqual(CalendarDesign.dayRadius, AtticRadius.card, "Calendar day cards use the card token")
         XCTAssertEqual(AtticRadius.row, 12)
         XCTAssertEqual(TasksRowDesign.radius, 12)
         XCTAssertEqual(NotesLibraryRowMetrics.radius, 12)
-        XCTAssertEqual(AtticRadius.menu, 14)
-        XCTAssertEqual(AtticRadius.popover, 14)
-        XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 14, "the solid pickers: 28 px")
+        XCTAssertEqual(AtticRadius.menu, 16, "32 px menus (owner, 2026-10-31)")
+        XCTAssertEqual(AtticRadius.popover, 16)
+        XCTAssertEqual(AtticDropdownMetrics.cornerRadius, 16, "the solid pickers: 32 px")
         XCTAssertEqual(AtticDropdownMetrics.inset, 3, "6 px padding")
-        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 11, "22 px rows")
+        XCTAssertEqual(AtticDropdownMetrics.highlightRadius, 13, "concentric rows: 16 − 3")
+        XCTAssertEqual(AtticDropdownMetrics.clearRadius, 13, "Clear Date as a row")
+        XCTAssertEqual(AtticDropdownMetrics.fieldRadius, 11, "the field, 5 pt in: 16 − 5")
         XCTAssertEqual(AtticRadius.noteBlock, 10)
         XCTAssertEqual(AtticNoteObjectMetrics.blockRadius, 10)
         XCTAssertEqual(AtticRadius.small, 6)
@@ -61,7 +63,7 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticRadius.reviewBar, 17, "20 + 14 px")
         XCTAssertEqual(AtticRadius.concentric(outer: AtticRadius.menu, padding: AtticRadius.menuPadding), AtticRadius.menuRow)
         // A day card's padding grows with its radius (10 px at 36 px).
-        XCTAssertEqual(CalendarDesign.dayPadding, 5)
+        XCTAssertEqual(CalendarDesign.dayPadding, 6.5, "48 px radius: 13 px padding")
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 32), 8.5, "64 px: 17 px")
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 0), 3, "never under 6 px")
     }
@@ -173,17 +175,17 @@ final class PanelChromeTests: XCTestCase {
     }
 
     /// Shapes on the solid pickers: the cards and their rows are surface
-    /// squircles at the menu radius (14 pt, rows 11 pt), and the date
+    /// squircles at the menu radius (16 pt, rows 13 pt), and the date
     /// picker's day marks whole superellipses on curve 1.4.
     func testPickerCardsRowsAndDayMarksFollowShapes() {
         let d = AtticDropdownMetrics.self
         let card = CGRect(x: 0, y: 0, width: 224, height: 260)
         XCTAssertEqual(AtticUnfoldShape(cornerRadius: d.cornerRadius).path(in: card),
-                       Squircle(cornerRadius: 14, exponent: AtticShape.surfaceExponent).path(in: card),
+                       Squircle(cornerRadius: 16, exponent: AtticShape.surfaceExponent).path(in: card),
                        "the card: a surface squircle at the menu radius")
         let row = CGRect(x: 3, y: 3, width: 218, height: 32)
         XCTAssertEqual(AtticDropdownRow.highlightShape.path(in: row),
-                       Squircle(cornerRadius: 11, exponent: AtticShape.surfaceExponent).path(in: row), "a row: 11 pt squircle")
+                       Squircle(cornerRadius: 13, exponent: AtticShape.surfaceExponent).path(in: row), "a row: 13 pt squircle")
         XCTAssertEqual(d.clearRadius, d.highlightRadius, "Clear Date is a row")
         XCTAssertEqual(d.monthMarkRadius, d.monthMarkHeight / 2, "a day mark is rounded by half its height")
         let mark = CGRect(x: 0, y: 0, width: d.monthMarkWidth, height: d.monthMarkHeight)
@@ -293,6 +295,9 @@ final class PanelChromeTests: XCTestCase {
     }
 
     func testTasksTopRowBottomBarSearchAndTagBar() throws {
+        // The motion path, stated (GitHub's runners turn Reduce Motion on).
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         try withPanel { host, state, tasksState, store, _, chrome in
             state.selectSection(.tasks)
             spin(1.0)
@@ -347,7 +352,33 @@ final class PanelChromeTests: XCTestCase {
     /// A real Escape in the open search field (the key-window route of
     /// `TasksRound12Tests`) closes the search and brings Pin back, its
     /// raised material told to draw its glass again.
+    /// Under Reduce Motion the pin and its glass still fold away while the
+    /// search is open (no glass or hit target left behind) and come back
+    /// when it closes, at once rather than in the search's motion.
+    func testUnderReduceMotionThePinsGlassFoldsWithTheSearchAndComesBack() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        try withPanel { host, state, _, _, _, _ in
+            state.selectSection(.tasks)
+            spin(1.0)
+            let searchButton = try XCTUnwrap(element("tasks-find-button", in: host))
+            XCTAssertTrue(searchButton.accessibilityPerformPress?() ?? false)
+            spin(0.8)
+            XCTAssertNotNil(element("tasks-find", in: host), "the search is open")
+            XCTAssertNil(element("panel-pin-button", in: host), "Pin folds away")
+            XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "and so does its glass")
+            let close = try XCTUnwrap(elements(host).first { ($0.accessibilityLabel?() ?? "") == "End search" })
+            XCTAssertTrue(close.accessibilityPerformPress?() ?? false)
+            spin(0.8)
+            XCTAssertNotNil(element("panel-pin-button", in: host), "Pin is back")
+            XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: false, gone: false), "and so is its glass")
+        }
+    }
+
     func testEscapeInTheSearchBringsThePinAndItsGlassBack() throws {
+        // The motion path, stated (GitHub's runners turn Reduce Motion on).
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         try requireKeyWindowTests()
         try withPanel { host, state, tasksState, store, _, _ in
             state.selectSection(.tasks)
@@ -424,6 +455,114 @@ final class PanelChromeTests: XCTestCase {
     /// page-switch slot, only on the notes list, 27 pt like the Tasks tabs,
     /// the current one on the selection marker; it folds with the search.
     /// The bottom bar ends with "+".
+    /// No outline from a click (owner, 2026-10-31): one keyboard tracker at
+    /// the panel's root, so the Notes and Calendar pages, the top row and the
+    /// bottom bar show rings only while the keyboard drives, as Tasks did. A
+    /// click on any page turns them off; Tab turns them on.
+    func testOneFocusTrackerForTheWholePanelAClickHidesRings() throws {
+        try withPanel { host, state, _, _, _, _ in
+            for section in [PanelSection.notes, .calendar, .tasks] {
+                state.selectSection(section)
+                spin(1.0)
+                XCTAssertTrue(state.keyboardFocus.isTracking, "\(section): the panel's tracker watches clicks and keys")
+            }
+            // What it does with them (TasksRound5Tests): Tab on, a click off.
+            state.keyboardFocus.observe(.keyDown, keyCode: 48)
+            XCTAssertTrue(state.keyboardFocus.isKeyboardDriving)
+            state.keyboardFocus.observe(.leftMouseDown, keyCode: nil)
+            XCTAssertFalse(state.keyboardFocus.isKeyboardDriving)
+        }
+    }
+
+    /// Tag bar fades (owner, 2026-10-31): each edge fades only while tags
+    /// are cut off there, over 14 pt (the HTML's 28 px), on every page's bar.
+    func testTheTagBarFadesOnlyWhereTagsAreCutOff() {
+        XCTAssertEqual(NotesBarMetrics.endFade, 14)
+        XCTAssertEqual(NotesTagBarCutOff(offset: 0, visible: 200, content: 180), .init(), "all fit: no fade")
+        XCTAssertEqual(NotesTagBarCutOff(offset: 0, visible: 200, content: 400), .init(trailing: true), "at the start: trailing only")
+        XCTAssertEqual(NotesTagBarCutOff(offset: 80, visible: 200, content: 400), .init(leading: true, trailing: true), "midway: both")
+        XCTAssertEqual(NotesTagBarCutOff(offset: 200, visible: 200, content: 400), .init(leading: true), "at the end: leading only")
+    }
+
+    /// Expanded things close with one click (owner, 2026-10-31): an open
+    /// search has an × at its end that ends it like Escape, and a click on
+    /// the page's empty space ends it too, on Tasks, Notes and Calendar.
+    func testTheSearchClosesFromItsCrossAndFromAClickOnEmptySpace() throws {
+        try withPanel { host, state, tasksState, store, draft, _ in
+            let window = try XCTUnwrap(host.window)
+            @MainActor func click(_ point: CGPoint) throws {
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                        with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                        pressure: type == .leftMouseDown ? 1 : 0)))
+                }
+                spin(0.6)
+            }
+            let pages: [(PanelSection, String, String)] = [(.tasks, "tasks-find-button", "tasks-find"),
+                                                           (.notes, "notes-search-button", "notes-search"),
+                                                           (.calendar, "calendar-search-button", "calendar-search")]
+            for (section, button, field) in pages {
+                state.selectSection(section)
+                spin(1.0)
+                if section == .notes { XCTAssertTrue(draft.pages.showLibrary()); spin(0.8) }
+                @MainActor func open() throws {
+                    XCTAssertTrue(try XCTUnwrap(element(button, in: host), "\(section): the search button").accessibilityPerformPress?() ?? false)
+                    spin(0.8)
+                    XCTAssertNotNil(element(field, in: host), "\(section): the search is open")
+                }
+                try open()
+                let cross = try XCTUnwrap(elements(host).first { ($0.accessibilityLabel?() ?? "") == "End search" },
+                                          "\(section): an × at the field's end")
+                let crossFrame = try XCTUnwrap(frame(ofElement: cross, in: host))
+                let insets = PanelPageLayout(cornerSize: 52, panelSize: host.bounds.size).chromeInsets
+                XCTAssertEqual(crossFrame.maxX, host.bounds.width - insets.trailing, accuracy: 0.5, "\(section): at the trailing end")
+                window.makeKey()
+                try click(CGPoint(x: crossFrame.midX, y: host.bounds.height - crossFrame.midY))
+                XCTAssertNil(element(field, in: host), "\(section): the × ends the search")
+                XCTAssertNotNil(element(button, in: host), "\(section): and the button is back")
+
+                try open()
+                window.makeKey()
+                if section == .tasks {
+                    // A row takes its own click: a search with words in it
+                    // stays (an empty one may end as its field loses focus).
+                    tasksState.model(for: store, toasts: nil).setSearchQuery("books", for: .now)
+                    spin(0.5)
+                    let row = try XCTUnwrap(elements(host).first { ($0.accessibilityLabel?() ?? "").hasPrefix("Return books") }
+                        .flatMap { frame(ofElement: $0, in: host) }, "a row")
+                    try click(CGPoint(x: row.midX, y: host.bounds.height - row.midY))
+                    XCTAssertNotNil(element(field, in: host), "a click on a row keeps the search")
+                }
+                // Empty page space, low in the list, above the bottom bar
+                // (window coordinates, from the bottom).
+                try click(CGPoint(x: host.bounds.midX, y: 150))
+                XCTAssertNil(element(field, in: host), "\(section): a click on empty space ends the search")
+            }
+        }
+    }
+
+    /// Square controls are not circles (owner, 2026-10-31; Accepted
+    /// "Shapes"): every raised control on the panel, on every page and bar,
+    /// the composer, "+" and the note and task pages' bottom buttons
+    /// included, draws on curve 1.4, never Apple's continuous corner.
+    func testEveryRaisedControlOnThePanelIsOnCurveOnePointFour() throws {
+        AtticMaterialProbe.resetCorners()
+        try withPanel { host, state, tasks, store, _, _ in
+            for section in [PanelSection.notes, .calendar, .tasks] {
+                state.selectSection(section)
+                spin(1.0)
+            }
+            // A task's page (its ‹ and Aa).
+            let model = tasks.model(for: store, toasts: nil)
+            model.openPage(try XCTUnwrap(model.rows(for: .now).first?.id))
+            spin(1.0)
+            host.display()
+        }
+        XCTAssertGreaterThan(AtticMaterialProbe.corners.count, 10, "controls drawn")
+        XCTAssertEqual(AtticMaterialProbe.corners.filter { $0 == nil }.count, 0, "no control on the continuous (circle) corner")
+    }
+
     func testNotesLayoutSwitchOnlyOnTheListAndFoldsWithSearch() throws {
         XCTAssertEqual(NotesBarMetrics.newNoteSymbol, "plus", "the bottom bar ends with +")
         XCTAssertEqual(NotesLayoutSwitchMetrics.width, 3 + 21 + 1 + 21 + 3)
