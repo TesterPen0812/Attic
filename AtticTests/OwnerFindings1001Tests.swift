@@ -115,10 +115,11 @@ final class O14FirstMouseTests: XCTestCase {
         let chrome = PanelChromeInteractionState()
         let settings = AppSettings(defaults: defaults)
         let tasksState = TasksPageState()
+        let draft = NoteDraftController(noteStore: notes)
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(store: store, noteStore: notes,
                                      canvasSession: CanvasSession(store: CanvasStore(container: container)),
-                                     noteDraft: NoteDraftController(noteStore: notes),
+                                     noteDraft: draft,
                                      chromeInteractionState: chrome, uiState: state, settings: settings,
                                      tasksPageState: tasksState),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome)
@@ -184,8 +185,13 @@ final class O14FirstMouseTests: XCTestCase {
             XCTFail("the demo has a task in Now")
         }
 
+        // Notes opens on a note; Back shows the list.
         state.selectSection(.notes)
         spin(1.5)
+        XCTAssertFalse(draft.pages.isLibraryPresented, "a note is open")
+        assertEveryViewAccepts("a note")
+        XCTAssertTrue(draft.pages.showLibrary())
+        spin(1.0)
         assertEveryViewAccepts("Notes list")
         try press("notes-layout-board")
         assertEveryViewAccepts("Notes board")
@@ -197,15 +203,6 @@ final class O14FirstMouseTests: XCTestCase {
         assertEveryViewAccepts("Calendar")
         try press("calendar-search-button")
         assertEveryViewAccepts("Calendar search")
-
-        state.selectSection(.notes)
-        spin(1.0)
-        try press("notes-board-card")
-        if !elements(host).contains(where: { ($0.accessibilityIdentifier?() ?? "") == "note-editor" }) {
-            try press("notes-board-card")
-        }
-        XCTAssertTrue(elements(host).contains { ($0.accessibilityIdentifier?() ?? "") == "note-editor" }, "a note is open")
-        assertEveryViewAccepts("a note")
     }
 }
 
