@@ -14,6 +14,12 @@ enum AtticStyle {
     /// being cut at the window edge. It never becomes a resize grip.
     /// 28 pt (visual A): room for the panel's 12 pt, y 4 shadow to fade out.
     static let panelElevationMargin: CGFloat = 28
+    /// The docked panel's margin: the island's region (8 pt gap, 27 pt
+    /// capsule) fits inside it, so the panel and the island hide into the
+    /// island's outer corner, 35 pt out, inside one window (Accepted "Tall
+    /// island", "Hiding and showing as one shape"). Click-through like the
+    /// 28 pt margin; floating panels keep `panelElevationMargin`.
+    static let dockedPanelMargin: CGFloat = 40
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4

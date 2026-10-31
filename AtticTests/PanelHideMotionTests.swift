@@ -138,6 +138,123 @@ final class PanelHideMotionTests: XCTestCase {
         }
     }
 
+    /// Accepted "Tall island", "Hiding and showing as one shape": the
+    /// docked panel (a 40 pt margin) hides into the island's outer corner,
+    /// 35 pt out from its surface. Every animation still draws the whole
+    /// layer, island included, inside the window, and each ends at that
+    /// corner.
+    func testTheDockedPanelHidesIntoTheIslandsCornerInsideItsWindow() {
+        let margin = AtticStyle.dockedPanelMargin
+        let sizes = [CGSize(width: 280, height: 360), CGSize(width: 380, height: 700), CGSize(width: 600, height: 420)]
+        let columns = PanelHideMotionTuning.genieColumns, rows = PanelHideMotionTuning.genieRows
+        for size in sizes {
+            let visible = CGRect(x: margin, y: margin, width: size.width, height: size.height)
+            let host = visible.insetBy(dx: -margin, dy: -margin)
+            let hostCorners = [CGPoint(x: host.minX, y: host.minY), CGPoint(x: host.maxX, y: host.minY),
+                               CGPoint(x: host.minX, y: host.maxY), CGPoint(x: host.maxX, y: host.maxY)]
+            for corner in ScreenCorner.allCases {
+                let island = PanelIslandLayout.islandFrame(panelFrame: visible, corner: corner)
+                let anchor = PanelCollapseGeometry.cornerPoint(of: island, corner: corner)
+                XCTAssertTrue(host.insetBy(dx: 1, dy: 1).contains(anchor), "\(size) \(corner): the anchor is in the window")
+                XCTAssertTrue(host.contains(island.insetBy(dx: -PanelIslandLayout.windowMargin + 1, dy: 0)))
+                let right = corner == .topRight || corner == .bottomRight
+                let top = corner == .topRight || corner == .topLeft
+                let inset = SIMD2(Float((right ? host.maxX - anchor.x : anchor.x - host.minX) / host.width),
+                                  Float((top ? host.maxY - anchor.y : anchor.y - host.minY) / host.height))
+                for step in 0...50 {
+                    let progress = Double(step) / 50
+                    let label = "\(size) \(corner) p=\(progress)"
+                    let pivot = CGPoint(x: host.midX, y: host.midY)
+                    let slide = PanelCollapseGeometry.transform(
+                        progress: progress, visibleBounds: visible, layerBounds: host, corner: corner,
+                        layerAnchor: pivot, anchor: anchor)
+                    func slid(_ point: CGPoint) -> CGPoint {
+                        let local = CGPoint(x: point.x - pivot.x, y: point.y - pivot.y).applying(slide)
+                        return CGPoint(x: local.x + pivot.x, y: local.y + pivot.y)
+                    }
+                    for point in hostCorners { assertInside(slid(point), host, 0.5, "Slide \(label)") }
+                    XCTAssertEqual(slid(anchor).x, anchor.x, accuracy: 0.01, "Slide keeps the island's corner \(label)")
+                    XCTAssertEqual(slid(anchor).y, anchor.y, accuracy: 0.01, "Slide keeps the island's corner \(label)")
+                    let swoop = PanelSwoopGeometry.transform(
+                        progress: progress, visibleBounds: visible, hostBounds: host, layerAnchor: .zero,
+                        corner: corner, anchor: anchor)
+                    for point in hostCorners { assertInside(project(point, swoop), host, 0.5, "Swoop \(label)") }
+                    let uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner, inset: inset)
+                    for row in 0...rows {
+                        for column in 0...columns where row == 0 || row == rows || column == 0 || column == columns {
+                            let p = PanelGenieRenderer.position(Float(column) / Float(columns), Float(row) / Float(rows), uniforms)
+                            let drawn = CGPoint(x: host.minX + CGFloat(p.x) * host.width, y: host.minY + CGFloat(p.y) * host.height)
+                            assertInside(drawn, host, 0.5, "Genie \(label)")
+                        }
+                    }
+                }
+                // At the end, Slide and Swoop have the panel at the island's
+                // corner, and Genie's mouth closes there.
+                let endSwoop = PanelSwoopGeometry.transform(progress: 1, visibleBounds: visible, hostBounds: host,
+                                                            layerAnchor: .zero, corner: corner, anchor: anchor)
+                for point in [visible.origin, CGPoint(x: visible.maxX, y: visible.maxY)] {
+                    let drawn = project(point, endSwoop)
+                    XCTAssertLessThan(hypot(drawn.x - anchor.x, drawn.y - anchor.y), 0.04 * max(size.width, size.height),
+                                      "Swoop ends at the island's corner \(size) \(corner)")
+                }
+                let end = PanelGenieRenderer.uniforms(progress: 1, corner: corner, inset: inset)
+                for row in 0...rows {
+                    for column in 0...columns {
+                        let p = PanelGenieRenderer.position(Float(column) / Float(columns), Float(row) / Float(rows), end)
+                        let drawn = CGPoint(x: host.minX + CGFloat(p.x) * host.width, y: host.minY + CGFloat(p.y) * host.height)
+                        XCTAssertEqual(drawn.x, anchor.x, accuracy: 0.01, "Genie's flow ends at the island's side \(size) \(corner)")
+                        let mouth = CGFloat(end.mouth) * host.height
+                        let fromCorner = top ? anchor.y - drawn.y : drawn.y - anchor.y
+                        XCTAssertGreaterThanOrEqual(fromCorner, -0.01, "Genie's mouth \(size) \(corner)")
+                        XCTAssertLessThanOrEqual(fromCorner, mouth + 0.01, "Genie's mouth \(size) \(corner)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// With no inset the mesh is exactly today's (floating panels).
+    func testGeniesMeshWithNoInsetIsUnchanged() {
+        for corner in ScreenCorner.allCases {
+            for progress in [0.0, 0.3, 0.7, 1.0] {
+                let u = PanelGenieRenderer.uniforms(progress: progress, corner: corner)
+                for (gx, gy) in [(Float(0), Float(0)), (0.5, 0.25), (1, 1), (0.9, 0.1)] {
+                    let p = PanelGenieRenderer.position(gx, gy, u)
+                    let s = u.right > 0.5 ? gx : 1 - gx, v = u.top > 0.5 ? gy : 1 - gy
+                    let w = min(s + u.slide, 1), t = min(1, max(0, w))
+                    let f = u.curve * t * t * (3 - 2 * t)
+                    let b = f * (1 - u.mouth) * (1 - v) + v
+                    XCTAssertEqual(p.x, u.right > 0.5 ? w : 1 - w, accuracy: 1e-5)
+                    XCTAssertEqual(p.y, u.top > 0.5 ? b : 1 - b, accuracy: 1e-5)
+                }
+            }
+        }
+    }
+
+    /// The island's glass is outside the surface: within its own clip it
+    /// rides the flight live like a control's, where the surface's clip
+    /// alone left it out.
+    func testTheIslandsGlassRidesLiveInsideItsOwnClip() {
+        let root = CALayer()
+        root.frame = CGRect(x: 0, y: 0, width: 480, height: 680)
+        let surface = CGRect(x: 40, y: 40, width: 365, height: 600)
+        let island = CALayer()
+        island.frame = CGRect(x: surface.maxX + 8 - 6, y: surface.maxY - 99 - 6, width: 39, height: 111)
+        let glass = CALayer()
+        glass.name = "CASDFLayer"
+        glass.frame = CGRect(x: 6, y: 6, width: 27, height: 99)
+        island.addSublayer(glass)
+        root.addSublayer(island)
+        let name: (CALayer) -> String = { $0.name ?? "CALayer" }
+        let without = PanelGenieView.scanGlass(in: root, surfaceRect: surface, hidesSurfaceMaterial: false, className: name)
+        XCTAssertTrue(without.pills.isEmpty)
+        XCTAssertEqual(without.leftOut.count, 1, "the surface's clip alone leaves the island's glass out")
+        let with = PanelGenieView.scanGlass(in: root, surfaceRect: surface, hidesSurfaceMaterial: false,
+                                            clips: [ObjectIdentifier(island): island.frame], className: name)
+        XCTAssertEqual(with.pills.map(\.rect), [root.convert(glass.bounds, from: glass)], "a live pill for the island")
+        XCTAssertTrue(with.hidden.contains { $0 === glass }, "its glass is out of the snapshot")
+    }
+
     func testSwoopKeepsItsShapeWhereItAlreadyFits() {
         // The fit only acts where the motion would leave the window: at rest
         // and near the corner the transform is the designed one.

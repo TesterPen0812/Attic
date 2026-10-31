@@ -303,11 +303,14 @@ enum PanelSwoopGeometry {
     /// the visible surface and `hostBounds` the whole layer (surface plus
     /// its shadow margin, the window's own bounds), both in the layer's
     /// bounds coordinates.
+    /// `anchor`: the point the panel hides into (nil: the surface's corner;
+    /// the docked panel's is the island's outer corner).
     static func transform(
-        progress: Double, visibleBounds: CGRect, hostBounds: CGRect, layerAnchor: CGPoint, corner: ScreenCorner
+        progress: Double, visibleBounds: CGRect, hostBounds: CGRect, layerAnchor: CGPoint, corner: ScreenCorner,
+        anchor: CGPoint? = nil
     ) -> CATransform3D {
-        let world = fitted(worldTransform(progress: progress, visibleBounds: visibleBounds, corner: corner),
-                           in: hostBounds, corner: corner, visibleBounds: visibleBounds)
+        let world = fitted(worldTransform(progress: progress, visibleBounds: visibleBounds, corner: corner, anchor: anchor),
+                           in: hostBounds, corner: corner, visibleBounds: visibleBounds, anchor: anchor)
         // A layer transforms about its anchor point.
         var layer = CATransform3DMakeTranslation(layerAnchor.x, layerAnchor.y, 0)
         layer = CATransform3DConcat(layer, world)
@@ -319,14 +322,14 @@ enum PanelSwoopGeometry {
     /// viewer and swells it, and its bow carries it sideways, a quarter of
     /// the way in, past the window's 28 pt margin; the window cut it off on
     /// a straight line (owner, 2026-10-19). `fitted` keeps it inside.
-    static func worldTransform(progress: Double, visibleBounds: CGRect, corner: ScreenCorner) -> CATransform3D {
+    static func worldTransform(progress: Double, visibleBounds: CGRect, corner: ScreenCorner,
+                               anchor: CGPoint? = nil) -> CATransform3D {
         let p = min(1, max(0, progress))
         guard p > 0 else { return CATransform3DIdentity }
         typealias T = PanelHideMotionTuning
         let right = corner == .topRight || corner == .bottomRight
         let top = corner == .topRight || corner == .topLeft
-        let cornerPoint = CGPoint(x: right ? visibleBounds.maxX : visibleBounds.minX,
-                                  y: top ? visibleBounds.maxY : visibleBounds.minY)
+        let cornerPoint = anchor ?? PanelCollapseGeometry.cornerPoint(of: visibleBounds, corner: corner)
         // The line from the panel's centre to its corner, and the bow's
         // direction: as far off that line as its normal, but inward on both
         // axes, away from the side edge and from the menu bar or Dock edge.
@@ -360,11 +363,8 @@ enum PanelSwoopGeometry {
     /// swipe and the keyframes see one shape, and it always pulls toward the
     /// corner the motion is heading for.
     static func fitted(_ world: CATransform3D, in hostBounds: CGRect, corner: ScreenCorner,
-                       visibleBounds: CGRect) -> CATransform3D {
-        let right = corner == .topRight || corner == .bottomRight
-        let top = corner == .topRight || corner == .topLeft
-        let pivot = CGPoint(x: right ? visibleBounds.maxX : visibleBounds.minX,
-                            y: top ? visibleBounds.maxY : visibleBounds.minY)
+                       visibleBounds: CGRect, anchor: CGPoint? = nil) -> CATransform3D {
+        let pivot = anchor ?? PanelCollapseGeometry.cornerPoint(of: visibleBounds, corner: corner)
         guard hostBounds.insetBy(dx: 1, dy: 1).contains(pivot) else { return world }
         // A rectangle under a perspective with every w > 0 draws a convex
         // quad, so its bounding box is its corners'.
@@ -479,10 +479,15 @@ final class PanelGenieRenderer: @unchecked Sendable {
         var alpha: Float
         var right: Float
         var top: Float
-        var padding: SIMD2<Float> = .zero
+        /// Where the funnel ends: its mouth's corner, in from the view's
+        /// corner on `corner`'s side, as fractions of the view's width and
+        /// height (zero: the view's own corner). The docked panel's is the
+        /// island's outer corner (Accepted "Tall island", "Hiding and
+        /// showing as one shape").
+        var inset: SIMD2<Float> = .zero
     }
 
-    static func uniforms(progress: Double, corner: ScreenCorner) -> Uniforms {
+    static func uniforms(progress: Double, corner: ScreenCorner, inset: SIMD2<Float> = .zero) -> Uniforms {
         typealias T = PanelHideMotionTuning
         let p = min(1, max(0, progress))
         return Uniforms(
@@ -491,7 +496,8 @@ final class PanelGenieRenderer: @unchecked Sendable {
             mouth: Float(T.genieMouth * (1 - T.genieMouthClose * smoothstep(0.55, 1, p))),
             alpha: Float(1 - smoothstep(T.genieFadeStart, 1, p)),
             right: corner == .topRight || corner == .bottomRight ? 1 : 0,
-            top: corner == .topRight || corner == .topLeft ? 1 : 0
+            top: corner == .topRight || corner == .topLeft ? 1 : 0,
+            inset: SIMD2(min(max(inset.x, 0), 0.5), min(max(inset.y, 0), 0.5))
         )
     }
 
@@ -500,10 +506,13 @@ final class PanelGenieRenderer: @unchecked Sendable {
     static func position(_ gx: Float, _ gy: Float, _ u: Uniforms) -> SIMD2<Float> {
         let s = u.right > 0.5 ? gx : 1 - gx
         let v = u.top > 0.5 ? gy : 1 - gy
-        let w = min(s + u.slide, 1)
-        let t = min(1, max(0, w))
+        // The straight edge (x) and the mouth's top (y) on the corner's
+        // side; at a zero inset, the view's own edges.
+        let wall = 1 - u.inset.x, edge = 1 - u.inset.y
+        let w = min(s + u.slide, wall)
+        let t = min(1, max(0, w / wall))
         let f = u.curve * t * t * (3 - 2 * t)
-        let b = f * (1 - u.mouth) * (1 - v) + v
+        let b = v + f * (edge - u.mouth + u.mouth * v - v)
         return SIMD2(u.right > 0.5 ? w : 1 - w, u.top > 0.5 ? b : 1 - b)
     }
 
@@ -532,15 +541,17 @@ final class PanelGenieRenderer: @unchecked Sendable {
     private static let source = """
     #include <metal_stdlib>
     using namespace metal;
-    struct GenieUniforms { float curve; float slide; float mouth; float alpha; float right; float top; float2 padding; };
+    struct GenieUniforms { float curve; float slide; float mouth; float alpha; float right; float top; float2 inset; };
     struct GenieOut { float4 position [[position]]; float2 uv; };
     vertex GenieOut genieVertex(uint vid [[vertex_id]], constant float2 *grid [[buffer(0)]], constant GenieUniforms &u [[buffer(1)]]) {
         float2 g = grid[vid];
         float s = u.right > 0.5 ? g.x : 1.0 - g.x;
         float v = u.top > 0.5 ? g.y : 1.0 - g.y;
-        float w = min(s + u.slide, 1.0);
-        float f = u.curve * smoothstep(0.0, 1.0, w);
-        float b = mix(f * (1.0 - u.mouth), 1.0, v);
+        float wall = 1.0 - u.inset.x;
+        float edge = 1.0 - u.inset.y;
+        float w = min(s + u.slide, wall);
+        float f = u.curve * smoothstep(0.0, 1.0, w / wall);
+        float b = v + f * (edge - u.mouth + u.mouth * v - v);
         float nx = u.right > 0.5 ? w : 1.0 - w;
         float ny = u.top > 0.5 ? b : 1.0 - b;
         GenieOut out;
@@ -608,6 +619,9 @@ final class PanelGenieView: NSView {
     private var displayLink: CADisplayLink?
     private var run: PanelHideMotionRun?
     private var corner: ScreenCorner = .topRight
+    /// Where the funnel's mouth ends, in from the view's corner
+    /// (`PanelGenieRenderer.Uniforms.inset`).
+    var anchorInset: SIMD2<Float> = .zero
     /// Called with every drawn frame's uniforms, in the frame's own
     /// transaction (the live material's mask moves with it).
     var frameObserver: ((PanelGenieRenderer.Uniforms) -> Void)?
@@ -696,9 +710,14 @@ final class PanelGenieView: NSView {
     /// content is rendered alone and the blurs are made from it; the
     /// controls are rendered alone into their own texture, and each
     /// control's glass rides between the two, live, in `dark`'s appearance.
+    ///
+    /// `extras` are layers beside the surface that fly with it (the docked
+    /// panel's island stand-in), each shown inside its own clip: their glass
+    /// rides live like the controls', and they are drawn once, with the
+    /// controls.
     func captureSnapshot(
         of view: NSView, tiers: CALayer?, surfaceRect: CGRect, cornerRadius: CGFloat, dark: Bool,
-        hidesSurfaceMaterial: Bool = false
+        hidesSurfaceMaterial: Bool = false, extras: [(layer: CALayer, clip: CGRect)] = []
     ) {
         let began = CACurrentMediaTime()
         defer { PanelHideMotionTrace.note("total", (CACurrentMediaTime() - began) * 1000) }
@@ -710,7 +729,8 @@ final class PanelGenieView: NSView {
         let width = Int((view.bounds.width * scale).rounded()), height = Int((view.bounds.height * scale).rounded())
         let space = view.window?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
         guard width > 0, height > 0, let context = Self.bitmap(width: width, height: height, space: space) else { return }
-        let scan = Self.scanGlass(in: root, surfaceRect: surfaceRect, hidesSurfaceMaterial: hidesSurfaceMaterial)
+        let scan = Self.scanGlass(in: root, surfaceRect: surfaceRect, hidesSurfaceMaterial: hidesSurfaceMaterial,
+                                  clips: Dictionary(extras.map { (ObjectIdentifier($0.layer), $0.clip) }) { first, _ in first })
         #if DEBUG
         if !scan.materialLayers.isEmpty { PanelHideMotionTrace.materialLayers = scan.materialLayers }
         PanelHideMotionTrace.glassStandIns = scan.pills.map { "\($0.rect.integral)" }
@@ -732,7 +752,7 @@ final class PanelGenieView: NSView {
                 PanelHideMotionTrace.note(name, (CACurrentMediaTime() - stage) * 1000)
                 stage = CACurrentMediaTime()
             }
-            let content = render(hiding: split.aboveContent)
+            let content = render(hiding: split.aboveContent + extras.map(\.layer))
             lap("r_content")
             let controls = render(hiding: split.belowControls)
             lap("r_controls")
@@ -772,6 +792,24 @@ final class PanelGenieView: NSView {
         }
         texture = made
         colorSpace = space
+    }
+
+    /// Tests: the snapshot's most opaque alpha (0…255) around `point` (this
+    /// view's points, y up), over its content and controls; nil without one.
+    func snapshotAlpha(around point: CGPoint) -> UInt8? {
+        guard let texture else { return nil }
+        let scale = CGFloat(texture.width) / max(1, bounds.width)
+        let x = Int((point.x * scale).rounded()), y = Int(((bounds.height - point.y) * scale).rounded())
+        var best: UInt8 = 0
+        for made in [texture, controlsTexture].compactMap({ $0 }) {
+            let x0 = min(max(0, x - 2), made.width - 1), y0 = min(max(0, y - 2), made.height - 1)
+            let w = min(5, made.width - x0), h = min(5, made.height - y0)
+            guard w > 0, h > 0 else { continue }
+            var bytes = [UInt8](repeating: 0, count: w * h * 4)
+            made.getBytes(&bytes, bytesPerRow: w * 4, from: MTLRegionMake2D(x0, y0, w, h), mipmapLevel: 0)
+            for index in stride(from: 3, to: bytes.count, by: 4) { best = max(best, bytes[index]) }
+        }
+        return best
     }
 
     func releaseSnapshot() {
@@ -972,6 +1010,7 @@ final class PanelGenieView: NSView {
     /// pill at the window's edge in a hide's first frames and a reveal's last.)
     static func scanGlass(
         in root: CALayer, surfaceRect: CGRect, hidesSurfaceMaterial: Bool,
+        clips: [ObjectIdentifier: CGRect] = [:],
         className: (CALayer) -> String = { String(describing: type(of: $0)) }
     ) -> GlassScan {
         var scan = GlassScan()
@@ -985,7 +1024,9 @@ final class PanelGenieView: NSView {
         func walk(_ layer: CALayer, clip: CGRect, shown: Bool) {
             let name = className(layer)
             let shown = shown && !layer.isHidden && layer.opacity > 0.01
-            var clip = clip
+            // A layer beside the surface that flies with it shows inside its
+            // own clip, not the surface's.
+            var clip = clips[ObjectIdentifier(layer)] ?? clip
             // A mask's own frame says nothing about what it lets through (the
             // panel's is zero-sized and draws its shape beyond its bounds), so
             // only bounds clipping narrows the clip; the surface bounds it all.
@@ -1252,7 +1293,7 @@ final class PanelGenieView: NSView {
               let frame = surfaces.next(width: width, height: height, device: device),
               let buffer = queue.makeCommandBuffer() else { return }
         let controlsFrame = controlsTexture == nil ? nil : controlSurfaces.next(width: width, height: height, device: device)
-        var uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner)
+        var uniforms = PanelGenieRenderer.uniforms(progress: progress, corner: corner, inset: anchorInset)
         frameObserver?(uniforms)
         controlGlassView.update(uniforms, isShown: controlsFrame != nil)
         func draw(_ texture: MTLTexture?, into target: MTLTexture) {
