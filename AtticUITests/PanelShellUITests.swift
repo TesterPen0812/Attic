@@ -153,40 +153,37 @@ final class PanelShellUITests: XCTestCase {
 
     private func assertOnlySelected(_ name: String, file: StaticString = #filePath, line: UInt = #line) {
         waitFor(page(name).isSelected, "\(name) reads as selected", file: file, line: line)
-        XCTAssertEqual(["tasks", "notes", "canvas"].filter { page($0).isSelected }, [name], file: file, line: line)
+        XCTAssertEqual(["tasks", "notes", "calendar", "canvas"].filter { page($0).isSelected }, [name], file: file, line: line)
     }
 
-    /// Chrome B: shut, the page button is a square the pin's size showing the
-    /// current page (30 pt since control size Medium, owner 2026-10-20; it
-    /// was 32); under the pointer it opens into all three (78 wide, three
-    /// 22 pt chips; it was 84), a click goes there; ⌘1–⌘3 work from anywhere; it shuts when the pointer leaves.
+    /// The Tall island (Planning.md, Accepted 2026-10-31 "Tall island:
+    /// switching pages"; it replaces the bottom bar's hover-to-open switch):
+    /// always on screen beside the panel, a 27 pt capsule of four 21 pt
+    /// items. Pointing never switches; a click does; ⌘1–⌘4 still work.
     /// VoiceOver reads one "Pages" group with a named button per page.
     func testThePageButtonOpensUnderThePointerAndSelectsPages() throws {
         let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pageButton.waitForExistence(timeout: 3))
         XCTAssertEqual(pageButton.label, "Pages")
         pin.hover()
-        XCTAssertEqual(pin.frame.width, 30, accuracy: 1, "chrome B's corner control, Medium")
-        XCTAssertEqual(pin.frame.height, 30, accuracy: 1)
-        waitFor(abs(pageButton.frame.width - 30) < 1.5, "shut, it is the pin's size (\(pageButton.frame.width))")
-        XCTAssertEqual(pageButton.frame.height, 30, accuracy: 1)
-        XCTAssertTrue(page("tasks").isHittable, "the current page shows")
+        XCTAssertEqual(pageButton.frame.width, 27, accuracy: 1.5, "a 27 pt capsule (\(pageButton.frame.width))")
+        XCTAssertEqual(pageButton.frame.height, 99, accuracy: 1.5, "four 21 pt items (\(pageButton.frame.height))")
+        for name in ["tasks", "notes", "calendar", "canvas"] {
+            XCTAssertTrue(page(name).isHittable, "\(name) is always on the island")
+        }
         XCTAssertEqual(page("notes").label, "Notes")
         assertOnlySelected("tasks")
 
-        pageButton.hover()
-        waitFor(page("notes").isHittable && page("canvas").isHittable, "under the pointer it opens")
-        waitFor(abs(pageButton.frame.width - 78) < 1.5, "to 78 pt (\(pageButton.frame.width))")
+        page("notes").hover()
+        Thread.sleep(forTimeInterval: 0.4)
+        assertOnlySelected("tasks")
         page("notes").click()
         assertOnlySelected("notes")
 
         app.typeKey("3", modifierFlags: .command)
-        assertOnlySelected("canvas")
+        assertOnlySelected("calendar")
         app.typeKey("1", modifierFlags: .command)
         assertOnlySelected("tasks")
-
-        pin.hover()
-        waitFor(abs(pageButton.frame.width - 30) < 1.5, "it shuts when the pointer leaves")
     }
 
     /// Focus rings are for keyboard navigation only: clicking pages leaves
@@ -198,8 +195,6 @@ final class PanelShellUITests: XCTestCase {
         pin.hover()
         Thread.sleep(forTimeInterval: 0.6)
         let before = pageButton.screenshot()
-        pageButton.hover()
-        waitFor(page("notes").isHittable, "it opens")
         page("notes").click()
         // An open note's bar has no page switch; ⌘1 (no navigation key, so
         // no ring) comes back from there.
