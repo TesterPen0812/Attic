@@ -407,6 +407,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
            lastUsableFrame != usableFrame(on: screen, corner: currentCorner) {
             recoverPanelInsideUsableArea(preferredScreen: screen)
         }
+        islandWindows.updatePassthrough(at: point)
         guard !isLiveResizing else {
             if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
             return
@@ -2069,6 +2070,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self.globalPointerMonitor = nil
         }
         if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
+        islandWindows.stopPassthrough()
         isDisplayingResizeCursor = false
     }
 }

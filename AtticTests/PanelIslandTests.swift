@@ -263,6 +263,39 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    /// The island window's clear margin (room for its focus ring) never
+    /// takes a click meant for the window under it; only the capsule does.
+    /// The label window never takes the pointer at all.
+    func testTheIslandsClearMarginPassesThePointerThrough() throws {
+        try withController { controller, _, _ in
+            let windows = controller.islandWindowsForTesting
+            let capsule = windows.islandFrame
+            let margin = PanelIslandLayout.windowMargin
+            XCTAssertTrue(windows.island.frame.contains(CGPoint(x: capsule.maxX + margin / 2, y: capsule.midY)))
+            let inMargin = [CGPoint(x: capsule.maxX + margin / 2, y: capsule.midY),
+                            CGPoint(x: capsule.minX - margin / 2, y: capsule.midY),
+                            CGPoint(x: capsule.midX, y: capsule.maxY + margin / 2),
+                            CGPoint(x: capsule.midX, y: capsule.minY - margin / 2)]
+            for point in inMargin {
+                controller.updateMousePassthrough(at: point)
+                XCTAssertTrue(windows.island.ignoresMouseEvents, "the clear margin at \(point) passes clicks through")
+                XCTAssertTrue(windows.label.ignoresMouseEvents)
+            }
+            controller.updateMousePassthrough(at: CGPoint(x: capsule.midX, y: capsule.midY))
+            XCTAssertFalse(windows.island.ignoresMouseEvents, "the capsule takes the pointer")
+            XCTAssertTrue(windows.label.ignoresMouseEvents, "the label never takes the pointer")
+            let item = PanelIslandLayout.itemFrame(0, in: capsule)
+            controller.updateMousePassthrough(at: CGPoint(x: item.midX, y: item.midY))
+            XCTAssertFalse(windows.island.ignoresMouseEvents, "an item takes the pointer")
+            // Pointing elsewhere (here, the panel) leaves the capsule
+            // hittable, for a click or an accessibility hit test there.
+            controller.updateMousePassthrough(at: CGPoint(x: windows.island.frame.maxX + 40, y: capsule.midY))
+            controller.updateMousePassthrough(at: CGPoint(x: capsule.maxX + margin / 2, y: capsule.midY))
+            controller.updateMousePassthrough(at: CGPoint(x: windows.island.frame.minX - 40, y: capsule.midY))
+            XCTAssertFalse(windows.island.ignoresMouseEvents, "off the island window, it still takes the pointer")
+        }
+    }
+
     // MARK: The owner's recording of build 1 (31 Oct)
 
     /// Every item's icon has the same ink and weight, as the design draws

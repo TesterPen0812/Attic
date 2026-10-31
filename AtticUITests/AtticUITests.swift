@@ -40,6 +40,13 @@ final class AtticUITests: XCTestCase {
         ] = token
     }
 
+    /// The Attic panel's window. The Tall island sits beside the panel in a
+    /// window of its own ("Pages"), so the app has more than one dialog and
+    /// the first one is not always the panel (Accepted "Tall island").
+    private var panelWindow: XCUIElement {
+        app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
+    }
+
     /// The main Attic panel stays visible under UI testing and is docked over
     /// the right side of the default 1024pt CI display. Move Settings into the
     /// clear work area before interacting with controls that otherwise exist
@@ -256,7 +263,7 @@ final class AtticUITests: XCTestCase {
         in settings: XCUIElement,
         page: XCUIElement
     ) {
-        let panel = app.dialogs.firstMatch
+        let panel = panelWindow
         guard element.waitForExistence(timeout: 3), panel.exists else { return }
         let band = settingsBand()
         for _ in 0..<8 {
@@ -378,7 +385,7 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(pin.isSelected)
         pin.click()
         XCTAssertTrue(pin.wait(for: \.isSelected, toEqual: false, timeout: 5))
-        let outside = app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
+        let outside = panelWindow.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220))
         outside.hover()
         let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !plus.exists }, object: nil)
@@ -417,7 +424,7 @@ final class AtticUITests: XCTestCase {
             body.exists && (body.value(forKey: "hasKeyboardFocus") as? Bool) == true
         }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: nil)], timeout: 5), .completed)
-        app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
+        panelWindow.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: -100, dy: 220)).hover()
         XCTAssertTrue(body.waitForNonExistence(timeout: 8), "Autosaved Notes focus must not permanently pin the main panel")
     }
@@ -484,7 +491,7 @@ final class AtticUITests: XCTestCase {
         func recordPanel(_ name: String) {
             // Evidence only: the live panel, and the Settings window as the
             // user sees it at that moment.
-            let attachment = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
+            let attachment = XCTAttachment(screenshot: panelWindow.screenshot())
             attachment.name = name
             attachment.lifetime = .keepAlways
             add(attachment)
@@ -766,7 +773,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testNativePanelResizeKeepsDockedEdgesAndMinimumSize() throws {
-        let panel = app.dialogs.firstMatch
+        let panel = panelWindow
         XCTAssertTrue(panel.waitForExistence(timeout: 3))
         app.buttons["panel-pin-button"].click()
         let initial = panel.frame
@@ -825,7 +832,7 @@ final class AtticUITests: XCTestCase {
         // The native AX scroll area reports its inset visible viewport.
         // Its height still protects against a short, fixed-height editor;
         // the header transition below proves that the document scrolls.
-        XCTAssertGreaterThan(scroll.frame.height, app.dialogs.firstMatch.frame.height * 0.5)
+        XCTAssertGreaterThan(scroll.frame.height, panelWindow.frame.height * 0.5)
         let pinFrame = pin.frame
         let controlsFrame = controls.frame
         let headerTitle = app.descendants(matching: .any)["notes-header-title"]
@@ -838,7 +845,7 @@ final class AtticUITests: XCTestCase {
         XCTAssertEqual(pin.frame, pinFrame)
         XCTAssertEqual(controls.frame, controlsFrame)
         XCTAssertEqual(body.value as? String, text)
-        let capture = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
+        let capture = XCTAttachment(screenshot: panelWindow.screenshot())
         capture.name = "Note-text-under-fixed-controls"
         capture.lifetime = .keepAlways
         add(capture)

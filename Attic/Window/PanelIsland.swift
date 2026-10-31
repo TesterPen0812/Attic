@@ -560,6 +560,26 @@ final class PanelIslandWindows {
         }
     }
 
+    /// Only the capsule takes the pointer. The window's clear margin (room
+    /// for the focus ring) passes clicks and hit-testing to the window under
+    /// it, as the panel's clear corners do. Elsewhere the window keeps taking
+    /// the pointer, so the capsule stays hittable. Moving onto the margin
+    /// also clears the pointed item, since the island then hears no exit.
+    /// Left alone while a button is held, so a pull off the island keeps
+    /// its drag and release.
+    func updatePassthrough(at point: CGPoint) {
+        guard NSEvent.pressedMouseButtons == 0 else { return }
+        let ignores = island.frame.contains(point) && !islandFrame.contains(point)
+        guard island.ignoresMouseEvents != ignores else { return }
+        island.ignoresMouseEvents = ignores
+        if ignores { model.point(at: nil) }
+    }
+
+    /// The island takes the pointer everywhere again (monitoring stopped).
+    func stopPassthrough() {
+        if island.ignoresMouseEvents { island.ignoresMouseEvents = false }
+    }
+
     private static let fadeKey = "attic.island.presentation"
 
     /// How shown the island is meant to be (the fade's end).
