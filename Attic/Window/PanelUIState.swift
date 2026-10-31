@@ -53,6 +53,9 @@ final class PanelUIState: ObservableObject {
     /// One tracker at the panel's root, so every page and bar, new ones
     /// included, follows it without opting in.
     let keyboardFocus = AtticKeyboardFocusTracker()
+    /// The Tall island's state (Accepted 2026-10-31): the page it marks,
+    /// the item under the pointer, and its clicks' page requests.
+    let island = PanelIslandModel()
     var editingDraftTitle: String {
         get { renameDraft.title }
         set { renameDraft.title = newValue }
@@ -269,6 +272,7 @@ final class PanelUIState: ObservableObject {
         confirmingTaskCompletionID = nil
         isCanvasConfirmationPresented = false
         selectedSection = section
+        island.show(PanelPage(section))
     }
 
     func endAdding() {
