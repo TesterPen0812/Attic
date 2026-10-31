@@ -289,17 +289,20 @@ struct TasksBottomBar<AddBar: View>: View {
 
     @Environment(\.atticDesign) private var design
     /// In the panel the shell draws the switch, the tag bar and "+" once
-    /// for every page (owner, 2026-10-31): here they are clear stand-ins,
-    /// and the add field folds out over them as before.
+    /// for every page (owner, 2026-10-31): here they are clear stand-ins.
+    /// There "+" opens the shell's card (Phase B), so the bar never folds
+    /// into the add field; hosted on its own it still does.
     @Environment(\.panelSharedChrome) private var sharedChrome
+    /// The page's Tab order, lent to the shared "+" (`TasksTabStop.plus`).
+    @Environment(\.atticFocusRequests) private var focusRequests
 
     var body: some View {
         let hasDraft = !text.text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let folded = TasksPanelDesign.footerFolded(addFocused: addFocused, hasDraft: hasDraft)
+        let shared = sharedChrome != nil
+        let folded = !shared && TasksPanelDesign.footerFolded(addFocused: addFocused, hasDraft: hasDraft)
         let side = AtticControlSize.headerControl
         // Done has no tag filter: its bar keeps its place, empty.
         let tagsShown = tab != .done
-        let shared = sharedChrome != nil
         HStack(alignment: .bottom, spacing: 0) {
             HStack(spacing: TasksDesignMetrics.footerGap) {
                 if shared {
@@ -318,11 +321,14 @@ struct TasksBottomBar<AddBar: View>: View {
             .allowsHitTesting(!folded)
             .accessibilityHidden(folded)
             ZStack(alignment: .bottomTrailing) {
-                // Always built, so "+" (or ⌘N) can give it the keyboard.
-                addBar()
-                    .opacity(folded ? 1 : 0)
-                    .allowsHitTesting(folded)
-                    .accessibilityHidden(!folded)
+                // Always built, so "+" (or ⌘N) can give it the keyboard;
+                // the panel's card replaces it there.
+                if !shared {
+                    addBar()
+                        .opacity(folded ? 1 : 0)
+                        .allowsHitTesting(folded)
+                        .accessibilityHidden(!folded)
+                }
                 if !folded, shared {
                     Color.clear.frame(width: side, height: side)
                 } else if !folded {
@@ -343,7 +349,7 @@ struct TasksBottomBar<AddBar: View>: View {
                         look: PanelBottomBarLook(middle: .tags(tags: tags, selection: tagSelection, idPrefix: "tasks-tag-bar",
                                                                shown: tagsShown),
                                                  plus: PanelBottomBarLook.tasksPlus, folded: folded),
-                        actions: PanelBottomBarActions(selectTag: onSelectTag, plus: onPlus))
+                        actions: PanelBottomBarActions(selectTag: onSelectTag, plus: onPlus, focusRequests: focusRequests))
     }
 
     /// "+" expanding into the field and back: the bar's fold token.

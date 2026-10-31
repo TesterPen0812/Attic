@@ -63,6 +63,8 @@ struct TasksPageHost: View {
     @State private var filesHold: PanelEditHold
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
+    /// The panel's "+" card, which replaces the add bar in the panel.
+    @Environment(\.panelComposer) private var panelComposer
 
     init(store: TaskStore, uiState: PanelUIState, settings: AppSettings, state: TasksPageState,
          layout: PanelPageLayout, chromeInteractionState: PanelChromeInteractionState,
@@ -222,7 +224,7 @@ struct TasksPageHost: View {
             if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
             // Only the page shown takes the shell's focus (a page built
             // behind Notes, or prepared on approach, never takes it).
-            if isCurrent, uiState.isComposerPresented { addBarFocused = true }
+            if isCurrent, uiState.isComposerPresented { takeNewTaskFocus(ending: true) }
             handlePrimaryInputFocusRequest()
             handleSearchRequest(model, request: uiState.searchRequest)
             showItemIfNeeded(model, uiState.shownItem)
@@ -284,7 +286,7 @@ struct TasksPageHost: View {
         // relayed through a `@FocusState` no view was focused on, SwiftUI
         // dropped it (H5-05).
         .onChange(of: primaryInputFocusRequest) { _, _ in handlePrimaryInputFocusRequest() }
-        .onChange(of: uiState.isComposerPresented) { _, presented in if presented, isCurrent { addBarFocused = true } }
+        .onChange(of: uiState.isComposerPresented) { _, presented in if presented, isCurrent { takeNewTaskFocus(ending: true) } }
         .onChange(of: addBarFocused) { _, focused in
             if !focused, isCurrent, uiState.isComposerPresented { uiState.endAdding() }
         }
@@ -297,7 +299,20 @@ struct TasksPageHost: View {
     private func handlePrimaryInputFocusRequest() {
         guard isCurrent, primaryInputFocusRequest != state.handledPrimaryInputFocusRequest else { return }
         state.handledPrimaryInputFocusRequest = primaryInputFocusRequest
-        addBarFocused = true
+        takeNewTaskFocus(ending: false)
+    }
+
+    /// The hotkey, the corner or an explicit open: the keyboard lands where
+    /// a new task is typed, the panel's "+" card (or, hosted on its own,
+    /// the add bar). `ending` closes the shell's adding state the card
+    /// does not hold.
+    private func takeNewTaskFocus(ending: Bool) {
+        guard let panelComposer else {
+            addBarFocused = true
+            return
+        }
+        panelComposer.open(on: .tasks(state.model(for: store, toasts: toasts).tab))
+        if ending { uiState.endAdding() }
     }
 
     /// `request` is the new value: a published value is sent before the
