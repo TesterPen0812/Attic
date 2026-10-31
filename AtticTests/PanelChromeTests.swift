@@ -295,6 +295,9 @@ final class PanelChromeTests: XCTestCase {
     }
 
     func testTasksTopRowBottomBarSearchAndTagBar() throws {
+        // The motion path, stated (GitHub's runners turn Reduce Motion on).
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         try withPanel { host, state, tasksState, store, _, chrome in
             state.selectSection(.tasks)
             spin(1.0)
@@ -349,7 +352,33 @@ final class PanelChromeTests: XCTestCase {
     /// A real Escape in the open search field (the key-window route of
     /// `TasksRound12Tests`) closes the search and brings Pin back, its
     /// raised material told to draw its glass again.
+    /// Under Reduce Motion the pin and its glass still fold away while the
+    /// search is open (no glass or hit target left behind) and come back
+    /// when it closes, at once rather than in the search's motion.
+    func testUnderReduceMotionThePinsGlassFoldsWithTheSearchAndComesBack() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
+        try withPanel { host, state, _, _, _, _ in
+            state.selectSection(.tasks)
+            spin(1.0)
+            let searchButton = try XCTUnwrap(element("tasks-find-button", in: host))
+            XCTAssertTrue(searchButton.accessibilityPerformPress?() ?? false)
+            spin(0.8)
+            XCTAssertNotNil(element("tasks-find", in: host), "the search is open")
+            XCTAssertNil(element("panel-pin-button", in: host), "Pin folds away")
+            XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "and so does its glass")
+            let close = try XCTUnwrap(elements(host).first { ($0.accessibilityLabel?() ?? "") == "End search" })
+            XCTAssertTrue(close.accessibilityPerformPress?() ?? false)
+            spin(0.8)
+            XCTAssertNotNil(element("panel-pin-button", in: host), "Pin is back")
+            XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: false, gone: false), "and so is its glass")
+        }
+    }
+
     func testEscapeInTheSearchBringsThePinAndItsGlassBack() throws {
+        // The motion path, stated (GitHub's runners turn Reduce Motion on).
+        AtticMotionPreference.systemReduceMotionOverride = false
+        defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         try requireKeyWindowTests()
         try withPanel { host, state, tasksState, store, _, _ in
             state.selectSection(.tasks)
@@ -459,7 +488,7 @@ final class PanelChromeTests: XCTestCase {
     /// search has an × at its end that ends it like Escape, and a click on
     /// the page's empty space ends it too, on Tasks, Notes and Calendar.
     func testTheSearchClosesFromItsCrossAndFromAClickOnEmptySpace() throws {
-        try withPanel { host, state, _, _, draft, _ in
+        try withPanel { host, state, tasksState, store, draft, _ in
             let window = try XCTUnwrap(host.window)
             @MainActor func click(_ point: CGPoint) throws {
                 for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -496,7 +525,10 @@ final class PanelChromeTests: XCTestCase {
                 try open()
                 window.makeKey()
                 if section == .tasks {
-                    // A row takes its own click: the search stays.
+                    // A row takes its own click: a search with words in it
+                    // stays (an empty one may end as its field loses focus).
+                    tasksState.model(for: store, toasts: nil).setSearchQuery("books", for: .now)
+                    spin(0.5)
                     let row = try XCTUnwrap(elements(host).first { ($0.accessibilityLabel?() ?? "").hasPrefix("Return books") }
                         .flatMap { frame(ofElement: $0, in: host) }, "a row")
                     try click(CGPoint(x: row.midX, y: host.bounds.height - row.midY))

@@ -178,6 +178,16 @@ private struct AtticSystemDesignModifier: ViewModifier {
     /// The Mac's setting (or a UI-test launch's, `AtticTransparencySeam`).
     private var reduceTransparency: Bool { AtticTransparencySeam.resolve(systemReduceTransparency) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The Mac's Reduce Motion, or in tests the rig's stated one
+    /// (`AtticMotionPreference.systemReduceMotionOverride`: GitHub's runners
+    /// turn it on).
+    private var systemReduceMotion: Bool {
+        #if DEBUG
+        AtticMotionPreference.systemReduceMotionOverride ?? reduceMotion
+        #else
+        reduceMotion
+        #endif
+    }
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
     func body(content: Content) -> some View {
@@ -196,7 +206,7 @@ private struct AtticSystemDesignModifier: ViewModifier {
             tintLength: tintLength,
             increaseContrast: contrast == .increased,
             reduceTransparency: reduceTransparency,
-            reduceMotion: animations.reducesMotion(systemReduceMotion: reduceMotion),
+            reduceMotion: animations.reducesMotion(systemReduceMotion: systemReduceMotion),
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
             controls: controls,
