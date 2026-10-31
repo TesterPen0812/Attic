@@ -1740,6 +1740,12 @@ private struct AtticRowControlAnchorsKey: PreferenceKey {
     }
 }
 
+/// A control's frame on a 1/256 pt grid (`onAtticRowControlFramesChange`).
+func atticControlGrid(_ rect: CGRect) -> CGRect {
+    func snap(_ value: CGFloat) -> CGFloat { (value * 256).rounded() / 256 }
+    return CGRect(x: snap(rect.minX), y: snap(rect.minY), width: snap(rect.width), height: snap(rect.height))
+}
+
 extension View {
     func atticRowControl() -> some View {
         anchorPreference(key: AtticRowControlAnchorsKey.self, value: .bounds) { [$0] }
@@ -1750,7 +1756,12 @@ extension View {
     func onAtticRowControlFramesChange(_ action: @escaping ([CGRect]) -> Void) -> some View {
         overlayPreferenceValue(AtticRowControlAnchorsKey.self) { anchors in
             Color.clear
-                .onGeometryChange(for: [CGRect].self) { proxy in anchors.map { proxy[$0] } } action: { frames in
+                // On a 1/256 pt grid: a transform animating at identity
+                // (a row's removal) reads its frames with float noise every
+                // frame, and each read was a new report. A departing cell
+                // then took its row's controls back from a newer cell, and
+                // its teardown erased them (RoundN L04).
+                .onGeometryChange(for: [CGRect].self) { proxy in anchors.map { atticControlGrid(proxy[$0]) } } action: { frames in
                     action(frames)
                 }
                 .allowsHitTesting(false)
