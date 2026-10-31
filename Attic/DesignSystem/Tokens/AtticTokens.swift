@@ -335,6 +335,8 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     // Settings
     case pageTitle, sectionHeading, sidebarHeading, sidebarRow, groupLabel, groupValue
     case settingsHelper, settingsHint, tileLabel, tileLabelSelected, rowSingle
+    /// The "+" card (Accepted 2026-10-29): its title, writing, chips and Create.
+    case composerTitle, composerWriting, composerChip, composerCreate
 
     struct Spec: Equatable {
         let size: CGFloat
@@ -351,7 +353,8 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     var isListText: Bool {
         switch self {
         case .rowTitle, .rowTitleActive, .rowMeta, .rowMetaEmphasis, .count, .priorityMark,
-             .pageTab, .pageTabSelected, .sectionToggle, .listBody: true
+             .pageTab, .pageTabSelected, .sectionToggle, .listBody,
+             .composerTitle, .composerWriting, .composerChip, .composerCreate: true
         default: false
         }
     }
@@ -413,6 +416,11 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .settingsHint: Spec(size: 12.5, weight: .regular, italic: true, monospacedDigits: false)
         case .tileLabel: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .tileLabelSelected: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
+        // The design's 28, 21, 20 and 22 px (drawn at 2x).
+        case .composerTitle: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
+        case .composerWriting: Spec(size: 10.5, weight: .regular, italic: false, monospacedDigits: false)
+        case .composerChip: Spec(size: 10, weight: .regular, italic: false, monospacedDigits: true)
+        case .composerCreate: Spec(size: 11, weight: .semibold, italic: false, monospacedDigits: false)
         }
     }
 

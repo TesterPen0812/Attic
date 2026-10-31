@@ -153,6 +153,12 @@ enum PanelHideRequestResult: Equatable {
 
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
+    /// The history ⌘Z reaches with the keyboard nowhere in a page.
+    private var unhandledUndoHistory: UndoHistoryID? {
+        let section = uiState.selectedSection
+        return section.isTaskBased ? .tasks : section.isCalendar ? .calendar : nil
+    }
+
     private let panel: AtticPanel
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
@@ -656,13 +662,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
         // say): the Tasks history, the one the Undo toast names.
+        // On Calendar: its own history, where the "+" card's events, tasks
+        // and notes made there are steps (w3 composer).
         panel.onUnhandledUndo = { [weak self] redo in
-            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return }
-            _ = redo ? library.redo(in: .tasks) : library.undo(in: .tasks)
+            guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return }
+            _ = redo ? library.redo(in: history) : library.undo(in: history)
         }
         panel.canPerformUnhandledUndo = { [weak self] redo in
-            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return false }
-            return redo ? library.undo.canRedo(in: .tasks) : library.undo.canUndo(in: .tasks)
+            guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return false }
+            return redo ? library.undo.canRedo(in: history) : library.undo.canUndo(in: history)
         }
         panel.onPressEnded = { [weak self] in self?.pressEnded() }
         panel.onDirectContentInteraction = { [weak self] in
