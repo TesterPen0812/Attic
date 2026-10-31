@@ -206,7 +206,14 @@ final class PanelShellUITests: XCTestCase {
         }
         waitFor(page("notes").isHittable, "it opens")
         page("notes").click()
-        page("tasks").click()
+        // An open note's bar has no page switch; ⌘1 (no navigation key, so
+        // no ring) comes back from there.
+        if page("tasks").waitForExistence(timeout: 2) {
+            page("tasks").click()
+        } else {
+            app.typeKey("1", modifierFlags: .command)
+        }
+        XCTAssertTrue(app.buttons["tasks-new-task"].waitForExistence(timeout: 3), "back on Tasks")
         pin.hover()
         Thread.sleep(forTimeInterval: 0.8)
         let after = pageButton.screenshot()

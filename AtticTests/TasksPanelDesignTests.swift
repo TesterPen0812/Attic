@@ -11,6 +11,30 @@ import XCTest
 /// sizes (drawn at 2×, px ÷ 2 = pt).
 @MainActor
 final class TasksPanelDesignTests: XCTestCase {
+    /// The strip over the hosted add bar is hidden from VoiceOver (and UI
+    /// tests) while the bar is empty: only its buttons' look is kept built.
+    func testTheEmptyBarsStripIsHiddenFromAccessibility() throws {
+        // As under VoiceOver or a UI test: SwiftUI builds its full tree.
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        var chain: [String] = []
+        func find(_ element: AnyObject, depth: Int, path: [String]) -> Bool {
+            guard depth < 40 else { return false }
+            let id = (element.accessibilityIdentifier?() ?? nil) ?? ""
+            let here = path + ["\(type(of: element)) \((element.accessibilityRole?() ?? nil)?.rawValue ?? "") \(id)"]
+            if id == "composer-date" { chain = here; return true }
+            return ((element.accessibilityChildren?() ?? nil) ?? []).contains { find($0 as AnyObject, depth: depth + 1, path: here) }
+        }
+        let found = find(try XCTUnwrap(hosted.window.contentView), depth: 0, path: [])
+        if found { print("STRIPCHAIN\n" + chain.suffix(8).joined(separator: "\n")) }
+        XCTAssertFalse(found, "no strip in the accessibility tree while the bar is empty")
+    }
+
     /// Mon 21 Sep 2026, 14:13 UTC.
     private let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
     private let calendar: Calendar = {

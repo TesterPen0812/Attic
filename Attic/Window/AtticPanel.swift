@@ -1769,14 +1769,14 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     /// The accessibility hit test (VoiceOver's pointer, XCUITest's hit
     /// point): SwiftUI answers with the first node in tree order under the
-    /// point, even an ignored one with no role, such as a page's clear
-    /// stand-in for a bar or the tabs' click band. Those lie under the
-    /// shell's controls (drawn later, above them), so every top-row control
-    /// and the page switch hit the stand-in. An ignored node is never the
-    /// answer: the topmost real element under the point is.
+    /// point, even an ignored one with no role (a page's clear stand-in for
+    /// a bar, the tabs' click band) or a row scrolled under the bars. Those
+    /// lie under the shell's controls, which are drawn later, above them, so
+    /// every top-row control and the page switch were "Not hittable". The
+    /// answer is the topmost real element under the point: the last in tree
+    /// order, as drawing goes.
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
         let hit = super.accessibilityHitTest(point)
-        guard let node = hit as AnyObject?, Self.isPlaceholder(node) else { return hit }
         return Self.topmostElement(in: self, at: point) ?? hit
     }
 
@@ -1798,9 +1798,11 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             visited += 1
             for child in (node.accessibilityChildren?() ?? nil) ?? [] {
                 let element = child as AnyObject
-                guard (element.accessibilityFrame?() ?? .zero).contains(point) || ((element.accessibilityChildren?() ?? nil) ?? []).count > 0
-                else { continue }
-                if (element.accessibilityFrame?() ?? .zero).contains(point), !isPlaceholder(element) { best = element }
+                let frame = element.accessibilityFrame?() ?? .zero
+                // A framed element holds its own: nothing under it lies
+                // outside it (a frameless group is looked into).
+                guard frame.isEmpty || frame.contains(point) else { continue }
+                if !frame.isEmpty, !isPlaceholder(element) { best = element }
                 visit(element, depth: depth + 1)
             }
         }
