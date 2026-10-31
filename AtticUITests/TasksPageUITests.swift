@@ -969,8 +969,14 @@ final class TasksPageUITests: XCTestCase {
     /// Round 5: the add bar's suggestion list keeps the keys in the draft.
     func testKeysTypedWithTheSuggestionsShowingStayInTheDraft() throws {
         select("Call the plumber")
+        // With the keyboard on a row the bar ends in "+" (Accepted
+        // 2026-10-29 "Top row and bottom bar"); "+" opens the add field
+        // with the keyboard in it.
+        let plus = window.buttons["tasks-new-task"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 5))
+        plus.click()
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
-        addBar.click()
+        waitFor((addBar.value(forKey: "hasKeyboardFocus") as? Bool) == true, "\"+\" gives the add field the keyboard")
         addBar.typeText("Buy #la")
         let suggestion = app.menuItems.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 3), "the suggestions show")
