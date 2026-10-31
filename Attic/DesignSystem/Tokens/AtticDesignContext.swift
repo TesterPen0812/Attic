@@ -329,5 +329,19 @@ enum AtticTransparencySeam {
         #endif
     }()
 
-    nonisolated static func resolve(_ system: Bool) -> Bool { forced || system }
+    #if DEBUG
+    /// Tests only: stands in for macOS Reduce Transparency, which GitHub's
+    /// macOS runner images turn on (as they do Reduce Motion), so tests of
+    /// the glass controls can state the setting they test instead of
+    /// inheriting the machine's (`AtticMotionPreference.systemReduceMotionOverride`).
+    nonisolated(unsafe) static var systemOverride: Bool?
+    #endif
+
+    nonisolated static func resolve(_ system: Bool) -> Bool {
+        #if DEBUG
+        forced || (systemOverride ?? system)
+        #else
+        forced || system
+        #endif
+    }
 }

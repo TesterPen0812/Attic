@@ -325,6 +325,11 @@ final class PanelChromeTests: XCTestCase {
     }
 
     func testTasksTopRowBottomBarSearchAndTagBar() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         // The motion path, stated (GitHub's runners turn Reduce Motion on).
         AtticMotionPreference.systemReduceMotionOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
@@ -372,7 +377,6 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertGreaterThan(text.maxX, host.bounds.width - insets.trailing - 40, "the field fills the row to the right inset")
             XCTAssertLessThanOrEqual(text.maxX, host.bounds.width - insets.trailing + 0.5)
             XCTAssertNil(element("panel-pin-button", in: host), "Pin folds away")
-            print("W4DIAG rm=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) rt=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency) ic=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast) states=\(AtticMaterialProbe.states) log=\(AtticMaterialProbe.w4Log.filter { $0.hasPrefix("panel-pin") }.suffix(12)) corners=\(AtticMaterialProbe.corners.count)")
             XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "and so does its glass")
             XCTAssertNil(element("tasks-page-tabs", in: host), "the switch folds away")
             XCTAssertNil(element("panel-settings-button", in: host), "••• folds away")
@@ -387,6 +391,11 @@ final class PanelChromeTests: XCTestCase {
     /// search is open (no glass or hit target left behind) and come back
     /// when it closes, at once rather than in the search's motion.
     func testUnderReduceMotionThePinsGlassFoldsWithTheSearchAndComesBack() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         AtticMotionPreference.systemReduceMotionOverride = true
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
         try withPanel { host, state, _, _, _, _ in
@@ -407,6 +416,11 @@ final class PanelChromeTests: XCTestCase {
     }
 
     func testEscapeInTheSearchBringsThePinAndItsGlassBack() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         // The motion path, stated (GitHub's runners turn Reduce Motion on).
         AtticMotionPreference.systemReduceMotionOverride = false
         defer { AtticMotionPreference.systemReduceMotionOverride = nil }
@@ -428,7 +442,6 @@ final class PanelChromeTests: XCTestCase {
             XCTAssertTrue(searchButton.accessibilityPerformPress?() ?? false)
             spin(0.8)
             XCTAssertNotNil(element("tasks-find", in: host), "the search is open")
-            print("W4DIAG rm=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) rt=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency) ic=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast) states=\(AtticMaterialProbe.states) log=\(AtticMaterialProbe.w4Log.filter { $0.hasPrefix("panel-pin") }.suffix(12)) corners=\(AtticMaterialProbe.corners.count)")
             XCTAssertEqual(AtticMaterialProbe.states["panel-pin"], .init(away: true, gone: true), "the pin's glass is gone")
             let field = try XCTUnwrap(AtticTabsSearchField.searchField(in: host, placeholder: model.searchPlaceholder(for: .now)))
             let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "the field has the keyboard")
@@ -579,6 +592,11 @@ final class PanelChromeTests: XCTestCase {
     /// the composer, "+" and the note and task pages' bottom buttons
     /// included, draws on curve 1.4, never Apple's continuous corner.
     func testEveryRaisedControlOnThePanelIsOnCurveOnePointFour() throws {
+        // Glass controls, stated: GitHub's runners also turn Reduce
+        // Transparency on, which draws every control flat (no raised
+        // material, so no probe; w4 run 41198876185).
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
         AtticMaterialProbe.resetCorners()
         try withPanel { host, state, tasks, store, _, _ in
             for section in [PanelSection.notes, .calendar, .tasks] {
@@ -591,7 +609,6 @@ final class PanelChromeTests: XCTestCase {
             spin(1.0)
             host.display()
         }
-        print("W4DIAG rm=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) rt=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency) ic=\(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast) states=\(AtticMaterialProbe.states) log=\(AtticMaterialProbe.w4Log.filter { $0.hasPrefix("panel-pin") }.suffix(12)) corners=\(AtticMaterialProbe.corners.count)")
         XCTAssertGreaterThan(AtticMaterialProbe.corners.count, 10, "controls drawn")
         XCTAssertEqual(AtticMaterialProbe.corners.filter { $0 == nil }.count, 0, "no control on the continuous (circle) corner")
     }
