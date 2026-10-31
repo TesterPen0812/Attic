@@ -13,7 +13,6 @@ struct CanvasPageHost: View {
     /// The bottom of the header band, measured from the panel's top edge.
     let headerBottom: CGFloat
 
-    @Environment(\.panelSharedChrome) private var sharedChrome
 
     var body: some View {
         CanvasPanelContent(
@@ -26,19 +25,8 @@ struct CanvasPageHost: View {
             topOverlayInset: headerBottom,
             mainControlRects: headerControlRects
         )
-        // The page switch at the bottom left, as on every page (Accepted
-        // 2026-10-29/30); the Draw page itself is still in Backlog.
-        // In the panel the shell draws it, once for every page (owner,
-        // 2026-10-31).
-        .overlay(alignment: .bottomLeading) {
-            if sharedChrome == nil {
-                AtticControlGroup {
-                    PanelPageSwitcher(page: .canvas)
-                }
-                .padding(.leading, layout.chromeInsets.leading)
-                .padding(.bottom, layout.chromeInsets.bottom)
-            }
-        }
+        // The page switch is the Tall island (Accepted 2026-10-31), so the
+        // Draw page has no bottom-left switch of its own.
         .panelBottomBar(.canvas, look: PanelBottomBarLook(), actions: PanelBottomBarActions())
     }
 }

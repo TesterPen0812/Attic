@@ -458,7 +458,7 @@ struct NotesEditorPage: View {
 
     private var ownLibraryBar: some View {
         HStack(spacing: NotesBarMetrics.gap) {
-            PanelPageSwitcher(page: .notes)
+            // The page switch is the Tall island (Accepted 2026-10-31).
             NotesTagBar(tags: library.recentTags(store: noteStore), selection: library.tagFilter) { tag in
                 library.tagFilter = tag
             }

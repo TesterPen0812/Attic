@@ -161,6 +161,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private let panel: AtticPanel
+    /// The Tall island beside the panel (Accepted 2026-10-31): two child
+    /// windows the controller places, shows, hides and fades with it.
+    private let islandWindows: PanelIslandWindows
     var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     /// Whether the panel is on screen (a page switch then animates).
     var isPanelVisible: Bool { panel.isVisible }
@@ -289,11 +292,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             chromeInteractionState: chromeInteractionState
         )
 
+        islandWindows = PanelIslandWindows(model: uiState.island, uiState: uiState, settings: settings)
+
         super.init()
         configurePanel()
         bindContentSize()
+        uiState.island.onClick = { [weak self] in self?.activateFromIsland() }
         uiState.$dockingPreviewCorner.sink { [weak self] corner in
             self?.updateDockingIndicator(corner: corner)
+            self?.layoutIsland(previewCorner: corner)
         }.store(in: &cancellables)
         // Saved data may change what the panel shows, hidden or not: a
         // snapshot taken before it is stale.
@@ -324,7 +331,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let top = corner == .topRight || corner == .topLeft
         let proposed = CGRect(x: right ? frame.maxX + 8 : frame.minX - 36,
                               y: top ? frame.maxY - 28 : frame.minY, width: 28, height: 28)
-        let target = PanelGeometry.avoidingOverlap(proposed, occupied: [frame],
+        let island = PanelIslandLayout.islandFrame(panelFrame: frame, corner: corner)
+        let target = PanelGeometry.avoidingOverlap(proposed, occupied: [frame, island],
             within: TestPresentationPolicy.placementFrame(screen.visibleFrame).insetBy(dx: 4, dy: 4), gap: 8)
         let indicator = dockingIndicator ?? NSPanel(contentRect: target,
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -357,6 +365,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
 
     func containsScreenPoint(_ point: CGPoint) -> Bool {
+        // The island is part of the panel: pointing at it never hides it.
+        if panel.isVisible, islandWindows.contains(point) { return true }
         guard panel.isVisible, panel.frame.contains(point) else { return false }
         let localPoint = CGPoint(
             x: point.x - panel.visibleContentFrame.minX,
@@ -380,14 +390,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // activity; no additional polling or rendering loop is needed.
         if panel.isVisible, !isLiveResizing, !isWindowDragging,
            let screen = panel.screen ?? currentScreen,
-           lastUsableFrame != TestPresentationPolicy.placementFrame(screen.visibleFrame) {
+           lastUsableFrame != usableFrame(on: screen, corner: currentCorner) {
             recoverPanelInsideUsableArea(preferredScreen: screen)
         }
         guard !isLiveResizing else {
             if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
             return
         }
-        let isInsideRectangularFrame = panel.isVisible && panel.frame.contains(point)
+        let isInsideRectangularFrame = panel.isVisible
+            && (panel.frame.contains(point) || islandWindows.contains(point))
         let localPoint = CGPoint(
             x: point.x - panel.visibleContentFrame.minX,
             y: point.y - panel.visibleContentFrame.minY
@@ -434,7 +445,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.cancelTrackpadSwipe()
         stopPanelMotion()
         let frameBeforeWorkAreaRefresh = panel.visibleContentFrame
-        guard let workArea = refreshCurrentWorkArea(preferredScreen: screen) else {
+        guard let workArea = refreshCurrentWorkArea(preferredScreen: screen, corner: corner) else {
             PerformanceSignposts.cancelReveal()
             PerformanceSignposts.cancelPageSwitch()
             return false
@@ -462,6 +473,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
             if makeKey { panel.makeKey() }
             panel.orderFrontRegardless()
+            showIsland()
             resamplePointerPassthrough()
             animateShow(to: safeFrame)
             PerformanceSignposts.panelOrderedFront()
@@ -484,6 +496,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             } else {
                 panel.orderFrontRegardless()
             }
+            showIsland()
 
             resamplePointerPassthrough()
             animateShow(to: finalFrame)
@@ -494,6 +507,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.setVisibleContentFrame(finalFrame, display: true)
         prepareCollapsedPresentation(corner: corner)
         panel.alphaValue = 1
+        // A reveal from hidden: the island comes in on the panel's motion.
+        islandWindows.setPresentation(0)
 
         performanceVisibilityChanges += 1
 
@@ -502,6 +517,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         } else {
             panel.orderFrontRegardless()
         }
+        showIsland()
 
         // The pointer monitor started before the panel was on screen, so
         // its first hit test could not see the corner wedges or the shadow
@@ -575,7 +591,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let generation = visibilityTransition.beginHideTransition(completion: completion)
         isShowing = false
         needsResizeAfterShowing = false
-        let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: TestPresentationPolicy.placementFrame(screen.visibleFrame))
+        let safeFrame = PanelGeometry.constrainedFrame(panel.visibleContentFrame, to: usableFrame(on: screen, corner: currentCorner))
         if !framesMatch(panel.visibleContentFrame, safeFrame) {
             panel.setVisibleContentFrame(safeFrame, display: true)
         }
@@ -583,7 +599,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Move its fixed-size native frame back while the same live subtree
         // collapses, so every hide reason converges on the actual dock anchor.
         let targetFrame = PanelGeometry.panelFrame(
-            in: TestPresentationPolicy.placementFrame(screen.visibleFrame), size: safeFrame.size, corner: currentCorner
+            in: usableFrame(on: screen, corner: currentCorner), size: safeFrame.size, corner: currentCorner
         )
         let reducedFade = hideFadesWhenReduced
         hideFadesWhenReduced = false
@@ -591,6 +607,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                      duration: settings.hideMotionDuration(.slide, hiding: true), reducedFade: reducedFade) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
+                self.islandWindows.hide()
                 self.panel.orderOut(nil)
                 self.contentContainer?.resetReducedFade()
                 self.performanceVisibilityChanges += 1
@@ -891,10 +908,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let resizedPanel = notification.object as? NSWindow else { return }
         uiState.updatePanelSize(((resizedPanel as? AtticPanel)?.visibleContentFrame ?? resizedPanel.frame).size)
+        layoutIsland()
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidMove(_ notification: Notification) {
+        layoutIsland()
         if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
@@ -972,17 +991,19 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             return frame
         }
         let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
+        let previewCorner = PanelDockingPolicy.nearestCorner(
+            for: PanelGeometry.constrainedFrame(frame, to: visibleFrame),
+            in: visibleFrame
+        )
+        // The panel keeps room for the island on the side it would dock to.
+        let panelArea = PanelIslandLayout.panelArea(in: visibleFrame, corner: previewCorner)
         if currentScreen !== screen {
             currentScreen = screen
-            updateResizeLimits(in: visibleFrame)
+            updateResizeLimits(in: panelArea)
         }
         let constrainedFrame = PanelGeometry.constrainedFrame(
             frame,
-            to: visibleFrame
-        )
-        let previewCorner = PanelDockingPolicy.nearestCorner(
-            for: constrainedFrame,
-            in: visibleFrame
+            to: panelArea
         )
         if uiState.dockingPreviewCorner != previewCorner {
             uiState.dockingPreviewCorner = previewCorner
@@ -1006,7 +1027,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
         currentScreen = screen
         let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
-        updateResizeLimits(in: visibleFrame)
+        updateResizeLimits(in: PanelIslandLayout.panelArea(in: visibleFrame, corner: currentCorner))
         let releaseAction = PanelDockingPolicy.releaseAction(
             velocity: velocity,
             translation: translation,
@@ -1098,6 +1119,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// lasts. Returns that progress.
     @discardableResult
     private func applyInteractiveDismissal(recordsSample: Bool) -> CGFloat {
+        let collapse = followInteractiveDismissal(recordsSample: recordsSample)
+        // The island goes with the panel under the fingers.
+        islandWindows.setPresentation(1 - collapse)
+        return collapse
+    }
+
+    private func followInteractiveDismissal(recordsSample: Bool) -> CGFloat {
         let follow = PanelCollapseGeometry.followProgress(
             from: interactiveSwipeStartProgress, distance: lastSwipeDistance, panelWidth: panel.visibleContentFrame.width
         )
@@ -1214,6 +1242,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func restoreFullPresentation() {
         clearInteractiveDismissal()
+        islandWindows.setPresentation(1)
         contentContainer?.setCollapseProgress(0, corner: currentCorner, reduceMotion: true)
         contentContainer?.allowsContentInteraction = true
     }
@@ -1237,7 +1266,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             isApplyingInteractiveCorner = false
         }
 
-        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
+        let visibleFrame = usableFrame(on: screen, corner: corner)
         updateResizeLimits(in: visibleFrame)
         let targetFrame = PanelGeometry.workAreaPlacement(
             preferredSize: CGSize(
@@ -1347,6 +1376,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             } completionHandler: {
                 MainActor.assumeIsolated { finishes.finishFrame() }
             }
+            islandWindows.setPresentation(1 - collapseProgress, duration: duration,
+                                          timing: CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1))
             return
         }
         let duration = fades ? PanelCollapseGeometry.reducedFadeDuration
@@ -1378,6 +1409,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
         )
         if contentContainer == nil { finishes.finishPresentation() }
+        // The island fades with the panel's own duration and curve.
+        islandWindows.setPresentation(1 - collapseProgress, duration: duration,
+                                      timing: CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1))
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
@@ -1508,6 +1542,40 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         needsResizeAfterShowing = false
     }
 
+    // MARK: Tall island
+
+    /// The panel's part of `screen`'s work area for `corner`: the island's
+    /// strip comes off that corner's side.
+    private func usableFrame(on screen: NSScreen, corner: ScreenCorner) -> CGRect {
+        PanelIslandLayout.panelArea(in: TestPresentationPolicy.placementFrame(screen.visibleFrame), corner: corner)
+    }
+
+    /// The side the island is on: the corner a drag would dock to, else the
+    /// docked corner.
+    private func layoutIsland(previewCorner: ScreenCorner?? = nil) {
+        let corner = (previewCorner ?? uiState.dockingPreviewCorner) ?? currentCorner
+        islandWindows.layout(panelFrame: panel.visibleContentFrame, corner: corner)
+    }
+
+    private func showIsland() {
+        layoutIsland()
+        islandWindows.show(attachedTo: panel)
+    }
+
+    /// One click makes the panel active (Owner notes on Attic Wave 2): a
+    /// click on the island gives the panel the keyboard, as one on the
+    /// panel does.
+    private func activateFromIsland() {
+        guard panel.isVisible, panel.canBecomeKey, !panel.isKeyWindow else { return }
+        panel.makeKey()
+    }
+
+    #if DEBUG
+    /// Test seams: the island's windows and capsule.
+    var islandWindowsForTesting: PanelIslandWindows { islandWindows }
+    var panelVisibleFrameForTesting: CGRect { panel.visibleContentFrame }
+    #endif
+
     private func screen(containing point: CGPoint) -> NSScreen? {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
             ?? NSScreen.screens.first { NSMouseInRect(point, TestPresentationPolicy.placementFrame($0.frame), false) }
@@ -1542,14 +1610,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func refreshCurrentWorkArea(
-        preferredScreen: NSScreen? = nil
+        preferredScreen: NSScreen? = nil,
+        corner: ScreenCorner? = nil
     ) -> PanelWorkAreaSnapshot? {
         guard let screen = preferredScreen
                 ?? bestScreen(for: panel.visibleContentFrame)
                 ?? panel.screen
                 ?? currentScreen
                 ?? NSScreen.main else { return nil }
-        let visibleFrame = TestPresentationPolicy.placementFrame(screen.visibleFrame)
+        // The panel's part of the work area: the island's strip is off the
+        // docked corner's side (Accepted 2026-10-31 "Tall island").
+        let visibleFrame = usableFrame(on: screen, corner: corner ?? currentCorner)
         currentScreen = screen
         updateResizeLimits(in: visibleFrame)
         return PanelWorkAreaSnapshot(visibleFrame: visibleFrame)

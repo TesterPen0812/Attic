@@ -71,8 +71,8 @@ struct PanelHeader: View {
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .accessibilityIdentifier("panel-pin-button")
                 // The menu bar menu's New note and Search Done Tasks keys,
-                // and ⌘1–⌘4 (the page switch moved to the pages' bottom
-                // bars, which an open note does not show), answered
+                // and ⌘1–⌘4 (the page switch is the Tall island, outside the
+                // panel, Accepted 2026-10-31), answered
                 // wherever the panel has the keyboard (round 10).
                 .background {
                     Group {

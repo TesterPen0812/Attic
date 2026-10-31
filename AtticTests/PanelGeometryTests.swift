@@ -370,9 +370,12 @@ final class PanelGeometryTests: XCTestCase {
                 height: settings.panelHeight == 620 ? 600 : 620
             ))
             XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
+            // The panel docks in the work area less the Tall island's strip
+            // on the corner's side (Accepted 2026-10-31 "Tall island").
             let expected = PanelGeometry.workAreaPlacement(
                 preferredSize: CGSize(width: settings.panelContentSize, height: settings.panelHeight),
-                in: TestPresentationPolicy.placementFrame(screen.visibleFrame), corner: corner
+                in: PanelIslandLayout.panelArea(in: TestPresentationPolicy.placementFrame(screen.visibleFrame), corner: corner),
+                corner: corner
             ).frame
             XCTAssertEqual(panel.visibleContentFrame, expected)
             XCTAssertEqual(container.hostingView.frame.size, expected.size)
