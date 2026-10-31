@@ -121,16 +121,31 @@ final class PanelIslandTests: XCTestCase {
         state.island.leave(.notes)
         XCTAssertNil(state.island.pointed)
 
-        // The label: only the pointed item's row draws.
+        // The label: only the pointed item's row draws (hosted in a window
+        // and drawn from its own view tree; the flat look, as glass draws
+        // artefacts off screen).
         state.island.point(at: .calendar)
+        let host = NSHostingView(rootView: PanelIslandLabels(model: state.island)
+            .atticDesign(AtticDesignContext(mode: .light, reduceMotion: true, controls: .craft)))
+        let labelSize = CGSize(width: L.labelRoom, height: L.height())
+        host.frame = CGRect(origin: .zero, size: labelSize)
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: labelSize),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        spin(0.3)
         func rowInk(_ row: Int) throws -> CGFloat {
-            let renderer = ImageRenderer(content: PanelIslandLabels(model: state.island)
-                .atticDesign(AtticDesignContext(mode: .light)))
-            renderer.scale = 2
-            let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
-            let top = Int((L.inset + CGFloat(row) * (L.item + L.gap)) * 2)
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsHigh) / host.bounds.height
+            let top = Int((L.inset + CGFloat(row) * (L.item + L.gap)) * scale)
             var ink: CGFloat = 0
-            for y in stride(from: top, to: top + Int(L.item * 2), by: 2) {
+            for y in stride(from: top, to: top + Int(L.item * scale), by: 2) {
                 for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
                     ink = max(ink, bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0)
                 }
