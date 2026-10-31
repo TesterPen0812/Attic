@@ -65,9 +65,9 @@ enum AtticRadius {
 
     /// The panel and page shells: 104 px.
     static let shell: CGFloat = 52
-    /// Cards: 36 px (the design's Card radius slider). Calendar day cards
-    /// and Notes board cards both use it.
-    static let card: CGFloat = 18
+    /// Cards: 48 px (the design's Card radius slider; owner, 2026-10-31,
+    /// up from 36). Calendar day cards and Notes board cards both use it.
+    static let card: CGFloat = 24
     /// Rows: 24 px.
     static let row: CGFloat = 12
     /// Menus and popovers: 28 px, with 6 px padding and 22 px rows.

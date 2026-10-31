@@ -424,6 +424,7 @@ final class CalendarPageTests: XCTestCase {
         XCTAssertEqual(CalendarDesign.dayCardExponent, AtticShape.surfaceExponent, "today's card is a squircle surface")
         XCTAssertEqual(CalendarDesign.dayRadius, AtticRadius.card)
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 18), 5, "36 px radius, 10 px padding")
+        XCTAssertEqual(CalendarDesign.dayPadding, 6.5, "the 48 px card: 13 px padding (owner, 2026-10-31)")
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 32), 8.5, "padding grows with the radius (64 px: 17 px)")
     }
 

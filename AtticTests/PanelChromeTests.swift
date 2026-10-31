@@ -40,7 +40,7 @@ final class PanelChromeTests: XCTestCase {
         // Surfaces (design px, half in points).
         XCTAssertEqual(AtticRadius.shell, 52)
         XCTAssertEqual(PanelCornerSize.defaultValue, 52, "104 px panel")
-        XCTAssertEqual(AtticRadius.card, 18, "36 px cards")
+        XCTAssertEqual(AtticRadius.card, 24, "48 px cards (owner, 2026-10-31)")
         XCTAssertEqual(CalendarDesign.dayRadius, AtticRadius.card, "Calendar day cards use the card token")
         XCTAssertEqual(AtticRadius.row, 12)
         XCTAssertEqual(TasksRowDesign.radius, 12)
@@ -61,7 +61,7 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticRadius.reviewBar, 17, "20 + 14 px")
         XCTAssertEqual(AtticRadius.concentric(outer: AtticRadius.menu, padding: AtticRadius.menuPadding), AtticRadius.menuRow)
         // A day card's padding grows with its radius (10 px at 36 px).
-        XCTAssertEqual(CalendarDesign.dayPadding, 5)
+        XCTAssertEqual(CalendarDesign.dayPadding, 6.5, "48 px radius: 13 px padding")
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 32), 8.5, "64 px: 17 px")
         XCTAssertEqual(CalendarDesign.dayPadding(radius: 0), 3, "never under 6 px")
     }

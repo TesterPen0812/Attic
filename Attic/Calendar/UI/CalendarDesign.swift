@@ -40,7 +40,7 @@ enum CalendarDesign {
     static let agendaInset: CGFloat = 10
     static let agendaTop: CGFloat = 4
     static let agendaBottom: CGFloat = 80
-    // A day: padding 10 px, 8 px apart, radius 36 px, 10 px tile to rows.
+    // A day: 8 px apart, radius 48 px (so padding 13 px), 10 px tile to rows.
     static let dayPadding: CGFloat = dayPadding(radius: dayRadius)
     /// A day card's padding grows with its radius (Shapes): the design's
     /// max(6, round(10 + (R − 36) / 4)) px, R in px.

@@ -9,7 +9,7 @@ import XCTest
 /// two-column board with no headings, pinned first with a small grey pin,
 /// each card in the shorter column by a height estimated from its content
 /// (never measured, so layout can't feed back into itself); cards on the
-/// 18 pt surface squircle; long links wrap; the list keeps its sections.
+/// 24 pt surface squircle; long links wrap; the list keeps its sections.
 @MainActor
 final class NotesBoardTests: XCTestCase {
     private var store: NoteStore!
@@ -296,26 +296,26 @@ final class NotesBoardTests: XCTestCase {
         NSHostingController(rootView: view.atticDesign(.default)).sizeThatFits(in: CGSize(width: width, height: 10_000))
     }
 
-    func testCardsAreEighteenPointSurfaceSquircles() throws {
+    func testCardsAreTwentyFourPointSurfaceSquircles() throws {
         XCTAssertEqual(NotesBoardMetrics.radius, AtticRadius.card)
-        XCTAssertEqual(NotesBoardMetrics.radius, 18, "36 px")
+        XCTAssertEqual(NotesBoardMetrics.radius, 24, "48 px (owner, 2026-10-31)")
         XCTAssertEqual(NotesBoardMetrics.columnGap, 6)
         XCTAssertEqual(NotesBoardMetrics.cardGap, 6)
 
         // A drawn card: where its corner is surface and where it is the
-        // backdrop matches the 18 pt surface squircle, point by point.
+        // backdrop matches the 24 pt surface squircle, point by point.
         let width: CGFloat = 140
         let height = fit(card(title: "Shape", preview: "A card"), width: width).height
         let bitmap = try render(card(title: "Shape", preview: "A card"), size: CGSize(width: width, height: height), context: solid)
-        let shape = Squircle(cornerRadius: 18, exponent: AtticShape.surfaceExponent)
+        let shape = Squircle(cornerRadius: 24, exponent: AtticShape.surfaceExponent)
             .path(in: CGRect(x: 0, y: 0, width: width, height: height))
         let surface = try pixel(bitmap, width / 2, height - 3)
         // The backdrop as this render draws it (its colour space), from
-        // the corner pixel, outside any 18 pt corner.
+        // the corner pixel, outside any 24 pt corner.
         let backdrop = try pixel(bitmap, 0, 0)
         XCTAssertGreaterThan(distance(surface, backdrop), 100, "the card is drawn")
         var checked = 0
-        for step in stride(from: CGFloat(0.5), through: 9, by: 0.5) {
+        for step in stride(from: CGFloat(0.5), through: 12, by: 0.5) {
             let inner = CGPoint(x: step + 0.75, y: step + 0.75), outer = CGPoint(x: step - 0.75, y: step - 0.75)
             let inside = shape.contains(CGPoint(x: step, y: step))
             // Skip the anti-aliased edge.
@@ -329,10 +329,10 @@ final class NotesBoardTests: XCTestCase {
             checked += 1
         }
         XCTAssertGreaterThan(checked, 8)
-        // Not a plain 18 pt circle-cornered rectangle: the squircle reaches
+        // Not a plain 24 pt circle-cornered rectangle: the squircle reaches
         // further into the corner along the diagonal.
-        let circle = Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: height), cornerRadius: 18, style: .circular)
-        XCTAssertTrue((stride(from: CGFloat(0.5), through: 9, by: 0.5)).contains {
+        let circle = Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: height), cornerRadius: 24, style: .circular)
+        XCTAssertTrue((stride(from: CGFloat(0.5), through: 12, by: 0.5)).contains {
             shape.contains(CGPoint(x: $0, y: $0)) != circle.contains(CGPoint(x: $0, y: $0))
         }, "the surface exponent shapes the corner")
     }
