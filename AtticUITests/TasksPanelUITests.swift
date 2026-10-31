@@ -347,7 +347,9 @@ final class TasksPanelUITests: XCTestCase {
         let openFiles = openMenuItem("Show Files")
         XCTAssertTrue(openFiles.waitForExistence(timeout: 5))
         hoverGlassMenuItem(openFiles, titled: "Show Files", in: app)
+        printGlassMenuTrace(app, "before Return")
         app.typeKey(.return, modifierFlags: [])
+        printGlassMenuTrace(app, "after Return")
         assertFilesListStaysOpen("native Show Files after Find, with real auto-hide")
     }
 

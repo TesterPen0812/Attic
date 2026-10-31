@@ -127,6 +127,7 @@ final class AtticGlassMenu {
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: trackingObject, userInfo: info)
         guard let chosen = menu.chosen else { return nil }
         AtticTextInput.choosing(chosen.menuShortcut, chosen.action)
+        menu.trace("RAN \(chosen.title) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil")")
         return chosen
     }
 

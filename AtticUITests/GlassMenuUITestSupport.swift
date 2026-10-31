@@ -53,6 +53,13 @@ extension XCTestCase {
         item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
     }
 
+    /// W4 diagnostics (temporary): prints the app's glass menu trace now.
+    func printGlassMenuTrace(_ app: XCUIApplication, _ tag: String) {
+        let probe = app.descendants(matching: .any)["attic-menu-trace"].firstMatch
+        let value = probe.exists ? (probe.value as? String ?? "no value") : "no probe"
+        print("MENUTRACE \(tag) BEGIN\n\(value)\nMENUTRACE END")
+    }
+
     /// W4 diagnostics (temporary): when the test fails, prints the app's
     /// glass menu trace ("attic-menu-trace", DEBUG UI-testing launches).
     private func printGlassMenuTraceOnFailure(_ app: XCUIApplication) {
