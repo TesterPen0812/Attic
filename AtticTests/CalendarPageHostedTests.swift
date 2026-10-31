@@ -6,14 +6,11 @@ import XCTest
 
 /// The Calendar page mounted in an off-screen window (Accepted 2026-10-30,
 /// "Calendar page"): what the page itself shows and does, not only its
-/// helpers. Today in the bottom bar comes and goes with the selection, the
-/// free-days line selects its first day, and free-day runs re-form as
-/// events load while the selection and scroll position hold and the page
-/// updates a bounded number of times.
-///
-/// Uses only the page, its model and accessibility identifiers, so the
-/// suite also runs against the page before the free-days line and the
-/// Today fade were built.
+/// helpers. Today in the bottom bar comes and goes with the selection,
+/// every day keeps its own date tile (empty days too, owner 2026-10-31: the
+/// older agenda) and a tile selects its day, and events loading keep the
+/// tiles, the selection and the scroll position while the page updates a
+/// bounded number of times.
 @MainActor
 final class CalendarPageHostedTests: XCTestCase {
     private let calendar = CalendarMonthMath.calendar(timeZone: TimeZone(identifier: "Europe/London")!)
@@ -46,40 +43,40 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
-    // MARK: - Free days
+    // MARK: - Every day's tile
 
-    func testClickingTheFreeDaysLineSelectsItsFirstDay() throws {
-        // 30 Oct–4 Nov are free: one line, "free-2026-10-30".
+    func testEmptyDaysKeepTheirOwnTileAndATileSelectsItsDay() throws {
+        // 30 Oct onward are empty: each keeps its own tile, nothing folds.
         try withPage(events: [event("s", on: 29)]) { page in
-            let line = try XCTUnwrap(page.element("calendar-free-2026-10-30"), "the free days fold into one line")
-            XCTAssertNil(page.element("calendar-tile-2026-10-31"), "the run's other days have no tile")
-            XCTAssertTrue(line.accessibilityPerformPress?() ?? false, "the line takes a click")
+            XCTAssertTrue(page.ids("calendar-free-").isEmpty, "no free-days line")
+            let tiles = page.tiles()
+            XCTAssertTrue(["2026-10-29", "2026-10-30", "2026-10-31"].allSatisfy(tiles.contains),
+                          "today and the empty days after it, one tile each: \(tiles)")
+            let tile = try XCTUnwrap(page.element("calendar-tile-2026-10-31"), "an empty day's tile")
+            XCTAssertTrue(tile.accessibilityPerformPress?() ?? false, "the tile takes a click")
             page.settle()
-            XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 30), "the click selects the run's first day")
+            XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 31), "the click selects its day")
         }
     }
 
-    /// Events loading while the page is scrolled: one landing on a run's
-    /// first day, on its last day, splitting a run, and one going so two
-    /// runs merge. The runs re-form with unique ids, the selected day and
-    /// the scroll position hold, and each load updates the page boundedly.
-    func testFreeRunsReformAsEventsLoadWhileSelectionAndScrollHold() throws {
+    /// Events loading while the page is scrolled: the days keep their tiles
+    /// with unique ids, the selected day and the scroll position hold, and
+    /// each load updates the page boundedly.
+    func testEventsLoadingKeepTilesSelectionAndScroll() throws {
         let base = event("s", on: 29)
         try withPage(events: [base]) { page in
-            XCTAssertEqual(page.freeLines(), ["2026-10-30"], "30 Oct–4 Nov: one run")
             page.scroll(to: 60)
             let offset = page.offset
             XCTAssertEqual(offset, 60, accuracy: 0.5, "scrolled into the month")
+            let tiles = page.tiles()
+            XCTAssertFalse(tiles.isEmpty)
 
-            @MainActor func load(_ events: [CalendarEvent], free expected: [String], days: [String],
-                      _ message: String, line: UInt = #line) {
+            @MainActor func load(_ events: [CalendarEvent], _ message: String, line: UInt = #line) {
                 let before = CalendarPage.bodyEvaluations
                 page.source.replace(events)
                 page.settle()
-                XCTAssertEqual(page.freeLines(), expected, "\(message): free runs", line: line)
-                XCTAssertEqual(page.tiles(), days, "\(message): day tiles", line: line)
-                let ids = page.freeLines() + page.tiles()
-                XCTAssertEqual(Set(ids).count, ids.count, "\(message): unique ids", line: line)
+                XCTAssertEqual(page.tiles(), tiles, "\(message): the same day tiles", line: line)
+                XCTAssertTrue(page.ids("calendar-free-").isEmpty, "\(message): nothing folds", line: line)
                 XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 29), "\(message): the selection holds", line: line)
                 XCTAssertEqual(page.offset, offset, accuracy: 0.5, "\(message): the scroll position holds", line: line)
                 let updates = CalendarPage.bodyEvaluations - before
@@ -90,16 +87,10 @@ final class CalendarPageHostedTests: XCTestCase {
             }
 
             let split = event("split", on: 1, month: 11)
-            load([base, split], free: ["2026-10-30", "2026-11-02"], days: ["2026-10-29", "2026-11-01"],
-                 "an event splitting the run")
+            load([base, split], "an event on an empty day")
             let first = event("first", on: 30)
-            load([base, split, first], free: ["2026-10-31", "2026-11-02"],
-                 days: ["2026-10-29", "2026-10-30", "2026-11-01"], "an event on a run's first day")
-            let last = event("last", on: 4, month: 11)
-            load([base, split, first, last], free: ["2026-10-31", "2026-11-02"],
-                 days: ["2026-10-29", "2026-10-30", "2026-11-01", "2026-11-04"], "an event on a run's last day")
-            load([base, first, last], free: ["2026-10-31"], days: ["2026-10-29", "2026-10-30", "2026-11-04"],
-                 "an event going, so two runs merge")
+            load([base, split, first], "another")
+            load([base, first], "an event going")
         }
     }
 
@@ -272,7 +263,6 @@ final class CalendarPageHostedTests: XCTestCase {
             return ids.filter { seen.insert($0).inserted }.sorted()
         }
 
-        func freeLines() -> [String] { ids("calendar-free-") }
         func tiles() -> [String] { ids("calendar-tile-") }
 
         private static func elements(_ root: AnyObject) -> [AnyObject] {

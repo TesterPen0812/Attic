@@ -54,9 +54,10 @@ final class CalendarTaskRowState: ObservableObject {
     func endRename() { renaming = nil }
 }
 
-/// One day of the agenda: the date on the left, the day's rows on the
-/// right; today's day on the white card (Accepted 2026-10-30: the only
-/// tile), a squircle surface at the card radius (Shapes).
+/// One day of the agenda: the grey date tile on the left, the day's rows on
+/// the right; today's day on its raised card (owner, 2026-10-31: the older
+/// agenda), a squircle surface at the card radius (Shapes), the tile
+/// concentric inside it.
 struct CalendarAgendaDay: View {
     let group: CalendarAgendaGroup
     let today: DueDay
@@ -147,9 +148,9 @@ struct CalendarAgendaDay: View {
 
 }
 
-/// The date, Today / Tomorrow / Yesterday, and the weekday, as plain text
-/// (Accepted 2026-10-30: no box). Tapping it selects the day (in a search,
-/// the grid jumps to it).
+/// The date, Today / Tomorrow / Yesterday, and the weekday on a grey tile
+/// (owner, 2026-10-31: the older agenda). Tapping it selects the day (in a
+/// search, the grid jumps to it).
 struct CalendarDateTile: View {
     let group: CalendarAgendaGroup
     let action: () -> Void
@@ -184,6 +185,10 @@ struct CalendarDateTile: View {
             .padding(.bottom, CalendarDesign.tilePaddingBottom)
             .frame(width: CalendarDesign.tileWidth, alignment: .leading)
             .frame(maxHeight: .infinity, alignment: .top)
+            .background {
+                AtticControlShape.shape(cornerRadius: CalendarDesign.tileRadius, exponent: AtticControlShape.designExponent)
+                    .fill(tokens.ink(.heading).withAlpha(CalendarDesign.tileFill).color)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -204,43 +209,6 @@ struct CalendarDateTile: View {
         }
         return (TaskRowPresentation.format(date, template: "dMMM", calendar: calendar, locale: locale), relative,
                 TaskRowPresentation.format(date, template: "EEEE", calendar: calendar, locale: locale))
-    }
-}
-
-/// A run of free days: one thin grey line, "10–11 Oct" then a hairline.
-/// Clicking it selects the run's first day.
-struct CalendarFreeDaysLine: View {
-    let run: CalendarFreeDays
-    let onSelectDay: (DueDay) -> Void
-
-    @Environment(\.atticDesign) private var design
-
-    func select() { onSelectDay(run.first) }
-
-    var body: some View {
-        let tokens = design.tokens
-        let label = run.label()
-        Button(action: select) {
-            HStack(spacing: CalendarDesign.freeGap) {
-                Text(verbatim: label)
-                    .font(.system(size: CalendarDesign.freeFont).monospacedDigit())
-                    .foregroundStyle(TasksPanelDesign.toneInk(.meta, tokens: tokens).color)
-                    .lineLimit(1)
-                    .fixedSize()
-                Rectangle()
-                    .fill(tokens.divider.color)
-                    .frame(height: CalendarDesign.freeHairline)
-            }
-            .padding(.horizontal, CalendarDesign.freeInsetX)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: CalendarDesign.freeHeight)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .padding(.bottom, CalendarDesign.dayGap)
-        .accessibilityLabel(label)
-        .accessibilityIdentifier("calendar-free-\(run.first.rawValue)")
     }
 }
 

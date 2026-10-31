@@ -15,13 +15,11 @@ enum CalendarDesign {
     // Grid: 30 px from the panel's sides, 7 px between keys.
     static let gridInset: CGFloat = 15
     static let keyGap: CGFloat = 3.5
-    // Days: 60 px tall; 2 px above and 7 px below each row.
+    // Days: 60 px tall; 2 px above and 7 px below each row. The selected
+    // day's key fills its cell, radius 20 px (owner, 2026-10-31: the older
+    // key).
     static let keyHeight: CGFloat = 30
-    /// The selected day's key (Accepted 2026-10-30): a 60 × 60 px whole
-    /// superellipse on curve 1.4, so rounded by half its side.
-    static let keySize: CGFloat = 30
-    static let keyCornerRadius: CGFloat = AtticShape.controlRadius(height: keySize)
-    static let keyExponent: CGFloat = AtticShape.controlExponent
+    static let keyRadius: CGFloat = 10
     static let weekTop: CGFloat = 1
     static let weekBottom: CGFloat = 3.5
     static let weekPitch: CGFloat = weekTop + keyHeight + weekBottom
@@ -52,9 +50,12 @@ enum CalendarDesign {
     /// Today's card is a surface: a squircle (Shapes, Accepted 2026-10-30).
     static let dayCardExponent: CGFloat = AtticShape.surfaceExponent
     static let tileToRows: CGFloat = 5
-    // Date (Accepted 2026-10-30: plain text, no box): 128 px wide,
-    // padding 14 16 16 16 px.
+    // Date tile (owner, 2026-10-31: the older agenda): 128 px wide, 4 %
+    // heading ink, padding 14 16 16 16 px; concentric inside the day's
+    // card (inner radius = card radius − padding: 35 px).
     static let tileWidth: CGFloat = 64
+    static let tileRadius: CGFloat = dayRadius - dayPadding
+    static let tileFill: Double = 0.04
     static let tilePaddingTop: CGFloat = 7
     static let tilePaddingX: CGFloat = 8
     static let tilePaddingBottom: CGFloat = 8
@@ -63,14 +64,6 @@ enum CalendarDesign {
     static let tileDateLine: CGFloat = 14
     static let tileWeekdayFont: CGFloat = 9.5
     static let tileWeekdayLine: CGFloat = 13
-
-    // A run of free days ("10–11 Oct"): a 40 px line, the card's padding
-    // plus 16 px in, 19 px text, 14 px to a 1 px hairline.
-    static let freeHeight: CGFloat = 20
-    static let freeInsetX: CGFloat = dayPadding + 8
-    static let freeFont: CGFloat = 9.5
-    static let freeGap: CGFloat = 7
-    static let freeHairline: CGFloat = 0.5
 
     /// The agenda fades in over 40 px under the pinned week (Accepted
     /// 2026-10-30, "Scrolling": a plain gradient, no native soft edge).

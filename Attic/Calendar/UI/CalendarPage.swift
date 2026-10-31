@@ -114,15 +114,12 @@ struct CalendarPage: View {
     @ViewBuilder
     private func agenda(_ snapshot: CalendarPageSnapshot) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(snapshot.entries) { entry in
-                switch entry {
-                case let .day(group):
-                    CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
-                                      rows: model.taskRows, focus: $taskFocus, focused: taskFocus,
-                                      onSelectDay: model.select)
-                case let .free(run):
-                    CalendarFreeDaysLine(run: run, onSelectDay: model.select)
-                }
+            // Every day on its own, each with its grey date tile, empty days
+            // too (owner, 2026-10-31: the older agenda).
+            ForEach(snapshot.groups) { group in
+                CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
+                                  rows: model.taskRows, focus: $taskFocus, focused: taskFocus,
+                                  onSelectDay: model.select)
             }
             if snapshot.showsNoMatches {
                 Text("No matches")

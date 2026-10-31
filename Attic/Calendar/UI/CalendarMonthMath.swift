@@ -33,14 +33,16 @@ struct CalendarMonth: Hashable, Comparable, Sendable {
 enum CalendarKeyStyle: Equatable, Sendable {
     /// No key: the number alone on the panel.
     case plain
-    /// The selected day: a grey key.
+    /// The selected day: the older pressed key, ink (owner, 2026-10-31).
     case selected
+    /// The selected day when it is today: the pressed key, red.
+    case selectedToday
 }
 
-/// The colour of a day's number: today red (selected or not), past days
-/// grey, the rest ink.
+/// The colour of a day's number: white on the selected key, otherwise today
+/// red, past days grey, the rest ink.
 enum CalendarKeyNumber: Equatable, Sendable {
-    case red, ink, grey
+    case red, ink, grey, white
 }
 
 /// The marks under a day's number: up to three event dots in the calendars'
@@ -62,11 +64,15 @@ struct CalendarGridDay: Identifiable, Equatable, Sendable {
     let isSelected: Bool
     var marks = CalendarDayMarks()
 
-    var style: CalendarKeyStyle { isSelected ? .selected : .plain }
+    var style: CalendarKeyStyle {
+        guard isSelected else { return .plain }
+        return isToday ? .selectedToday : .selected
+    }
 
     var number: CalendarKeyNumber {
+        if isSelected { return .white }
         if isToday { return .red }
-        return isPast && !isSelected ? .grey : .ink
+        return isPast ? .grey : .ink
     }
 }
 
