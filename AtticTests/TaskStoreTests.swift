@@ -6,6 +6,50 @@ import UniformTypeIdentifiers
 
 final class TaskStoreTests: XCTestCase {
     @MainActor
+    func testRetainedTaskEditFieldsCoverEveryStoredAttributeAndRelationship() throws {
+        let entity = try XCTUnwrap(Schema([TaskItem.self]).entitiesByName["TaskItem"])
+        let storedFields = Set(entity.attributes.map(\.name) + entity.relationships.map(\.name))
+        let restored = TaskStore.RetainedTaskEdits.restoredFields
+        let exemptions = TaskStore.RetainedTaskEdits.notWrittenByEditCommands
+        XCTAssertEqual(storedFields, restored.union(exemptions.keys),
+                       "Every stored field must be restored or deliberately exempted from guarded edits.")
+        XCTAssertTrue(restored.isDisjoint(with: exemptions.keys))
+        for (name, reason) in exemptions {
+            XCTAssertFalse(reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name)
+        }
+    }
+
+    @MainActor
+    func testEachRetainedTaskEditFieldDetectsChangesAndRestoresItsExactRawValue() throws {
+        let original = TaskItem(title: "Original")
+        // Include an orphan imported clock; restoring a nil day must not erase it.
+        original.dueTimeMinutesRaw = 1500
+        let before = try WorkspaceModelFields.read(original)
+        let changed = TaskItem(title: "Changed", status: .done, priority: .high,
+                               updatedAt: .distantPast, completedAt: .distantPast,
+                               manualOrder: 123, parentID: UUID())
+        changed.tagsRaw = "raw tags"
+        changed.dueDayRaw = "2026-10-31"
+        changed.dueTimeMinutesRaw = 120
+        changed.completedFromRaw = "imported status"
+        changed.completedFromOrder = 456
+        changed.listOrderVersion = 7
+        changed.doneLoggedAt = .distantPast
+        let different = try WorkspaceModelFields.read(changed)
+        for name in TaskStore.RetainedTaskEdits.restoredFields.sorted() {
+            let edits = TaskStore.RetainedTaskEdits()
+            edits.capture(original)
+            XCTAssertFalse(edits.restore(), "an unchanged snapshot needs no restoration")
+            let value = try XCTUnwrap(different[name])
+            XCTAssertNotEqual(before[name], value, "fixture must change \(name)")
+            try WorkspaceModelFields.apply([name: value], to: original)
+            XCTAssertTrue(edits.restore(), "must detect a change to \(name)")
+            XCTAssertEqual(try WorkspaceModelFields.read(original), before, name)
+            XCTAssertFalse(edits.restore(), "restoring \(name) must be idempotent")
+        }
+    }
+
+    @MainActor
     func testFailedPlainCommitPublicationReloadsAfterRevisionWithoutUndoingDurableSave() throws {
         let store = try makeTestStore()
         let task = try XCTUnwrap(store.create(title: "Parent"))

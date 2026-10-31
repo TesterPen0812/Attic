@@ -973,35 +973,69 @@ final class TaskStore: ObservableObject {
     /// SwiftData on macOS 26 can roll back its context without reverting
     /// retained model instances. Keep each instance's own values, including
     /// divergent replicas, until the edit's save outcome is known.
-    private final class RetainedTaskEdits {
+    final class RetainedTaskEdits {
+        /// One typed field table drives capture, change detection and restore.
+        /// Keep the raw clock after the day: the day's observer can clear it.
+        private static let fields: [Field] = [
+            Field("title", \.title),
+            Field("statusRaw", \.statusRaw),
+            Field("priorityRaw", \.priorityRaw),
+            Field("completedAt", \.completedAt),
+            Field("manualOrder", \.manualOrder),
+            Field("parentID", \.parentID),
+            Field("tagsRaw", \.tagsRaw),
+            Field("dueDayRaw", \.dueDayRaw),
+            Field("dueTimeMinutesRaw", \.dueTimeMinutesRaw),
+            Field("completedFromRaw", \.completedFromRaw),
+            Field("completedFromOrder", \.completedFromOrder),
+            Field("updatedAt", \.updatedAt),
+            Field("listOrderVersion", \.listOrderVersion),
+            Field("doneLoggedAt", \.doneLoggedAt)
+        ]
+        static var restoredFields: Set<String> { Set(fields.map(\.name)) }
+
+        /// Guarded edit commands do not write these fields. The schema test
+        /// requires every new stored attribute or relationship to be decided.
+        static let notWrittenByEditCommands: [String: String] = [
+            "id": "Edits preserve the task's logical identity.",
+            "createdAt": "Edits preserve the original creation time.",
+            "associationGeneration": "Only workspace association and lifecycle commands bump this generation.",
+            "imageReferencesData": "Only attachment commands change file references.",
+            "removedAttachmentsData": "Only attachment commands change removed-file history.",
+            "deletedAt": "Only lifecycle commands change soft deletion.",
+            "deletionGroupID": "Only lifecycle commands change deletion groups.",
+            "deletionRootID": "Only lifecycle commands change deletion roots.",
+            "deletionMembersRaw": "Only lifecycle commands change deletion membership."
+        ]
+
+        private struct CapturedField {
+            let hasChanged: () -> Bool
+            let apply: () -> Void
+        }
+
+        private struct Field {
+            let name: String
+            let capture: (TaskItem) -> CapturedField
+
+            init<Value: Equatable>(_ name: String, _ keyPath: ReferenceWritableKeyPath<TaskItem, Value>) {
+                self.name = name
+                capture = { task in
+                    let value = task[keyPath: keyPath]
+                    return CapturedField(hasChanged: { task[keyPath: keyPath] != value },
+                                         apply: { task[keyPath: keyPath] = value })
+                }
+            }
+        }
+
         private var restorations: [ObjectIdentifier: () -> Bool] = [:]
 
         func capture(_ task: TaskItem) {
             let key = ObjectIdentifier(task)
             guard restorations[key] == nil else { return }
-            let state = TaskEditableState(task)
-            let updatedAt = task.updatedAt
-            let listOrderVersion = task.listOrderVersion
-            let doneLoggedAt = task.doneLoggedAt
+            let snapshot = Self.fields.map { $0.capture(task) }
             restorations[key] = {
-                guard TaskEditableState(task) != state || task.updatedAt != updatedAt
-                        || task.listOrderVersion != listOrderVersion || task.doneLoggedAt != doneLoggedAt else { return false }
-                task.title = state.title
-                task.statusRaw = state.statusRaw
-                task.priorityRaw = state.priorityRaw
-                task.completedAt = state.completedAt
-                task.manualOrder = state.manualOrder
-                task.parentID = state.parentID
-                task.tagsRaw = state.tagsRaw
-                // Raw day first: its observer may clear the clock. Restore
-                // the exact raw time afterwards, even for an orphan import.
-                task.dueDayRaw = state.dueDayRaw
-                task.dueTimeMinutesRaw = state.dueTimeMinutesRaw
-                task.completedFromRaw = state.completedFromRaw
-                task.completedFromOrder = state.completedFromOrder
-                task.updatedAt = updatedAt
-                task.listOrderVersion = listOrderVersion
-                task.doneLoggedAt = doneLoggedAt
+                guard snapshot.contains(where: { $0.hasChanged() }) else { return false }
+                snapshot.forEach { $0.apply() }
                 return true
             }
         }
