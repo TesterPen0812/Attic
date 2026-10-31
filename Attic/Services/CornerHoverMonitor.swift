@@ -286,7 +286,9 @@ final class CornerHoverMonitor {
     ) -> PanelRevealRefusal? {
         let targetSection = section ?? uiState.selectedSection
 
-        if targetSection != uiState.selectedSection {
+        if targetSection != uiState.selectedSection, uiState.routeElsewhere(targetSection) {
+            // Its page is out in its own panel, which came forward.
+        } else if targetSection != uiState.selectedSection {
             if uiState.selectedSection.isNotes {
                 guard noteDraft.prepareToLeave(.pageSwitch) else { return .unsavedNote }
             }
@@ -338,7 +340,8 @@ final class CornerHoverMonitor {
         let isMouseButtonPressed = NSEvent.pressedMouseButtons != 0
 
         let isInteractionLocked = MainPanelAutoHidePolicy.isInteractionLocked(
-            reasons: uiState.interactionLockReasons, pointerInside: isInPanel,
+            reasons: uiState.interactionLockReasons.union(panelController.floatingInteractionLockReasons),
+            pointerInside: isInPanel,
             secondsSinceKeyboardInput: uptime - lastKeyboardInputAt
         ) || isMouseButtonPressed
         let transition = stateMachine.update(
