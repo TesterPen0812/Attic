@@ -1679,8 +1679,17 @@ final class AtticPanelContentContainer: NSView {
         swoopRun = run
         swoopProgress = target
         // 30 keyframes for a timed run; a spring gets one per 120 Hz frame.
-        let count = max(PanelHideMotionTuning.swoopKeyframes, Int((run.duration * 120).rounded(.up)))
-        let steps = run.samples(count)
+        // More where the run is fast, so no step covers more than
+        // `swoopKeyframeMaxStep` (Core Animation's matrix interpolation
+        // between frames leaves the curve).
+        typealias T = PanelHideMotionTuning
+        var count = max(T.swoopKeyframes, Int((run.duration * 120).rounded(.up)))
+        var steps = run.samples(count)
+        let largest = zip(steps, steps.dropFirst()).map { abs($1 - $0) }.max() ?? 0
+        if largest > T.swoopKeyframeMaxStep {
+            count = min(T.swoopKeyframeLimit, Int((Double(count) * largest / T.swoopKeyframeMaxStep).rounded(.up)))
+            steps = run.samples(count)
+        }
         let transforms = CAKeyframeAnimation(keyPath: "transform")
         transforms.values = steps.map { NSValue(caTransform3D: swoopTransform($0, corner: corner)) }
         let opacities = CAKeyframeAnimation(keyPath: "opacity")

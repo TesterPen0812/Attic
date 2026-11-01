@@ -159,6 +159,14 @@ enum PanelHideMotionTuning {
     static let swoopPerspective: Double = 900
     static let swoopFadeStart: Double = 0.85
     static let swoopKeyframes = 30
+    /// The most progress one keyframe step may cover. Core Animation
+    /// interpolates between two keyframes' matrices by decomposing them,
+    /// which leaves Swoop's tilted, perspective curve in between: with 30
+    /// frames the drawn panel strayed from the curve by up to 37 pt on the
+    /// reveal's fast start and 13 pt mid-hide. Denser frames keep it on
+    /// the curve; the timing and the curve are unchanged.
+    static let swoopKeyframeMaxStep: Double = 0.02
+    static let swoopKeyframeLimit = 600
 
     // Swipe follows fingers
     /// A swipe released to close finishes into the corner on this spring
