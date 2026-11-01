@@ -965,6 +965,12 @@ final class PanelGenieView: NSView {
         /// carries its own outline; nil is the rounded rectangle above.
         var exponent: CGFloat?
 
+        /// One glass read twice: in the same place, to within half a point.
+        func sameGlass(as other: GlassPill) -> Bool {
+            abs(rect.minX - other.rect.minX) < 0.5 && abs(rect.minY - other.rect.minY) < 0.5
+                && abs(rect.maxX - other.rect.maxX) < 0.5 && abs(rect.maxY - other.rect.maxY) < 0.5
+        }
+
         init(rect: CGRect, clip: CGRect, cornerRadius: CGFloat? = nil, continuous: Bool = true, exponent: CGFloat? = nil) {
             self.rect = rect
             self.clip = clip
@@ -1108,8 +1114,11 @@ final class PanelGenieView: NSView {
                     // A glass group has two SDF layers (its backdrop's and its
                     // content's vibrancy): one control, one glass. Drawn twice,
                     // live glass doubled its tint (g8: the add bar 16-34
-                    // levels off rest).
-                    if !scan.pills.contains(made) { scan.pills.append(made) }
+                    // levels off rest). The two layers' frames may differ, so
+                    // one reads as the group's rect and the other as its padded
+                    // outline, a few hundredths of a point apart (the Tasks words
+                    // switch rode twice): the same place is the same glass.
+                    if !scan.pills.contains(where: { $0.sameGlass(as: made) }) { scan.pills.append(made) }
                 } else if !scan.leftOut.contains(pill.rect) {
                     scan.leftOut.append(pill.rect)
                 }

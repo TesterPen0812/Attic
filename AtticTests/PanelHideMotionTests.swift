@@ -651,11 +651,15 @@ final class PanelHideMotionShipTests: XCTestCase {
     /// scrolling content renders under them, the edges' variable blurs and
     /// the controls (the composer's field among them) over it. (Rendered
     /// whole, the controls' glass and the blurs were missing and rows showed
-    /// through the add bar: owner, 2026-10-21.)
+    /// through the add bar: owner, 2026-10-21.) The field exists while the
+    /// composer is open ("+" is the add field at rest, Accepted 2026-10-29/30
+    /// "Top row and bottom bar"), so the composer is opened first.
     func testTheSnapshotTellsTheContentFromTheControls() throws {
         let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
         defer { rig.close() }
         RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        rig.state.beginAdding()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
         rig.content.layoutSubtreeIfNeeded()
         func has(_ layers: [CALayer], _ test: (CALayer) -> Bool) -> Bool {
             layers.contains { test($0) || has($0.sublayers ?? [], test) }
@@ -917,7 +921,9 @@ final class PanelHideMotionShipTests: XCTestCase {
     /// flight on its own, in its own place and shape. The pin and the page
     /// switch share one glass group, and the design's superellipse glass
     /// reports its outline padded past the control: before, the group rode
-    /// as one 288 pt capsule across the whole header line.
+    /// as one 288 pt capsule across the whole header line. Each glass rides
+    /// once: the words switch's two SDF layers (its backdrop's and its
+    /// content's) were each read as a pill, 0.02 pt apart, so it rode twice.
     func testThePanelDesignsControlsEachRideInTheirOwnShape() throws {
         let rig = try PanelRig(attachments: makeTestAttachmentFileStore())
         defer { rig.close() }
@@ -933,12 +939,20 @@ final class PanelHideMotionShipTests: XCTestCase {
         XCTAssertEqual(header.map { ($0.rect.width * 2).rounded() / 2 }, [control, TasksTopTabsMetrics.width, control, control],
                        "\(header.map(\.rect))")
         for pill in header { XCTAssertEqual(pill.rect.height, control, accuracy: 0.5, "\(pill.rect)") }
-        // The bottom bar's page switch: one glass, 27 tall, a capsule.
+        // The bottom bar (Accepted 2026-10-31 "Tall island": the island
+        // replaces its page switch, the tag bar moves to the left and "+"
+        // stays): the tag bar, one glass capsule 27 tall, then "+".
         let switchWidth = AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count)
-        let pageSwitch = try XCTUnwrap(scan.pills.first { abs($0.rect.width - switchWidth) < 0.5 && $0.rect.midY < surface.midY },
-                                       "\(scan.pills.map(\.rect))")
-        XCTAssertEqual(pageSwitch.rect.height, control, accuracy: 0.5)
-        XCTAssertEqual(pageSwitch.cornerRadius ?? -1, control / 2, accuracy: 0.5)
+        let bottom = scan.pills.filter { $0.rect.midY < surface.midY }.sorted { $0.rect.minX < $1.rect.minX }
+        XCTAssertFalse(bottom.contains { abs($0.rect.width - switchWidth) < 0.5 }, "no page switch: \(bottom.map(\.rect))")
+        XCTAssertEqual(bottom.count, 2, "the tag bar and \"+\": \(bottom.map(\.rect))")
+        let tagBar = try XCTUnwrap(bottom.first), plus = try XCTUnwrap(bottom.last)
+        XCTAssertGreaterThan(tagBar.rect.width, control * 2, "\(tagBar.rect)")
+        XCTAssertEqual(tagBar.rect.height, control, accuracy: 0.5)
+        XCTAssertEqual(tagBar.cornerRadius ?? -1, control / 2, accuracy: 0.5, "a capsule")
+        XCTAssertEqual(plus.rect.width, control, accuracy: 0.5, "\(plus.rect)")
+        XCTAssertEqual(plus.rect.height, control, accuracy: 0.5)
+        XCTAssertLessThan(tagBar.rect.maxX, plus.rect.minX)
         // Every control here has the design's corner, at most a capsule's radius.
         for pill in scan.pills {
             XCTAssertEqual(pill.exponent ?? -1, AtticControlShape.designExponent, accuracy: 1e-6, "\(pill.rect)")
