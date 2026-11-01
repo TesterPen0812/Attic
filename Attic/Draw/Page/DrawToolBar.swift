@@ -31,6 +31,8 @@ enum DrawPageMetrics {
     static let pillGap: CGFloat = 8
     /// The board's clear area keeps 12 px from the top row and the bar.
     static let clearGap: CGFloat = 6
+    /// The canvas menu's card starts 12 px under the title capsule.
+    static let menuGap: CGFloat = 6
 
     static func fold(_ reduceMotion: Bool) -> Animation { TasksDesignMetrics.fold(reduceMotion: reduceMotion) }
 

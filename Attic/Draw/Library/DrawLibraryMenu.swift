@@ -10,6 +10,10 @@ enum DrawLibraryMetrics {
     /// The list scrolls past this unless the page gives the room it has
     /// (the drawing's 640 px).
     static let maxListHeight: CGFloat = 320
+    /// The card's first row, the search field: 60 px tall, 18 px side
+    /// padding, a 20 px magnifier 12 px from 22 px text; 6 px above the list.
+    static let searchRowHeight: CGFloat = 30
+    static let searchRowGap: CGFloat = 3
     /// The leading column: the canvas thumbnail (44 × 33 px), the "+" and
     /// the commands' icons share it.
     static let thumbnail = CGSize(width: 22, height: 16.5)

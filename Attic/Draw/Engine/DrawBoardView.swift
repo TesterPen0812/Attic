@@ -31,6 +31,22 @@ final class DrawBoardView: NSView, DrawBoardSink {
     private(set) var editor: DrawTextEditorView?
 
     #if DEBUG
+    /// Test seam: the pointer's window location in place of the real one.
+    var pointerOverride: CGPoint?
+    #endif
+
+    /// The drawing's pen cursor: a dot in the pen colour, sized to the
+    /// stroke on screen (its 16 px image, r = width ÷ 2 + 1 px, at most
+    /// 6 px: halved, the stroke plus 1 pt, at most 6 pt), in a white ring.
+    static let cursorRing: CGFloat = 0.6
+    static func penDotDiameter(strokeWidth: Double, zoom: CGFloat) -> CGFloat {
+        min(6, max(2, CGFloat(strokeWidth) * zoom + 1))
+    }
+    /// The eraser's 24 px ring, halved: 12 pt, its 10 pt circle the
+    /// eraser's own reach (5 pt either side of the pointer).
+    static let eraserCursorSize: CGFloat = 12
+
+    #if DEBUG
     /// Test seam: rasters requested and installed by this board.
     private(set) var rasterRequests = 0
     private(set) var rasterInstalls = 0
