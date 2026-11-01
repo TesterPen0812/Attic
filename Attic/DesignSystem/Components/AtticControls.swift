@@ -2325,6 +2325,20 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
     let placeholderColor: NSColor
     let onEscape: () -> Void
 
+    /// A query is plain, single-line text. TextKit 2 creates a rendering
+    /// subview for its first glyph, which invalidates SwiftUI's surrounding
+    /// layout through AppKit's constraint-hosting bridge. A cell-scoped
+    /// TextKit 1 editor draws that text without changing the view tree.
+    final class QueryCell: NSTextFieldCell {
+        private lazy var queryEditor: NSTextView = {
+            let editor = NSTextView(usingTextLayoutManager: false)
+            editor.isFieldEditor = true
+            return editor
+        }()
+
+        override func fieldEditor(for controlView: NSView) -> NSTextView? { queryEditor }
+    }
+
     final class Field: NSTextField {
         /// The field took the keyboard (a click back into it, ⌘F, Search).
         var onFocus: (() -> Void)?
@@ -2349,6 +2363,7 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> Field {
         let field = Field()
+        field.cell = QueryCell(textCell: "")
         field.isBordered = false
         field.isBezeled = false
         field.drawsBackground = false

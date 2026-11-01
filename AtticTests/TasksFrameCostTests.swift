@@ -213,12 +213,23 @@ final class TasksFrameCostTests: XCTestCase {
 /// The Tasks page on the spec's seeded sizes, in a window off screen, as
 /// the panel hosts it; each step is timed as one frame.
 @MainActor
+private final class InputCostHostingView<Content: View>: NSHostingView<Content> {
+    private(set) var layoutPasses = 0
+    override func layout() {
+        layoutPasses += 1
+        super.layout()
+    }
+}
+
+@MainActor
 final class FrameCostHost {
     let store: TaskStore
     let model: TasksPageModel
     let window: NSPanel
     let focus = Hosted.Focus()
     private var time: TimeInterval = 1_000
+    private var layoutPassCount: () -> Int = { 0 }
+    var layoutPasses: Int { layoutPassCount() }
 
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { true }
@@ -242,8 +253,10 @@ final class FrameCostHost {
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
+        let host = InputCostHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
             .frame(width: size.width, height: size.height))
+        window.contentView = host
+        layoutPassCount = { [weak host] in host?.layoutPasses ?? 0 }
         window.orderFront(nil)
         window.makeKey()
         spin(1)

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import SwiftData
 import XCTest
@@ -339,17 +340,33 @@ final class DoneSearchCostTests: XCTestCase {
         host.model.beginSearch()
         host.spin(0.6)
         Hosted.pumpEvents()
+        host.spin(0.1)
+        _ = host.frame()
         let editor = try XCTUnwrap(host.window.firstResponder as? NSTextView)
         let ids = host.model.doneLogTasks.map(\.id)
         let evaluations = TasksPage.tabsEvaluations
+        let layouts = host.layoutPasses
+        var pagePublications = 0, inputPublications = 0, resultPublications = 0
+        let observations = [
+            host.model.objectWillChange.sink { pagePublications += 1 },
+            host.model.doneSearchInput.objectWillChange.sink { inputPublications += 1 },
+            host.model.doneResults.objectWillChange.sink { resultPublications += 1 }
+        ]
+        defer { withExtendedLifetime(observations) {} }
         let milliseconds = host.frame {
             editor.insertText("F", replacementRange: editor.selectedRange())
         }
         print("ATTIC_DONE_FIRST_CHARACTER frame_ms=\(milliseconds)")
+        print("ATTIC_DONE_FIRST_PUBLICATIONS page/input/results=\([pagePublications, inputPublications, resultPublications])")
+        XCTAssertEqual(pagePublications, 0)
+        XCTAssertEqual(inputPublications, 0)
+        XCTAssertEqual(resultPublications, 0)
         XCTAssertEqual(host.model.doneSearchInput.text, "F")
         XCTAssertEqual(host.model.doneSearch, "")
         XCTAssertEqual(host.model.doneLogTasks.map(\.id), ids)
         XCTAssertEqual(TasksPage.tabsEvaluations, evaluations)
+        XCTAssertEqual(host.layoutPasses, layouts,
+                       "typing in the fixed native field must not relayout the surrounding page")
         host.model.flushDoneSearchInput()
         XCTAssertEqual(host.model.doneSearch, "F")
         host.model.loadDoneLogIfNeeded()
@@ -399,6 +416,91 @@ final class DoneSearchCostTests: XCTestCase {
         field.setSelectedRange(NSRange(location: field.string.utf16.count, length: 0))
         field.insertText("x", replacementRange: field.selectedRange())
         XCTAssertEqual(host.model.doneSearchInput.text, "earlyx")
+    }
+
+    func testNativeQueryEditorKeepsCompositionUndoAndFocusBehavior() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1")
+        }
+        let model = TasksPageModel(library: AtticLibrary(tasks: try makeTestStore()))
+        let panel = InputPanel(contentRect: CGRect(x: -4000, y: -4000, width: 344, height: 40),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.makeFirstResponder(nil); panel.contentView = nil; panel.close() }
+        var escapes = 0
+        panel.contentView = NSHostingView(rootView:
+            TasksDoneSearchField(model: model, input: model.doneSearchInput, isFocused: .constant(true),
+                                 onEscape: { escapes += 1; model.setSearchQuery("", for: .done) })
+                .atticDesign(AtticDesignContext(mode: .light)))
+        panel.orderFront(nil)
+        panel.makeKey()
+        func settle() { RunLoop.current.run(until: Date().addingTimeInterval(0.1)); Hosted.pumpEvents() }
+        settle()
+        let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+        let field = try XCTUnwrap(editor.delegate as? NSTextField)
+        editor.insertText("café", replacementRange: editor.selectedRange())
+        editor.breakUndoCoalescing()
+        settle()
+        XCTAssertEqual(model.doneSearchInput.text, "café")
+        XCTAssertTrue(editor.allowsUndo)
+        let undo = try XCTUnwrap(editor.undoManager)
+        XCTAssertTrue(undo.canUndo)
+        undo.undo()
+        XCTAssertEqual(model.doneSearchInput.text, "")
+        undo.redo()
+        XCTAssertEqual(model.doneSearchInput.text, "café")
+        editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+        editor.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        editor.insertText("日本", replacementRange: editor.markedRange())
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertEqual(model.doneSearchInput.text, "日本")
+        XCTAssertTrue(panel.makeFirstResponder(nil))
+        XCTAssertTrue(panel.makeFirstResponder(field))
+        XCTAssertTrue(panel.firstResponder === editor, "the cell keeps its editor across focus changes")
+        XCTAssertEqual(editor.string, "日本")
+        model.typeDoneSearch("external")
+        settle()
+        XCTAssertEqual(editor.string, "external")
+        editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        settle()
+        XCTAssertEqual(escapes, 1)
+        XCTAssertEqual(model.doneSearchInput.text, "")
+        editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertEqual(escapes, 2, "Escape is still routed for an empty query")
+        editor.insertText("reopened", replacementRange: editor.selectedRange())
+        XCTAssertEqual(model.doneSearchInput.text, "reopened")
+    }
+
+    func testNativeQueryEditorIsReleasedWithItsHostedField() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1")
+        }
+        weak var editor: NSTextView?
+        try autoreleasepool {
+            let model = TasksPageModel(library: AtticLibrary(tasks: try makeTestStore()))
+            let panel = InputPanel(contentRect: CGRect(x: -4000, y: -4000, width: 344, height: 40),
+                                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.isReleasedWhenClosed = false
+            panel.contentView = NSHostingView(rootView:
+                TasksDoneSearchField(model: model, input: model.doneSearchInput,
+                                     isFocused: .constant(true), onEscape: {})
+                    .atticDesign(AtticDesignContext(mode: .light)))
+            panel.orderFront(nil)
+            panel.makeKey()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            Hosted.pumpEvents()
+            editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+            panel.makeFirstResponder(nil)
+            panel.contentView = nil
+            panel.close()
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while editor != nil && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertNil(editor)
     }
 
     func testCoalescingNeverAppliesAnOldQueryAfterEscapeAndFlushesBeforeNavigation() async throws {
