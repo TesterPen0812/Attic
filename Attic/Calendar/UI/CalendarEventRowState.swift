@@ -6,6 +6,7 @@ import Foundation
 @MainActor
 final class CalendarEventRowState: ObservableObject {
     @Published private(set) var rowID: String?
+    @Published private(set) var rowDay: DueDay?
     @Published private(set) var owned: CalendarOwnedEvent?
     @Published private(set) var calendars: [CalendarWriteCalendar] = []
     @Published var title = ""
@@ -27,11 +28,13 @@ final class CalendarEventRowState: ObservableObject {
         self.makeWriter = makeWriter
     }
 
-    func toggle(_ event: CalendarEvent) async {
+    func toggle(_ event: CalendarEvent, on day: DueDay? = nil) async {
         guard !busy else { return }
-        if rowID == event.id { _ = await close(); return }
+        let day = day ?? DueDay(date: event.start, calendar: CalendarMonthMath.calendar())
+        if rowID == event.id, rowDay == day { _ = await close(); return }
         guard await close() else { return }
         rowID = event.id
+        rowDay = day
         title = event.title
         failure = nil
         busy = true
@@ -133,18 +136,22 @@ final class CalendarEventRowState: ObservableObject {
 
     private func clear() {
         rowID = nil
+        rowDay = nil
         owned = nil
         expandedChoice = nil
         failure = nil
     }
 
-    func openInCalendar(_ event: CalendarEvent) async {
+    func openInCalendar(_ event: CalendarEvent, on day: DueDay? = nil) async {
         do {
             if writer == nil { writer = try makeWriter?() }
             guard let writer else { throw CalendarEventWriteError.openFailed }
             try await writer.openInCalendar(event.id)
         } catch {
-            if rowID == nil { rowID = event.id }
+            if rowID == nil {
+                rowID = event.id
+                rowDay = day ?? DueDay(date: event.start, calendar: CalendarMonthMath.calendar())
+            }
             failure = String(localized: "Couldn’t open event in Calendar. Try again.")
         }
     }

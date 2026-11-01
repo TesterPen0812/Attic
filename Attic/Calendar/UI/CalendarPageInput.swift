@@ -57,7 +57,7 @@ struct CalendarPageInput: NSViewRepresentable {
                 let point = window.convertPoint(toScreen: event.locationInWindow)
                 let hit = window.contentView?.accessibilityHitTest(point) as AnyObject?
                 let role = hit?.accessibilityRole?()
-                let control = [NSAccessibility.Role.button, .textField, .checkBox, .popUpButton, .comboBox].contains { $0 == role }
+                let control = [NSAccessibility.Role.button, .textField, .textArea, .checkBox, .popUpButton, .comboBox].contains { $0 == role }
                 if !onRow && !control { route.emptyPress() }
             }
             return event

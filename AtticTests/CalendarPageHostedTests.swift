@@ -55,8 +55,7 @@ final class CalendarPageHostedTests: XCTestCase {
             page.settle()
             XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5)
             XCTAssertNotNil(page.element("calendar-search"))
-            page.model.setQuery("")
-            page.window.makeFirstResponder(nil)
+            XCTAssertTrue(try XCTUnwrap(page.element("search-close")).accessibilityPerformPress?() ?? false)
             page.settle()
             XCTAssertEqual(page.offset, 0, accuracy: 0.5)
         }
@@ -106,6 +105,28 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    func testAMultiDayEventOpensOnlyTheClickedDayRow() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        var span = event("span", on: 29)
+        span.isAllDay = true
+        span.start = date(2026, 10, 29)
+        span.end = date(2026, 10, 31)
+        try withPage(events: [span]) { page in
+            XCTAssertEqual(page.matching("calendar-event-span").count, 2)
+            XCTAssertTrue(try XCTUnwrap(page.matching("calendar-event-span").first).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.matching("calendar-event-open-span").count, 1, "one physical day row opens")
+            XCTAssertTrue(try XCTUnwrap(page.matching("calendar-event-span").last).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.matching("calendar-event-open-span").count, 1, "opening the other day closes the first")
+        }
+    }
+
     func testCommandTReturnsToTodayAndEscapeClosesOnlyTheOpenEvent() throws {
         try requireKeyWindowTests()
         AtticMotionPreference.systemReduceMotionOverride = true
@@ -126,6 +147,15 @@ final class CalendarPageHostedTests: XCTestCase {
             page.press("\u{1b}", keyCode: 53)
             XCTAssertNil(page.element("calendar-event-open-keys"))
             XCTAssertNotNil(page.element("calendar-event-keys"))
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-search-button")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5)
+            page.press("\u{1b}", keyCode: 53)
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5, "Escape restores the month")
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-search-button")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            page.click(at: CGPoint(x: 160, y: 80), count: 1)
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5, "empty space restores the month")
         }
     }
 
@@ -468,9 +498,11 @@ final class CalendarPageHostedTests: XCTestCase {
             settle()
         }
 
-        func element(_ identifier: String) -> AnyObject? {
+        func element(_ identifier: String) -> AnyObject? { matching(identifier).first }
+
+        func matching(_ identifier: String) -> [AnyObject] {
             host.layoutSubtreeIfNeeded()
-            return Self.elements(host).first { ($0.accessibilityIdentifier?() ?? "") == identifier }
+            return Self.elements(host).filter { ($0.accessibilityIdentifier?() ?? "") == identifier }
         }
 
         /// The dates (yyyy-MM-dd) of the drawn elements whose id starts with `prefix`.

@@ -61,7 +61,10 @@ struct CalendarPage: View {
             if model.eventRows.rowID != nil { Task { await model.eventRows.close() }; return true }
             if searchOpen { endSearch(); return true }
             return false
-        }, emptyPress: { Task { await model.eventRows.close() } }))
+        }, emptyPress: {
+            if searchOpen { endSearch() }
+            Task { await model.eventRows.close() }
+        }))
         .atticDesignCorners()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {

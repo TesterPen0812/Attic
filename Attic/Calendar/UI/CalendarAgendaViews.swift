@@ -223,12 +223,12 @@ struct CalendarEventRow: View {
 
     @Environment(\.atticDesign) private var design
 
-    private var isOpen: Bool { rows.rowID == event.id }
+    private var isOpen: Bool { rows.rowID == event.id && rows.rowDay == day }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
-                Button { Task { await rows.toggle(event) } } label: { summary }
+                Button { Task { await rows.toggle(event, on: day) } } label: { summary }
                     .buttonStyle(.plain)
                     .focusEffectDisabled()
                     .accessibilityValue(isOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))
@@ -254,7 +254,7 @@ struct CalendarEventRow: View {
         .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: isOpen)
         .background(CalendarEventRowBoundary())
         .atticContextMenu {
-            [AtticMenuCommand("Open in Calendar") { Task { await rows.openInCalendar(event) } }]
+            [AtticMenuCommand("Open in Calendar") { Task { await rows.openInCalendar(event, on: day) } }]
         }
         .accessibilityElement(children: .contain)
     }
@@ -343,7 +343,7 @@ struct CalendarEventRow: View {
                     Text(verbatim: event.calendarTitle)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    Button("Open in Calendar") { Task { await rows.openInCalendar(event) } }
+                    Button("Open in Calendar") { Task { await rows.openInCalendar(event, on: day) } }
                         .accessibilityIdentifier("calendar-event-open-\(event.id)")
                 }
             }
