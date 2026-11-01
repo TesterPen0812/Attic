@@ -146,6 +146,10 @@ final class DrawPageModel: ObservableObject {
     var pendingImport: Task<Void, Never>?
     /// A canvas's thumbnail renders once its edits have been quiet this long.
     var thumbnailSettleDelay: TimeInterval = 1.5
+    /// Renders a thumbnail away from the main thread (tests hold one back).
+    var thumbnailRenderer: @Sendable (_ objects: [DrawObject], _ dark: Bool) async -> Data? = { objects, dark in
+        await Task.detached(priority: .utility) { DrawThumbnail.render(objects, dark: dark) }.value
+    }
 
     private var viewports: [UUID: DrawViewport] = [:]
     private var userMovedView = false
@@ -294,8 +298,9 @@ final class DrawPageModel: ObservableObject {
             return
         }
         let dark = DrawImageActions.isDark
+        let render = thumbnailRenderer
         let task = Task { @MainActor [weak self] in
-            let data = await Task.detached(priority: .utility) { DrawThumbnail.render(snapshot, dark: dark) }.value
+            let data = await render(snapshot, dark)
             guard let self, self.thumbnailRenders[id]?.generation == generation else { return }
             self.thumbnailRenders[id] = nil
             self.writeThumbnail(data, on: id)

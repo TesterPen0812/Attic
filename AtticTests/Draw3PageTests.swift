@@ -66,6 +66,7 @@ final class Draw3PageTests: XCTestCase {
         AtticTransparencySeam.systemOverride = nil
         AtticDraw.enabledOverride = nil
         DrawImageActions.darkOverride = nil
+        DrawPageModel.importLoadHook = nil
         super.tearDown()
     }
 
@@ -167,6 +168,59 @@ final class Draw3PageTests: XCTestCase {
         let centre = model.viewport.world(CGPoint(x: model.clearRect.midX, y: model.clearRect.midY))
         XCTAssertEqual(object.frame.x + 30, centre.x, accuracy: 0.5)
         XCTAssertEqual(object.frame.y + 20, centre.y, accuracy: 0.5)
+    }
+
+    private func imageFile(_ name: String, width: Int = 60, height: Int = 40) throws -> (URL, Data) {
+        let data = Draw3Images.encoded(width: width, height: height)
+        let file = folder.appendingPathComponent(name)
+        try data.write(to: file)
+        return (file, data)
+    }
+
+    private func filePasteboard(_ file: URL) -> NSPasteboard {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-draw3-file-\(UUID().uuidString)"))
+        addTeardownBlock { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([file as NSURL])
+        return pasteboard
+    }
+
+    func testAnImportThatFinishesAfterASwitchLandsOnTheCanvasItWasDroppedOn() async throws {
+        let (file, data) = try imageFile("late.png")
+        let origin = try XCTUnwrap(model.canvasID)
+        let drop = CGPoint(x: 160, y: 220)
+        let centre = model.viewport.world(drop)
+        let task = try XCTUnwrap(model.importImages(from: filePasteboard(file), at: drop))
+        model.newCanvas()
+        let other = try XCTUnwrap(model.canvasID)
+        XCTAssertNotEqual(other, origin)
+        await task.value
+        XCTAssertTrue(model.objects.isEmpty, "The canvas now open is left alone")
+        let landed = try store.open(origin).objects
+        XCTAssertEqual(landed.count, 1, "The drop is never lost")
+        guard case .image(let image) = landed.first?.content else { return XCTFail("Not an image") }
+        XCTAssertEqual(image.original, data)
+        let frame = try XCTUnwrap(landed.first?.frame)
+        XCTAssertEqual(frame.x + frame.width / 2, centre.x, accuracy: 0.5, "Where it was dropped")
+        XCTAssertEqual(frame.y + frame.height / 2, centre.y, accuracy: 0.5)
+        XCTAssertNil(model.saveNotice)
+        model.open(origin)
+        XCTAssertEqual(model.objects.map(\.id), landed.map(\.id))
+        XCTAssertTrue(model.canUndo, "Its Undo step belongs to that canvas")
+        model.undo()
+        XCTAssertTrue(model.objects.isEmpty)
+    }
+
+    func testQuitWaitsForEveryImportInFlight() async throws {
+        let (slow, _) = try imageFile("slow.png"), (fast, _) = try imageFile("fast.png", width: 30, height: 30)
+        DrawPageModel.importLoadHook = { names in
+            if names == ["slow.png"] { try? await Task.sleep(nanoseconds: 400_000_000) }
+        }
+        XCTAssertNotNil(model.importImages(from: filePasteboard(slow), at: nil))
+        XCTAssertNotNil(model.importImages(from: filePasteboard(fast), at: nil))
+        let ready = await model.prepareToQuit()
+        XCTAssertTrue(ready)
+        XCTAssertEqual(stored.filter(\.isImage).count, 2, "Quit waited for both imports, not only the latest")
     }
 
     func testDrawObjectsOnThePasteboardStillPasteAsObjects() async throws {
@@ -344,6 +398,41 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertFalse(model.canUndo)
     }
 
+    func testTextInAResizedGroupScalesWithItInOneSaveAndOneUndoStep() throws {
+        let durable = try persistentStore()
+        use(durable)
+        var box = DrawObject(frame: DrawFrame(x: 100, y: 100), zIndex: 1, content: .text("one two three four five six"))
+        box.textWidth = 60
+        DrawPageModel.measure(&box, text: box.text)
+        var free = DrawObject(frame: DrawFrame(x: 100, y: 240), zIndex: 2, content: .text("free width"))
+        DrawPageModel.measure(&free, text: free.text)
+        let shape = DrawObject(frame: DrawFrame(x: 100, y: 200, width: 80, height: 30), zIndex: 3, content: .shape(.rectangle))
+        XCTAssertTrue(model.perform(.put([box, free, shape])).isSaved)
+        model.setTool(.select)
+        model.selectAll()
+        durable.metrics.reset()
+        let corner = spot(.bottomRight)
+        var path = [corner]
+        for step in 1...10 { path.append(CGPoint(x: corner.x + CGFloat(step) * 10, y: corner.y + CGFloat(step) * 10)) }
+        drag(path)
+        XCTAssertEqual(durable.metrics.saveAttempts, 1, "One save per drag")
+        let scaledShape = try XCTUnwrap(model.object(shape.id))
+        let s = scaledShape.frame.width / shape.frame.width
+        XCTAssertGreaterThan(s, 1.2)
+        let text = try XCTUnwrap(model.object(box.id)), loose = try XCTUnwrap(model.object(free.id))
+        XCTAssertEqual(text.frame.x, 100, accuracy: 0.5, "The group scales from the opposite corner")
+        XCTAssertEqual(text.frame.width, box.frame.width * s, accuracy: 0.5, "The box grows with the group")
+        XCTAssertEqual(text.frame.height, box.frame.height * s, accuracy: 0.5, "Same lines, larger: no reflow")
+        XCTAssertEqual(text.textWidth ?? 0, 60 * s, accuracy: 0.5)
+        XCTAssertEqual(loose.frame.width, free.frame.width * s, accuracy: 0.5)
+        XCTAssertEqual(loose.frame.height, free.frame.height * s, accuracy: 0.5)
+        XCTAssertEqual(loose.frame.y, 100 + (240 - 100) * s, accuracy: 0.5)
+        model.undo()
+        XCTAssertEqual(model.object(box.id), box, "One Undo step puts the text back")
+        XCTAssertEqual(model.object(free.id), free)
+        XCTAssertEqual(model.object(shape.id)?.frame, shape.frame)
+    }
+
     func testHandlesTakePressesBeyondTheirSixPointsAndShowAResizeCursor() {
         put(DrawObject(frame: DrawFrame(x: 100, y: 100, width: 80, height: 40), content: .shape(.rectangle)))
         model.setTool(.select)
@@ -406,6 +495,26 @@ final class Draw3PageTests: XCTestCase {
         model.selectAll()
         model.deleteSelection()
         XCTAssertTrue(wait { (try? durable.library().first?.thumbnail) == nil }, "Nothing drawn: no thumbnail, the empty card")
+    }
+
+    func testALateRenderNeverBringsBackAThumbnailAfterTheLastObjectGoes() async throws {
+        let durable = try persistentStore()
+        use(durable)
+        model.thumbnailSettleDelay = 600
+        let gate = Draw3Gate()
+        model.thumbnailRenderer = { _, _ in
+            await gate.wait()
+            return Data([7, 7, 7])
+        }
+        put(DrawObject(frame: DrawFrame(x: 20, y: 30, width: 100, height: 50), content: .shape(.rectangle)))
+        model.flushThumbnail()
+        model.selectAll()
+        model.deleteSelection()
+        model.flushThumbnail()
+        XCTAssertNil(try durable.library().first?.thumbnail)
+        gate.open()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(try durable.library().first?.thumbnail, "The card stays empty")
     }
 
     // MARK: Export… and Copy as Image
@@ -495,6 +604,78 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNotNil(model.pasteboard.data(forType: .png))
     }
 
+    func testCopyAsImageKeepsAPNGOrJPEGOriginalByteForByte() async throws {
+        model.setTool(.select)
+        for type in [UTType.png, .jpeg] {
+            let original = Draw3Images.encoded(width: 30, height: 20, type: type, red: 0.1, green: 0.6, blue: 0.3)
+            put(imageObject(original, width: 30, height: 20, type: type.identifier))
+            let object = try XCTUnwrap(model.objects.last)
+            model.select([object.id])
+            model.runMore(.copyAsImage)
+            await model.images.lastTask?.value
+            let items = model.pasteboard.pasteboardItems ?? []
+            let rendered = try XCTUnwrap(items.first?.data(forType: .png).flatMap(Draw3Images.cgImage), "\(type): the rendered PNG")
+            let expected = DrawGeometry.bounds(object).insetBy(dx: -DrawExport.margin, dy: -DrawExport.margin)
+            XCTAssertEqual(rendered.width, Int((expected.width * 2).rounded(.up)))
+            let originals = items.compactMap { $0.data(forType: NSPasteboard.PasteboardType(type.identifier)) }
+            XCTAssertTrue(originals.contains(original), "\(type): the original, byte for byte")
+        }
+    }
+
+    func testAFailedExportOrSaveImageKeepsTheOldFileAndSaysSo() async throws {
+        struct Injected: Error {}
+        exportBoard()
+        let destination = folder.appendingPathComponent("Board.png"), trashed = folder.appendingPathComponent("Trashed")
+        try FileManager.default.createDirectory(at: trashed, withIntermediateDirectories: true)
+        let old = Data("the old file".utf8)
+        try old.write(to: destination)
+        model.images.chooseDestination = { _, _ in destination }
+        // A Trash the test can see.
+        func testFiles() -> DrawFileWriter {
+            var files = DrawFileWriter()
+            files.trash = { url in try FileManager.default.moveItem(at: url, to: trashed.appendingPathComponent(UUID().uuidString)) }
+            return files
+        }
+        func folderFiles() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0 != "Trashed" }
+        }
+
+        // Writing the new file fails: Export….
+        model.images.files = testFiles()
+        model.images.files.write = { _, _ in throw Injected() }
+        model.images.exportCanvas(model.canvasID!)
+        await model.images.lastTask?.value
+        XCTAssertEqual(try? Data(contentsOf: destination), old, "The old file is untouched")
+        let notice = try XCTUnwrap(model.saveNotice, "The failure shows")
+        XCTAssertFalse(notice.canRetry)
+        XCTAssertEqual(try folderFiles(), ["Board.png"], "Nothing staged is left behind")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: trashed.path).isEmpty)
+        model.dismissSaveError()
+        XCTAssertNil(model.saveNotice)
+
+        // Swapping it in fails: Save Image.
+        put(imageObject(Draw3Images.encoded(width: 20, height: 20), width: 20, height: 20))
+        model.images.files = testFiles()
+        model.images.files.replace = { _, _, _ in throw Injected() }
+        model.images.saveImage(model.objects.last!)
+        await model.images.lastTask?.value
+        XCTAssertEqual(try? Data(contentsOf: destination), old)
+        XCTAssertNotNil(model.saveNotice)
+        XCTAssertEqual(try folderFiles(), ["Board.png"])
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: trashed.path).isEmpty)
+        model.dismissSaveError()
+
+        // A save that works replaces it; the old file goes to the Trash.
+        model.images.files = testFiles()
+        model.images.exportCanvas(model.canvasID!)
+        await model.images.lastTask?.value
+        XCTAssertNotNil(Draw3Images.cgImage(try Data(contentsOf: destination)), "The new PNG is in place")
+        let binned = try FileManager.default.contentsOfDirectory(at: trashed, includingPropertiesForKeys: nil)
+        XCTAssertEqual(try binned.map { try Data(contentsOf: $0) }, [old], "The old file is in the Trash, whole")
+        XCTAssertEqual(try folderFiles(), ["Board.png"])
+        XCTAssertNil(model.saveNotice)
+    }
+
     func testExportAndCopyAsImageAreGreyedWhileTheCanvasIsEmpty() {
         func enabled(_ command: DrawLibraryMenuModel.Command) -> Bool? {
             model.library.rows.first { $0.kind == .command(command) }?.isEnabled
@@ -541,6 +722,33 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNil(model.saveNotice)
         XCTAssertFalse(durable.hasUnsettledEdits)
         XCTAssertEqual(try DrawPersistentStore(container: durable.container).open(model.canvasID!).objects.count, 1)
+    }
+
+    func testDrawingAgainAfterAFailedSaveKeepsBothStrokesAndRetrySavesThemInOrder() async throws {
+        var fail = true
+        let durable = try persistentStore(save: { context in
+            if fail { throw NSError(domain: "Injected", code: 1) }
+            try context.save()
+        })
+        use(durable)
+        model.setTool(.pen)
+        drag([CGPoint(x: 60, y: 100), CGPoint(x: 130, y: 140)])
+        XCTAssertNotNil(model.saveNotice)
+        drag([CGPoint(x: 60, y: 200), CGPoint(x: 130, y: 260)])
+        XCTAssertEqual(model.objects.count, 2, "Input keeps working: the second stroke stays on the board")
+        XCTAssertNotNil(model.saveNotice, "The notice stays until they are saved")
+        let blocked = await model.prepareToQuit()
+        XCTAssertFalse(blocked, "Quit waits for both")
+        fail = false
+        model.retrySave()
+        XCTAssertNil(model.saveNotice)
+        XCTAssertFalse(durable.hasUnsettledEdits)
+        let saved = try DrawPersistentStore(container: durable.container).open(model.canvasID!).objects
+        XCTAssertEqual(saved.count, 2)
+        XCTAssertEqual(saved.map(\.id), model.objects.map(\.id), "Saved in drawing order")
+        XCTAssertTrue(model.canUndo)
+        model.undo()
+        XCTAssertEqual(model.objects.map(\.id), [saved[0].id], "Undo takes back the second stroke first")
     }
 
     func testAHeldSaveShowsAndRetryReconciles() throws {
@@ -603,11 +811,13 @@ final class Draw3PageTests: XCTestCase {
 final class Draw3HeldRepository: DrawRepository {
     private let memory = DrawMemoryRepository()
     var reconcileOutcome: DrawWriteOutcome = .held("Mixed")
+    /// Once set, writes save (the store's trouble is over).
+    var writesCommit = false
 
     func library() throws -> [DrawCanvas] { memory.library() }
     func load(_ id: UUID) throws -> DrawSnapshot? { memory.load(id) }
     func textMatches(_ words: [String], in id: UUID) throws -> [UUID] { memory.textMatches(words, in: id) }
-    func write(_ change: DrawChange) -> DrawWriteOutcome { .held("Mixed") }
+    func write(_ change: DrawChange) -> DrawWriteOutcome { writesCommit ? memory.write(change) : .held("Mixed") }
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome {
         if case .committed = reconcileOutcome { _ = memory.write(change) }
         return reconcileOutcome
@@ -703,5 +913,34 @@ final class Draw3BoardTests: XCTestCase {
         XCTAssertGreaterThan(DrawImageDecodeProbe.decodes, 0, "The image decodes on the renderer")
         XCTAssertEqual(DrawImageDecodeProbe.mainThreadDecodes, 0)
         XCTAssertLessThan(DrawImageDecodeProbe.largestPixelSide, 6000, "Downsampled to the size on screen")
+    }
+}
+
+/// Holds an async step until the test opens it.
+final class Draw3Gate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if isOpen {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+
+    func open() {
+        lock.lock()
+        isOpen = true
+        let waiting = waiters
+        waiters = []
+        lock.unlock()
+        waiting.forEach { $0.resume() }
     }
 }

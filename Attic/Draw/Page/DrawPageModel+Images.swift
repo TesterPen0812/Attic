@@ -38,6 +38,11 @@ private enum DrawImageSource: Sendable {
     case data(Data)
     case file(URL)
 
+    /// The file names, for tests that hold one import back.
+    var names: [String] {
+        if case .file(let url) = self { [url.lastPathComponent] } else { [] }
+    }
+
     nonisolated func load() -> DrawImageImport? {
         switch self {
         case .data(let data): DrawImageImport.inspect(data)
@@ -47,6 +52,11 @@ private enum DrawImageSource: Sendable {
 }
 
 extension DrawPageModel {
+    #if DEBUG
+    /// Tests only: runs before an import's files are read, with their names.
+    nonisolated(unsafe) static var importLoadHook: (@Sendable ([String]) async -> Void)?
+    #endif
+
     /// Image data the board takes from a drop or a paste.
     static let imagePasteboardTypes: [NSPasteboard.PasteboardType] = [
         .png, .tiff,
@@ -93,6 +103,9 @@ extension DrawPageModel {
         let point = screen ?? CGPoint(x: clearRect.midX, y: clearRect.midY)
         let centre = viewport.world(point)
         let task = Task { @MainActor [weak self] in
+            #if DEBUG
+            await Self.importLoadHook?(sources.flatMap(\.names))
+            #endif
             let imports = await Task.detached(priority: .userInitiated) { sources.compactMap { $0.load() } }.value
             self?.place(imports, around: centre, on: canvasID)
         }
@@ -121,6 +134,20 @@ extension DrawPageModel {
     }
 }
 
+/// How Save Image and Export… touch the disk (tests make a step fail).
+struct DrawFileWriter: Sendable {
+    /// Writes the new file's bytes.
+    var write: @Sendable (_ data: Data, _ url: URL) throws -> Void = { try $0.write(to: $1) }
+    /// Swaps the staged file in for the destination in one step, keeping
+    /// the old file under the backup name next to it.
+    var replace: @Sendable (_ destination: URL, _ staged: URL, _ backupName: String) throws -> Void = { destination, staged, backup in
+        _ = try FileManager.default.replaceItemAt(destination, withItemAt: staged, backupItemName: backup,
+                                                  options: [.withoutDeletingBackupItem])
+    }
+    /// Moves a file to the Trash (never deletes it).
+    var trash: @Sendable (_ url: URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+}
+
 /// Save Image, Copy as Image and Export…: files and pasteboards for the
 /// page (the page model's `DrawImageSeam`).
 @MainActor
@@ -128,6 +155,8 @@ final class DrawImageActions: DrawImageSeam {
     weak var model: DrawPageModel?
     /// Where a save goes: the save panel, or a test's folder.
     var chooseDestination: @MainActor (_ name: String, _ types: [UTType]) -> URL? = DrawImageActions.savePanel
+    /// The disk steps of a save.
+    var files = DrawFileWriter()
     #if DEBUG
     /// Tests only: the appearance exports and thumbnails render in.
     nonisolated(unsafe) static var darkOverride: Bool?
@@ -171,8 +200,8 @@ final class DrawImageActions: DrawImageSeam {
         let type = UTType(image.contentType) ?? .png
         let name = canvasName + "." + (type.preferredFilenameExtension ?? "png")
         guard let url = chooseDestination(name, [type]) else { return }
-        let bytes = image.original
-        lastTask = Task.detached(priority: .userInitiated) { Self.write(bytes, to: url) }
+        let bytes = image.original, files = files
+        lastTask = Task.detached(priority: .userInitiated) { Self.write(bytes, to: url, files: files) }
     }
 
     /// The selection's ⋯ → Copy as Image: a PNG at 2× on the board colour;
@@ -193,10 +222,10 @@ final class DrawImageActions: DrawImageSeam {
         let content = objects(of: id)
         guard !content.isEmpty, let url = chooseDestination(name(of: id), [.png, .pdf]) else { return }
         let format: DrawExportFormat = url.pathExtension.lowercased() == "pdf" ? .pdf : .png
-        let dark = Self.isDark
+        let dark = Self.isDark, files = files
         lastTask = Task.detached(priority: .userInitiated) {
             guard let data = DrawExport.render(content, format: format, dark: dark) else { return }
-            Self.write(data, to: url)
+            Self.write(data, to: url, files: files)
         }
     }
 
@@ -221,10 +250,9 @@ final class DrawImageActions: DrawImageSeam {
     // MARK: Files
 
     /// A file already there goes to the Trash first (never deleted).
-    nonisolated private static func write(_ data: Data, to url: URL) {
-        let files = FileManager.default
-        if files.fileExists(atPath: url.path) { try? files.trashItem(at: url, resultingItemURL: nil) }
-        try? data.write(to: url)
+    nonisolated private static func write(_ data: Data, to url: URL, files: DrawFileWriter) {
+        if FileManager.default.fileExists(atPath: url.path) { try? files.trash(url) }
+        try? files.write(data, url)
     }
 
     /// The standard save panel, with a format choice when there are several.

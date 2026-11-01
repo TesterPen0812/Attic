@@ -279,6 +279,187 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertTrue(try store.deletedImages().isEmpty)
         XCTAssertEqual(try store.library().map(\.id), [host.id])
     }
+
+    // MARK: Batch 3: payload replicas before a purge
+
+    /// A deleted canvas with an image, and a deleted image on a live canvas,
+    /// whose object headers agree; only their payload rows are replicated.
+    private func payloadReplicaFixture(_ store: DrawPersistentStore, container: ModelContainer,
+                                       _ diverge: (DrawPayloadRecord) -> Void) throws -> (targets: [DrawPurgeTarget], ids: Set<UUID>) {
+        let board = store.create(name: "Board"), boardImage = image()
+        XCTAssertTrue(store.perform(.put([boardImage]), on: board.id).isSaved)
+        XCTAssertTrue(store.perform(.deleteCanvas, on: board.id).isSaved)
+        let host = store.create(name: "Host"), picture = image(bytes: 90)
+        XCTAssertTrue(store.perform(.put([picture, stroke()]), on: host.id).isSaved)
+        XCTAssertTrue(store.perform(.remove([picture.id]), on: host.id).isSaved)
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        for row in try context.fetch(FetchDescriptor<DrawPayloadRecord>()) where row.id == boardImage.id || row.id == picture.id {
+            let copy = row.copy()
+            diverge(copy)
+            context.insert(copy)
+        }
+        try context.save()
+        let canvasDate = try XCTUnwrap(store.library(deleted: true).first { $0.id == board.id }?.deletedAt)
+        let imageDate = try XCTUnwrap(store.deletedImages().first { $0.object.id == picture.id }?.object.deletedAt)
+        return ([.canvas(board.id, deletedAt: canvasDate), .image(canvas: host.id, object: picture.id, deletedAt: imageDate)],
+                [boardImage.id, picture.id])
+    }
+
+    private func payloadRows(_ container: ModelContainer, _ ids: Set<UUID>) throws -> Int {
+        try ModelContext(container).fetch(FetchDescriptor<DrawPayloadRecord>()).filter { ids.contains($0.id) }.count
+    }
+
+    func testDisagreeingPayloadReplicasSurviveDeletePermanently() throws {
+        let divergences: [(String, (DrawPayloadRecord) -> Void)] = [
+            ("a different original", { $0.apply(Data([1, 2, 3]), id: $0.id, canvasID: $0.canvasID, role: $0.role) }),
+            ("the same digest over different bytes", { $0.bytes = Data([4, 5, 6]) }),
+            ("a different parent", { $0.canvasID = UUID() }),
+        ]
+        for (name, diverge) in divergences {
+            let container = try container()
+            let store = DrawPersistentStore(container: container)
+            let fixture = try payloadReplicaFixture(store, container: container, diverge)
+            XCTAssertEqual(store.purge(fixture.targets), DrawPurgeReport(removed: 0, kept: 2), "Kept with \(name)")
+            XCTAssertEqual(try payloadRows(container, fixture.ids), 4, "Every payload replica stays with \(name)")
+            XCTAssertEqual(try store.library(deleted: true).count, 1)
+            XCTAssertEqual(try store.deletedImages().count, 1)
+        }
+    }
+
+    func testDisagreeingPayloadReplicasSurviveEmptyAndTheThirtyDayRemoval() throws {
+        let clock = Clock(), container = try container()
+        let store = DrawPersistentStore(container: container, now: clock.now)
+        let fixture = try payloadReplicaFixture(store, container: container) {
+            $0.apply(Data([1, 2, 3]), id: $0.id, canvasID: $0.canvasID, role: $0.role)
+        }
+        let model = RecentlyDeletedModel(library: nil, draw: { store })
+        model.reload()
+        model.requestEmpty()
+        model.confirmEmpty()
+        XCTAssertEqual(try payloadRows(container, fixture.ids), 4, "Empty keeps disagreeing payloads")
+        XCTAssertEqual(try store.library(deleted: true).count, 1)
+        XCTAssertEqual(try store.deletedImages().count, 1)
+        clock.advance(40 * 86_400)
+        XCTAssertEqual(DrawRecentlyDeleted.purgeExpired(store: store, now: clock.now(), calendar: .current),
+                       DrawPurgeReport(removed: 0, kept: 2))
+        XCTAssertEqual(try payloadRows(container, fixture.ids), 4, "The 30-day removal keeps them too")
+    }
+
+    func testAgreeingPayloadReplicasAllGoOnEveryPurgePath() throws {
+        // Delete Permanently.
+        do {
+            let container = try container()
+            let store = DrawPersistentStore(container: container)
+            let fixture = try payloadReplicaFixture(store, container: container) { _ in }
+            XCTAssertEqual(store.purge(fixture.targets), DrawPurgeReport(removed: 2, kept: 0))
+            XCTAssertEqual(try payloadRows(container, fixture.ids), 0)
+        }
+        // Empty.
+        do {
+            let container = try container()
+            let store = DrawPersistentStore(container: container)
+            let fixture = try payloadReplicaFixture(store, container: container) { _ in }
+            let model = RecentlyDeletedModel(library: nil, draw: { store })
+            model.reload()
+            model.requestEmpty()
+            model.confirmEmpty()
+            XCTAssertEqual(try payloadRows(container, fixture.ids), 0)
+            XCTAssertTrue(try store.library(deleted: true).isEmpty)
+        }
+        // The 30-day removal.
+        do {
+            let clock = Clock(), container = try container()
+            let store = DrawPersistentStore(container: container, now: clock.now)
+            let fixture = try payloadReplicaFixture(store, container: container) { _ in }
+            clock.advance(40 * 86_400)
+            XCTAssertEqual(DrawRecentlyDeleted.purgeExpired(store: store, now: clock.now(), calendar: .current).removed, 2)
+            XCTAssertEqual(try payloadRows(container, fixture.ids), 0)
+        }
+    }
+
+    // MARK: Batch 3: edits after a failed save
+
+    /// A durable store whose saves fail while `fail` is set, recording the
+    /// object rows each successful save inserted, in order.
+    private final class SaveLog {
+        var fail = true
+        var inserted: [UUID] = []
+    }
+
+    private func flakyStore(_ log: SaveLog, container: ModelContainer) -> DrawPersistentStore {
+        DrawPersistentStore(container: container, save: { context in
+            if log.fail { throw Injected() }
+            let rows = context.insertedModelsArray.compactMap { $0 as? DrawObjectRecord }.map(\.id)
+            try context.save()
+            log.inserted += rows
+        })
+    }
+
+    func testAnEditAfterAFailedSaveQueuesAndRetrySavesBothInOrder() throws {
+        let log = SaveLog(), container = try container()
+        let store = flakyStore(log, container: container)
+        let board = store.create()
+        let first = stroke(), second = stroke()
+        guard case .retry = store.perform(.put([first]), on: board.id) else { return XCTFail("The first save fails, ready for Retry") }
+        XCTAssertFalse(store.perform(.put([second]), on: board.id).isSaved)
+        XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), [first.id, second.id], "Input keeps working: both show")
+        XCTAssertEqual(Set(store.pendingEdits[board.id]?.objects.map(\.id) ?? []), [first.id, second.id])
+        XCTAssertFalse(store.canUndo(on: board.id), "Undo waits until they are saved")
+
+        log.fail = false
+        XCTAssertTrue(store.retry(on: board.id).isSaved)
+        XCTAssertFalse(store.hasUnsettledEdits)
+        XCTAssertEqual(log.inserted, [first.id, second.id], "Saved in the order they were made")
+        XCTAssertEqual(Set(try DrawPersistentStore(container: container).open(board.id).objects.map(\.id)), [first.id, second.id])
+
+        // Undo takes them back one at a time, the latest first.
+        XCTAssertTrue(store.undo(on: board.id).isSaved)
+        XCTAssertEqual(try store.open(board.id).objects.map(\.id), [first.id])
+        XCTAssertTrue(store.undo(on: board.id).isSaved)
+        XCTAssertTrue(try store.open(board.id).objects.isEmpty)
+        XCTAssertFalse(store.canUndo(on: board.id))
+        XCTAssertTrue(store.redo(on: board.id).isSaved)
+        XCTAssertEqual(try store.open(board.id).objects.map(\.id), [first.id])
+    }
+
+    func testTwoFailuresInARowLoseNothingAndALaterSaveSavesEveryEditInOrder() throws {
+        let log = SaveLog(), container = try container()
+        let store = flakyStore(log, container: container)
+        let board = store.create()
+        let first = stroke(), second = stroke(), third = stroke()
+        XCTAssertFalse(store.perform(.put([first]), on: board.id).isSaved)
+        XCTAssertFalse(store.perform(.put([second]), on: board.id).isSaved, "The second save fails too")
+        XCTAssertFalse(store.retry(on: board.id).isSaved, "And so does Retry")
+        XCTAssertTrue(store.hasUnsettledEdits, "Quit still waits")
+        XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), [first.id, second.id])
+
+        log.fail = false
+        XCTAssertTrue(store.perform(.put([third]), on: board.id).isSaved, "A later successful save takes the held ones with it")
+        XCTAssertFalse(store.hasUnsettledEdits)
+        XCTAssertEqual(log.inserted, [first.id, second.id, third.id])
+        XCTAssertEqual(Set(try DrawPersistentStore(container: container).open(board.id).objects.map(\.id)),
+                       [first.id, second.id, third.id])
+        for remaining in [[first.id, second.id], [first.id], []] {
+            XCTAssertTrue(store.undo(on: board.id).isSaved)
+            XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), Set(remaining))
+        }
+    }
+
+    func testEditsQueuedBehindAHeldSaveSettleOnceItReconciles() throws {
+        let repository = Draw3HeldRepository()
+        let store = DrawStore(repository: repository)
+        let board = store.create()
+        let first = stroke(), second = stroke()
+        guard case .held = store.perform(.put([first]), on: board.id) else { return XCTFail("Held") }
+        XCTAssertFalse(store.perform(.put([second]), on: board.id).isSaved)
+        XCTAssertEqual(Set(try store.open(board.id).objects.map(\.id)), [first.id, second.id])
+        repository.reconcileOutcome = .committed
+        repository.writesCommit = true
+        XCTAssertTrue(store.reconcile(on: board.id).isSaved)
+        XCTAssertFalse(store.hasUnsettledEdits)
+        XCTAssertEqual(Set(try repository.load(board.id)?.objects.map(\.id) ?? []), [first.id, second.id])
+    }
 }
 
 // Test-only replica fixtures: production never inserts replicas deliberately.

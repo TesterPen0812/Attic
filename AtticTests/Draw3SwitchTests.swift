@@ -129,6 +129,26 @@ final class Draw3SwitchTests: XCTestCase {
         XCTAssertNil(library.title(of: AtticItemRef(.canvas, ids.live)))
         XCTAssertFalse(library.setTags(["new"], on: AtticItemRef(.canvas, ids.live)))
         XCTAssertFalse(library.restore(AtticItemRef(.canvas, ids.deleted)))
+        // Batch 3: the rest of the readers. Draw's Search, links, tag
+        // edits, Empty, the workspace inventory, and the agent's tools.
+        _ = try DrawPageModel.shared.store.search("Old")
+        _ = try DrawPageModel.shared.store.search("#old-tag")
+        XCTAssertEqual(library.state(of: AtticItemRef(.canvas, ids.live)), .missing)
+        XCTAssertFalse(library.delete(AtticItemRef(.canvas, ids.live)))
+        _ = library.renameTag("old-tag", to: "renamed-tag")
+        var empty = RecentlyDeletedSelection(items: library.recentlyDeleted())
+        empty.items[AtticItemRef(.canvas, ids.deleted)] = Date().addingTimeInterval(-60 * 86_400)
+        _ = library.emptyRecentlyDeleted(empty)
+        let workspace = ModelContext(coordinator.store.container)
+        _ = try WorkspaceLegacyBridge.inventory(in: workspace, includeCanvas: true)
+        let agent = AgentTaskTools(store: coordinator.store, noteStore: coordinator.noteStore, library: library)
+        let canvas: [String: Any] = ["kind": "canvas", "id": ids.live.uuidString]
+        for (tool, arguments) in [("list_deleted", [:]), ("list_tags", [:]),
+                                  ("update_tags", ["action": "rename", "from": "old-tag", "to": "agent-tag"]),
+                                  ("delete_item", canvas), ("restore_item", ["kind": "canvas", "id": ids.deleted.uuidString]),
+                                  ("link", ["item": canvas])] as [(String, [String: Any])] {
+            _ = try? agent.call(name: tool, arguments: arguments)
+        }
         let ready = await coordinator.prepareForTerminationDurably()
         XCTAssertTrue(ready)
         coordinator.stop()
@@ -136,6 +156,33 @@ final class Draw3SwitchTests: XCTestCase {
         XCTAssertEqual(CanvasReplicaFetchCounter.fetches, 0, "No old Canvas row is fetched while Draw is on")
         XCTAssertEqual(CanvasReplicaFetchCounter.blocked, 0, "Nothing even tries")
         XCTAssertEqual(try oldRows(seeded), before, "The old rows are unchanged")
+    }
+
+    /// Batch 3: the readers outside the Canvas store (workspace tokens and
+    /// the inventory, links, titles, tags) go through the counted funnel,
+    /// so the zero above covers them too.
+    func testEveryOtherReaderOfOldCanvasRowsIsCountedAtTheFunnel() throws {
+        AtticDraw.enabledOverride = false
+        let tasks = try makeTestStore()
+        let container = tasks.container
+        let ids = try seedOldCanvases(in: container)
+        let library = AtticLibrary(tasks: tasks)
+        let context = ModelContext(container)
+        func counted(_ name: String, line: UInt = #line, _ body: () throws -> Void) rethrows {
+            CanvasReplicaFetchCounter.reset()
+            try body()
+            XCTAssertGreaterThan(CanvasReplicaFetchCounter.fetches, 0, "\(name) reads through the funnel", line: line)
+        }
+        try counted("A workspace token") { _ = try WorkspaceModelToken.read(WorkspaceOwner(entity: .board, id: ids.live), in: context) }
+        try counted("A batch of workspace tokens") {
+            _ = try WorkspaceModelToken.read(owners: [WorkspaceOwner(entity: .board, id: ids.live),
+                                                      WorkspaceOwner(entity: .semantic, id: UUID())], in: context)
+        }
+        try counted("The workspace inventory") { _ = try WorkspaceLegacyBridge.inventory(in: context, includeCanvas: true) }
+        counted("A link's state") { _ = library.state(of: AtticItemRef(.canvas, ids.live)) }
+        counted("A title") { _ = library.title(of: AtticItemRef(.canvas, ids.live)) }
+        counted("The tag inventory") { _ = TagService(container: container).counts() }
+        counted("A tag rename") { _ = TagService(container: container).rename("old-tag", to: "renamed-tag") }
     }
 
     func testWithDrawOffTheOldCanvasLoadsAsBefore() throws {
