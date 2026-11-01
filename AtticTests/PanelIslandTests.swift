@@ -638,7 +638,10 @@ final class PanelIslandTests: XCTestCase {
 
     /// The island windows draw active exactly while their parent is key,
     /// whatever their own key state (they are never key).
+    /// Key-window lane only: the invisible host freezes every window's
+    /// `isKeyWindow` override to false.
     func testTheIslandWindowsDrawActiveExactlyWhileTheirParentIsKey() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
         final class ReportsKey: NSWindow { var key = true; override var isKeyWindow: Bool { key } }
         let parent = ReportsKey(contentRect: TestPresentationPolicy.offscreenFrame(CGRect(x: 0, y: 0, width: 80, height: 80)),
                                 styleMask: [.borderless], backing: .buffered, defer: true)

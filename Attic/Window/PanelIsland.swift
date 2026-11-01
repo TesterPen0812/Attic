@@ -403,6 +403,17 @@ final class PanelIslandWindow: NSPanel {
     }
     override var canBecomeKey: Bool { allowsKey && !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { false }
+    /// Draws active exactly while its parent, the Attic panel, is key, so
+    /// the island's glass looks like the panel's own controls (owner, 1 Nov:
+    /// it drew inactive glass while Attic was focused). AppKit's glass asks
+    /// the window it is in, and a child window that is never key always
+    /// answers inactive; SwiftUI's `appearsActive`/`controlActiveState` and
+    /// an `isKeyWindow` override do not reach it (measured on macOS 26.4).
+    /// Only the look changes: the window still never becomes key or main,
+    /// and the keyboard stays with the panel. AppKit asks again whenever
+    /// the parent's key state changes and when the window is ordered in
+    /// attached (`show(attachedTo:)` attaches before it orders in).
+    @objc func _hasActiveAppearance() -> Bool { parent?.isKeyWindow ?? false }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
