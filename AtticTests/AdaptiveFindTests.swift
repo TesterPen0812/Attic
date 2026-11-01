@@ -280,8 +280,11 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertNotNil(element("notes-search", in: host), "the notes' search is open")
 
             // Over All notes, Search searches the notes.
-            try press("search-close", in: host)
-            spin(0.8)
+            library()?.clearSearch()
+            draft.pages.dismissLibrary()
+            spin(1.0)
+            XCTAssertTrue(draft.pages.showLibrary())
+            spin(1.0)
             let offNote = try XCTUnwrap(element("notes-search-button", in: host))
             XCTAssertEqual(offNote.accessibilityLabel?(), "Search notes (⌘F)", "the tooltip names the notes' search")
             try press("notes-search-button", in: host)
