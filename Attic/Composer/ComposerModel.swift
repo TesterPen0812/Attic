@@ -94,10 +94,14 @@ final class ComposerModel: ObservableObject {
     @Published private(set) var calendars: [CalendarWriteCalendar] = []
     /// A creation that did not save: the draft stays, the card says so.
     @Published private(set) var failed = false
+    @Published private(set) var isCreating = false
 
     /// The card's title field.
     let editor = AtticTokenFieldEditor()
     private var writer: CalendarEventWriter?
+    private var calendarLoad: Task<[CalendarWriteCalendar], Never>?
+    private var calendarLoadGeneration = 0
+    private var draftGeneration = 0
 
     static let lengths = [30, 60, 90, 120]
 
@@ -114,13 +118,14 @@ final class ComposerModel: ObservableObject {
             || !writing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    var canCreate: Bool { !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty }
+    var canCreate: Bool { !isCreating && !TaskDraftBuilder.collapsed(tasks.addBar.text).isEmpty }
 
     // MARK: Opening and closing
 
     /// "+" opens on the page's own kind unless a note draft was kept; ⇧⌘N
     /// asks for Note. A kept event draft is a task outside Calendar.
     func open(on page: ComposerPage, as requested: ComposerKind? = nil) {
+        draftGeneration += 1
         let keptNote = kind == .note && hasDraft
         self.page = page
         if let requested, page.kinds.contains(requested) || requested == .note {
@@ -131,7 +136,7 @@ final class ComposerModel: ObservableObject {
         if !page.kinds.contains(kind) { kind = kind == .event ? .task : page.ownKind }
         if !page.kinds.contains(kind) { kind = .note }
         fillCalendarDay()
-        if kind == .event { loadCalendars() }
+        if kind == .event { requestCalendars() }
         failed = false
         if !isOpen { returnFocus = NSApp.keyWindow?.firstResponder }
         isOpen = true
@@ -141,6 +146,7 @@ final class ComposerModel: ObservableObject {
     /// Escape or a click outside: the card closes and keeps the draft.
     func close() {
         guard isOpen else { return }
+        draftGeneration += 1
         isOpen = false
         restoreFocus()
     }
@@ -166,8 +172,9 @@ final class ComposerModel: ObservableObject {
     func choose(_ newKind: ComposerKind) {
         guard page.kinds.contains(newKind), newKind != kind else { return }
         kind = newKind
+        draftGeneration += 1
         fillCalendarDay()
-        if newKind == .event { loadCalendars() }
+        if newKind == .event { requestCalendars() }
         failed = false
     }
 
@@ -256,15 +263,42 @@ final class ComposerModel: ObservableObject {
     /// Return creates; ⌘Return creates and opens the item's page. The card
     /// closes on success and keeps the draft (and says so) on failure.
     @discardableResult
-    func create(openingPage: Bool = false) -> Bool {
+    func create(openingPage: Bool = false) async -> Bool {
+        if kind != .event { return createImmediately(openingPage: openingPage) }
         // Closing has started (Escape, a click outside): nothing creates.
         guard isOpen else { return false }
         guard canCreate else { return false }
-        let made: Bool = switch kind {
-        case .task: createTask(openingPage: openingPage)
-        case .event: createEvent(openingPage: openingPage)
-        case .note: createNote(openingPage: openingPage)
+        isCreating = true
+        defer { isCreating = false }
+        let generation = draftGeneration
+        let (made, unchanged) = await createEvent(openingPage: openingPage, generation: generation)
+        guard generation == draftGeneration, unchanged else { return made }
+        return finishCreation(made)
+    }
+
+    /// Only Calendar needs to suspend. Native Return keeps its existing
+    /// immediate task/note behavior and schedules an event's durable save.
+    func submit(openingPage: Bool = false) {
+        if kind == .event {
+            let generation = draftGeneration
+            let input = tasks.addBar, notes = writing, length = eventLength, calendar = calendarID
+            Task { [weak self] in
+                guard let self, self.draftGeneration == generation, self.kind == .event,
+                      self.tasks.addBar == input, self.writing == notes, self.eventLength == length,
+                      self.calendarID == calendar || (calendar == nil && self.calendarID == self.calendars.first?.id) else { return }
+                _ = await self.create(openingPage: openingPage)
+            }
         }
+        else { _ = createImmediately(openingPage: openingPage) }
+    }
+
+    private func createImmediately(openingPage: Bool) -> Bool {
+        guard isOpen, canCreate, kind != .event else { return false }
+        let made = kind == .task ? createTask(openingPage: openingPage) : createNote(openingPage: openingPage)
+        return finishCreation(made)
+    }
+
+    private func finishCreation(_ made: Bool) -> Bool {
         failed = !made
         guard made else { return false }
         clearDraft()
@@ -295,8 +329,15 @@ final class ComposerModel: ObservableObject {
         return true
     }
 
-    private func createEvent(openingPage: Bool) -> Bool {
-        guard let writer = loadWriter(), let calendar = selectedCalendar else { return false }
+    private func createEvent(openingPage: Bool, generation: Int) async -> (made: Bool, unchanged: Bool) {
+        let input = tasks.addBar, inputWriting = writing, inputLength = eventLength
+        let inputCalendar = calendarID
+        if calendars.isEmpty { await loadCalendars() }
+        guard generation == draftGeneration, tasks.addBar == input, writing == inputWriting,
+              eventLength == inputLength else { return (false, false) }
+        guard let writer = loadWriter(),
+              let calendar = calendars.first(where: { $0.id == inputCalendar }) ?? calendars.first else { return (false, true) }
+        guard calendarID == inputCalendar || calendarID == calendar.id else { return (false, false) }
         // As for a task: a day typed last replaces the picked one, even with
         // its word still at the caret; a lone time keeps the picked day.
         var finished = tasks.addBar
@@ -306,11 +347,17 @@ final class ComposerModel: ObservableObject {
         let day = values.day ?? tasks.parser.today
         guard let draft = Self.eventDraft(title: values.title.isEmpty ? TaskDraftBuilder.collapsed(tasks.addBar.text) : values.title,
                                           day: day, time: values.time, length: eventLength,
-                                          calendarID: calendar.id, calendar: clock, notes: writing),
-              let made = try? writer.create(draft) else { return false }
+                                          calendarID: calendar.id, calendar: clock, notes: writing) else { return (false, true) }
+        let submitted = tasks.addBar
+        let submittedWriting = writing, submittedCalendar = calendarID, submittedLength = eventLength
+        let made = try? await writer.create(draft)
+        let unchanged = generation == draftGeneration && tasks.addBar == submitted
+            && writing == submittedWriting && calendarID == submittedCalendar && eventLength == submittedLength
+        guard let made else { return (false, unchanged) }
+        guard unchanged else { return (true, false) }
         calendarID = calendar.id
         if openingPage { services.openEvent(made) }
-        return true
+        return (true, true)
     }
 
     /// A timed event lasts `length` minutes; one with no time is all day
@@ -360,9 +407,23 @@ final class ComposerModel: ObservableObject {
         return writer
     }
 
-    func loadCalendars() {
+    private func requestCalendars() {
+        Task { [weak self] in await self?.loadCalendars() }
+    }
+
+    func loadCalendars() async {
         guard let writer = loadWriter() else { return }
-        let list = (try? writer.writableCalendars()) ?? []
+        let load: Task<[CalendarWriteCalendar], Never>
+        if let calendarLoad { load = calendarLoad }
+        else {
+            calendarLoadGeneration += 1
+            load = Task { (try? await writer.writableCalendars()) ?? [] }
+            calendarLoad = load
+        }
+        let generation = calendarLoadGeneration
+        let list = await load.value
+        guard !Task.isCancelled, generation == calendarLoadGeneration else { return }
+        calendarLoad = nil
         if list != calendars { calendars = list }
         if let calendarID, list.contains(where: { $0.id == calendarID }) { return }
         calendarID = list.first?.id
@@ -372,8 +433,8 @@ final class ComposerModel: ObservableObject {
 
     /// ⌘Z past the title's own typing: the page's history.
     /// ⌘Return on an event: Calendar.app at it, through the card's writer.
-    func openInCalendar(_ event: CalendarOwnedEvent) {
-        try? loadWriter()?.openInCalendar(event.occurrenceID)
+    func openInCalendar(_ event: CalendarOwnedEvent) async {
+        try? await loadWriter()?.openInCalendar(event.occurrenceID)
     }
 
     /// The Undo a creation's toast offers: the history the creation went
@@ -384,6 +445,14 @@ final class ComposerModel: ObservableObject {
         return { library.undo(in: history) }
     }
 
-    func undoPage() { _ = tasks.library.undo(in: page.history) }
-    func redoPage() { _ = tasks.library.redo(in: page.history) }
+    func undoPage() {
+        let history = page.history, library = tasks.library
+        if history == .calendar { Task { await library.replay(in: history, redo: false) } }
+        else { _ = library.undo(in: history) }
+    }
+    func redoPage() {
+        let history = page.history, library = tasks.library
+        if history == .calendar { Task { await library.replay(in: history, redo: true) } }
+        else { _ = library.redo(in: history) }
+    }
 }

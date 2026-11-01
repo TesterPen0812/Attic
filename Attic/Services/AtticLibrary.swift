@@ -514,6 +514,15 @@ final class AtticLibrary {
         return historyOutcome(undo.redoStep(in: history), since: serial, verb: String(localized: "redo"))
     }
 
+    /// Calendar's EventKit steps await their serial worker; ordinary steps
+    /// still use the same route and outcome mapping.
+    @discardableResult
+    func replay(in history: UndoHistoryID, redo: Bool) async -> CommandOutcome {
+        let serial = tasks.errorSerial
+        return historyOutcome(await undo.replay(in: history, redo: redo), since: serial,
+                              verb: redo ? String(localized: "redo") : String(localized: "undo"))
+    }
+
     private func historyOutcome(_ outcome: UndoOutcome?, since serial: UInt64, verb: String) -> CommandOutcome {
         let reported = tasks.errorSerial != serial ? tasks.lastErrorMessage : nil
         switch outcome {

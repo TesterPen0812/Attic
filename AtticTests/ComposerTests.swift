@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -29,6 +30,8 @@ final class ComposerTests: XCTestCase {
     private func day(_ offset: Int) -> DueDay { DueDay(date: clock.date(byAdding: .day, value: offset, to: now)!, calendar: clock) }
 
     override func setUp() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
         container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         _ = try WorkspaceLegacyBridge.coordinator(for: container)
         let fixed = now
@@ -58,6 +61,7 @@ final class ComposerTests: XCTestCase {
 
     override func tearDown() {
         AtticMotionPreference.systemReduceMotionOverride = nil
+        AtticTransparencySeam.systemOverride = nil
         windows.forEach { $0.contentView = nil; $0.close() }
         windows.removeAll()
     }
@@ -72,15 +76,96 @@ final class ComposerTests: XCTestCase {
 
     private func liveTasks() -> [TaskItem] { tasks.tasks.filter { $0.deletedAt == nil } }
 
+    func testQueuedEventSubmissionCannotCreateAReplacementSession() async {
+        model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
+        type("Old event")
+        model.submit(openingPage: true)
+        // Stay on this actor turn: the queued event has not started yet.
+        model.close()
+        model.open(on: .tasks(.now))
+        type("Replacement draft")
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertTrue(events.events.isEmpty)
+        XCTAssertTrue(liveTasks().isEmpty)
+        XCTAssertTrue(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "Replacement draft")
+    }
+
+    func testAnInFlightEventCreatesOnceAndLeavesAReopenedDraftAlone() async throws {
+        let staged = expectation(description: "event proof staged off main")
+        let release = DispatchSemaphore(value: 0)
+        var paused = false // confined to the writer worker
+        let record = try CalendarOwnershipRecord(persist: { _ in
+            if !paused {
+                paused = true
+                staged.fulfill()
+                _ = release.wait(timeout: .now() + 10)
+            }
+        })
+        let backend = events
+        let writer = BackgroundCalendarEventWriter(undoRoute: library.undo) {
+            CalendarEventTransactions(store: backend, record: record)
+        }
+        model.services.makeWriter = { writer }
+        model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
+        type("Submitted event")
+        let submission = Task { await self.model.create() }
+        await fulfillment(of: [staged], timeout: 3)
+        XCTAssertTrue(model.isCreating)
+        let duplicate = Task { await self.model.create() }
+        await Task.yield()
+        model.close()
+        model.open(on: .tasks(.now))
+        type("New draft")
+        release.signal()
+        defer { release.signal() }
+        await XCTAssertTrueAsync(await submission.value)
+        await XCTAssertFalseAsync(await duplicate.value)
+        XCTAssertEqual(events.events.count, 1)
+        XCTAssertEqual(events.events.values.first?.draft.title, "Submitted event")
+        XCTAssertTrue(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "New draft")
+    }
+
+    func testTypingDuringCalendarLoadingCannotSubmitTheNewerDraft() async throws {
+        let loading = expectation(description: "calendar load")
+        let submitting = expectation(description: "submission entered")
+        let release = DispatchSemaphore(value: 0)
+        let backend = events
+        let writer = BackgroundCalendarEventWriter(undoRoute: library.undo) {
+            loading.fulfill()
+            _ = release.wait(timeout: .now() + 10)
+            return CalendarEventTransactions(store: backend, record: try CalendarOwnershipRecord())
+        }
+        model.services.makeWriter = { writer }
+        let token = model.$isCreating.dropFirst().filter { $0 }.sink { _ in submitting.fulfill() }
+        defer { token.cancel(); release.signal() }
+        model.open(on: .calendar(selected: today))
+        type("First draft")
+        let submission = Task { await self.model.create() }
+        await fulfillment(of: [loading, submitting], timeout: 3)
+        type("Newer draft")
+        release.signal()
+        await XCTAssertFalseAsync(await submission.value)
+        XCTAssertTrue(events.events.isEmpty)
+        XCTAssertTrue(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "Newer draft")
+    }
+
     // MARK: Kinds
 
-    func testPlusOpensOnThePagesOwnKindWithItsKinds() {
+    func testPlusOpensOnThePagesOwnKindWithItsKinds() async {
         model.open(on: .tasks(.now))
         XCTAssertTrue(model.isOpen)
         XCTAssertEqual(model.kind, .task)
         XCTAssertEqual(model.kinds, [.task, .note])
         model.close()
         model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
         XCTAssertEqual(model.kind, .event)
         XCTAssertEqual(model.kinds, [.task, .event, .note])
     }
@@ -90,13 +175,14 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.kind, .note)
     }
 
-    func testAKeptNoteDraftOpensAsNoteOnAnyPage() {
+    func testAKeptNoteDraftOpensAsNoteOnAnyPage() async {
         model.open(on: .tasks(.now))
         model.choose(.note)
         type("Idea #work")
         model.close()
         XCTAssertFalse(model.isOpen)
         model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
         XCTAssertEqual(model.kind, .note)
         XCTAssertEqual(page.addBar.text, "Idea #work")
     }
@@ -108,8 +194,9 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.kind, .task)
     }
 
-    func testAKeptEventDraftIsATaskOutsideCalendar() {
+    func testAKeptEventDraftIsATaskOutsideCalendar() async {
         model.open(on: .calendar(selected: day(2)))
+        await model.loadCalendars()
         type("Lunch 1pm")
         model.close()
         model.open(on: .tasks(.now))
@@ -118,17 +205,18 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(model.kinds.contains(.event))
     }
 
-    func testCalendarStartsOnTheSelectedDayAndNowStartsEmpty() {
+    func testCalendarStartsOnTheSelectedDayAndNowStartsEmpty() async {
         model.open(on: .tasks(.now))
         XCTAssertNil(model.values.day, "Date is empty by default on Now")
         model.close()
         model.open(on: .calendar(selected: day(3)))
+        await model.loadCalendars()
         XCTAssertEqual(model.values.day, day(3))
         model.choose(.task)
         XCTAssertEqual(model.values.day, day(3))
     }
 
-    func testTheTitleTintsWhatThisKindReads() {
+    func testTheTitleTintsWhatThisKindReads() async {
         model.open(on: .tasks(.now))
         type("Call !! #home tomorrow 4pm")
         XCTAssertEqual(model.chips.count, 4)
@@ -137,6 +225,7 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.values.tags, ["home"])
         model.close()
         model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
         model.choose(.event)
         XCTAssertEqual(model.chips.count, 2, "an event reads a day and a time")
         XCTAssertNil(model.values.priority)
@@ -144,11 +233,11 @@ final class ComposerTests: XCTestCase {
 
     // MARK: Tasks
 
-    func testReturnCreatesATaskWithItsWritingAsOneUndoStep() throws {
+    func testReturnCreatesATaskWithItsWritingAsOneUndoStep() async throws {
         model.open(on: .tasks(.now))
         type("Pay rent !! #home tomorrow 4pm")
         model.writing = "Bank details"
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         let task = try XCTUnwrap(liveTasks().first)
         XCTAssertEqual(task.title, "Pay rent")
         XCTAssertEqual(task.priority, .high)
@@ -169,52 +258,52 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(TaskNoteConversion.hasWriting(task.id, in: ModelContext(container)))
     }
 
-    func testCommandReturnCreatesAndOpensTheTasksPage() throws {
+    func testCommandReturnCreatesAndOpensTheTasksPage() async throws {
         model.open(on: .tasks(.now))
         type("Call Sam")
-        XCTAssertTrue(model.create(openingPage: true))
+        await XCTAssertTrueAsync(await model.create(openingPage: true))
         XCTAssertEqual(opened, [try XCTUnwrap(liveTasks().first).id])
     }
 
-    func testLaterMakesAnUndatedPutOffTask() throws {
+    func testLaterMakesAnUndatedPutOffTask() async throws {
         model.open(on: .tasks(.backlog))
         type("Someday")
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         let task = try XCTUnwrap(liveTasks().first)
         XCTAssertEqual(task.status, .backlog)
         XCTAssertNil(task.dueDay)
         XCTAssertTrue(toasts.isEmpty)
     }
 
-    func testADatedTaskFromLaterGoesToNow() throws {
+    func testADatedTaskFromLaterGoesToNow() async throws {
         model.open(on: .tasks(.backlog))
         type("Dentist tomorrow")
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         XCTAssertEqual(try XCTUnwrap(liveTasks().first).status, .todo)
         XCTAssertEqual(toasts, ["Added to Now"])
     }
 
-    func testDoneCreatesInNow() throws {
+    func testDoneCreatesInNow() async throws {
         model.open(on: .tasks(.done))
         type("Follow up")
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         XCTAssertEqual(try XCTUnwrap(liveTasks().first).status, .todo)
         XCTAssertEqual(toasts, ["Added to Now"])
     }
 
     /// Review B-4: once closing starts, nothing creates.
-    func testAClosedCardCreatesNothing() {
+    func testAClosedCardCreatesNothing() async {
         model.open(on: .tasks(.now))
         type("Not yet")
         model.close()
-        XCTAssertFalse(model.create())
+        await XCTAssertFalseAsync(await model.create())
         XCTAssertTrue(liveTasks().isEmpty)
         XCTAssertEqual(page.addBar.text, "Not yet", "the draft is kept")
     }
 
-    func testEscapeKeepsTheDraftAndAnEmptyTitleCannotCreate() {
+    func testEscapeKeepsTheDraftAndAnEmptyTitleCannotCreate() async {
         model.open(on: .tasks(.now))
-        XCTAssertFalse(model.create())
+        await XCTAssertFalseAsync(await model.create())
         type("Draft")
         model.writing = "kept"
         model.close()
@@ -226,14 +315,15 @@ final class ComposerTests: XCTestCase {
 
     // MARK: Events
 
-    func testAnEventIsWrittenThroughTheWriterAndUndoneWithIt() throws {
+    func testAnEventIsWrittenThroughTheWriterAndUndoneWithIt() async throws {
         model.open(on: .calendar(selected: day(2)))
+        await model.loadCalendars()
         XCTAssertEqual(model.calendars.map(\.id), ["home", "work"])
         XCTAssertEqual(model.selectedCalendar?.id, "home")
         model.calendarID = "work"
         model.eventLength = 90
         type("Lunch with Ana 1pm")
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         let event = try XCTUnwrap(events.events.values.first)
         XCTAssertEqual(events.events.count, 1)
         XCTAssertEqual(event.draft.title, "Lunch with Ana")
@@ -251,11 +341,12 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(events.events.isEmpty)
     }
 
-    func testAnEventsWritingLineBecomesItsNotesAndUndoStillRemovesIt() throws {
+    func testAnEventsWritingLineBecomesItsNotesAndUndoStillRemovesIt() async throws {
         model.open(on: .calendar(selected: day(1)))
+        await model.loadCalendars()
         type("Dentist 9am")
         model.writing = "  Bring the form\nRoom 4  "
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         let event = try XCTUnwrap(events.events.values.first)
         XCTAssertEqual(event.draft.notes, "Bring the form\nRoom 4")
         XCTAssertEqual(model.writing, "")
@@ -265,40 +356,44 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(events.events.values.first?.draft.notes, "Bring the form\nRoom 4")
     }
 
-    func testAWhitespaceWritingLineWritesNoNotes() throws {
+    func testAWhitespaceWritingLineWritesNoNotes() async throws {
         model.open(on: .calendar(selected: day(1)))
+        await model.loadCalendars()
         type("Gym")
         model.writing = " \n "
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         XCTAssertNil(try XCTUnwrap(events.events.values.first).draft.notes)
     }
 
-    func testAnEventWithNoTimeIsAllDayAndCommandReturnOpensIt() throws {
+    func testAnEventWithNoTimeIsAllDayAndCommandReturnOpensIt() async throws {
         model.open(on: .calendar(selected: day(1)))
+        await model.loadCalendars()
         type("Holiday")
-        XCTAssertTrue(model.create(openingPage: true))
+        await XCTAssertTrueAsync(await model.create(openingPage: true))
         let event = try XCTUnwrap(events.events.values.first)
         XCTAssertTrue(event.draft.isAllDay)
         XCTAssertEqual(event.draft.start, day(1).startDate(in: clock).flatMap { clock.startOfDay(for: $0) })
         XCTAssertEqual(openedEvents.count, 1)
     }
 
-    func testATaskMadeOnCalendarIsOneStepInCalendarsHistory() throws {
+    func testATaskMadeOnCalendarIsOneStepInCalendarsHistory() async throws {
         model.open(on: .calendar(selected: day(1)))
+        await model.loadCalendars()
         model.choose(.task)
         type("Buy flowers")
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         XCTAssertEqual(try XCTUnwrap(liveTasks().first).dueDay, day(1))
         XCTAssertTrue(events.events.isEmpty)
         XCTAssertEqual(library.undo(in: .calendar), .applied)
         XCTAssertTrue(liveTasks().isEmpty)
     }
 
-    func testAFailedEventWriteKeepsTheDraft() {
+    func testAFailedEventWriteKeepsTheDraft() async {
         model.services.makeWriter = { throw CalendarEventWriteError.accessDenied }
         model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
         type("Standup 9am")
-        XCTAssertFalse(model.create())
+        await XCTAssertFalseAsync(await model.create())
         XCTAssertTrue(model.isOpen)
         XCTAssertTrue(model.failed)
         XCTAssertEqual(page.addBar.text, "Standup 9am")
@@ -306,12 +401,12 @@ final class ComposerTests: XCTestCase {
 
     // MARK: Quick note
 
-    func testAQuickNoteIsFiledInNotesWithItsTagsAndPin() throws {
+    func testAQuickNoteIsFiledInNotesWithItsTagsAndPin() async throws {
         model.open(on: .tasks(.now), as: .note)
         type("Gift ideas #home")
         model.writing = "Scarf"
         model.pinned = true
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         let note = try XCTUnwrap(notes.notes.first { $0.deletedAt == nil })
         XCTAssertEqual(note.title, "Gift ideas")
         XCTAssertEqual(note.tags, ["home"])
@@ -328,22 +423,23 @@ final class ComposerTests: XCTestCase {
 
     /// Review B-1: the toast undoes the history its creation went into,
     /// even after the card moved to another page.
-    func testAToastsUndoUndoesTheHistoryItsCreationWentInto() throws {
+    func testAToastsUndoUndoesTheHistoryItsCreationWentInto() async throws {
         model.open(on: .tasks(.now), as: .note)
         type("Tasks-side idea")
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         let note = try XCTUnwrap(notes.notes.first { $0.deletedAt == nil })
         let undo = try XCTUnwrap(toastUndos.last)
         model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
         model.close()
         XCTAssertEqual(undo(), .applied)
         XCTAssertNil(notes.notes.first { $0.id == note.id && $0.deletedAt == nil }, "the note went, not a Calendar step")
     }
 
-    func testCommandReturnOpensTheNoteInNotes() throws {
+    func testCommandReturnOpensTheNoteInNotes() async throws {
         model.open(on: .tasks(.now), as: .note)
         type("Reading list")
-        XCTAssertTrue(model.create(openingPage: true))
+        await XCTAssertTrueAsync(await model.create(openingPage: true))
         XCTAssertEqual(openedNotes.count, 1)
         XCTAssertTrue(toasts.isEmpty)
     }
@@ -354,12 +450,12 @@ final class ComposerTests: XCTestCase {
         try ModelContext(container).fetch(FetchDescriptor<T>())
     }
 
-    func testAFailedSaveLeavesNoTaskNoWritingNoStepAndARetryMakesOne() throws {
+    func testAFailedSaveLeavesNoTaskNoWritingNoStepAndARetryMakesOne() async throws {
         model.open(on: .tasks(.now))
         type("Pay rent")
         model.writing = "Bank details"
         saveFailure.on = true
-        XCTAssertFalse(model.create())
+        await XCTAssertFalseAsync(await model.create())
         XCTAssertTrue(try rows(TaskItem.self).isEmpty, "no live or Recently Deleted task")
         XCTAssertTrue(try rows(NoteItem.self).isEmpty)
         XCTAssertTrue(try rows(TaskNoteAssociation.self).isEmpty)
@@ -370,7 +466,7 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(model.writing, "Bank details")
 
         saveFailure.on = false
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         XCTAssertEqual(try rows(TaskItem.self).count, 1)
         let task = try XCTUnwrap(liveTasks().first)
         XCTAssertTrue(TaskNoteConversion.hasWriting(task.id, in: ModelContext(container)))
@@ -378,12 +474,12 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(liveTasks().isEmpty)
     }
 
-    func testAPinThatCannotSaveKeepsTheCardOpenWithTheDraft() throws {
+    func testAPinThatCannotSaveKeepsTheCardOpenWithTheDraft() async throws {
         model.open(on: .tasks(.now), as: .note)
         type("Pinned idea")
         model.pinned = true
         saveFailure.on = true
-        XCTAssertFalse(model.create())
+        await XCTAssertFalseAsync(await model.create())
         XCTAssertTrue(model.isOpen)
         XCTAssertTrue(model.failed)
         XCTAssertTrue(model.pinned)
@@ -391,24 +487,26 @@ final class ComposerTests: XCTestCase {
         XCTAssertTrue(toasts.isEmpty)
 
         saveFailure.on = false
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         XCTAssertTrue(try XCTUnwrap(notes.notes.first).isPinned)
     }
 
-    func testATypedDayReplacesCalendarsPickedDayEvenAtTheCaret() throws {
+    func testATypedDayReplacesCalendarsPickedDayEvenAtTheCaret() async throws {
         model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
         type("Lunch tomorrow")
-        XCTAssertTrue(model.create(openingPage: true))
+        await XCTAssertTrueAsync(await model.create(openingPage: true))
         let event = try XCTUnwrap(events.events.values.first)
         XCTAssertEqual(event.draft.title, "Lunch")
         XCTAssertEqual(DueDay(date: event.draft.start, calendar: clock), day(1))
     }
 
-    func testCalendarUndoReachesTheNewestCalendarActionWhateverItsKind() throws {
+    func testCalendarUndoReachesTheNewestCalendarActionWhateverItsKind() async throws {
         let b = try XCTUnwrap(library.createTasks([TaskDraft(title: "B")])?.first)
         model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
         type("A 1pm")
-        XCTAssertTrue(model.create())
+        await XCTAssertTrueAsync(await model.create())
         XCTAssertEqual(events.events.count, 1)
         CalendarAgendaCommands.toggleDone(b.id, store: tasks)
         XCTAssertEqual(tasks.listedTask(withID: b.id)?.status, .done)

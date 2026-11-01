@@ -722,7 +722,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // and notes made there are steps (w3 composer).
         panel.onUnhandledUndo = { [weak self] redo in
             guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return }
-            _ = redo ? library.redo(in: history) : library.undo(in: history)
+            if history == .calendar { Task { await library.replay(in: history, redo: redo) } }
+            else { _ = redo ? library.redo(in: history) : library.undo(in: history) }
         }
         panel.canPerformUnhandledUndo = { [weak self] redo in
             guard let self, let history = self.unhandledUndoHistory, let library = self.store.commandLibrary else { return false }

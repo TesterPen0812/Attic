@@ -329,7 +329,9 @@ struct AtticPanelView: View {
                     noteDraft.pages.dismissLibrary()
                 }
             },
-            openEvent: { [composerState] event in composerState.model?.openInCalendar(event) },
+            openEvent: { [composerState] event in
+                Task { await composerState.model?.openInCalendar(event) }
+            },
             toast: { [toasts] message, undo in
                 toasts.show(message, performing: undo)
             })

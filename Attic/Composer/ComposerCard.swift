@@ -231,7 +231,11 @@ struct ComposerCard: View {
     private var titleActions: AtticTokenFieldActions {
         let tasks = model.tasks
         return AtticTokenFieldActions(
-            submit: { command in model.create(openingPage: command) },
+            submit: { command in
+                model.submit(openingPage: command)
+                // The confirmed save clears the draft; native input must keep
+                // it intact while an event write is still in flight.
+            },
             dismissChip: { range in
                 title.history.checkpoint(title.text, selection: title.currentSelection)
                 title.text.dismiss(range)
@@ -294,7 +298,7 @@ struct ComposerCard: View {
             .focused($writingFocused)
             .onKeyPress(.return, phases: .down) { press in
                 if press.modifiers.contains(.shift) && !press.modifiers.contains(.command) { return .ignored }
-                model.create(openingPage: press.modifiers.contains(.command))
+                model.submit(openingPage: press.modifiers.contains(.command))
                 return .handled
             }
             .accessibilityIdentifier("composer-writing")
@@ -454,7 +458,7 @@ struct ComposerCard: View {
 
     private var createButton: some View {
         let can = model.canCreate
-        return Button { model.create() } label: {
+        return Button { model.submit() } label: {
             AtticText(verbatim: String(localized: "Create"), style: .composerCreate, ink: .body)
                 .colour(AtticRGBA(red: 1, green: 1, blue: 1, alpha: 1))
                 .padding(.horizontal, ComposerMetrics.createPadding)

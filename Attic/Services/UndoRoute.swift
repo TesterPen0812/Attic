@@ -102,6 +102,7 @@ final class UndoRoute: ObservableObject {
     private var workspaces: [UndoHistoryID: WorkspaceHistory] = [:]
     private var aliases: [UndoHistoryID: UndoHistoryID] = [:]
     private var replaying: Set<UndoHistoryID> = []
+    private var pendingRecords: [UndoHistoryID: [UndoStep]] = [:]
     var onOwnershipChanged: (() -> Void)?
     /// Least recently used first; the last one is the page in use.
     private var recency: [UndoHistoryID] = []
@@ -160,6 +161,10 @@ final class UndoRoute: ObservableObject {
     func record(_ step: UndoStep, in history: UndoHistoryID) {
         if let capture = captures.last { capture(step); return }
         let history = resolved(history)
+        if replaying.contains(history) {
+            pendingRecords[history, default: []].append(step)
+            return
+        }
         var entry = histories[history] ?? History()
         entry.undo.append(step)
         if entry.undo.count > limit { entry.undo.removeFirst(entry.undo.count - limit) }
@@ -345,10 +350,15 @@ final class UndoRoute: ObservableObject {
     }
     var referencedOperationIDs: Set<UUID> {
         Set(histories.values.flatMap { ($0.undo + $0.redo).compactMap(\.operationID) })
+            .union(pendingRecords.values.flatMap { $0.compactMap(\.operationID) })
             .union(workspaces.values.flatMap { [$0.pendingReplayID, $0.pendingCommandID].compactMap { $0 } })
     }
     var referencedAttachmentIDs: Set<UUID> {
-        histories.values.reduce(into: workspaces.values.reduce(into: Set<UUID>()) { $0.formUnion($1.deferredAttachmentIDs) }) { ids, history in
+        let pending = pendingRecords.values.flatMap { $0 }.reduce(into: Set<UUID>()) {
+            $0.formUnion($1.attachmentIDs)
+            if let payload = $1.workspacePayload { $0.formUnion(payload.attachmentIDs) }
+        }
+        return histories.values.reduce(into: workspaces.values.reduce(into: pending) { $0.formUnion($1.deferredAttachmentIDs) }) { ids, history in
             for step in history.undo + history.redo {
                 ids.formUnion(step.attachmentIDs)
                 if let payload = step.workspacePayload { ids.formUnion(payload.attachmentIDs) }
@@ -369,7 +379,11 @@ final class UndoRoute: ObservableObject {
             return redo ? redoStep(in: key) : undoStep(in: key)
         }
         replaying.insert(key)
-        defer { replaying.remove(key) }
+        defer {
+            replaying.remove(key)
+            for step in pendingRecords.removeValue(forKey: key) ?? [] { record(step, in: key) }
+            evictInactiveHistories()
+        }
         var committed = false
         let outcome = await replay(redo, { [self] in
             if committed { return }
@@ -380,10 +394,18 @@ final class UndoRoute: ObservableObject {
             if redo { current.redo.removeLast(); current.undo.append(step) }
             else { current.undo.removeLast(); current.redo.append(step) }
             histories[key] = current
+            touch(key)
             committed = true
             revision &+= 1
             onOwnershipChanged?()
         })
+        if !committed, outcome == .obsolete, var current = histories[key],
+           (redo ? current.redo : current.undo).last?.id == step.id {
+            if redo { current.redo.removeLast() } else { current.undo.removeLast() }
+            histories[key] = current
+            revision &+= 1
+            onOwnershipChanged?()
+        }
         return committed ? .applied : outcome
     }
 
@@ -424,7 +446,8 @@ final class UndoRoute: ObservableObject {
     private func evictInactiveHistories() {
         while recency.count > 1,
               recency.count > historyLimit || totalStepCount > totalLimit {
-            histories.removeValue(forKey: recency.removeFirst())
+            guard let index = recency.dropLast().firstIndex(where: { !replaying.contains($0) }) else { break }
+            histories.removeValue(forKey: recency.remove(at: index))
         }
     }
 }
