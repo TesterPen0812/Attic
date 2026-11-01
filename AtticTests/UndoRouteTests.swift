@@ -4,6 +4,46 @@ import XCTest
 
 @MainActor
 final class UndoRouteTests: XCTestCase {
+    func testAnAwaitingCalendarUndoCannotBeEvictedByAnotherHistory() async {
+        let route = UndoRoute(historyLimit: 1)
+        var event = UndoStep(name: "Event", undoOutcome: { .failed }, redoOutcome: { .failed })
+        event.replay = { _, commit in
+            route.record(UndoStep(name: "Task", undoOutcome: { .applied }, redoOutcome: { .applied }), in: .tasks)
+            do { try commit(); return .applied } catch { return .failed }
+        }
+        route.record(event, in: .calendar)
+        let result = await route.replay(in: .calendar, redo: false)
+        XCTAssertEqual(result, .applied)
+        XCTAssertTrue(route.canRedo(in: .calendar))
+    }
+
+    func testAsyncObsoleteCalendarUndoDropsOnlyThatStep() async {
+        let route = UndoRoute()
+        route.record(UndoStep(name: "Earlier", undoOutcome: { .applied }, redoOutcome: { .applied }), in: .calendar)
+        var gone = UndoStep(name: "Gone", undoOutcome: { .failed }, redoOutcome: { .failed })
+        gone.replay = { _, _ in .obsolete }
+        route.record(gone, in: .calendar)
+        let result = await route.replay(in: .calendar, redo: false)
+        XCTAssertEqual(result, .obsolete)
+        XCTAssertEqual(route.undoName(in: .calendar), "Earlier")
+        XCTAssertFalse(route.canRedo(in: .calendar))
+    }
+
+    func testRecordingDuringAsyncCalendarUndoPreservesTheCommittedCursor() async {
+        let route = UndoRoute()
+        var first = UndoStep(name: "First", undoOutcome: { .failed }, redoOutcome: { .failed })
+        first.replay = { _, commit in
+            route.record(UndoStep(name: "Later", undoOutcome: { .applied }, redoOutcome: { .applied }), in: .calendar)
+            do { try commit(); return .applied } catch { return .failed }
+        }
+        route.record(first, in: .calendar)
+        let result = await route.replay(in: .calendar, redo: false)
+        XCTAssertEqual(result, .applied)
+        XCTAssertEqual(route.undoCount(in: .calendar), 1)
+        XCTAssertEqual(route.undoName(in: .calendar), "Later")
+        XCTAssertFalse(route.canRedo(in: .calendar), "the later change consumes the old redo branch")
+    }
+
     // MARK: - The route
 
     private final class Counter {

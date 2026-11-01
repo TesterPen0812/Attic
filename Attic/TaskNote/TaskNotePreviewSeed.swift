@@ -27,8 +27,7 @@ enum TaskNotePreviewSeed {
         case eight
     }
 
-    /// The owner's preview of the task page ("Attic Task Page"): its fresh
-    /// store opens on these task pages beside the ordinary demo content.
+    /// Identity used by explicit task-page fixtures.
     static let ownerPreviewBundleIdentifier = "com.taha.Attic.preview.taskpage"
     static let ownerPreviewScenarios: [Scenario] = [.heavy, .boundary, .nonote]
 
@@ -48,7 +47,7 @@ enum TaskNotePreviewSeed {
         (0..<lines).map { .text("Line \($0) with some ordinary words to wrap a little in a narrow panel.") }
     }
 
-    /// The owner preview's task pages, written once into its empty store.
+    /// Explicitly seed the task-page fixtures into the supplied store.
     @MainActor
     static func seedOwnerPreview(in container: ModelContainer, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) throws {
         for scenario in ownerPreviewScenarios { seeded[scenario] = try seed(scenario, in: container, now: now, calendar: calendar) }
@@ -70,7 +69,7 @@ enum TaskNotePreviewSeed {
             var blocks: [NoteBlock] = []
             for name in ["homepage-v3.png", "blog-index.png"] {
                 let url = folder.appendingPathComponent(name)
-                try AtticDemoData.demoImage().write(to: url, options: .atomic)
+                try PreviewFixtureImage.png().write(to: url, options: .atomic)
                 guard let bytes = await NotesPageController.loadFile(url, type: "public.png").staged else { return }
                 staged.append(bytes)
                 blocks.append(.image(attachmentID: bytes.id))

@@ -2,7 +2,6 @@ import EventKit
 import Foundation
 
 /// Transactional fake used by hosted tests. Never creates an EKEventStore.
-@MainActor
 final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
     var accessState: CalendarAccessState = .granted
     var availableCalendars: [CalendarWriteCalendar] = []
@@ -85,8 +84,9 @@ final class FakeCalendarEventWriteStore: CalendarEventWriteStore {
     }
 
     func rollback() { staged = nil; rollbacks += 1 }
-    func openInCalendar(_ occurrenceID: String) throws {
+    func openInCalendar(_ occurrenceID: String) throws -> URL? {
         if let openError { throw openError }
         opened.append(occurrenceID)
+        return nil
     }
 }

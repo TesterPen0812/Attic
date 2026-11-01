@@ -7,16 +7,14 @@ private final class WriterReadStore: CalendarEventStoring {
     let backend: FakeCalendarEventWriteStore
     init(_ backend: FakeCalendarEventWriteStore) { self.backend = backend }
     func authorizationStatus() -> EKAuthorizationStatus { .fullAccess }
-    func requestFullAccess() async throws -> Bool { true }
+    func requestFullAccess(_ completion: @escaping @Sendable (Result<Bool, Error>) -> Void) { completion(.success(true)) }
     func occurrences(from start: Date, to end: Date) -> [CalendarStoreOccurrence] {
-        MainActor.assumeIsolated {
-            backend.events.values.map { event in
+        backend.events.values.map { event in
                 CalendarStoreOccurrence(eventIdentifier: event.eventIdentifier, itemIdentifier: event.itemIdentifier,
                     title: event.draft.title, start: event.draft.start, end: event.draft.end,
                     isAllDay: event.draft.isAllDay, location: nil, calendarTitle: "Home", calendarColour: nil,
                     timeZone: TimeZone(identifier: event.draft.timeZoneID))
             }
-        }
     }
 }
 
@@ -49,6 +47,69 @@ final class CalendarEventWriterTests: XCTestCase {
     func testWritableCalendarsKeepSourceIdentityAndColour() throws {
         let writer = try writer()
         XCTAssertEqual(try writer.writableCalendars(), [calendar(), calendar("work", source: "Work")])
+    }
+
+    func testOwnershipJournalIOLeavesTheMainThread() async throws {
+        let record = try CalendarOwnershipRecord(persist: { _ in
+            XCTAssertFalse(Thread.isMainThread, "durable event proof must not block the UI")
+        })
+        store.availableCalendars = [calendar()]
+        let backend = store
+        let writer = BackgroundCalendarEventWriter(undoRoute: undo) {
+            XCTAssertFalse(Thread.isMainThread, "store and ownership file initialization must leave main too")
+            return CalendarEventTransactions(store: backend, record: record)
+        }
+        let made = try await writer.create(draft())
+        XCTAssertEqual(made.draft.title, "Lunch")
+    }
+
+    func testBackgroundWritersSerializeTheSameJournalAndPreserveUndoRedo() async throws {
+        let root = ownedTemporaryDirectory(prefix: "CalendarBackgroundJournal")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("ownership.json")
+        let backend = store
+        backend.availableCalendars = [calendar()]
+        func background() -> BackgroundCalendarEventWriter {
+            BackgroundCalendarEventWriter(undoRoute: undo, notificationCenter: center) {
+                CalendarEventTransactions(store: backend, record: try CalendarOwnershipRecord(fileURL: url))
+            }
+        }
+        let first = background(), second = background()
+        async let a = first.create(draft("First"))
+        async let b = second.create(draft("Second"))
+        let made = try await (a, b)
+        XCTAssertNotEqual(made.0.id, made.1.id)
+        XCTAssertEqual(store.events.count, 2)
+        XCTAssertEqual(try CalendarOwnershipRecord(fileURL: url).entries.count, 2)
+        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: false), .applied)
+        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: false), .applied)
+        XCTAssertTrue(store.events.isEmpty)
+        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: true), .applied)
+        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: true), .applied)
+        XCTAssertEqual(Set(store.events.values.map(\.draft.title)), ["First", "Second"])
+    }
+
+    func testBackgroundCommitRecoveryAndFailedOrObsoleteUndoKeepTheirOutcomes() async throws {
+        store.availableCalendars = [calendar()]
+        store.landsThenThrowsOnCommit = true
+        let backend = store
+        let writer = BackgroundCalendarEventWriter(undoRoute: undo, notificationCenter: center) {
+            CalendarEventTransactions(store: backend, record: try CalendarOwnershipRecord())
+        }
+        _ = try await writer.create(draft())
+        XCTAssertNil(writer.lastError, "a verified landed commit remains successful")
+        XCTAssertEqual(undo.undoCount(in: .calendar), 1)
+        store.landsThenThrowsOnCommit = false
+        store.commitError = .saveFailed("retry")
+        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: false), .failed)
+        XCTAssertEqual(writer.lastError, .saveFailed("retry"))
+        XCTAssertEqual(undo.undoCount(in: .calendar), 1)
+        store.commitError = nil
+        let key = try XCTUnwrap(store.events.keys.first)
+        store.events[key]?.draft.title = "Changed outside Attic"
+        await XCTAssertEqualAsync(await undo.replay(in: .calendar, redo: false), .obsolete)
+        XCTAssertEqual(undo.undoCount(in: .calendar), 0)
+        XCTAssertEqual(store.events[key]?.draft.title, "Changed outside Attic")
     }
 
     func testCreateUndoRedoTracksNewEventIdentifierAndRefreshes() throws {
@@ -294,23 +355,29 @@ final class CalendarEventWriterTests: XCTestCase {
         XCTAssertEqual(store.events.count, 2)
     }
 
-    func testWritesAndUndoInvalidateCalendarPageReadAndSearchCaches() throws {
+    func testWritesAndUndoInvalidateCalendarPageReadAndSearchCaches() async throws {
         let writer = try writer()
         let source = EventKitCalendarEventSource(store: WriterReadStore(store), notificationCenter: center)
         let taskStore = try makeTestStore()
         let model = CalendarPageModel(store: taskStore, source: source, now: { self.draft().start })
         model.setQuery("Lunch")
         model.commitSearch()
+        await model.waitForEventReadsForTesting()
         XCTAssertTrue(model.snapshot.showsNoMatches)
         let made = try writer.create(draft())
+        await model.waitForEventReadsForTesting()
         XCTAssertFalse(model.snapshot.showsNoMatches)
         _ = try writer.edit(made.id, draft: draft("Dinner"))
+        await model.waitForEventReadsForTesting()
         XCTAssertTrue(model.snapshot.showsNoMatches)
         XCTAssertTrue(undo.undo(in: .calendar))
+        await model.waitForEventReadsForTesting()
         XCTAssertFalse(model.snapshot.showsNoMatches)
         try writer.delete(made.id)
+        await model.waitForEventReadsForTesting()
         XCTAssertTrue(model.snapshot.showsNoMatches)
         XCTAssertTrue(undo.undo(in: .calendar))
+        await model.waitForEventReadsForTesting()
         XCTAssertFalse(model.snapshot.showsNoMatches)
     }
 

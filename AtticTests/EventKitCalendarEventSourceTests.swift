@@ -10,6 +10,7 @@ private final class FakeCalendarEventStore: CalendarEventStoring {
     var stored: [CalendarStoreOccurrence] = []
     private(set) var requestCount = 0
     private(set) var queries: [DateInterval] = []
+    var onFetch: (() -> Void)?
 
     init(status: EKAuthorizationStatus = .fullAccess, statusAfterRequest: EKAuthorizationStatus = .fullAccess) {
         self.status = status
@@ -18,13 +19,14 @@ private final class FakeCalendarEventStore: CalendarEventStoring {
 
     func authorizationStatus() -> EKAuthorizationStatus { status }
 
-    func requestFullAccess() async throws -> Bool {
+    func requestFullAccess(_ completion: @escaping @Sendable (Result<Bool, Error>) -> Void) {
         requestCount += 1
         status = statusAfterRequest
-        return status == .fullAccess
+        completion(.success(status == .fullAccess))
     }
 
     func occurrences(from start: Date, to end: Date) -> [CalendarStoreOccurrence] {
+        onFetch?()
         queries.append(DateInterval(start: start, end: end))
         // Like EventKit: anything touching the span, inclusive at both ends.
         return stored.filter { $0.start <= end && $0.end >= start }
@@ -32,7 +34,144 @@ private final class FakeCalendarEventStore: CalendarEventStoring {
 }
 
 @MainActor
+private final class HeldCalendarReader: CalendarEventSource, AsyncCalendarEventReading {
+    var accessState: CalendarAccessState = .granted
+    var onChange: (@MainActor () -> Void)?
+    private var pending: [(DateInterval, CheckedContinuation<[CalendarEvent], Never>)] = []
+    private(set) var readCount = 0
+    private(set) var completedCount = 0
+    var pendingCount: Int { pending.count }
+    var nextInterval: DateInterval? { pending.first?.0 }
+    func requestAccess() async -> CalendarAccessState { accessState }
+    func events(in interval: DateInterval) -> [CalendarEvent] { XCTFail("UI used the synchronous read path"); return [] }
+    func search(_ text: String, in interval: DateInterval) -> [CalendarEvent] { XCTFail("UI used synchronous search"); return [] }
+    func loadEvents(in interval: DateInterval) async -> [CalendarEvent] {
+        let events = await withCheckedContinuation { continuation in
+            readCount += 1
+            pending.append((interval, continuation))
+        }
+        completedCount += 1
+        return events
+    }
+    func completeFirst(_ events: [CalendarEvent]) {
+        guard !pending.isEmpty else { XCTFail("no pending read"); return }
+        pending.removeFirst().1.resume(returning: events)
+    }
+    func completeAll(_ events: [CalendarEvent] = []) {
+        while !pending.isEmpty { completeFirst(events) }
+    }
+}
+
+@MainActor
 final class EventKitCalendarEventSourceTests: XCTestCase {
+    private func waitUntil(_ predicate: @MainActor () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(3)
+        while !predicate(), Date() < deadline { try? await Task.sleep(for: .milliseconds(5)) }
+        return predicate()
+    }
+
+    func testAsyncRangeCacheKeepsSearchResultsAndInvalidatesOnStoreChanges() async {
+        let backend = FakeCalendarEventStore()
+        backend.stored = [occurrence("cafe", "Café", date(2026, 10, 29, 9), date(2026, 10, 29, 10))]
+        let center = NotificationCenter(), source = source(backend, center: center)
+        let interval = day(2026, 10, 29)
+        let first = await source.loadEvents(in: interval)
+        let fetches = backend.queries.count
+        for query in ["cafe", "CAFÉ", "no match"] {
+            let again = await source.loadEvents(in: interval)
+            XCTAssertEqual(again.filter { $0.matches(query) }, first.filter { $0.matches(query) })
+        }
+        XCTAssertEqual(backend.queries.count, fetches, "query text does not repeat occurrence I/O")
+        backend.stored = []
+        center.post(name: .EKEventStoreChanged, object: nil)
+        let refreshed = await source.loadEvents(in: interval)
+        XCTAssertTrue(refreshed.isEmpty)
+        XCTAssertEqual(backend.queries.count, fetches + 1)
+    }
+
+    func testReturningToACachedQueryAndReplacingASourceIgnoreLateReads() async throws {
+        let held = HeldCalendarReader()
+        defer { held.completeAll() }
+        let now = date(2026, 10, 29, 9)
+        let events = ["Alpha", "Beta"].enumerated().map { index, title in
+            CalendarEvent(id: title, title: title, start: now.addingTimeInterval(Double(index + 1) * 3600),
+                          end: now.addingTimeInterval(Double(index + 2) * 3600), isAllDay: false,
+                          calendarTitle: "Test", colour: .init(red: 0, green: 0, blue: 0))
+        }
+        let model = CalendarPageModel(store: try makeTestStore(), source: held, calendar: calendar, now: { now })
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        held.completeFirst(events)
+        await model.waitForEventReadsForTesting()
+        model.setQuery("Alpha"); model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        held.completeFirst(events)
+        await model.waitForEventReadsForTesting()
+        model.setQuery("Beta"); model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        model.setQuery("Alpha"); model.commitSearch()
+        let cached = model.snapshot, publications = model.publishCount, reads = held.readCount
+        held.completeFirst(events)
+        await model.waitForEventReadsForTesting()
+        XCTAssertEqual(model.snapshot, cached, "a late query cannot blank the cached query")
+        XCTAssertEqual(model.publishCount, publications)
+        XCTAssertEqual(held.readCount, reads, "no unnecessary replacement fetch")
+        model.setQuery("Beta"); model.commitSearch()
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        model.replaceSource(CalendarEventSourceStub(events: []))
+        let replacement = model.snapshot
+        held.completeFirst(events)
+        await model.waitForEventReadsForTesting()
+        XCTAssertEqual(model.snapshot, replacement)
+    }
+
+    func testNextEventUsesCompletionTimeAndRejectsDeniedOrDisabledLateResults() async {
+        let held = HeldCalendarReader()
+        defer { held.completeAll() }
+        let calendar = calendar
+        // Keep the real one-shot timer in the future while this test advances
+        // only its injected clock; a past fixture would fire on every yield.
+        let morning = calendar.date(bySettingHour: 9, minute: 0, second: 0,
+                                    of: Date().addingTimeInterval(7 * 86_400))!
+        var now = morning
+        let feed = TasksNextEventFeed(source: held, now: { now }, calendar: { calendar })
+        defer { feed.setEnabled(false) }
+        let old = CalendarEvent(id: "old", title: "Old", start: morning, end: morning.addingTimeInterval(3_600),
+                                isAllDay: false, calendarTitle: "Test", colour: .init(red: 0, green: 0, blue: 0))
+        var future = old; future.id = "future"; future.start = morning.addingTimeInterval(7_200); future.end = morning.addingTimeInterval(10_800)
+        feed.setEnabled(true)
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        now = morning.addingTimeInterval(5_400)
+        held.completeFirst([old, future])
+        await feed.waitForReadForTesting()
+        XCTAssertEqual(feed.current?.id, "future")
+        feed.refresh()
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        held.accessState = .denied
+        held.completeFirst([future])
+        await feed.waitForReadForTesting()
+        XCTAssertNil(feed.current)
+        held.accessState = .granted
+        feed.refresh()
+        await XCTAssertTrueAsync(await waitUntil { held.pendingCount == 1 })
+        feed.setEnabled(false)
+        held.completeFirst([future])
+        await feed.waitForReadForTesting()
+        XCTAssertNil(feed.current)
+        XCTAssertNil(feed.nextWake)
+    }
+
+    func testCalendarPageFetchLeavesTheMainThread() async throws {
+        let fetched = expectation(description: "page event fetch")
+        let backend = FakeCalendarEventStore()
+        backend.onFetch = {
+            XCTAssertFalse(Thread.isMainThread, "EventKit occurrence I/O must not block the UI")
+            fetched.fulfill()
+        }
+        let model = CalendarPageModel(store: try makeTestStore(), source: source(backend))
+        await fulfillment(of: [fetched], timeout: 3)
+        XCTAssertEqual(model.snapshot.access, .granted)
+    }
+
     private var calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/London")!

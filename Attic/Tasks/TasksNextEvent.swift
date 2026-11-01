@@ -45,6 +45,8 @@ final class TasksNextEventFeed {
     private var enabled = false
     private var timer: Timer?
     private var enabledObservation: AnyCancellable?
+    private var readTask: Task<Void, Never>?
+    private var readGeneration = 0
 
     /// The page's sink; called only when the row changes.
     var onUpdate: ((TasksNextEvent?) -> Void)?
@@ -74,6 +76,8 @@ final class TasksNextEventFeed {
     /// Reads today's events again: on a calendar change, when the page
     /// shows, when the shown event ends and at midnight.
     func refresh() {
+        readGeneration += 1
+        readTask?.cancel()
         timer?.invalidate()
         timer = nil
         // Never `requestAccess()` here: only the Calendar page asks.
@@ -81,7 +85,28 @@ final class TasksNextEventFeed {
         let date = now(), calendar = calendar()
         let start = calendar.startOfDay(for: date)
         guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { publish(nil); return }
-        let next = TasksNextEvent.pick(source.events(in: DateInterval(start: start, end: end)), now: date, calendar: calendar)
+        let interval = DateInterval(start: start, end: end)
+        if let reader = source as? AsyncCalendarEventReading {
+            let generation = readGeneration
+            readTask = Task { [weak self] in
+                let events = await reader.loadEvents(in: interval)
+                guard !Task.isCancelled, let self, self.readGeneration == generation,
+                      self.enabled else { return }
+                guard self.source.accessState == .granted else { self.publish(nil); return }
+                let current = self.now(), currentCalendar = self.calendar()
+                guard currentCalendar.isDate(current, inSameDayAs: date), currentCalendar.timeZone == calendar.timeZone else {
+                    self.refresh()
+                    return
+                }
+                self.install(events, date: current, calendar: currentCalendar, end: end)
+            }
+            return
+        }
+        install(source.events(in: interval), date: date, calendar: calendar, end: end)
+    }
+
+    private func install(_ events: [CalendarEvent], date: Date, calendar: Calendar, end: Date) {
+        let next = TasksNextEvent.pick(events, now: date, calendar: calendar)
         publish(next.map { TasksNextEvent($0, calendar: calendar, locale: locale) })
         let wake = min(next?.end ?? end, end)
         let timer = Timer(fire: wake.addingTimeInterval(1), interval: 0, repeats: false) { [weak self] _ in
@@ -96,6 +121,7 @@ final class TasksNextEventFeed {
     /// or midnight), and that wake-up arriving now.
     var nextWake: Date? { timer?.fireDate }
     func wakeNow() { timer?.fire() }
+    func waitForReadForTesting() async { await readTask?.value }
     #endif
 
     private func publish(_ event: TasksNextEvent?) {

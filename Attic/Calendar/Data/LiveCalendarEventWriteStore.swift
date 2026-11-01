@@ -5,7 +5,7 @@ import Foundation
 /// Private transaction store, separate from the page's read store. The second
 /// reader sees committed state even while the writer has unsaved changes.
 /// Merely constructing this adapter does not create an EKEventStore.
-@MainActor
+/// The live writer worker owns this adapter and every EK object it creates.
 final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
     private let storeFactory: () throws -> EKEventStore
     private var loadedWriter: EKEventStore?
@@ -202,7 +202,7 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
         return .saveFailed(error.localizedDescription)
     }
 
-    func openInCalendar(_ occurrenceID: String) throws {
+    func openInCalendar(_ occurrenceID: String) throws -> URL? {
         let environment = AppRuntimeEnvironment()
         guard !environment.isRunningTests && !environment.isUITesting else { throw CalendarEventWriteError.openFailed }
         guard accessState == .granted else { throw CalendarEventWriteError.accessDenied }
@@ -221,8 +221,10 @@ final class LiveCalendarEventWriteStore: CalendarEventWriteStore {
         }
         guard let event = candidates.first ?? lookup(identifier, in: reader),
               let url = Self.calendarURL(itemIdentifier: event.calendarItemIdentifier, start: start,
-                                        isRepeating: event.hasRecurrenceRules || event.isDetached),
-              NSWorkspace.shared.open(url) else { throw CalendarEventWriteError.openFailed }
+                                        isRepeating: event.hasRecurrenceRules || event.isDetached) else {
+            throw CalendarEventWriteError.openFailed
+        }
+        return url
     }
 
     /// Calendar's native event-opening URL. Building this URL never opens an

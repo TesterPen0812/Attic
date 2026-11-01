@@ -171,6 +171,52 @@ final class PanelPullOutTests: XCTestCase {
 /// The pull-out with real panels in the invisible test host.
 @MainActor
 final class PanelPullOutHostedTests: XCTestCase {
+    func testPullOutAndDockInPublishNoStateDuringViewUpdates() throws {
+        try withRig { rig in
+            if ProcessInfo.processInfo.environment["ATTIC_F7_STACKS"] == "1" {
+                print("QUALITY1_F7_ATTACH pid=\(ProcessInfo.processInfo.processIdentifier)")
+                fflush(stdout)
+                spin(10)
+            }
+            let diagnostics = try captureErrorOutput {
+                try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+                XCTAssertTrue(rig.pullOut.dockIn(.tasks))
+                spin(0.6)
+            }
+            XCTAssertFalse(diagnostics.contains("Publishing changes from within view updates"), diagnostics)
+        }
+    }
+
+    private func captureErrorOutput(_ body: () throws -> Void) rethrows -> String {
+        let pipe = Pipe()
+        var captured = Data()
+        let lock = NSLock()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            lock.lock(); captured.append(chunk); lock.unlock()
+        }
+        fflush(stderr)
+        let saved = dup(STDERR_FILENO)
+        dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+        defer {
+            fflush(stderr)
+            dup2(saved, STDERR_FILENO)
+            Darwin.close(saved)
+            try? pipe.fileHandleForWriting.close()
+            spin(0.1)
+            pipe.fileHandleForReading.readabilityHandler = nil
+        }
+        try body()
+        // Restore before draining, so no more runtime messages join this capture.
+        fflush(stderr)
+        dup2(saved, STDERR_FILENO)
+        try? pipe.fileHandleForWriting.close()
+        spin(0.1)
+        pipe.fileHandleForReading.readabilityHandler = nil
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: captured, as: UTF8.self)
+    }
+
     @MainActor private struct Rig {
         let controller: AtticPanelController
         let state: PanelUIState
@@ -318,12 +364,14 @@ final class PanelPullOutHostedTests: XCTestCase {
                 weak var floating: PanelFloatingPanel?
                 weak var window: AtticPanel?
                 weak var hosting: AtticPanelHostingView?
+                weak var pageState: PanelUIState?
                 try autoreleasepool {
                     try pull(page, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
                     let made = try XCTUnwrap(rig.pullOut.panel(for: page))
                     floating = made
                     window = made.panel
                     hosting = made.hostingViewForTesting
+                    pageState = made.uiState
                     // A press brings it forward (the callback that held it).
                     made.hostingViewForTesting.onWindowDragBegan?()
                     made.hostingViewForTesting.onWindowDragEnded?(made.visibleFrame, CGPoint(x: made.visibleFrame.midX,
@@ -331,10 +379,11 @@ final class PanelPullOutHostedTests: XCTestCase {
                     XCTAssertTrue(rig.pullOut.dockIn(page), "cycle \(cycle)")
                 }
                 spin(until: { rig.pullOut.panel(for: page) == nil })
-                spin(until: { floating == nil && window == nil && hosting == nil })
+                spin(until: { floating == nil && window == nil && hosting == nil && pageState == nil })
                 XCTAssertNil(floating, "cycle \(cycle): the floating panel")
                 XCTAssertNil(window, "cycle \(cycle): its window")
                 XCTAssertNil(hosting, "cycle \(cycle): its hosting view")
+                XCTAssertNil(pageState, "cycle \(cycle): its page state")
             }
         }
     }

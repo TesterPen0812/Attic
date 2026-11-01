@@ -257,7 +257,9 @@ struct CalendarScrollMask: View {
     #if DEBUG
     /// Test seam: the `pinned` of each body run, so a hosted test can see
     /// that the mounted scroller carries this mask and follows the pin.
-    static var renders: [Bool] = []
+    static var renders: [Bool] = [] {
+        didSet { if renders.count > AtticDiagnosticHistory.capacity { renders.removeFirst(renders.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
+    }
     #endif
 
     var body: some View {

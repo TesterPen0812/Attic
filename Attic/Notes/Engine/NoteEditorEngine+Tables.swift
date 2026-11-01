@@ -110,7 +110,7 @@ extension NoteEditorEngine {
         onTableChromeChange?()
         onTableFocusChange?()
         onCaretChange?()
-        find.updateHighlights()
+        find.updateTableHighlights(in: view)
     }
 
     /// After one of the page's controls (Aa's row, a grip's menu): the

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import ObjectiveC
 import SwiftUI
 import XCTest
@@ -10,6 +11,33 @@ import XCTest
 @MainActor
 final class NoteEditorEngineTests: XCTestCase {
     #if !ATTIC_GENERATED_TESTS
+    func testNativeSelectionRestorationDefersBodyChromePublication() async throws {
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("Title")]))
+        defer { engine.detachView() }
+        let chrome = NotesPageChrome()
+        let accessories = NoteTitleAccessories(engine: engine, textView: view,
+            scrollView: try XCTUnwrap(view.enclosingScrollView), chrome: chrome, design: .default,
+            headerBottom: 40, isUntouched: { false }, tagEditor: { AnyView(EmptyView()) })
+        defer { accessories.invalidate() }
+        var publications = 0
+        let observation = chrome.$hasBody.dropFirst().sink { _ in publications += 1 }
+        defer { observation.cancel() }
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertTrue(chrome.hasBody, "native make/update must not synchronously publish chrome")
+        XCTAssertEqual(publications, 0)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertFalse(chrome.hasBody)
+        XCTAssertEqual(publications, 1)
+    }
+
     func testB02RichCopyPreservesNumberedListStartsAndRestarts() throws {
         var first = NoteBlock.text("first", style: "number"); first.start = 7
         var restart = NoteBlock.text("restart", style: "number"); restart.start = 12

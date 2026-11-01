@@ -413,41 +413,6 @@ final class CombinedFixRoundTests: XCTestCase {
 
     // MARK: A15 in Notes (replacing P2-02's D1)
 
-    /// Owner, 2026-10-06: the Notes editor's edges are glass only (the
-    /// header's buttons and title capsule, the bottom row), so the editor
-    /// has no fade at all; All notes keeps a short one behind its label line.
-    func testTheNotesTextShowsFaintlyUnderTheControls() {
-        let stops = AtticScrollUnderFade.stops(height: 520, plainText: [])
-        for y in stride(from: CGFloat(0), through: 520, by: 4) {
-            XCTAssertEqual(AtticScrollUnderFade.opacity(stops, at: y, height: 520), 1, accuracy: 0.001, "whole at \(y)")
-        }
-        let library = AtticScrollUnderFade.stops(height: 520, plainText: [70...86])
-        func opacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(library, at: y, height: 520) }
-        XCTAssertEqual(opacity(78), AtticScrollUnderFade.behindText, accuracy: 0.001, "faint behind the label line")
-        XCTAssertEqual(opacity(70 - AtticScrollUnderFade.textRamp), 1, accuracy: 0.001)
-        XCTAssertEqual(opacity(86 + AtticScrollUnderFade.textRamp), 1, accuracy: 0.001)
-        XCTAssertEqual(opacity(20), 1, accuracy: 0.001, "whole under the header's glass")
-        XCTAssertEqual(opacity(500), 1, accuracy: 0.001, "whole under the bottom row's glass")
-
-        // Round 4 (owner): content dissolves into the panel's own edges, from
-        // faint at the edge to full at the middle of the header's controls
-        // and of the bottom row; under the rest of the glass it is whole.
-        let size = CGSize(width: 320, height: 520)
-        let layout = PanelPageLayout(cornerSize: 52, panelSize: size)
-        let top = layout.scrollEdgeFadeTop, bottom = layout.scrollEdgeFadeBottom
-        let edged = AtticScrollUnderFade.stops(height: 520, plainText: [], topEdge: top, bottomEdge: bottom)
-        func edgeOpacity(_ y: CGFloat) -> Double { AtticScrollUnderFade.opacity(edged, at: y, height: 520) }
-        XCTAssertEqual(edgeOpacity(0), AtticScrollUnderFade.edgeFloor, accuracy: 0.001, "all but gone at the panel's top edge")
-        XCTAssertEqual(edgeOpacity(520), AtticScrollUnderFade.edgeFloor, accuracy: 0.001, "and at its bottom edge")
-        XCTAssertEqual(edgeOpacity(top), 1, accuracy: 0.001, "whole from the header controls' middle")
-        XCTAssertEqual(edgeOpacity(520 - bottom), 1, accuracy: 0.001, "and to the bottom row's middle")
-        XCTAssertLessThan(top, layout.headerBottom, "a short band: within the header")
-        let ramp = stride(from: CGFloat(0), through: top, by: 1).map(edgeOpacity)
-        XCTAssertEqual(ramp, ramp.sorted(), "rising from the edge")
-        for y in stride(from: top, through: 520 - bottom, by: 4) {
-            XCTAssertEqual(edgeOpacity(y), 1, accuracy: 0.001, "whole at \(y)")
-        }
-    }
 
     /// The fade reached the AppKit editor through a SwiftUI mask; the
     /// owner's 10-17 decision removes it: the note stays visible under the

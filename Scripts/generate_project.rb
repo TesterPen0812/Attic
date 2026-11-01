@@ -190,7 +190,6 @@ shared_mobile_sources = [
   'Canvas/CanvasTypes.swift',
   'Canvas/CanvasViewport.swift',
   'Design/AtticTheme.swift',
-  'Design/TaskActionsMenu.swift',
   'Models/CanvasBoardItem.swift',
   'Models/CanvasImageItem.swift',
   'Models/CanvasStrokeItem.swift',

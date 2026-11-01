@@ -566,12 +566,9 @@ final class OwnerFindingsDemoDataTests: XCTestCase {
         }
     }
 
-    func testOnlyAPreviewBuildsMenuOffersLoadDemoData() {
-        func titles(_ load: (() -> Void)?) -> [String] {
-            MenuBarCommands.commands(advertisedNewTaskShortcut: nil, showPanel: {}, newTask: {}, newNote: {}, search: {},
-                                     openSettings: {}, quit: {}, loadDemoData: load).map(\.title)
-        }
-        XCTAssertFalse(titles(nil).contains("Load Demo Data"))
-        XCTAssertTrue(titles({}).contains("Load Demo Data"))
+    func testTheMenuDoesNotOfferDemoData() {
+        let titles = MenuBarCommands.commands(advertisedNewTaskShortcut: nil, showPanel: {}, newTask: {},
+            newNote: {}, search: {}, openSettings: {}, quit: {}).map(\.title)
+        XCTAssertFalse(titles.contains("Load Demo Data"))
     }
 }

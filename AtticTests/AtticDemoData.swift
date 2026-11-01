@@ -1,29 +1,13 @@
 import AppKit
 import Foundation
 import SwiftData
+@testable import Attic
 
-/// Realistic content for preview builds (owner, 2026-10-01), so a fresh
-/// preview identity opens on something to look at: Now, Later and Done
-/// with subtasks, tags, dates (overdue, today, future), every priority and a
-/// task in progress; a few Done days; and notes with formatting, a
-/// checklist, an image and a file.
-///
-/// Only ever written into a `com.taha.Attic.preview.*` identity's own store
-/// (its own sandbox container): on its first launch while that store is
-/// empty, or through the menu's preview-only Load Demo Data. Never under
-/// `com.taha.Attic`, never into an in-memory, UI-test, performance or
-/// gallery store. Every item has a fixed id, so loading twice adds nothing
-/// twice (a demo item already there is left as it is, except an untouched
-/// raw-Markdown copy of a formatted demo note from an older seed, which
-/// Load Demo Data replaces with the formatted document).
+/// Synthetic tasks and notes, seeded explicitly into stores owned by tests.
 @MainActor
 enum AtticDemoData {
     static let officialBundleIdentifier = "com.taha.Attic"
     static let previewPrefix = "com.taha.Attic.preview."
-    /// Set in the preview identity's own defaults once it has been seeded
-    /// on first launch (Load Demo Data still works afterwards).
-    static let seededKey = "AtticPreviewDemoDataSeeded"
-
     /// A preview identity, and nothing else: not the official identity, not
     /// another Attic identity, whatever its arguments.
     nonisolated static func isAllowed(bundleIdentifier: String?) -> Bool {
@@ -245,23 +229,5 @@ enum AtticDemoData {
     Aa Bb Cc 0123456789
     """
 
-    /// A small palette image (four soft swatches).
-    static func demoImage() throws -> Data {
-        let size = 320
-        guard let context = CGContext(data: nil, width: size, height: size / 2, bitsPerComponent: 8, bytesPerRow: size * 4,
-                                      space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        let swatches: [(CGFloat, CGFloat, CGFloat)] = [(0.93, 0.91, 0.88), (0.80, 0.77, 0.73), (0.55, 0.53, 0.50), (0.85, 0.45, 0.30)]
-        for (index, colour) in swatches.enumerated() {
-            context.setFillColor(red: colour.0, green: colour.1, blue: colour.2, alpha: 1)
-            context.fill(CGRect(x: index * size / 4, y: 0, width: size / 4, height: size / 2))
-        }
-        guard let image = context.makeImage(),
-              let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        return data
-    }
+    static func demoImage() throws -> Data { try PreviewFixtureImage.png() }
 }

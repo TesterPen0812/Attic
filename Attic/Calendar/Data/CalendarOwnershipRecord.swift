@@ -1,6 +1,6 @@
 import Foundation
 
-@MainActor
+/// Confined to its transaction owner (the serial writer queue in the app).
 final class CalendarOwnershipRecord {
     private struct Transition: Codable {
         var id: UUID

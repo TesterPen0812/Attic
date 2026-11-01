@@ -79,29 +79,29 @@ enum CalendarEventWriteError: Error, Equatable {
 }
 
 /// This local UUID survives delete/Undo, even when EventKit assigns new IDs.
-struct CalendarOwnedEvent: Identifiable, Equatable {
+struct CalendarOwnedEvent: Identifiable, Equatable, Sendable {
     var id: UUID
     var occurrenceID: String
     var draft: CalendarEventDraft
 }
 
-/// Engine only. Call from the Calendar page once its composer/event UI ships.
+/// Event operations await durable work; UI state and Undo stay on main.
 /// Other pages retain their read-only source and navigate to Calendar.
 @MainActor
 protocol CalendarEventWriter: AnyObject {
     var lastError: CalendarEventWriteError? { get }
-    func writableCalendars() throws -> [CalendarWriteCalendar]
-    func ownedEvent(matching occurrenceID: String) throws -> CalendarOwnedEvent?
-    func create(_ draft: CalendarEventDraft) throws -> CalendarOwnedEvent
-    func edit(_ id: UUID, draft: CalendarEventDraft) throws -> CalendarOwnedEvent
-    func delete(_ id: UUID) throws
-    func openInCalendar(_ occurrenceID: String) throws
+    func writableCalendars() async throws -> [CalendarWriteCalendar]
+    func ownedEvent(matching occurrenceID: String) async throws -> CalendarOwnedEvent?
+    func create(_ draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
+    func edit(_ id: UUID, draft: CalendarEventDraft) async throws -> CalendarOwnedEvent
+    func delete(_ id: UUID) async throws
+    func openInCalendar(_ occurrenceID: String) async throws
 }
 
 /// Local proof: EventKit identity and the captured user-visible values. Attic
 /// never writes a URL or other marker into events. Provider alarms/availability
 /// are observations only and do not participate in ownership matching.
-struct CalendarWriteSnapshot: Codable, Equatable {
+struct CalendarWriteSnapshot: Codable, Equatable, Sendable {
     var eventIdentifier: String
     var itemIdentifier: String
     var draft: CalendarEventDraft
@@ -129,7 +129,6 @@ struct CalendarWriteSnapshot: Codable, Equatable {
 /// Mutations are staged, not committed, until their ownership proof is durable.
 /// Implementations must discard ALL staged changes on rollback and never share
 /// their transactional store with unrelated writers.
-@MainActor
 protocol CalendarEventWriteStore: AnyObject {
     var accessState: CalendarAccessState { get }
     /// Live EventKit already posts its own notification. Fakes normally rely
@@ -143,7 +142,9 @@ protocol CalendarEventWriteStore: AnyObject {
     func stageDelete(_ previous: CalendarWriteSnapshot) throws
     func commit() throws
     func rollback()
-    func openInCalendar(_ occurrenceID: String) throws
+    /// Resolve on the store's owner; the UI opens the returned URL on main.
+    /// A fake may record the request and return nil without opening an app.
+    func openInCalendar(_ occurrenceID: String) throws -> URL?
 }
 
 extension CalendarEventWriteStore {

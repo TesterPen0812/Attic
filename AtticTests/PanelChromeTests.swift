@@ -8,6 +8,37 @@ import XCTest
 /// the Calendar header. Sizes are points (the design's px ÷ 2).
 @MainActor
 final class PanelChromeTests: XCTestCase {
+    func testContinuousDiagnosticsRetainOnlyRecentSamples() {
+        AtticMaterialProbe.resetCorners()
+        PanelSwipeTrace.events = []
+        ComposerOverlay.surfaces = []
+        ComposerOverlay.corners = []
+        CalendarScrollMask.renders = []
+        defer {
+            AtticMaterialProbe.resetCorners()
+            PanelSwipeTrace.events = []
+            ComposerOverlay.surfaces = []
+            ComposerOverlay.corners = []
+            CalendarScrollMask.renders = []
+        }
+        for index in 0..<10_000 {
+            AtticMaterialProbe.recordCorner(CGFloat(index))
+            AtticMaterialProbe.recordRevealed(.init(cornerRadius: CGFloat(index), leading: 0, trailing: 0, exponent: 1.4))
+            PanelSwipeTrace.events.append([Double(index)])
+            ComposerOverlay.surfaces.append(ComposerGrow.geometry(progress: 1, card: CGSize(width: CGFloat(index), height: 130)))
+            ComposerOverlay.corners.append(CGPoint(x: index, y: 0))
+            CalendarScrollMask.renders.append(index.isMultiple(of: 2))
+        }
+        for count in [AtticMaterialProbe.corners.count, AtticMaterialProbe.revealed.count,
+                      PanelSwipeTrace.events.count, ComposerOverlay.surfaces.count,
+                      ComposerOverlay.corners.count, CalendarScrollMask.renders.count] {
+            XCTAssertLessThanOrEqual(count, 4096, "continuous diagnostics must have bounded storage")
+        }
+        XCTAssertEqual(AtticMaterialProbe.corners.last!, 9_999)
+        XCTAssertEqual(PanelSwipeTrace.events.last, [9_999])
+        XCTAssertEqual(ComposerOverlay.corners.last?.x, 9_999)
+        XCTAssertEqual(CalendarScrollMask.renders.last, false)
+    }
     // MARK: Tokens
 
     func testEveryTopRowAndBottomBarControlIs27() {

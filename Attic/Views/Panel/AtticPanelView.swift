@@ -262,11 +262,16 @@ struct AtticPanelView: View {
     }
 
     /// Now's next event (Accepted 2026-10-29): that day on the Calendar page.
-    private func openCalendarDay(_ day: DueDay) {
-        let calendar = calendarPageState.model(store: store)
-        calendar.goToToday()
-        calendar.select(day)
-        selectSection(.calendar)
+    private var openCalendarDay: (DueDay) -> Void {
+        { [weak calendarPageState, weak uiState, store, noteDraft, canvasSession, settings] day in
+            guard let calendarPageState, let uiState else { return }
+            let calendar = calendarPageState.model(store: store)
+            calendar.goToToday()
+            calendar.select(day)
+            Self.selectSection(.calendar, uiState: uiState, noteDraft: noteDraft, canvasSession: canvasSession,
+                               motion: PanelPageMotion.current(reduceMotion: AtticMotionPreference.reducesMotion
+                                                               || settings.animations == .reduced))
+        }
     }
 
     /// The Calendar's "+": the card, on that day.
@@ -315,21 +320,25 @@ struct AtticPanelView: View {
                 if uiState.isFloating, page != .tasks, page != .calendar { return }
                 uiState.openTaskNote(id, from: page == .calendar ? .calendar : .tasks, row: id)
             },
-            openNote: { [noteDraft, uiState] id in
+            openNote: { [noteDraft, uiState, canvasSession, settings] id in
                 if uiState.isElsewhere(.notes) {
                     // Notes out in its own panel comes forward with the
                     // note; a floating panel's ⌘Return never switches the
                     // docked panel's page.
                     guard uiState.openElsewhere(.notes, switchesDocked: !uiState.isFloating) else { return }
                 } else {
-                    selectSection(.notes)
+                    Self.selectSection(.notes, uiState: uiState, noteDraft: noteDraft, canvasSession: canvasSession,
+                                       motion: PanelPageMotion.current(reduceMotion: AtticMotionPreference.reducesMotion
+                                                                       || settings.animations == .reduced))
                 }
                 DispatchQueue.main.async {
                     guard noteDraft.pages.open(noteID: id) else { return }
                     noteDraft.pages.dismissLibrary()
                 }
             },
-            openEvent: { [composerState] event in composerState.model?.openInCalendar(event) },
+            openEvent: { [weak composerState] event in
+                Task { await composerState?.model?.openInCalendar(event) }
+            },
             toast: { [toasts] message, undo in
                 toasts.show(message, performing: undo)
             })
@@ -338,7 +347,8 @@ struct AtticPanelView: View {
     /// Open Task Note and a row's file drop (Phase 3).
     private var taskNoteEntryServices: TaskNoteEntryServices {
         TaskNoteEntryServices(
-            open: { [uiState, tasksPageState, store, toasts, weak pages = noteDraft.pages] id, backTitle in
+            open: { [weak uiState, weak tasksPageState, store, toasts, weak pages = noteDraft.pages] id, backTitle in
+                guard let uiState, let tasksPageState else { return }
                 let model = tasksPageState.model(for: store, toasts: toasts)
                 let query = model.trimmedQuery(for: model.tab)
                 if TaskNoteWindows.shared.bringForward(id, searchQuery: query) { return }
@@ -615,6 +625,11 @@ struct AtticPanelView: View {
     }
 
     func selectSection(_ section: PanelSection) {
+        Self.selectSection(section, uiState: uiState, noteDraft: noteDraft, canvasSession: canvasSession, motion: pageMotion)
+    }
+
+    private static func selectSection(_ section: PanelSection, uiState: PanelUIState, noteDraft: NoteDraftController,
+                                      canvasSession: CanvasSession, motion: PanelPageMotion) {
         guard uiState.selectedSection != section else { return }
         // A page out in its own panel: that panel comes forward instead.
         if uiState.routeElsewhere(section) { return }
@@ -631,7 +646,7 @@ struct AtticPanelView: View {
         if uiState.selectedSection.isCanvas {
             canvasSession.interruptActiveInteraction()
         }
-        uiState.switchPage(to: section, motion: pageMotion) {
+        uiState.switchPage(to: section, motion: motion) {
             if section.isNotes {
                 noteDraft.pages.present()
             }

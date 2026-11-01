@@ -3,7 +3,6 @@ import SwiftData
 
 @MainActor
 final class WorkspaceOperationCoordinator {
-    enum WriteClass: Equatable { case journaled, plain, bookkeeping }
     enum Outcome: Equatable {
         case notCommitted, conflict, unknown, committed, publicationPending
     }

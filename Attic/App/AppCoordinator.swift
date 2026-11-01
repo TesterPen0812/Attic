@@ -402,10 +402,6 @@ final class AppCoordinator: ObservableObject {
     private let newTaskHotKey: GlobalHotKey
     private let performanceRoot: URL?
     private let isPerformanceSeedOnly: Bool
-    /// A preview identity with its own on-disk store: the menu offers Load
-    /// Demo Data (`AtticDemoData`).
-    let demoDataAllowed: Bool
-    private let demoContainer: ModelContainer?
     private var performanceSignalSource: (any DispatchSourceSignal)?
     #if DEBUG
     private var hideMotionBench: PanelHideMotionBench?
@@ -551,53 +547,12 @@ final class AppCoordinator: ObservableObject {
             try? TaskNotePreviewSeed.seedOwnerPreview(in: container)
         }
         #endif
-        // Preview builds only (owner, 2026-10-01): a fresh preview identity
-        // opens on demo content, written into its own empty store once.
-        let demoDataAllowed = !inMemoryStore && performanceRoot == nil && !usesCanvasUITestPersistence
-            && !isUITesting && !isRunningTests && !runtime.isGalleryLaunch
-            && AtticDemoData.isAllowed(bundleIdentifier: runtime.bundleIdentifier)
-        var demoSeeded = false
-        if demoDataAllowed {
-            let defaults = runtime.makeSettingsDefaults()
-            if !defaults.bool(forKey: AtticDemoData.seededKey), AtticDemoData.storeIsEmpty(container) {
-                do {
-                    demoSeeded = try AtticDemoData.seed(into: container, bundleIdentifier: runtime.bundleIdentifier) > 0
-                    // "Attic Task Page" (Phase 3): its task pages too.
-                    if runtime.bundleIdentifier == TaskNotePreviewSeed.ownerPreviewBundleIdentifier {
-                        try TaskNotePreviewSeed.seedOwnerPreview(in: container)
-                    }
-                    // "Attic Task Life" (slice 1): the task pages and one
-                    // task for each lifecycle state.
-                    if TaskNoteLifecyclePreviewSeed.seeds(bundleIdentifier: runtime.bundleIdentifier) {
-                        try TaskNotePreviewSeed.seedOwnerPreview(in: container)
-                        try TaskNoteLifecyclePreviewSeed.seed(in: container)
-                    }
-                    // "Attic Task Files" (slice 2): the task pages, then
-                    // legacy-attachment families once the stores exist.
-                    if runtime.bundleIdentifier == TaskFilesPreviewSeed.bundleIdentifier {
-                        try TaskNotePreviewSeed.seedOwnerPreview(in: container)
-                    }
-                } catch {
-                    NSLog("Attic demo data: %@", error.localizedDescription)
-                }
-            }
-            defaults.set(true, forKey: AtticDemoData.seededKey)
-        }
-        self.demoDataAllowed = demoDataAllowed
-        self.demoContainer = demoDataAllowed ? container : nil
         let (store, noteStore) = try runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
-        if demoSeeded {
-            let bundleIdentifier = runtime.bundleIdentifier
-            Task { @MainActor in await AtticDemoData.attachFiles(to: noteStore, bundleIdentifier: bundleIdentifier) }
-        }
-        // The heavy task's screenshots and PDFs (`p3-21`): the owner preview's
-        // fresh store, and the in-memory UI-test seed used for captures.
-        let taskFilesSeed = isUITesting ? (inMemoryStore && environment["ATTIC_UI_TEST_SEED"] == "taskfiles")
-            : (demoSeeded && runtime.bundleIdentifier == TaskFilesPreviewSeed.bundleIdentifier)
-        if demoSeeded || (inMemoryStore && isUITesting && ["tasknote", "taskfiles"].contains(environment["ATTIC_UI_TEST_SEED"] ?? "")) {
+        // Attachments belong only to explicitly requested in-memory UI fixtures.
+        if inMemoryStore, isUITesting, ["tasknote", "taskfiles"].contains(environment["ATTIC_UI_TEST_SEED"] ?? "") {
             Task { @MainActor in await TaskNotePreviewSeed.attachHeavyFiles(to: noteStore) }
         }
-        if taskFilesSeed {
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "taskfiles" {
             TaskFilesPreviewSeed.pending = Task { @MainActor in await TaskFilesPreviewSeed.seed(tasks: store) }
         }
         let canvasStore = CanvasStore(container: container)
@@ -1141,24 +1096,6 @@ final class AppCoordinator: ObservableObject {
 
     /// The menu-bar Search: the Tasks page's Done search, focused (⌘K
     /// search arrives with the command palette in a later phase).
-    /// Preview builds only: adds the demo tasks and notes that are not in
-    /// this preview identity's store yet, and shows them.
-    func loadDemoData() {
-        guard demoDataAllowed, let demoContainer else { return }
-        let bundleIdentifier = Bundle.main.bundleIdentifier
-        do {
-            try AtticDemoData.seed(into: demoContainer, bundleIdentifier: bundleIdentifier)
-        } catch {
-            NSLog("Attic demo data: %@", error.localizedDescription)
-            return
-        }
-        store.refresh()
-        noteStore.refresh()
-        let notes = noteStore
-        Task { @MainActor in await AtticDemoData.attachFiles(to: notes, bundleIdentifier: bundleIdentifier) }
-        showPanel()
-    }
-
     func showSearch() {
         // The panel takes the keyboard, but not for the add bar: a late add
         // bar focus request would take it back from the search field.

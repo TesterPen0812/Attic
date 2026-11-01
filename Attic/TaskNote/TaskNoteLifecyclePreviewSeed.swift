@@ -1,17 +1,14 @@
 import Foundation
 import SwiftData
 
-/// "Attic Task Life" (`com.taha.Attic.preview.tasklife`, Phase 3 slice 1):
-/// its fresh store opens on the task page's own samples plus one task for
-/// each lifecycle state this slice adds. Written once, into the preview's
-/// own empty store, in the forms the app itself writes (soft deletes with
-/// their preservation records, the task-note storage form).
+/// Explicit task-lifecycle fixtures for in-memory UI tests and unit tests.
+/// They use the app's soft-delete and task-note storage forms.
 enum TaskNoteLifecyclePreviewSeed {
     static let bundleIdentifier = "com.taha.Attic.preview.tasklife"
-    /// "Attic One Item" (Phase 3 C2) opens on the same samples.
+    /// The related identity used by explicit one-item fixtures.
     static let oneItemBundleIdentifier = "com.taha.Attic.preview.oneitem"
 
-    /// The preview identities whose fresh store gets these samples.
+    /// Identities recognized by the explicit fixture.
     static func seeds(bundleIdentifier: String?) -> Bool {
         bundleIdentifier == Self.bundleIdentifier || bundleIdentifier == oneItemBundleIdentifier
     }

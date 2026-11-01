@@ -899,20 +899,6 @@ final class TaskStore: ObservableObject {
         WorkspaceCrashHook.reach("K3-task")
     }
 
-    static func stageTransition(in context: ModelContext, from expected: [TaskEditableState],
-                                to target: [TaskEditableState], timestamp: Date) throws {
-        let adapter = try TaskStore(staging: context, timestamp: timestamp)
-        for state in expected {
-            let id = state.id
-            let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-            guard !replicas.isEmpty, replicas.allSatisfy({ TaskEditableState($0) == state }) else {
-                throw WorkspaceFoundationError.conflict
-            }
-        }
-        if case .obsolete = try adapter.stageEditableTransition(from: expected, to: target) {
-            throw WorkspaceFoundationError.conflict
-        }
-    }
 
     #endif
 

@@ -142,9 +142,8 @@ final class C2MenusTests: XCTestCase {
 
     // MARK: Preview
 
-    /// "Attic One Item" opens on Attic Task Life's samples; the official
-    /// identity never gets demo content.
-    func testTheOneItemPreviewIsSeededLikeTaskLife() {
+    /// Explicit Task Life fixtures recognize their dedicated identities.
+    func testTaskLifeFixturesRecognizeTheirDedicatedPreviewIdentities() {
         XCTAssertTrue(TaskNoteLifecyclePreviewSeed.seeds(bundleIdentifier: "com.taha.Attic.preview.oneitem"))
         XCTAssertTrue(TaskNoteLifecyclePreviewSeed.seeds(bundleIdentifier: "com.taha.Attic.preview.tasklife"))
         XCTAssertFalse(TaskNoteLifecyclePreviewSeed.seeds(bundleIdentifier: "com.taha.Attic"))

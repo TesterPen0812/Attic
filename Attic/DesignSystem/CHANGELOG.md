@@ -1,3 +1,19 @@
+## 2026-11-01 · Native query editing
+
+The single-line search field owns a stable TextKit 1 field editor. Its first
+glyph no longer adds a TextKit 2 rendering subview and invalidates the whole
+SwiftUI page layout. Query results, native composition, Undo and focus behavior
+are unchanged; the Notes document editor continues to use TextKit 2.
+
+## 2026-11-01 · Bounded diagnostics
+
+Material-corner and reveal probes keep at most 4,096 recent samples, including
+optimized Local builds. Overflow drops the oldest quarter in one batch.
+
+## 2026-11-01 — unused presentation helpers
+
+- Removed the test-only scroll-under fade, obsolete quick-entry/drawer layout helpers, unused task action menu and unused note group heading. Active panel geometry and controls keep their existing implementations.
+
 ## 2026-10-31 · Tasks fix round 1 merge
 
 The next event's time uses rgb(86,88,92) through `toneInk`, between the
