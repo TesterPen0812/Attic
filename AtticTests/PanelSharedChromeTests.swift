@@ -28,6 +28,10 @@ final class PanelSharedChromeTests: XCTestCase {
 
     /// The mean level of each box (pt, top-left), as drawn now.
     private func levels(_ host: NSView, _ boxes: [CGRect]) throws -> [CGFloat] {
+        // Reproduce CI's 140 ms bitmap capture without changing its assertions.
+        if ProcessInfo.processInfo.environment["ATTIC_TEST_SLOW_CHROME_CAPTURE"] == "1" {
+            Thread.sleep(forTimeInterval: 0.14)
+        }
         host.layoutSubtreeIfNeeded()
         let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
@@ -126,12 +130,25 @@ final class PanelSharedChromeTests: XCTestCase {
                 names.append("tag bar card")
             }
             let before = try levels(host, boxes)
-            let start = Date()
-            state.switchPage(to: to, motion: PanelPageMotion.current(reduceMotion: false))
             var samples: [(ms: Int, levels: [CGFloat])] = []
-            while Date().timeIntervalSince(start) < 0.7 {
-                spin(0.008)
-                samples.append((Int(Date().timeIntervalSince(start) * 1000), try levels(host, boxes)))
+            do {
+                // As in the island motion tests, pause presentation and step
+                // its clock. Bitmap capture cost must never skip a frame:
+                // the same 0.7 s window is sampled at 60 frames per second.
+                let layer = try XCTUnwrap(host.layer)
+                let start = layer.convertTime(CACurrentMediaTime(), from: nil)
+                layer.speed = 0
+                layer.timeOffset = start
+                defer { layer.speed = 1; layer.timeOffset = 0 }
+                host._renderForTest(interval: 0)
+                state.switchPage(to: to, motion: PanelPageMotion.current(reduceMotion: false))
+                for frame in 0...42 {
+                    let elapsed = Double(frame) / 60
+                    host._renderForTest(interval: frame == 0 ? 0 : 1.0 / 60)
+                    layer.timeOffset = start + elapsed
+                    CATransaction.flush()
+                    samples.append((Int(elapsed * 1000), try levels(host, boxes)))
+                }
             }
             XCTAssertGreaterThan(samples.count, 10, "sampled the switch's frames")
             spin(0.4)
