@@ -35,7 +35,8 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
         case .tasks: String(localized: "Tasks")
         case .notes: String(localized: "Notes")
         case .calendar: String(localized: "Calendar")
-        case .canvas: String(localized: "Canvas")
+        // Draw while the new page has Canvas's place (`AtticDraw.enabled`).
+        case .canvas: AtticDraw.isEnabled ? String(localized: "Draw") : String(localized: "Canvas")
         }
     }
 

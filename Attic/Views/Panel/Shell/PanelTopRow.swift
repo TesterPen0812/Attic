@@ -139,6 +139,30 @@ final class PanelTopRowState: ObservableObject {
     }
 
     func isSearching(_ page: PanelPage) -> Bool { searchingPages.contains(page) }
+
+    /// The pages whose top row is dimmed (Draw's D6: during a stroke the
+    /// shell's Pin, ••• and Search dim with the page's own controls).
+    @Published private(set) var dimmedPages: Set<PanelPage> = []
+
+    func setDimmed(_ dimmed: Bool, on page: PanelPage) {
+        if dimmed, !dimmedPages.contains(page) { dimmedPages.insert(page) }
+        if !dimmed, dimmedPages.contains(page) { dimmedPages.remove(page) }
+    }
+}
+
+/// The shell's header dimmed with the current page's top row (D6). Only this
+/// observes the state, so the header itself isn't re-evaluated.
+struct PanelHeaderDim: ViewModifier {
+    @ObservedObject var state: PanelTopRowState
+    let page: PanelPage
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        let dimmed = state.dimmedPages.contains(page)
+        content
+            .opacity(dimmed ? 0.35 : 1)
+            .animation(design.reduceMotion ? nil : AtticMotionScale.easeOut(AtticMotionScale.fast), value: dimmed)
+    }
 }
 
 private struct PanelTopRowStateKey: EnvironmentKey {
