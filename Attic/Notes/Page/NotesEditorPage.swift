@@ -43,6 +43,8 @@ struct NotesEditorPage: View {
     /// The top row's search is open (its button, ⌘F, typing in All notes):
     /// the field shows first, then takes the keyboard.
     @State private var searchOpen = false
+    /// The open note's Find is shown, in the top row (N4, Idea B).
+    @State private var findOpen = false
     /// The bottom row's control that has the keyboard after ⌃Tab or ⌃⇧Tab
     /// left the text (OD-7), and whether its controls are keyboard stops:
     /// only from then until the keyboard is back in the text, so a click
@@ -125,7 +127,17 @@ struct NotesEditorPage: View {
             // history draw theirs under their own controls).
             if showsEditor, controller.historyBrowser == nil { AtticEdgeBlurBackdrops(editorEdges) }
             if showsEditor, controller.proposalReview == nil, controller.historyBrowser == nil {
+                // Find folds the title away with Pin and ••• (N4).
                 headerTitle
+                    .opacity(topFindShown ? 0 : 1)
+                    .allowsHitTesting(!topFindShown)
+                    .accessibilityHidden(topFindShown)
+                    .animation(PanelTopRowLayout.searchAnimation(shown: topFindShown, reduceMotion: design.reduceMotion),
+                               value: topFindShown)
+            }
+            if showsEditor, let find = controller.active?.engine.find {
+                NoteFindTopRowObserver(find: find, shown: $findOpen)
+                    .id(ObjectIdentifier(find))
             }
             if controller.proposalReview == nil, controller.historyBrowser == nil {
                 topRow
@@ -368,36 +380,71 @@ struct NotesEditorPage: View {
             && NotesLibraryView.searchShown(open: searchOpen, focused: searchFocused, query: library.query)
     }
 
+    /// Find in the open note has the top row (N4, Idea B, 2026-11-01).
+    private var topFindShown: Bool { showsEditor && findOpen }
+
     /// The panel's top row on Notes (`PanelTopRow`, Tasks' places): the
     /// search button, or the field that filters All notes through its own
-    /// search and tag filter. Notes has no middle-slot controls and no
-    /// task-list filter button.
+    /// search and tag filter, or, on an open note, Find's field. Notes has
+    /// no middle-slot controls and no task-list filter button.
     private var topRow: some View {
         let shown = topSearchShown
+        let finding = topFindShown
         // Board | list in the page-switch slot, only on the notes list
         // (Accepted 2026-10-30, "Notes board"); the search folds it.
-        return PanelTopRow(page: .notes, layout: layout, searchOpen: shown) {
+        return PanelTopRow(page: .notes, layout: layout, searchOpen: shown || finding) {
             if controller.isLibraryPresented {
                 NotesLayoutSwitch(selection: $library.layout)
                     .atticDesignCorners()
                     .transition(.opacity)
             }
         } search: {
-            if shown {
+            if finding, let find = controller.active?.engine.find {
+                NoteFindTopRowField(find: find, onAllNotes: searchAllNotes)
+                    .transition(PanelTopRowLayout.fieldTransition)
+            } else if shown {
                 AtticTabsSearchField(placeholder: NotesLibraryModel.placeholder(count: noteStore.notes.count, tag: library.tagFilter),
                                      text: $library.query, isFocused: $searchFocused, floating: true,
                                      onEscape: endTopSearch, header: true)
                     .accessibilityIdentifier("notes-search")
                     .transition(PanelTopRowLayout.fieldTransition)
             } else {
-                PanelTopRowSearchButton(label: "Search notes (⌘F)", identifier: "notes-search-button") {
-                    showLibrary(focusSearch: true)
-                }
+                // On an open note the button finds in it; over All notes it
+                // searches the notes. Its tooltip names which.
+                PanelTopRowSearchButton(label: Self.searchButtonLabel(onNote: showsEditor), identifier: "notes-search-button",
+                                        shared: false) { searchOrFind() }
                     .transition(.opacity)
             }
         }
-        .animation(PanelTopRowLayout.searchAnimation(shown: shown, reduceMotion: design.reduceMotion), value: shown)
+        .animation(PanelTopRowLayout.searchAnimation(shown: shown || finding, reduceMotion: design.reduceMotion),
+                   value: shown || finding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// The top row's Search button's name (and tooltip) on each page.
+    static func searchButtonLabel(onNote: Bool) -> String {
+        onNote ? String(localized: "Find in note (⌘F)") : String(localized: "Search notes (⌘F)")
+    }
+
+    /// The Search button: Find on an open note, else the notes' search.
+    private func searchOrFind() {
+        if showsEditor, let find = controller.active?.engine.find {
+            find.inTopRow = true
+            find.show()
+        } else {
+            showLibrary(focusSearch: true)
+        }
+    }
+
+    /// All notes at Find's end, or ⇧⌘F: the query goes on to All notes'
+    /// search and Find ends.
+    private func searchAllNotes() {
+        if let find = controller.active?.engine.find, find.isShown {
+            let query = find.query
+            find.close(returnFocus: false)
+            if !query.isEmpty { library.query = query }
+        }
+        showLibrary(focusSearch: true)
     }
 
     /// Esc in the field: the search ends and the button returns.
@@ -625,7 +672,7 @@ struct NotesEditorPage: View {
             Button("") { Task { await controller.saveRecoveryCopy() } }
                 .keyboardShortcut(Self.saveRecoveryCopyShortcut)
                 .disabled(!showsEditor || !controller.canSaveRecoveryCopy(controller.active))
-            Button("") { showLibrary(focusSearch: true) }
+            Button("") { searchAllNotes() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
             // The bar's New note and All notes keys, wherever the page shows
             // (its buttons show on one side each).
