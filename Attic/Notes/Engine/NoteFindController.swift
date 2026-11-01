@@ -550,8 +550,9 @@ private struct NoteFindBar: View {
 /// step (the controller's keys), Escape or × end it.
 struct NoteFindTopRowField: View {
     @ObservedObject var find: NoteFindController
-    /// All notes at the field's end: the query goes on to the notes' search.
-    let onAllNotes: () -> Void
+    /// All notes at the field's end: the query goes on to the notes' search
+    /// (nil on a task's page, which lives in Tasks: no pill).
+    let onAllNotes: (() -> Void)?
 
     @Environment(\.atticDesign) private var design
 
@@ -611,6 +612,7 @@ struct NoteFindTopRowField: View {
             step("chevron.right", label: String(localized: "Next match"), identifier: "note-find-next") {
                 find.next()
             }
+            if let onAllNotes {
             Button(action: onAllNotes) {
                 Text("All notes")
                     .font(.system(size: Metrics.allNotesFont))
@@ -627,6 +629,7 @@ struct NoteFindTopRowField: View {
             .help(String(localized: "Search all notes (⇧⌘F)"))
             .accessibilityIdentifier("note-find-all-notes")
             .padding(.leading, Metrics.allNotesLeading)
+            }
         }
     }
 

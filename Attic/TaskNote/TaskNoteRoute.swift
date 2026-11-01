@@ -49,6 +49,8 @@ struct TaskNoteRouteHost<Origin: View>: View {
                                       onOpenInWindow: { openInWindow(taskID) }) {
                     Self.closeRoute(taskID, uiState: uiState, controller: noteDraft.pages)
                 }
+                // The page's own top row is this page's (its Find takes it, N4 B).
+                .environment(\.panelTopRowPage, page)
                 .id("\(taskID)-\(taskRouteGeneration)")
             }
         }

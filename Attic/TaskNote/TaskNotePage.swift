@@ -346,6 +346,12 @@ struct TaskNotePage: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
+    /// The shell's top row and the page it is on (N4 B, batch 3).
+    @Environment(\.panelTopRowState) private var topRowState
+    @Environment(\.panelTopRowPage) private var topRowPage
+    @State private var findOpen = false
+    /// Whether the row was already searching when Find took it.
+    @State private var rowSearchHeld: Bool?
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var damaged: NoteDamagedRecoveryExit
     @State private var confirming: Confirmation?
@@ -415,7 +421,20 @@ struct TaskNotePage: View {
             // Content shows under the floating controls, blurred (owner,
             // 2026-10-17): the Notes page's own variable blur.
             AtticEdgeBlurBackdrops(AtticFloatingEdges(top: layout.headerBottom, bottom: bottomControls))
-            if placement == .panel, !showsHistory { headerTitle }
+            if placement == .panel, !showsHistory {
+                // Find folds the riding title away (N4 B).
+                headerTitle
+                    .opacity(findOpen ? 0 : 1)
+                    .allowsHitTesting(!findOpen)
+                    .accessibilityHidden(findOpen)
+                    .animation(PanelTopRowLayout.searchAnimation(shown: findOpen, reduceMotion: design.reduceMotion), value: findOpen)
+            }
+            if findsInTopRow, !showsHistory {
+                let find = presenter.host.engine.find
+                NoteFindTopRowObserver(find: find, shown: $findOpen)
+                    .id(ObjectIdentifier(find))
+                if findOpen { findRow(find) }
+            }
             if !showsHistory {
                 bottomRow
                     .padding(.leading, layout.chromeInsets.leading)
@@ -433,6 +452,9 @@ struct TaskNotePage: View {
                     .accessibilityIdentifier("task-note-history")
             }
         }
+        .animation(PanelTopRowLayout.searchAnimation(shown: findOpen, reduceMotion: design.reduceMotion), value: findOpen)
+        .onChange(of: findOpen) { _, open in holdTopRow(open) }
+        .onDisappear { holdTopRow(false) }
         .onChange(of: design) { _, newValue in presenter.update(design: newValue) }
         .onChange(of: chrome.formatRow.isOpen) { _, open in
             chrome.controls?.isFormatBarOpen = open
@@ -482,6 +504,40 @@ struct TaskNotePage: View {
             Text(verbatim: confirmationMessage(kind))
         }
         .accessibilityElement(children: .contain)
+    }
+
+    // MARK: Find in the top row (N4 B, batch 3)
+
+    /// In the panel, Find takes the page's own top row, as on a note. A
+    /// page in its own window has no such row (its title bar is the
+    /// window's), so Find keeps its card there.
+    private var findsInTopRow: Bool { placement == .panel && topRowState != nil && topRowPage != nil }
+
+    /// The field, its count and ‹ › across the row (the shell's chrome
+    /// inset on both sides). No All notes pill: the page lives in Tasks.
+    private func findRow(_ find: NoteFindController) -> some View {
+        NoteFindTopRowField(find: find, onAllNotes: nil)
+            .frame(height: PanelTopRowLayout.control)
+            .padding(.top, layout.chromeInsets.top)
+            .padding(.leading, layout.chromeInsets.leading)
+            .padding(.trailing, layout.chromeInsets.trailing)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .transition(PanelTopRowLayout.fieldTransition)
+    }
+
+    /// The row's other controls fold with Find: the shell's pin (••• and
+    /// Search already give way while the page covers its origin) folds as
+    /// the top row's search does, and the drag lane keeps off the field.
+    /// Closing gives the row back as it was.
+    private func holdTopRow(_ open: Bool) {
+        guard let topRowState, let page = topRowPage else { return }
+        if open {
+            if rowSearchHeld == nil { rowSearchHeld = topRowState.isSearching(page) }
+            topRowState.setSearching(true, on: page)
+        } else if let held = rowSearchHeld {
+            rowSearchHeld = nil
+            topRowState.setSearching(held, on: page)
+        }
     }
 
     /// `p3-21` panel 3: the task's title rides in the header once the head
