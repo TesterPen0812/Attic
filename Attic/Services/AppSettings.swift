@@ -84,6 +84,7 @@ final class AppSettings: ObservableObject {
         static let nextEventInNow = "nextEventInNow"
         static let animations = "animations"
         static let hideAnimation = "panelHideAnimation"
+        static let islandSpot = "panelIslandSpot"
         static let hideSpeedLab = "motionLabHideSpeeds"
         static let motionLabTuning = "motionLabTuning"
         static let quickCaptureEnabled = "quickCaptureEnabled"
@@ -241,6 +242,13 @@ final class AppSettings: ObservableObject {
     /// How the panel hides and reveals (Settings › General › Behaviour).
     @Published var hideAnimation: PanelHideAnimation {
         didSet { defaults.set(hideAnimation.rawValue, forKey: Key.hideAnimation) }
+    }
+
+    /// Where the island sits around the docked panel (Settings › Panel;
+    /// Accepted 2026-11-01 "Island position"). Stored relative to the
+    /// corner, so moving the panel keeps it.
+    @Published var islandSpot: PanelIslandSpot {
+        didSet { defaults.set(islandSpot.rawValue, forKey: Key.islandSpot) }
     }
 
     /// The preview-only speed lab's hide and reveal durations. Under the
@@ -421,6 +429,7 @@ final class AppSettings: ObservableObject {
         AtticMotionTuning.current = tuning
         hideAnimation = defaults.string(forKey: Key.hideAnimation)
             .flatMap(PanelHideAnimation.init(storedValue:)) ?? .defaultValue
+        islandSpot = defaults.string(forKey: Key.islandSpot).flatMap(PanelIslandSpot.init(rawValue:)) ?? .defaultSpot
         // Genie Classic (dropped 2026-10-21) is stored as Genie from now on.
         if defaults.string(forKey: Key.hideAnimation) == "genie" {
             defaults.set(PanelHideAnimation.genieLiveGlass.rawValue, forKey: Key.hideAnimation)

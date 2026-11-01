@@ -59,6 +59,11 @@ struct PanelSettingsView: View {
                 }
             }
 
+            // Accepted 2026-11-01 "Island position: seven spots around the panel".
+            SettingsGroup(title: String(localized: "Island")) {
+                PanelIslandSpotRow(settings: settings)
+            }
+
             SettingsGroup(title: String(localized: "Timing")) {
                 AtticSliderRow(
                     label: String(localized: "Reveal delay"),
