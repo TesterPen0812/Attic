@@ -271,10 +271,23 @@ final class ComposerModel: ObservableObject {
         isCreating = true
         defer { isCreating = false }
         let generation = draftGeneration
-        let (made, unchanged) = await createEvent(openingPage: openingPage, generation: generation)
-        guard generation == draftGeneration, unchanged else { return made }
-        return finishCreation(made)
+        switch await createEvent(openingPage: openingPage, generation: generation) {
+        case .notSubmitted:
+            return false
+        case .failed:
+            // The submitted event did not save: the card says so even when
+            // the draft was edited while it was saving, and keeps that draft.
+            guard generation == draftGeneration else { return false }
+            return finishCreation(false)
+        case let .saved(current):
+            guard generation == draftGeneration, current else { return true }
+            return finishCreation(true)
+        }
     }
+
+    /// What became of an event submission. `saved(current: false)`: it
+    /// saved, but the card now holds a newer draft, which stays.
+    private enum EventSubmission { case notSubmitted, failed, saved(current: Bool) }
 
     /// Only Calendar needs to suspend. Native Return keeps its existing
     /// immediate task/note behavior and schedules an event's durable save.
@@ -329,15 +342,15 @@ final class ComposerModel: ObservableObject {
         return true
     }
 
-    private func createEvent(openingPage: Bool, generation: Int) async -> (made: Bool, unchanged: Bool) {
+    private func createEvent(openingPage: Bool, generation: Int) async -> EventSubmission {
         let input = tasks.addBar, inputWriting = writing, inputLength = eventLength
         let inputCalendar = calendarID
         if calendars.isEmpty { await loadCalendars() }
         guard generation == draftGeneration, tasks.addBar == input, writing == inputWriting,
-              eventLength == inputLength else { return (false, false) }
+              eventLength == inputLength else { return .notSubmitted }
         guard let writer = loadWriter(),
-              let calendar = calendars.first(where: { $0.id == inputCalendar }) ?? calendars.first else { return (false, true) }
-        guard calendarID == inputCalendar || calendarID == calendar.id else { return (false, false) }
+              let calendar = calendars.first(where: { $0.id == inputCalendar }) ?? calendars.first else { return .failed }
+        guard calendarID == inputCalendar || calendarID == calendar.id else { return .notSubmitted }
         // As for a task: a day typed last replaces the picked one, even with
         // its word still at the caret; a lone time keeps the picked day.
         var finished = tasks.addBar
@@ -347,17 +360,17 @@ final class ComposerModel: ObservableObject {
         let day = values.day ?? tasks.parser.today
         guard let draft = Self.eventDraft(title: values.title.isEmpty ? TaskDraftBuilder.collapsed(tasks.addBar.text) : values.title,
                                           day: day, time: values.time, length: eventLength,
-                                          calendarID: calendar.id, calendar: clock, notes: writing) else { return (false, true) }
+                                          calendarID: calendar.id, calendar: clock, notes: writing) else { return .failed }
         let submitted = tasks.addBar
         let submittedWriting = writing, submittedCalendar = calendarID, submittedLength = eventLength
         let made = try? await writer.create(draft)
         let unchanged = generation == draftGeneration && tasks.addBar == submitted
             && writing == submittedWriting && calendarID == submittedCalendar && eventLength == submittedLength
-        guard let made else { return (false, unchanged) }
-        guard unchanged else { return (true, false) }
+        guard let made else { return .failed }
+        guard unchanged else { return .saved(current: false) }
         calendarID = calendar.id
         if openingPage { services.openEvent(made) }
-        return (true, true)
+        return .saved(current: true)
     }
 
     /// A timed event lasts `length` minutes; one with no time is all day

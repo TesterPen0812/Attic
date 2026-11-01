@@ -131,6 +131,65 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(page.addBar.text, "New draft")
     }
 
+    /// A held write: the record's persist parks on the writer worker until
+    /// released, then fails (rolled back) or succeeds. Fakes only.
+    private func holdEventWrite(failing: Bool) throws -> (staged: XCTestExpectation, release: DispatchSemaphore) {
+        let staged = expectation(description: "event write held off main")
+        let release = DispatchSemaphore(value: 0)
+        var held = false // confined to the writer worker
+        let record = try CalendarOwnershipRecord(persist: { _ in
+            guard !held else { return }
+            held = true
+            staged.fulfill()
+            _ = release.wait(timeout: .now() + 10)
+            if failing { throw CocoaError(.fileWriteUnknown) }
+        })
+        let backend = events
+        let writer = BackgroundCalendarEventWriter(undoRoute: library.undo) {
+            CalendarEventTransactions(store: backend, record: record)
+        }
+        model.services.makeWriter = { writer }
+        return (staged, release)
+    }
+
+    func testAHeldEventWriteThatFailsAfterTheDraftChangesSaysSoAndKeepsTheEdit() async throws {
+        let (staged, release) = try holdEventWrite(failing: true)
+        defer { release.signal() }
+        model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
+        type("Submitted event")
+        let submission = Task { await self.model.create() }
+        await fulfillment(of: [staged], timeout: 3)
+        type("Edited event")
+        model.writing = "Edited notes"
+        release.signal()
+        await XCTAssertFalseAsync(await submission.value)
+        XCTAssertTrue(model.failed)
+        XCTAssertTrue(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "Edited event")
+        XCTAssertEqual(model.writing, "Edited notes")
+        XCTAssertTrue(events.events.isEmpty)
+    }
+
+    func testAHeldEventWriteThatSucceedsAfterTheDraftChangesShowsNoFailure() async throws {
+        let (staged, release) = try holdEventWrite(failing: false)
+        defer { release.signal() }
+        model.open(on: .calendar(selected: today))
+        await model.loadCalendars()
+        type("Submitted event")
+        let submission = Task { await self.model.create() }
+        await fulfillment(of: [staged], timeout: 3)
+        type("Edited event")
+        model.writing = "Edited notes"
+        release.signal()
+        await XCTAssertTrueAsync(await submission.value)
+        XCTAssertFalse(model.failed)
+        XCTAssertTrue(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "Edited event")
+        XCTAssertEqual(model.writing, "Edited notes")
+        XCTAssertEqual(events.events.values.map(\.draft.title), ["Submitted event"])
+    }
+
     func testTypingDuringCalendarLoadingCannotSubmitTheNewerDraft() async throws {
         let loading = expectation(description: "calendar load")
         let submitting = expectation(description: "submission entered")
