@@ -337,6 +337,10 @@ final class NotesPageController: ObservableObject {
     /// is decided, each with Undo and Redo.
     @Published private(set) var proposalDecisionState = NoteProposalDecisions()
     private var isFinishingProposalReview = false
+    /// A review action (a decision, Save as New Note) is running. The
+    /// controls read this wherever they are hosted (N5: the top card, or
+    /// the bottom row's status pill).
+    @Published private(set) var isProposalReviewBusy = false
     private var verifiedAvailability: [UUID: (revision: UInt64, digest: String, available: Bool)] = [:]
     private var verifyingAvailability = Set<UUID>()
     private var resolvedAttachmentRows: [UUID: (revision: UInt64, row: NoteAttachment?)] = [:]
@@ -1094,12 +1098,29 @@ final class NotesPageController: ObservableObject {
     // MARK: Per-change review (N5, Idea B)
 
     var proposalDecisions: [Int: Bool] { proposalDecisionState.accepted }
+    /// A per-change review is open inside the note: the bottom row's pill is
+    /// the review bar, and "+" (N7) folds away until it closes.
+    var isReviewingProposalInPlace: Bool { proposalReview?.changes != nil }
     var remainingProposalChanges: Int {
         guard let changes = proposalReview?.changes?.changes else { return 0 }
         return changes.filter { proposalDecisionState.accepted[$0.id] == nil }.count
     }
-    var canUndoProposalDecision: Bool { proposalReview?.changes != nil && !isFinishingProposalReview && proposalDecisionState.canUndo }
-    var canRedoProposalDecision: Bool { proposalReview?.changes != nil && !isFinishingProposalReview && proposalDecisionState.canRedo }
+    var canUndoProposalDecision: Bool {
+        proposalReview?.changes != nil && !isFinishingProposalReview && !isProposalReviewBusy && proposalDecisionState.canUndo
+    }
+    var canRedoProposalDecision: Bool {
+        proposalReview?.changes != nil && !isFinishingProposalReview && !isProposalReviewBusy && proposalDecisionState.canRedo
+    }
+
+    /// Runs one review action at a time for the review's controls.
+    func performProposalReviewAction(_ action: @escaping @MainActor () async -> Bool) {
+        guard !isProposalReviewBusy else { return }
+        isProposalReviewBusy = true
+        Task { @MainActor [weak self] in
+            _ = await action()
+            self?.isProposalReviewBusy = false
+        }
+    }
 
     @discardableResult
     func decideProposalChange(_ id: Int, accept: Bool) async -> Bool {
