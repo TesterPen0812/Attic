@@ -2731,8 +2731,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // Only public RTF needs the visible ordinal. Private fragments keep
         // implicit starts so copies and moves continue the destination's list.
         let rtfVisibleStart: Int?
-        if case let .number(marker) = listMarker(at: range.location) {
-            rtfVisibleStart = Int(marker.dropLast())
+        if paragraphStyle(at: range.location) == .number {
+            rtfVisibleStart = numberedOrdinal(at: lineRange(at: range.location).location, indent: indentAt(range.location) ?? 0)
         } else { rtfVisibleStart = nil }
         return writeSelection(selected, to: pasteboard, types: types, rtfVisibleStart: rtfVisibleStart)
     }
@@ -2781,7 +2781,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     let attrs = selected.attributes(at: position, effectiveRange: nil)
                     if let kind = attrs[.noteBlockStyle] as? String, ["number", "bullet"].contains(kind) {
                         let depth = min(2, max(0, attrs[.noteBlockIndent] as? Int ?? 0))
-                        let marker: NSTextList.MarkerFormat = kind == "number" ? .decimal : .disc
+                        let marker: NSTextList.MarkerFormat = kind == "number"
+                            ? (depth == 1 ? .init(rawValue: NSTextList.MarkerFormat.lowercaseLatin.rawValue + ".")
+                               : (depth == 2 ? .init(rawValue: NSTextList.MarkerFormat.lowercaseRoman.rawValue + ".") : .decimal)) : .disc
                         if lists.count > depth + 1 { lists = Array(lists.prefix(depth + 1)) }
                         while lists.count <= depth { lists.append(NSTextList(markerFormat: marker, options: 0)) }
                         if lists[depth].markerFormat != marker || attrs[.noteListStart] != nil {

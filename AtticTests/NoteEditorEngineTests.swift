@@ -80,6 +80,23 @@ final class NoteEditorEngineTests: XCTestCase {
         }
     }
 
+    func testB14RTFNestedNumberMarkersMatchTheEditor() throws {
+        var letter = NoteBlock.text("letter", style: "number"); letter.indent = 1
+        var roman = NoteBlock.text("roman", style: "number"); roman.indent = 2
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("outer", style: "number"), letter, roman]))
+        defer { engine.detachView() }
+        let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+        XCTAssertEqual(engine.listMarker(at: location(of: "letter", in: engine)), .letter("a."))
+        XCTAssertEqual(engine.listMarker(at: location(of: "roman", in: engine)), .roman("i."))
+        XCTAssertTrue(engine.writeSelection(NSRange(location: 2, length: engine.textStorage.length - 2), to: board, types: [.rtf]))
+        let copied = try XCTUnwrap(NSAttributedString(rtf: XCTUnwrap(board.data(forType: .rtf)), documentAttributes: nil))
+        for (word, marker) in [("outer", "1"), ("letter", "a."), ("roman", "i.")] {
+            let at = (copied.string as NSString).range(of: word).location
+            let list = try XCTUnwrap((copied.attribute(.paragraphStyle, at: at, effectiveRange: nil) as? NSParagraphStyle)?.textLists.last)
+            XCTAssertEqual(list.marker(forItemNumber: 1), marker)
+        }
+    }
+
     func testB02RichCopyPreservesNumberedListStartsAndRestarts() throws {
         var first = NoteBlock.text("first", style: "number"); first.start = 7
         var restart = NoteBlock.text("restart", style: "number"); restart.start = 12
