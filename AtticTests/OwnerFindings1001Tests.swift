@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -274,6 +275,66 @@ final class O14FirstClickKeyLookTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         XCTAssertTrue(uiState.isPanelPinned, "one click pins")
         XCTAssertTrue(uiState.isPanelKey, "and the panel shows as key after the release")
+    }
+
+    /// The same on the glass key look (Glass and Solid surfaces) and on the
+    /// island (2 Nov, "This keeps coming back"): one press on a panel that
+    /// isn't key acts, nothing that follows the key state redraws while
+    /// the button is down, and the key look follows the release.
+    func testOneClickOnThePinOrTheIslandActsWithEitherKeyLookAndTheLookFollowsTheRelease() throws {
+        try requireKeyWindowTests()
+        for surface in [PanelSurfaceStyle.glass, .solid] {
+            try FirstClickHarness.withController(self, surface: surface, reduceMotion: true) { harness in
+                let state = harness.state, panel = harness.panel
+                let island = harness.controller.islandWindowsForTesting
+                for target in ["pin", "island"] {
+                    let other = FirstClickHarness.otherKeyWindow()
+                    defer { other.orderOut(nil) }
+                    harness.spin(0.4)
+                    XCTAssertFalse(panel.isKeyWindow, "\(surface) \(target): the panel isn't key")
+                    XCTAssertFalse(state.isPanelKey)
+                    let window: NSWindow
+                    let screenPoint: CGPoint
+                    if target == "pin" {
+                        let frame = panel.visibleContentFrame
+                        let insets = PanelGeometry.chromeInsets(cornerSize: harness.settings.panelCornerSize, panelSize: frame.size)
+                        window = panel
+                        screenPoint = CGPoint(x: frame.minX + insets.leading + PanelHeaderLayout.pinSize.width / 2,
+                                              y: frame.maxY - insets.top - PanelHeaderLayout.height / 2)
+                    } else {
+                        let page: PanelPage = PanelPage(state.selectedSection) == .notes ? .calendar : .notes
+                        let item = PanelIslandLayout.itemFrame(try XCTUnwrap(PanelIslandLayout.pages.firstIndex(of: page)),
+                                                               in: island.islandFrame)
+                        window = island.island
+                        screenPoint = CGPoint(x: item.midX, y: item.midY)
+                    }
+                    let location = window.convertPoint(fromScreen: screenPoint)
+                    func send(_ type: NSEvent.EventType) throws {
+                        window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                            with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                            pressure: type == .leftMouseDown ? 1 : 0)))
+                    }
+                    let pinned = state.isPanelPinned, section = state.selectedSection
+                    var looks: [Bool] = []
+                    let watch = state.$isPanelKey.dropFirst().sink { looks.append($0) }
+                    try send(.leftMouseDown)
+                    harness.spin(0.1)
+                    XCTAssertEqual(looks, [], "\(surface) \(target): no key look redraws while the button is down")
+                    try send(.leftMouseUp)
+                    harness.spin(0.6)
+                    watch.cancel()
+                    if target == "pin" {
+                        XCTAssertNotEqual(state.isPanelPinned, pinned, "\(surface): one click on the pin acts")
+                        state.isPanelPinned = pinned
+                    } else {
+                        XCTAssertNotEqual(state.selectedSection, section, "\(surface): one click on the island switches")
+                    }
+                    XCTAssertTrue(panel.isKeyWindow, "\(surface) \(target): one click makes the panel active")
+                    XCTAssertTrue(state.isPanelKey, "\(surface) \(target): and it shows as key after the release")
+                }
+            }
+        }
     }
 }
 
