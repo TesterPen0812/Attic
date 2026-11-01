@@ -602,6 +602,7 @@ struct NoteFindTopRowField: View {
                     .fixedSize()
                     .padding(.leading, Metrics.countLeading)
                     .padding(.trailing, Metrics.countTrailing)
+                    .accessibilityLabel(Text(verbatim: count))
                     .accessibilityIdentifier("note-find-count")
             }
             step("chevron.left", label: String(localized: "Previous match"), identifier: "note-find-previous") {

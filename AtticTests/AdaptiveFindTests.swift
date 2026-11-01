@@ -56,6 +56,13 @@ final class AdaptiveFindTests: XCTestCase {
 
     private func descendants(of view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants(of:)) }
 
+    /// What VoiceOver reads for a text element.
+    private func spoken(_ identifier: String, in host: NSView) -> String? {
+        guard let element = element(identifier, in: host) else { return nil }
+        if let label = element.accessibilityLabel?(), !label.isEmpty { return label }
+        return element.accessibilityValue?() as? String
+    }
+
     /// The real panel on Notes with one note open whose body says "quote"
     /// three times.
     private func withNote(_ body: (_ host: AtticPanelHostingView, _ panel: NSPanel, _ draft: NoteDraftController,
@@ -143,7 +150,7 @@ final class AdaptiveFindTests: XCTestCase {
             }
             XCTAssertEqual(scroll.contentInsets.top, insetBefore, accuracy: 0.001, "nothing pushes the note down")
             XCTAssertEqual(engine.find.clearance, 0)
-            XCTAssertFalse(descendants(of: scroll).contains { $0 is NSHostingView<AnyView> },
+            XCTAssertFalse(descendants(of: scroll).contains { $0.accessibilityIdentifier() == NoteFindController.fieldIdentifier },
                            "the two-row card is gone")
 
             // Escape restores exactly what folded.
@@ -167,7 +174,8 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertEqual(engine.find.matches.count, 3, "the title is not searched; the body has three")
             XCTAssertEqual(engine.find.index, 0)
             let count = try XCTUnwrap(element("note-find-count", in: host), "the count")
-            XCTAssertEqual(count.accessibilityLabel?(), "1/3")
+            _ = count
+            XCTAssertEqual(spoken("note-find-count", in: host), "1/3")
             let countFrame = try XCTUnwrap(frame(of: "note-find-count", in: host))
             let next = try XCTUnwrap(frame(of: "note-find-next", in: host))
             let previous = try XCTUnwrap(frame(of: "note-find-previous", in: host))
@@ -188,7 +196,7 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertTrue(engine.find.handleKey(key(36, "\r", flags: .shift)), "⇧Return steps back")
             XCTAssertEqual(engine.find.index, 1)
             spin(0.2)
-            XCTAssertEqual(element("note-find-count", in: host)?.accessibilityLabel?(), "2/3")
+            XCTAssertEqual(spoken("note-find-count", in: host), "2/3")
             XCTAssertEqual(engine.textView?.selectedRange(), engine.find.matches[1].noteRange, "the match is selected")
 
             try press("note-find-next", in: host)
@@ -200,7 +208,7 @@ final class AdaptiveFindTests: XCTestCase {
 
             engine.find.query = "zebra"
             spin(0.2)
-            XCTAssertEqual(element("note-find-count", in: host)?.accessibilityLabel?(), "No matches")
+            XCTAssertEqual(spoken("note-find-count", in: host), "No matches")
             engine.find.close(returnFocus: false)
         }
     }
@@ -271,7 +279,7 @@ final class AdaptiveFindTests: XCTestCase {
             XCTAssertNotNil(element("notes-search", in: host), "the notes' search is open")
 
             // Over All notes, Search searches the notes.
-            library()?.clearSearch()
+            try press("search-close", in: host)
             spin(0.8)
             let offNote = try XCTUnwrap(element("notes-search-button", in: host))
             XCTAssertEqual(offNote.accessibilityLabel?(), "Search notes (⌘F)", "the tooltip names the notes' search")
