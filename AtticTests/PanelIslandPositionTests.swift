@@ -278,18 +278,14 @@ final class PanelIslandPositionTests: XCTestCase {
                         XCTAssertEqual(reported.y, unionCorner.y, accuracy: 0.01, "\(note): the anchor")
                         XCTAssertEqual(anchor, reported, note)
                         var hidden = false
-                        var checked: [Double] = []
                         _ = controller.requestHide { hidden = $0 == .hidden }
-                        let start = Date()
-                        while !hidden, Date().timeIntervalSince(start) < 3 {
-                            RunLoop.current.run(until: Date().addingTimeInterval(0.003))
-                            let p = controller.displayedProgressForProbe
-                            for fraction in [0.3, 0.7] where !checked.contains(fraction) && p >= fraction && p < 0.97 && !hidden {
-                                try assertMidFlight(controller, panel, mode: mode, corner: corner, spot: spot, anchor: anchor,
-                                                    "\(note) at \(p)")
-                                checked.append(fraction)
-                            }
+                        // Paused frames: a slow runner passed 0.7 between two
+                        // real-time samples (CI 41274121451).
+                        let checked = try samplePausedMotion(controller, container, mode: mode, hiding: true, note) { p in
+                            try assertMidFlight(controller, panel, mode: mode, corner: corner, spot: spot, anchor: anchor,
+                                                "\(note) at \(p)")
                         }
+                        spin(until: { hidden })
                         XCTAssertTrue(hidden, note)
                         XCTAssertEqual(checked.sorted(), [0.3, 0.7], "\(note): sampled")
                         XCTAssertTrue(controller.show(on: screen, corner: corner))
