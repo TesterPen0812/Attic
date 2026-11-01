@@ -1031,7 +1031,7 @@ private final class AtticGlassMenuRootView: NSView {
 }
 
 /// Its own window keeps this glass separate from the panel's container.
-private struct AtticGlassMenuSurface: View {
+struct AtticGlassMenuSurface: View {
     let style: AtticGlassMenuStyle
 
     var body: some View {
