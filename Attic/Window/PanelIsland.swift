@@ -130,60 +130,131 @@ enum PanelIslandLayout {
         corner == .topRight || corner == .topLeft
     }
 
-    /// The part of a work area the panel itself may use: the island's strip
-    /// comes off the docked corner's side, so a panel placed `screenInset`
-    /// inside it sits `panelSideInset` from that edge.
+    /// Whether the island sits right of the panel at `spot`.
+    static func isRightOfPanel(corner: ScreenCorner, spot: PanelIslandSpot) -> Bool {
+        spot.side == .open ? !isOnRight(corner) : isOnRight(corner)
+    }
+
+    /// The part of a work area the panel itself may use, so the island
+    /// always fits beside it on screen, 8 pt from the edge at the least.
+    /// - Screen side: the island's strip comes off the docked corner's side,
+    ///   so a panel placed `screenInset` inside it sits `panelSideInset`
+    ///   (43 pt) from that edge (Accepted "Tall island", "Placement").
+    /// - Anywhere else the panel's side edge is the usual 12 pt in
+    ///   (Accepted "Island position", "Spacing"), and the strip comes off
+    ///   the far side or the open end instead, which only limits how large
+    ///   the panel may grow.
     static func panelArea(in visibleFrame: CGRect, corner: ScreenCorner,
                           spot: PanelIslandSpot = .defaultSpot,
                           screenInset: CGFloat = PanelGeometry.screenInset) -> CGRect {
-        let trim = min(max(0, panelSideInset - screenInset), max(0, visibleFrame.width))
+        let strip = max(0, panelSideInset - screenInset)
         var area = visibleFrame
-        area.size.width -= trim
-        if !isOnRight(corner) { area.origin.x += trim }
+        switch spot.side {
+        case .screen, .open:
+            let trim = min(strip, max(0, visibleFrame.width))
+            area.size.width -= trim
+            // The strip's side: the corner's for the screen side, else the other.
+            if isOnRight(corner) != (spot.side == .screen) { area.origin.x += trim }
+        case .across:
+            let trim = min(strip, max(0, visibleFrame.height))
+            area.size.height -= trim
+            // The open end: the bottom in a top corner, the top in a bottom one.
+            if isTop(corner) { area.origin.y += trim }
+        }
         return area
     }
 
-    /// The island's capsule in screen points, beside `panelFrame` (the
-    /// panel's visible surface) on `corner`'s side.
-    static func islandFrame(panelFrame: CGRect, corner: ScreenCorner,
-                            spot: PanelIslandSpot = .defaultSpot) -> CGRect {
-        let height = height()
-        let x = isOnRight(corner) ? panelFrame.maxX + panelGap : panelFrame.minX - panelGap - width
-        let y = isTop(corner) ? panelFrame.maxY - height : panelFrame.minY
-        return CGRect(x: x, y: y, width: width, height: height)
+    /// The capsule's size: 27 × 99 standing, 99 × 27 lying flat.
+    static func size(spot: PanelIslandSpot) -> CGSize {
+        spot.isFlat ? CGSize(width: height(), height: width) : CGSize(width: width, height: height())
     }
 
-    /// The gap between the panel and the island, at the island's height:
+    /// The island's capsule in screen points at `spot` around `panelFrame`
+    /// (the panel's visible surface) docked in `corner`: 8 pt from the
+    /// panel; along a side at its corner end, middle or far end, or flat
+    /// and centred across its open end.
+    static func islandFrame(panelFrame: CGRect, corner: ScreenCorner,
+                            spot: PanelIslandSpot = .defaultSpot) -> CGRect {
+        let size = size(spot: spot)
+        let top = isTop(corner)
+        if spot.isFlat {
+            let y = top ? panelFrame.minY - panelGap - size.height : panelFrame.maxY + panelGap
+            let x = wholePoint(panelFrame.midX - size.width / 2, towardMax: isOnRight(corner))
+            return CGRect(x: x, y: y, width: size.width, height: size.height)
+        }
+        let x = isRightOfPanel(corner: corner, spot: spot) ? panelFrame.maxX + panelGap : panelFrame.minX - panelGap - size.width
+        let atTop = panelFrame.maxY - size.height, atBottom = panelFrame.minY
+        let y: CGFloat = switch spot.position {
+        case .cornerEnd: top ? atTop : atBottom
+        case .middle: wholePoint(panelFrame.midY - size.height / 2, towardMax: top)
+        case .farEnd: top ? atBottom : atTop
+        }
+        return CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    /// A centred spot on whole points, so its window lands exactly where it
+    /// is placed, rounded toward the screen corner so the spots still mirror
+    /// exactly from corner to corner.
+    private static func wholePoint(_ value: CGFloat, towardMax: Bool) -> CGFloat {
+        value.rounded(towardMax ? .up : .down)
+    }
+
+    /// The gap between the panel and the island, as long as the island:
     /// crossing it from the panel to the island stays on the panel.
     static func gapFrame(panelFrame: CGRect, corner: ScreenCorner,
                          spot: PanelIslandSpot = .defaultSpot) -> CGRect {
-        let island = islandFrame(panelFrame: panelFrame, corner: corner)
-        let x = isOnRight(corner) ? panelFrame.maxX : island.maxX
+        let island = islandFrame(panelFrame: panelFrame, corner: corner, spot: spot)
+        if spot.isFlat {
+            let y = isTop(corner) ? island.maxY : panelFrame.maxY
+            return CGRect(x: island.minX, y: y, width: island.width, height: panelGap)
+        }
+        let x = isRightOfPanel(corner: corner, spot: spot) ? panelFrame.maxX : island.maxX
         return CGRect(x: x, y: island.minY, width: panelGap, height: island.height)
     }
 
-    /// An item's square in screen points (items run top to bottom).
+    /// An item's square in screen points: top to bottom, or left to right
+    /// in a flat island (wider than tall), in the pages' order.
     static func itemFrame(_ index: Int, in island: CGRect) -> CGRect {
-        CGRect(x: island.minX + inset, y: island.maxY - inset - CGFloat(index + 1) * item - CGFloat(index) * gap,
-               width: item, height: item)
+        let step = CGFloat(index) * (item + gap)
+        if island.width > island.height {
+            return CGRect(x: island.minX + inset + step, y: island.minY + inset, width: item, height: item)
+        }
+        return CGRect(x: island.minX + inset, y: island.maxY - inset - item - step, width: item, height: item)
     }
 
-    /// The side of the island its label shows on: the panel's.
+    /// The side of the island its label shows on: the panel's (Accepted
+    /// "Island position": "The name label shows on the panel's side").
     static func labelSide(corner: ScreenCorner, spot: PanelIslandSpot = .defaultSpot) -> PanelIslandLabelSide {
-        isOnRight(corner) ? .left : .right
+        if spot.isFlat { return isTop(corner) ? .above : .below }
+        return isRightOfPanel(corner: corner, spot: spot) ? .left : .right
     }
 
-    /// The label window: the island's height, beside it on the panel's side.
+    /// The label window, on the panel's side: beside a standing island and
+    /// as tall as it, or over the panel above or below a flat one, wide
+    /// enough for a name centred on either end item.
     static func labelWindowFrame(island: CGRect, corner: ScreenCorner,
                                  spot: PanelIslandSpot = .defaultSpot) -> CGRect {
-        let x = isOnRight(corner) ? island.minX - labelGap - labelRoom : island.maxX + labelGap
-        return CGRect(x: x, y: island.minY, width: labelRoom, height: island.height)
+        switch labelSide(corner: corner, spot: spot) {
+        case .left: return CGRect(x: island.minX - labelGap - labelRoom, y: island.minY, width: labelRoom, height: island.height)
+        case .right: return CGRect(x: island.maxX + labelGap, y: island.minY, width: labelRoom, height: island.height)
+        case .above, .below:
+            let width = island.width + labelRoom
+            let y = labelSide(corner: corner, spot: spot) == .above ? island.maxY + labelGap : island.minY - labelGap - labelHeight
+            return CGRect(x: island.midX - width / 2, y: y, width: width, height: labelHeight)
+        }
     }
 
     /// How the island's stand-in keeps its place on the surface as the
     /// panel resizes (the motion layer is not flipped).
     static func standInResizing(corner: ScreenCorner, spot: PanelIslandSpot = .defaultSpot) -> NSView.AutoresizingMask {
-        [isOnRight(corner) ? .minXMargin : .maxXMargin, isTop(corner) ? .minYMargin : .maxYMargin]
+        let top = isTop(corner)
+        if spot.isFlat { return [.minXMargin, .maxXMargin, top ? .maxYMargin : .minYMargin] }
+        let x: NSView.AutoresizingMask = isRightOfPanel(corner: corner, spot: spot) ? .minXMargin : .maxXMargin
+        switch spot.position {
+        case .middle: return [x, .minYMargin, .maxYMargin]
+        case .cornerEnd: return [x, top ? .minYMargin : .maxYMargin]
+        case .farEnd: return [x, top ? .maxYMargin : .minYMargin]
+        }
     }
 
     /// The point the panel and the island hide into and grow back out of:
@@ -191,7 +262,8 @@ enum PanelIslandLayout {
     /// "Island position", "Hiding and showing as one shape still holds").
     static func collapseAnchor(panelFrame: CGRect, corner: ScreenCorner,
                                spot: PanelIslandSpot = .defaultSpot) -> CGPoint {
-        PanelCollapseGeometry.cornerPoint(of: islandFrame(panelFrame: panelFrame, corner: corner), corner: corner)
+        let union = panelFrame.union(islandFrame(panelFrame: panelFrame, corner: corner, spot: spot))
+        return PanelCollapseGeometry.cornerPoint(of: union, corner: corner)
     }
 }
 
@@ -286,7 +358,11 @@ struct PanelIslandView: View {
     var body: some View {
         let radius = AtticRadius.header
         let chipRadius = AtticRadius.nested(outer: radius, gap: L.inset) ?? radius
-        VStack(spacing: L.gap) {
+        // Lying flat (the across spot), the same items in a row, in the same
+        // order reading left to right (Accepted "Island position").
+        let stack = model.isFlat ? AnyLayout(HStackLayout(spacing: L.gap)) : AnyLayout(VStackLayout(spacing: L.gap))
+        let size = model.isFlat ? CGSize(width: L.height(), height: L.width) : CGSize(width: L.width, height: L.height())
+        stack {
             ForEach(L.pages) { page in
                 if isStandIn {
                     face(page, chipRadius: chipRadius)
@@ -296,7 +372,7 @@ struct PanelIslandView: View {
             }
         }
         .padding(L.inset)
-        .frame(width: L.width, height: L.height())
+        .frame(width: size.width, height: size.height)
         // The surface sits behind the items rather than wrapping them, so
         // the glass does not tint the icons and chip (the owner's recording
         // of build 1: the island read faint), as the top-line tabs do.
@@ -399,33 +475,55 @@ struct PanelIslandLabels: View {
     private typealias L = PanelIslandLayout
 
     var body: some View {
-        let alignment: Alignment = model.labelOnLeft ? .trailing : .leading
-        let towardIsland: CGFloat = model.labelOnLeft ? L.labelSlide : -L.labelSlide
-        VStack(spacing: L.gap) {
-            ForEach(L.pages) { page in
-                let shown = model.pointed == page
-                Text(page.title)
-                    .font(.system(size: L.labelFontSize, weight: .medium))
-                    .foregroundStyle(design.tokens.ink(.heading).color)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .padding(.horizontal, L.labelPadding)
-                    .frame(height: L.labelHeight)
-                    .modifier(PanelIslandSurface(flat: design.effectiveControls != .liquidGlass,
-                                                 cornerRadius: L.labelHeight / 2))
-                    .opacity(shown ? 1 : 0)
-                    .offset(x: shown ? 0 : towardIsland)
-                    .animation(shown || L.labelFadesOut(pointed: model.pointed)
-                               ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown) : nil,
-                               value: shown)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
-                    .frame(height: L.item)
-                    .accessibilityHidden(true)
+        Group {
+            if model.isFlat {
+                // Over the panel, each name centred over its item.
+                HStack(spacing: L.gap) {
+                    ForEach(L.pages) { page in
+                        label(page).frame(width: L.item, height: L.labelHeight)
+                    }
+                }
+                .frame(width: L.height() + L.labelRoom, height: L.labelHeight)
+            } else {
+                let alignment: Alignment = model.labelSide == .left ? .trailing : .leading
+                VStack(spacing: L.gap) {
+                    ForEach(L.pages) { page in
+                        label(page)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+                            .frame(height: L.item)
+                    }
+                }
+                .padding(.vertical, L.inset)
+                .frame(width: L.labelRoom, height: L.height())
             }
         }
-        .padding(.vertical, L.inset)
-        .frame(width: L.labelRoom, height: L.height())
         .allowsHitTesting(false)
+    }
+
+    /// A page's name: it slides in 4 pt from the island's side.
+    private func label(_ page: PanelPage) -> some View {
+        let shown = model.pointed == page
+        let towardIsland: CGSize = switch model.labelSide {
+        case .left: CGSize(width: L.labelSlide, height: 0)
+        case .right: CGSize(width: -L.labelSlide, height: 0)
+        case .above: CGSize(width: 0, height: L.labelSlide)
+        case .below: CGSize(width: 0, height: -L.labelSlide)
+        }
+        return Text(page.title)
+            .font(.system(size: L.labelFontSize, weight: .medium))
+            .foregroundStyle(design.tokens.ink(.heading).color)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, L.labelPadding)
+            .frame(height: L.labelHeight)
+            .modifier(PanelIslandSurface(flat: design.effectiveControls != .liquidGlass,
+                                         cornerRadius: L.labelHeight / 2))
+            .opacity(shown ? 1 : 0)
+            .offset(shown ? .zero : towardIsland)
+            .animation(shown || L.labelFadesOut(pointed: model.pointed)
+                       ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown) : nil,
+                       value: shown)
+            .accessibilityHidden(true)
     }
 }
 

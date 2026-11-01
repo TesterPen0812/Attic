@@ -58,13 +58,14 @@ final class PanelIslandPositionTests: XCTestCase {
         case .open:
             eq(right ? panel.minX - island.maxX : island.minX - panel.maxX, 8, "8 pt from the panel, on its open side")
         case .across:
-            eq(island.midX, panel.midX, "centred")
+            XCTAssertEqual(island.midX, panel.midX, accuracy: 0.5, "\(what): centred, on whole points", file: file, line: line)
+            XCTAssertEqual(island.minX, island.minX.rounded(), "\(what)", file: file, line: line)
             if top { eq(panel.minY - island.maxY, 8, "8 pt below the panel") } else { eq(island.minY - panel.maxY, 8, "8 pt above") }
         }
         if !spot.isFlat {
             switch spot.position {
             case .cornerEnd: top ? eq(island.maxY, panel.maxY, "at the top") : eq(island.minY, panel.minY, "at the bottom")
-            case .middle: eq(island.midY, panel.midY, "at the middle")
+            case .middle: XCTAssertEqual(island.midY, panel.midY, accuracy: 0.5, "\(what): at the middle", file: file, line: line)
             case .farEnd: top ? eq(island.minY, panel.minY, "at the bottom") : eq(island.maxY, panel.maxY, "at the top")
             }
         }
@@ -109,6 +110,12 @@ final class PanelIslandPositionTests: XCTestCase {
             eq(label.midX, island.midX, "the labels over their items")
             XCTAssertTrue(label.intersects(panel), "\(what): over the panel", file: file, line: line)
         }
+        // At the largest size the area allows, the island still fits on screen.
+        let area = L.panelArea(in: visible, corner: corner, spot: spot)
+        let largest = PanelGeometry.workAreaPlacement(preferredSize: CGSize(width: 9999, height: 9999), in: area, corner: corner).frame
+        let farthest = L.islandFrame(panelFrame: largest, corner: corner, spot: spot)
+        XCTAssertTrue(visible.insetBy(dx: 7.99, dy: 7.99).contains(farthest),
+                      "\(what): the largest panel keeps the island 8 pt on screen (\(farthest) in \(visible))", file: file, line: line)
         // They hide into the corner of the two together nearest the screen corner.
         let anchor = L.collapseAnchor(panelFrame: panel, corner: corner, spot: spot)
         let union = panel.union(island)
