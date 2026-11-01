@@ -20,13 +20,22 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
     let owner: WorkspaceOwner
     let replicas: [Replica]
 
+    /// Old Canvas rows go through the counted funnel. While Draw has
+    /// Canvas's place they are never read, and a refused read can't stand
+    /// for absence either.
+    @MainActor private static func canvasRows<M: PersistentModel>(_ context: ModelContext, _ descriptor: FetchDescriptor<M>) throws -> [M] {
+        let rows = try context.fetchCanvasReplicas(descriptor)
+        if AtticLegacyCanvas.isDormant(context) { throw WorkspaceFoundationError.unknown }
+        return rows
+    }
+
     @MainActor static func read(_ owner: WorkspaceOwner, in context: ModelContext) throws -> Self {
         let id = owner.id
         switch owner.entity {
-        case .board: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })))
-        case .stroke: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { $0.id == id })))
-        case .image: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasImageItem>(predicate: #Predicate { $0.id == id })))
-        case .semantic: return try capture(owner, rows: context.fetch(FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { $0.id == id })))
+        case .board: return try capture(owner, rows: canvasRows(context, FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })))
+        case .stroke: return try capture(owner, rows: canvasRows(context, FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { $0.id == id })))
+        case .image: return try capture(owner, rows: canvasRows(context, FetchDescriptor<CanvasImageItem>(predicate: #Predicate { $0.id == id })))
+        case .semantic: return try capture(owner, rows: canvasRows(context, FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { $0.id == id })))
         case .tagColour: return try capture(owner, rows: context.fetch(FetchDescriptor<TagColour>(predicate: #Predicate { $0.id == id })))
         case .task: return try capture(owner, rows: context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })))
         case .note: return try capture(owner, rows: context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })))
@@ -68,10 +77,10 @@ struct WorkspaceModelToken: Codable, Equatable, Sendable {
             case .preservation: try collect(context.fetch(FetchDescriptor<TaskDeletionPreservation>(predicate: #Predicate { ids.contains($0.id) })))
             case .receipt: try collect(context.fetch(FetchDescriptor<OperationReceipt>(predicate: #Predicate { ids.contains($0.id) })))
             case .migration: try collect(context.fetch(FetchDescriptor<TaskAttachmentMigrationRecord>(predicate: #Predicate { ids.contains($0.id) })))
-            case .board: try collect(context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { ids.contains($0.id) })))
-            case .stroke: try collect(context.fetch(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { ids.contains($0.id) })))
-            case .image: try collect(context.fetch(FetchDescriptor<CanvasImageItem>(predicate: #Predicate { ids.contains($0.id) })))
-            case .semantic: try collect(context.fetch(FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .board: try collect(canvasRows(context, FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .stroke: try collect(canvasRows(context, FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .image: try collect(canvasRows(context, FetchDescriptor<CanvasImageItem>(predicate: #Predicate { ids.contains($0.id) })))
+            case .semantic: try collect(canvasRows(context, FetchDescriptor<CanvasSemanticObjectItem>(predicate: #Predicate { ids.contains($0.id) })))
             }
         }
         return result

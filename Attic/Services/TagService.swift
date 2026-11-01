@@ -317,7 +317,7 @@ final class TagService {
             }
             // While Draw has Canvas's place the old boards are left unread.
             let boards: [CanvasBoardItem] = try AtticLegacyCanvas.isDormant(context) ? []
-                : context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" }))
+                : context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" }))
             for board in boards {
                 if let updated = apply(board.tagsRaw, board.persistentModelID) {
                     WorkspaceLegacyBridge.prepareMutation(board, in: context)
@@ -355,7 +355,8 @@ final class TagService {
         }
         func fetch<T: PersistentModel>(_ descriptor: FetchDescriptor<T>) throws -> [T] {
             inventoryFetchCount += 1
-            return try context.fetch(descriptor)
+            // Old Canvas rows go through the counted, gated funnel.
+            return T.self == CanvasBoardItem.self ? try context.fetchCanvasReplicas(descriptor) : try context.fetch(descriptor)
         }
         func record(_ ref: AtticItemRef, _ raw: String, _ created: Date) {
             let tags = Set(AtticTag.decode(raw))

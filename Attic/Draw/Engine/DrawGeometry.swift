@@ -130,6 +130,14 @@ enum DrawText {
         }
     }
 
+    /// A box's size when its layout (at `fontSize`, wrapped at `wrap` drawn
+    /// size) is drawn `scale` times larger: the same lines, scaled.
+    static func size(of text: String, fontSize: CGFloat, width wrap: CGFloat?, scale: CGFloat) -> CGSize {
+        guard scale != 1, scale > 0 else { return size(of: text, fontSize: fontSize, width: wrap) }
+        let laid = size(of: text, fontSize: fontSize, width: wrap.map { $0 / scale })
+        return CGSize(width: laid.width * scale, height: laid.height * scale)
+    }
+
     static func size(of text: String, fontSize: CGFloat, width wrap: CGFloat? = nil) -> CGSize {
         let all = lines(text, size: fontSize, width: wrap)
         let height = CGFloat(all.count) * fontSize * lineHeight

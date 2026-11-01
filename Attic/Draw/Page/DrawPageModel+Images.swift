@@ -38,6 +38,11 @@ private enum DrawImageSource: Sendable {
     case data(Data)
     case file(URL)
 
+    /// The file names, for tests that hold one import back.
+    var names: [String] {
+        if case .file(let url) = self { [url.lastPathComponent] } else { [] }
+    }
+
     nonisolated func load() -> DrawImageImport? {
         switch self {
         case .data(let data): DrawImageImport.inspect(data)
@@ -47,6 +52,11 @@ private enum DrawImageSource: Sendable {
 }
 
 extension DrawPageModel {
+    #if DEBUG
+    /// Tests only: runs before an import's files are read, with their names.
+    nonisolated(unsafe) static var importLoadHook: (@Sendable ([String]) async -> Void)?
+    #endif
+
     /// Image data the board takes from a drop or a paste.
     static let imagePasteboardTypes: [NSPasteboard.PasteboardType] = [
         .png, .tiff,
@@ -91,22 +101,31 @@ extension DrawPageModel {
         }
         guard !sources.isEmpty else { return nil }
         let point = screen ?? CGPoint(x: clearRect.midX, y: clearRect.midY)
-        let centre = viewport.world(point)
+        // The view as it was at the drop: the images land there, on that
+        // canvas, even if another one is open by the time they're read.
+        let drop = DrawImageDrop(canvas: canvasID, centre: viewport.world(point),
+                                 room: CGSize(width: clearRect.width * 0.8 / viewport.zoom, height: clearRect.height * 0.8 / viewport.zoom),
+                                 step: 12 / viewport.zoom)
+        let token = UUID()
         let task = Task { @MainActor [weak self] in
+            #if DEBUG
+            await Self.importLoadHook?(sources.flatMap(\.names))
+            #endif
             let imports = await Task.detached(priority: .userInitiated) { sources.compactMap { $0.load() } }.value
-            self?.place(imports, around: centre, on: canvasID)
+            self?.place(imports, at: drop)
+            self?.importFinished(token)
         }
-        pendingImport = task
+        importStarted(token, task)
         return task
     }
 
     /// Natural size, scaled down to fit comfortably in the view, aspect
-    /// kept, centred on the point; several cascade. One Undo step.
-    private func place(_ imports: [DrawImageImport], around centre: CGPoint, on id: UUID) {
-        guard !imports.isEmpty, canvasID == id else { return }
-        let room = CGSize(width: clearRect.width * 0.8 / viewport.zoom, height: clearRect.height * 0.8 / viewport.zoom)
-        let step = 12 / viewport.zoom
-        var z = topZ
+    /// kept, centred on the point; several cascade. One Undo step, on the
+    /// canvas the images were dropped on.
+    private func place(_ imports: [DrawImageImport], at drop: DrawImageDrop) {
+        guard !imports.isEmpty else { return }
+        let room = drop.room, step = drop.step, centre = drop.centre
+        var z = drop.canvas == canvasID ? topZ : (try? store.open(drop.canvas).objects.map(\.zIndex).max()) ?? 0
         let placed = imports.enumerated().map { index, item -> DrawObject in
             let size = item.naturalSize
             let scale = min(1, room.width / max(size.width, 0.001), room.height / max(size.height, 0.001))
@@ -117,8 +136,30 @@ extension DrawPageModel {
                                                width: width, height: height),
                               zIndex: z, content: .image(item.image))
         }
-        perform(.put(placed))
+        perform(.put(placed), on: drop.canvas)
     }
+}
+
+/// Where an import lands: its canvas and that canvas's view at the drop.
+private struct DrawImageDrop: Sendable {
+    var canvas: UUID
+    var centre: CGPoint
+    var room: CGSize
+    var step: CGFloat
+}
+
+/// How Save Image and Export… touch the disk (tests make a step fail).
+struct DrawFileWriter: Sendable {
+    /// Writes the new file's bytes.
+    var write: @Sendable (_ data: Data, _ url: URL) throws -> Void = { try $0.write(to: $1) }
+    /// Swaps the staged file in for the destination in one step, keeping
+    /// the old file under the backup name next to it.
+    var replace: @Sendable (_ destination: URL, _ staged: URL, _ backupName: String) throws -> Void = { destination, staged, backup in
+        _ = try FileManager.default.replaceItemAt(destination, withItemAt: staged, backupItemName: backup,
+                                                  options: [.withoutDeletingBackupItem])
+    }
+    /// Moves a file to the Trash (never deletes it).
+    var trash: @Sendable (_ url: URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
 }
 
 /// Save Image, Copy as Image and Export…: files and pasteboards for the
@@ -128,6 +169,8 @@ final class DrawImageActions: DrawImageSeam {
     weak var model: DrawPageModel?
     /// Where a save goes: the save panel, or a test's folder.
     var chooseDestination: @MainActor (_ name: String, _ types: [UTType]) -> URL? = DrawImageActions.savePanel
+    /// The disk steps of a save.
+    var files = DrawFileWriter()
     #if DEBUG
     /// Tests only: the appearance exports and thumbnails render in.
     nonisolated(unsafe) static var darkOverride: Bool?
@@ -171,19 +214,45 @@ final class DrawImageActions: DrawImageSeam {
         let type = UTType(image.contentType) ?? .png
         let name = canvasName + "." + (type.preferredFilenameExtension ?? "png")
         guard let url = chooseDestination(name, [type]) else { return }
-        let bytes = image.original
-        lastTask = Task.detached(priority: .userInitiated) { Self.write(bytes, to: url) }
+        let bytes = image.original, files = files
+        lastTask = Task { @MainActor [weak self] in
+            let failure = await Task.detached(priority: .userInitiated) { Self.write(bytes, to: url, files: files) }.value
+            if let failure { self?.model?.report(failure) }
+        }
     }
 
-    /// The selection's ⋯ → Copy as Image: a PNG at 2× on the board colour;
-    /// one image also puts its original data on the pasteboard.
+    /// The selection's ⋯ → Copy as Image: a PNG at 2× on the board colour.
+    /// One image is the image itself: one pasteboard item with its original
+    /// bytes in their own type, plus a PNG of it when it isn't one (for apps
+    /// that only read PNG), and no board behind it.
     func copyAsImage(_ objects: [DrawObject]) {
         guard !objects.isEmpty else { return }
-        var original: (Data, NSPasteboard.PasteboardType)?
         if objects.count == 1, case .image(let image) = objects[0].content {
-            original = (image.original, NSPasteboard.PasteboardType(image.contentType))
+            return copyOriginal(image)
         }
-        copy(objects, original: original)
+        copy(objects)
+    }
+
+    private func copyOriginal(_ image: DrawImage) {
+        let original = image.original, type = NSPasteboard.PasteboardType(image.contentType)
+        lastTask = Task { @MainActor [weak self] in
+            let png = type == .png ? nil : await Task.detached(priority: .userInitiated) { Self.png(of: original) }.value
+            guard let pasteboard = self?.model?.pasteboard else { return }
+            pasteboard.clearContents()
+            let item = NSPasteboardItem()
+            item.setData(original, forType: type)
+            if let png { item.setData(png, forType: .png) }
+            pasteboard.writeObjects([item])
+        }
+    }
+
+    /// A PNG of the image's own pixels (orientation and colour kept).
+    nonisolated private static func png(of data: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImageFromSource(destination, source, 0, nil)
+        return CGImageDestinationFinalize(destination) ? output as Data : nil
     }
 
     // MARK: Canvas menu
@@ -193,10 +262,15 @@ final class DrawImageActions: DrawImageSeam {
         let content = objects(of: id)
         guard !content.isEmpty, let url = chooseDestination(name(of: id), [.png, .pdf]) else { return }
         let format: DrawExportFormat = url.pathExtension.lowercased() == "pdf" ? .pdf : .png
-        let dark = Self.isDark
-        lastTask = Task.detached(priority: .userInitiated) {
-            guard let data = DrawExport.render(content, format: format, dark: dark) else { return }
-            Self.write(data, to: url)
+        let dark = Self.isDark, files = files
+        lastTask = Task { @MainActor [weak self] in
+            let failure = await Task.detached(priority: .userInitiated) { () -> String? in
+                guard let data = DrawExport.render(content, format: format, dark: dark) else {
+                    return Self.failure(url, String(localized: "The canvas couldn’t be drawn."))
+                }
+                return Self.write(data, to: url, files: files)
+            }.value
+            if let failure { self?.model?.report(failure) }
         }
     }
 
@@ -204,27 +278,73 @@ final class DrawImageActions: DrawImageSeam {
     func copyCanvas(_ id: UUID) {
         let content = objects(of: id)
         guard !content.isEmpty else { return }
-        copy(content, original: nil)
+        copy(content)
     }
 
-    private func copy(_ objects: [DrawObject], original: (Data, NSPasteboard.PasteboardType)?) {
+    private func copy(_ objects: [DrawObject]) {
         let dark = Self.isDark
         lastTask = Task { @MainActor [weak self] in
             let png = await Task.detached(priority: .userInitiated) { DrawExport.render(objects, format: .png, dark: dark) }.value
             guard let png, let pasteboard = self?.model?.pasteboard else { return }
             pasteboard.clearContents()
             pasteboard.setData(png, forType: .png)
-            if let original, original.1 != .png { pasteboard.setData(original.0, forType: original.1) }
         }
     }
 
     // MARK: Files
 
-    /// A file already there goes to the Trash first (never deleted).
-    nonisolated private static func write(_ data: Data, to url: URL) {
-        let files = FileManager.default
-        if files.fileExists(atPath: url.path) { try? files.trashItem(at: url, resultingItemURL: nil) }
-        try? data.write(to: url)
+    /// The new file is written in full to a staging folder on the same
+    /// volume, then swapped in for the destination in one step. Until then
+    /// the file already there is untouched; once the new one is in place
+    /// the old one goes to the Trash (never deleted). Nil, or what went
+    /// wrong for the notice.
+    nonisolated private static func write(_ data: Data, to url: URL, files: DrawFileWriter) -> String? {
+        let manager = FileManager.default
+        let staging: URL
+        do {
+            staging = try manager.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true)
+        } catch { return failure(url, error.localizedDescription) }
+        // The staging folder goes only once it is empty: the old file is
+        // never removed with it.
+        defer {
+            if (try? manager.contentsOfDirectory(atPath: staging.path))?.isEmpty == true { try? manager.removeItem(at: staging) }
+        }
+        let staged = staging.appendingPathComponent(url.lastPathComponent)
+        do {
+            try files.write(data, staged)
+        } catch {
+            try? manager.removeItem(at: staged) // our own partial file, never the user's
+            return failure(url, error.localizedDescription)
+        }
+        guard manager.fileExists(atPath: url.path) else {
+            do { try manager.moveItem(at: staged, to: url) } catch {
+                try? manager.removeItem(at: staged)
+                return failure(url, error.localizedDescription)
+            }
+            return nil
+        }
+        let backupName = ".\(UUID().uuidString)-\(url.lastPathComponent)"
+        do {
+            try files.replace(url, staged, backupName)
+        } catch {
+            try? manager.removeItem(at: staged)
+            return failure(url, error.localizedDescription)
+        }
+        // The old file, under its own name, to the Trash. If that fails it
+        // stays next to the new one (hidden), never deleted.
+        let backup = url.deletingLastPathComponent().appendingPathComponent(backupName)
+        guard manager.fileExists(atPath: backup.path) else { return nil }
+        let named = staging.appendingPathComponent(url.lastPathComponent)
+        if (try? manager.moveItem(at: backup, to: named)) != nil {
+            if (try? files.trash(named)) == nil { try? manager.moveItem(at: named, to: backup) }
+        } else {
+            try? files.trash(backup)
+        }
+        return nil
+    }
+
+    nonisolated private static func failure(_ url: URL, _ reason: String) -> String {
+        String(localized: "“\(url.lastPathComponent)” couldn’t be saved: \(reason)")
     }
 
     /// The standard save panel, with a format choice when there are several.

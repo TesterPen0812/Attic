@@ -193,10 +193,18 @@ final class DrawSwiftDataRepository: DrawRepository {
                     result.kept += 1
                     continue
                 }
-                let payloads = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate: #Predicate { $0.canvasID == id }))
-                let objectPayloads = objectIDs.isEmpty ? [] : try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
-                    #Predicate { $0.role == "object" && objectIDs.contains($0.id) }))
-                doom(boards); doom(replicas); doom(payloads); doom(objectPayloads)
+                // Every physical replica of each payload too, wherever its
+                // parent says it lives: all of them must agree, or all stay.
+                let owned = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate: #Predicate { $0.canvasID == id }))
+                let payloadIDs = Array(Set(owned.map(\.id)).union(objectIDs))
+                let payloads = payloadIDs.isEmpty ? [] : try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
+                    #Predicate { payloadIDs.contains($0.id) }))
+                let canvasPayloads = payloads.filter { $0.role == "thumbnail" ? $0.id == id : objectIDs.contains($0.id) || $0.canvasID == id }
+                guard Self.agree(canvasPayloads, parent: id) else {
+                    result.kept += 1
+                    continue
+                }
+                doom(boards); doom(replicas); doom(canvasPayloads)
                 result.removedCanvases.insert(id)
             }
             for (objectID, target) in images {
@@ -209,6 +217,10 @@ final class DrawSwiftDataRepository: DrawRepository {
                 }
                 let payloads = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
                     #Predicate { $0.id == objectID && $0.role == "object" }))
+                guard Self.agree(payloads, parent: target.canvas) else {
+                    result.kept += 1
+                    continue
+                }
                 doom(rows); doom(payloads)
                 result.removedImages.insert(objectID)
             }
@@ -235,6 +247,16 @@ final class DrawSwiftDataRepository: DrawRepository {
              row.textIndex, row.payloadDigest].joined(separator: "\u{1F}")
         }
         return Set(values).count <= 1
+    }
+
+    /// Each payload's replicas (same role and id) share their parent,
+    /// format, digest and exact bytes.
+    private static func agree(_ payloads: [DrawPayloadRecord], parent: UUID) -> Bool {
+        guard payloads.allSatisfy({ $0.canvasID == parent }) else { return false }
+        return Dictionary(grouping: payloads) { "\($0.role)/\($0.id.uuidString)" }.values.allSatisfy { group in
+            guard let first = group.first else { return true }
+            return group.allSatisfy { $0.formatVersion == first.formatVersion && $0.digest == first.digest && $0.bytes == first.bytes }
+        }
     }
 
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome {

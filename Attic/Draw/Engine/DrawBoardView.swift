@@ -315,8 +315,8 @@ final class DrawBoardView: NSView, DrawBoardSink {
     private func updateEditorFrame() {
         guard let editor, let edit = model.editing else { return }
         let viewport = model.viewport
-        let fontSize = CGFloat(edit.style.size.textSize)
-        let size = DrawText.size(of: edit.text, fontSize: fontSize, width: edit.width)
+        let fontSize = edit.pointSize
+        let size = DrawText.size(of: edit.text, fontSize: CGFloat(edit.style.size.textSize), width: edit.width, scale: edit.scale)
         let origin = viewport.screen(edit.origin)
         let frame = CGRect(x: origin.x, y: origin.y, width: (size.width + (edit.width == nil ? fontSize : 0)) * viewport.zoom,
                            height: max(size.height, fontSize * DrawText.lineHeight) * viewport.zoom)
@@ -602,7 +602,7 @@ final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
     }
 
     func apply(_ edit: DrawTextEdit, zoom: CGFloat, palette: DrawPalette, replacingText: Bool) {
-        let fontSize = CGFloat(edit.style.size.textSize) * zoom
+        let fontSize = edit.pointSize * zoom
         let paragraph = NSMutableParagraphStyle()
         paragraph.minimumLineHeight = fontSize * DrawText.lineHeight
         paragraph.maximumLineHeight = fontSize * DrawText.lineHeight

@@ -13,7 +13,9 @@ class DrawStore: DrawStoreProtocol {
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var states: [UUID: State] = [:]
     @ObservationIgnored private var histories: [UUID: History] = [:]
-    @ObservationIgnored private var pending: [UUID: Pending] = [:]
+    /// Per canvas, the edits not yet saved, oldest first. Only the first
+    /// has been tried; the rest wait behind it and are already on show.
+    @ObservationIgnored private var pending: [UUID: [Pending]] = [:]
 
     private struct State {
         var canvas: DrawCanvas
@@ -37,6 +39,9 @@ class DrawStore: DrawStoreProtocol {
     private struct History { var undo: [Step] = []; var redo: [Step] = [] }
     private enum Action { case edit, undo, redo }
     private struct Pending { var step: Step; var action: Action }
+    /// How the first unsaved edit is settled: written again (Retry),
+    /// reconciled with what the store holds, or whichever its outcome asks.
+    private enum Head { case write, reconcile, auto }
 
     init(repository: any DrawRepository, now: @escaping () -> Date = Date.init) {
         self.repository = repository
@@ -134,10 +139,16 @@ class DrawStore: DrawStoreProtocol {
 
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
         if case .thumbnail(let bytes) = command { return writeThumbnail(bytes, on: id) }
-        guard pending[id] == nil else { return pendingEdits[id]!.outcome }
         do {
             guard let step = try prepare(command, on: id) else { return .unchanged }
-            return execute(step, action: .edit)
+            guard pending[id] != nil else { return execute(step, action: .edit) }
+            // An earlier edit isn't saved yet: this one shows at once and
+            // waits behind it (never lost), then everything is tried again.
+            let queued = stamped(step)
+            show(queued)
+            pending[id]?.append(Pending(step: queued, action: .edit))
+            publishPending(id, outcome: pendingEdits[id]?.outcome ?? .retry(""))
+            return flush(id, head: .auto)
         } catch { return .held("Could not prepare the edit: \(error)") }
     }
 
@@ -187,16 +198,16 @@ class DrawStore: DrawStoreProtocol {
     }
 
     func retry(on id: UUID) -> DrawSaveResult {
-        guard let edit = pending[id] else { return .unchanged }
+        guard pending[id] != nil else { return .unchanged }
         guard case .retry = pendingEdits[id]?.outcome else {
             return .held("The stored state needs reconciliation before Retry.")
         }
-        return execute(edit.step, action: edit.action)
+        return flush(id, head: .write)
     }
 
     func reconcile(on id: UUID) -> DrawSaveResult {
-        guard let edit = pending[id] else { return .unchanged }
-        return settle(repository.reconcile(edit.step.change), step: edit.step, action: edit.action)
+        guard pending[id] != nil else { return .unchanged }
+        return flush(id, head: .reconcile)
     }
 
     func canUndo(on id: UUID) -> Bool {
@@ -297,50 +308,117 @@ class DrawStore: DrawStoreProtocol {
         }
     }
 
-    private func execute(_ step: Step, action: Action) -> DrawSaveResult {
-        // History holds canvas metadata from when each step was made; the
-        // thumbnail is whatever was rendered last, never an older one.
+    /// History holds canvas metadata from when each step was made; the
+    /// thumbnail is whatever was rendered last, never an older one.
+    private func stamped(_ step: Step) -> Step {
         var step = step
         let thumbnail = states[step.change.canvasID]?.canvas.thumbnail
         step.before.thumbnail = thumbnail
         step.after.thumbnail = thumbnail
         if step.change.before != nil { step.change.before?.thumbnail = thumbnail }
         if step.change.after != nil { step.change.after?.thumbnail = thumbnail }
-        let outcome: DrawWriteOutcome = step.change.before == nil && step.change.after == nil
-            ? .committed : repository.write(step.change)
-        return settle(outcome, step: step, action: action)
+        return step
     }
-    private func settle(_ outcome: DrawWriteOutcome, step: Step, action: Action) -> DrawSaveResult {
+    private func write(_ step: Step) -> DrawWriteOutcome {
+        step.change.before == nil && step.change.after == nil ? .committed : repository.write(step.change)
+    }
+    /// The visible after-draft, saved or not.
+    private func show(_ step: Step) {
         let id = step.change.canvasID
         states[id]?.canvas = step.after
         states[id]?.persisted = step.afterPersisted
         for objectID in step.change.objectIDs { states[id]?.objects[objectID] = step.change.objectsAfter[objectID] }
+    }
+
+    private func execute(_ step: Step, action: Action) -> DrawSaveResult {
+        let step = stamped(step)
+        let outcome = write(step)
+        show(step)
         switch outcome {
-        case .committed:
-            pending[id] = nil
-            pendingEdits[id] = nil
-            switch action {
-            case .edit: histories[id, default: History()].undo.append(step); histories[id]?.redo = []
-            case .undo:
-                if let original = histories[id]?.undo.popLast() { histories[id, default: History()].redo.append(original) }
-            case .redo:
-                _ = histories[id]?.redo.popLast()
-                histories[id, default: History()].undo.append(step)
-            }
-            revision &+= 1
-            let delta = DrawDelta(canvas: step.after,
-                                  upserted: step.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
-                                  removedIDs: step.change.objectIDs.filter { step.change.objectsAfter[$0]?.deletedAt != nil || step.change.objectsAfter[$0] == nil }.sorted { $0.uuidString < $1.uuidString },
-                                  revision: revision)
-            lastDelta = delta
-            return .saved(delta)
-        case .retry(let message): return retain(.retry(message), step: step, action: action)
-        case .held(let message): return retain(.held(message), step: step, action: action)
+        case .committed: return .saved(commit(step, action: action))
+        case .retry(let message):
+            pending[step.change.canvasID] = [Pending(step: step, action: action)]
+            return publishPending(step.change.canvasID, outcome: .retry(message))
+        case .held(let message):
+            pending[step.change.canvasID] = [Pending(step: step, action: action)]
+            return publishPending(step.change.canvasID, outcome: .held(message))
         }
     }
-    private func retain(_ outcome: DrawSaveResult, step: Step, action: Action) -> DrawSaveResult {
-        pending[step.change.canvasID] = Pending(step: step, action: action)
-        pendingEdits[step.change.canvasID] = DrawPendingEdit(canvas: step.after, objects: states[step.change.canvasID]?.snapshot.objects ?? [], outcome: outcome)
+
+    /// Saves the canvas's unsaved edits in the order they were made,
+    /// stopping at the first that still can't be saved (it and everything
+    /// behind it stay, on show, for Retry or the next edit).
+    private func flush(_ id: UUID, head: Head) -> DrawSaveResult {
+        var saved: [DrawDelta] = []
+        var first = true
+        while var edit = pending[id]?.first {
+            var outcome: DrawWriteOutcome
+            let reconcileFirst: Bool
+            switch head {
+            case .reconcile: reconcileFirst = first
+            case .write: reconcileFirst = false
+            case .auto: if first, case .held = pendingEdits[id]?.outcome { reconcileFirst = true } else { reconcileFirst = false }
+            }
+            if reconcileFirst {
+                // A held save is read back, never overwritten.
+                outcome = repository.reconcile(edit.step.change)
+            } else {
+                edit.step = stamped(edit.step)
+                pending[id]?[0] = edit
+                outcome = write(edit.step)
+            }
+            first = false
+            switch outcome {
+            case .committed:
+                pending[id]?.removeFirst()
+                if pending[id]?.isEmpty == true {
+                    pending[id] = nil
+                    pendingEdits[id] = nil
+                }
+                saved.append(commit(edit.step, action: edit.action))
+            case .retry(let message):
+                return publishPending(id, outcome: .retry(message))
+            case .held(let message):
+                return publishPending(id, outcome: .held(message))
+            }
+        }
+        guard let last = saved.last else { return .unchanged }
+        guard saved.count > 1 else { return .saved(last) }
+        // Several saved at once: one delta covering them, the latest winning.
+        var upserted: [UUID: DrawObject] = [:], removed = Set<UUID>()
+        for delta in saved {
+            for object in delta.upserted { upserted[object.id] = object; removed.remove(object.id) }
+            for objectID in delta.removedIDs { upserted[objectID] = nil; removed.insert(objectID) }
+        }
+        return .saved(DrawDelta(canvas: last.canvas, upserted: upserted.values.sorted(by: Self.objectOrder),
+                                removedIDs: removed.sorted { $0.uuidString < $1.uuidString }, revision: last.revision))
+    }
+
+    /// A confirmed save: history moves on once and one delta is published.
+    private func commit(_ step: Step, action: Action) -> DrawDelta {
+        let id = step.change.canvasID
+        switch action {
+        case .edit: histories[id, default: History()].undo.append(step); histories[id]?.redo = []
+        case .undo:
+            if let original = histories[id]?.undo.popLast() { histories[id, default: History()].redo.append(original) }
+        case .redo:
+            _ = histories[id]?.redo.popLast()
+            histories[id, default: History()].undo.append(step)
+        }
+        revision &+= 1
+        let delta = DrawDelta(canvas: step.after,
+                              upserted: step.change.objectsAfter.values.filter { $0.deletedAt == nil }.sorted(by: Self.objectOrder),
+                              removedIDs: step.change.objectIDs.filter { step.change.objectsAfter[$0]?.deletedAt != nil || step.change.objectsAfter[$0] == nil }.sorted { $0.uuidString < $1.uuidString },
+                              revision: revision)
+        lastDelta = delta
+        return delta
+    }
+
+    @discardableResult
+    private func publishPending(_ id: UUID, outcome: DrawSaveResult) -> DrawSaveResult {
+        guard let edits = pending[id], let last = edits.last else { return outcome }
+        pendingEdits[id] = DrawPendingEdit(canvas: last.step.after, objects: states[id]?.snapshot.objects ?? [],
+                                           outcome: outcome, count: edits.count)
         return outcome
     }
     private static func name(_ value: String?) -> String {
