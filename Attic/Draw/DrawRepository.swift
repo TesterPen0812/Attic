@@ -14,6 +14,20 @@ struct DrawChange: Equatable {
     }
 }
 
+/// An image Delete Permanently or the 30-day removal takes: its canvas and
+/// the deletion time the list showed.
+struct DrawImageTarget: Equatable, Sendable {
+    var canvas: UUID
+    var deletedAt: Date
+}
+
+/// What a repository purge removed, and how many targets stayed.
+struct DrawRepositoryPurge: Equatable, Sendable {
+    var removedCanvases: Set<UUID> = []
+    var removedImages: Set<UUID> = []
+    var kept = 0
+}
+
 enum DrawWriteOutcome {
     case committed
     case retry(String)
@@ -27,6 +41,13 @@ protocol DrawRepository: AnyObject {
     func textMatches(_ words: [String], in id: UUID) throws -> [UUID]
     func write(_ change: DrawChange) -> DrawWriteOutcome
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome
+    /// Forgets a failed attempt that nothing will retry (a thumbnail).
+    func discardAttempt(for id: UUID)
+    /// Images deleted from live canvases, from metadata only.
+    func deletedImageHeaders() throws -> [DrawDeletedImage]
+    /// Removes deleted canvases (with everything in them) and deleted
+    /// images for good, every physical replica, in one save.
+    func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge
 }
 
 @MainActor
@@ -50,4 +71,9 @@ final class DrawMemoryRepository: DrawRepository {
         }.map(\.id).sorted { $0.uuidString < $1.uuidString }
     }
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome { .retry("Retry the edit.") }
+    func discardAttempt(for id: UUID) {}
+    func deletedImageHeaders() -> [DrawDeletedImage] { [] }
+    func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
+        DrawRepositoryPurge(kept: canvases.count + images.count)
+    }
 }

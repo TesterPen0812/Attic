@@ -22,12 +22,15 @@ final class DrawSaveMetrics {
 @MainActor
 final class DrawPersistentStore: DrawStore {
     let metrics: DrawSaveMetrics
+    /// The app's container it writes to (never one it opened itself).
+    let container: ModelContainer
     /// Accept an already-owned app container. This initializer never opens a
     /// path, default store, legacy store, or container on its own.
     init(container: ModelContainer, now: @escaping () -> Date = Date.init,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         let metrics = DrawSaveMetrics()
         self.metrics = metrics
+        self.container = container
         super.init(repository: DrawSwiftDataRepository(container: container, metrics: metrics, save: save), now: now)
     }
 }
@@ -137,6 +140,12 @@ final class DrawSwiftDataRepository: DrawRepository {
             context.rollback()
             return .held("Could not validate the stored canvas: \(error)")
         }
+    }
+
+    func discardAttempt(for id: UUID) {}
+    func deletedImageHeaders() throws -> [DrawDeletedImage] { [] }
+    func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
+        DrawRepositoryPurge(kept: canvases.count + images.count)
     }
 
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome {

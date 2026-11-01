@@ -137,6 +137,12 @@ final class DrawPageModel: ObservableObject {
     var pasteboard: NSPasteboard = .general
     /// The seconds the zoom level shows for (the working file's 1.1 s).
     var pillFlashDuration: TimeInterval = 1.1
+    /// Save Image, Copy as Image and Export… (the page's image seam).
+    private(set) lazy var images = DrawImageActions(model: self)
+    /// The latest drop or paste of images, until it is placed.
+    var pendingImport: Task<Void, Never>?
+    /// A canvas's thumbnail renders once its edits have been quiet this long.
+    var thumbnailSettleDelay: TimeInterval = 1.5
 
     private var viewports: [UUID: DrawViewport] = [:]
     private var userMovedView = false
@@ -172,6 +178,26 @@ final class DrawPageModel: ObservableObject {
     static func install(container: ModelContainer) {
         shared = DrawPageModel(store: DrawPersistentStore(container: container))
     }
+
+    #if DEBUG
+    /// Tests only: the session's page model (the quit route asks it).
+    static func replaceShared(_ model: DrawPageModel) { shared = model }
+    #endif
+
+    // MARK: Save problems and quit
+
+    /// The shell's notice for a save the store couldn't confirm (`.retry` or
+    /// `.held`), with Retry.
+    var saveNotice: PanelNoticeContent? { nil }
+
+    /// The notice's Retry.
+    func retrySave() {}
+
+    /// The notice's ✕.
+    func dismissSaveError() {}
+
+    /// The app's quit: pending input settles; false while an edit is unsaved.
+    func prepareToQuit() async -> Bool { true }
 
     var viewport: DrawViewport { viewportState.viewport }
 

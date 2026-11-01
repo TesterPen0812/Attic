@@ -76,11 +76,16 @@ enum CanvasSaveOutcome: Equatable {
 enum CanvasReplicaFetchCounter {
     static private(set) var fetches = 0
     static private(set) var rows = 0
+    /// Reads refused because the container's old rows are dormant (Draw on).
+    static private(set) var blocked = 0
 
     static func reset() {
         fetches = 0
         rows = 0
+        blocked = 0
     }
+
+    static func noteBlocked() { blocked &+= 1 }
 
     static func note(rows count: Int) {
         fetches &+= 1

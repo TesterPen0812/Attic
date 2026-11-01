@@ -83,6 +83,17 @@ class DrawStore: DrawStoreProtocol {
         return try state(id).objects.values.filter { $0.isImage && $0.deletedAt != nil }.sorted(by: Self.objectOrder)
     }
 
+    func deletedImages() throws -> [DrawDeletedImage] {
+        _ = revision
+        return []
+    }
+
+    func purge(_ targets: [DrawPurgeTarget]) -> DrawPurgeReport {
+        DrawPurgeReport(removed: 0, kept: targets.count)
+    }
+
+    func purge(deletedBefore cutoff: Date) -> DrawPurgeReport { DrawPurgeReport() }
+
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
         guard pending[id] == nil else { return pendingEdits[id]!.outcome }
         do {

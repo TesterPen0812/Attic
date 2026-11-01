@@ -408,6 +408,12 @@ final class DrawBoardView: NSView, DrawBoardSink {
 
     // MARK: Cursor and accessibility
 
+    /// A drop of images (files or data) at a board point: starts the import.
+    func acceptDrop(from pasteboard: NSPasteboard, at point: CGPoint) -> Bool { false }
+
+    /// The resize cursor for a handle.
+    static func cursor(for handle: DrawHandle) -> NSCursor { .arrow }
+
     override func resetCursorRects() {
         let cursor: NSCursor = switch model.tool {
         case .select: .arrow

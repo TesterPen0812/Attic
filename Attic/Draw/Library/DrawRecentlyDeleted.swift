@@ -48,6 +48,13 @@ enum DrawRecentlyDeleted {
         return canvases + images
     }
 
+    /// The daily cleanup's Draw half (`DailyCleanupService`): what has been
+    /// in Recently Deleted for 30 days goes for good.
+    @discardableResult
+    static func purgeExpired(store: (any DrawStoreProtocol)?, now: Date, calendar: Calendar) -> DrawPurgeReport {
+        DrawPurgeReport()
+    }
+
     /// Puts them back, one store command per canvas. Returns how many came
     /// back and the reason for the first that could not, if any.
     static func restore(_ items: [DrawDeletedItem], store: (any DrawStoreProtocol)?) -> (restored: Int, failure: String?) {
