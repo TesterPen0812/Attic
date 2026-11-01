@@ -7,7 +7,8 @@ import SwiftUI
 enum DrawLibraryMetrics {
     /// The menus' wide width (224 pt; the drawing's card is 210 pt).
     static let width: CGFloat = AtticMenuMetrics.wideWidth
-    /// The list scrolls past this (the drawing's 640 px).
+    /// The list scrolls past this unless the page gives the room it has
+    /// (the drawing's 640 px).
     static let maxListHeight: CGFloat = 320
     /// The leading column: the canvas thumbnail (44 × 33 px), the "+" and
     /// the commands' icons share it.
@@ -33,11 +34,14 @@ enum DrawLibraryMetrics {
 /// own); keys come through the model.
 struct DrawLibraryMenu: View {
     @ObservedObject var model: DrawLibraryMenuModel
+    /// The list's tallest, before it scrolls: the room under the capsule.
+    var maxListHeight: CGFloat = DrawLibraryMetrics.maxListHeight
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
 
-    init(model: DrawLibraryMenuModel) {
+    init(model: DrawLibraryMenuModel, maxListHeight: CGFloat = DrawLibraryMetrics.maxListHeight) {
         self.model = model
+        self.maxListHeight = maxListHeight
     }
 
     var body: some View {
@@ -45,7 +49,7 @@ struct DrawLibraryMenu: View {
             switch model.mode {
             case .list:
                 DrawLibraryCard(width: DrawLibraryMetrics.width) {
-                    DrawLibraryRows(model: model, rows: model.rows)
+                    DrawLibraryRows(model: model, rows: model.rows, maxHeight: maxListHeight)
                 }
                 .accessibilityLabel(String(localized: "Canvases"))
             case .tags:
@@ -79,31 +83,50 @@ struct DrawLibraryCard<Content: View>: View {
     }
 }
 
-/// The rows, scrolling past `maxListHeight`.
+/// The rows, scrolling past `maxListHeight`; the highlighted row stays in
+/// view as ↑ ↓ move it.
 struct DrawLibraryRows: View {
-    @ObservedObject var model: DrawLibraryMenuModel
     let rows: [DrawLibraryMenuModel.Row]
+    let litID: String?
+    var scrollTarget: String?
+    var maxHeight: CGFloat = DrawLibraryMetrics.maxListHeight
+    let hover: (DrawLibraryMenuModel.Row, Bool) -> Void
+    let choose: (DrawLibraryMenuModel.Row) -> Void
+
+    init(rows: [DrawLibraryMenuModel.Row], litID: String?, scrollTarget: String? = nil,
+         maxHeight: CGFloat = DrawLibraryMetrics.maxListHeight,
+         hover: @escaping (DrawLibraryMenuModel.Row, Bool) -> Void, choose: @escaping (DrawLibraryMenuModel.Row) -> Void) {
+        self.rows = rows
+        self.litID = litID
+        self.scrollTarget = scrollTarget
+        self.maxHeight = maxHeight
+        self.hover = hover
+        self.choose = choose
+    }
+
+    init(model: DrawLibraryMenuModel, rows: [DrawLibraryMenuModel.Row], maxHeight: CGFloat) {
+        self.init(rows: rows, litID: model.litRowID(in: rows), scrollTarget: model.highlightedID, maxHeight: maxHeight,
+                  hover: { model.hover($0, inside: $1) }, choose: { model.choose($0) })
+    }
 
     var body: some View {
-        let lit = model.litRowID(in: rows)
         let height = DrawLibraryMetrics.listHeight(rows)
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
                     ForEach(rows) { row in
                         if row.startsSection { AtticDropdownRule() }
-                        DrawLibraryRowView(row: row, isLit: row.id == lit,
-                                           onHover: { inside in model.hover(inside ? row : nil) }) {
-                            model.choose(row)
+                        DrawLibraryRowView(row: row, isLit: row.id == litID,
+                                           onHover: { inside in hover(row, inside) }) {
+                            choose(row)
                         }
                         .id(row.id)
                     }
                 }
             }
-            .scrollDisabled(height <= DrawLibraryMetrics.maxListHeight)
-            .scrollIndicators(.automatic)
-            .frame(height: min(height, DrawLibraryMetrics.maxListHeight))
-            .onChange(of: model.highlightedID) { _, id in
+            .scrollDisabled(height <= maxHeight)
+            .frame(height: min(height, maxHeight))
+            .onChange(of: scrollTarget) { _, id in
                 if let id { proxy.scrollTo(id) }
             }
         }

@@ -203,10 +203,14 @@ final class DrawLibraryMenuModel: ObservableObject {
         }
     }
 
-    /// The pointer over a row moves the one highlight.
-    func hover(_ row: Row?) {
-        let id = row.flatMap { $0.isEnabled ? $0.id : nil }
-        if highlightedID != id { highlightedID = id }
+    /// The pointer over a row moves the one highlight; leaving the lit row
+    /// clears it.
+    func hover(_ row: Row, inside: Bool) {
+        if inside, row.isEnabled {
+            if highlightedID != row.id { highlightedID = row.id }
+        } else if highlightedID == row.id {
+            highlightedID = nil
+        }
     }
 
     // MARK: Choosing
