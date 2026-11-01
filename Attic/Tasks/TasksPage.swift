@@ -205,6 +205,9 @@ struct TasksPage: View {
         // on the pager, so the lists still run under the controls.
         .clipped()
 
+        // Where a row dragged into another day would land (Adaptive picks),
+        // under the lifted card.
+        .overlay { TasksDayDropLine(drop: pointer.dayDrop) }
         // A reorder's lifted card, over everything on the page.
         // (A preview's `ATTIC_UI_TEST_LIFT=off` leaves the layer out: an A/B
         // switch.)
@@ -480,8 +483,12 @@ struct TasksPage: View {
         .onChange(of: design.reduceMotion, initial: true) { _, reduced in swipe.reduced = reduced }
         .onChange(of: drag != nil, initial: true) { _, dragging in
             swipe.dragActive = dragging
-            // However the drag ended (a page change, a hide), the card goes.
-            if !dragging { pointer.liftedCard.end() }
+            // However the drag ended (a page change, a hide), the card goes,
+            // and with it a cross-day target and the drop days.
+            if !dragging {
+                pointer.liftedCard.end()
+                endDayDrop()
+            }
         }
         .onChange(of: pagerBand, initial: true) { _, band in swipe.band = band }
         .onChange(of: focusedRow) { _, focus in
@@ -1469,9 +1476,19 @@ struct TasksPage: View {
                         let turning = turn?.matches(tab, dateGroup.key) ?? false
                         let folded = Self.shownFolded(turning ? turn : nil, folded: model.folded(on: tab).contains(dateGroup.key))
                         if dateGroup.showsHeader {
-                            TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
-                                             overdue: dateGroup.isOverdue) {
-                                toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                            // A row dragged into this day marks its header
+                            // (Adaptive picks), read in the header's own body.
+                            TasksDayDropHeader(drop: pointer.dayDrop, key: dateGroup.key) { targeted in
+                                TasksGroupHeader(title: dateGroup.title, count: dateGroup.ids.count, folded: folded,
+                                                 overdue: dateGroup.isOverdue, isDropTarget: targeted) {
+                                    toggleGroup(dateGroup.key, on: tab, animation: design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26))
+                                }
+                            }
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer, tab, key = dateGroup.key] frame in
+                                if tab == .now { pointer.headerFrames[key] = frame }
+                            }
+                            .onDisappear { [pointer, tab, key = dateGroup.key] in
+                                if tab == .now { pointer.headerFrames[key] = nil }
                             }
                             .id("group:" + dateGroup.key)
                             .accessibilityIdentifier("tasks-group-\(dateGroup.key)")
@@ -1628,11 +1645,14 @@ struct TasksPage: View {
                 beginDragSession(in: tab)
                 if let origin = pointer.frames[TasksRowID(tab: tab, id: id)] {
                     pointer.liftedCard.begin(id: id, tab: tab, origin: origin)
+                    pointer.dayDrop.setLineX((origin.minX + TasksDesignMetrics.textX)...(origin.maxX - TasksDesignMetrics.rowPaddingX))
                 }
+                beginDayDrop(in: tab, reorders: reorders)
             },
             onMove: { [pointer] translation in pointer.liftedCard.follow(translation) },
             onEnd: finishDrag,
-            onPushPastGroup: { if reorders { showBoundaryHint() } }
+            onPushPastGroup: { if reorders { showBoundaryHint() } },
+            crossDay: { location in updateDayDrop(for: id, in: tab, at: location, reorders: reorders) }
         ) { live in
             let isSelected = model.selection.contains(id)
             let run = selectionRun(for: id, in: tab)
@@ -2785,7 +2805,10 @@ struct TasksPage: View {
         var next = current
         next.scrolled += moved
         let total = dragSession.translation + next.scrolled
-        next.targetIndex = TasksReorderCell<EmptyView, EmptyView>.target(
+        // The list moved under the pointer: it may be over another day now.
+        let crossing = updateDayDrop(for: current.id, in: tab, at: location,
+                                     reorders: Self.reorders(tab: tab, manual: model.reorders(on: tab)))
+        next.targetIndex = crossing ? current.startIndex : TasksReorderCell<EmptyView, EmptyView>.target(
             start: current.startIndex, translation: total, group: current.group, heights: { rowHeight($0, in: tab) }, geometry: dragSession.geometry
         )
         drag = next
@@ -2883,6 +2906,8 @@ struct TasksPage: View {
     private func cancelDrag(returning: Bool = false) {
         guard let current = drag else { return }
         if returning, current.landing { return }
+        // The row goes back to its own day: no target, no drop days.
+        endDayDrop()
         dragSession.cancel()
         dragSession.timer?.invalidate()
         dragSession.timer = nil
@@ -2931,13 +2956,21 @@ struct TasksPage: View {
         // The keyboard comes to the moved row, so ⌘Z (and Esc) reach the
         // list right after a drop.
         setFocus(finished.id)
+        // Released in another day (Adaptive picks): the date changes there.
+        let dayDrop = finished.tab == .now ? pointer.dayDrop.target : nil
         let commit = {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 drag = nil
                 pointer.liftedCard.end()
-                if finished.targetIndex != finished.startIndex {
+                // The drop days fold away as the row takes its new place.
+                endDayDrop(animated: false)
+                if let dayDrop {
+                    let move = { [weak model] in model?.moveToDay(finished.id, dayDrop) ?? CommandOutcome.failed(.taskGone) }
+                    let moved = model.report(move(), on: finished.id, retry: move)
+                    if moved.isApplied { AtticHaptics.tick(enabled: design.hapticsEnabled) }
+                } else if finished.targetIndex != finished.startIndex {
                     // A filter or Find: among the rows shown (item 6).
                     // Among the rows shown: a filter, Find or a date group (item 6).
                     let narrowed = true
@@ -2960,7 +2993,13 @@ struct TasksPage: View {
         landing.scrolled = drag?.id == finished.id ? (drag?.scrolled ?? finished.scrolled) : finished.scrolled
         landing.landing = true
         drag = landing
-        let y = TasksLiftedCard.landing(of: landing, originY: lift.origin.minY, heights: { rowHeight($0, in: finished.tab) })
+        var y = TasksLiftedCard.landing(of: landing, originY: lift.origin.minY, heights: { rowHeight($0, in: finished.tab) })
+        if let dayDrop {
+            // Into the gap at the drop line; a row leaving from above it
+            // gives its own place back first.
+            let above = (pointer.frames[TasksRowID(tab: finished.tab, id: finished.id)]?.minY ?? lift.origin.minY) < dayDrop.lineY
+            y = dayDrop.lineY - (above ? lift.origin.height : 0)
+        }
         withAnimation(AtticMotionPreset.settle.animation(reduceMotion: false)) {
             pointer.liftedCard.land(at: y)
         } completion: {
@@ -2968,6 +3007,55 @@ struct TasksPage: View {
             guard drag?.id == finished.id, drag?.landing == true else { return }
             commit()
         }
+    }
+
+    // MARK: - Drag into another day (Adaptive picks, 2026-11-01)
+
+    /// A row lifted on Now's manual order: Today and Tomorrow show as
+    /// empty headers if no task is due on them, to drop under.
+    private func beginDayDrop(in tab: TasksTab, reorders: Bool) {
+        pointer.dayDrop.set(nil)
+        guard tab == .now, reorders, !model.dayDragLive else { return }
+        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
+            model.dayDragLive = true
+        }
+    }
+
+    /// The drag ended or went back: no target, and the drop days fold away.
+    private func endDayDrop(animated: Bool = true) {
+        pointer.dayDrop.set(nil)
+        guard model.dayDragLive else { return }
+        withAnimation(animated && !design.reduceMotion ? AtticMotionPreset.settle.animation(reduceMotion: false) : nil) {
+            model.dayDragLive = false
+        }
+    }
+
+    /// Whether the pointer at `location` is in another day that takes the
+    /// dragged row; the target (its header's mark, the drop line) follows.
+    private func updateDayDrop(for id: UUID, in tab: TasksTab, at location: CGPoint, reorders: Bool) -> Bool {
+        let target = tab == .now && reorders && !dragSession.isCancelled
+            ? dayDropTarget(for: id, at: location) : nil
+        pointer.dayDrop.set(target)
+        return target != nil
+    }
+
+    /// Where the dragged row would land in the day under the pointer, from
+    /// Now's drawn groups and the frames their headers and rows reported.
+    private func dayDropTarget(for id: UUID, at location: CGPoint) -> TasksDayDrop? {
+        let sections = model.sections(for: .now)
+        guard let own = sections.groups.first(where: { $0.ids.contains(id) }),
+              let status = (sections.groupRows[own.key] ?? []).first(where: { $0.id == id })?.status else { return nil }
+        let time = { (id: UUID) in store.task(withID: id)?.dueTimeMinutes }
+        let days = sections.groups.map { group in
+            TasksDayDropFinder.Day(
+                key: group.key, kind: group.kind, header: pointer.headerFrames[group.key],
+                rows: (sections.groupRows[group.key] ?? []).filter { $0.id != id }.map { row in
+                    TasksDayDropFinder.Row(id: row.id, status: row.status, time: time(row.id),
+                                           frame: pointer.frames[TasksRowID(tab: .now, id: row.id)])
+                })
+        }
+        return TasksDayDropFinder.target(at: location.y, dragged: .init(id: id, status: status, time: time(id), frame: nil),
+                                         ownKey: own.key, days: days, today: model.dateChoices.today)
     }
 
     /// ⌘↑ ⌘↓ at the first or last place of a group, with the neighbouring
@@ -4089,6 +4177,10 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     let onMove: (CGFloat) -> Void
     let onEnd: (TasksDrag) -> Void
     let onPushPastGroup: () -> Void
+    /// The pointer is at this page point: whether it is in another day
+    /// that takes the row (Adaptive picks), where the drop line then shows
+    /// and the row's own day gives back its place.
+    let crossDay: (CGPoint) -> Bool
     @ViewBuilder let row: (TasksCellLive) -> Row
     @ViewBuilder let below: (TasksCellLive) -> Below
 
@@ -4186,10 +4278,15 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                     drag?.geometry = session.geometry
                     onMove(value.translation.height)
                 }
-                let target = Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
+                // In another day, the drop line shows there and this day's
+                // rows go back to their places.
+                let crossing = crossDay(value.location)
+                let target = crossing ? start
+                    : Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
                 if drag?.targetIndex != target { drag?.targetIndex = target }
                 // Pushing past the group's end: say why it stops there.
-                let past = Self.pushesPastGroup(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
+                let past = !crossing
+                    && Self.pushesPastGroup(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
                 if past, !pushedPast { onPushPastGroup() }
                 if past != pushedPast { pushedPast = past }
             }
@@ -4200,7 +4297,9 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                 guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
                       let start = session.geometry?.index(id) ?? group.firstIndex(of: id) else { return }
                 let moved = value.translation.height + (drag?.id == id ? (drag?.scrolled ?? 0) : 0)
-                let target = Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
+                let crossing = crossDay(value.location)
+                let target = crossing ? start
+                    : Self.target(start: start, translation: moved, group: group, heights: heights, geometry: session.geometry)
                 onEnd(TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target, geometry: session.geometry))
             }
     }
@@ -4342,6 +4441,11 @@ final class TasksPointer {
     var frames: [TasksRowID: CGRect] = [:]
     /// This SwiftUI button lives between rows and must keep its native click.
     var completedTodayFrames: [TasksTab: CGRect] = [:]
+    /// Now's day headers' frames in the page, by group key (a row dragged
+    /// into another day finds the day under the pointer).
+    var headerFrames: [String: CGRect] = [:]
+    /// Where a row dragged out of its day would land (Adaptive picks).
+    let dayDrop = TasksDayDropState()
     /// The card a reorder lifts, over the whole page.
     let liftedCard = TasksLiftedCard()
     /// Tests: receives a drag out of the panel instead of AppKit.

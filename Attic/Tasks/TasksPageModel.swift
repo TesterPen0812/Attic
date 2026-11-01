@@ -337,6 +337,10 @@ final class TasksPageModel: ObservableObject {
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
     @Published var completedTodayExpanded = false
+    /// A row is being dragged on Now (Adaptive picks, "Drag a task into
+    /// another day"): Today and Tomorrow show as empty headers to drop
+    /// under. Set when the drag lifts and cleared when it ends.
+    @Published var dayDragLive = false
     /// Today's next event (`TasksNextEventFeed`), shown at the top of Now's
     /// Today; nil without Calendar access, with the switch off, or with no
     /// event still ahead today.
@@ -614,6 +618,8 @@ final class TasksPageModel: ObservableObject {
         let tag: String?
         let folded: Set<String>
         let nextEvent: TasksNextEvent?
+        /// A row is being dragged on Now: Today and Tomorrow show.
+        let dayDrag: Bool
     }
 
     /// What a page kept built but not drawn shows (round 11): while it is
@@ -638,6 +644,8 @@ final class TasksPageModel: ObservableObject {
         let folded: Set<String>
         /// The next event at the top of Today (Now only).
         let nextEvent: TasksNextEvent?
+        /// A row is being dragged on Now (its Today and Tomorrow show).
+        let dayDrag: Bool
         /// Whether this page is the one that answers the user (the tab
         /// shown, on screen): it gains and loses editors, focus and popovers
         /// with it (round 12).
@@ -649,7 +657,7 @@ final class TasksPageModel: ObservableObject {
                   completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                   doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: searchQuery(for: tab),
                   view: viewOptions(for: tab), tag: tagFilter(on: tab), folded: folded(on: tab), nextEvent: nextEvent(on: tab),
-                  owner: self.tab == tab && isPageShown)
+                  dayDrag: tab == .now && dayDragLive, owner: self.tab == tab && isPageShown)
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -674,7 +682,7 @@ final class TasksPageModel: ObservableObject {
         let key = RowsKey(tab: tab, revision: store.revision, noteOwners: noteOwnersRevision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                           completedExpanded: tab == .now && completedTodayExpanded, today: today, dateEnvironment: dateEnvironment,
                           view: viewOptions(for: tab), search: tab == .done ? "" : trimmedQuery(for: tab), tag: tagFilter(on: tab),
-                          folded: folded(on: tab), nextEvent: nextEvent(on: tab))
+                          folded: folded(on: tab), nextEvent: nextEvent(on: tab), dayDrag: tab == .now && dayDragLive)
         if let cached = rowsCache[tab], cached.key == key { return cached }
         let all = buildRows(for: tab)
         var sections = TasksSections()
@@ -702,6 +710,7 @@ final class TasksPageModel: ObservableObject {
             : TasksPanelDesign.groups(open.map { ($0.id, $0.due) }, times: times, today: key.today,
                                       calendar: services.calendar(), locale: services.locale)
         if key.nextEvent != nil { groups = TasksPanelDesign.withTodayForNextEvent(groups) }
+        if key.dayDrag { groups = TasksPanelDesign.withDropDays(groups, today: key.today, calendar: services.calendar()) }
         let byID = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for group in groups where !key.folded.contains(group.key) {
             var drawn: [TasksListRow] = []

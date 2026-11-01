@@ -9,6 +9,9 @@ struct TasksGroupHeader: View {
     let count: Int
     let folded: Bool
     var overdue = false
+    /// A row dragged on Now would land in this day (Adaptive picks): the
+    /// header takes the title's ink, as under the pointer.
+    var isDropTarget = false
     let toggle: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -16,14 +19,15 @@ struct TasksGroupHeader: View {
 
     var body: some View {
         let tokens = design.tokens
+        let lit = hovered || isDropTarget
         // The design's header grey, a step under the titles on every
         // surface (Glass draws `.label` in the title's ink); the title's
         // ink under the pointer.
         let rest = TasksPanelDesign.toneInk(.groupHeader, tokens: tokens)
         Button(action: toggle) {
             HStack(spacing: TasksDesignMetrics.groupHeaderGap) {
-                AtticText(verbatim: title, style: .groupHeader, ink: hovered ? .heading : .helper)
-                    .colour(hovered ? nil : rest)
+                AtticText(verbatim: title, style: .groupHeader, ink: lit ? .heading : .helper)
+                    .colour(lit ? nil : rest)
                 if folded {
                     AtticText(verbatim: "\(count)", style: .groupHeader, ink: .helper)
                         .colour(TasksPanelDesign.toneInk(.meta, tokens: tokens))
@@ -45,7 +49,7 @@ struct TasksGroupHeader: View {
         .focusEffectDisabled()
         .onHover { hovered = $0 }
         .animation(design.reduceMotion ? nil : TasksDesignMetrics.curve(0.2), value: folded)
-        .animation(design.reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
+        .animation(design.reduceMotion ? nil : .easeOut(duration: 0.15), value: lit)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)

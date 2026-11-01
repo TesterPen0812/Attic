@@ -115,6 +115,30 @@ enum TasksPanelDesign {
         return groups
     }
 
+    /// The day after `today`, in the stored days' calendar.
+    static func tomorrow(after today: DueDay, calendar: Calendar) -> DueDay? {
+        let gregorian = DueDay.storageCalendar(matching: calendar)
+        return today.startDate(in: gregorian).flatMap { gregorian.date(byAdding: .day, value: 1, to: $0) }
+            .map { DueDay(date: $0, calendar: gregorian) }
+    }
+
+    /// Now's groups while a row is dragged (Adaptive picks, "Drag a task
+    /// into another day"; the orchestrator's call): Today and Tomorrow show
+    /// as empty headers when no task is due on them, so a row can be
+    /// dropped under them. Today after Overdue, Tomorrow after Today.
+    static func withDropDays(_ groups: [Group], today: DueDay, calendar: Calendar) -> [Group] {
+        var groups = groups
+        if !groups.contains(where: { $0.kind == .today }) {
+            let at = groups.firstIndex { $0.kind != .overdue } ?? groups.endIndex
+            groups.insert(Group(kind: .today, title: String(localized: "Today"), isOverdue: false, ids: []), at: at)
+        }
+        if let tomorrow = tomorrow(after: today, calendar: calendar), !groups.contains(where: { $0.kind == .day(tomorrow) }) {
+            let at = (groups.firstIndex { $0.kind == .today }).map { $0 + 1 } ?? groups.endIndex
+            groups.insert(Group(kind: .day(tomorrow), title: String(localized: "Tomorrow"), isOverdue: false, ids: []), at: at)
+        }
+        return groups
+    }
+
     /// The Done page's header for a day ("Mon 27 Oct"), today included.
     static func doneDayTitle(_ day: Date, today: Date, calendar: Calendar, locale: Locale) -> String {
         let sameYear = calendar.component(.year, from: day) == calendar.component(.year, from: today)

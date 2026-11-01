@@ -51,14 +51,36 @@ extension TasksPageModel {
         if reachesDoneLogAfterEdit(live) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
         if day != nil { followDatedOutOfLater(live) }
-        let message: String
+        showToast(dueDayToast(day, count: live.count))
+        return outcome
+    }
+
+    /// What the Undo toast says after a date change.
+    private func dueDayToast(_ day: DueDay?, count: Int) -> String {
         if let day {
             let text = TaskRowPresentation.due(day, today: dateChoices.today, calendar: services.calendar(), locale: services.locale).text
-            message = live.count == 1 ? String(localized: "Due \(text)") : String(localized: "\(live.count) tasks due \(text)")
-        } else {
-            message = live.count == 1 ? String(localized: "Date removed") : String(localized: "Dates removed from \(live.count) tasks")
+            return count == 1 ? String(localized: "Due \(text)") : String(localized: "\(count) tasks due \(text)")
         }
-        showToast(message)
+        return count == 1 ? String(localized: "Date removed") : String(localized: "Dates removed from \(count) tasks")
+    }
+
+    /// A row dropped under another day's header on Now (Adaptive picks,
+    /// "Drag a task into another day"): its date becomes that day (the date
+    /// card's change, its time kept; No date clears it) and it takes its
+    /// place there, as one step with the date card's Undo toast. A drop
+    /// that changes nothing commits nothing.
+    @discardableResult
+    func moveToDay(_ id: UUID, _ drop: TasksDayDrop) -> CommandOutcome {
+        guard let task = store.task(withID: id) else { return .failed(.taskGone) }
+        let day: DueDay?
+        switch drop.change {
+        case .day(let target): day = target
+        case .clear: day = nil
+        }
+        guard task.dueDay != day else { return .applied }
+        let outcome = library.moveTask(id, toDueDay: day, before: drop.before, after: drop.after)
+        guard outcome.isApplied else { return outcome }
+        showToast(dueDayToast(day, count: 1))
         return outcome
     }
 

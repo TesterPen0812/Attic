@@ -3859,21 +3859,7 @@ final class TaskStore: ObservableObject {
 
         let timestamp = now()
         do {
-            if let sparseOrder = sparseManualOrder(at: destinationIndex, in: group) {
-                let replicas = try storedTasks(matching: task.id)
-                let shown = TaskContentSnapshot(task)
-                WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
-                for replica in replicas {
-                    let agrees = replica === task || TaskContentSnapshot(replica) == shown
-                    replica.manualOrder = sparseOrder
-                    replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
-                }
-            } else {
-                // Legacy stores can have missing or tightly packed values. Pay the
-                // O(n) rebalance once, then normal reorders only dirty the moved row.
-                try assignSpacedManualOrders(to: group, updatedAt: timestamp)
-            }
+            try stageOrder(of: task, at: destinationIndex, in: group, updatedAt: timestamp)
         } catch {
             context.rollback()
             // refresh() clears the notice on success, so the reorder failure
@@ -3883,6 +3869,69 @@ final class TaskStore: ObservableObject {
             return false
         }
         return save(owner: owner)
+    }
+
+    /// Writes `task`'s new place, `index` in `group` (already in its new
+    /// order). Only the moved task's order changes, unless the orders
+    /// around it are too close, when the group is re-spaced once.
+    private func stageOrder(of task: TaskItem, at index: Int, in group: [TaskItem], updatedAt timestamp: Date,
+                            retaining edits: RetainedTaskEdits? = nil) throws {
+        if let sparseOrder = sparseManualOrder(at: index, in: group) {
+            let replicas = try storedTasks(matching: task.id)
+            edits?.capture(replicas)
+            let shown = TaskContentSnapshot(task)
+            WorkspaceLegacyBridge.prepareMutations(replicas, in: context)
+            for replica in replicas {
+                let agrees = replica === task || TaskContentSnapshot(replica) == shown
+                replica.manualOrder = sparseOrder
+                replica.listOrderVersion = TaskItem.currentListOrderVersion
+                if agrees { replica.updatedAt = max(replica.updatedAt, timestamp) }
+            }
+        } else {
+            // Legacy stores can have missing or tightly packed values. Pay the
+            // O(n) rebalance once, then normal reorders only dirty the moved row.
+            try assignSpacedManualOrders(to: group, updatedAt: timestamp, retaining: edits)
+        }
+    }
+
+    /// A row dragged into another day on Now (Adaptive picks, 2026-11-01):
+    /// its date set as the date card sets it (`stageUpdate`, so its time
+    /// stays, and goes with the date when the date is cleared), and its
+    /// place in its order group just before `beforeID`, or just after
+    /// `afterID` (neither: its place is kept), in one save: both change or
+    /// neither does.
+    @discardableResult
+    func moveTask(_ taskID: UUID, toDueDay dueDay: DueDay?, before beforeID: UUID?, after afterID: UUID?) -> Bool {
+        guard prepareTaskEdit() else { return false }
+        guard let task = task(withID: taskID) else { return false }
+        let owner = familyOwner(of: task)
+        let retainedEdits = RetainedTaskEdits()
+        var changed = false
+        do {
+            changed = try stageUpdate(task, dueDay: .some(dueDay), allowingUnfinishedSubtasks: true, retaining: retainedEdits)
+            var group = orderGroup(of: task)
+            if let source = group.firstIndex(where: { $0.id == taskID }) {
+                let moved = group.remove(at: source)
+                var destination = source
+                if let beforeID, let index = group.firstIndex(where: { $0.id == beforeID }) {
+                    destination = index
+                } else if let afterID, let index = group.firstIndex(where: { $0.id == afterID }) {
+                    destination = index + 1
+                }
+                destination = min(destination, group.count)
+                group.insert(moved, at: destination)
+                if destination != source {
+                    try stageOrder(of: task, at: destination, in: group, updatedAt: now(), retaining: retainedEdits)
+                    changed = true
+                }
+            }
+        } catch {
+            rollback(retaining: retainedEdits)
+            try? reloadTasks()
+            report(error.localizedDescription, owner: owner)
+            return false
+        }
+        return changed ? save(owner: owner, retaining: retainedEdits) : true
     }
 
     func refresh() {
