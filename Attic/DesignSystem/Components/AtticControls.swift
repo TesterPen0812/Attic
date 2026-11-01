@@ -992,6 +992,7 @@ struct AtticTabsSearchField: View {
                     AtticNativeSearchInput(text: $text, placeholder: placeholder,
                         identifier: nativeInputIdentifier, isFocused: isFocused,
                         color: NSColor(tokens.color(.heading)), placeholderColor: NSColor(tokens.color(.helper)),
+                        headerFont: header ? font : nil,
                         onEscape: onEscape)
                         .background(AtticFieldClaimProbe(claim: claim, placeholder: placeholder,
                             wanted: { isFocused?.wrappedValue == true }).accessibilityHidden(true))
@@ -2323,7 +2324,22 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
     let isFocused: Binding<Bool>?
     let color: NSColor
     let placeholderColor: NSColor
+    /// The header's field takes the other header searches' font, resolved
+    /// as their SwiftUI field resolves it, and the height a borderless
+    /// field gets for it, so the text sits on the same baseline on every
+    /// page; elsewhere it keeps the list body.
+    let headerFont: Font?
     let onEscape: () -> Void
+
+    static let bodyHeight: CGFloat = 18
+
+    private func apply(fontIn context: Context, to field: Field) {
+        let font = headerFont.map { $0.resolve(in: context.environment.fontResolutionContext).ctFont as NSFont }
+            ?? AtticTextStyle.listBody.nsFont
+        guard field.font != font else { return }
+        field.font = font
+        field.fixedHeight = headerFont == nil ? Self.bodyHeight : ceil(field.cell?.cellSize.height ?? Self.bodyHeight)
+    }
 
     /// A query is plain, single-line text. TextKit 2 creates a rendering
     /// subview for its first glyph, which invalidates SwiftUI's surrounding
@@ -2336,13 +2352,30 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
             return editor
         }()
 
+        /// The caret in the panel's accent, as SwiftUI's own fields draw it
+        /// (the other header searches are SwiftUI fields).
+        var caretColor: NSColor? {
+            didSet {
+                guard caretColor != oldValue, let caretColor,
+                      let editor = (controlView as? NSControl)?.currentEditor() as? NSTextView else { return }
+                editor.insertionPointColor = caretColor
+            }
+        }
+
         override func fieldEditor(for controlView: NSView) -> NSTextView? { queryEditor }
+
+        override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+            let editor = super.setUpFieldEditorAttributes(textObj)
+            if let caretColor, let view = editor as? NSTextView { view.insertionPointColor = caretColor }
+            return editor
+        }
     }
 
     final class Field: NSTextField {
         /// The field took the keyboard (a click back into it, ⌘F, Search).
         var onFocus: (() -> Void)?
-        override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 18) }
+        var fixedHeight: CGFloat = AtticNativeSearchInput.bodyHeight
+        override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: fixedHeight) }
         // The font and single-line height are fixed; typing changes neither.
         override func invalidateIntrinsicContentSize() {}
 
@@ -2357,7 +2390,7 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: Field, context: Context) -> CGSize? {
-        CGSize(width: proposal.width ?? 200, height: 18)
+        CGSize(width: proposal.width ?? 200, height: nsView.fixedHeight)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -2375,6 +2408,7 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
         field.delegate = context.coordinator
         field.setAccessibilityLabel(placeholder)
         field.setAccessibilityIdentifier(identifier)
+        apply(fontIn: context, to: field)
         return field
     }
 
@@ -2385,10 +2419,14 @@ private struct AtticNativeSearchInput: NSViewRepresentable {
             guard let owner = coordinator?.owner, owner.isFocused?.wrappedValue != true else { return }
             owner.isFocused?.wrappedValue = true
         }
-        field.font = AtticTextStyle.listBody.nsFont
+        apply(fontIn: context, to: field)
+        let font = field.font ?? AtticTextStyle.listBody.nsFont
+        if headerFont != nil {
+            (field.cell as? QueryCell)?.caretColor = NSColor(Color(Color.accentColor.resolve(in: context.environment)))
+        }
         field.textColor = color
         field.placeholderAttributedString = NSAttributedString(string: placeholder,
-            attributes: [.font: AtticTextStyle.listBody.nsFont, .foregroundColor: placeholderColor])
+            attributes: [.font: font, .foregroundColor: placeholderColor])
         if field.stringValue != text { field.stringValue = text }
     }
 

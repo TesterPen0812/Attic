@@ -473,6 +473,94 @@ final class DoneSearchCostTests: XCTestCase {
         XCTAssertEqual(model.doneSearchInput.text, "reopened")
     }
 
+    // MARK: Header parity (wave 2 review 2)
+
+    /// Done's header field and the header field the other pages use, each in
+    /// its own off-screen panel at the same width.
+    private func hostHeaderSearch(done: Bool, focused: Bool) throws -> (panel: InputPanel, field: NSTextField) {
+        let model = TasksPageModel(library: AtticLibrary(tasks: try makeTestStore()))
+        let panel = InputPanel(contentRect: CGRect(x: -4000, y: -4000, width: 300, height: 40),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let field: AnyView = done
+            ? AnyView(TasksDoneSearchField(model: model, input: model.doneSearchInput, isFocused: .constant(focused),
+                                           onEscape: {}, header: true))
+            : AnyView(AtticTabsSearchField(placeholder: "Search", text: .constant(""), isFocused: .constant(focused),
+                                           floating: true, onEscape: {}, header: true))
+        panel.contentView = NSHostingView(rootView: field.frame(width: 300, height: 40)
+            .atticDesign(AtticDesignContext(mode: .light)))
+        panel.orderFront(nil)
+        if focused { panel.makeKey() }
+        RunLoop.current.run(until: Date().addingTimeInterval(focused ? 0.3 : 0.05))
+        Hosted.pumpEvents()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        func fields(in view: NSView) -> [NSTextField] {
+            view.subviews.flatMap { ($0 as? NSTextField).map { [$0] } ?? [] + fields(in: $0) }
+        }
+        let found = try XCTUnwrap(fields(in: try XCTUnwrap(panel.contentView)).first { $0.isEditable })
+        return (panel, found)
+    }
+
+    private struct TextGeometry: Equatable {
+        var frame: CGRect, baseline: CGFloat, font: String, size: CGFloat
+        var placeholderFont: String?, placeholderSize: CGFloat?, placeholderColor: String?
+    }
+
+    private func geometry(_ field: NSTextField) throws -> TextGeometry {
+        let font = try XCTUnwrap(field.font)
+        let title = try XCTUnwrap(field.cell).titleRect(forBounds: field.bounds)
+        let baselineInField = field.isFlipped ? title.minY + font.ascender : title.maxY - font.ascender
+        let placeholder = field.placeholderAttributedString
+        let pFont = placeholder?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        let pColor = (placeholder?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?
+            .usingColorSpace(.sRGB).map { String(format: "%.3f %.3f %.3f %.3f", $0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent) }
+        return TextGeometry(frame: field.convert(field.bounds, to: nil),
+                            baseline: field.convert(NSPoint(x: 0, y: baselineInField), to: nil).y,
+                            font: font.fontName, size: font.pointSize,
+                            placeholderFont: pFont?.fontName, placeholderSize: pFont?.pointSize, placeholderColor: pColor)
+    }
+
+    func testDonesHeaderSearchSetsItsTextExactlyWhereTheOtherHeaderSearchDoes() throws {
+        let (tasksPanel, tasksField) = try hostHeaderSearch(done: false, focused: false)
+        defer { tasksPanel.contentView = nil; tasksPanel.close() }
+        let (donePanel, doneField) = try hostHeaderSearch(done: true, focused: false)
+        defer { donePanel.contentView = nil; donePanel.close() }
+        let tasks = try geometry(tasksField), done = try geometry(doneField)
+        XCTAssertEqual(done.font, tasks.font)
+        XCTAssertEqual(done.size, tasks.size)
+        XCTAssertEqual(done.frame, tasks.frame, "text frame")
+        XCTAssertEqual(done.baseline, tasks.baseline, "baseline")
+        XCTAssertEqual(done.placeholderFont, tasks.font, "placeholder font")
+        XCTAssertEqual(done.placeholderSize, tasks.size, "placeholder size")
+        XCTAssertNotNil(done.placeholderColor)
+    }
+
+    func testDonesHeaderSearchKeepsTheOtherHeaderSearchsCaretAndSelection() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
+            throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1")
+        }
+        // As drawn: each colour resolved in the panel's appearance.
+        func drawn(_ colour: NSColor?, in panel: NSPanel) -> String? {
+            var out: String?
+            panel.effectiveAppearance.performAsCurrentDrawingAppearance {
+                out = colour?.usingColorSpace(.sRGB).map {
+                    String(format: "%.3f %.3f %.3f %.3f", $0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent)
+                }
+            }
+            return out
+        }
+        func editing(done: Bool) throws -> (colour: String?, selection: String?) {
+            let (panel, _) = try hostHeaderSearch(done: done, focused: true)
+            defer { panel.makeFirstResponder(nil); panel.contentView = nil; panel.close() }
+            let editor = try XCTUnwrap(panel.firstResponder as? NSTextView, "the field has the keyboard")
+            return (drawn(editor.insertionPointColor, in: panel),
+                    drawn(editor.selectedTextAttributes[.backgroundColor] as? NSColor, in: panel))
+        }
+        let tasks = try editing(done: false), done = try editing(done: true)
+        XCTAssertEqual(done.colour, tasks.colour, "caret")
+        XCTAssertEqual(done.selection, tasks.selection, "selection")
+    }
+
     func testNativeQueryEditorIsReleasedWithItsHostedField() throws {
         guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else {
             throw XCTSkip("Requires ATTIC_KEY_WINDOW_TESTS=1")
