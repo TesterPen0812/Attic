@@ -67,7 +67,7 @@ struct AtticChoiceRow: View {
             }
             .padding(.horizontal, AtticPopoverMetrics.rowPadding)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color)
+            .background(Self.highlightShape(radius: radius).fill(fill.color)
                 .padding(.vertical, m.highlightGap / 2))
             .contentShape(Rectangle())
         }
@@ -93,6 +93,12 @@ struct AtticChoiceRow: View {
         .accessibilityLabel(detail.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(check == .on || isHighlighted ? .isSelected : [])
         .accessibilityValue(check == .mixed ? String(localized: "some selected tasks") : "")
+    }
+
+    /// The lit row's fill: a surface squircle, as the menus' and the
+    /// dropdowns' rows (`AtticDropdownRow.highlightShape`).
+    static func highlightShape(radius: CGFloat) -> AtticControlOutline {
+        AtticControlOutline(cornerRadius: radius, exponent: AtticShape.surfaceExponent)
     }
 }
 
@@ -635,7 +641,7 @@ struct AtticDateCard: View {
         .padding(.leading, d.fieldIconLeading)
         .padding(.trailing, d.rowPadding)
         .frame(height: d.fieldHeight)
-        .background(RoundedRectangle(cornerRadius: d.fieldRadius, style: .continuous).fill(design.tokens.dropdownHighlight.color))
+        .background(d.fieldShape.fill(design.tokens.dropdownHighlight.color))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(String(localized: "Date"))
         .accessibilityValue(typed)

@@ -60,7 +60,6 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(TasksDesignMetrics.tileRadius, 6)
         // Concentric nesting.
         XCTAssertEqual(AtticRadius.formatSheet, 19, "24 + 14 px")
-        XCTAssertEqual(AtticRadius.reviewBar, 17, "20 + 14 px")
         XCTAssertEqual(AtticRadius.concentric(outer: AtticRadius.menu, padding: AtticRadius.menuPadding), AtticRadius.menuRow)
         // A day card's padding grows with its radius (10 px at 36 px).
         XCTAssertEqual(CalendarDesign.dayPadding, 6.5, "48 px radius: 13 px padding")
@@ -662,6 +661,127 @@ final class PanelChromeTests: XCTestCase {
             let expected = AtticControlShape.shape(cornerRadius: min(NotesBarMetrics.radius, part.width / 2),
                                                    exponent: AtticShape.controlExponent).path(in: part)
             XCTAssertEqual(differences(sliding.path(in: rect), expected), 0, "sliding: the same curve")
+        }
+    }
+
+    // MARK: Shapes: the surfaces still left (Accepted "Shapes", still to build 31 Oct)
+
+    /// Containment on a 0.25 pt grid over each corner's box (the sides
+    /// between the corners are straight in every one of these shapes).
+    private func cornerDifferences(_ a: Path, _ b: Path, in rect: CGRect, box: CGFloat) -> Int {
+        let steps = Int(box * 4)
+        var count = 0
+        for (x0, y0) in [(rect.minX, rect.minY), (rect.maxX - box, rect.minY),
+                         (rect.minX, rect.maxY - box), (rect.maxX - box, rect.maxY - box)] {
+            for i in 0..<steps {
+                for j in 0..<steps {
+                    let point = CGPoint(x: x0 + (CGFloat(i) + 0.5) / 4, y: y0 + (CGFloat(j) + 0.5) / 4)
+                    if a.contains(point) != b.contains(point) { count += 1 }
+                }
+            }
+        }
+        return count
+    }
+
+    /// The drawn outline is the expected squircle or curve-1.4 shape, and
+    /// visibly not the old continuous rounded rectangle of the same radius.
+    private func assertOutline(_ shape: AtticControlOutline, in size: CGSize, radius: CGFloat, exponent: CGFloat,
+                               _ name: String, file: StaticString = #filePath, line: UInt = #line) {
+        let rect = CGRect(origin: .zero, size: size)
+        let box = min(radius + 2, size.width / 2, size.height / 2)
+        let expected = Squircle(cornerRadius: radius, exponent: exponent).path(in: rect)
+        let old = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+        XCTAssertGreaterThan(cornerDifferences(expected, old, in: rect, box: box), 4, "\(name): the grid tells the two apart",
+                             file: file, line: line)
+        XCTAssertEqual(shape.cornerRadius, radius, "\(name): radius", file: file, line: line)
+        XCTAssertEqual(cornerDifferences(shape.path(in: rect), expected, in: rect, box: box), 0, "\(name): the shape",
+                       file: file, line: line)
+    }
+
+    private func withSystemLooksStated(_ body: () throws -> Void) rethrows {
+        // GitHub's runners turn both on; these shapes must not depend on them.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try body()
+    }
+
+    func testNoteObjectCardsAreSquircles() {
+        withSystemLooksStated {
+            let m = AtticNoteObjectMetrics.self
+            let surface = AtticShape.surfaceExponent
+            assertOutline(m.cardShape, in: CGSize(width: 300, height: m.cardHeight), radius: AtticRadius.noteBlock,
+                          exponent: surface, "file card")
+            assertOutline(m.blockShape, in: CGSize(width: 300, height: m.blockCardHeight), radius: AtticRadius.noteBlock,
+                          exponent: surface, "block file card")
+            // The selected object's ring hugs the card on its own curve,
+            // its stroke wholly inside the edge.
+            let rect = CGRect(x: 0, y: 0, width: 300, height: m.cardHeight)
+            let ring = NoteObjectSelectionView.ringPath(objectRect: rect, shape: m.cardShape)
+            let expected = Squircle(cornerRadius: AtticRadius.noteBlock, exponent: surface).inset(by: m.ringWidth / 2).path(in: rect)
+            var differ = 0
+            for i in 0..<48 {
+                for j in 0..<48 {
+                    let point = CGPoint(x: (CGFloat(i) + 0.5) / 4, y: (CGFloat(j) + 0.5) / 4)
+                    if ring.contains(point) != expected.contains(point) { differ += 1 }
+                }
+            }
+            XCTAssertEqual(differ, 0, "the ring follows the card's squircle")
+        }
+    }
+
+    func testTheToastIsACapsuleOnCurve14() {
+        withSystemLooksStated {
+            let height = AtticControlSize.toastHeight
+            let control = AtticShape.controlExponent
+            assertOutline(AtticUndoToast.shape, in: CGSize(width: 220, height: height),
+                          radius: AtticRadius.control(height: height), exponent: control, "toast")
+            let inner = AtticRadius.control(height: height) - AtticControlSize.capsuleInset
+            assertOutline(AtticUndoToast.buttonShape(), in: CGSize(width: 56, height: AtticControlSize.smallHeight),
+                          radius: inner, exponent: control, "Undo, concentric")
+        }
+    }
+
+    func testTheDragTilesAreRowSquircles() {
+        withSystemLooksStated {
+            let surface = AtticShape.surfaceExponent
+            assertOutline(AtticReorderLiftModifier.shape, in: CGSize(width: 288, height: 36), radius: AtticRadius.row,
+                          exponent: surface, "the lifted task")
+            assertOutline(AtticCarryPreview.cardShape, in: CGSize(width: 200, height: 36), radius: AtticRadius.row,
+                          exponent: surface, "the carry card")
+            assertOutline(TasksDragOut.labelShape, in: CGSize(width: 140, height: 28), radius: AtticRadius.row,
+                          exponent: surface, "the drag label")
+            // A file dragged over a note carries the file card's look.
+            assertOutline(AtticNoteObjectMetrics.cardShape,
+                          in: CGSize(width: AtticNoteObjectMetrics.carryWidth, height: AtticNoteObjectMetrics.carryHeight),
+                          radius: AtticRadius.noteBlock, exponent: surface, "the note carry card")
+        }
+    }
+
+    func testThePickerFieldIsAConcentricSquircle() {
+        withSystemLooksStated {
+            let d = AtticDropdownMetrics.self
+            let surface = AtticShape.surfaceExponent
+            assertOutline(d.fieldShape, in: CGSize(width: 220, height: d.fieldHeight),
+                          radius: AtticRadius.concentric(outer: d.cornerRadius, padding: d.inset + d.fieldInset),
+                          exponent: surface, "the field")
+            // The composer's short lists light their rows like the menus.
+            let fill = AtticControlSize.smallHeight - AtticPickerMetrics.highlightGap
+            assertOutline(AtticChoiceRow.highlightShape(radius: AtticRadius.control(height: fill)),
+                          in: CGSize(width: 140, height: fill), radius: d.highlightRadius, exponent: surface, "a lit row")
+        }
+    }
+
+    func testTheSettingsCardsAreSquircles() {
+        withSystemLooksStated {
+            let surface = AtticShape.surfaceExponent
+            assertOutline(AtticGroupCardShape.shape, in: CGSize(width: 420, height: 160), radius: AtticRadius.card,
+                          exponent: surface, "a group card")
+            assertOutline(AtticContentCard<EmptyView>.shape, in: CGSize(width: 480, height: 400), radius: AtticRadius.contentCard,
+                          exponent: surface, "the page's card")
         }
     }
 

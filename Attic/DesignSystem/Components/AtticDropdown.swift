@@ -778,7 +778,7 @@ struct AtticDropdownField: View {
         .padding(.leading, systemName == nil ? m.rowPadding : m.fieldIconLeading)
         .padding(.trailing, m.rowPadding)
         .frame(height: m.fieldHeight)
-        .background(RoundedRectangle(cornerRadius: m.fieldRadius, style: .continuous).fill(design.tokens.dropdownHighlight.color))
+        .background(m.fieldShape.fill(design.tokens.dropdownHighlight.color))
     }
 }
 

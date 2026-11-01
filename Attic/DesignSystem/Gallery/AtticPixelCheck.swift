@@ -262,6 +262,16 @@ enum AtticGeometryCheck {
         )?.radius ?? 0
     }
 
+    /// Settings' cards are surfaces too (squircles), and the toast a
+    /// curve-1.4 capsule (Shapes): what the fit reads from the same outline
+    /// drawn alone at the specimen's size.
+    static func surfaceRadius(_ radius: CGFloat, exponent: CGFloat = AtticShape.surfaceExponent, size: CGSize) -> CGFloat {
+        AtticCornerMeasure.measure(
+            Squircle(cornerRadius: radius, exponent: exponent).fill(Color.gray),
+            layoutSize: size, context: .default
+        )?.radius ?? 0
+    }
+
     static func specimens(demo: AtticGalleryDemo = AtticGalleryDemo()) -> [Specimen] {
         let noop = demo.record("Geometry check")
         let tokens = AtticDesignContext.default.tokens
@@ -287,7 +297,8 @@ enum AtticGeometryCheck {
                      expectedSize: CGSize(width: 0, height: 36), expectedRadius: AtticRadius.control(height: 36)),
             Specimen(name: "Undo toast", view: AnyView(AtticUndoToast(message: "Task deleted", onUndo: noop)),
                      expectedSize: CGSize(width: 0, height: AtticControlSize.toastHeight),
-                     expectedRadius: AtticRadius.control(height: AtticControlSize.toastHeight)),
+                     expectedRadius: surfaceRadius(AtticUndoToast.shape.cornerRadius, exponent: AtticShape.controlExponent,
+                                                   size: CGSize(width: 200, height: AtticControlSize.toastHeight))),
             Specimen(name: "Tag chip", view: AnyView(AtticTagChip(name: "launch")),
                      expectedSize: CGSize(width: 0, height: AtticControlSize.tagHeight),
                      expectedRadius: AtticRadius.control(height: AtticControlSize.tagHeight)),
@@ -304,10 +315,12 @@ enum AtticGeometryCheck {
                      expectedSize: CGSize(width: 288, height: AtticTaskCardMetrics.titleHeight), expectedRadius: AtticRadius.tile),
             Specimen(name: "Group card", view: AnyView(AtticGroupCard { Color.clear.frame(height: AtticLayout.groupedRowSingle) }),
                      layoutSize: CGSize(width: 400, height: AtticLayout.groupedRowSingle),
-                     expectedSize: CGSize(width: 400, height: 40), expectedRadius: AtticRadius.groupCard),
+                     expectedSize: CGSize(width: 400, height: 40),
+                     expectedRadius: surfaceRadius(AtticRadius.groupCard, size: CGSize(width: 400, height: AtticLayout.groupedRowSingle))),
             Specimen(name: "Content card", view: AnyView(AtticContentCard { Color.clear }),
                      layoutSize: CGSize(width: 300, height: 120),
-                     expectedSize: CGSize(width: 300, height: 120), expectedRadius: AtticRadius.contentCard),
+                     expectedSize: CGSize(width: 300, height: 120),
+                     expectedRadius: surfaceRadius(AtticRadius.contentCard, size: CGSize(width: 300, height: 120))),
             Specimen(name: "Pop-over", view: AnyView(AtticPopover { Color.clear.frame(height: 64) }),
                      expectedSize: CGSize(width: AtticPopoverMetrics.defaultWidth, height: 64 + 2 * AtticPopoverMetrics.padding), expectedRadius: popoverRadius),
             Specimen(name: "Palette tile", view: AnyView(AtticPaletteTile(palette: .original, action: noop)),

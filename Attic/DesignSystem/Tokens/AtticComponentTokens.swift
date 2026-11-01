@@ -416,6 +416,10 @@ enum AtticDropdownMetrics {
     /// ruled off by a full-width hairline.
     static let fieldHeight: CGFloat = 30
     static let fieldRadius: CGFloat = AtticRadius.concentric(outer: cornerRadius, padding: inset + fieldInset)
+    /// The field's outline (the Date field and the dropdowns' text fields):
+    /// a surface squircle, concentric with the card like the rows'
+    /// highlights (Shapes, Accepted 2026-10-30).
+    static var fieldShape: AtticControlOutline { AtticControlOutline(cornerRadius: fieldRadius, exponent: AtticShape.surfaceExponent) }
     static let fieldHeaderHeight: CGFloat = 40
     /// The field is this much further in than the rows (5 pt from the edge).
     static let fieldInset: CGFloat = 2
@@ -987,7 +991,12 @@ enum AtticNoteObjectMetrics {
     static let blockSecondLine: CGFloat = 52
     static let blockHeaderGlyph: CGFloat = 11
     static let blockHeaderGap: CGFloat = 10
-    static let cardRadius: CGFloat = AtticRadius.contentCard
+    static let cardRadius: CGFloat = AtticRadius.noteBlock
+    /// The card's and the block card's outlines (and the carry card's, and
+    /// the selected object's ring): note blocks, squircles (Shapes,
+    /// Accepted 2026-10-30: note blocks 20 px).
+    static var cardShape: AtticControlOutline { AtticControlOutline(cornerRadius: cardRadius, exponent: AtticShape.surfaceExponent) }
+    static var blockShape: AtticControlOutline { AtticControlOutline(cornerRadius: blockRadius, exponent: AtticShape.surfaceExponent) }
     static let cardPadding: CGFloat = 12
     static let cardIcon: CGFloat = 20
     static let cardIconSlot: CGFloat = 22

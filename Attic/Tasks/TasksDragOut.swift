@@ -178,6 +178,9 @@ enum TasksDragOut {
         context == .outsideApplication ? .copy : []
     }
 
+    /// The label's outline: the lifted card's row squircle.
+    static var labelShape: AtticControlOutline { AtticReorderLiftModifier.shape }
+
     /// A quiet label of what is being dragged.
     static func image(title: String) -> NSImage {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
@@ -185,7 +188,7 @@ enum TasksDragOut {
         let width = min(280, ceil(text.size().width)) + 24
         let size = NSSize(width: width, height: 28)
         return NSImage(size: size, flipped: false) { rect in
-            let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
+            let shape = NSBezierPath(cgPath: Self.labelShape.path(in: rect.insetBy(dx: 0.5, dy: 0.5)).cgPath)
             NSColor.windowBackgroundColor.withAlphaComponent(0.95).setFill()
             shape.fill()
             NSColor.separatorColor.setStroke()
