@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// What the writing view's chrome shows beside the text: the header title
@@ -6,7 +7,9 @@ import SwiftUI
 /// editor. Owned by the page; the text view's accessories report into it.
 @MainActor
 final class NotesPageChrome: ObservableObject {
-    enum TagEditorAnchor: Equatable { case tags, menu }
+    /// The tag editor's place: always the tag line under the title (N6),
+    /// opened from a tag or from ⋯ → Tags….
+    enum TagEditorAnchor: Equatable { case tags }
 
     /// 0 while the title shows; 1 once it has passed under the header. The
     /// header title's opacity follows it 1:1 (UX plan § 7).
@@ -17,7 +20,7 @@ final class NotesPageChrome: ObservableObject {
     /// Published only when it flips, never per keystroke.
     @Published var hasBody = true
     @Published var isMenuOpen = false
-    /// The tag editor is open, from the tag line or from the menu button.
+    /// The tag editor is open in the tag line (N6).
     @Published var tagEditor: TagEditorAnchor?
 
     /// Aa's format row (OD-14). Its own object, not a published value
@@ -129,9 +132,11 @@ final class NotesPageChrome: ObservableObject {
         accessories?.presentMenu(fromHeader: headerTitleProgress >= 0.5)
     }
 
-    /// ⋯ → Tags…: the tag editor, from the tags when there are some.
+    /// ⋯ → Tags… or a click on a tag: the tag line becomes the editor in
+    /// place (N6), with no tags yet as well. A read-only note has none.
     func presentTagEditor() {
-        tagEditor = (accessories?.hasTags ?? false) ? .tags : .menu
+        guard accessories?.canEditTags ?? false else { return }
+        tagEditor = .tags
     }
 
     func focusText() { accessories?.focusText() }
@@ -383,7 +388,12 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     private let tagMeasure = NSHostingController(rootView: AnyView(EmptyView()))
     /// The measured tag line, kept until the tags or the width change (the
     /// layout pass runs on every keystroke).
-    private var measuredTagLine: (tags: [String], width: CGFloat, height: CGFloat)?
+    private var measuredTagLine: (tags: [String], width: CGFloat, editing: Bool, height: CGFloat)?
+    /// The tag line's open editor (N6) moves the body: relayout as it opens and closes.
+    private var tagEditorObserver: AnyCancellable?
+    /// What the tag line and ⋯ were last built from: a SwiftUI update
+    /// re-sends the same look, and the open editor keeps its field.
+    private var builtLook: (design: AtticDesignContext, palette: AtticTagPalette, recolours: Bool, tags: [String])?
     private var spokenTitle = ""
     private var boundsObserver: NSObjectProtocol?
     private var shownTags: [String] = []
@@ -397,6 +407,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
     private let tagEditor: () -> AnyView
 
     var hasTags: Bool { !engine.tags.isEmpty }
+    var canEditTags: Bool { !engine.isReadOnly }
 
     /// The note's current input client has the keyboard, including its
     /// callout field while Emoji & Symbols is choosing an icon.
@@ -460,6 +471,9 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         chrome.accessories = self
         rebuild()
         textView.onLayout = { [weak self] in self?.layout() }
+        tagEditorObserver = chrome.$tagEditor.removeDuplicates().dropFirst().sink { [weak self] _ in
+            self?.textView?.needsLayout = true
+        }
         engine.onTagsDisplayChange = { [weak self] in
             self?.rebuild()
             self?.textView?.needsLayout = true
@@ -483,6 +497,7 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         boundsObserver = nil
         engine.onTagsDisplayChange = nil
+        tagEditorObserver = nil
         engine.onCaretChange = nil
         textView?.onLayout = nil
         textView?.suggestionCommand = nil
@@ -500,16 +515,35 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
 
     private func rebuild() {
         shownTags = engine.tags
+        let recolours = colouring.setHue != nil
+        if let built = builtLook, built.design == design, built.palette == colouring.palette, built.recolours == recolours,
+           built.tags == shownTags { return }
+        builtLook = (design, colouring.palette, recolours, shownTags)
         let chrome = chrome
         let design = design
         let tagEditor = tagEditor
-        menuHost.rootView = AnyView(NoteMenuButtonRoot(chrome: chrome, tagEditor: tagEditor) { [weak self] in
+        menuHost.rootView = AnyView(NoteMenuButtonRoot(chrome: chrome) { [weak self] in
             self?.presentMenu(fromHeader: false)
         }
         .atticDesign(design).environment(\.atticTagColouring, colouring))
-        tagHost.rootView = AnyView(NoteTagLineRoot(chrome: chrome, tags: shownTags, tagEditor: tagEditor)
+        tagHost.rootView = AnyView(NoteTagLineRoot(chrome: chrome, tags: shownTags, canEdit: canEditTags, tagEditor: tagEditor)
             .atticDesign(design).environment(\.atticTagColouring, colouring))
-        tagMeasure.rootView = AnyView(AtticNoteTagLine(tags: shownTags) { _ in }.atticDesign(design).environment(\.atticTagColouring, colouring))
+    }
+
+    /// The tag line's height at `width`: the coloured line at rest, the
+    /// editor (its chips, field and the matches' fixed room) while open.
+    private func measureTagLine(width: CGFloat, editing: Bool) -> CGFloat {
+        let tags = engine.tags
+        if let measured = measuredTagLine, measured.tags == tags, measured.width == width, measured.editing == editing {
+            return measured.height
+        }
+        let line: AnyView = editing
+            ? AnyView(NoteTagLineEditorView(tags: tags, query: .constant("")))
+            : AnyView(AtticNoteTagLine(tags: tags) { _ in })
+        tagMeasure.rootView = AnyView(line.atticDesign(design).environment(\.atticTagColouring, colouring))
+        let height = ceil(tagMeasure.sizeThatFits(in: NSSize(width: width, height: 10_000)).height)
+        measuredTagLine = (tags, width, editing, height)
+        return height
     }
 
     /// Keeps the ⋯ on the title's first line and the tags under its last,
@@ -533,15 +567,13 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
         menuHost.isHidden = isUntouched()
         updateMenuCover()
         // The tag line: 4 under the title's last line, the column's width.
+        // While it is the editor (N6) it shows with no tags as well, and
+        // the room the engine keeps for it grows once, as it opens.
         var tagHeight: CGFloat = 0
         let width = max(0, columnRight - columnLeft)
-        if !engine.tags.isEmpty, width > 0 {
-            if let measured = measuredTagLine, measured.tags == engine.tags, measured.width == width {
-                tagHeight = measured.height
-            } else {
-                tagHeight = ceil(tagMeasure.sizeThatFits(in: NSSize(width: width, height: 10_000)).height)
-                measuredTagLine = (engine.tags, width, tagHeight)
-            }
+        let editing = chrome.tagEditor != nil && canEditTags
+        if !engine.tags.isEmpty || editing, width > 0 {
+            tagHeight = measureTagLine(width: width, editing: editing)
             let frame = NSRect(x: columnLeft, y: rects.last.minY + NoteTextStyle.titleLineHeight + NoteTextStyle.titleToTags,
                                width: width, height: tagHeight)
             if tagHost.frame != frame { tagHost.frame = frame }
@@ -798,32 +830,39 @@ final class NoteTitleAccessories: NotesKeyboardReturnTarget {
 
 private struct NoteMenuButtonRoot: View {
     @ObservedObject var chrome: NotesPageChrome
-    let tagEditor: () -> AnyView
     let action: () -> Void
 
     var body: some View {
         AtticNoteMenuButton(isOpen: chrome.isMenuOpen, action: action)
             .accessibilityIdentifier("notes-menu-button")
-            // The E1 tag picker, as in Tasks (CU P2-03), in the panel's
-            // overlay layer.
-            .atticDropdown(isPresented: Binding(get: { chrome.tagEditor == .menu },
-                                                set: { if !$0, chrome.tagEditor == .menu { chrome.tagEditor = nil } }),
-                           label: String(localized: "Tags")) { tagEditor() }
     }
 }
 
+/// The tags under the title: coloured text at rest; a click on a tag (or
+/// ⋯ → Tags…) makes the line itself the tag editor (N6), in place of the
+/// shared tag picker that dropped over the note.
 private struct NoteTagLineRoot: View {
     @ObservedObject var chrome: NotesPageChrome
     let tags: [String]
+    let canEdit: Bool
     let tagEditor: () -> AnyView
 
+    @Environment(\.atticDesign) private var design
+
     var body: some View {
-        AtticNoteTagLine(tags: tags) { _ in chrome.tagEditor = .tags }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("notes-tag-line")
-            .atticDropdown(isPresented: Binding(get: { chrome.tagEditor == .tags },
-                                                set: { if !$0, chrome.tagEditor == .tags { chrome.tagEditor = nil } }),
-                           label: String(localized: "Tags")) { tagEditor() }
+        let editing = chrome.tagEditor != nil && canEdit
+        ZStack(alignment: .topLeading) {
+            if editing {
+                tagEditor()
+                    .transition(.opacity)
+            } else {
+                AtticNoteTagLine(tags: tags) { _ in if canEdit { chrome.tagEditor = .tags } }
+                    .accessibilityIdentifier("notes-tag-line")
+                    .transition(.opacity)
+            }
+        }
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: editing)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }
 
