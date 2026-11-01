@@ -5,8 +5,8 @@ import SwiftUI
 /// row, the month grid of keys right under it, and the agenda below. The
 /// grid scrolls with the agenda; the selected day's week pins under the
 /// weekday letters while the other weeks scroll away, so scrolling (or the
-/// month pill) moves between the month and the week. The footer has Today
-/// and "+".
+/// month pill) moves between the month and the week. Search folds to the
+/// selected week; Today sits between the arrows, and the footer keeps "+".
 struct CalendarPage: View {
     @ObservedObject var model: CalendarPageModel
     let layout: PanelPageLayout
@@ -16,6 +16,9 @@ struct CalendarPage: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.panelSharedChrome) private var sharedChrome
+    @Environment(\.atticPanelPageIsCurrent) private var isCurrent
+    @Environment(\.atticPanelToasts) private var toasts
+    @Environment(\.panelComposer) private var composer
     @State private var scrollPosition = ScrollPosition(y: 0)
     @State private var flags = ScrollFlags()
     @State private var searchOpen = false
@@ -53,9 +56,21 @@ struct CalendarPage: View {
             footer(snapshot)
                 .frame(maxHeight: .infinity, alignment: .bottom)
         }
+        .background(CalendarPageInput(enabled: { isCurrent && !(composer?.isOpen() ?? false) }, today: { afterClosingEvent(model.goToToday) }, escape: {
+            if model.eventRows.expandedChoice != nil { model.eventRows.expandedChoice = nil; return true }
+            if model.eventRows.rowID != nil { Task { await model.eventRows.close() }; return true }
+            if searchOpen { endSearch(); return true }
+            return false
+        }, emptyPress: { Task { await model.eventRows.close() } }))
         .atticDesignCorners()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { model.pageAppeared() }
+        .onAppear {
+            model.pageAppeared()
+            model.eventRows.didWrite = { [weak library = model.store.commandLibrary, weak toasts = toasts] message in
+                guard let library else { return }
+                toasts?.show(message, performingAsync: { await library.replay(in: .calendar, redo: false) })
+            }
+        }
         // Another day: the agenda's task selection lets go.
         .onChange(of: snapshot.selected) { _, _ in model.taskRows.clearSelection() }
         .onChange(of: snapshot.weeks.count) { _, count in
@@ -79,7 +94,7 @@ struct CalendarPage: View {
                 // Flat days (Accepted 2026-10-30): no glass in the grid.
                 VStack(spacing: 0) {
                     ForEach(weeks) { week in
-                        CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: model.select)
+                        CalendarWeekRow(week: week, isWeekView: flags.weekView, onSelect: { day in afterClosingEvent { model.select(day) } })
                             .equatable()
                             // The selected week is drawn once, by its held row.
                             .accessibilityHidden(week.containsSelection)
@@ -96,7 +111,7 @@ struct CalendarPage: View {
             .mask(alignment: .top) { CalendarScrollMask(rowTop: rowTop, pinned: flags.pinned) }
             .overlay(alignment: .top) {
                 if let pinnedIndex, let rowTop {
-                    CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: model.select)
+                    CalendarWeekRow(week: weeks[pinnedIndex], isWeekView: flags.weekView, onSelect: { day in afterClosingEvent { model.select(day) } })
                         .equatable()
                         .visualEffect { content, proxy in
                             content.offset(y: CalendarMonthMath.heldRowTop(
@@ -128,8 +143,8 @@ struct CalendarPage: View {
             // too (owner, 2026-10-31: the older agenda).
             ForEach(snapshot.groups) { group in
                 CalendarAgendaDay(group: group, today: snapshot.today, taskActions: taskActions,
-                                  rows: model.taskRows, focus: $taskFocus, focused: taskFocus,
-                                  onSelectDay: model.select)
+                                  rows: model.taskRows, eventRows: model.eventRows, focus: $taskFocus, focused: taskFocus,
+                                  onSelectDay: { day in afterClosingEvent { model.select(day) } })
             }
             if snapshot.showsNoMatches {
                 Text("No matches")
@@ -155,8 +170,10 @@ struct CalendarPage: View {
                                onToggleWeekView: { toggleWeekView(weekCount: snapshot.weeks.count) })
         } pageSwitch: {
             CalendarMonthArrows(isWeekView: flags.weekView,
-                                onPrevious: { model.shift(by: -1, weekView: flags.weekView) },
-                                onNext: { model.shift(by: 1, weekView: flags.weekView) })
+                                onPrevious: { afterClosingEvent { model.shift(by: -1, weekView: flags.weekView) } },
+                                onNext: { afterClosingEvent { model.shift(by: 1, weekView: flags.weekView) } },
+                                todayShown: CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today),
+                                onToday: { afterClosingEvent(model.goToToday) })
         } search: {
             if searchOpen {
                 AtticTabsSearchField(placeholder: String(localized: "Search"),
@@ -171,15 +188,26 @@ struct CalendarPage: View {
             }
         }
         .animation(CalendarDesign.searchAnimation(opening: searchOpen, reduceMotion: design.reduceMotion), value: searchOpen)
+        .onChange(of: searchOpen) { _, open in
+            withAnimation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion)) {
+                scrollPosition.scrollTo(y: open ? CalendarMonthMath.weekViewOffset(weekCount: model.snapshot.weeks.count) : 0)
+            }
+        }
         .onChange(of: searchFocused) { _, focused in
             // Leaving an empty search puts it away.
             if !focused, model.searchText.trimmingCharacters(in: .whitespaces).isEmpty { searchOpen = false }
         }
     }
 
+    private func afterClosingEvent(_ action: @escaping @MainActor () -> Void) {
+        Task { if await model.eventRows.close() { action() } }
+    }
+
     private func beginSearch() {
-        searchOpen = true
-        searchFocused = true
+        afterClosingEvent {
+            searchOpen = true
+            searchFocused = true
+        }
     }
 
     private func endSearch() {
@@ -197,12 +225,10 @@ struct CalendarPage: View {
 
     // MARK: Footer
 
-    /// The bottom bar (Accepted 2026-10-29/30): the page switch, Today,
-    /// then "+". In the panel the shell draws it once for every page
-    /// (owner, 2026-10-31); the page lends it Today and "+".
+    /// Adaptive picks C3 (Accepted 2026-11-01): Today has moved to the
+    /// header. The shared footer keeps the existing add route.
     @ViewBuilder
     private func footer(_ snapshot: CalendarPageSnapshot) -> some View {
-        let todayShown = CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today)
         ZStack {
             if sharedChrome == nil {
                 ownFooter(snapshot)
@@ -212,9 +238,8 @@ struct CalendarPage: View {
             }
         }
         .panelBottomBar(.calendar,
-                        look: PanelBottomBarLook(middle: .today(shown: todayShown), plus: PanelBottomBarLook.calendarPlus),
-                        actions: PanelBottomBarActions(today: { [model] in model.goToToday() },
-                                                       plus: { [model] in onNewTask(model.newTaskDay) }))
+                        look: PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.calendarPlus),
+                        actions: PanelBottomBarActions(plus: { [model] in onNewTask(model.newTaskDay) }))
     }
 
     private func ownFooter(_ snapshot: CalendarPageSnapshot) -> some View {
@@ -223,8 +248,6 @@ struct CalendarPage: View {
         return AtticControlGroup {
             HStack(spacing: TasksDesignMetrics.footerGap) {
                 // The page switch is the Tall island (Accepted 2026-10-31).
-                CalendarTodayButton(isShown: CalendarTodayButton.isShown(selected: snapshot.selected, today: snapshot.today),
-                                    flat: flat, action: model.goToToday)
                 Spacer(minLength: 0)
                 AtticRaisedButton(systemName: "plus", label: "New task", size: CGSize(width: height, height: height),
                                   emphasisedGlyph: true, flat: flat, cornerRadius: TasksDesignMetrics.footerRadius) {
