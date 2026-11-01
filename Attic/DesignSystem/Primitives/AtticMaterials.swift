@@ -375,12 +375,23 @@ enum AtticMaterialProbe {
     static func reset() { states = [:] }
     /// Every raised control's corner since `resetCorners()` (nil: Apple's
     /// continuous corner, which draws a square control as a circle).
-    static private(set) var corners: [CGFloat?] = []
+    static private(set) var corners: [CGFloat?] = [] {
+        didSet { if corners.count > AtticDiagnosticHistory.capacity { corners.removeFirst(corners.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
+    }
     static func recordCorner(_ exponent: CGFloat?) { corners.append(exponent) }
     /// Every revealed (sliding) control's glass shape since `resetCorners()`.
-    static private(set) var revealed: [AtticRevealedControlShape] = []
+    static private(set) var revealed: [AtticRevealedControlShape] = [] {
+        didSet { if revealed.count > AtticDiagnosticHistory.capacity { revealed.removeFirst(revealed.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
+    }
     static func recordRevealed(_ shape: AtticRevealedControlShape) { revealed.append(shape) }
     static func resetCorners() { corners = []; revealed = [] }
+}
+
+/// Recent diagnostic samples, bounded even in optimized Local/DEBUG builds.
+/// Drop a quarter on overflow to amortize array moves during continuous input.
+enum AtticDiagnosticHistory {
+    static let capacity = 4096
+    static let retainedAfterOverflow = 3072
 }
 #endif
 

@@ -2144,7 +2144,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 /// the release.
 @MainActor
 enum PanelSwipeTrace {
-    static var events: [[Double]] = []
+    static var events: [[Double]] = [] {
+        didSet { if events.count > AtticDiagnosticHistory.capacity { events.removeFirst(events.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
+    }
     static var release: [String: Double] = [:]
 }
 #endif

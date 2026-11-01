@@ -1,3 +1,8 @@
+## 2026-11-01 · Bounded diagnostics
+
+Material-corner and reveal probes keep at most 4,096 recent samples, including
+optimized Local builds. Overflow drops the oldest quarter in one batch.
+
 ## 2026-10-31 · Tasks fix round 1 merge
 
 The next event's time uses rgb(86,88,92) through `toneInk`, between the

@@ -102,8 +102,12 @@ struct ComposerOverlay: View {
     #if DEBUG
     /// Test seams: whether the grow is drawn, and each frame it drew.
     static var isPresented = false
-    static var surfaces: [ComposerGrow.Geometry] = []
-    static var corners: [CGPoint] = []
+    static var surfaces: [ComposerGrow.Geometry] = [] {
+        didSet { if surfaces.count > AtticDiagnosticHistory.capacity { surfaces.removeFirst(surfaces.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
+    }
+    static var corners: [CGPoint] = [] {
+        didSet { if corners.count > AtticDiagnosticHistory.capacity { corners.removeFirst(corners.count - AtticDiagnosticHistory.retainedAfterOverflow) } }
+    }
     #endif
     /// The card's own size, measured at full width (it grows with its
     /// writing); a first guess before the first measure.
