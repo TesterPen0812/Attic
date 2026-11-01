@@ -304,6 +304,12 @@ struct NotesEditorPage: View {
     private var reviewsInPlace: Bool {
         !controller.isLibraryPresented && controller.isReviewingProposalInPlace
     }
+    /// The review bar's room: the row less Back and Aa ("+" folds away)
+    /// and the pill's least gaps on each side.
+    private var reviewBarRoom: CGFloat {
+        max(0, layout.panelSize.width - 2 * layout.chromeInsets.leading
+            - 2 * AtticControlSize.panelButton.width - 2 * AtticNoteMetrics.pillMinGap)
+    }
     private var hidesRowsForReview: Bool { controller.proposalReview != nil && !reviewsInPlace }
 
     // MARK: Content
@@ -554,7 +560,8 @@ struct NotesEditorPage: View {
                 NoteStatusSlot(controller: controller, store: noteStore, session: session, damaged: damagedRecovery,
                                maxWidth: AtticNoteMetrics.pillMaxWidth(
                                    panelWidth: layout.panelSize.width, chromeInset: layout.chromeInsets.leading,
-                                   showsFormat: showsFormatButton))
+                                   showsFormat: showsFormatButton),
+                               reviewBarMaxWidth: reviewBarRoom)
                     .noteFormatRowLeaving(.status)
                     .accessibilitySortPriority(2)
                     .transition(.opacity)
@@ -563,7 +570,7 @@ struct NotesEditorPage: View {
             if showsFormatButton {
                 formatButton
                     .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))
-                    .padding(.trailing, AtticNoteMetrics.formatButtonGap)
+                    .padding(.trailing, reviewsInPlace ? 0 : AtticNoteMetrics.formatButtonGap)
                     .transition(.opacity)
             }
             // N5 Idea C: "+" folds away while the pill is the review bar.
@@ -1070,6 +1077,8 @@ struct NoteStatusSlot: View {
     /// note: a task command that changed nothing, § 5.6; OD-4 keeps them in
     /// this slot rather than a Retry line of their own).
     var leadingItems: [AtticStatusItem] = []
+    /// N5: the room the proposal's pill has once it grows into the review bar.
+    var reviewBarMaxWidth: CGFloat = .infinity
     @State private var showingDetails = false
     @State private var showingProposal = false
     @Environment(\.atticDesign) private var design
@@ -1093,7 +1102,8 @@ struct NoteStatusSlot: View {
             if let primary = items.first, items.count == 1, primary.id == "proposal",
                let proposalID = controller.proposalID(for: session, deletion: false) {
                 // N5 Idea C: the proposal's pill grows into the review bar.
-                NoteProposalReviewBar(controller: controller, item: primary, proposalID: proposalID, maxWidth: maxWidth)
+                NoteProposalReviewBar(controller: controller, item: primary, proposalID: proposalID, maxWidth: maxWidth,
+                                      openMaxWidth: reviewBarMaxWidth)
                     .id(key)
                     .transition(AtticMotionScale.overlayTransition(reduceMotion: design.reduceMotion, from: .bottom))
             } else if let primary = items.first {
@@ -1480,6 +1490,7 @@ struct NoteProposalReviewBar: View {
     let item: AtticStatusItem
     let proposalID: UUID
     var maxWidth: CGFloat = AtticNoteMetrics.pillMaxWidth
+    var openMaxWidth: CGFloat = .infinity
     @Environment(\.atticDesign) private var design
 
     private var isOpen: Bool { controller.isReviewingProposalInPlace }
@@ -1521,7 +1532,7 @@ struct NoteProposalReviewBar: View {
                     .transition(.opacity)
             }
         }
-        .frame(maxWidth: isOpen ? nil : min(m.pillMaxWidth, maxWidth))
+        .frame(maxWidth: isOpen ? openMaxWidth : min(m.pillMaxWidth, maxWidth))
         .fixedSize(horizontal: true, vertical: false)
         .frame(height: m.pillHeight)
         .atticRaisedMaterial(cornerRadius: radius, interactive: false)
@@ -1602,7 +1613,7 @@ struct NoteProposalReviewActions: View {
 
 /// Draft N5 Idea C's values, design px halved.
 enum NoteProposalReviewMetrics {
-    static let actionsLead: CGFloat = 6       // .gact margin-left 12 px
+    static let actionsLead: CGFloat = 4       // .gact margin-left 12 px, less 2 to fit 320 pt
     static let actionsTrail: CGFloat = 3.5    // 7 px
     static let noticeFont: CGFloat = 9.5
     static let pillHeight: CGFloat = 20       // .pillbtn 40 px
@@ -1610,7 +1621,7 @@ enum NoteProposalReviewMetrics {
     static let pillPadding: CGFloat = 8       // 16 px
     static let softPillPadding: CGFloat = 7   // 14 px
     static let buttonGap: CGFloat = 3         // 6 px
-    static let menuSize: CGFloat = 22         // .tiny, 44 px
+    static let menuSize: CGFloat = 20         // .tiny 44 px, less 2 to fit 320 pt
     static let menuGlyph: CGFloat = 11
     static let changeButton: CGFloat = 17     // .chg button, 34 px
     static let changeInset: CGFloat = 4       // right: 8 px

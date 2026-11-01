@@ -300,10 +300,10 @@ final class AdaptiveProposalTests: XCTestCase {
 
     private func barWidth(_ controller: NotesPageController, proposalID: UUID) -> CGFloat {
         let item = AtticStatusItem(id: "proposal", systemName: "sparkle", title: "Claude has changes")
-        let host = NSHostingView(rootView: NoteProposalReviewBar(controller: controller, item: item, proposalID: proposalID)
+        // The bar's own (ideal) width, as the bottom row lays it out.
+        let host = NSHostingController(rootView: NoteProposalReviewBar(controller: controller, item: item, proposalID: proposalID)
             .environment(\.atticDesign, .default))
-        host.layoutSubtreeIfNeeded()
-        return host.fittingSize.width
+        return host.sizeThatFits(in: CGSize(width: 600, height: 60)).width
     }
 
     func testThePillGrowsIntoTheBarAndEscapeFoldsItBack() async throws {
@@ -327,7 +327,9 @@ final class AdaptiveProposalTests: XCTestCase {
         XCTAssertTrue(hasProposalStatus(controller, session), "the pill stays: the proposal waits")
         XCTAssertEqual(store.pendingEdits(noteID: session.noteID).count, 1)
         let pill = barWidth(controller, proposalID: proposalID)
-        XCTAssertGreaterThan(bar, pill + 60, "the bar adds •••, Reject and Accept at the pill's end")
+        XCTAssertGreaterThan(bar, pill + 40, "the bar adds •••, Reject and Accept at the pill's end (bar \(bar), pill \(pill))")
+        // A 320 pt panel's row: 320 − 2 × 12 − Back and Aa (2 × 27) − 2 × 9.
+        XCTAssertLessThanOrEqual(bar, 224, "the bar fits beside Back and Aa at 320 pt")
         // The pill opens the review again: pill → bar.
         await XCTAssertTrueAsync(await controller.beginProposalReview(id: proposalID))
         XCTAssertTrue(controller.isReviewingProposalInPlace)
