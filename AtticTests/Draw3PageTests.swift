@@ -604,7 +604,7 @@ final class Draw3PageTests: XCTestCase {
         XCTAssertNotNil(model.pasteboard.data(forType: .png))
     }
 
-    func testCopyAsImageKeepsAPNGOrJPEGOriginalByteForByte() async throws {
+    func testCopyAsImageForOneImageIsOneItemWithTheOriginalByteForByte() async throws {
         model.setTool(.select)
         for type in [UTType.png, .jpeg] {
             let original = Draw3Images.encoded(width: 30, height: 20, type: type, red: 0.1, green: 0.6, blue: 0.3)
@@ -614,11 +614,13 @@ final class Draw3PageTests: XCTestCase {
             model.runMore(.copyAsImage)
             await model.images.lastTask?.value
             let items = model.pasteboard.pasteboardItems ?? []
-            let rendered = try XCTUnwrap(items.first?.data(forType: .png).flatMap(Draw3Images.cgImage), "\(type): the rendered PNG")
-            let expected = DrawGeometry.bounds(object).insetBy(dx: -DrawExport.margin, dy: -DrawExport.margin)
-            XCTAssertEqual(rendered.width, Int((expected.width * 2).rounded(.up)))
-            let originals = items.compactMap { $0.data(forType: NSPasteboard.PasteboardType(type.identifier)) }
-            XCTAssertTrue(originals.contains(original), "\(type): the original, byte for byte")
+            XCTAssertEqual(items.count, 1, "\(type): one item, so a paste gives one picture")
+            let item = try XCTUnwrap(items.first)
+            XCTAssertEqual(item.data(forType: NSPasteboard.PasteboardType(type.identifier)), original,
+                           "\(type): the original, byte for byte")
+            // A PNG of the image itself (no board background), for apps that only read PNG.
+            let png = try XCTUnwrap(item.data(forType: .png).flatMap(Draw3Images.cgImage), "\(type): a PNG too")
+            XCTAssertEqual([png.width, png.height], [30, 20], "\(type): the image at its own pixels")
         }
     }
 
