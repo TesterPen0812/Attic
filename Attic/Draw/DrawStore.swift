@@ -138,7 +138,7 @@ class DrawStore: DrawStoreProtocol {
     }
 
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
-        if case .thumbnail(let bytes) = command { return writeThumbnail(bytes, on: id) }
+        if case .thumbnail(let bytes, let dark) = command { return writeThumbnail(bytes, dark: dark, on: id) }
         do {
             guard let step = try prepare(command, on: id) else { return .unchanged }
             guard pending[id] != nil else { return execute(step, action: .edit) }
@@ -176,7 +176,7 @@ class DrawStore: DrawStoreProtocol {
         case .rename(let name): after.name = Self.name(name)
         case .tags(let tags):
             after.tags = AtticTag.normalizedSet(tags)
-        case .thumbnail(let bytes): after.thumbnail = bytes
+        case .thumbnail(let bytes, let dark): after.thumbnail = bytes; after.thumbnailDark = bytes == nil ? nil : dark
         case .deleteCanvas: after.deletedAt = now()
         case .restoreCanvas: after.deletedAt = nil
         }
@@ -234,6 +234,7 @@ class DrawStore: DrawStoreProtocol {
         let copy = create(name: name ?? source.canvas.name + " copy")
         states[copy.id]?.canvas.tags = source.canvas.tags
         states[copy.id]?.canvas.thumbnail = source.canvas.thumbnail
+        states[copy.id]?.canvas.thumbnailDark = source.canvas.thumbnailDark
         let objects = source.objects.map { $0.translated(by: DrawPoint()) }
         let result = perform(.put(objects), on: copy.id)
         // Empty duplicates, like New, stay drafts. Failed copies remain visible
@@ -281,10 +282,15 @@ class DrawStore: DrawStoreProtocol {
     /// A thumbnail is not an edit: no Undo step, no new date (so no move in
     /// the menu), and a failure leaves nothing waiting for Retry (the next
     /// settle renders it again). A draft has none until its first content.
-    private func writeThumbnail(_ bytes: Data?, on id: UUID) -> DrawSaveResult {
-        guard pending[id] == nil, let current = try? state(id), current.canvas.thumbnail != bytes else { return .unchanged }
+    /// It records the appearance it was rendered for; the same bytes for
+    /// another appearance still write (the record changes).
+    private func writeThumbnail(_ bytes: Data?, dark: Bool?, on id: UUID) -> DrawSaveResult {
+        let dark = bytes == nil ? nil : dark
+        guard pending[id] == nil, let current = try? state(id),
+              current.canvas.thumbnail != bytes || current.canvas.thumbnailDark != dark else { return .unchanged }
         var after = current.canvas
         after.thumbnail = bytes
+        after.thumbnailDark = dark
         guard current.canvas.deletedAt == nil else { return .unchanged }
         // A draft keeps its thumbnail in memory until its first save.
         guard current.persisted else {
@@ -313,10 +319,11 @@ class DrawStore: DrawStoreProtocol {
     private func stamped(_ step: Step) -> Step {
         var step = step
         let thumbnail = states[step.change.canvasID]?.canvas.thumbnail
-        step.before.thumbnail = thumbnail
-        step.after.thumbnail = thumbnail
-        if step.change.before != nil { step.change.before?.thumbnail = thumbnail }
-        if step.change.after != nil { step.change.after?.thumbnail = thumbnail }
+        let dark = states[step.change.canvasID]?.canvas.thumbnailDark
+        step.before.thumbnail = thumbnail; step.before.thumbnailDark = dark
+        step.after.thumbnail = thumbnail; step.after.thumbnailDark = dark
+        if step.change.before != nil { step.change.before?.thumbnail = thumbnail; step.change.before?.thumbnailDark = dark }
+        if step.change.after != nil { step.change.after?.thumbnail = thumbnail; step.change.after?.thumbnailDark = dark }
         return step
     }
     private func write(_ step: Step) -> DrawWriteOutcome {

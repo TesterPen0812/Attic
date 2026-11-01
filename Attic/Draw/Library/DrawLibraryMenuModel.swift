@@ -189,6 +189,13 @@ final class DrawLibraryMenuModel: ObservableObject {
         return query.isEmpty ? nil : returnTarget(in: rows)?.id
     }
 
+    /// The menu is showing these rows: their thumbnails go to the page,
+    /// which re-renders any drawn for the other appearance. Called after
+    /// the list appears or changes, never from a layout pass.
+    func showThumbnails() {
+        actions.thumbnailsShown(rows.compactMap(\.canvas))
+    }
+
     // MARK: Keys
 
     /// Return in the capsule.

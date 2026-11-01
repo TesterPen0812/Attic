@@ -55,6 +55,11 @@ final class DrawSearchModel: ObservableObject {
         }
     }
 
+    /// The results are showing: their thumbnails take the menu's path.
+    func showThumbnails() {
+        actions.thumbnailsShown(results.map(\.canvas))
+    }
+
     /// The drawing's 28 characters, then an ellipsis.
     static func shortened(_ text: String, limit: Int = 28) -> String {
         let flat = text.replacingOccurrences(of: "\n", with: " ")
@@ -135,7 +140,8 @@ struct DrawSearchResults: View {
                                     guard let result = results.first(where: { $0.canvas.id == row.canvas?.id }) else { return }
                                     model.open(result)
                                     topRow?.endSearch(on: .canvas)
-                                })
+                                },
+                                thumbnailsShown: { [actions = model.actions] in actions.thumbnailsShown($0) })
             }
             .accessibilityLabel(String(localized: "Canvases found"))
             .accessibilityIdentifier("draw-search-results")

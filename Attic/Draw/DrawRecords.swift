@@ -13,6 +13,9 @@ final class DrawCanvasRecord {
     var updatedAt: Date = Date()
     var deletedAt: Date? = nil
     var thumbnailID: UUID? = nil
+    /// The appearance the thumbnail was rendered for (true: dark); nil
+    /// without one, or for one rendered before this was kept.
+    var thumbnailDark: Bool? = nil
     var textIndex: String = ""
 
     init() {}
@@ -21,12 +24,13 @@ final class DrawCanvasRecord {
         tagsJSON = try DrawCodec.string(canvas.tags)
         createdAt = canvas.createdAt; updatedAt = canvas.updatedAt; deletedAt = canvas.deletedAt
         thumbnailID = canvas.thumbnail == nil ? nil : canvas.id
+        thumbnailDark = canvas.thumbnail == nil ? nil : canvas.thumbnailDark
         textIndex = canvas.textIndex
     }
     func value(thumbnail: Data? = nil) throws -> DrawCanvas {
         DrawCanvas(id: id, name: name, tags: try DrawCodec.decode([String].self, from: tagsJSON),
                    createdAt: createdAt, updatedAt: updatedAt, deletedAt: deletedAt,
-                   thumbnail: thumbnail, textIndex: textIndex)
+                   thumbnail: thumbnail, thumbnailDark: thumbnailID == nil ? nil : thumbnailDark, textIndex: textIndex)
     }
 }
 

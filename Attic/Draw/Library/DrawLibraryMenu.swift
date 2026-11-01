@@ -92,21 +92,38 @@ struct DrawLibraryRows: View {
     var maxHeight: CGFloat = DrawLibraryMetrics.maxListHeight
     let hover: (DrawLibraryMenuModel.Row, Bool) -> Void
     let choose: (DrawLibraryMenuModel.Row) -> Void
+    /// The rows' canvases once they show (and again when they or the
+    /// appearance change): the page re-renders thumbnails drawn for the
+    /// other appearance. Runs after the list appears, never during layout.
+    var thumbnailsShown: (([DrawCanvas]) -> Void)?
+    @Environment(\.colorScheme) private var colorScheme
 
     init(rows: [DrawLibraryMenuModel.Row], litID: String?, scrollTarget: String? = nil,
          maxHeight: CGFloat = DrawLibraryMetrics.maxListHeight,
-         hover: @escaping (DrawLibraryMenuModel.Row, Bool) -> Void, choose: @escaping (DrawLibraryMenuModel.Row) -> Void) {
+         hover: @escaping (DrawLibraryMenuModel.Row, Bool) -> Void, choose: @escaping (DrawLibraryMenuModel.Row) -> Void,
+         thumbnailsShown: (([DrawCanvas]) -> Void)? = nil) {
         self.rows = rows
         self.litID = litID
         self.scrollTarget = scrollTarget
         self.maxHeight = maxHeight
         self.hover = hover
         self.choose = choose
+        self.thumbnailsShown = thumbnailsShown
     }
 
     init(model: DrawLibraryMenuModel, rows: [DrawLibraryMenuModel.Row], maxHeight: CGFloat) {
+        let actions = model.actions
         self.init(rows: rows, litID: model.litRowID(in: rows), scrollTarget: model.highlightedID, maxHeight: maxHeight,
-                  hover: { model.hover($0, inside: $1) }, choose: { model.choose($0) })
+                  hover: { model.hover($0, inside: $1) }, choose: { model.choose($0) },
+                  thumbnailsShown: { actions.thumbnailsShown($0) })
+    }
+
+    /// What the shown thumbnails are: each canvas, its thumbnail and the
+    /// appearance it was rendered for, and the current appearance.
+    private var shownThumbnails: [String] {
+        rows.compactMap { row in
+            row.canvas.map { "\($0.id.uuidString) \($0.thumbnail?.hashValue ?? 0) \(String(describing: $0.thumbnailDark))" }
+        } + [colorScheme == .dark ? "dark" : "light"]
     }
 
     var body: some View {
@@ -126,6 +143,9 @@ struct DrawLibraryRows: View {
             }
             .scrollDisabled(height <= maxHeight)
             .frame(height: min(height, maxHeight))
+            .task(id: shownThumbnails) {
+                thumbnailsShown?(rows.compactMap(\.canvas))
+            }
             .onChange(of: scrollTarget) { _, id in
                 if let id { proxy.scrollTo(id) }
             }

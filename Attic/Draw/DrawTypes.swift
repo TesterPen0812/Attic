@@ -94,6 +94,9 @@ struct DrawCanvas: Identifiable, Codable, Equatable, Sendable {
     var deletedAt: Date? = nil
     /// Small, UI-rendered thumbnail only; never an original image or stroke body.
     var thumbnail: Data? = nil
+    /// The appearance `thumbnail` was rendered for (true: the dark board);
+    /// nil without a thumbnail, or for one rendered before this was kept.
+    var thumbnailDark: Bool? = nil
     var textIndex: String = ""
 }
 
@@ -136,7 +139,8 @@ enum DrawCommand: Sendable {
     case restoreObjects([UUID])
     case rename(String)
     case tags([String])
-    case thumbnail(Data?)
+    /// Quiet: the rendered thumbnail and the appearance it was rendered for.
+    case thumbnail(Data?, dark: Bool? = nil)
     case deleteCanvas
     case restoreCanvas
 }

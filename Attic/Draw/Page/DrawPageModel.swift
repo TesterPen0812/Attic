@@ -164,8 +164,13 @@ final class DrawPageModel: ObservableObject {
     /// Canvases whose thumbnail is behind their content.
     private var thumbnailDirty: Set<UUID> = []
     private var thumbnailTimer: DispatchWorkItem?
-    private var thumbnailRenders: [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
+    private var thumbnailRenders: [UUID: (generation: Int, dark: Bool, task: Task<Void, Never>)] = [:]
     private var thumbnailGeneration = 0
+    /// Shown canvases whose thumbnail was rendered for the other
+    /// appearance, waiting for the next turn of the main loop.
+    private var appearanceQueue: Set<UUID> = []
+    private var appearanceDrainScheduled = false
+    private var appearanceObservation: NSKeyValueObservation?
     /// The save notice's ✕ hides it until the next problem.
     @Published private var dismissedSaveProblem: String?
     /// A file Save Image or Export… couldn't write, or an image that
@@ -175,6 +180,9 @@ final class DrawPageModel: ObservableObject {
     init(store: any DrawStoreProtocol) {
         self.store = store
         observeStore()
+        appearanceObservation = NSApplication.shared.observe(\.effectiveAppearance) { [weak self] _, _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.appearanceChanged() } }
+        }
         DrawLibraryHub.register(store)
         imageSeam = images
     }
@@ -192,7 +200,8 @@ final class DrawPageModel: ObservableObject {
                            close: { [weak self] in self?.closeFilter() },
                            export: { [weak self] in self?.images.exportCanvas($0) },
                            copyAsImage: { [weak self] in self?.images.copyCanvas($0) },
-                           hasContent: { [weak self] in self?.hasContent($0) ?? false })
+                           hasContent: { [weak self] in self?.hasContent($0) ?? false },
+                           thumbnailsShown: { [weak self] in self?.thumbnailsShown($0) })
     }
 
     /// The one model the panel keeps for the session (the store owns Undo,
@@ -309,8 +318,10 @@ final class DrawPageModel: ObservableObject {
     }
 
     /// Off the main thread, from this snapshot, through the store's quiet
-    /// `.thumbnail` command (no Undo, no date, no new order).
-    private func renderThumbnail(_ id: UUID, objects snapshot: [DrawObject]) {
+    /// `.thumbnail` command (no Undo, no date, no new order), recording the
+    /// appearance it was rendered for. With `keepOnFailure`, a render that
+    /// fails leaves the shown thumbnail alone.
+    private func renderThumbnail(_ id: UUID, objects snapshot: [DrawObject], keepOnFailure: Bool = false) {
         thumbnailDirty.remove(id)
         thumbnailGeneration += 1
         let generation = thumbnailGeneration
@@ -319,7 +330,7 @@ final class DrawPageModel: ObservableObject {
             // must never land after the empty card.
             thumbnailRenders[id]?.task.cancel()
             thumbnailRenders[id] = nil
-            writeThumbnail(nil, on: id)
+            writeThumbnail(nil, dark: DrawImageActions.isDark, on: id)
             return
         }
         let dark = DrawImageActions.isDark
@@ -328,14 +339,63 @@ final class DrawPageModel: ObservableObject {
             let data = await render(snapshot, dark)
             guard let self, self.thumbnailRenders[id]?.generation == generation else { return }
             self.thumbnailRenders[id] = nil
-            self.writeThumbnail(data, on: id)
+            if data == nil, keepOnFailure { return }
+            self.writeThumbnail(data, dark: dark, on: id)
         }
-        thumbnailRenders[id] = (generation, task)
+        thumbnailRenders[id] = (generation, dark, task)
     }
 
-    private func writeThumbnail(_ data: Data?, on id: UUID) {
+    /// These canvases' thumbnails are about to show (the canvas menu,
+    /// Search). Any rendered for the other appearance is queued, once per
+    /// canvas, and re-rendered on the next turn of the main loop, so the
+    /// caller (a view's appearance) never renders or writes state. The old
+    /// thumbnail shows until the new one lands, then the card updates in
+    /// place. Canvases that never show are left alone.
+    func thumbnailsShown(_ canvases: [DrawCanvas]) {
+        let dark = DrawImageActions.isDark
+        for canvas in canvases where canvas.thumbnail != nil && canvas.thumbnailDark != dark && canvas.deletedAt == nil {
+            appearanceQueue.insert(canvas.id)
+        }
+        guard !appearanceQueue.isEmpty, !appearanceDrainScheduled else { return }
+        appearanceDrainScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.renderQueuedAppearances() }
+        }
+    }
+
+    /// The app's appearance changed: the open canvas's thumbnail renders
+    /// again once edits settle, like an edit's.
+    func appearanceChanged() {
+        guard let canvasID, !objects.isEmpty else { return }
+        let dark = DrawImageActions.isDark
+        // Already on its way in this appearance, or settling (which renders
+        // in the appearance of the moment it settles).
+        if thumbnailRenders[canvasID]?.dark == dark { return }
+        if thumbnailDirty.contains(canvasID), thumbnailTimer != nil { return }
+        if let canvas = try? store.open(canvasID).canvas, canvas.thumbnail != nil, canvas.thumbnailDark == dark,
+           thumbnailRenders[canvasID] == nil { return }
+        thumbnailNeeded()
+    }
+
+    private func renderQueuedAppearances() {
+        appearanceDrainScheduled = false
+        let ids = appearanceQueue
+        appearanceQueue = []
+        let dark = DrawImageActions.isDark
+        for id in ids where thumbnailRenders[id]?.dark != dark {
+            if id == canvasID {
+                appearanceChanged()
+                continue
+            }
+            guard store.pendingEdits[id] == nil, let snapshot = try? store.open(id), snapshot.canvas.deletedAt == nil,
+                  snapshot.canvas.thumbnail != nil, snapshot.canvas.thumbnailDark != dark else { continue }
+            renderThumbnail(id, objects: snapshot.objects, keepOnFailure: true)
+        }
+    }
+
+    private func writeThumbnail(_ data: Data?, dark: Bool, on id: UUID) {
         let synced = appliedRevision == store.revision
-        switch store.perform(.thumbnail(data), on: id) {
+        switch store.perform(.thumbnail(data, dark: dark), on: id) {
         case .saved:
             if synced { appliedRevision = store.revision }
         case .unchanged:
