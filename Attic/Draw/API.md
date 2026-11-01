@@ -21,7 +21,9 @@ changes are one `put`. Image originals, dimensions and type round-trip exactly.
 Colours are Ink/Blue/Red/Green/Orange; sizes map to 1.5/2.25/4 pt strokes and
 11/14/20 pt text; corners are Square/Rounded. A text box's optional `textWidth`
 is its wrap width (set by its side handles); without one the box grows to its
-longest line.
+longest line. Its optional `textScale` (set when a group is resized) draws the
+style's size that much larger or smaller: the lines are laid out at the
+style's size and wrap width ÷ scale, then scaled, so they never reflow.
 
 `library(deleted:)` lists metadata newest first. `search` combines `#tags` with
 name/text terms and returns matching text box IDs for reveal. Tags use Attic's
@@ -35,8 +37,9 @@ from metadata only (no originals, thumbnails or board state).
 `purge(_:)` removes deleted canvases and images for good (Delete Permanently,
 Empty) and `purge(deletedBefore:)` is the 30-day removal; each target names the
 deletion time it was listed with, every physical replica of it goes, and a
-target whose replicas disagree (or whose canvas has an unsettled edit) is kept
-and counted in the report. There is no Clear command.
+target whose replicas disagree (canvas, object or payload rows: parent,
+digest and bytes) or whose canvas has an unsettled edit is kept and counted
+in the report. There is no Clear command.
 
 `.thumbnail(data)` is a quiet write: no Undo step, no new `updatedAt`, no new
 place in the library, and it doesn't count as an edit. History steps carry the
@@ -48,8 +51,12 @@ Observe `revision`, `lastDelta`, `pendingEdits` and `hasUnsettledEdits` on the
 concrete observable store. Successful saves publish one delta and advance history
 once. `.retry` keeps the visible after-draft and permits `retry(on:)`; `.held`
 requires `reconcile(on:)`. History stays unchanged until a save is confirmed.
-Do not release the session or allow quit with unsettled edits. The store blocks
-further commands on that canvas until reconciliation/Retry settles it. Other
+Do not release the session or allow quit with unsettled edits. Commands on a
+canvas with an unsaved edit still work: each shows at once and waits, in
+order, behind it (`pendingEdits[id].count` says how many). `retry`,
+`reconcile` and each later command try them again in order (a held one is
+reconciled, never overwritten), stopping at the first that still fails; Undo
+and Redo stay off until all are saved, then step back through each. Other
 canvases remain available. `reload` reads fresh durable values after external
 imports and clears only that canvas's old history; it refuses unsettled drafts.
 
@@ -57,9 +64,14 @@ Use `copy` to encode `DrawStore.clipboardType` (`com.taha.attic.draw-objects.v1`
 into the pasteboard. After successfully writing the pasteboard, call `cut` to
 remove the same IDs. `paste` validates the version, assigns fresh IDs, offsets
 geometry, and places the objects above existing objects as one Undo step. Copy
-as Image (PNG at 2×, plus the original data for one image) and Export… (PNG
+as Image (PNG at 2×, plus the original data for one image: a PNG original on
+a second pasteboard item, other types on the same one) and Export… (PNG
 at 2×, vector PDF with full-resolution images) render on the page side
-(`DrawExport`, `DrawImageActions`), off the main thread.
+(`DrawExport`, `DrawImageActions`), off the main thread. Export… and Save
+Image write the whole file to a staging folder, swap it in atomically, and only
+then move the old file to the Trash; a failure leaves the old file as it was and
+shows in `saveNotice` (without Retry). An image drop or paste lands on the
+canvas it was made on, even after a switch (`DrawPageModel.perform(_:on:)`).
 
 For durable storage, use `DrawPersistentStore(container: appContainer)` behind
 the same protocol. It accepts an existing container; it never opens a default
@@ -79,7 +91,8 @@ This API never accesses old `Canvas*` rows. `AtticDraw.isEnabled` (on unless
 `AtticDraw.enabled` is false in defaults, read at launch) makes Draw the Canvas
 page; the app then marks its container with `AtticLegacyCanvas.markDormant`,
 and every old-Canvas reader (the Canvas store, Search's library, Recently
-Deleted, tags, the replica fetch funnel) leaves the old rows unread and
+Deleted, tags, workspace tokens and inventory, links and titles, all through
+the counted `fetchCanvasReplicas` funnel) leaves the old rows unread and
 unchanged. The quit route calls `DrawPageModel.prepareToQuit()`, which settles
-the stroke in progress, retries or reconciles unsettled edits and returns false
-while one is held. Undo survives session switches, not app relaunch.
+the stroke in progress, waits for every image import in flight, retries or
+reconciles unsettled edits and returns false while any is unsaved. Undo survives session switches, not app relaunch.
