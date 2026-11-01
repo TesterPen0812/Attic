@@ -67,6 +67,7 @@ final class DrawBoardView: NSView, DrawBoardSink {
         marqueeLayer.fillColor = NSColor.systemBlue.withAlphaComponent(0.08).cgColor
         marqueeLayer.lineWidth = 0.75
         model.board = self
+        registerForDraggedTypes(DrawPageModel.imagePasteboardTypes + [.fileURL])
         layoutLayers()
     }
 
@@ -140,7 +141,8 @@ final class DrawBoardView: NSView, DrawBoardSink {
     private func currentKey() -> DrawRasterKey {
         let move = model.rasterMove
         return DrawRasterKey(revision: model.contentRevision, viewport: model.viewport, size: bounds.size, scale: scale,
-                             dark: isDark, hidden: model.rasterHidden, moved: move?.ids ?? [], offset: move?.offset ?? .zero)
+                             dark: isDark, hidden: model.rasterHidden, moved: move?.ids ?? [], offset: move?.offset ?? .zero,
+                             replaced: model.rasterReplacements.mapValues(\.frame))
     }
 
     /// Queues the committed raster for the current state; the board does
@@ -154,7 +156,7 @@ final class DrawBoardView: NSView, DrawBoardSink {
         #if DEBUG
         rasterRequests += 1
         #endif
-        renderer.request(DrawRasterRequest(key: key, objects: model.objects))
+        renderer.request(DrawRasterRequest(key: key, objects: model.objects, replacements: model.rasterReplacements))
     }
 
     private func install(_ request: DrawRasterRequest, _ result: DrawRasterImage) {
@@ -230,7 +232,7 @@ final class DrawBoardView: NSView, DrawBoardSink {
         case .marquee(let from, let to, _):
             let rect = model.viewport.screen(CGRect(x: from.x, y: from.y, width: to.x - from.x, height: to.y - from.y).standardized)
             marqueeLayer.path = CGPath(roundedRect: viewRect(rect), cornerWidth: 4, cornerHeight: 4, transform: nil)
-        case .move:
+        case .move, .resize:
             updateSelection()
         case .erase, .pan:
             break
@@ -251,9 +253,10 @@ final class DrawBoardView: NSView, DrawBoardSink {
 
     /// The blue outline with handles (screen points, never scaled).
     private func updateSelection() {
-        let chosen = model.selectedObjects
+        let chosen = model.displayedSelection
         let outline = CGMutablePath(), handles = CGMutablePath()
         guard !chosen.isEmpty, model.editing == nil else {
+            if handlesLayer.path != nil { window?.invalidateCursorRects(for: self) }
             selectionLayer.path = nil
             handlesLayer.path = nil
             return
@@ -267,23 +270,14 @@ final class DrawBoardView: NSView, DrawBoardSink {
         }
         for object in chosen {
             let moved = object.translated(by: DrawPoint(x: offset.x, y: offset.y), id: object.id)
-            if chosen.count == 1, case .shape(let kind) = moved.content, kind == .line || kind == .arrow {
-                let (a, b) = DrawGeometry.endpoints(moved.frame)
-                handle(boardToView(viewport.screen(a)))
-                handle(boardToView(viewport.screen(b)))
-                continue
-            }
+            if chosen.count == 1, case .shape(let kind) = moved.content, kind == .line || kind == .arrow { continue }
             let rect = viewRect(viewport.screen(DrawGeometry.bounds(moved)).insetBy(dx: -gap, dy: -gap))
             outline.addPath(CGPath(roundedRect: rect, cornerWidth: 5, cornerHeight: 5, transform: nil))
-            guard chosen.count == 1 else { continue }
-            if case .text = moved.content {
-                handle(CGPoint(x: rect.minX, y: rect.midY))
-                handle(CGPoint(x: rect.maxX, y: rect.midY))
-            } else {
-                for corner in [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
-                               CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY)] { handle(corner) }
-            }
         }
+        // One object's handles, or the corners around several (they scale
+        // as a group).
+        for spot in model.handleSpots { handle(boardToView(spot.point)) }
+        if model.live == nil { window?.invalidateCursorRects(for: self) }
         selectionLayer.path = outline
         handlesLayer.path = handles
     }
@@ -322,9 +316,9 @@ final class DrawBoardView: NSView, DrawBoardSink {
         guard let editor, let edit = model.editing else { return }
         let viewport = model.viewport
         let fontSize = CGFloat(edit.style.size.textSize)
-        let size = DrawText.size(of: edit.text, fontSize: fontSize)
+        let size = DrawText.size(of: edit.text, fontSize: fontSize, width: edit.width)
         let origin = viewport.screen(edit.origin)
-        let frame = CGRect(x: origin.x, y: origin.y, width: (size.width + fontSize) * viewport.zoom,
+        let frame = CGRect(x: origin.x, y: origin.y, width: (size.width + (edit.width == nil ? fontSize : 0)) * viewport.zoom,
                            height: max(size.height, fontSize * DrawText.lineHeight) * viewport.zoom)
         editor.frame = viewRect(frame)
     }
@@ -408,6 +402,35 @@ final class DrawBoardView: NSView, DrawBoardSink {
 
     // MARK: Cursor and accessibility
 
+    /// A drop of images (files or data) at a board point: starts the import.
+    func acceptDrop(from pasteboard: NSPasteboard, at point: CGPoint) -> Bool {
+        model.importImages(from: pasteboard, at: point) != nil
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        DrawPageModel.holdsImages(sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        DrawPageModel.holdsImages(sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        acceptDrop(from: sender.draggingPasteboard, at: boardPoint(convert(sender.draggingLocation, from: nil)))
+    }
+
+    /// The resize cursor for a handle.
+    static func cursor(for handle: DrawHandle) -> NSCursor {
+        switch handle {
+        case .topLeft: .frameResize(position: .topLeft, directions: .all)
+        case .topRight: .frameResize(position: .topRight, directions: .all)
+        case .bottomLeft: .frameResize(position: .bottomLeft, directions: .all)
+        case .bottomRight: .frameResize(position: .bottomRight, directions: .all)
+        case .left, .right: .columnResize
+        case .start, .end: .crosshair
+        }
+    }
+
     override func resetCursorRects() {
         let cursor: NSCursor = switch model.tool {
         case .select: .arrow
@@ -415,6 +438,14 @@ final class DrawBoardView: NSView, DrawBoardSink {
         case .pen, .eraser, .shape: .crosshair
         }
         addCursorRect(bounds, cursor: cursor)
+        // The handles show which way they resize, over the same reach a
+        // press takes.
+        let reach = DrawPageModel.handleHitRadius
+        for spot in model.handleSpots {
+            let point = boardToView(spot.point)
+            addCursorRect(CGRect(x: point.x - reach, y: point.y - reach, width: reach * 2, height: reach * 2),
+                          cursor: Self.cursor(for: spot.handle))
+        }
     }
 
     override func isAccessibilityElement() -> Bool { true }
@@ -422,6 +453,15 @@ final class DrawBoardView: NSView, DrawBoardSink {
     override func accessibilityLabel() -> String? { String(localized: "Drawing board") }
     override func accessibilityValue() -> Any? {
         String(localized: "\(model.objects.count) objects, \(model.selection.count) selected")
+    }
+
+    /// The handles' resize, for VoiceOver.
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard !model.selection.isEmpty else { return nil }
+        return [NSAccessibilityCustomAction(name: String(localized: "Make Larger")) { [weak self] in
+                    self?.model.scaleSelection(by: 1.1); return true },
+                NSAccessibilityCustomAction(name: String(localized: "Make Smaller")) { [weak self] in
+                    self?.model.scaleSelection(by: 1 / 1.1); return true }]
     }
 }
 
@@ -571,6 +611,10 @@ final class DrawTextEditorView: NSTextView, NSTextViewDelegate {
                                                          .paragraphStyle: paragraph]
         typingAttributes = attributes
         insertionPointColor = colour
+        // A box with a set width wraps inside it; others grow to the right.
+        let wrap = edit.width.map { $0 * zoom }
+        isHorizontallyResizable = wrap == nil
+        textContainer?.size = CGSize(width: wrap ?? .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         applying = true
         if replacingText, string != edit.text, !hasMarkedText() {
             string = edit.text

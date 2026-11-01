@@ -14,6 +14,20 @@ struct DrawChange: Equatable {
     }
 }
 
+/// An image Delete Permanently or the 30-day removal takes: its canvas and
+/// the deletion time the list showed.
+struct DrawImageTarget: Equatable, Sendable {
+    var canvas: UUID
+    var deletedAt: Date
+}
+
+/// What a repository purge removed, and how many targets stayed.
+struct DrawRepositoryPurge: Equatable, Sendable {
+    var removedCanvases: Set<UUID> = []
+    var removedImages: Set<UUID> = []
+    var kept = 0
+}
+
 enum DrawWriteOutcome {
     case committed
     case retry(String)
@@ -27,6 +41,13 @@ protocol DrawRepository: AnyObject {
     func textMatches(_ words: [String], in id: UUID) throws -> [UUID]
     func write(_ change: DrawChange) -> DrawWriteOutcome
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome
+    /// Forgets a failed attempt that nothing will retry (a thumbnail).
+    func discardAttempt(for id: UUID)
+    /// Images deleted from live canvases, from metadata only.
+    func deletedImageHeaders() throws -> [DrawDeletedImage]
+    /// Removes deleted canvases (with everything in them) and deleted
+    /// images for good, every physical replica, in one save.
+    func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge
 }
 
 @MainActor
@@ -50,4 +71,29 @@ final class DrawMemoryRepository: DrawRepository {
         }.map(\.id).sorted { $0.uuidString < $1.uuidString }
     }
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome { .retry("Retry the edit.") }
+    func discardAttempt(for id: UUID) {}
+    func deletedImageHeaders() -> [DrawDeletedImage] {
+        canvases.values.filter { $0.deletedAt == nil }.flatMap { canvas -> [DrawDeletedImage] in
+            var metadata = canvas
+            metadata.thumbnail = nil
+            return objects[canvas.id, default: [:]].values.filter { $0.isImage && $0.deletedAt != nil }
+                .map { DrawDeletedImage(canvas: metadata, object: $0.header) }
+        }
+    }
+    func purge(canvases targets: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
+        var result = DrawRepositoryPurge()
+        for (id, deletedAt) in targets {
+            guard let canvas = canvases[id], canvas.deletedAt == deletedAt else { result.kept += 1; continue }
+            canvases[id] = nil
+            objects[id] = nil
+            result.removedCanvases.insert(id)
+        }
+        for (objectID, target) in images {
+            guard canvases[target.canvas] != nil, let object = objects[target.canvas]?[objectID], object.isImage,
+                  object.deletedAt == target.deletedAt else { result.kept += 1; continue }
+            objects[target.canvas]?[objectID] = nil
+            result.removedImages.insert(objectID)
+        }
+        return result
+    }
 }

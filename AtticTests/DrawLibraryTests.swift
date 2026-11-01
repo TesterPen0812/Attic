@@ -302,8 +302,8 @@ final class DrawLibraryTests: XCTestCase {
         XCTAssertEqual(picture.title, "Image")
         XCTAssertEqual(picture.detail, "From “Launch plan” · Deleted today")
         XCTAssertEqual(model.entries.count, 2)
-        XCTAssertFalse(canvas.canDeletePermanently)
-        XCTAssertFalse(picture.canDeletePermanently)
+        XCTAssertTrue(canvas.canDeletePermanently, "Draw 3: the store removes Draw rows for good")
+        XCTAssertTrue(picture.canDeletePermanently)
         XCTAssertEqual(model.sections.map(\.kind), [.canvas, .attachment])
 
         model.restore(canvas)

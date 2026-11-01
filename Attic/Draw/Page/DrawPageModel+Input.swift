@@ -61,7 +61,9 @@ extension DrawPageModel {
             select([])
             begin(.shape(shape, start: world, end: world))
         case .select:
-            if let hit = DrawGeometry.pick(objects, at: world, tolerance: pickTolerance) {
+            if let spot = handleSpot(at: screen) {
+                beginResize(spot, at: world)
+            } else if let hit = DrawGeometry.pick(objects, at: world, tolerance: pickTolerance) {
                 if shift {
                     select(selection.contains(hit.id) ? selection.filter { $0 != hit.id } : selection + [hit.id])
                 } else if !selection.contains(hit.id) {
@@ -109,6 +111,8 @@ extension DrawPageModel {
             if nowMoved { board?.drawContentChanged() }
         case .marquee(let from, _, let base):
             setLive(.marquee(from: from, to: world, base: base))
+        case .resize(let resize):
+            dragResize(resize, to: world, shift: shift)
         }
     }
 
@@ -169,6 +173,8 @@ extension DrawPageModel {
                 let inside = objects.filter { DrawGeometry.bounds($0).intersects(rect) }.map(\.id)
                 select(Array(base) + inside.filter { !base.contains($0) })
             }
+        case .resize(let resize):
+            finishResize(resize)
         }
         if isDrawingLive { isDrawingLive = false }
         board?.drawLiveChanged()

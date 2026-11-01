@@ -83,7 +83,57 @@ class DrawStore: DrawStoreProtocol {
         return try state(id).objects.values.filter { $0.isImage && $0.deletedAt != nil }.sorted(by: Self.objectOrder)
     }
 
+    func deletedImages() throws -> [DrawDeletedImage] {
+        _ = revision
+        return try repository.deletedImageHeaders().sorted {
+            ($0.object.deletedAt ?? .distantPast, $0.object.id.uuidString) > ($1.object.deletedAt ?? .distantPast, $1.object.id.uuidString)
+        }
+    }
+
+    func purge(_ targets: [DrawPurgeTarget]) -> DrawPurgeReport {
+        var canvases: [UUID: Date] = [:], images: [UUID: DrawImageTarget] = [:], kept = 0
+        for target in Set(targets) {
+            switch target {
+            case let .canvas(id, deletedAt):
+                // A canvas with an unsettled edit stays until it settles.
+                if pending[id] != nil { kept += 1 } else { canvases[id] = deletedAt }
+            case let .image(canvas, object, deletedAt):
+                if pending[canvas] != nil { kept += 1 } else { images[object] = DrawImageTarget(canvas: canvas, deletedAt: deletedAt) }
+            }
+        }
+        guard !canvases.isEmpty || !images.isEmpty else { return DrawPurgeReport(removed: 0, kept: kept) }
+        let result = repository.purge(canvases: canvases, images: images)
+        for id in result.removedCanvases {
+            states[id] = nil
+            histories[id] = nil
+        }
+        for objectID in result.removedImages {
+            guard let canvasID = images[objectID]?.canvas else { continue }
+            states[canvasID]?.objects[objectID] = nil
+            // Its steps (placing, moving, deleting it) can't be undone any
+            // more, and history is a chain: the canvas starts afresh.
+            histories[canvasID] = nil
+        }
+        let removed = result.removedCanvases.count + result.removedImages.count
+        if removed > 0 { revision &+= 1 }
+        return DrawPurgeReport(removed: removed, kept: kept + result.kept)
+    }
+
+    func purge(deletedBefore cutoff: Date) -> DrawPurgeReport {
+        var targets: [DrawPurgeTarget] = []
+        for canvas in (try? library(deleted: true)) ?? [] {
+            if let deletedAt = canvas.deletedAt, deletedAt < cutoff { targets.append(.canvas(canvas.id, deletedAt: deletedAt)) }
+        }
+        for image in (try? deletedImages()) ?? [] {
+            if let deletedAt = image.object.deletedAt, deletedAt < cutoff {
+                targets.append(.image(canvas: image.canvas.id, object: image.object.id, deletedAt: deletedAt))
+            }
+        }
+        return targets.isEmpty ? DrawPurgeReport() : purge(targets)
+    }
+
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult {
+        if case .thumbnail(let bytes) = command { return writeThumbnail(bytes, on: id) }
         guard pending[id] == nil else { return pendingEdits[id]!.outcome }
         do {
             guard let step = try prepare(command, on: id) else { return .unchanged }
@@ -217,7 +267,45 @@ class DrawStore: DrawStoreProtocol {
         states[id] = state
         return state
     }
+    /// A thumbnail is not an edit: no Undo step, no new date (so no move in
+    /// the menu), and a failure leaves nothing waiting for Retry (the next
+    /// settle renders it again). A draft has none until its first content.
+    private func writeThumbnail(_ bytes: Data?, on id: UUID) -> DrawSaveResult {
+        guard pending[id] == nil, let current = try? state(id), current.canvas.thumbnail != bytes else { return .unchanged }
+        var after = current.canvas
+        after.thumbnail = bytes
+        guard current.canvas.deletedAt == nil else { return .unchanged }
+        // A draft keeps its thumbnail in memory until its first save.
+        guard current.persisted else {
+            states[id]?.canvas = after
+            revision &+= 1
+            return .saved(DrawDelta(canvas: after, upserted: [], removedIDs: [], revision: revision))
+        }
+        let change = DrawChange(canvasID: id, before: current.canvas, after: after, objectsBefore: [:], objectsAfter: [:])
+        var outcome = repository.write(change)
+        if case .committed = outcome {} else {
+            outcome = repository.reconcile(change)
+            if case .committed = outcome {} else { repository.discardAttempt(for: id) }
+        }
+        switch outcome {
+        case .committed:
+            states[id]?.canvas = after
+            revision &+= 1
+            return .saved(DrawDelta(canvas: after, upserted: [], removedIDs: [], revision: revision))
+        case .retry(let message): return .retry(message)
+        case .held(let message): return .held(message)
+        }
+    }
+
     private func execute(_ step: Step, action: Action) -> DrawSaveResult {
+        // History holds canvas metadata from when each step was made; the
+        // thumbnail is whatever was rendered last, never an older one.
+        var step = step
+        let thumbnail = states[step.change.canvasID]?.canvas.thumbnail
+        step.before.thumbnail = thumbnail
+        step.after.thumbnail = thumbnail
+        if step.change.before != nil { step.change.before?.thumbnail = thumbnail }
+        if step.change.after != nil { step.change.after?.thumbnail = thumbnail }
         let outcome: DrawWriteOutcome = step.change.before == nil && step.change.after == nil
             ? .committed : repository.write(step.change)
         return settle(outcome, step: step, action: action)

@@ -160,7 +160,6 @@ struct RecentlyDeletedSettingsView: View {
         // Restore │ Select All │ Delete Permanently…: icons on every row and
         // the destructive command last (Dropdown content: answers, owner,
         // 2026-10-24, sheet 5).
-        // Draw's rows have no permanent delete yet (the Draw store has none).
         let purgeable = targets.filter(\.canDeletePermanently)
         let commands = [
             AtticMenuCommand(verbatim: RecentlyDeletedPresentation.restoreTitle(count: targets.count),

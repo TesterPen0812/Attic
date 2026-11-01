@@ -146,7 +146,10 @@ struct DrawTitleCapsule: View {
             }
             .atticDesignCorners()
             if model.isFiltering {
-                DrawLibraryMenu(model: library)
+                DrawLibraryMenu(model: library, maxListHeight: DrawPageMetrics.menuListRoom(
+                    boardHeight: model.boardSize.height,
+                    chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
+                    chromeBottom: model.clearInsets.left))
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }

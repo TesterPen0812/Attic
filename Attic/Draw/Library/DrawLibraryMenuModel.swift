@@ -158,12 +158,14 @@ final class DrawLibraryMenuModel: ObservableObject {
         rows.append(Row(kind: .newCanvas(name: query.isEmpty ? nil : query),
                         title: query.isEmpty ? String(localized: "New canvas") : String(localized: "New canvas “\(query)”")))
         guard query.isEmpty else { return rows }
-        let hasCanvas = currentCanvas(in: found) != nil
+        let current = currentCanvas(in: found)
+        let hasCanvas = current != nil
+        let drawn = current.map { actions.hasContent($0.id) } ?? false
         for command in Command.allCases {
             let enabled: Bool = switch command {
             case .linkedFrom: false
-            case .export: hasCanvas && actions.export != nil
-            case .copyAsImage: hasCanvas && actions.copyAsImage != nil
+            case .export: drawn && actions.export != nil
+            case .copyAsImage: drawn && actions.copyAsImage != nil
             default: hasCanvas
             }
             rows.append(Row(kind: .command(command), title: command.title, isEnabled: enabled,

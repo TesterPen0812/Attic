@@ -14,6 +14,8 @@ final class TasksPanelUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
+        // testAHiddenTasksPageTakesNoKeysClicksOrVoiceOver uses the old Canvas page.
+        app.launchArguments += ["-AtticDraw.enabled", "NO"]
         app.launch()
         app.activate()
         XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 5))

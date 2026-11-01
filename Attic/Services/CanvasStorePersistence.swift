@@ -29,6 +29,7 @@ extension CanvasStore {
     ///   board. Reload still falls back if that board is no longer live.
     @discardableResult
     func save(restoringSelectionOnFailure previousSelection: UUID? = nil) -> CanvasSaveOutcome {
+        guard !isDormant else { return .noChanges }
         let savedPresentation: CanvasPresentationSnapshot
         do {
             // Resolve the pending mutation while the saved context is still

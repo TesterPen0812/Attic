@@ -11,19 +11,24 @@ struct DrawLibraryActions {
     /// Job 3: Export… and Copy as Image stay greyed while these are nil.
     let export: (@MainActor (_ canvasID: UUID) -> Void)?
     let copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)?
+    /// Whether a canvas has anything drawn (Export… and Copy as Image are
+    /// greyed while it doesn't).
+    let hasContent: @MainActor (_ canvasID: UUID) -> Bool
 
     init(open: @escaping @MainActor (_ canvasID: UUID) -> Void,
          newCanvas: @escaping @MainActor (_ name: String?) -> Void,
          reveal: @escaping @MainActor (_ canvasID: UUID, _ objectID: UUID) -> Void,
          close: @escaping @MainActor () -> Void,
          export: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
-         copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)? = nil) {
+         copyAsImage: (@MainActor (_ canvasID: UUID) -> Void)? = nil,
+         hasContent: @escaping @MainActor (_ canvasID: UUID) -> Bool = { _ in true }) {
         openCanvas = open
         makeCanvas = newCanvas
         revealObject = reveal
         closeMenu = close
         self.export = export
         self.copyAsImage = copyAsImage
+        self.hasContent = hasContent
     }
 
     /// Shows this canvas on the board.

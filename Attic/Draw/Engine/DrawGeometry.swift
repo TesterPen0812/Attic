@@ -107,10 +107,35 @@ enum DrawText {
         return CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
     }
 
-    static func size(of text: String, fontSize: CGFloat) -> CGSize {
-        let all = lines(text)
+    /// The lines as drawn: each paragraph, wrapped at `width` when the box
+    /// has one (a text box's side handles set it).
+    static func lines(_ text: String, size: CGFloat, width: CGFloat?) -> [String] {
+        let paragraphs = lines(text)
+        guard let width, width > 0 else { return paragraphs }
+        let font = font(size: size)
+        return paragraphs.flatMap { paragraph -> [String] in
+            guard !paragraph.isEmpty else { return [paragraph] }
+            let attributed = NSAttributedString(string: paragraph, attributes: [.init(kCTFontAttributeName as String): font])
+            let typesetter = CTTypesetterCreateWithAttributedString(attributed)
+            let utf16 = paragraph.utf16.count
+            var result: [String] = [], start = 0
+            while start < utf16 {
+                var count = CTTypesetterSuggestLineBreak(typesetter, start, Double(width))
+                if count <= 0 { count = 1 }
+                let range = NSRange(location: start, length: min(count, utf16 - start))
+                result.append((paragraph as NSString).substring(with: range).trimmingCharacters(in: .newlines))
+                start += range.length
+            }
+            return result
+        }
+    }
+
+    static func size(of text: String, fontSize: CGFloat, width wrap: CGFloat? = nil) -> CGSize {
+        let all = lines(text, size: fontSize, width: wrap)
+        let height = CGFloat(all.count) * fontSize * lineHeight
+        if let wrap, wrap > 0 { return CGSize(width: max(minimumWidth, wrap), height: height) }
         let width = all.map { CGFloat(CTLineGetTypographicBounds(line($0.isEmpty ? " " : $0, size: fontSize, colour: nil), nil, nil, nil)) }.max() ?? 0
-        return CGSize(width: max(minimumWidth, width.rounded(.up)), height: CGFloat(all.count) * fontSize * lineHeight)
+        return CGSize(width: max(minimumWidth, width.rounded(.up)), height: height)
     }
 }
 

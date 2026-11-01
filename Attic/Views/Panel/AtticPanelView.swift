@@ -13,6 +13,8 @@ struct AtticPanelView: View {
     @ObservedObject var noteDraft: NoteDraftController
     let chromeInteractionState: PanelChromeInteractionState
     @ObservedObject var uiState: PanelUIState
+    /// The Draw page's model (its save notice shows like the other pages').
+    @ObservedObject private var drawPage: DrawPageModel = .shared
     @ObservedObject var settings: AppSettings
     @ObservedObject var toasts: PanelToastCenter
 
@@ -692,6 +694,7 @@ struct AtticPanelView: View {
     private var currentNotice: PanelNoticeContent? {
         switch currentPage {
         case .canvas:
+            if AtticDraw.isEnabled { return drawPage.saveNotice }
             return canvasSession.lastErrorMessage.map {
                 PanelNoticeContent(message: $0, canRetry: !canvasSession.failedImageIDs.isEmpty)
             }
@@ -705,12 +708,13 @@ struct AtticPanelView: View {
 
     private func retryCurrentNotice() {
         guard currentPage == .canvas else { return }
+        if AtticDraw.isEnabled { return drawPage.retrySave() }
         if canvasSession.retryFailedImageDecodes() { canvasSession.dismissErrorMessage() }
     }
 
     private func dismissCurrentNotice() {
         switch currentPage {
-        case .canvas: canvasSession.dismissErrorMessage()
+        case .canvas: AtticDraw.isEnabled ? drawPage.dismissSaveError() : canvasSession.dismissErrorMessage()
         case .notes: noteStore.dismissError()
         case .tasks, .calendar: store.dismissError()
         }

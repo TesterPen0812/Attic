@@ -33,6 +33,8 @@ final class PerformanceUITests: XCTestCase {
         let result = XCUIApplication()
         result.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         result.launchEnvironment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] = "1"
+        // The old Canvas page: Draw has its place unless the hidden switch is off.
+        result.launchArguments += ["-AtticDraw.enabled", "NO"]
         result.launchEnvironment["ATTIC_PERF_UI_TEST"] = "1"
         result.launchEnvironment["ATTIC_PERF_UI_IDENTIFIER"] = identifier
         result.launchEnvironment["ATTIC_PERF_SEED_ONLY"] = seedOnly ? "1" : "0"

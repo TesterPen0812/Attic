@@ -50,9 +50,21 @@ struct DrawObject: Identifiable, Codable, Equatable, Sendable {
     var style: DrawStyle = DrawStyle()
     var content: DrawContent
     var deletedAt: Date? = nil
+    /// A text box whose width was set by its handles: its lines wrap to this
+    /// many points. Nil keeps the box as wide as its longest line.
+    var textWidth: Double? = nil
 
     var text: String { if case .text(let text) = content { text } else { "" } }
     var isImage: Bool { if case .image = content { true } else { false } }
+
+    /// The object without an image's original bytes (metadata reads).
+    var header: Self {
+        guard case .image(var image) = content else { return self }
+        var result = self
+        image.original = Data()
+        result.content = .image(image)
+        return result
+    }
 
     func translated(by offset: DrawPoint, id: UUID = UUID()) -> Self {
         var result = self
@@ -82,6 +94,28 @@ struct DrawCanvas: Identifiable, Codable, Equatable, Sendable {
 struct DrawSnapshot: Equatable, Sendable {
     var canvas: DrawCanvas
     var objects: [DrawObject]
+}
+
+/// What Delete Permanently, Empty and the 30-day removal take out of the
+/// store, matched by deletion time: anything restored and deleted again
+/// since the list was read stays.
+enum DrawPurgeTarget: Hashable, Sendable {
+    case canvas(UUID, deletedAt: Date)
+    case image(canvas: UUID, object: UUID, deletedAt: Date)
+}
+
+/// How many targets went for good, and how many stayed (their replicas
+/// disagree, their deletion time moved, or their canvas has an unsettled edit).
+struct DrawPurgeReport: Equatable, Sendable {
+    var removed = 0
+    var kept = 0
+}
+
+/// An image deleted from a live canvas, as Recently Deleted lists it: read
+/// from metadata only, so `object`'s original bytes are empty.
+struct DrawDeletedImage: Equatable, Sendable {
+    var canvas: DrawCanvas
+    var object: DrawObject
 }
 
 struct DrawSearchMatch: Equatable, Sendable {
@@ -137,6 +171,14 @@ protocol DrawStoreProtocol: AnyObject {
     func create(name: String?) -> DrawCanvas
     func open(_ id: UUID) throws -> DrawSnapshot
     func deletedImages(in id: UUID) throws -> [DrawObject]
+    /// Every image deleted from a live canvas, from metadata only (no
+    /// original bytes, no thumbnails, no board state).
+    func deletedImages() throws -> [DrawDeletedImage]
+    /// Removes the targets for good, every physical replica of each; a
+    /// target whose replicas disagree stays until they agree.
+    func purge(_ targets: [DrawPurgeTarget]) -> DrawPurgeReport
+    /// The 30-day removal: everything deleted strictly before `cutoff`.
+    func purge(deletedBefore cutoff: Date) -> DrawPurgeReport
     func perform(_ command: DrawCommand, on id: UUID) -> DrawSaveResult
     func retry(on id: UUID) -> DrawSaveResult
     func reconcile(on id: UUID) -> DrawSaveResult

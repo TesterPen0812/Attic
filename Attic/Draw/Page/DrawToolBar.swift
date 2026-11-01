@@ -33,6 +33,14 @@ enum DrawPageMetrics {
     static let clearGap: CGFloat = 6
 
     static func fold(_ reduceMotion: Bool) -> Animation { TasksDesignMetrics.fold(reduceMotion: reduceMotion) }
+
+    /// The canvas menu's list may grow this tall: the room under the title
+    /// capsule, down to the panel's bottom inset.
+    /// The menu may pass over the bottom bar; it stops at the panel's inset.
+    static func menuListRoom(boardHeight: CGFloat, chromeTop: CGFloat, chromeBottom: CGFloat) -> CGFloat {
+        let room = boardHeight - chromeTop - capsule - AtticSpacing.s4 - chromeBottom - AtticGlassMenuShape.inset * 2
+        return max(DrawLibraryMetrics.maxListHeight, room)
+    }
 }
 
 extension DrawTool {
