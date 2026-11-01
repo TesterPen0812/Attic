@@ -309,6 +309,36 @@ final class PanelPullOutHostedTests: XCTestCase {
         }
     }
 
+    /// A pulled-out panel docked back in goes away with its window and its
+    /// hosting view (and its subscriptions), every time. Its press callback
+    /// held it (Astra F3).
+    func testADockedBackPanelGoesAwayWithItsWindowAndHostingView() throws {
+        try withRig { rig in
+            for (cycle, page) in [PanelPage.tasks, .calendar, .tasks].enumerated() {
+                weak var floating: PanelFloatingPanel?
+                weak var window: AtticPanel?
+                weak var hosting: AtticPanelHostingView?
+                try autoreleasepool {
+                    try pull(page, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+                    let made = try XCTUnwrap(rig.pullOut.panel(for: page))
+                    floating = made
+                    window = made.panel
+                    hosting = made.hostingViewForTesting
+                    // A press brings it forward (the callback that held it).
+                    made.hostingViewForTesting.onWindowDragBegan?()
+                    made.hostingViewForTesting.onWindowDragEnded?(made.visibleFrame, CGPoint(x: made.visibleFrame.midX,
+                                                                                             y: made.visibleFrame.maxY - 21), .zero, .zero)
+                    XCTAssertTrue(rig.pullOut.dockIn(page), "cycle \(cycle)")
+                }
+                spin(until: { rig.pullOut.panel(for: page) == nil })
+                spin(until: { floating == nil && window == nil && hosting == nil })
+                XCTAssertNil(floating, "cycle \(cycle): the floating panel")
+                XCTAssertNil(window, "cycle \(cycle): its window")
+                XCTAssertNil(hosting, "cycle \(cycle): its hosting view")
+            }
+        }
+    }
+
     func testAnUnpinnedPanelHidesAndReturnsWithTheDockedPanelAndAPinnedOneStays() throws {
         try withRig { rig in
             try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))

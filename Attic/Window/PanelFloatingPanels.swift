@@ -174,6 +174,14 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         panel.delegate = nil
         uiState.releasePageContent()
         panel.contentView = nil
+        // The owner's callbacks go with it: none may keep it alive.
+        onPressed = nil
+        onDragBegan = nil
+        onDragChanged = nil
+        onDragEnded = nil
+        onPinChanged = nil
+        onResized = nil
+        cancellables.removeAll()
     }
 
     func makeKey() {
@@ -606,8 +614,8 @@ final class PanelPullOutController {
         floating.uiState.onOpenElsewhere = { [weak self] other, switchesDocked in
             self?.bringForward(other, switchesDocked: switchesDocked) ?? false
         }
-        floating.onPressed = { [weak self] in
-            guard let self, state.front != page else { return }
+        floating.onPressed = { [weak self, weak floating] in
+            guard let self, let floating, state.front != page else { return }
             state.raise(page)
             floating.panel.orderFrontRegardless()
             save()
