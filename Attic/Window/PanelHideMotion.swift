@@ -1103,9 +1103,12 @@ final class PanelGenieView: NSView {
                 abs($0.rect.minX - group.rect.minX) < 1 && abs($0.rect.minY - group.rect.minY) < 1
                     && abs($0.rect.width - group.rect.width) < 1 && abs($0.rect.height - group.rect.height) < 1
             }
+            // Its rect too: the radius was read on that element's outline,
+            // which may sit a few hundredths of a point off the group's rect
+            // (paired with the group's, a capsule read wider than half its height).
             let candidates = inside.isEmpty
-                ? [(rect: group.rect, clip: group.clip, radius: alone?.radius ?? -1, continuous: alone?.continuous ?? true,
-                    exponent: alone?.exponent)]
+                ? [(rect: alone?.rect ?? group.rect, clip: group.clip, radius: alone?.radius ?? -1,
+                    continuous: alone?.continuous ?? true, exponent: alone?.exponent)]
                 : inside
             for pill in candidates where pill.rect.width > 4 && pill.rect.height > 4 {
                 if pill.clip.intersection(pill.rect).width > 0.5, pill.clip.intersection(pill.rect).height > 0.5 {
