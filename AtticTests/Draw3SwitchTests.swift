@@ -30,6 +30,8 @@ final class Draw3SwitchTests: XCTestCase {
         XCTAssertFalse(AtticDraw.value(in: defaults), "defaults write … AtticDraw.enabled -bool false")
         defaults.set(true, forKey: AtticDraw.enabledKey)
         XCTAssertTrue(AtticDraw.value(in: defaults))
+        defaults.set("NO", forKey: AtticDraw.enabledKey)
+        XCTAssertFalse(AtticDraw.value(in: defaults), "a launch argument's -AtticDraw.enabled NO")
 
         AtticDraw.enabledOverride = true
         XCTAssertEqual(PanelPage.canvas.title, "Draw")

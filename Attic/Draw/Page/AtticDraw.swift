@@ -15,7 +15,8 @@ enum AtticDraw {
 
     /// The setting in these defaults (unset is on).
     static func value(in defaults: UserDefaults) -> Bool {
-        defaults.object(forKey: enabledKey) as? Bool ?? true
+        // `bool(forKey:)` also reads a launch argument's "NO".
+        defaults.object(forKey: enabledKey) == nil ? true : defaults.bool(forKey: enabledKey)
     }
 
     /// Read once: the switch takes effect at the next launch, so the store,
