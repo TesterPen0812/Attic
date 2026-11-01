@@ -38,6 +38,22 @@ final class NoteFindController: ObservableObject {
     private var pendingFullSearch = false
     private var monitor: Any?
     private var host: NSHostingView<AnyView>?
+    /// The Notes page puts Find in its top row (N4, Idea B, 2026-11-01):
+    /// the page's field takes the query, Pin, the title and ••• fold away,
+    /// and the note never moves. Elsewhere (a task's page) Find keeps its
+    /// own card in the note's scroll view.
+    var inTopRow = false
+    /// How the open Find shows: decided when it opens.
+    private(set) var shownInTopRow = false
+    /// Keys typed after ⌘F before the top row's field exists go to the
+    /// query, never the note (first-key speed), until this moment.
+    private var typeAheadDeadline: TimeInterval?
+    /// A reopened Find's last query is selected: the first key replaces it.
+    private var replacesQuery = false
+    /// The top row's field has not had the keyboard yet in this Find.
+    private var awaitingField = false
+    /// The top row's field (the page draws it; found by this identifier).
+    static let fieldIdentifier = "note-find"
     private var topInset: CGFloat = 0
     private var columnInset: CGFloat = 16
     /// Work counters for the headless performance gates.
@@ -46,7 +62,8 @@ final class NoteFindController: ObservableObject {
     private(set) var objectSearchPassCount = 0
     private(set) var highlightLayoutPassCount = 0
     static var height: CGFloat { AtticControlSize.smallHeight * 2 + AtticSpacing.s4 + AtticSpacing.s8 * 2 }
-    var clearance: CGFloat { isShown ? Self.height : 0 }
+    /// The room the card takes above the note: none in the top row.
+    var clearance: CGFloat { isShown && !shownInTopRow ? Self.height : 0 }
     let highlight = NSColor.systemYellow.withAlphaComponent(0.4)
 
     init(engine: NoteEditorEngine) { self.engine = engine }
@@ -58,14 +75,84 @@ final class NoteFindController: ObservableObject {
                       event.window === window, window.isKeyWindow else { return event }
                 let responder = window.firstResponder
                 let inNote = responder === view || self.engine?.activeTableView?.isFocused == true
-                let inFind = (responder as? NSTextView)?.isFieldEditor == true
-                    && ((responder as? NSTextView)?.delegate as? NSView).map { field in
-                        self.host.map { field.isDescendant(of: $0) } == true
-                    } == true
+                let inFind = self.isFindField(responder)
+                if inFind { self.typeAheadDeadline = nil; self.awaitingField = false }
+                if inNote, self.typeAhead(event) { return nil }
+                if inFind, self.replacesQuery, Self.isTyping(event), let editor = responder as? NSTextView {
+                    // The last query, still selected, gives way to the key.
+                    editor.selectAll(nil)
+                    self.replacesQuery = false
+                }
                 return (inNote || inFind) && self.handleKey(event) ? nil : event
             }
         }
         layoutBar()
+    }
+
+    /// The field editor of Find's own field: the card's, or the top row's.
+    private func isFindField(_ responder: NSResponder?) -> Bool {
+        guard let editor = responder as? NSTextView, editor.isFieldEditor,
+              let field = editor.delegate as? NSView else { return false }
+        if let host, field.isDescendant(of: host) { return true }
+        return shownInTopRow && isShown && field.accessibilityIdentifier() == Self.fieldIdentifier
+    }
+
+    /// The top row's field, once the page has drawn it.
+    private func topRowField() -> NSTextField? {
+        guard let content = engine?.textView?.window?.contentView else { return nil }
+        func search(_ view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable,
+               field.accessibilityIdentifier() == Self.fieldIdentifier { return field }
+            for child in view.subviews { if let found = search(child) { return found } }
+            return nil
+        }
+        return search(content)
+    }
+
+    /// A plain typing key: characters, with no ⌘ or ⌃.
+    private static func isTyping(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .control]).isEmpty,
+              let characters = event.characters, !characters.isEmpty else { return false }
+        return characters.unicodeScalars.allSatisfy {
+            !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value)
+        }
+    }
+
+    /// A key typed after ⌘F while the top row's field is still on its way:
+    /// it edits the query (Delete too), never the note.
+    @discardableResult
+    func typeAhead(_ event: NSEvent) -> Bool {
+        guard shownInTopRow, isShown, fieldFocused, awaitingField, let deadline = typeAheadDeadline,
+              ProcessInfo.processInfo.systemUptime < deadline else { return false }
+        if event.keyCode == 51, event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            if replacesQuery { query = "" } else if !query.isEmpty { query.removeLast() }
+            replacesQuery = false
+            return true
+        }
+        guard Self.isTyping(event), let characters = event.characters else { return false }
+        if replacesQuery { query = characters } else { query += characters }
+        replacesQuery = false
+        return true
+    }
+
+    /// The top row's field has appeared: it takes the keyboard (unless the
+    /// keyboard went elsewhere meanwhile), the last query selected, or the
+    /// caret after what was typed ahead.
+    func topRowFieldAppeared() {
+        guard shownInTopRow, isShown, fieldFocused, awaitingField,
+              let field = topRowField(), let window = field.window else { return }
+        let editor = field.currentEditor() as? NSTextView
+        if editor == nil || window.firstResponder !== editor {
+            guard typeAheadDeadline != nil || window.firstResponder === engine?.textView
+                    || window.firstResponder === window || window.firstResponder == nil,
+                  window.makeFirstResponder(field) else { return }
+        }
+        typeAheadDeadline = nil
+        awaitingField = false
+        guard let editor = field.currentEditor() else { return }
+        let length = (editor.string as NSString).length
+        editor.selectedRange = replacesQuery ? NSRange(location: 0, length: length) : NSRange(location: length, length: 0)
+        replacesQuery = false
     }
 
     func detach() {
@@ -92,6 +179,23 @@ final class NoteFindController: ObservableObject {
     func show() {
         guard let engine, let scroll = engine.scrollView else { return }
         fieldFocused = true
+        if inTopRow || (isShown && shownInTopRow) {
+            if !isShown {
+                shownInTopRow = true
+                replacesQuery = !query.isEmpty
+                typeAheadDeadline = ProcessInfo.processInfo.systemUptime + 1
+                awaitingField = true
+                isShown = true
+                refresh(selectFirst: false)
+            } else if let field = topRowField() {
+                // ⌘F again: the field takes the keyboard back, the query
+                // selected.
+                field.window?.makeFirstResponder(field)
+                replacesQuery = false
+            }
+            return
+        }
+        shownInTopRow = false
         if host == nil {
             let host = NSHostingView(rootView: AnyView(NoteFindBar(find: self).atticDesign(engine.style.design)))
             self.host = host
@@ -126,9 +230,13 @@ final class NoteFindController: ObservableObject {
         let selected = index.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
         isShown = false
         fieldFocused = false
+        typeAheadDeadline = nil
+        replacesQuery = false
+        awaitingField = false
         matches = []
         index = nil
-        engine?.scrollView?.contentInsets.top = topInset
+        if !shownInTopRow { engine?.scrollView?.contentInsets.top = topInset }
+        shownInTopRow = false
         if let host { Self.disappear(host) }
         host = nil
         updateHighlights(clear: true)
@@ -434,6 +542,128 @@ private struct NoteFindBar: View {
         .accessibilityIdentifier("note-find-bar")
         .padding(AtticSpacing.s8)
         .background(AtticPopoverBackground(cornerRadius: AtticRadius.contentCard))
+    }
+}
+
+/// Find in the panel's top row (N4, Idea B): the header's round field fills
+/// the row, with "2/7 ‹ ›", All notes and × at its end. Return and ⇧Return
+/// step (the controller's keys), Escape or × end it.
+struct NoteFindTopRowField: View {
+    @ObservedObject var find: NoteFindController
+    /// All notes at the field's end: the query goes on to the notes' search.
+    let onAllNotes: () -> Void
+
+    @Environment(\.atticDesign) private var design
+
+    /// The draft's tail, design px halved (`adaptive-drafts-notes.html`, N4).
+    enum Metrics {
+        static let countFont: CGFloat = 10
+        static let countLeading: CGFloat = 4
+        static let countTrailing: CGFloat = 3
+        static let step: CGFloat = 22
+        static let stepGlyph: CGFloat = 10
+        static let allNotesHeight: CGFloat = 20
+        static let allNotesPadding: CGFloat = 6
+        static let allNotesFont: CGFloat = 9.5
+        static let allNotesLeading: CGFloat = 1
+    }
+
+    /// "2/7", "7" before a match is current, "No matches"; nothing while
+    /// the field is empty.
+    static func count(query: String, matches: Int, index: Int?) -> String {
+        guard !query.isEmpty else { return "" }
+        guard matches > 0 else { return String(localized: "No matches") }
+        return index.map { "\($0 + 1)/\(matches)" } ?? "\(matches)"
+    }
+
+    var body: some View {
+        AtticTabsSearchField(placeholder: String(localized: "Find in note"), text: $find.query,
+                             isFocused: $find.fieldFocused, nativeInputIdentifier: NoteFindController.fieldIdentifier,
+                             floating: true, onEscape: { find.close() }, header: true, accessory: AnyView(tail))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("note-find-bar")
+            .onAppear {
+                // The field takes the keyboard the moment it is in the window.
+                for delay in [0.0, 0.05, 0.15, 0.4] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { find.topRowFieldAppeared() }
+                }
+            }
+    }
+
+    private var tail: some View {
+        let tokens = design.tokens
+        let count = Self.count(query: find.query, matches: find.matches.count, index: find.index)
+        return HStack(spacing: 0) {
+            if !count.isEmpty {
+                Text(verbatim: count)
+                    .font(.system(size: Metrics.countFont).monospacedDigit())
+                    .foregroundStyle(tokens.color(.helper))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.leading, Metrics.countLeading)
+                    .padding(.trailing, Metrics.countTrailing)
+                    .accessibilityLabel(Text(verbatim: count))
+                    .accessibilityIdentifier("note-find-count")
+            }
+            step("chevron.left", label: String(localized: "Previous match"), identifier: "note-find-previous") {
+                find.next(backward: true)
+            }
+            step("chevron.right", label: String(localized: "Next match"), identifier: "note-find-next") {
+                find.next()
+            }
+            Button(action: onAllNotes) {
+                Text("All notes")
+                    .font(.system(size: Metrics.allNotesFont))
+                    .foregroundStyle(tokens.color(.label))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, Metrics.allNotesPadding)
+                    .frame(height: Metrics.allNotesHeight)
+                    .background(Capsule(style: .continuous).fill(tokens.color(.heading).opacity(0.05)))
+                    .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help(String(localized: "Search all notes (⇧⌘F)"))
+            .accessibilityIdentifier("note-find-all-notes")
+            .padding(.leading, Metrics.allNotesLeading)
+        }
+    }
+
+    private func step(_ systemName: String, label: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            AtticIcon(systemName: systemName, size: Metrics.stepGlyph, weight: AtticIconWeight.outline, ink: .glyph)
+                .frame(width: Metrics.step, height: Metrics.step)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .disabled(find.matches.isEmpty)
+        .opacity(find.matches.isEmpty ? 0.4 : 1)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// Mirrors the open note's Find into its page, so the top row folds for it;
+/// the page's Find goes to the top row while the note shows.
+struct NoteFindTopRowObserver: View {
+    @ObservedObject var find: NoteFindController
+    @Binding var shown: Bool
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+            .onAppear { find.inTopRow = true }
+            .onChange(of: find.isShown, initial: true) { _, now in if shown != now { shown = now } }
+            .onDisappear {
+                find.close(returnFocus: false)
+                find.inTopRow = false
+                if shown { shown = false }
+            }
     }
 }
 

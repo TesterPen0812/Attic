@@ -58,6 +58,9 @@ struct NoteProposalReview: Identifiable, Equatable {
 
     var workspaceIntent: AgentWorkspaceIntent? = nil
     var workspaceReadSet: AgentWorkspaceReadSet? = nil
+    /// The per-change comparison reviewed inside the note (N5, Idea B);
+    /// nil for a deletion or a workspace operation, reviewed whole.
+    var changes: NoteProposalChangeSet? = nil
 
     var summary: String {
         if let workspaceIntent { return workspaceIntent.summary }
@@ -330,6 +333,14 @@ final class NotesPageController: ObservableObject {
     private var proposalStatusCache: [UUID: ProposalStatus] = [:]
     @Published var proposalReview: NoteProposalReview?
     @Published var proposalReviewNotice: String?
+    /// The in-note review's decisions (N5): in memory until every change
+    /// is decided, each with Undo and Redo.
+    @Published private(set) var proposalDecisionState = NoteProposalDecisions()
+    private var isFinishingProposalReview = false
+    /// A review action (a decision, Save as New Note) is running. The
+    /// controls read this wherever they are hosted (N5: the top card, or
+    /// the bottom row's status pill).
+    @Published private(set) var isProposalReviewBusy = false
     private var verifiedAvailability: [UUID: (revision: UInt64, digest: String, available: Bool)] = [:]
     private var verifyingAvailability = Set<UUID>()
     private var resolvedAttachmentRows: [UUID: (revision: UInt64, row: NoteAttachment?)] = [:]
@@ -1056,22 +1067,116 @@ final class NotesPageController: ObservableObject {
                 }
             }
         }
-        proposalReview = NoteProposalReview(id: edit.id, sessionID: session.id, noteID: session.noteID,
+        var review = NoteProposalReview(id: edit.id, sessionID: session.id, noteID: session.noteID,
             agent: edit.agentName.isEmpty ? "Agent" : edit.agentName, createdAt: edit.createdAt, isDeletion: edit.isDeletion,
             current: session.engine.document(), currentTags: session.engine.tags,
             proposed: edit.isDeletion ? .blank : document, proposedPreview: preview,
             revision: note.revisionToken, savedContent: note.content, signature: NoteProposalSignature(edit))
+        if !edit.isDeletion {
+            let changes = NoteProposalChangeSet(current: review.current, proposed: document)
+            review.changes = changes
+            // A refreshed comparison keeps each decision whose change is unchanged.
+            if let previous = proposalReview, previous.id == edit.id, let old = previous.changes {
+                proposalDecisionState = proposalDecisionState.carried(from: old, to: changes)
+            } else {
+                proposalDecisionState = NoteProposalDecisions()
+            }
+        } else {
+            proposalDecisionState = NoteProposalDecisions()
+        }
+        proposalReview = review
         return true
     }
 
     func endProposalReview() {
         proposalReview = nil
         proposalReviewNotice = nil
+        proposalDecisionState = NoteProposalDecisions()
         operationReviewSession = nil
     }
 
+    // MARK: Per-change review (N5, Idea B)
+
+    var proposalDecisions: [Int: Bool] { proposalDecisionState.accepted }
+    /// A per-change review is open inside the note: the bottom row's pill is
+    /// the review bar, and "+" (N7) folds away until it closes.
+    var isReviewingProposalInPlace: Bool { proposalReview?.changes != nil }
+    var remainingProposalChanges: Int {
+        guard let changes = proposalReview?.changes?.changes else { return 0 }
+        return changes.filter { proposalDecisionState.accepted[$0.id] == nil }.count
+    }
+    var canUndoProposalDecision: Bool {
+        proposalReview?.changes != nil && !isFinishingProposalReview && !isProposalReviewBusy && proposalDecisionState.canUndo
+    }
+    var canRedoProposalDecision: Bool {
+        proposalReview?.changes != nil && !isFinishingProposalReview && !isProposalReviewBusy && proposalDecisionState.canRedo
+    }
+
+    /// Runs one review action at a time for the review's controls.
+    func performProposalReviewAction(_ action: @escaping @MainActor () async -> Bool) {
+        guard !isProposalReviewBusy else { return }
+        isProposalReviewBusy = true
+        Task { @MainActor [weak self] in
+            _ = await action()
+            self?.isProposalReviewBusy = false
+        }
+    }
+
     @discardableResult
-    func acceptProposal() async -> Bool {
+    func decideProposalChange(_ id: Int, accept: Bool) async -> Bool {
+        await decideProposalChanges([id], accept: accept)
+    }
+
+    /// Accept or Reject on the review's card: every change still undecided.
+    @discardableResult
+    func decideRemainingProposalChanges(accept: Bool) async -> Bool {
+        guard let changes = proposalReview?.changes?.changes else { return false }
+        return await decideProposalChanges(changes.map(\.id), accept: accept)
+    }
+
+    @discardableResult
+    func undoProposalDecision() -> Bool {
+        guard canUndoProposalDecision else { return false }
+        proposalReviewNotice = nil
+        return proposalDecisionState.undo()
+    }
+
+    @discardableResult
+    func redoProposalDecision() -> Bool {
+        guard canRedoProposalDecision else { return false }
+        return proposalDecisionState.redo()
+    }
+
+    /// Records a decision; the last one writes the note from the accepted
+    /// changes only (or, with none accepted, discards the proposal). A
+    /// write that doesn't happen keeps nothing of that last decision.
+    private func decideProposalChanges(_ ids: [Int], accept: Bool) async -> Bool {
+        guard !isFinishingProposalReview, let review = proposalReview, let set = review.changes else { return false }
+        let known = Set(set.changes.map(\.id))
+        let fresh = ids.filter { known.contains($0) && proposalDecisionState.accepted[$0] == nil }
+        guard !fresh.isEmpty else { return false }
+        let before = proposalDecisionState
+        proposalReviewNotice = nil
+        proposalDecisionState.decide(fresh, accept: accept)
+        guard remainingProposalChanges == 0 else { return true }
+        isFinishingProposalReview = true
+        defer { isFinishingProposalReview = false }
+        let accepted = Set(proposalDecisionState.accepted.filter(\.value).keys)
+        let finished = accepted.isEmpty ? discardReviewedProposal()
+            : await acceptProposal(merging: set.merged(accepting: accepted))
+        if finished { return true }
+        if let now = proposalReview, now.id == review.id {
+            if let refreshed = now.changes, refreshed != set {
+                proposalDecisionState = before.carried(from: set, to: refreshed)
+            } else {
+                proposalDecisionState = before
+            }
+        }
+        return false
+    }
+
+    @discardableResult
+    func acceptProposal(merging merged: NoteDocument? = nil) async -> Bool {
         if let review = proposalReview, review.workspaceIntent != nil { return await acceptWorkspaceProposal(review) }
         guard await awaitRecoveryForUser(), let review = proposalReview, let session = cache[review.noteID], isReviewSessionCurrent(session),
               session.id == review.sessionID, !session.isImporting,
@@ -1109,9 +1214,11 @@ final class NotesPageController: ObservableObject {
                 self.proposalReviewNotice = "Recovery data is being preserved. Retry deletion when saving finishes."
                 return false
             }
+            let preservationID = UUID()
             let outcome = self.store.replaceWithProposal(review.id, noteID: review.noteID,
                 expectedRevision: review.revision, expectedSavedContent: review.savedContent,
-                expectedProposal: review.signature, preserving: review.current)
+                expectedProposal: review.signature, preserving: review.current,
+                merged: review.isDeletion ? nil : merged, preservationID: preservationID)
             switch outcome {
             case let .failure(error):
                 self.proposalReviewNotice = error.localizedDescription
@@ -1127,8 +1234,25 @@ final class NotesPageController: ObservableObject {
                 } else {
                     if let page = session.workspacePage {
                         page.externalRefresh(origin: review.agent)
+                    } else if merged != nil, let note = self.store.note(withID: review.noteID),
+                              let revision = note.revisionID, revision.uuidString == token {
+                        // N5: the reviewed note opens fresh from the store, and
+                        // ⌘Z puts back the text the review replaced, as Undo
+                        // after Restore Version does (the displaced session
+                        // keeps that text; its version is retained for it).
+                        session.engine.detachView()
+                        self.cache[review.noteID] = nil
+                        guard let applied = self.session(for: note) else { return true }
+                        self.activate(applied)
+                        if let previous = self.versionRestoreUndo { self.store.historyRetainedVersionIDs.remove(previous.versionID) }
+                        self.versionRestoreUndo = VersionRestoreUndo(id: UUID(), noteID: review.noteID,
+                            versionID: preservationID, restoredRevisionID: revision,
+                            document: applied.engine.document(), tags: applied.engine.tags,
+                            historyPosition: applied.engine.history.undoOps.map(ObjectIdentifier.init),
+                            session: session, isUndo: true)
+                        self.store.historyRetainedVersionIDs.insert(preservationID)
                     } else {
-                        session.replaceEngine(self.makeEngine(noteID: review.noteID, document: review.proposed,
+                        session.replaceEngine(self.makeEngine(noteID: review.noteID, document: merged ?? review.proposed,
                             readOnly: false, tags: session.engine.tags))
                         session.baseRevisionID = UUID(uuidString: token)
                         self.wire(session)
