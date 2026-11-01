@@ -116,6 +116,72 @@ final class WorkspaceHistoryTests: XCTestCase {
         XCTAssertEqual(replacement.storage.string, "")
     }
 
+    func testB10PublicationRetriesBackOffToABoundAndRecoverWithAFakeClock() async throws {
+        let clock = PublicationRetryTestClock()
+        defer { clock.cancelAll() }
+        workspace.publicationRetrySleep = { try await clock.sleep($0) }
+        let recovered = expectation(description: "publication recovery completed")
+        adapter.onWorkspaceRecoveryChanged = { pending, _, _ in if !pending { recovered.fulfill() } }
+        var broken = true, attempts = 0
+        let publication = WorkspaceOperationCoordinator.Publication(steps: [{ _ in
+            attempts += 1
+            if broken { throw WorkspaceFoundationError.preparationFailed }
+        }])
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in
+            try forwardRenamePlan(publication: publication)
+        }, .publicationPending)
+        let delays: [Duration] = [.milliseconds(250), .seconds(1), .seconds(2), .seconds(4), .seconds(8),
+                                  .seconds(16), .seconds(32), .seconds(60), .seconds(60)]
+        for (index, expected) in delays.enumerated() {
+            guard await clock.waitForSleep(index + 1) else { return }
+            XCTAssertEqual(clock.delays[index], expected)
+            XCTAssertEqual(clock.pendingCount, 1, "one timer owns retries")
+            XCTAssertEqual(attempts, index + 1)
+            if index > 0 {
+                XCTAssertTrue(workspace.permitsUnsavedDraft)
+                XCTAssertFalse(workspace.isInputReserved)
+            }
+            clock.advance()
+        }
+        guard await clock.waitForSleep(delays.count + 1) else { return }
+        XCTAssertEqual(clock.delays.last, .seconds(60), "persistent failure caps the interval, not the retry count")
+        broken = false
+        clock.advance()
+        await fulfillment(of: [recovered], timeout: 10)
+        XCTAssertFalse(workspace.hasPendingPublication, "the capped timer still notices recovery")
+        XCTAssertFalse(workspace.isInputReserved)
+        XCTAssertEqual(clock.pendingCount, 0)
+        XCTAssertEqual(attempts, delays.count + 2)
+    }
+
+    func testB10SaveFailureRetriesResumeAfterStorageRecovers() async throws {
+        let clock = PublicationRetryTestClock()
+        defer { clock.cancelAll() }
+        workspace.publicationRetrySleep = { try await clock.sleep($0) }
+        let recovered = expectation(description: "publication recovery completed")
+        adapter.onWorkspaceRecoveryChanged = { pending, _, _ in if !pending { recovered.fulfill() } }
+        var broken = true, saves = 0
+        coordinator.save = { context in
+            saves += 1
+            if broken && saves > 1 { throw WorkspaceFoundationError.preparationFailed }
+            try context.save()
+        }
+        expectEqual(await workspace.performCommand(using: coordinator) { [self] in try forwardRenamePlan() }, .publicationPending)
+        for (index, delay) in [Duration.milliseconds(250), .seconds(1), .seconds(2)].enumerated() {
+            guard await clock.waitForSleep(index + 1) else { return }
+            XCTAssertEqual(clock.delays[index], delay)
+            if index == 2 { broken = false }
+            clock.advance()
+        }
+        await fulfillment(of: [recovered], timeout: 10)
+        XCTAssertFalse(workspace.hasPendingPublication)
+        XCTAssertFalse(workspace.isInputReserved)
+        XCTAssertEqual(try title(), "After", "retries finish bookkeeping without repeating or losing the saved command")
+        let receipts = try coordinator.freshContext().fetch(FetchDescriptor<OperationReceipt>())
+        XCTAssertEqual(receipts.count, 1)
+        XCTAssertTrue(receipts.allSatisfy { $0.publicationComplete && $0.envelopeReleased })
+    }
+
     func testB08MissingRetryCoordinatorReleasesReservedDraftInput() async throws {
         XCTAssertTrue(workspace.reserveInput())
         var delivered = 0
@@ -541,5 +607,46 @@ final class WorkspaceHistoryTests: XCTestCase {
         expectEqual(route.undoCount(in: workspace.historyID), 2)
         expectEqual(await workspace.replay(redo: false), .applied); expectEqual(try title(), "Before")
         XCTAssertTrue(adapter.undo()); expectEqual(adapter.storage.string, "")
+    }
+}
+
+/// No wall time passes: each advance releases one production retry timer.
+@MainActor
+private final class PublicationRetryTestClock {
+    private(set) var delays: [Duration] = []
+    private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
+    private var requests: [(Int, XCTestExpectation)] = []
+    var pendingCount: Int { waiters.count }
+    func sleep(_ delay: Duration) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                delays.append(delay)
+                waiters.append((id, continuation))
+                let ready = requests.filter { $0.0 <= delays.count }
+                requests.removeAll { $0.0 <= delays.count }
+                ready.forEach { $0.1.fulfill() }
+            }
+        } onCancel: {
+            Task { @MainActor in self.cancel(id) }
+        }
+    }
+    func waitForSleep(_ count: Int, file: StaticString = #filePath, line: UInt = #line) async -> Bool {
+        if delays.count >= count { return true }
+        let ready = XCTestExpectation(description: "retry requested sleep \(count)")
+        requests.append((count, ready))
+        let result = await XCTWaiter.fulfillment(of: [ready], timeout: 10)
+        XCTAssertEqual(result, .completed, file: file, line: line)
+        return result == .completed
+    }
+    func advance() { if !waiters.isEmpty { waiters.removeFirst().1.resume() } }
+    private func cancel(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.0 == id }) else { return }
+        waiters.remove(at: index).1.resume(throwing: CancellationError())
+    }
+    func cancelAll() {
+        let pending = waiters; waiters.removeAll()
+        pending.forEach { $0.1.resume(throwing: CancellationError()) }
     }
 }

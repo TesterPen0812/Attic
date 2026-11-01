@@ -61,7 +61,10 @@ final class WorkspaceHistory {
     private var resolvingDeferredInput = false
     private weak var pendingCoordinator: WorkspaceOperationCoordinator?
     private var retryTask: Task<Void, Never>?
+    /// The retry timer's clock, injectable without changing publication IO.
+    var publicationRetrySleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     private var retryInFlight = false
+    private var publicationRetryDelay: Duration = .seconds(1)
     private var publicationInstalled = false
     private var fallbackBranchesStoredResult = false
     private var pendingCompletion: (() async -> Void)?
@@ -408,6 +411,7 @@ final class WorkspaceHistory {
     }
     private func beginPublicationRecovery(using coordinator: WorkspaceOperationCoordinator) {
         pendingCoordinator = coordinator
+        publicationRetryDelay = .seconds(1)
         currentAdapter?.onWorkspaceRecoveryChanged?(true, false, false)
         schedulePublicationRetry(after: .milliseconds(250))
     }
@@ -419,8 +423,9 @@ final class WorkspaceHistory {
     }
     private func schedulePublicationRetry(after delay: Duration) {
         guard retryTask == nil, hasPendingPublication else { return }
+        let sleep = publicationRetrySleep
         retryTask = Task { [weak self, weak pendingCoordinator] in
-            do { try await Task.sleep(for: delay) } catch { return }
+            do { try await sleep(delay) } catch { return }
             guard let self, !Task.isCancelled else { return }
             self.retryTask = nil
             guard let pendingCoordinator else {
@@ -434,7 +439,9 @@ final class WorkspaceHistory {
             // the person's draft when storage cannot finish publication.
             self.permitUnsavedDraft()
             self.recoveryPeers.compactMap(\.value).forEach { $0.permitUnsavedDraft() }
-            self.schedulePublicationRetry(after: .seconds(1))
+            let delay = self.publicationRetryDelay
+            self.publicationRetryDelay = min(.seconds(60), delay * 2)
+            self.schedulePublicationRetry(after: delay)
         }
     }
     /// A known committed projection cannot hide a native field draft. Keep
