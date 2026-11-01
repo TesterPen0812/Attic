@@ -316,9 +316,9 @@ final class CornerHoverMonitor {
         return nil
     }
 
-    private func samplePointer(at location: CGPoint = NSEvent.mouseLocation) {
+    private func samplePointer(at location: CGPoint = NSEvent.mouseLocation,
+                               uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         sampleCount += 1
-        let uptime = ProcessInfo.processInfo.systemUptime
         lastEventSampleAt = uptime
         defer { refreshSamplingCadence(at: location) }
         let activeScreen = screen(containing: location)
@@ -563,7 +563,9 @@ final class CornerHoverMonitor {
     var hoverScreenFramesForTesting: [CGRect] { cachedScreenFrames }
     var revealPolicyForTesting: CornerRevealPolicy { revealPolicy }
     /// Test seam: one pointer sample at `location`, as an event would run it.
-    func sampleForTesting(at location: CGPoint) { samplePointer(at: location) }
+    func sampleForTesting(at location: CGPoint, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        samplePointer(at: location, uptime: uptime)
+    }
     /// Test seam: whether a pointer at `location` counts as in the hotspot
     /// with `flags` held, as a sample decides it.
     func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {

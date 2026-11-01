@@ -2113,11 +2113,15 @@ struct TasksPage: View {
             Self.log.notice("Show Files \(id, privacy: .public) refused: the key belongs to a typing field")
             return
         }
+        // Tracking ends before this default-mode command runs. Acquire the
+        // files hold now so auto-hide cannot win the intervening turn.
+        chrome.filesLock(true)
         pointer.endInvocation()
         RunLoop.main.perform(inModes: [.default]) { [model] in
             MainActor.assumeIsolated {
                 // A live task's files open or close under its row (A1).
                 if store.task(withID: id) != nil { toggleFiles(id) } else { model.openPage(id) }
+                chrome.filesLock(model.hasVisibleInlineFiles)
             }
         }
         CFRunLoopWakeUp(CFRunLoopGetMain())

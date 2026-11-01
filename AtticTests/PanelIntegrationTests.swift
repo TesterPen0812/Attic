@@ -90,6 +90,89 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertTrue(hidden)
     }
 
+    func testB17GlassMenuCloseHandsAutoHideToTheFilesList() throws {
+        let panel = try makePanel()
+        panel.settings.hideDelay = 0.1
+        panel.uiState.isPanelPinned = false
+        let hold = PanelEditHold()
+        hold.apply = { panel.uiState.setInteractionLock(.taskFilesVisible, isActive: $0) }
+        let hosted = try Hosted(height: 520, keyWindow: false,
+            chrome: TasksPageChrome(filesLock: { hold.set($0) }))
+        defer { hosted.close() }
+        let task = try XCTUnwrap(hosted.model.rows(for: .now).first)
+        let id = task.id, context = ModelContext(hosted.store.container)
+        let stored = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first)
+        stored.imageReferencesData = try TaskStore.encodedAttachments([TaskImageReference(id: UUID(), filename: "brief.pdf",
+            digest: "fixture", contentTypeIdentifier: "com.adobe.pdf", byteCount: 100)])
+        try context.save()
+        hosted.store.refresh()
+        hosted.model.setSearchQuery(task.model.title, for: .now)
+        hosted.spin(0.1)
+        XCTAssertEqual(hosted.model.rows(for: .now).map(\.id), [task.id], "Find rebuilds the row before the menu")
+        hosted.model.setSearchQuery("", for: .now)
+        hosted.spin(0.1)
+        XCTAssertGreaterThan(hosted.model.rows(for: .now).count, 1)
+        let more = try XCTUnwrap(hosted.page.taskCommands(task.id, tab: .now).first { $0.title == "More" })
+        let show = try XCTUnwrap(more.children.first { $0.title == "Show Files" })
+        XCTAssertEqual(panel.monitor.revealProgrammatically(section: .tasks, takesKeyboard: false), .shown)
+        spin(0.4)
+        let frame = panel.controller.panelVisibleFrameForTesting
+        let inside = CGPoint(x: frame.midX, y: frame.midY)
+        XCTAssertTrue(panel.controller.containsScreenPoint(inside))
+        var time = ProcessInfo.processInfo.systemUptime
+        panel.monitor.sampleForTesting(at: inside, uptime: time)
+        let outside = CGPoint(x: frame.minX - 200, y: frame.midY)
+        var tracking = PanelMenuTrackingState(), ended = false
+        let center = NotificationCenter.default
+        let begin = center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                tracking.begin()
+                panel.uiState.setInteractionLock(.menuTracking, isActive: tracking.isTracking)
+            }
+        }
+        let end = center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                tracking.end()
+                panel.uiState.setInteractionLock(.menuTracking, isActive: tracking.isTracking)
+                // Admit the hover monitor's lock-change sample before the
+                // command's default-mode work: the failing event ordering.
+                RunLoop.main.perform(inModes: [.default]) {
+                    MainActor.assumeIsolated {
+                        panel.monitor.sampleForTesting(at: outside, uptime: time)
+                        time += 0.2
+                        panel.monitor.sampleForTesting(at: outside, uptime: time)
+                        ended = true
+                    }
+                }
+            }
+        }
+        defer { center.removeObserver(begin); center.removeObserver(end) }
+        AtticGlassMenu.ordersCardsFront = false
+        defer { AtticGlassMenu.ordersCardsFront = true; AtticGlassMenu.testDriver = nil }
+        AtticGlassMenu.testDriver = { menu in
+            panel.monitor.sampleForTesting(at: outside, uptime: time)
+            XCTAssertTrue(panel.controller.isVisibleForPerformanceProbe)
+            menu.choose(show)
+        }
+        AtticGlassMenu.popUp([.submenu("More", systemImage: "ellipsis", more.children)],
+            in: try XCTUnwrap(hosted.window.contentView), placement: .point(.zero), opener: nil)
+        spin(until: { ended && hosted.model.expandedFiles.contains(task.id) })
+        XCTAssertTrue(ended)
+        XCTAssertTrue(hosted.model.expandedFiles.contains(task.id))
+        // Let an already-requested hide finish; checking the window at the
+        // command's first frame would miss a hide still in flight.
+        spin(0.6)
+        XCTAssertTrue(panel.controller.isVisibleForPerformanceProbe, "auto-hide must not win the menu-to-files handoff")
+        XCTAssertTrue(panel.uiState.interactionLockReasons.contains(.taskFilesVisible))
+        hosted.model.toggleFiles(task.id)
+        spin(until: { !panel.uiState.interactionLockReasons.contains(.taskFilesVisible) })
+        panel.monitor.sampleForTesting(at: outside, uptime: time)
+        time += 0.2
+        panel.monitor.sampleForTesting(at: outside, uptime: time)
+        spin(until: { !panel.controller.isVisibleForPerformanceProbe })
+        XCTAssertFalse(panel.controller.isVisibleForPerformanceProbe, "real auto-hide resumes after files close")
+    }
+
     func testR12FilesHoldAllowsAgentShowAndTrackpadSwipeWhileThePanelIsKey() throws {
         let panel = try makePanel()
         panel.uiState.setPanelKey(true)
