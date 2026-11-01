@@ -228,8 +228,11 @@ struct AtticRaisedMaterialModifier: ViewModifier {
             content.opacity(0)
         } else if capture == nil, design.effectiveControls == .liquidGlass {
             if let reveal {
-                glass(content.clipShape(reveal.shape(cornerRadius: cornerRadius)),
-                      in: reveal.shape(cornerRadius: cornerRadius))
+                let revealed = reveal.shape(cornerRadius: cornerRadius, exponent: cornerExponent)
+                #if DEBUG
+                let _ = AtticMaterialProbe.recordRevealed(revealed)
+                #endif
+                glass(content.clipShape(revealed), in: revealed)
             } else {
                 glass(content, in: shape)
             }
@@ -269,13 +272,15 @@ struct AtticRaisedMaterialModifier: ViewModifier {
 /// members itself and ignores a clip set on them from outside, so the
 /// glass's own shape narrows to the part still inside, and the content is
 /// clipped to it. Its corners stay the control's until the part is
-/// narrower than two of them. Unset (nil), a control draws as before.
+/// narrower than two of them, on the control's own corner curve
+/// (`exponent`, as `AtticControlShape`). Unset (nil), a control draws as
+/// before.
 struct AtticControlReveal: Equatable {
     var leading: CGFloat = 0
     var trailing: CGFloat = 0
 
-    func shape(cornerRadius: CGFloat) -> AtticRevealedControlShape {
-        AtticRevealedControlShape(cornerRadius: cornerRadius, leading: leading, trailing: trailing)
+    func shape(cornerRadius: CGFloat, exponent: CGFloat? = nil) -> AtticRevealedControlShape {
+        AtticRevealedControlShape(cornerRadius: cornerRadius, leading: leading, trailing: trailing, exponent: exponent)
     }
 }
 
@@ -283,6 +288,8 @@ struct AtticRevealedControlShape: InsettableShape {
     var cornerRadius: CGFloat
     var leading: CGFloat
     var trailing: CGFloat
+    /// The superellipse exponent (nil: the continuous rounded rectangle).
+    var exponent: CGFloat?
     var inset: CGFloat = 0
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
@@ -294,7 +301,7 @@ struct AtticRevealedControlShape: InsettableShape {
         let width = rect.width - max(0, leading) - max(0, trailing)
         guard width > 0.5 else { return Path() }
         let part = CGRect(x: rect.minX + max(0, leading), y: rect.minY, width: width, height: rect.height)
-        return RoundedRectangle(cornerRadius: min(cornerRadius, width / 2, rect.height / 2), style: .continuous)
+        return AtticControlShape.shape(cornerRadius: min(cornerRadius, width / 2, rect.height / 2), exponent: exponent)
             .inset(by: inset)
             .path(in: part)
     }
@@ -370,7 +377,10 @@ enum AtticMaterialProbe {
     /// continuous corner, which draws a square control as a circle).
     static private(set) var corners: [CGFloat?] = []
     static func recordCorner(_ exponent: CGFloat?) { corners.append(exponent) }
-    static func resetCorners() { corners = [] }
+    /// Every revealed (sliding) control's glass shape since `resetCorners()`.
+    static private(set) var revealed: [AtticRevealedControlShape] = []
+    static func recordRevealed(_ shape: AtticRevealedControlShape) { revealed.append(shape) }
+    static func resetCorners() { corners = []; revealed = [] }
 }
 #endif
 

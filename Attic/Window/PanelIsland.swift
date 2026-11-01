@@ -667,8 +667,9 @@ private final class PanelIslandStandInHostingView<Root: View>: NSHostingView<Roo
 
 /// The island and its label, child windows of the Attic panel (Accepted
 /// "Tall island": "it shows, hides and moves with the panel"). The panel's
-/// controller places them from the panel's frame, shows and hides them with
-/// it and fades them on its hide motion's own duration and curve.
+/// controller places them from the panel's frame and shows and hides them
+/// with it; while the panel moves, its motion layer draws the island (the
+/// stand-in) and the windows' content steps aside at once.
 @MainActor
 final class PanelIslandWindows {
     let model: PanelIslandModel
@@ -793,34 +794,19 @@ final class PanelIslandWindows {
         label.orderOut(nil)
     }
 
-    /// How shown the island is (1 shown, 0 hidden), animated over
-    /// `duration` on `timing` (the panel motion's own), or at once. The
-    /// windows stay opaque and their content fades on Core Animation, so
-    /// the fade runs on the render server with the panel's own motion
-    /// (a window's animated alpha did not: the owner's recording of build
-    /// 1 showed the island staying until the panel vanished).
-    func setPresentation(_ shown: CGFloat, duration: TimeInterval = 0,
-                         timing: CAMediaTimingFunction? = nil) {
+    /// How shown the island is (1 shown, 0 hidden), at once. The windows
+    /// stay opaque and their content's opacity changes, in the caller's
+    /// transaction (the swaps with the stand-in).
+    func setPresentation(_ shown: CGFloat) {
         let alpha = min(max(shown, 0), 1)
         for window in [island, label] {
             if window.alphaValue != 1 { window.alphaValue = 1 }
             guard let view = window.contentView else { continue }
             view.wantsLayer = true
-            let layer = view.layer
-            let from = layer?.presentation()?.opacity ?? Float(view.alphaValue)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            layer?.removeAnimation(forKey: Self.fadeKey)
             view.alphaValue = alpha
-            layer?.opacity = Float(alpha)
-            if duration > 0, abs(from - Float(alpha)) > 0.001, let layer {
-                let fade = CABasicAnimation(keyPath: "opacity")
-                fade.fromValue = from
-                fade.toValue = Float(alpha)
-                fade.duration = duration
-                fade.timingFunction = timing
-                layer.add(fade, forKey: Self.fadeKey)
-            }
+            view.layer?.opacity = Float(alpha)
             CATransaction.commit()
         }
     }
@@ -845,10 +831,8 @@ final class PanelIslandWindows {
         if island.ignoresMouseEvents { island.ignoresMouseEvents = false }
     }
 
-    private static let fadeKey = "attic.island.presentation"
-
-    /// How shown the island is meant to be (the fade's end, or the motion's
-    /// while the stand-in shows it).
+    /// How shown the island is meant to be (its windows' content, or the
+    /// motion's while the stand-in shows it).
     var shownAlpha: CGFloat { handedOffShown ?? island.contentView?.alphaValue ?? 0 }
 
     /// Whether `point` (screen) is on the island's capsule while it shows.

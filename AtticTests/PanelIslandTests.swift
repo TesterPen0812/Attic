@@ -487,6 +487,79 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    /// Every frame Core Animation draws of a Swoop hide and reveal (the
+    /// run paused and scanned through its whole duration, so no frame is
+    /// missed and a slow host can't skip the worst one) keeps the panel and
+    /// the island on Swoop's curve about the island's outer corner. Its
+    /// matrix interpolation between keyframes leaves the curve where a step
+    /// covers much progress: with 30 frames the drawn panel strayed by up
+    /// to 37 pt mid-reveal (Astra U1); the frames are dense enough now.
+    func testEverySwoopFrameKeepsThePanelAndTheIslandOnTheCurve() throws {
+        try withController(configure: { $0.hideAnimation = .swoop }) { controller, _, panel in
+            let screen = try XCTUnwrap(controller.currentScreen)
+            let container = try content(panel)
+            func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
+            @MainActor func motionLayer() -> CALayer? {
+                container.subviews.compactMap(\.layer).first { $0.animation(forKey: "attic.panel.swoop") != nil }
+            }
+            @MainActor func scan(_ note: String, corner: ScreenCorner) throws {
+                let layer = try XCTUnwrap(motionLayer(), note)
+                let group = try XCTUnwrap(layer.animation(forKey: "attic.panel.swoop"), note)
+                let surface = local(panel.visibleContentFrame, in: panel)
+                let anchor = islandAnchor(panel, corner)
+                let capsule = local(L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner), in: panel)
+                let panelCorners = corners(surface), island = corners(capsule)
+                let curve = (0...800).map { step in
+                    PanelSwoopGeometry.transform(progress: Double(step) / 800, visibleBounds: surface,
+                                                 hostBounds: container.bounds, layerAnchor: .zero, corner: corner, anchor: anchor)
+                }
+                layer.speed = 0
+                defer { layer.speed = 1; layer.timeOffset = 0 }
+                var worst = (t: 0.0, panel: CGFloat(0), island: CGFloat(0))
+                for step in 0...240 {
+                    let t = Double(step) / 240
+                    layer.timeOffset = group.beginTime + group.duration * t
+                    CATransaction.flush()
+                    let drawnPanel = panelCorners.map { container.drawnPoint($0) }
+                    let drawnIsland = island.map { container.drawnPoint($0) }
+                    let best = curve.map { transform in
+                        (transform, zip(panelCorners, drawnPanel)
+                            .map { distance(PanelSwoopGeometry.project($0, transform), $1) }.max() ?? 0)
+                    }.min { $0.1 < $1.1 }!
+                    let islandError = zip(island, drawnIsland)
+                        .map { distance(PanelSwoopGeometry.project($0, best.0), $1) }.max() ?? 0
+                    if max(best.1, islandError) > max(worst.panel, worst.island) { worst = (t, best.1, islandError) }
+                }
+                // Measured after the fix: at most 1.9 pt (the curve's own
+                // 1/800 steps included); before it, 13 pt hiding, 37 pt
+                // revealing.
+                XCTAssertLessThan(worst.panel, 3, "\(note): the panel on the curve (\(worst))")
+                XCTAssertLessThan(worst.island, 3, "\(note): the island on it with the panel (\(worst))")
+            }
+            @MainActor func hide(_ corner: ScreenCorner) throws {
+                var hidden = false
+                _ = controller.requestHide { hidden = $0 == .hidden }
+                spin(until: { motionLayer() != nil || hidden }, timeout: 1)
+                try scan("hide \(corner)", corner: corner)
+                spin(until: { hidden })
+                XCTAssertTrue(hidden, "hide \(corner)")
+            }
+            @MainActor func reveal(_ corner: ScreenCorner) throws {
+                XCTAssertTrue(controller.show(on: screen, corner: corner))
+                spin(until: { motionLayer() != nil }, timeout: 1)
+                try scan("reveal \(corner)", corner: corner)
+                spin(until: { !container.isIslandStandInShown })
+                XCTAssertFalse(container.isIslandStandInShown, "reveal \(corner): handed back at rest")
+            }
+            try hide(.topRight)
+            for corner in [ScreenCorner.bottomRight, .bottomLeft, .topLeft, .topRight] {
+                try reveal(corner)
+                spin(0.05)
+                try hide(corner)
+            }
+        }
+    }
+
     /// The dismissing swipe: under the fingers the island goes with the
     /// panel's collapse on the same transform (Slide and Swoop), and it
     /// springs back with the panel on release.
@@ -576,6 +649,54 @@ final class PanelIslandTests: XCTestCase {
                 XCTAssertEqual(CGFloat(genie.anchorInset.y), (box.maxY - anchor.y) / box.height, accuracy: 0.001, note)
                 spin(until: { hidden })
                 XCTAssertTrue(hidden, note)
+            }
+        }
+    }
+
+    /// Genie hiding in one corner and revealing in another (same panel
+    /// size): the snapshot the reveal flies holds the island at the new
+    /// corner and nothing at the old one, whether it is taken at the reveal
+    /// (cold) or was prepared while hidden at the old corner (warm). Astra U2.
+    func testAGenieRevealInANewCornerSnapshotsTheIslandThere() throws {
+        for (reduceTransparency, warm) in [(false, false), (false, true), (true, true)] {
+            try withController(configure: { $0.hideAnimation = .genieLiveGlass }) { controller, _, panel in
+                AtticTransparencySeam.systemOverride = reduceTransparency
+                let screen = try XCTUnwrap(controller.currentScreen)
+                let container = try content(panel)
+                let genie = container.genieForTesting
+                spin(until: { !container.isIslandStandInShown })
+                @MainActor func items(_ corner: ScreenCorner) -> [CGPoint] {
+                    let island = L.islandFrame(panelFrame: panel.visibleContentFrame, corner: corner)
+                    return PanelPage.allCases.indices.map { index in
+                        let item = local(PanelIslandLayout.itemFrame(index, in: island), in: panel)
+                        return CGPoint(x: item.midX, y: item.midY)
+                    }
+                }
+                var from = ScreenCorner.topRight
+                for to in [ScreenCorner.bottomRight, .bottomLeft, .topLeft, .topRight] {
+                    let note = "reduce transparency \(reduceTransparency), \(warm ? "warm" : "cold"), \(from) to \(to)"
+                    var hidden = false
+                    _ = controller.requestHide { hidden = $0 == .hidden }
+                    spin(until: { hidden })
+                    XCTAssertTrue(hidden, note)
+                    let size = panel.visibleContentFrame.size
+                    let old = items(from)
+                    // An expected reveal prepares the snapshot while hidden.
+                    if warm { container.prepareAlternateSnapshot(.genieLiveGlass, surface: nil) }
+                    XCTAssertTrue(controller.show(on: screen, corner: to), note)
+                    XCTAssertEqual(panel.visibleContentFrame.size, size, "\(note): the same size")
+                    for (index, point) in items(to).enumerated() {
+                        let alpha = try XCTUnwrap(genie.snapshotAlpha(around: point), note)
+                        XCTAssertGreaterThan(alpha, 60, "\(note): item \(index) at the new corner")
+                    }
+                    for (index, point) in old.enumerated() {
+                        let alpha = try XCTUnwrap(genie.snapshotAlpha(around: point), note)
+                        XCTAssertLessThan(alpha, 20, "\(note): nothing where item \(index) was")
+                    }
+                    spin(until: { !container.isIslandStandInShown })
+                    XCTAssertFalse(container.isIslandStandInShown, "\(note): handed back at rest")
+                    from = to
+                }
             }
         }
     }
@@ -852,12 +973,11 @@ final class PanelIslandTests: XCTestCase {
                 let error = zip(panelCorners, drawnPanel).map { distance(PanelSwoopGeometry.project($0, transform), $1) }.max() ?? 0
                 if error < best.error { best = (p, error) }
             }
-            // A timed run draws Core Animation's keyframes (30, interpolated
-            // between, not along the exact curve): the drawn shape strays
-            // from it by up to about 3 % of the panel's size, most on the
-            // reveal's fast start (the island strays with it, on the same
-            // transform). The swipe checks the exact curve (1.5 pt).
-            let tolerance = keyframed ? max(1.5, 0.04 * hypot(surface.width, surface.height)) : 1.5
+            // A timed run draws Core Animation's keyframes, interpolated
+            // between, dense enough to stay within 2 pt of the curve
+            // (`testEverySwoopFrameKeepsThePanelAndTheIslandOnTheCurve`).
+            // The swipe checks the exact curve (1.5 pt).
+            let tolerance: CGFloat = keyframed ? 3 : 1.5
             XCTAssertLessThan(best.error, tolerance, "\(note): the panel is Swoop about the island's corner (\(best))",
                               file: file, line: line)
             // Mid-flight. A timed run's presentation runs a frame or two
@@ -971,3 +1091,4 @@ final class PanelIslandTests: XCTestCase {
         while !condition(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
     }
 }
+

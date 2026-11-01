@@ -1495,6 +1495,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, let container = self.contentContainer, !self.isInteractiveDismissal,
                   self.panel.isVisible == hiding, self.settings.hideAnimation == mode else { return }
             // The pointer has just left (or arrived in the corner): hover fresh.
+            // A reveal's snapshot holds the island at the corner it reveals in.
+            if !hiding { container.placeIslandStandIn(corner: self.currentCorner) }
             container.prepareAlternateSnapshot(mode, surface: self.genieSurface(for: mode), hoverFresh: true)
         }
         expectedChangeWork = work
@@ -1538,6 +1540,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// chosen hide animation reveals from.
     private func prepareCollapsedPresentation(corner: ScreenCorner) {
         let mode = settings.hideAnimation
+        // The island's stand-in at this reveal's corner first: Genie
+        // snapshots it where it is (a hide may have left it at another).
+        contentContainer?.placeIslandStandIn(corner: corner)
         guard mode != .slide, let container = contentContainer else {
             contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
             return
