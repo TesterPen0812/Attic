@@ -79,6 +79,7 @@ final class FirstClickWindowServerTests: XCTestCase {
         floating.isReleasedWhenClosed = false
         floating.isOpaque = false
         floating.backgroundColor = .clear
+        floating.level = PanelPullOutController.floatingLevel
         floating.contentView = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         defer { floating.close() }
         let visible = try XCTUnwrap(NSScreen.main?.visibleFrame)
@@ -89,14 +90,16 @@ final class FirstClickWindowServerTests: XCTestCase {
             floating.orderFrontRegardless()
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
             let frame = floating.frame
-            var missed = 0
+            var missed: [String] = []
             for x in stride(from: frame.minX + 10, to: frame.maxX - 10, by: 20) {
-                for y in stride(from: frame.minY + 10, to: frame.maxY - 10, by: 20)
-                where NSWindow.windowNumber(at: CGPoint(x: x, y: y), belowWindowWithWindowNumber: 0) != floating.windowNumber {
-                    missed += 1
+                for y in stride(from: frame.minY + 10, to: frame.maxY - 10, by: 20) {
+                    let number = NSWindow.windowNumber(at: CGPoint(x: x, y: y), belowWindowWithWindowNumber: 0)
+                    guard number != floating.windowNumber else { continue }
+                    let window = NSApp.windows.first { $0.windowNumber == number }
+                    missed.append("(\(Int(x - frame.minX)), \(Int(y - frame.minY))) → \(window.map { String(describing: type(of: $0)) } ?? "another app's window")")
                 }
             }
-            if missed > 0 { misses.append("showing \(showing): \(missed) points") }
+            if !missed.isEmpty { misses.append("showing \(showing): \(missed.count) points, \(missed.prefix(3))") }
             floating.orderOut(nil)
         }
         XCTAssertEqual(misses, [], "a clear floating panel passes clicks to the app behind")
@@ -112,15 +115,15 @@ final class FirstClickWindowServerTests: XCTestCase {
 @MainActor
 final class FirstClickFirstMouseTests: XCTestCase {
     private final class RefusingInOverlay: NSView {
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
         override func mouseDown(with event: NSEvent) {}
     }
     private final class RefusingInIsland: NSView {
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
         override func mouseDown(with event: NSEvent) {}
     }
     private final class RefusingElsewhere: NSView {
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+        override dynamic func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
     }
 
     private func event(_ type: NSEvent.EventType, _ window: NSWindow, at view: NSView) -> NSEvent {
