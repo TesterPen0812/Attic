@@ -1157,6 +1157,9 @@ final class AtticPanelContentContainer: NSView {
     /// island; it never takes a hit or an accessibility element. Nil for a
     /// floating panel, which hides into its own corner.
     private(set) var islandStandIn: NSView?
+    /// Where the island sits (Accepted 2026-11-01 "Island position"), set
+    /// with the stand-in's place.
+    private(set) var islandSpot: PanelIslandSpot = .defaultSpot
 
     func installIslandStandIn(_ view: NSView) {
         view.wantsLayer = true
@@ -1167,14 +1170,15 @@ final class AtticPanelContentContainer: NSView {
 
     /// Puts the stand-in exactly over the island's window: beside the
     /// surface on `corner`'s side, with the window's clear margin.
-    func placeIslandStandIn(corner: ScreenCorner) {
+    func placeIslandStandIn(corner: ScreenCorner, spot: PanelIslandSpot = .defaultSpot) {
+        islandSpot = spot
         guard let view = islandStandIn else { return }
-        let capsule = PanelIslandLayout.islandFrame(panelFrame: hostingView.frame, corner: corner)
+        let capsule = PanelIslandLayout.islandFrame(panelFrame: hostingView.frame, corner: corner, spot: spot)
         let frame = capsule.insetBy(dx: -PanelIslandLayout.windowMargin, dy: -PanelIslandLayout.windowMargin)
         if view.frame != frame { view.frame = frame }
-        // It keeps to the surface's corner as the panel resizes.
-        view.autoresizingMask = [PanelIslandLayout.isOnRight(corner) ? .minXMargin : .maxXMargin,
-                                 PanelIslandLayout.isTop(corner) ? .minYMargin : .maxYMargin]
+        // It keeps to its place on the surface as the panel resizes.
+        let mask = PanelIslandLayout.standInResizing(corner: corner, spot: spot)
+        if view.autoresizingMask != mask { view.autoresizingMask = mask }
     }
 
     /// Whether the stand-in draws the island (in the caller's transaction).
@@ -1191,12 +1195,11 @@ final class AtticPanelContentContainer: NSView {
     }
 
     /// The point the panel hides into, in the motion layer's bounds: the
-    /// island's outer corner on `corner`'s side (nil without an island:
-    /// the surface's own corner).
+    /// corner of the panel and the island together on `corner`'s side (nil
+    /// without an island: the surface's own corner).
     func collapseAnchor(corner: ScreenCorner) -> CGPoint? {
         guard islandStandIn != nil else { return nil }
-        let island = PanelIslandLayout.islandFrame(panelFrame: hostingView.frame, corner: corner)
-        return PanelCollapseGeometry.cornerPoint(of: island, corner: corner)
+        return PanelIslandLayout.collapseAnchor(panelFrame: hostingView.frame, corner: corner, spot: islandSpot)
     }
 
     /// Tests: where the motion layer draws `point` (in its bounds, which
