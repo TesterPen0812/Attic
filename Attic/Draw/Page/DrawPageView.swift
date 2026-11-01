@@ -86,6 +86,20 @@ struct DrawPageHost: View {
             }
         }
         .overlay(alignment: .top) {
+            // The canvas menu: a card below the top row (the drawing's
+            // `dv.titleMenu`), its search field the first row. Pin, ••• and
+            // Search stay where they are, so nothing here can reach them.
+            if model.isFiltering, !model.isSearching {
+                DrawLibraryMenu(model: model.library, maxListHeight: DrawPageMetrics.menuListRoom(
+                    boardHeight: model.boardSize.height,
+                    chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
+                    chromeBottom: model.clearInsets.left), onSearchEscape: model.closeFilter)
+                    .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + DrawPageMetrics.menuGap)
+                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+            }
+        }
+        .animation(DrawPageMetrics.fold(design.reduceMotion), value: model.isFiltering)
+        .overlay(alignment: .top) {
             if model.isSearching {
                 DrawSearchResults(model: model.search)
                     .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + AtticSpacing.s4)
@@ -97,9 +111,9 @@ struct DrawPageHost: View {
 }
 
 /// The title: the canvas name with its ⌄ in a glass capsule, centred in the
-/// top row. D4: a click makes the capsule itself the canvas filter, typing in
-/// place, with the library's menu hanging under it. The menu's Rename edits
-/// the name in the capsule.
+/// top row. A click opens the canvas menu, a card below the top row whose
+/// first row is its search field (the page draws it); the capsule stays as
+/// it is. The menu's Rename edits the name in the capsule.
 struct DrawTitleCapsule: View {
     @ObservedObject var model: DrawPageModel
     @ObservedObject var library: DrawLibraryMenuModel
@@ -109,58 +123,40 @@ struct DrawTitleCapsule: View {
     var body: some View {
         let m = DrawPageMetrics.self
         let flat = design.effectiveControls != .liquidGlass
-        VStack(spacing: AtticSpacing.s4) {
-            Group {
-                if library.isRenaming {
-                    field(DrawTitleField(text: $library.nameDraft, placeholder: String(localized: "Canvas name"),
-                                         label: String(localized: "Canvas name"), onReturn: library.commitRename,
-                                         onMove: { _ in }, onEscape: library.cancelRename, onEnd: library.commitRename))
-                        .accessibilityIdentifier("draw-title-rename")
-                } else if model.isFiltering {
-                    field(DrawTitleField(text: $library.filter, placeholder: String(localized: "Canvases"),
-                                         label: String(localized: "Find a canvas"), onReturn: library.openFirstMatch,
-                                         onMove: library.moveHighlight(by:), onEscape: model.closeFilter, onEnd: nil))
-                        .accessibilityIdentifier("draw-title-filter")
-                } else {
-                    Button(action: model.openFilter) {
-                        HStack(spacing: m.titleGap) {
-                            Text(verbatim: model.canvasName)
-                                .font(.system(size: m.titleFont, weight: .bold))
-                                .tracking(-0.015 * m.titleFont)
-                                .foregroundStyle(design.tokens.color(.heading))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            AtticIcon(systemName: "chevron.down", size: 6, weight: .semibold, ink: .chevron)
-                        }
-                        .padding(.leading, m.titlePadding.leading)
-                        .padding(.trailing, m.titlePadding.trailing)
-                        .frame(height: m.capsule)
-                        .contentShape(Capsule())
+        Group {
+            if library.isRenaming {
+                DrawTitleField(text: $library.nameDraft, placeholder: String(localized: "Canvas name"),
+                               label: String(localized: "Canvas name"), onReturn: library.commitRename,
+                               onMove: { _ in }, onEscape: library.cancelRename, onEnd: library.commitRename)
+                    .frame(height: m.capsule)
+                    .padding(.horizontal, m.titlePadding.leading)
+                    .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+                    .accessibilityIdentifier("draw-title-rename")
+            } else {
+                Button(action: { model.isFiltering ? model.closeFilter() : model.openFilter() }) {
+                    HStack(spacing: m.titleGap) {
+                        Text(verbatim: model.canvasName)
+                            .font(.system(size: m.titleFont, weight: .bold))
+                            .tracking(-0.015 * m.titleFont)
+                            .foregroundStyle(design.tokens.color(.heading))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        AtticIcon(systemName: "chevron.down", size: 6, weight: .semibold, ink: .chevron)
                     }
-                    .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.header, flat: flat))
-                    .help(model.canvasName)
-                    .accessibilityLabel(model.canvasName)
-                    .accessibilityHint(String(localized: "Opens the canvas menu"))
-                    .accessibilityIdentifier("draw-title")
+                    .padding(.leading, m.titlePadding.leading)
+                    .padding(.trailing, m.titlePadding.trailing)
+                    .frame(height: m.capsule)
+                    .contentShape(Capsule())
                 }
-            }
-            .atticDesignCorners()
-            if model.isFiltering {
-                DrawLibraryMenu(model: library, maxListHeight: DrawPageMetrics.menuListRoom(
-                    boardHeight: model.boardSize.height,
-                    chromeTop: model.clearInsets.top - DrawPageMetrics.capsule - DrawPageMetrics.clearGap,
-                    chromeBottom: model.clearInsets.left))
-                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                .buttonStyle(AtticRaisedButtonStyle(cornerRadius: AtticRadius.header, flat: flat))
+                .help(model.canvasName)
+                .accessibilityLabel(model.canvasName)
+                .accessibilityHint(String(localized: "Opens the canvas menu"))
+                .accessibilityAddTraits(model.isFiltering ? .isSelected : [])
+                .accessibilityIdentifier("draw-title")
             }
         }
-        .animation(DrawPageMetrics.fold(design.reduceMotion), value: model.isFiltering)
-    }
-
-    private func field(_ field: DrawTitleField) -> some View {
-        field
-            .frame(height: DrawPageMetrics.capsule)
-            .padding(.horizontal, DrawPageMetrics.titlePadding.leading)
-            .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+        .atticDesignCorners()
     }
 }
 
@@ -229,7 +225,7 @@ struct DrawBoardRepresentable: NSViewRepresentable {
 
     func updateNSView(_ view: DrawBoardView, context: Context) {
         model.setBoard(size: view.bounds.size == .zero ? model.boardSize : view.bounds.size, clearInsets: clearInsets)
-        view.window?.invalidateCursorRects(for: view)
+        view.queueCursorRefresh()
     }
 }
 
@@ -244,6 +240,9 @@ struct DrawTitleField: NSViewRepresentable {
     let onEscape: () -> Void
     /// The field lost the keyboard (Rename commits then).
     let onEnd: (() -> Void)?
+    var alignment: NSTextAlignment = .center
+    var font: NSFont = .systemFont(ofSize: DrawPageMetrics.titleFont, weight: .bold)
+    var identifier: String?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -252,9 +251,12 @@ struct DrawTitleField: NSViewRepresentable {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.alignment = .center
-        field.font = .systemFont(ofSize: DrawPageMetrics.titleFont, weight: .bold)
+        field.alignment = alignment
+        field.font = font
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
         field.placeholderString = placeholder
+        if let identifier { field.setAccessibilityIdentifier(identifier) }
         field.delegate = context.coordinator
         field.setAccessibilityLabel(label)
         DispatchQueue.main.async { field.window?.makeFirstResponder(field) }

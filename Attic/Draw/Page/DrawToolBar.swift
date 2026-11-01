@@ -36,11 +36,19 @@ enum DrawPageMetrics {
 
     static func fold(_ reduceMotion: Bool) -> Animation { TasksDesignMetrics.fold(reduceMotion: reduceMotion) }
 
-    /// The canvas menu's list may grow this tall: the room under the title
-    /// capsule, down to the panel's bottom inset.
-    /// The menu may pass over the bottom bar; it stops at the panel's inset.
+    /// The canvas menu's list may grow this tall: the room under the card's
+    /// search row (the card starts `menuGap` under the top row), down to the
+    /// panel's bottom inset. The menu may pass over the bottom bar; it stops
+    /// at the panel's inset. The search row covers the card's top inset (the
+    /// drawing's −6 px margin), so only the bottom inset is added. As drawn
+    /// that leaves 360 pt at the smallest panel, half a point short of the
+    /// three-canvas list Draw 3 fits there; the card may sit `bottomGrace`
+    /// into the bottom inset (one pixel at 2×) rather than scroll.
+    static let bottomGrace: CGFloat = 0.5
+
     static func menuListRoom(boardHeight: CGFloat, chromeTop: CGFloat, chromeBottom: CGFloat) -> CGFloat {
-        let room = boardHeight - chromeTop - capsule - AtticSpacing.s4 - chromeBottom - AtticGlassMenuShape.inset * 2
+        let room = boardHeight - chromeTop - capsule - menuGap - DrawLibraryMetrics.searchRowHeight
+            - DrawLibraryMetrics.searchRowGap - chromeBottom - AtticGlassMenuShape.inset + bottomGrace
         return max(DrawLibraryMetrics.maxListHeight, room)
     }
 }
