@@ -362,7 +362,12 @@ jobs:
         # parallel round-trips job; the watchdog is headroom against a hang.
         # Run 39819662022: Phase 3's suites brought 3,422 tests to 35:00 and the
         # step was cut 0.5 s after TEST EXECUTE SUCCEEDED, so 45 minutes.
-        timeout-minutes: 45
+        # Run 41266792926 took 41:41 (4:00 build, 37:35 tests); run
+        # 41274121451 was cut at 45:00 about 1:15 before the end (13 new
+        # PanelIslandPositionTests, 70 s, and a runner up to 22 % slower in
+        # the T suites), so 60 minutes: a hang is still cut well inside the
+        # job's 180 (that job used 54).
+        timeout-minutes: 60
         env:
           # The runner has no person at it: unit tests may make a window key
           # and let AppKit resolve targetless menu actions for real.
