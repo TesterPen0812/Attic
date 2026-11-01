@@ -13,6 +13,7 @@ final class DrawPageModelTests: XCTestCase {
         super.setUp()
         AtticMotionPreference.systemReduceMotionOverride = false
         AtticTransparencySeam.systemOverride = false
+        DrawLibrarySetting.override = true
         store = DrawInMemoryStore()
         model = DrawPageModel(store: store)
         model.pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-draw-tests-\(UUID().uuidString)"))
@@ -25,6 +26,7 @@ final class DrawPageModelTests: XCTestCase {
         model.pasteboard.releaseGlobally()
         AtticMotionPreference.systemReduceMotionOverride = nil
         AtticTransparencySeam.systemOverride = nil
+        DrawLibrarySetting.override = nil
         super.tearDown()
     }
 
@@ -403,5 +405,54 @@ final class DrawPageModelTests: XCTestCase {
         XCTAssertEqual(model.canvasID, canvas)
         XCTAssertEqual(model.selection, [box])
         XCTAssertTrue(model.clearRect.intersects(model.viewport.screen(DrawGeometry.bounds(stored[0]))))
+    }
+
+    // MARK: D4 and the library seam
+
+    func testCapsuleFilterReturnOpensTheFirstMatch() throws {
+        model.newCanvas(name: "Alpha")
+        stroke()
+        let alpha = try XCTUnwrap(model.canvasID)
+        model.newCanvas(name: "Beta")
+        stroke()
+        let beta = try XCTUnwrap(model.canvasID)
+        model.open(alpha)
+        model.openFilter()
+        XCTAssertTrue(model.isFiltering)
+        model.library.filter = "Bet"
+        model.library.openFirstMatch()
+        XCTAssertEqual(model.canvasID, beta)
+        XCTAssertFalse(model.isFiltering, "Choosing closes the capsule's filter")
+        XCTAssertEqual(model.library.filter, "")
+        XCTAssertEqual(model.library.currentCanvasID, beta)
+    }
+
+    func testEscapeAndAPressOnTheBoardCloseTheFilter() {
+        model.openFilter()
+        model.library.filter = "zz"
+        XCTAssertTrue(model.escape())
+        XCTAssertFalse(model.isFiltering)
+        XCTAssertEqual(model.library.filter, "")
+        model.openFilter()
+        model.setTool(.pen)
+        model.pointerDown(at: CGPoint(x: 100, y: 100))
+        XCTAssertFalse(model.isFiltering)
+        XCTAssertNil(model.live, "The press only closes the menu")
+    }
+
+    func testSearchRevealsTheMatchingTextBox() throws {
+        model.setTool(.text)
+        model.pointerDown(at: CGPoint(x: 80, y: 120))
+        model.typed("Needle")
+        model.endEditing()
+        let canvas = try XCTUnwrap(model.canvasID)
+        model.newCanvas()
+        model.openSearch()
+        model.search.query = "Needle"
+        model.search.openHighlighted()
+        XCTAssertEqual(model.canvasID, canvas)
+        XCTAssertEqual(model.selection.count, 1)
+        model.closeSearch()
+        XCTAssertEqual(model.search.query, "")
     }
 }

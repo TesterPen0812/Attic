@@ -105,9 +105,7 @@ final class DrawPageModel: ObservableObject {
     @Published var isSelectionStyleOpen = false
     /// D4: the title capsule is the canvas filter.
     @Published private(set) var isFiltering = false
-    @Published var filterText = ""
     @Published private(set) var isSearching = false
-    @Published var searchQuery = ""
     /// D6: a stroke (or a shape or erase) is under way.
     @Published var isDrawingLive = false
     @Published var isMovingSelection = false
@@ -148,6 +146,20 @@ final class DrawPageModel: ObservableObject {
     init(store: any DrawStoreProtocol) {
         self.store = store
         observeStore()
+        DrawLibraryHub.register(store)
+    }
+
+    /// The library's canvas menu under the title capsule (D4) and the top
+    /// Search's results (`Attic/Draw/Library/`).
+    private(set) lazy var library = DrawLibraryMenuModel(store: store, actions: libraryActions)
+    private(set) lazy var search = DrawSearchModel(store: store, actions: libraryActions)
+
+    /// The page's side of the library seam.
+    var libraryActions: DrawLibraryActions {
+        DrawLibraryActions(open: { [weak self] in self?.open($0) },
+                           newCanvas: { [weak self] in self?.newCanvas(name: $0) },
+                           reveal: { [weak self] in self?.reveal(canvasID: $0, objectID: $1) },
+                           close: { [weak self] in self?.closeFilter() })
     }
 
     /// The one model the panel keeps for the session (the store owns Undo,
@@ -204,6 +216,7 @@ final class DrawPageModel: ObservableObject {
         guard let snapshot = try? store.open(id) else { return }
         canvasID = id
         canvasName = snapshot.canvas.name
+        library.currentCanvasID = id
         objects = snapshot.objects.filter { $0.deletedAt == nil }
         selection = []
         strip = nil
@@ -581,18 +594,27 @@ final class DrawPageModel: ObservableObject {
     func openFilter() {
         endEditing()
         strip = nil
-        filterText = ""
+        library.cancelRename()
+        if !library.filter.isEmpty { library.filter = "" }
         isFiltering = true
     }
 
     func closeFilter() {
         guard isFiltering else { return }
         isFiltering = false
-        filterText = ""
+        library.closeTags()
+        if !library.filter.isEmpty { library.filter = "" }
     }
 
-    func openSearch() { isSearching = true }
-    func closeSearch() { isSearching = false; searchQuery = "" }
+    func openSearch() {
+        closeFilter()
+        isSearching = true
+    }
+
+    func closeSearch() {
+        isSearching = false
+        if !search.query.isEmpty { search.query = "" }
+    }
 
     // MARK: Viewport
 

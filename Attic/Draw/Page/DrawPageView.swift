@@ -67,9 +67,7 @@ struct DrawPageHost: View {
     private var topRow: some View {
         PanelTopRow(page: .canvas, layout: layout, searchOpen: model.isSearching) {
             if model.isSearching {
-                AtticTabsSearchField(placeholder: String(localized: "Search canvases"), text: $model.searchQuery,
-                                     floating: true, onEscape: model.closeSearch, header: true)
-                    .atticDesignCorners()
+                DrawSearchField(model: model, search: model.search)
                     .accessibilityIdentifier("draw-search")
                     .transition(PanelTopRowLayout.fieldTransition)
             } else {
@@ -81,10 +79,18 @@ struct DrawPageHost: View {
                    value: model.isSearching)
         .overlay(alignment: .top) {
             if !model.isSearching {
-                DrawTitleCapsule(model: model)
+                DrawTitleCapsule(model: model, library: model.library)
                     .padding(.top, layout.chromeInsets.top)
                     .padding(.horizontal, DrawPageMetrics.titleSideInset)
                     .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .top) {
+            if model.isSearching {
+                DrawSearchResults(model: model.search)
+                    .padding(.top, layout.chromeInsets.top + DrawPageMetrics.capsule + AtticSpacing.s4)
+                    .padding(.horizontal, layout.chromeInsets.leading)
+                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }
     }
@@ -92,9 +98,11 @@ struct DrawPageHost: View {
 
 /// The title: the canvas name with its ⌄ in a glass capsule, centred in the
 /// top row. D4: a click makes the capsule itself the canvas filter, typing in
-/// place, with the library's menu hanging under it.
+/// place, with the library's menu hanging under it. The menu's Rename edits
+/// the name in the capsule.
 struct DrawTitleCapsule: View {
     @ObservedObject var model: DrawPageModel
+    @ObservedObject var library: DrawLibraryMenuModel
 
     @Environment(\.atticDesign) private var design
 
@@ -103,12 +111,15 @@ struct DrawTitleCapsule: View {
         let flat = design.effectiveControls != .liquidGlass
         VStack(spacing: AtticSpacing.s4) {
             Group {
-                if model.isFiltering {
-                    DrawTitleField(text: $model.filterText, onReturn: { DrawLibraryHosting.openFirstMatch(model) },
-                                   onMove: { DrawLibraryHosting.moveHighlight(model, by: $0) }, onEscape: model.closeFilter)
-                        .frame(height: m.capsule)
-                        .padding(.horizontal, m.titlePadding.leading)
-                        .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+                if library.isRenaming {
+                    field(DrawTitleField(text: $library.nameDraft, placeholder: String(localized: "Canvas name"),
+                                         label: String(localized: "Canvas name"), onReturn: library.commitRename,
+                                         onMove: { _ in }, onEscape: library.cancelRename, onEnd: library.commitRename))
+                        .accessibilityIdentifier("draw-title-rename")
+                } else if model.isFiltering {
+                    field(DrawTitleField(text: $library.filter, placeholder: String(localized: "Canvases"),
+                                         label: String(localized: "Find a canvas"), onReturn: library.openFirstMatch,
+                                         onMove: library.moveHighlight(by:), onEscape: model.closeFilter, onEnd: nil))
                         .accessibilityIdentifier("draw-title-filter")
                 } else {
                     Button(action: model.openFilter) {
@@ -135,10 +146,39 @@ struct DrawTitleCapsule: View {
             }
             .atticDesignCorners()
             if model.isFiltering {
-                DrawLibraryHosting.menu(model)
+                DrawLibraryMenu(model: library)
+                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
         }
         .animation(DrawPageMetrics.fold(design.reduceMotion), value: model.isFiltering)
+    }
+
+    private func field(_ field: DrawTitleField) -> some View {
+        field
+            .frame(height: DrawPageMetrics.capsule)
+            .padding(.horizontal, DrawPageMetrics.titlePadding.leading)
+            .background(Color.clear.atticRaisedMaterial(cornerRadius: AtticRadius.header, interactive: false))
+    }
+}
+
+/// The top Search on the Draw page: the shared header field bound to the
+/// library's search; ↑ ↓ and Return go to its results.
+struct DrawSearchField: View {
+    @ObservedObject var model: DrawPageModel
+    @ObservedObject var search: DrawSearchModel
+
+    var body: some View {
+        AtticTabsSearchField(placeholder: String(localized: "Search canvases"), text: $search.query,
+                             floating: true, onEscape: model.closeSearch, header: true)
+            .atticDesignCorners()
+            .onKeyPress(.upArrow) { search.moveHighlight(by: -1); return .handled }
+            .onKeyPress(.downArrow) { search.moveHighlight(by: 1); return .handled }
+            .onKeyPress(.return) {
+                guard !search.results.isEmpty else { return .ignored }
+                search.openHighlighted()
+                model.closeSearch()
+                return .handled
+            }
     }
 }
 
@@ -194,9 +234,13 @@ struct DrawBoardRepresentable: NSViewRepresentable {
 /// Escape go to the canvas menu.
 struct DrawTitleField: NSViewRepresentable {
     @Binding var text: String
+    let placeholder: String
+    let label: String
     let onReturn: () -> Void
     let onMove: (Int) -> Void
     let onEscape: () -> Void
+    /// The field lost the keyboard (Rename commits then).
+    let onEnd: (() -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -207,9 +251,9 @@ struct DrawTitleField: NSViewRepresentable {
         field.focusRingType = .none
         field.alignment = .center
         field.font = .systemFont(ofSize: DrawPageMetrics.titleFont, weight: .bold)
-        field.placeholderString = String(localized: "Canvases")
+        field.placeholderString = placeholder
         field.delegate = context.coordinator
-        field.setAccessibilityLabel(String(localized: "Find a canvas"))
+        field.setAccessibilityLabel(label)
         DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
         return field
     }
@@ -228,6 +272,8 @@ struct DrawTitleField: NSViewRepresentable {
             parent.text = field.stringValue
         }
 
+        func controlTextDidEndEditing(_ notification: Notification) { parent.onEnd?() }
+
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)): parent.onReturn(); return true
@@ -238,17 +284,4 @@ struct DrawTitleField: NSViewRepresentable {
             }
         }
     }
-}
-
-/// The seam to the library builder's canvas menu (`Attic/Draw/Library/`).
-/// Until their `DrawLibraryMenu` lands, the filter shows no menu.
-@MainActor
-enum DrawLibraryHosting {
-    @ViewBuilder
-    static func menu(_ model: DrawPageModel) -> some View {
-        EmptyView()
-    }
-
-    static func openFirstMatch(_ model: DrawPageModel) {}
-    static func moveHighlight(_ model: DrawPageModel, by step: Int) {}
 }
