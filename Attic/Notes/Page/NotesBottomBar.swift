@@ -41,6 +41,13 @@ typealias PanelTagBar = NotesTagBar
 /// All and every tag in use, coloured; the chosen one on a quiet fill.
 /// Choosing one filters the list; more than the bar holds scrolls sideways,
 /// without a scroller.
+///
+/// The bar is only as wide as All and its tags (the user's addition to T6,
+/// Accepted 2026-11-01 "Adaptive picks"), from its place at the panel's
+/// left; with more tags than fit it stops at the room it is given. It hides
+/// while no tags exist at all, so "+" stands alone until the first one,
+/// which grows the bar out from the left. Width changes take the expand
+/// motion; Reduce Motion is instant.
 struct NotesTagBar: View {
     let tags: [String]
     let selection: String?
@@ -56,9 +63,36 @@ struct NotesTagBar: View {
 
     var body: some View {
         let m = NotesBarMetrics.self
-        let shape = Squircle(cornerRadius: m.radius, exponent: TasksDesignMetrics.cornerExponent)
         let motion = design.reduceMotion ? nil : TasksDesignMetrics.curve(0.26)
-        ScrollViewReader { proxy in
+        let collapsed = tags.isEmpty
+        PanelTagBarWidth(collapsed: collapsed) {
+            // Sizes the bar: All and the tags at their own widths.
+            NotesTagBarSizer(tags: tags, selection: selection)
+                .hidden()
+                .accessibilityHidden(true)
+            // Built only while tags exist (no empty element for VoiceOver);
+            // the first tag grows it out from the left.
+            if !collapsed {
+                scroller(motion: motion)
+                    .transition(.modifier(active: NotesTagBarGrow(progress: 0), identity: NotesTagBarGrow(progress: 1)))
+            }
+        }
+        .frame(height: m.control)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(Self.widthAnimation(reduceMotion: design.reduceMotion), value: tags)
+        .animation(Self.widthAnimation(reduceMotion: design.reduceMotion), value: selection)
+    }
+
+    /// The width's motion as tags come and go (the app's expand preset;
+    /// Reduce Motion: instant).
+    static func widthAnimation(reduceMotion: Bool) -> Animation? {
+        AtticMotionPreset.expand.animation(reduceMotion: reduceMotion)
+    }
+
+    private func scroller(motion: Animation?) -> some View {
+        let m = NotesBarMetrics.self
+        let shape = Squircle(cornerRadius: m.radius, exponent: TasksDesignMetrics.cornerExponent)
+        return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: m.pillGap) {
                     NotesTagBarPill(title: String(localized: "All"), tag: nil, selected: selection == nil) { onSelect(nil) }
@@ -99,13 +133,73 @@ struct NotesTagBar: View {
             }
         }
         .clipShape(shape)
-        .frame(maxWidth: .infinity)
         .frame(height: m.control)
         // The glass behind the pills, never over them.
         .background(Color.clear.atticRaisedMaterial(cornerRadius: m.radius, interactive: false))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
         .accessibilityIdentifier(idPrefix)
+    }
+}
+
+/// The tag bar's width: its sizer's (All and the tags at their own
+/// widths), never more than the room proposed (it stops before "+"), and
+/// none while collapsed. The second subview, the bar itself, takes it.
+struct PanelTagBarWidth: Layout {
+    var collapsed: Bool
+
+    static func width(ideal: CGFloat, room: CGFloat?, collapsed: Bool) -> CGFloat {
+        collapsed ? 0 : min(ideal, room ?? ideal)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let sizer = subviews.first else { return .zero }
+        let ideal = sizer.sizeThatFits(.unspecified)
+        return CGSize(width: Self.width(ideal: ideal.width, room: proposal.width, collapsed: collapsed),
+                      height: proposal.height ?? ideal.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: .unspecified)
+        guard subviews.count > 1 else { return }
+        subviews[1].place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// The first tag's bar growing out from the left (and the last one's
+/// folding back into it).
+private struct NotesTagBarGrow: ViewModifier {
+    let progress: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(x: max(progress, 0.001), y: 1, anchor: .leading)
+            .opacity(progress)
+    }
+}
+
+/// The pills' widths, without buttons: All and each tag in the pill's font
+/// and padding (semibold when chosen), as the bar lays them out.
+private struct NotesTagBarSizer: View {
+    let tags: [String]
+    let selection: String?
+
+    var body: some View {
+        let m = NotesBarMetrics.self
+        HStack(spacing: m.pillGap) {
+            pill(String(localized: "All"), selected: selection == nil)
+            ForEach(tags, id: \.self) { tag in pill(TasksPanelDesign.tagChipTitle(tag), selected: selection == tag) }
+        }
+        .padding(.horizontal, m.tagBarPadding)
+        .frame(height: m.control)
+    }
+
+    private func pill(_ title: String, selected: Bool) -> some View {
+        Text(verbatim: title)
+            .font(.system(size: NotesBarMetrics.pillFontSize, weight: selected ? .semibold : .medium))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, NotesBarMetrics.pillPaddingX)
     }
 }
 

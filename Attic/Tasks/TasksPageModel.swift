@@ -458,12 +458,18 @@ final class TasksPageModel: ObservableObject {
     /// The tag chip chosen under the search (owner, 2026-10-28; the
     /// design's `listFilter`): one tag at a time, for the panel's session
     /// (not remembered), on Now and Later. Nil is All.
-    @Published var tagFilter: String?
+    @Published var tagFilter: String? {
+        // Done draws from its own results (T6: the tag bar filters Done).
+        willSet { if newValue != tagFilter { doneResults.objectWillChange.send() } }
+    }
     /// Bumped when the library's tags change (their order, a rename): the
     /// tag chips are rebuilt.
     var tagInventoryRevision: UInt64 = 0
     /// The tag chips, built once per change (`tagChips()`).
     var tagChipsCache: (revision: UInt64, inventory: UInt64, tags: [String])?
+    /// Find's counts on the other tabs (T3), built once per query, tag and
+    /// change (`searchMatchesElsewhere(from:)`).
+    var elsewhereCountsCache: (key: TasksElsewhereKey, counts: [TasksElsewhereCount])?
     /// Where the page and the views are remembered across relaunch (L7).
     var memory: TasksPageMemory?
     /// Loaded pages of the Done log (lazily, a page at a time). Published
@@ -484,6 +490,8 @@ final class TasksPageModel: ObservableObject {
     /// an archived row shows its checklist from its archived family.
     private var doneLogChildren: [UUID: [TaskItem]] = [:]
     private var doneLogQuery: String?
+    /// The tag the loaded Done log pages were read for (T6).
+    private var doneLogTag: String?
     private var doneLogRevision: UInt64?
     private var doneLogCursor = TaskStore.DoneLogCursor()
 
@@ -805,7 +813,7 @@ final class TasksPageModel: ObservableObject {
     /// cleanup) and the Done log, grouped by the day they were finished,
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
-        let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch,
+        let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch, tag: tagFilter,
                           today: DueDay(date: services.now(), calendar: services.calendar()), dateEnvironment: dateEnvironment,
                           folded: folded(on: .done))
         if let doneCache, doneCache.key == key { return doneCache.days }
@@ -821,6 +829,7 @@ final class TasksPageModel: ObservableObject {
         let revision: UInt64
         let loaded: [UUID]
         let search: String
+        let tag: String?
         let today: DueDay
         let dateEnvironment: DatePresentationEnvironment
         let folded: Set<String>
@@ -831,7 +840,8 @@ final class TasksPageModel: ObservableObject {
     private func buildDoneDays() -> [TasksDoneDay] {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let today = store.doneTodayTasks()
-        let finished = (today.filter { store.matchesItemSearch($0, query: query) } + doneLogTasks)
+        let tag = tagFilter
+        let finished = (today.filter { store.matchesItemSearch($0, query: query) && (tag.map($0.tags.contains) ?? true) } + doneLogTasks)
         let calendar = services.calendar()
         let now = services.now()
         var days: [TasksDoneDay] = []
@@ -868,13 +878,14 @@ final class TasksPageModel: ObservableObject {
     func doneSearchCount() -> (matches: Int, total: Int)? {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return nil }
-        let key = DoneCountKey(revision: store.revision, query: query)
+        let key = DoneCountKey(revision: store.revision, query: query, tag: tagFilter)
         if let doneCountCache, doneCountCache.key == key { return doneCountCache.count }
-        let today = store.doneTodayTasks()
+        let tag = tagFilter
+        let today = store.doneTodayTasks().filter { tag.map($0.tags.contains) ?? true }
         var count: (matches: Int, total: Int)?
         if doneLogFailure == nil {
-            let logMatches = store.indexedDoneLogCount(matching: query)
-            let logTotal = store.indexedDoneLogCount()
+            let logMatches = store.indexedDoneLogCount(matching: query, tag: tag)
+            let logTotal = store.indexedDoneLogCount(tag: tag)
             count = (today.filter { store.matchesItemSearch($0, query: query) }.count + logMatches, today.count + logTotal)
         }
         doneCountCache = (key, count)
@@ -884,6 +895,7 @@ final class TasksPageModel: ObservableObject {
     private struct DoneCountKey: Equatable {
         let revision: UInt64
         let query: String
+        let tag: String?
     }
 
     private var doneCountCache: (key: DoneCountKey, count: (matches: Int, total: Int)?)?
@@ -892,19 +904,22 @@ final class TasksPageModel: ObservableObject {
     /// or the search changed since.
     func loadDoneLogIfNeeded() {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard doneLogQuery != query || doneLogRevision != store.revision else { return }
-        let limit = doneLogQuery == query ? max(Self.doneLogPageSize, doneLogTasks.count) : Self.doneLogPageSize
-        let page = store.indexedDoneLogPage(limit: limit, matching: query)
+        let tag = tagFilter
+        let same = doneLogQuery == query && doneLogTag == tag
+        guard !same || doneLogRevision != store.revision else { return }
+        let limit = same ? max(Self.doneLogPageSize, doneLogTasks.count) : Self.doneLogPageSize
+        let page = store.indexedDoneLogPage(limit: limit, matching: query, tag: tag)
         if let failure = page.failure {
             // Keep what the page showed for this search; a new search shows
             // what was read. Not marked as loaded, so Retry reads again.
-            if doneLogQuery != query { setDoneLog(page.tasks) }
+            if !same { setDoneLog(page.tasks) }
             doneLogCursor = page.next
             doneLogHasMore = true
             doneLogFailure = failure
             return
         }
         doneLogQuery = query
+        doneLogTag = tag
         doneLogRevision = store.revision
         setDoneLog(page.tasks)
         doneLogCursor = page.next
@@ -918,12 +933,12 @@ final class TasksPageModel: ObservableObject {
     func loadMoreDoneLog(limit: Int = doneLogPageSize) {
         guard doneLogHasMore, doneLogFailure == nil else { return }
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        if doneLogQuery != query { loadDoneLogIfNeeded(); return }
+        if doneLogQuery != query || doneLogTag != tagFilter { loadDoneLogIfNeeded(); return }
         if doneLogRevision != store.revision {
             loadDoneLogIfNeeded()
             guard doneLogHasMore, doneLogFailure == nil else { return }
         }
-        let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "")
+        let page = store.indexedDoneLogPage(from: doneLogCursor, limit: limit, matching: doneLogQuery ?? "", tag: doneLogTag)
         doneCountCache = nil
         // The indexed cursor supplies canonical IDs in completion order.
         // Existing families remain valid for this store revision.
@@ -943,7 +958,8 @@ final class TasksPageModel: ObservableObject {
     /// stopped (or the first page, when that was what failed).
     func retryDoneLog() {
         doneLogFailure = nil
-        if doneLogQuery != doneSearch.trimmingCharacters(in: .whitespacesAndNewlines) || doneLogRevision != store.revision {
+        if doneLogQuery != doneSearch.trimmingCharacters(in: .whitespacesAndNewlines) || doneLogTag != tagFilter
+            || doneLogRevision != store.revision {
             loadDoneLogIfNeeded()
         } else {
             loadMoreDoneLog()
@@ -1289,12 +1305,14 @@ final class TasksPageModel: ObservableObject {
             if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
+            if let tag = tagFilter, !task.tags.contains(tag) { tagFilter = nil }
             if parent != nil { doneDetailID = task.id }
             unfoldDoneDay(of: task.id)
         } else if target == .done {
             if doneSearch != doneSearchInput.text { doneSearch = doneSearchInput.text }
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             if !query.isEmpty, !store.matchesItemSearch(task, query: query) { doneSearch = "" }
+            if let tag = tagFilter, !task.tags.contains(tag) { tagFilter = nil }
             if parent != nil { doneDetailID = task.id }
             guard revealInDoneLog(task.id) else {
                 // Not loaded: nothing is selected or scrolled to until it is.
@@ -1351,7 +1369,7 @@ final class TasksPageModel: ObservableObject {
         loadDoneLogIfNeeded()
         if !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil,
            doneLogTasks.count < Self.doneRevealReach {
-            let offset = store.indexedDoneLogOffset(of: id, matching: doneLogQuery ?? "") ?? (Self.doneRevealReach - 1)
+            let offset = store.indexedDoneLogOffset(of: id, matching: doneLogQuery ?? "", tag: doneLogTag) ?? (Self.doneRevealReach - 1)
             let remaining = max(0, offset + 1 - doneLogTasks.count)
             let pages = max(1, (remaining + Self.doneRevealStep - 1) / Self.doneRevealStep)
             loadMoreDoneLog(limit: min(pages * Self.doneRevealStep, Self.doneRevealReach - doneLogTasks.count))

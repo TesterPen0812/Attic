@@ -2713,12 +2713,15 @@ final class TaskStore: ObservableObject {
         let title: NSString
         let completed: Date
         let created: Date
+        /// The tag bar filters Done too (T6, Accepted 2026-11-01).
+        let tags: [String]
 
         init(_ task: TaskItem) {
             id = task.id
             title = task.title as NSString
             completed = task.completedAt ?? task.updatedAt
             created = task.createdAt
+            tags = task.tags
         }
     }
 
@@ -2792,7 +2795,7 @@ final class TaskStore: ObservableObject {
     }
 
     private var doneSearchEntries: [DoneSearchEntry] = []
-    private var doneSearchMatches: (query: String, locale: String, ids: [UUID])?
+    private var doneSearchMatches: (query: String, tag: String?, locale: String, ids: [UUID])?
 
     private func indexDoneSearch(_ winners: [TaskItem], replacing ids: Set<UUID>? = nil) {
         indexItemTasks(winners, replacing: ids)
@@ -2816,35 +2819,43 @@ final class TaskStore: ObservableObject {
         doneSearchMatches = nil
     }
 
-    private func doneSearchIDs(matching query: String) -> [UUID] {
+    private func doneSearchIDs(matching query: String, tag: String? = nil) -> [UUID] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let locale = Locale.current.identifier
-        if let cached = doneSearchMatches, cached.query == query, cached.locale == locale { return cached.ids }
+        if let cached = doneSearchMatches, cached.query == query, cached.tag == tag, cached.locale == locale { return cached.ids }
         // Keep the exact localized matching semantics, including diacritics;
         // folding to a different comparison would subtly change results.
-        let ids = doneSearchEntries.compactMap {
-            query.isEmpty || $0.title.localizedStandardContains(query) || additionalItemMatch($0.id, query: query) ? $0.id : nil
+        let ids = doneSearchEntries.compactMap { entry -> UUID? in
+            if let tag, !entry.tags.contains(tag) { return nil }
+            return query.isEmpty || entry.title.localizedStandardContains(query) || additionalItemMatch(entry.id, query: query) ? entry.id : nil
         }
-        doneSearchMatches = (query, locale, ids)
+        doneSearchMatches = (query, tag, locale, ids)
         return ids
     }
 
-    func indexedDoneLogOffset(of id: UUID, matching query: String) -> Int? {
-        doneSearchIDs(matching: query).firstIndex(of: id)
+    func indexedDoneLogOffset(of id: UUID, matching query: String, tag: String? = nil) -> Int? {
+        doneSearchIDs(matching: query, tag: tag).firstIndex(of: id)
     }
 
-    func indexedDoneLogCount(matching query: String = "") -> Int {
-        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? doneSearchEntries.count : doneSearchIDs(matching: query).count
+    func indexedDoneLogCount(matching query: String = "", tag: String? = nil) -> Int {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && tag == nil
+            ? doneSearchEntries.count : doneSearchIDs(matching: query, tag: tag).count
+    }
+
+    /// Every tag on a task in the Done log, from the index (no read).
+    func indexedDoneLogTags() -> Set<String> {
+        var tags = Set<String>()
+        for entry in doneSearchEntries { tags.formUnion(entry.tags) }
+        return tags
     }
 
     /// The panel's logical cursor walks matching canonical IDs. Only this
     /// page is hydrated; no SQL string predicate or full-log count on typing.
     /// The raw physical cursor above remains available to command clients.
     func indexedDoneLogPage(from cursor: DoneLogCursor = DoneLogCursor(), limit: Int,
-                            matching query: String = "") -> DoneLogPage {
+                            matching query: String = "", tag: String? = nil) -> DoneLogPage {
         donePageReadCount += 1
-        let ids = doneSearchIDs(matching: query)
+        let ids = doneSearchIDs(matching: query, tag: tag)
         let start = min(cursor.rowOffset, ids.count)
         let end = min(start + max(0, limit), ids.count)
         let pageIDs = Array(ids[start..<end])

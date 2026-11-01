@@ -297,6 +297,14 @@ enum AtticSelectionBarMetrics {
     static let controlSpacing: CGFloat = 2
     static let countLeading: CGFloat = 10
     static let countTrailing: CGFloat = 6
+    /// In the tag bar's place (T2, the drafts' 2× values halved): the
+    /// bar's 27 pt card and 3 pt inset, 23 × 21 pt controls, the count in
+    /// the tags' 10.5 pt medium, 7.5 pt in.
+    static let barHeight: CGFloat = AtticControlSize.headerControl
+    static let barInset: CGFloat = 3
+    static let barControl = CGSize(width: 23, height: 21)
+    static let barFontSize: CGFloat = 10.5
+    static let barCountLeading: CGFloat = 7.5
 }
 
 /// Direction A's page tabs as quiet labels (Phase 0's qualities): 16 pt

@@ -1307,6 +1307,14 @@ struct TasksPage: View {
         return true
     }
 
+    /// "2 in Later" in Find's count (T3): that tab, the query kept, the
+    /// keyboard back in the search field.
+    private func followSearch(from tab: TasksTab, to target: TasksTab) {
+        model.followSearch(from: tab, to: target)
+        searchTab = target
+        searchFocused = true
+    }
+
     /// Esc (or the field's "Esc"): the search ends, the tabs return, and the
     /// Done log shows whole again.
     private func endSearch() {
@@ -1521,9 +1529,10 @@ struct TasksPage: View {
                         }
                     }
                     if !query.isEmpty, !sections.open.isEmpty, let count = model.listSearchCount(for: tab) {
-                        // Find's quiet count.
-                        AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) tasks on \(tab.title)"),
-                                  style: .rowMeta, ink: .helper)
+                        // Find's quiet count, and the other tabs' matches (T3).
+                        TasksFindCountLine(text: String(localized: "\(count.matches) of \(count.total) tasks on \(tab.title)"),
+                                           elsewhere: model.searchMatchesElsewhere(from: tab),
+                                           follow: { followSearch(from: tab, to: $0) })
                             .frame(height: AtticLayout.rowPitch)
                             .padding(.leading, TasksDesignMetrics.textX)
                             .accessibilityIdentifier("tasks-find-count")
@@ -3194,24 +3203,21 @@ struct TasksPage: View {
                 TasksBoundaryHint(text: boundaryHintText)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
-            // A paste offer owns the area over the bar while it asks; the
-            // selection bar shows when the add bar is not being used.
+            // A paste offer owns the area over the bar while it asks.
             if let offer = model.pasteOffer {
                 pasteOfferBar(offer)
                     .frame(maxWidth: .infinity)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
-            } else if model.selection.count > 1, model.tab != .done, !addBarFocused {
-                selectionBar
-                    .frame(maxWidth: .infinity)
-                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
             }
             // The bottom bar (Accepted 2026-10-29/30): the page switch, the
-            // tag bar and "+", which opens into the add field.
+            // tag bar and "+", which opens into the add field. Two or more
+            // selected (T2, Accepted 2026-11-01): the selection bar takes
+            // the tag bar's place instead of stacking over it.
             TasksBottomBar(text: model.addBarState, addFocused: addBarFocused, tab: model.tab,
                            tags: model.tagChips(), tagSelection: model.tagFilter(on: model.tab),
                            onSelectTag: { model.chooseTagChip($0) }, onPlus: {
                                if let panelComposer { panelComposer.open(on: .tasks(model.tab)) } else { addBarFocused = true }
-                           }) {
+                           }, selectionBar: selectionBarShown ? AnyView(selectionBar) : nil) {
                 addBar
             }
         }
@@ -3268,6 +3274,13 @@ struct TasksPage: View {
         .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: height), interactive: false)
     }
 
+    /// The selection bar's turn in the tag bar's place (T2): two or more
+    /// selected on Now or Later, with no paste offer and the add field not
+    /// in use.
+    private var selectionBarShown: Bool {
+        model.selection.count > 1 && model.tab != .done && !addBarFocused && model.pasteOffer == nil
+    }
+
     private var selectionBar: some View {
         let ids = model.orderedSelection()
         let count = ids.count
@@ -3317,7 +3330,12 @@ struct TasksPage: View {
                 ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: { run { [weak model] in model?.moveToNow(ids) ?? .failed(.taskGone) } })
                 : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Later", handler: { run { [weak model] in model?.moveToBacklog(ids) ?? .failed(.taskGone) } }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
-        ], summary: selectionSummary(ids))
+        ], summary: selectionSummary(ids), inBar: true, filterTag: model.tagFilter(on: model.tab).map { tag in
+            (TasksPanelDesign.tagChipTitle(tag),
+             TasksPanelDesign.vivid(TasksPanelDesign.tagColours(hue: TasksPanelDesign.oklchHue(for: tagColouring.hue(for: tag)),
+                                                                dark: design.mode == .dark).text, tokens: design.tokens).color)
+        })
+        .accessibilityIdentifier("tasks-selection-bar")
     }
 
     /// The selection bar's Date or Tags picker, while open (round 10).

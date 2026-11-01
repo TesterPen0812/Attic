@@ -285,6 +285,10 @@ struct TasksBottomBar<AddBar: View>: View {
     let tagSelection: String?
     let onSelectTag: (String?) -> Void
     let onPlus: () -> Void
+    /// Two or more tasks selected (T2, Accepted 2026-11-01): the selection
+    /// bar takes the tag bar's place, as wide as its own content, and "+"
+    /// stays. The tag bar comes back as it was when the selection ends.
+    var selectionBar: AnyView? = nil
     @ViewBuilder var addBar: () -> AddBar
 
     @Environment(\.atticDesign) private var design
@@ -301,10 +305,12 @@ struct TasksBottomBar<AddBar: View>: View {
         let shared = sharedChrome != nil
         let folded = !shared && TasksPanelDesign.footerFolded(addFocused: addFocused, hasDraft: hasDraft)
         let side = AtticControlSize.headerControl
-        // Done has no tag filter: its bar keeps its place, empty.
-        let tagsShown = tab != .done
+        // T6 (Accepted 2026-11-01): Done keeps the tag bar too. A
+        // multi-selection's bar takes its turn in its place (T2).
+        let selecting = selectionBar != nil
+        let tagsShown = !selecting
         HStack(alignment: .bottom, spacing: 0) {
-            HStack(spacing: TasksDesignMetrics.footerGap) {
+            ZStack(alignment: .leading) {
                 if shared {
                     Color.clear.frame(height: side)
                 } else {
@@ -315,7 +321,15 @@ struct TasksBottomBar<AddBar: View>: View {
                         .allowsHitTesting(tagsShown)
                         .accessibilityHidden(!tagsShown)
                 }
+                // Drawn by the page even in the panel (its pickers and
+                // menus are the page's), over the shared tag bar's place
+                // while that fades out.
+                if let selectionBar {
+                    selectionBar
+                        .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: nil))
+                }
             }
+            .frame(height: side)
             .frame(maxWidth: folded ? 0 : .infinity, alignment: .leading)
             .opacity(folded ? 0 : 1)
             .padding(.trailing, folded ? 0 : TasksDesignMetrics.footerGap)
@@ -572,5 +586,52 @@ struct TasksFoldClip: Shape {
 
     func path(in rect: CGRect) -> Path {
         Path(CGRect(x: rect.minX - 1_000, y: rect.minY - 1_000, width: rect.width + 2_000, height: 1_000 + visible))
+    }
+}
+
+/// Find's quiet count line (owner item 17), and since T3 (Accepted
+/// 2026-11-01) "· 2 in Later · 5 in Done": each part a link to that tab
+/// that keeps the query, a tab with no matches left out. The switch is
+/// folded away while you search, so this is its route.
+struct TasksFindCountLine: View {
+    let text: String
+    let elsewhere: [TasksElsewhereCount]
+    let follow: (TasksTab) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            AtticText(verbatim: text, style: .rowMeta, ink: .helper)
+            ForEach(elsewhere, id: \.tab) { part in
+                AtticText(verbatim: " · ", style: .rowMeta, ink: .helper)
+                TasksFindCountLink(title: String(localized: "\(part.count) in \(part.tab.title)")) { follow(part.tab) }
+                    .accessibilityIdentifier("tasks-find-count-\(part.tab.title.lowercased())")
+            }
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// "2 in Later": the heading ink, underlined (the drafts' link), a little
+/// lighter under the pointer.
+private struct TasksFindCountLink: View {
+    let title: String
+    let action: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(verbatim: title)
+                .font(AtticTextStyle.rowMeta.font)
+                .underline()
+                .foregroundStyle(design.tokens.color(hovered ? .body : .heading))
+                .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { hovered = $0 }
+        .accessibilityAddTraits(.isLink)
     }
 }

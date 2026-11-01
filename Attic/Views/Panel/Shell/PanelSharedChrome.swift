@@ -95,8 +95,8 @@ final class PanelSharedChrome: ObservableObject {
 struct PanelBottomBarLook: Equatable {
     enum Middle: Equatable {
         case none
-        /// The tag bar card: All and the tags; `shown` false keeps its
-        /// place, empty (Tasks' Done).
+        /// The tag bar card: All and the tags; `shown` false fades it out
+        /// in place, where Tasks' selection bar takes its turn (T2).
         case tags(tags: [String], selection: String?, idPrefix: String, shown: Bool)
         /// Calendar: Today, shown only while another day is selected.
         case today(shown: Bool)
@@ -320,6 +320,8 @@ struct PanelSharedBottomBar: View {
                 .opacity(shown ? 1 : 0)
                 .allowsHitTesting(shown)
                 .accessibilityHidden(!shown || hidden)
+                // Taking turns with the selection bar (T2), on its motion.
+                .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion, showing: shown), value: shown)
         case let .today(shown):
             // Built only while shown (the bar's outer accessibility state
             // must not reach a hidden Today), fading in and out on its own
