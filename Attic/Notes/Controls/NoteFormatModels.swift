@@ -247,8 +247,28 @@ final class NoteFormatModel: ObservableObject {
     @Published var barKeyboardIndex: Int?
     /// The keyboard's position in the format row (⌘T, ⌃Tab), or nil.
     @Published var rowKeyboardIndex: Int?
-    /// The format row's style list is open.
-    @Published var rowStyleListOpen = false
+    /// N1 (Adaptive picks, 2026-11-01): the format row's Style pill stands
+    /// widened into its five styles (the lists and indents folded away).
+    @Published var rowStyleListOpen = false {
+        didSet { if !rowStyleListOpen, styleStripKeyboardIndex != nil { styleStripKeyboardIndex = nil } }
+    }
+    /// The keyboard's place among the widened styles (opened from the keys).
+    @Published var styleStripKeyboardIndex: Int?
+    /// N2: the highlighter's chevron stands widened into its colours on this
+    /// surface (B I U S folded away); nil when closed.
+    @Published var highlightPalette: NoteCommandSurface? {
+        didSet { if highlightPalette == nil, paletteKeyboardIndex != nil { paletteKeyboardIndex = nil } }
+    }
+    /// The keyboard's place among the open colours.
+    @Published var paletteKeyboardIndex: Int?
+    /// N3: the selection bar's Link cell stands widened into the address
+    /// field (the style and B I U S folded away).
+    @Published var linkFieldOpen = false
+    /// The selection bar's laid-out width at rest: the field takes what the
+    /// style and B I U S give up, so the bar keeps it.
+    @Published var barRestWidth: CGFloat = 0
+    /// The link's text, error and actions while the field is open.
+    var linkCard: NoteFormatCardModel?
     /// The table menu (Table ⌄) is open.
     @Published var rowTableMenuOpen = false
     /// The note's highlight colour, for the highlight toggle's swatch.
@@ -290,6 +310,41 @@ final class NoteFormatModel: ObservableObject {
     func run(_ command: NoteFormatCommand, from surface: NoteCommandSurface) {
         if command == .mark(.link) { willRequestLink?() }
         router?.run(command, from: surface)
+    }
+
+    /// N1: the five styles the Style pill widens into (Title · Heading ·
+    /// Subheading · Body · Mono); Small Heading, Quote and Callout stay in
+    /// Format ▸ and `/`.
+    static let stripStyles: [NoteFormatCommand] = [
+        .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)), .paragraph(.body), .paragraph(.mono)
+    ]
+
+    /// N1: a widened style picked (or the marked one clicked again): the
+    /// row comes back either way.
+    func pickStripStyle(_ command: NoteFormatCommand) {
+        guard snapshot.isEnabled(command) else { NSSound.beep(); return }
+        let current = snapshot.value(command) == .on
+        rowStyleListOpen = false
+        if !current { run(command, from: .formatBar) }
+    }
+
+    /// N2: the highlighter's chevron, once to widen, again to fold back.
+    func toggleHighlightPalette(on surface: NoteCommandSurface) {
+        highlightPalette = highlightPalette == surface ? nil : surface
+    }
+
+    /// The selection's highlight colour, if it has one.
+    var currentHighlight: NoteHighlightColour? {
+        snapshot.value(.mark(.highlight)) != .off ? router?.engine.highlightColour() : nil
+    }
+
+    /// N2: a colour picked from the widened highlighter; the marked one
+    /// again only folds it back.
+    func pickHighlight(_ colour: NoteHighlightColour, from surface: NoteCommandSurface) {
+        guard snapshot.isEnabled(.mark(.highlight)) else { NSSound.beep(); return }
+        let current = currentHighlight == colour
+        highlightPalette = nil
+        if !current { router?.highlight(colour, from: surface) }
     }
 
     /// The highlighter's menu (N-2 option A: the split button's chevron):
@@ -457,7 +512,10 @@ final class NoteFormatCardModel: ObservableObject {
     /// What was typed into the date card after `/date` (the card has no
     /// field: its suggestions show it).
     @Published var dateText = ""
-    @Published var linkText = ""
+    /// Typing again clears a bad address's error (N3: the field's red ring).
+    @Published var linkText = "" {
+        didSet { if linkError != nil, linkText != oldValue { linkError = nil } }
+    }
     @Published var linkError: String?
     @Published var today = Date()
     @Published var calendar = Calendar.current

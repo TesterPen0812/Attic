@@ -431,8 +431,9 @@ struct NotesEditorPage: View {
     private var darkGlyphs: Bool { design.tokens.context.mode == .dark }
 
     /// All notes: the tag bar and "+". An open note: Back on the left,
-    /// its status between, Aa on the right (Notes Page v2; the "New note"
-    /// field and the scope button it once had were replaced on 2026-10-28).
+    /// its status between, then Aa and "+" on the right (Notes Page v2; the
+    /// "New note" field and the scope button it once had were replaced on
+    /// 2026-10-28; N7, Adaptive picks 2026-11-01: "+" stays, Aa one place in).
     @ViewBuilder
     private var bottomButtons: some View {
         Group {
@@ -499,10 +500,29 @@ struct NotesEditorPage: View {
             if showsFormatButton {
                 formatButton
                     .modifier(NotesKeyboardStop(stop: .format, enabled: bottomStops, focus: $bottomFocus))
+                    .padding(.trailing, AtticNoteMetrics.formatButtonGap)
                     .transition(.opacity)
             }
+            newNoteButton
         }
         .transition(.opacity)
+    }
+
+    /// N7: "+" stays on an open note, in All notes' place and look (the
+    /// shared bar's "+"), so it never moves or changes between the two. The
+    /// format row takes the whole row, "+" included: it slides out past the
+    /// row's trailing edge as Aa grows, and back as the row closes.
+    private var newNoteButton: some View {
+        let side = AtticControlSize.headerControl
+        let plus = PanelBottomBarLook.notesPlus
+        return AtticRaisedButton(systemName: NotesBarMetrics.newNoteSymbol, label: String.LocalizationValue(stringLiteral: plus.label),
+                                 size: CGSize(width: side, height: side), help: plus.help, emphasisedGlyph: true,
+                                 flat: design.effectiveControls != .liquidGlass, cornerRadius: AtticRadius.header) {
+            newNote()
+        }
+        .atticDesignCorners()
+        .noteFormatRowLeaving(.newNote)
+        .accessibilityIdentifier(plus.identifier)
     }
 
     /// Aa shows on an editable note with text under its title (owner,

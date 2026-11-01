@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The formatting and insertion UI laid over one note's text view: the
@@ -51,6 +52,7 @@ final class NoteFormatControls: NSObject {
             } else {
                 formatModel.rowKeyboardIndex = nil
                 if formatModel.rowStyleListOpen { formatModel.rowStyleListOpen = false }
+                if formatModel.highlightPalette == .formatBar { formatModel.highlightPalette = nil }
                 // A selection's marks go back to the selection bar (D-06).
                 if selection.length > 0 { scheduleRefresh() }
             }
@@ -98,6 +100,7 @@ final class NoteFormatControls: NSObject {
         addressHost = AtticOverlayHostingView(rootView: AnyView(EmptyView()))
         super.init()
         formatModel.router = router
+        formatModel.linkCard = cardModel
         cardHost.acceptsKeyboard = true
         // The `/` list and the cards are dropdowns: their room is the card's
         // shadow's, and VoiceOver hears a menu.
@@ -128,6 +131,10 @@ final class NoteFormatControls: NSObject {
         cardModel.onCommitLink = { [weak self] url in self?.commitLink(url) ?? false }
         cardModel.onRemoveLink = { [weak self] in self?.removeLink() }
         cardModel.onCancel = { [weak self] in self?.cancelCard() }
+        widenSubscription = formatModel.$rowStyleListOpen.combineLatest(formatModel.$highlightPalette)
+            .map { $0 || $1 != nil }
+            .removeDuplicates()
+            .sink { [weak self] widened in self?.setWidenMonitor(widened) }
 
         engine.onSlashSessionChange = { [weak self] session in self?.slashSessionChanged(session) }
         engine.onSlashDateRequest = { [weak self] in self?.openDateCard(fromSlash: true) }
@@ -202,8 +209,11 @@ final class NoteFormatControls: NSObject {
         resignObserver = nil
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        if let widenMonitor { NSEvent.removeMonitor(widenMonitor) }
         keyMonitor = nil
         mouseMonitor = nil
+        widenMonitor = nil
+        widenSubscription = nil
         hoverWork?.cancel()
         if let trackingArea { textView?.removeTrackingArea(trackingArea) }
         engine.onSlashSessionChange = nil
@@ -298,6 +308,9 @@ final class NoteFormatControls: NSObject {
     /// Recomputes what shows. Runs after the engine has handled the event.
     func refresh() {
         guard let textView else { return }
+        // N3: while the link's field stands in the bar, the bar stays as it
+        // is (its field has the keyboard; the selection is the link's).
+        if linkInBar { updateHint(); return }
         let current = selection
         let focused = textView.window?.firstResponder === textView || barOwnsKeyboard
         let inTable = tableMarkTarget
@@ -362,7 +375,7 @@ final class NoteFormatControls: NSObject {
     private func layoutDidChange() {
         if formatModel.barShown { placeBar() }
         if slashModel.shown { placeSlashList() }
-        if cardModel.card != nil { placeCard() }
+        if cardModel.card != nil, !linkInBar { placeCard() }
         if hintShown { updateHint() }
         if !addressHost.isHidden { hideAddress() }
     }
@@ -419,6 +432,8 @@ final class NoteFormatControls: NSObject {
             return
         }
         barAwaitsRoom = false
+        let rest = barNaturalWidths[barWidthKey] ?? barWidth
+        if formatModel.barRestWidth != rest { formatModel.barRestWidth = rest }
         barHost.isInteractive = true
         if barHost.isHidden { barHost.isHidden = false }
         if !formatModel.barShown { formatModel.barShown = true }
@@ -426,6 +441,9 @@ final class NoteFormatControls: NSObject {
 
     func hideBar() {
         barAwaitsRoom = false
+        if formatModel.highlightPalette == .selectionBar { formatModel.highlightPalette = nil }
+        // The field can't stay without its bar (scrolled out of room).
+        if linkInBar { cancelCard(refocus: false) }
         guard formatModel.barShown || formatModel.barKeyboardIndex != nil else { return }
         formatModel.barShown = false
         formatModel.barKeyboardIndex = nil
@@ -434,9 +452,13 @@ final class NoteFormatControls: NSObject {
     }
 
     private var barWidths: [String: CGFloat] = [:]
+    /// The bar as SwiftUI lays it out (its host can be a little wider).
+    private var barNaturalWidths: [String: CGFloat] = [:]
+    private var barWidthKey = ""
 
     /// The bar's laid-out width for a style name (measured once per name).
     private func measuredBarWidth(styleName: String) -> CGFloat {
+        barWidthKey = styleName
         if let width = barWidths[styleName] { return width }
         let probe = NoteFormatModel()
         probe.router = router
@@ -446,6 +468,7 @@ final class NoteFormatControls: NSObject {
         let measured = host.fittingSize.width - AtticNoteFormatMetrics.shadowRoom * 2
         let width = styleName.hasPrefix("cells:") ? measured : max(measured, Self.barWidth(styleName: styleName))
         barWidths[styleName] = width
+        barNaturalWidths[styleName] = measured
         return width
     }
 
@@ -545,7 +568,7 @@ final class NoteFormatControls: NSObject {
     /// scroll or layout pass moves it with the text, at once.
     @discardableResult
     private func placeBar(animated: Bool = false) -> Bool {
-        guard let placement = barPlacement(selection: selection) else {
+        guard let placement = barPlacement(selection: barAnchor ?? selection) else {
             // A showing bar scrolled out of room waits to come back.
             let waits = formatModel.barShown
             hideBar()
@@ -652,6 +675,11 @@ final class NoteFormatControls: NSObject {
         guard event.type == .keyDown, flags.isEmpty, let window = textView?.window, event.window === window else { return nil }
         // An input method keeps its Esc wherever the keyboard is.
         if let editor = (event.window ?? window).firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
+        // N1, N2: a widened control folds back first, and what folded away returns.
+        if formatModel.highlightPalette != nil {
+            closeHighlightPalette()
+            return true
+        }
         if formatModel.rowStyleListOpen {
             formatModel.rowStyleListOpen = false
             return true
@@ -692,6 +720,9 @@ final class NoteFormatControls: NSObject {
 
     private func handleRowKey(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
         guard let index = formatModel.rowKeyboardIndex else { return false }
+        if formatModel.rowStyleListOpen, let strip = formatModel.styleStripKeyboardIndex {
+            return handleStripKey(event, flags: flags, index: strip)
+        }
         let items = rowItems
         let count = items.count
         guard index < count else { exitRowKeyboard(); return false }
@@ -718,6 +749,10 @@ final class NoteFormatControls: NSObject {
         case .style:
             guard NoteCommandCatalog.styles.contains(where: { formatModel.snapshot.isEnabled($0) }) else { NSSound.beep(); return }
             formatModel.rowStyleListOpen = true
+            // N1: the ring moves onto the widened styles, on the current one.
+            let styles = NoteFormatModel.stripStyles
+            formatModel.styleStripKeyboardIndex = styles.firstIndex { formatModel.snapshot.value($0) == .on } ?? 0
+            announceStripItem()
         case let .command(command):
             guard formatModel.snapshot.isEnabled(command) else { NSSound.beep(); return }
             formatModel.run(command, from: .formatBar)
@@ -769,6 +804,9 @@ final class NoteFormatControls: NSObject {
 
     private func handleBarKey(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
         guard let index = formatModel.barKeyboardIndex else { return false }
+        if formatModel.highlightPalette == .selectionBar, let colour = formatModel.paletteKeyboardIndex {
+            return handlePaletteKey(event, flags: flags, index: colour)
+        }
         let items = barItems
         let count = items.count
         guard index < count else { exitBarKeyboard(); return false }
@@ -778,11 +816,14 @@ final class NoteFormatControls: NSObject {
         case 48: formatModel.barKeyboardIndex = flags.contains(.shift) ? (index - 1 + count) % count : (index + 1) % count
         case 36, 76, 49: pressBarItem(items[index]); return true
         case 125 where items[index] == .command(.mark(.highlight)):
-            // ↓ on the highlighter opens its colours (the chevron's menu).
-            guard let textView, formatModel.snapshot.isEnabled(.mark(.highlight)) else { NSSound.beep(); return true }
-            let anchor = barFrame
-            AtticNativeMenu.popUp(formatModel.highlightMenu(from: .selectionBar),
-                                  below: NSRect(x: anchor.minX, y: anchor.minY, width: anchor.width, height: anchor.height), in: textView)
+            // ↓ on the highlighter widens it into its colours (N2), the
+            // ring on the selection's colour.
+            guard formatModel.snapshot.isEnabled(.mark(.highlight)), formatModel.snapshot.cells == nil else {
+                NSSound.beep(); return true
+            }
+            formatModel.highlightPalette = .selectionBar
+            formatModel.paletteKeyboardIndex = formatModel.currentHighlight.flatMap { NoteHighlightColour.menuOrder.firstIndex(of: $0) } ?? 0
+            announcePaletteItem()
             return true
         case 53: exitBarKeyboard(); return true
         default:
@@ -849,6 +890,10 @@ final class NoteFormatControls: NSObject {
                 return true
             default: return false
             }
+        }
+        if selector == #selector(NSResponder.cancelOperation(_:)), formatModel.highlightPalette != nil {
+            closeHighlightPalette()
+            return true
         }
         if selector == #selector(NSResponder.cancelOperation(_:)), formatModel.barShown {
             dismissedSelection = selection
@@ -980,7 +1025,7 @@ final class NoteFormatControls: NSObject {
     /// selection, or the whole link around a caret), the selection to come
     /// back to, and the current address.
     func openLinkCard(target: NoteLinkTarget) {
-        hideBar()
+        if linkInBar { cancelCard(refocus: false) }
         cardFromSlash = false
         linkTarget = target
         cardSelection = target.selection
@@ -988,7 +1033,156 @@ final class NoteFormatControls: NSObject {
         cardModel.viewportHeight = nil
         cardModel.viewportWidth = nil
         cardModel.openLink(url: target.url)
+        // N3 (Adaptive picks, 2026-11-01): the bar's Link cell widens into
+        // the address field over the link's text (it replaced the
+        // column-wide card). With no room for the bar, the card still opens.
+        if openLinkField(over: target.range) { return }
+        hideBar()
         presentCard()
+    }
+
+    // MARK: The link field in the bar (N3)
+
+    /// The link's field stands in the selection bar.
+    private(set) var linkInBar = false
+    /// The text the bar stands over while its field is open (the whole
+    /// link around a caret).
+    private var barAnchor: NSRange?
+
+    private func openLinkField(over range: NSRange) -> Bool {
+        guard range.length > 0, NSMaxRange(range) <= engine.textStorage.length else { return false }
+        slashModel.hide()
+        formatModel.highlightPalette = nil
+        formatModel.barKeyboardIndex = nil
+        formatModel.setSnapshot(NoteFormatSnapshot.make(router: router, selection: range))
+        barAnchor = range
+        barWidth = measuredBarWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
+        guard placeBar(animated: formatModel.barShown) else {
+            barAnchor = nil
+            return false
+        }
+        linkInBar = true
+        barAwaitsRoom = false
+        let rest = barNaturalWidths[barWidthKey] ?? barWidth
+        if formatModel.barRestWidth != rest { formatModel.barRestWidth = rest }
+        barHost.isInteractive = true
+        barHost.acceptsKeyboard = true
+        if barHost.isHidden { barHost.isHidden = false }
+        if !formatModel.barShown { formatModel.barShown = true }
+        formatModel.linkFieldOpen = true
+        installCardDismissal()
+        DispatchQueue.main.async { [weak self] in self?.focusCardField(attempts: 3) }
+        return true
+    }
+
+    private func closeLinkField() {
+        guard linkInBar else { return }
+        linkInBar = false
+        barAnchor = nil
+        formatModel.linkFieldOpen = false
+        barHost.acceptsKeyboard = false
+    }
+
+    /// The host the link's field is in (the bar's, or the card's).
+    private var linkHost: AtticOverlayHostingView { linkInBar ? barHost : cardHost }
+
+    // MARK: Widened controls (N1, N2)
+
+    /// Folds whatever stands widened back, exactly as it was.
+    func foldWidened() {
+        if formatModel.rowStyleListOpen { formatModel.rowStyleListOpen = false }
+        if formatModel.highlightPalette != nil { formatModel.highlightPalette = nil }
+    }
+
+    func closeHighlightPalette() {
+        formatModel.highlightPalette = nil
+        if formatModel.barKeyboardIndex != nil { announceBarItem() }
+    }
+
+    /// A click in the note folds a widened style or colour row back.
+    private var widenMonitor: Any?
+    private var widenSubscription: AnyCancellable?
+
+    private func setWidenMonitor(_ widened: Bool) {
+        if widened, widenMonitor == nil {
+            widenMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self, let textView = self.textView, let window = textView.window, event.window === window,
+                      let hit = window.contentView?.hitTest(event.locationInWindow) else { return event }
+                // The note's own text only: the bar, the bottom row and the
+                // page's controls answer their own clicks.
+                if hit === textView || hit.isDescendant(of: textView) { self.foldWidened() }
+                return event
+            }
+        } else if !widened, let monitor = widenMonitor {
+            NSEvent.removeMonitor(monitor)
+            widenMonitor = nil
+        }
+    }
+
+    private func handleStripKey(_ event: NSEvent, flags: NSEvent.ModifierFlags, index: Int) -> Bool {
+        let styles = NoteFormatModel.stripStyles
+        switch event.keyCode {
+        case 123 where flags.isEmpty: formatModel.styleStripKeyboardIndex = (index + styles.count - 1) % styles.count
+        case 124 where flags.isEmpty: formatModel.styleStripKeyboardIndex = (index + 1) % styles.count
+        case 48 where flags.isEmpty || flags == [.shift]:
+            formatModel.styleStripKeyboardIndex = (index + (flags.contains(.shift) ? styles.count - 1 : 1)) % styles.count
+        case 36, 76, 49:
+            guard flags.isEmpty, index < styles.count else { return true }
+            formatModel.pickStripStyle(styles[index])
+            announceRowItem()
+            return true
+        default:
+            // Anything else is writing: the styles fold back and the key
+            // reaches the text.
+            formatModel.rowStyleListOpen = false
+            exitRowKeyboard()
+            return false
+        }
+        announceStripItem()
+        return true
+    }
+
+    private func announceStripItem() {
+        guard let index = formatModel.styleStripKeyboardIndex, let textView,
+              index < NoteFormatModel.stripStyles.count else { return }
+        let command = NoteFormatModel.stripStyles[index]
+        let value = AtticFormatValue.spokenValue(formatModel.snapshot.value(command))
+        NSAccessibility.post(element: textView, notification: .announcementRequested, userInfo: [
+            .announcement: "\(NoteFormatStyleStrip.name(command)), \(value)", .priority: NSAccessibilityPriorityLevel.high.rawValue
+        ])
+    }
+
+    private func handlePaletteKey(_ event: NSEvent, flags: NSEvent.ModifierFlags, index: Int) -> Bool {
+        let colours = NoteHighlightColour.menuOrder
+        switch event.keyCode {
+        case 123: formatModel.paletteKeyboardIndex = (index + colours.count - 1) % colours.count
+        case 124: formatModel.paletteKeyboardIndex = (index + 1) % colours.count
+        case 48: formatModel.paletteKeyboardIndex = (index + (flags.contains(.shift) ? colours.count - 1 : 1)) % colours.count
+        case 36, 76, 49:
+            guard index < colours.count else { return true }
+            formatModel.pickHighlight(colours[index], from: .selectionBar)
+            announceBarItem()
+            return true
+        case 126, 53:
+            closeHighlightPalette()
+            return true
+        default:
+            closeHighlightPalette()
+            exitBarKeyboard()
+            return false
+        }
+        announcePaletteItem()
+        return true
+    }
+
+    private func announcePaletteItem() {
+        guard let index = formatModel.paletteKeyboardIndex, let textView,
+              index < NoteHighlightColour.menuOrder.count else { return }
+        let colour = NoteHighlightColour.menuOrder[index]
+        let value = AtticFormatValue.spokenValue(formatModel.currentHighlight == colour ? .on : .off)
+        NSAccessibility.post(element: textView, notification: .announcementRequested, userInfo: [
+            .announcement: "\(colour.title), \(value)", .priority: NSAccessibilityPriorityLevel.high.rawValue
+        ])
     }
 
     private var linkTarget: NoteLinkTarget?
@@ -1059,11 +1253,12 @@ final class NoteFormatControls: NSObject {
     /// The field may not exist until SwiftUI's next pass: a few turns, then
     /// the card's host itself (its field's focus follows).
     private func focusCardField(attempts: Int) {
-        guard cardModel.card != nil, let window = cardHost.window, !cardHasKeyboard else { return }
-        cardHost.layoutSubtreeIfNeeded()
-        if let field = Self.firstTextField(in: cardHost), window.makeFirstResponder(field) { return }
+        let host = linkHost
+        guard cardModel.card != nil, let window = host.window, !cardHasKeyboard else { return }
+        host.layoutSubtreeIfNeeded()
+        if let field = Self.firstTextField(in: host), window.makeFirstResponder(field) { return }
         guard attempts > 1 else {
-            window.makeFirstResponder(cardHost)
+            window.makeFirstResponder(host)
             return
         }
         DispatchQueue.main.async { [weak self] in self?.focusCardField(attempts: attempts - 1) }
@@ -1079,17 +1274,19 @@ final class NoteFormatControls: NSObject {
 
     /// The card's field has the keyboard.
     var cardHasKeyboard: Bool {
-        guard let responder = cardHost.window?.firstResponder as? NSView else { return false }
-        return responder === cardHost || responder.isDescendant(of: cardHost)
+        let host = linkHost
+        guard let responder = host.window?.firstResponder as? NSView else { return false }
+        return responder === host || responder.isDescendant(of: host)
     }
 
     /// A click outside the card, or the window losing the keyboard, cancels it.
     private func installCardDismissal() {
         if mouseMonitor == nil {
             mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-                guard let self, self.cardModel.card != nil, event.window === self.cardHost.window else { return event }
-                let point = self.cardHost.convert(event.locationInWindow, from: nil)
-                let inside = self.cardHost.contentRect.contains(point)
+                let host = self?.linkHost
+                guard let self, let host, self.cardModel.card != nil, event.window === host.window else { return event }
+                let point = host.convert(event.locationInWindow, from: nil)
+                let inside = host.contentRect.contains(point)
                 if !inside { self.cancelCard(refocus: false) }
                 return event
             }
@@ -1119,6 +1316,8 @@ final class NoteFormatControls: NSObject {
     }
 
     private func closeCard(refocus: Bool, restoring range: NSRange?) {
+        let fromBar = linkInBar
+        closeLinkField()
         cardModel.card = nil
         cardCover = nil
         cardHost.isInteractive = false
@@ -1127,6 +1326,11 @@ final class NoteFormatControls: NSObject {
         mouseMonitor = nil
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         resignObserver = nil
+        if fromBar, !refocus {
+            // A click elsewhere: the bar follows what the click does.
+            if let textView, barOwnsKeyboard { textView.window?.makeFirstResponder(textView) }
+            scheduleRefresh()
+        }
         guard refocus, let textView else { return }
         textView.window?.makeFirstResponder(textView)
         if let range, NSMaxRange(range) <= engine.textStorage.length { textView.setSelectedRange(range) }
