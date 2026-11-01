@@ -218,8 +218,8 @@ struct DrawLibraryRowView: View {
     }
 }
 
-/// The store's thumbnail payload; until job 3 renders one, an empty card in
-/// the board's colour with its hairline.
+/// The store's thumbnail payload; an empty canvas (no thumbnail) keeps the
+/// empty card in the board's colour with its hairline.
 struct DrawCanvasThumbnail: View {
     let canvas: DrawCanvas
     @Environment(\.atticDesign) private var design
@@ -252,7 +252,8 @@ enum DrawThumbnailCache {
 
     static func image(for canvas: DrawCanvas) -> NSImage? {
         guard let data = canvas.thumbnail, !data.isEmpty else { return nil }
-        let key = "\(canvas.id.uuidString)-\(canvas.updatedAt.timeIntervalSinceReferenceDate)-\(data.count)"
+        // A thumbnail write leaves the canvas's date alone, so the bytes key it.
+        let key = "\(canvas.id.uuidString)-\(data.count)-\(data.hashValue)"
         if let cached = images[key] { return cached }
         guard let image = NSImage(data: data) else { return nil }
         if images.count > 128 { images.removeAll() }

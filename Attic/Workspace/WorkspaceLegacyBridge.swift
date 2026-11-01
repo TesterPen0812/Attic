@@ -117,7 +117,7 @@ enum WorkspaceLegacyBridge {
         let coordinator = try coordinator(for: context.container)
         coordinator.ledger.register(context)
         let baseline = baseline ?? [:]
-        let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas)
+        let state = ContextState(coordinator, baseline, includeCanvas: includeCanvas && !AtticLegacyCanvas.isDormant(context))
         if captureScopes {
             let entities: Set<WorkspaceOwner.Entity> = [.task, .note, .attachment, .version, .proposal, .association, .preservation, .tagColour]
             let inventory = try inventory(in: context, includeCanvas: false,
@@ -590,7 +590,7 @@ enum WorkspaceLegacyBridge {
         try include(TaskNoteAssociation.self, name: "TaskNoteAssociation"); try include(TaskDeletionPreservation.self, name: "TaskDeletionPreservation")
         try include(OperationReceipt.self, name: "OperationReceipt")
         try include(TaskAttachmentMigrationRecord.self, name: "TaskAttachmentMigrationRecord")
-        if includeCanvas {
+        if includeCanvas, !AtticLegacyCanvas.isDormant(context) {
             try include(CanvasBoardItem.self, name: "CanvasBoardItem")
             try include(CanvasStrokeItem.self, name: "CanvasStrokeItem"); try include(CanvasImageItem.self, name: "CanvasImageItem")
             try include(CanvasSemanticObjectItem.self, name: "CanvasSemanticObjectItem")

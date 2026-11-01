@@ -389,7 +389,8 @@ enum CanvasEditCommandAvailability {
     /// Whether the shadowing items exist at all. Outside the Canvas section
     /// the standard Edit ▸ Undo/Redo is left alone.
     static func offersShadowingItems(section: PanelSection) -> Bool {
-        section.isCanvas
+        // While Draw has Canvas's place, ⌘Z belongs to the Draw board.
+        section.isCanvas && !AtticDraw.isEnabled
     }
 
     /// Whether the offered *Undo Canvas Change* item is presented enabled.

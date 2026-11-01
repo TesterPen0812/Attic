@@ -29,6 +29,7 @@ enum CanvasRecentlyDeletedError: LocalizedError {
 /// before this existed have none and are kept until removed by hand.
 extension CanvasStore {
     func recentlyDeletedCanvases() -> [DeletedItemSummary] {
+        guard !isDormant else { return [] }
         do {
             let boards = try makeFreshContext().fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(
                 predicate: #Predicate { $0.tombstoned && $0.purgedAt == nil }
@@ -60,6 +61,7 @@ extension CanvasStore {
     /// current selection does not change.
     @discardableResult
     func restoreCanvas(_ id: UUID) -> Bool {
+        guard !isDormant else { return false }
         do {
             let boards = try storedBoardReplicas(matching: id)
             guard !boards.isEmpty else { throw CanvasReplicaMutationError.missingCanvas(id) }
@@ -287,6 +289,7 @@ extension CanvasStore {
         confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
+        guard !isDormant else { return [] }
         var purged = Set<UUID>()
         var stamped = false
         do {

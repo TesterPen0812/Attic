@@ -513,6 +513,9 @@ final class AppCoordinator: ObservableObject {
             #endif
         }
 
+        // While Draw has Canvas's place, the old Canvas rows in this store
+        // are left untouched and unread for the whole run.
+        if AtticDraw.isEnabled { AtticLegacyCanvas.markDormant(container) }
         #if DEBUG
         // Capture seam: the in-memory UI-test store holds the design mockup's
         // tasks (`TasksPagePreview.seedDemo`), never anything of the owner's.
@@ -652,6 +655,8 @@ final class AppCoordinator: ObservableObject {
             store: store,
             purgeRecentlyDeleted: { now, calendar in
                 library.purgeExpired(now: now, calendar: calendar)
+                // Draw's rows go after the same 30 days.
+                _ = DrawRecentlyDeleted.purgeExpired(store: DrawLibraryHub.activeStore, now: now, calendar: calendar)
             }
         )
         let hoverMonitor = CornerHoverMonitor(
@@ -1030,7 +1035,7 @@ final class AppCoordinator: ObservableObject {
             hasStarted = false
             return
         }
-        canvasSession.cancelActiveInteraction()
+        if AtticDraw.isEnabled { DrawPageModel.shared.finishLiveInput() } else { canvasSession.cancelActiveInteraction() }
         _ = noteDraft.flush()
         cleanupService.stop()
         hoverMonitor.stop()
@@ -1050,6 +1055,15 @@ final class AppCoordinator: ObservableObject {
             hoverMonitor.revealProgrammatically(section: .notes)
             return false
         }
+        if AtticDraw.isEnabled {
+            // Draw's pending edits settle first; a held one stops quit and
+            // shows the page with its notice (the old Canvas is left alone).
+            guard await DrawPageModel.shared.prepareToQuit() else {
+                hoverMonitor.revealProgrammatically(section: .canvas)
+                return false
+            }
+            return true
+        }
         canvasSession.cancelActiveInteraction()
         canvasSession.flushViewState()
         return true
@@ -1059,6 +1073,10 @@ final class AppCoordinator: ObservableObject {
         let canTerminate = AppTerminationPreparation.prepare(
             flushNoteDraft: { noteDraft.prepareToLeave(.quit) },
             commitCanvasTermination: {
+                if AtticDraw.isEnabled {
+                    DrawPageModel.shared.finishLiveInput()
+                    return
+                }
                 canvasSession.cancelActiveInteraction()
                 canvasSession.flushViewState()
             }
@@ -1066,6 +1084,13 @@ final class AppCoordinator: ObservableObject {
         guard canTerminate else {
             hoverMonitor.revealProgrammatically(section: .notes)
             return false
+        }
+        if AtticDraw.isEnabled, DrawPageModel.shared.store.hasUnsettledEdits {
+            DrawPageModel.shared.retrySave()
+            if DrawPageModel.shared.store.hasUnsettledEdits {
+                hoverMonitor.revealProgrammatically(section: .canvas)
+                return false
+            }
         }
         return true
     }

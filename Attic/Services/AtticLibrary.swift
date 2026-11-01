@@ -163,6 +163,7 @@ final class AtticLibrary {
                 guard let winner = NoteStore.canonicalReplicas(from: rows).first else { return .missing }
                 return winner.deletedAt != nil ? .deleted : .live
             case .canvas:
+                if legacyCanvasDormant { return .missing }
                 if canvases?.canvases.contains(where: { $0.id == id }) == true { return .live }
                 let rows = try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id }))
                 guard !rows.isEmpty else { return .missing }
@@ -175,6 +176,9 @@ final class AtticLibrary {
             return .missing
         }
     }
+
+    /// While Draw has Canvas's place, the old Canvas rows are left unread.
+    private var legacyCanvasDormant: Bool { AtticLegacyCanvas.isDormant(container) }
 
     /// A short, human title for an item, whatever its state.
     func title(of ref: AtticItemRef) -> String? {
@@ -192,7 +196,8 @@ final class AtticLibrary {
             if let owner = note.taskID, let title = title(of: AtticItemRef(.task, owner)) { return title }
             return note.title.isEmpty ? String(note.body.split(whereSeparator: \.isNewline).first ?? "") : note.title
         case .canvas:
-            guard let rows = try? context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })),
+            guard !legacyCanvasDormant,
+                  let rows = try? context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })),
                   !rows.isEmpty else { return nil }
             return CanvasStore.winningBoardReplica(in: rows).name
         }
@@ -1291,7 +1296,7 @@ final class AtticLibrary {
             }
             return notes.setTags(newTags, for: note) || fail(notes.lastErrorMessage)
         case .canvas:
-            guard let canvases else { return fail("Canvases are unavailable.") }
+            guard let canvases, !legacyCanvasDormant else { return fail("Canvases are unavailable.") }
             return canvases.setTags(newTags, forCanvas: ref.id) || fail(canvases.lastErrorMessage)
         }
     }

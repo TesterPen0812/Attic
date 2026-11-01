@@ -315,7 +315,10 @@ final class TagService {
                     affectedItems.insert(AtticItemRef(.note, note.id))
                 }
             }
-            for board in try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
+            // While Draw has Canvas's place the old boards are left unread.
+            let boards = AtticLegacyCanvas.isDormant(context) ? []
+                : try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" }))
+            for board in boards {
                 if let updated = apply(board.tagsRaw, board.persistentModelID) {
                     WorkspaceLegacyBridge.prepareMutation(board, in: context)
                     board.tagsRaw = updated
@@ -381,7 +384,7 @@ final class TagService {
             }
         }
 
-        let boardIDs = Array(Set(try fetch(FetchDescriptor<CanvasBoardItem>(
+        let boardIDs = AtticLegacyCanvas.isDormant(container) ? [] : Array(Set(try fetch(FetchDescriptor<CanvasBoardItem>(
             predicate: #Predicate { $0.tagsRaw != "" }
         )).map(\.id)))
         if !boardIDs.isEmpty {

@@ -76,6 +76,8 @@ struct DrawRasterKey: Equatable, Sendable {
     var hidden: Set<UUID> = []
     var moved: Set<UUID> = []
     var offset = CGPoint.zero
+    /// Objects drawn in their live geometry (a handle drag), by frame.
+    var replaced: [UUID: DrawFrame] = [:]
 }
 
 struct DrawRasterRequest: Sendable {
@@ -83,6 +85,8 @@ struct DrawRasterRequest: Sendable {
     /// The page's ordered objects (an immutable copy-on-write value; never
     /// rebuilt for the request).
     let objects: [DrawObject]
+    /// The live geometry `key.replaced` names.
+    var replacements: [UUID: DrawObject] = [:]
 }
 
 struct DrawRasterImage: @unchecked Sendable { let image: CGImage }
@@ -131,8 +135,8 @@ enum DrawRaster {
         for (index, original) in request.objects.enumerated() {
             if index % 32 == 0, cancelled() { return nil }
             guard !key.hidden.contains(original.id) else { continue }
-            let object = key.moved.contains(original.id)
-                ? original.translated(by: DrawPoint(x: key.offset.x, y: key.offset.y), id: original.id) : original
+            let object = request.replacements[original.id] ?? (key.moved.contains(original.id)
+                ? original.translated(by: DrawPoint(x: key.offset.x, y: key.offset.y), id: original.id) : original)
             // Off-screen objects cost nothing.
             let reach = DrawGeometry.bounds(object).insetBy(dx: -8, dy: -8)
             guard key.viewport.screen(reach).intersects(visible) else { continue }
@@ -142,7 +146,7 @@ enum DrawRaster {
         return DrawRasterImage(image: image)
     }
 
-    static func draw(_ object: DrawObject, in context: CGContext, palette: DrawPalette) {
+    static func draw(_ object: DrawObject, in context: CGContext, palette: DrawPalette, fullResolution: Bool = false) {
         let colour = palette.cgColor(object.style.colour)
         switch object.content {
         case .stroke, .shape:
@@ -153,15 +157,16 @@ enum DrawRaster {
             context.strokePath()
         case .text(let text):
             drawText(text, at: CGPoint(x: object.frame.x, y: object.frame.y), size: object.style.size.textSize,
-                     colour: colour, in: context)
+                     width: object.textWidth.map { CGFloat($0) }, colour: colour, in: context)
         case .image(let image):
-            drawImage(image, id: object.id, in: DrawGeometry.frame(object.frame), context: context, dark: palette.dark)
+            drawImage(image, id: object.id, in: DrawGeometry.frame(object.frame), context: context, dark: palette.dark,
+                      fullResolution: fullResolution)
         }
     }
 
-    static func drawText(_ text: String, at origin: CGPoint, size: Double, colour: CGColor, in context: CGContext) {
+    static func drawText(_ text: String, at origin: CGPoint, size: Double, width: CGFloat? = nil, colour: CGColor, in context: CGContext) {
         let fontSize = CGFloat(size)
-        for (index, line) in DrawText.lines(text).enumerated() where !line.isEmpty {
+        for (index, line) in DrawText.lines(text, size: fontSize, width: width).enumerated() where !line.isEmpty {
             let ctLine = DrawText.line(line, size: fontSize, colour: colour)
             context.saveGState()
             context.translateBy(x: origin.x, y: origin.y + fontSize * DrawText.baseline + CGFloat(index) * fontSize * DrawText.lineHeight)
@@ -172,27 +177,53 @@ enum DrawRaster {
         }
     }
 
-    /// Images are job 3's: drawn as they are, on a quiet tile until decoded.
-    static func drawImage(_ image: DrawImage, id: UUID, in rect: CGRect, context: CGContext, dark: Bool) {
+    /// An image drawn from a copy decoded at the size it covers on the
+    /// device (in steps, cached), never the 6000 px original, on a quiet
+    /// tile if it can't be read. Exports to PDF draw the full resolution.
+    static func drawImage(_ image: DrawImage, id: UUID, in rect: CGRect, context: CGContext, dark: Bool,
+                          fullResolution: Bool = false) {
         let clip = CGPath(roundedRect: rect, cornerWidth: min(8, rect.width / 2), cornerHeight: min(8, rect.height / 2), transform: nil)
         context.saveGState()
         context.addPath(clip)
         context.clip()
-        let cacheKey = "\(id.uuidString)-\(image.original.count)" as NSString
-        var decoded = imageCache.object(forKey: cacheKey)
-        if decoded == nil, let source = CGImageSourceCreateWithData(image.original as CFData, nil),
-           let made = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-            imageCache.setObject(made, forKey: cacheKey)
-            decoded = made
+        let full = max(image.pixelWidth, image.pixelHeight, 1)
+        let side: Int
+        if fullResolution {
+            side = full
+        } else {
+            let device = rect.applying(context.userSpaceToDeviceSpaceTransform)
+            let wanted = Int(max(abs(device.width), abs(device.height)).rounded(.up))
+            // Power-of-two steps, so a zoom or a resize reuses the copy.
+            var step = 64
+            while step < wanted { step *= 2 }
+            side = min(step, full)
         }
-        if let decoded {
+        if let decoded = decoded(image, id: id, side: side) {
             context.translateBy(x: rect.minX, y: rect.maxY)
             context.scaleBy(x: 1, y: -1)
+            context.interpolationQuality = .high
             context.draw(decoded, in: CGRect(origin: .zero, size: rect.size))
         } else {
             context.setFillColor(CGColor(gray: dark ? 0.25 : 0.88, alpha: 1))
             context.fill(rect)
         }
         context.restoreGState()
+    }
+
+    /// The image decoded with its longest side at most `side` pixels.
+    static func decoded(_ image: DrawImage, id: UUID, side: Int) -> CGImage? {
+        let cacheKey = "\(id.uuidString)-\(image.original.count)-\(side)" as NSString
+        if let cached = imageCache.object(forKey: cacheKey) { return cached }
+        guard let source = CGImageSourceCreateWithData(image.original as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
+        else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceShouldCacheImmediately: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: side]
+        guard let made = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        DrawImageDecodeProbe.record(pixelSide: max(made.width, made.height))
+        // A full-resolution export copy isn't kept.
+        if made.width * made.height <= 4096 * 4096 { imageCache.setObject(made, forKey: cacheKey) }
+        return made
     }
 }

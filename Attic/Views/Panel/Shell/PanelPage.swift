@@ -72,7 +72,8 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
         )
     }
 
-    static let switchItems = allCases.map(\.switchItem)
+    /// Computed, so the Canvas item's title follows the Draw switch.
+    static var switchItems: [AtticPageButton<PanelPage>.Item] { allCases.map(\.switchItem) }
 
     /// Which side of `other` this page sits on in the switch's order
     /// (Tasks, Notes, Calendar, Canvas): -1 before it, 1 after it, 0 if it is `other`.

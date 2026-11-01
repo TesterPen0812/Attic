@@ -40,6 +40,8 @@ struct DrawTextEdit: Equatable {
     var style: DrawStyle
     /// In the store (false for a new box until its first character).
     var stored: Bool
+    /// The box's wrap width, once a side handle has set one.
+    var width: CGFloat? = nil
 }
 
 /// What the pointer is doing on the board right now (never published: the
@@ -51,6 +53,7 @@ enum DrawLive: Equatable {
     case move(from: CGPoint, offset: CGPoint, moved: Bool)
     case marquee(from: CGPoint, to: CGPoint, base: Set<UUID>)
     case pan(start: CGPoint, viewport: DrawViewport)
+    case resize(DrawResize)
 }
 
 /// What the board view hears from the page model. Calls arrive on the main
@@ -148,11 +151,19 @@ final class DrawPageModel: ObservableObject {
     private var userMovedView = false
     private var appliedRevision: UInt64 = 0
     private var flashGeneration = 0
+    /// Canvases whose thumbnail is behind their content.
+    private var thumbnailDirty: Set<UUID> = []
+    private var thumbnailTimer: DispatchWorkItem?
+    private var thumbnailRenders: [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
+    private var thumbnailGeneration = 0
+    /// The save notice's ✕ hides it until the next problem.
+    @Published private var dismissedSaveProblem: String?
 
     init(store: any DrawStoreProtocol) {
         self.store = store
         observeStore()
         DrawLibraryHub.register(store)
+        imageSeam = images
     }
 
     /// The library's canvas menu under the title capsule (D4) and the top
@@ -165,7 +176,10 @@ final class DrawPageModel: ObservableObject {
         DrawLibraryActions(open: { [weak self] in self?.open($0) },
                            newCanvas: { [weak self] in self?.newCanvas(name: $0) },
                            reveal: { [weak self] in self?.reveal(canvasID: $0, objectID: $1) },
-                           close: { [weak self] in self?.closeFilter() })
+                           close: { [weak self] in self?.closeFilter() },
+                           export: { [weak self] in self?.images.exportCanvas($0) },
+                           copyAsImage: { [weak self] in self?.images.copyCanvas($0) },
+                           hasContent: { [weak self] in self?.hasContent($0) ?? false })
     }
 
     /// The one model the panel keeps for the session (the store owns Undo,
@@ -187,17 +201,120 @@ final class DrawPageModel: ObservableObject {
     // MARK: Save problems and quit
 
     /// The shell's notice for a save the store couldn't confirm (`.retry` or
-    /// `.held`), with Retry.
-    var saveNotice: PanelNoticeContent? { nil }
+    /// `.held`), with Retry: the open canvas's first, else any canvas's.
+    var saveNotice: PanelNoticeContent? {
+        guard let problem = saveProblem, problem.message != dismissedSaveProblem else { return nil }
+        return PanelNoticeContent(message: problem.message, canRetry: true)
+    }
 
-    /// The notice's Retry.
-    func retrySave() {}
+    private var saveProblem: (id: UUID, message: String)? {
+        let pending = store.pendingEdits
+        let id = canvasID.flatMap { pending[$0] == nil ? nil : $0 } ?? pending.keys.sorted { $0.uuidString < $1.uuidString }.first
+        guard let id, let edit = pending[id] else { return nil }
+        switch edit.outcome {
+        case .retry(let message), .held(let message):
+            return (id, message.isEmpty ? String(localized: "Your drawing couldn’t be saved.") : message)
+        case .saved, .unchanged:
+            return (id, String(localized: "Your drawing couldn’t be saved."))
+        }
+    }
 
-    /// The notice's ✕.
-    func dismissSaveError() {}
+    /// The notice's Retry: a failed save is tried again; a held one is
+    /// reconciled with what the store has.
+    func retrySave() {
+        dismissedSaveProblem = nil
+        for (id, edit) in store.pendingEdits {
+            let result: DrawSaveResult
+            if case .held = edit.outcome { result = store.reconcile(on: id) } else { result = store.retry(on: id) }
+            if id == canvasID { apply(result) }
+        }
+        objectWillChange.send()
+    }
 
-    /// The app's quit: pending input settles; false while an edit is unsaved.
-    func prepareToQuit() async -> Bool { true }
+    /// The notice's ✕ (the edit stays unsettled, so quit still waits).
+    func dismissSaveError() {
+        dismissedSaveProblem = saveProblem?.message
+    }
+
+    /// The app's quit: the stroke in progress and any import finish, the
+    /// open canvas's thumbnail renders, and unsettled edits are retried or
+    /// reconciled. False while one is still unsaved (quit stops).
+    func prepareToQuit() async -> Bool {
+        finishLiveInput()
+        await pendingImport?.value
+        flushThumbnail()
+        for render in thumbnailRenders.values { await render.task.value }
+        if store.hasUnsettledEdits { retrySave() }
+        return !store.hasUnsettledEdits
+    }
+
+    private func hasContent(_ id: UUID) -> Bool {
+        if id == canvasID { return !objects.isEmpty }
+        return ((try? store.open(id).objects) ?? []).contains { $0.deletedAt == nil }
+    }
+
+    // MARK: Thumbnails
+
+    /// The open canvas changed: its thumbnail renders once edits settle.
+    private func thumbnailNeeded() {
+        guard let canvasID else { return }
+        thumbnailDirty.insert(canvasID)
+        thumbnailTimer?.cancel()
+        let timer = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.thumbnailSettled() }
+        }
+        thumbnailTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + thumbnailSettleDelay, execute: timer)
+    }
+
+    private func thumbnailSettled() {
+        thumbnailTimer = nil
+        // Still drawing: wait for the next quiet spell.
+        guard live == nil else { return thumbnailNeeded() }
+        flushThumbnail()
+    }
+
+    /// Renders the open canvas's thumbnail now if it is behind (a switch,
+    /// a hide, quit).
+    func flushThumbnail() {
+        thumbnailTimer?.cancel()
+        thumbnailTimer = nil
+        guard let id = canvasID, thumbnailDirty.contains(id) else { return }
+        renderThumbnail(id, objects: objects)
+    }
+
+    /// Off the main thread, from this snapshot, through the store's quiet
+    /// `.thumbnail` command (no Undo, no date, no new order).
+    private func renderThumbnail(_ id: UUID, objects snapshot: [DrawObject]) {
+        thumbnailDirty.remove(id)
+        thumbnailGeneration += 1
+        let generation = thumbnailGeneration
+        guard !snapshot.isEmpty else {
+            writeThumbnail(nil, on: id)
+            return
+        }
+        let dark = DrawImageActions.isDark
+        let task = Task { @MainActor [weak self] in
+            let data = await Task.detached(priority: .utility) { DrawThumbnail.render(snapshot, dark: dark) }.value
+            guard let self, self.thumbnailRenders[id]?.generation == generation else { return }
+            self.thumbnailRenders[id] = nil
+            self.writeThumbnail(data, on: id)
+        }
+        thumbnailRenders[id] = (generation, task)
+    }
+
+    private func writeThumbnail(_ data: Data?, on id: UUID) {
+        let synced = appliedRevision == store.revision
+        switch store.perform(.thumbnail(data), on: id) {
+        case .saved:
+            if synced { appliedRevision = store.revision }
+        case .unchanged:
+            // An unsettled edit comes first; the thumbnail follows it.
+            if store.pendingEdits[id] != nil { thumbnailDirty.insert(id) }
+        case .retry, .held:
+            thumbnailDirty.insert(id)
+        }
+    }
 
     var viewport: DrawViewport { viewportState.viewport }
 
@@ -238,6 +355,8 @@ final class DrawPageModel: ObservableObject {
     func open(_ id: UUID) {
         finishLiveInput()
         endEditing()
+        // The canvas being left gets its thumbnail now.
+        flushThumbnail()
         if let canvasID { viewports[canvasID] = viewport }
         guard let snapshot = try? store.open(id) else { return }
         canvasID = id
@@ -286,7 +405,10 @@ final class DrawPageModel: ObservableObject {
 
     func setShown(_ shown: Bool) {
         guard shown != isShown else { return }
-        if !shown { finishLiveInput() }
+        if !shown {
+            finishLiveInput()
+            flushThumbnail()
+        }
         isShown = shown
         board?.drawVisibilityChanged()
     }
@@ -491,10 +613,18 @@ final class DrawPageModel: ObservableObject {
         apply(store.cut(ids, from: canvasID))
     }
 
-    var canPaste: Bool { pasteboard.data(forType: NSPasteboard.PasteboardType(DrawStore.clipboardType)) != nil }
+    var canPaste: Bool {
+        pasteboard.availableType(from: [NSPasteboard.PasteboardType(DrawStore.clipboardType)]) != nil || pasteboardHasImage
+    }
 
+    /// Draw objects paste as objects; otherwise an image pastes at the
+    /// centre of the view.
     func paste() {
-        guard let canvasID, let data = pasteboard.data(forType: NSPasteboard.PasteboardType(DrawStore.clipboardType)) else { return }
+        guard let canvasID else { return }
+        guard let data = pasteboard.data(forType: NSPasteboard.PasteboardType(DrawStore.clipboardType)) else {
+            importImages(from: pasteboard, at: nil)
+            return
+        }
         let before = Set(objects.map(\.id))
         let step = 12 / viewport.zoom
         apply(store.paste(data, into: canvasID, offset: DrawPoint(x: step, y: step)))
@@ -518,7 +648,7 @@ final class DrawPageModel: ObservableObject {
     func isEnabled(_ command: DrawMoreCommand) -> Bool {
         switch command {
         case .paste: canPaste
-        case .copyAsImage: imageSeam != nil
+        case .copyAsImage: !selection.isEmpty && imageSeam != nil
         default: !selection.isEmpty
         }
     }
@@ -558,7 +688,7 @@ final class DrawPageModel: ObservableObject {
         guard let object = object(id), case .text(let text) = object.content else { return }
         endEditing()
         editing = DrawTextEdit(id: id, origin: CGPoint(x: object.frame.x, y: object.frame.y), text: text,
-                               style: object.style, stored: true)
+                               style: object.style, stored: true, width: object.textWidth.map { CGFloat($0) })
         editingID = id
         select([])
         contentRevision += 1
@@ -610,7 +740,8 @@ final class DrawPageModel: ObservableObject {
     }
 
     static func measure(_ object: inout DrawObject, text: String) {
-        let size = DrawText.size(of: text, fontSize: CGFloat(object.style.size.textSize))
+        let size = DrawText.size(of: text, fontSize: CGFloat(object.style.size.textSize),
+                                 width: object.textWidth.map { CGFloat($0) })
         object.frame.width = size.width
         object.frame.height = size.height
     }
@@ -711,6 +842,7 @@ final class DrawPageModel: ObservableObject {
                 objects = pending.objects.filter { $0.deletedAt == nil }.sorted(by: Self.order)
             }
             lastError = message
+            dismissedSaveProblem = nil
         }
         appliedRevision = store.revision
         afterContentChange(replacingEditorText: replacingEditorText)
@@ -736,6 +868,7 @@ final class DrawPageModel: ObservableObject {
         refreshHistory()
         contentRevision += 1
         selectionRevision += 1
+        thumbnailNeeded()
         updateLost()
         board?.drawContentChanged()
         board?.drawSelectionChanged()

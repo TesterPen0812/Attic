@@ -100,6 +100,7 @@ extension ModelContext {
     func fetchCanvasReplicas<Model: PersistentModel>(
         _ descriptor: FetchDescriptor<Model>
     ) throws -> [Model] {
+        if AtticLegacyCanvas.isDormant(self) { return Self.refuseDormantRead([]) }
         #if DEBUG
         let rows = try fetch(descriptor)
         CanvasReplicaFetchCounter.note(rows: rows.count)
@@ -112,6 +113,7 @@ extension ModelContext {
     func countCanvasReplicas<Model: PersistentModel>(
         _ descriptor: FetchDescriptor<Model>
     ) throws -> Int {
+        if AtticLegacyCanvas.isDormant(self) { return Self.refuseDormantRead(0) }
         #if DEBUG
         let count = try fetchCount(descriptor)
         CanvasReplicaFetchCounter.note(rows: 0)
@@ -119,6 +121,14 @@ extension ModelContext {
         #else
         return try fetchCount(descriptor)
         #endif
+    }
+
+    /// The backstop while Draw has Canvas's place: old rows read as none.
+    private static func refuseDormantRead<Value>(_ empty: Value) -> Value {
+        #if DEBUG
+        CanvasReplicaFetchCounter.noteBlocked()
+        #endif
+        return empty
     }
 }
 
@@ -519,12 +529,20 @@ final class CanvasStore: ObservableObject {
         }
         self.loadReplicas = loadReplicas
         self.decodeStroke = decodeStroke
+        // While Draw has Canvas's place the old rows are left unread.
+        guard !isDormant else {
+            canvases = []
+            return
+        }
         refresh()
         if CanvasCloudInfrastructurePolicy.isEnabled {
             observeRemoteChanges()
             observeCloudKitEvents()
         }
     }
+
+    /// The old Canvas rows are left untouched and unread (Draw is on).
+    var isDormant: Bool { AtticLegacyCanvas.isDormant(container) }
 
     var selectedCanvas: CanvasBoard {
         if let board = canvases.first(where: { $0.id == selectedCanvasID }) {
