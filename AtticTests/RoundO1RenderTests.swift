@@ -170,12 +170,6 @@ final class RoundO1RenderTests: XCTestCase {
             try component(AtticRowActionsButton(action: { _ in }).atticForcedState(.hover),
                           "o17-10-actions-after-\(mode.rawValue)", mode: mode, scale: 6)
 
-            // O17-11: a file line under the pointer (Remove alone).
-            let store = TaskStore(container: try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false))
-            let file = TaskImageReference(id: UUID(), filename: "Lease.pdf", digest: "d", contentTypeIdentifier: UTType.pdf.identifier, byteCount: 2048)
-            try component(TasksFileRow(file: file, store: store, owner: UUID(), remove: {}).frame(width: 260).atticForcedState(.hover),
-                          "o17-11-file-line-after-\(mode.rawValue)", mode: mode)
-
             // O17-14: "Add subtask" under the pointer, before and after.
             let q = AtticQuietActionMetrics.self
             let hover = context(mode).tokens.chipHover.color

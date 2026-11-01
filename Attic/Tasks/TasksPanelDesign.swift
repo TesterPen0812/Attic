@@ -179,9 +179,6 @@ enum TasksPanelDesign {
 
     // MARK: - Files
 
-    /// The most files a row draws as tiles.
-    static let maxTiles = 6
-
     /// A file tile's label: its extension, upper case, at most 4 letters.
     static func tileLabel(_ filename: String) -> String {
         let ext = (filename as NSString).pathExtension

@@ -119,15 +119,22 @@ struct TasksFileTiles: View {
     let files: [TaskImageReference]
 
     var body: some View {
-        HStack(spacing: TasksDesignMetrics.tileGap) {
-            ForEach(files) { file in
-                if file.isImage {
-                    TasksImageTile(reference: file)
-                } else {
-                    TasksFileTile(name: file.filename)
+        // Every file is a tile (no cap, Accepted 2026-11-01 "Task rows: no
+        // paperclip count"): more than fit scroll sideways with a trackpad
+        // swipe, clipped where the strip starts, the row's text column. No
+        // scroller bar, and no bounce while they all fit.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: TasksDesignMetrics.tileGap) {
+                ForEach(files) { file in
+                    if file.isImage {
+                        TasksImageTile(reference: file)
+                    } else {
+                        TasksFileTile(name: file.filename)
+                    }
                 }
             }
         }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(files.map(\.filename).joined(separator: ", "))
     }

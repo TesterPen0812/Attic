@@ -613,7 +613,7 @@ enum AtticMenuSymbols {
             ("Date", "calendar"), ("Tags", "tag"), ("Priority", "flag"),
             ("Move to Later", "clock"), ("Move to Now", "sun.max"), ("Add Subtask", "plus"),
             ("Copy", "doc.on.doc"), ("Duplicate", "plus.square.on.square"), ("More", "ellipsis.circle"),
-            ("Delete", "trash"), ("Show Files", "paperclip"), ("Hide Files", "paperclip"),
+            ("Delete", "trash"),
             ("Move Up", "arrow.up"), ("Move Down", "arrow.down"), ("Rename", "pencil"), ("Pin", "pin"), ("Unpin", "pin.slash"),
             // The subtask and note row menus (sheet 2).
             ("Move to Task…", "arrow.turn.up.right"), ("Make Standalone Task", "arrow.up.left.square"),

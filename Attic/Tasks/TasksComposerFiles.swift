@@ -77,7 +77,7 @@ extension TasksPageModel {
 
     /// The new task takes the bar's files (O17-06): one import, the same
     /// one a drop on its row runs. The task exists already, so a failed
-    /// import keeps it and says why; its files list opens on what arrived.
+    /// import keeps it and says why; what arrived shows as its tiles.
     func attachComposerFiles(to id: UUID) {
         let files = addBarState.files
         guard !files.isEmpty else { return }
@@ -88,7 +88,6 @@ extension TasksPageModel {
             guard let owner = self.store.attachmentOwnerID(for: id) else { staging.discard(); return }
             let added = await self.store.attachStagedFiles(to: owner) { staging }
             guard let added, !added.isEmpty else { return }
-            self.setFilesExpanded(owner, true)
             let title = self.store.task(withID: owner)?.title ?? ""
             AccessibilityNotification.Announcement(
                 added.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(added.count) files to \(title)")

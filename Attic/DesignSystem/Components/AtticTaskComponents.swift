@@ -1210,11 +1210,13 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
         return ranges
     }
 
-    /// A second line only when the task has tags or subtasks (or a page,
-    /// files or links, or is open in a window); done rows never have one.
-    /// The due date always stays at the right end of the title line.
+    /// A second line only when the task has tags or subtasks (or a page or
+    /// links, or is open in a window); done rows never have one. Files are
+    /// not on it: their tiles show them (Accepted 2026-11-01 "Task rows: no
+    /// paperclip count"). The due date always stays at the right end of the
+    /// title line.
     var hasDetails: Bool {
-        state != .done && (!tags.isEmpty || subtasks != nil || hasPage || attachments > 0 || links > 0 || inWindow)
+        state != .done && (!tags.isEmpty || subtasks != nil || hasPage || links > 0 || inWindow)
     }
 
     /// The due date at the right end of the title line (none once done).
@@ -1324,11 +1326,6 @@ struct AtticTaskRow: View {
     var isSelected = false
     var selectionRun: AtticSelectionRun = .single
     var isExpanded = false
-    /// The files list is open under the row (A1).
-    var isFilesExpanded = false
-    /// The files count's click: opens or closes the files list under the
-    /// row. nil draws the count as plain text.
-    var onToggleFiles: (() -> Void)? = nil
     /// "Add to page" while a file hovers over the row.
     var dropLabel: String?
     let actions: AtticTaskActions
@@ -1492,7 +1489,6 @@ struct AtticTaskRow: View {
                            value: showsOpen)
                 if twoLine {
                     AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded,
-                                     isFilesExpanded: isFilesExpanded, onToggleFiles: capture == nil ? onToggleFiles : nil,
                                      onTags: capture == nil ? meta?.onTags : nil,
                                      tagsPopover: meta.map { meta in
                                          AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
@@ -1858,7 +1854,8 @@ struct AtticDueText: View {
 }
 
 /// The details line: tags, then the subtask checklist (a control: it opens
-/// the quick look), then a page, files and links, only when present. No
+/// the quick look), then a page and links, only when present (files show as
+/// the row's tiles, never as a count: Accepted 2026-11-01). No
 /// separators (owner fix 2, between v16's 4a and 4b): items sit 14 pt
 /// apart, each small icon 5 pt before its label.
 ///
@@ -1871,10 +1868,6 @@ struct AtticTaskDetails: View {
     let disabled: Bool
     let isExpanded: Bool
     let onToggleExpanded: () -> Void
-    /// The files list is open under the row, and the files count's click
-    /// (A1); nil draws the count as plain text (captures, Done).
-    var isFilesExpanded = false
-    var onToggleFiles: (() -> Void)? = nil
     /// A click on the tags (the row's tag popover); nil draws plain text.
     var onTags: (() -> Void)? = nil
     /// The row's tag popover, anchored to the tags themselves so its arrow
@@ -1915,35 +1908,12 @@ struct AtticTaskDetails: View {
             }
             if model.hasPage {
                 // Phase 3 (`p3-06`, D11): the task has a note of its own. The
-                // glyph has no count; files keep the paperclip and theirs.
+                // glyph has no count.
                 AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon).colour(tone)
                     .help(String(localized: "Has a note"))
                     .accessibilityLabel(String(localized: "Has a note"))
                     .fixedSize()
                     .layoutPriority(1)
-            }
-            if model.attachments > 0 {
-                if let onToggleFiles {
-                    // The files count opens the files list, apart from the
-                    // subtasks (A1).
-                    AtticDetailsCountButton(
-                        systemName: "paperclip", count: "\(model.attachments)",
-                        isExpanded: isFilesExpanded, disabled: disabled,
-                        help: (String(localized: "Hide files"), String(localized: "Show files")),
-                        spokenLabel: model.attachments == 1 ? String(localized: "1 file") : String(localized: "\(model.attachments) files"),
-                        hint: (String(localized: "Hides the files"), String(localized: "Shows the files")),
-                        action: onToggleFiles
-                    )
-                    .fixedSize()
-                    .layoutPriority(1)
-                } else {
-                    HStack(spacing: m.detailsIconGap) {
-                        AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon).colour(tone)
-                        AtticText(verbatim: "\(model.attachments)", style: .taskMeta, ink: text).colour(tone)
-                    }
-                    .fixedSize()
-                    .layoutPriority(1)
-                }
             }
             if model.links > 0 {
                 AtticText(verbatim: String(localized: "\(model.links) links"), style: .taskMeta, ink: text).colour(tone)
@@ -2371,7 +2341,7 @@ private struct AtticSubtaskCommands: ViewModifier {
 }
 
 /// The quick look: the row expands in place into its subtasks and "Add
-/// subtask" (its files open apart, under it: `TasksFilesList`). Aligned to the row's text column.
+/// subtask". Aligned to the row's text column.
 struct AtticQuickLook: View {
     let subtasks: [AtticSubtaskModel]
     let onToggle: (AtticSubtaskModel) -> Void

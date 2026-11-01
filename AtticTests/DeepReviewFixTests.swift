@@ -7,7 +7,7 @@ import XCTest
 
 /// Phase 1's deep review, the UI fix round: Find from far down a list
 /// (P2-01), Clean cut's fade over the control regions (A15 replaced D1)
-/// (P2-02, owner A7: no native soft edges), one Open Files command for every route (P2-03), a visible
+/// (P2-02, owner A7: no native soft edges; P2-03, one Open Files command, went with the files list), a visible
 /// keyboard focus at every Tab stop (P2-04), the composer strip's values
 /// in full (P3-01) and the pager's test-only settle (code review). Each is
 /// driven the way a person drives it where the hosted page allows: real
@@ -253,80 +253,6 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertTrue(ScrollEdgeTests.blurredLayers(in: try XCTUnwrap(list.documentView?.layer)).isEmpty)
     }
 
-    // MARK: - P2-03: one Open Files command
-
-    /// Open Files… from the row's right-click menu (the menu a secondary
-    /// click on the row gets), from the actions menu (the menu's own keys)
-    /// and from ⌘Return: each opens the row's files, once.
-    func testOpenFilesOpensFromTheRightClickMenuTheActionsMenuAndCommandReturn() throws {
-        try requireKeyWindowTests()
-        let hosted = try Hosted(height: 520)
-        defer { hosted.close() }
-        var opened: [UUID] { Array(hosted.model.expandedFiles) }
-        let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
-        // The right-click menu: the menu SwiftUI shows for a secondary click
-        // on the row, its More › Open Files… chosen as AppKit chooses an
-        // item. (Typing into a live context menu in the hosted window was
-        // not dependable across macOS versions; `TasksPanelUITests` clicks
-        // it in the real panel.)
-        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)])
-        let content = try XCTUnwrap(hosted.window.contentView)
-        let point = CGPoint(x: frame.minX + 110, y: hosted.height - (frame.minY + 16))
-        let press = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
-                                                     timestamp: ProcessInfo.processInfo.systemUptime,
-                                                     windowNumber: hosted.window.windowNumber, context: nil,
-                                                     eventNumber: 3, clickCount: 1, pressure: 1))
-        // Draft C (owner, 2026-10-23): the row's right-click menu is a glass
-        // menu built from its commands; the same commands as an NSMenu stand
-        // in for choosing an item here.
-        _ = content
-        let menu = AtticNativeMenu.make(try XCTUnwrap(AtticContextMenus.commands(for: press), "a secondary click on the row has the row's menu"))
-        menu.update()
-        let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
-        more.update()
-        let open = try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Show Files") }, "holding Show Files")
-        more.performActionForItem(at: open)
-        hosted.spin(0.5)
-        XCTAssertEqual(opened, [row], "the right-click menu's Open Files… opens the row's files")
-
-        // The pointer reports the entire cell, including its inline files.
-        // Wait for collapse to reach layout before clickRow uses its centre;
-        // otherwise that old centre can hit the space below the actual row.
-        func closeFilesAndWaitForLayout() throws {
-            for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
-            let deadline = Date().addingTimeInterval(2)
-            repeat {
-                content.layoutSubtreeIfNeeded()
-                hosted.spin(0.01)
-            } while abs((hosted.pointer.frames[TasksRowID(tab: .now, id: row)]?.height ?? .infinity) - frame.height) > 0.5
-                && Date() < deadline
-            XCTAssertEqual(try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)]).height,
-                           frame.height, accuracy: 0.5, "the files have collapsed in the rendered cell")
-        }
-
-        // The actions menu (a real secondary click on the selected row; ⇧⌘I
-        // opens the page since 2026-10-30): down to More (its ninth item
-        // since Dropdown content: answers, owner, 2026-10-24, answer 1 A),
-        // into it, Return.
-        try closeFilesAndWaitForLayout()
-        try hosted.clickRow(row, tab: .now)
-        XCTAssertEqual(hosted.model.selection, [row], "the menu's key is sent with its row selected")
-        let down: (characters: String, keyCode: UInt16) = ("\u{F701}", 125)
-        let actionTimers = schedule(Array(repeating: down, count: 9) + [("\u{F703}", 124), ("\r", 36)], in: hosted)
-        hosted.rightClick(y: try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)]).midY, x: 200)
-        hosted.spin(1)
-        actionTimers.forEach { $0.invalidate() }
-        XCTAssertEqual(opened, [row], "the actions menu's Open Files… opens them the same way")
-
-        // ⌘Return on the selected row.
-        try closeFilesAndWaitForLayout()
-        try hosted.clickRow(row, tab: .now)
-        hosted.press("\r", keyCode: 36, modifiers: .command)
-        hosted.spin(0.3)
-        XCTAssertEqual(opened, [row], "and ⌘Return")
-        XCTAssertNil(hosted.model.editingTitleID, "⌘Return is not Return: no title is edited")
-    }
-
     // MARK: - PR prep P2: a menu's choice is not a typing field's key
 
     private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = [],
@@ -347,7 +273,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertTrue(AtticTextInput.owns(plainReturn, menuChoice: nil, hasKeyboard: { true }),
                       "a key outside any menu stays the typing field's")
         XCTAssertFalse(AtticTextInput.owns(plainReturn, menuChoice: openPage, hasKeyboard: { true }),
-                       "the Return that chose Open Files… in its menu is the menu's")
+                       "the Return that chose an item in its menu is the menu's")
         XCTAssertFalse(AtticTextInput.owns(commandReturn, menuChoice: .some(nil), hasKeyboard: { true }),
                        "an item without a key equivalent, chosen, is never a field's key")
         XCTAssertTrue(AtticTextInput.owns(commandReturn, menuChoice: openPage, hasKeyboard: { true }),
@@ -355,128 +281,6 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertFalse(AtticTextInput.owns(commandReturn, menuChoice: openPage, hasKeyboard: { false }))
         XCTAssertFalse(AtticTextInput.owns(try keyEvent("\r", keyCode: 36, type: .keyUp), menuChoice: nil, hasKeyboard: { true }))
         XCTAssertFalse(AtticTextInput.owns(nil, menuChoice: nil, hasKeyboard: { true }))
-    }
-
-    /// The on-screen failure (CU recheck 3): More › Open Files… chosen with
-    /// Return in the right-click menu and in ⇧⌘I's menu, while something
-    /// has the keyboard (on macOS 27 the context menu's own Ask Siri field;
-    /// the composer under a menu), opened nothing, while ⌘Return did. Here
-    /// the Return is the current event and an open pop-over has the
-    /// keyboard; each menu's Open Files… must open the row's files, and a
-    /// real ⌘Return key equivalent must still leave a typing field alone.
-    func testOpenFilesChosenWithReturnOpensWhileSomethingHasTheKeyboard() throws {
-        let hosted = try Hosted(height: 520)
-        defer { hosted.close() }
-        var opened: [UUID] { Array(hosted.model.expandedFiles) }
-        let row = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.model.title == "Book dentist" }?.id)
-
-        let keyboardOwner = NSPanel(contentRect: CGRect(x: -6_000, y: -6_000, width: 40, height: 40),
-                                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        keyboardOwner.isReleasedWhenClosed = false
-        keyboardOwner.orderFront(nil)
-        AtticTextInput.notePopover(keyboardOwner)
-        defer { keyboardOwner.orderOut(nil); keyboardOwner.close() }
-        XCTAssertTrue(AtticTextInput.hasKeyboard, "an open pop-over has the keyboard")
-
-        /// Makes `event` the app's current event without delivering it, as
-        /// the key that chose a menu item is while the item's command runs.
-        func makeCurrent(_ event: NSEvent) {
-            NSApp.postEvent(event, atStart: true)
-            _ = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true)
-        }
-        func chooseOpenFiles(in menu: NSMenu) throws {
-            menu.update()
-            let more = try XCTUnwrap(menu.items.first { $0.title == "More" }?.submenu, "with More")
-            more.update()
-            more.performActionForItem(at: try XCTUnwrap(more.items.firstIndex { $0.title.hasPrefix("Show Files") }))
-            hosted.spin(0.3)
-        }
-
-        // The right-click menu.
-        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: row)])
-        let point = CGPoint(x: frame.minX + 110, y: hosted.height - (frame.minY + 16))
-        let press = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
-                                                     timestamp: ProcessInfo.processInfo.systemUptime,
-                                                     windowNumber: hosted.window.windowNumber, context: nil,
-                                                     eventNumber: 3, clickCount: 1, pressure: 1))
-        let contextMenu = AtticNativeMenu.make(try XCTUnwrap(AtticContextMenus.commands(for: press)))
-        makeCurrent(try keyEvent("\r", keyCode: 36))
-        XCTAssertEqual(NSApp.currentEvent?.type, .keyDown, "the Return is the current event")
-        try chooseOpenFiles(in: contextMenu)
-        XCTAssertEqual(opened, [row], "the right-click menu's Open Files…, chosen with Return, opens the row's files")
-
-        // ⇧⌘I's menu (the same commands as an NSMenu), on a Later row.
-        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
-        hosted.go(to: .backlog)
-        let later = try XCTUnwrap(hosted.model.rows(for: .backlog).first?.id, "Later lists a task")
-        makeCurrent(try keyEvent("\r", keyCode: 36))
-        try chooseOpenFiles(in: AtticNativeMenu.make(hosted.page.taskCommands(later, tab: .backlog)))
-        XCTAssertEqual(opened, [later], "⇧⌘I's Open Files…, chosen with Return, opens them too")
-
-        // The item's own ⌘Return while something types stays with it.
-        for id in hosted.model.expandedFiles { hosted.model.setFilesExpanded(id, false) }
-        makeCurrent(try keyEvent("\r", keyCode: 36, modifiers: .command))
-        try chooseOpenFiles(in: AtticNativeMenu.make(hosted.page.taskCommands(later, tab: .backlog)))
-        XCTAssertEqual(opened, [], "a typing field keeps its own ⌘Return")
-    }
-
-    func testOpenFilesPresentationWaitsForTheDefaultRunLoopMode() async throws {
-        let hosted = try Hosted(height: 520)
-        defer { hosted.close() }
-        let row = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
-        let command = try XCTUnwrap(AtticMenuCommand.command(for: AtticTaskShortcut.openPage,
-                                                            in: hosted.page.taskCommands(row, tab: .now)))
-        var openedMode: CFRunLoopMode?
-        let opened = expectation(description: "Open Files is delivered")
-        // The files list opens in the model's own turn: the mode it opens
-        // in is the mode of the presentation.
-        let observation = hosted.model.$expandedFiles.dropFirst().sink { _ in
-            openedMode = CFRunLoopCopyCurrentMode(CFRunLoopGetMain())
-            opened.fulfill()
-        }
-        defer { observation.cancel() }
-        // Enter the native tracking mode from a run-loop source, not from
-        // a main-dispatch callback (which forbids nested queue servicing).
-        let invoke = Timer(timeInterval: 0.01, repeats: false) { _ in
-            MainActor.assumeIsolated {
-                command.action()
-                let endTracking = Timer(timeInterval: 0.1, repeats: false) { _ in CFRunLoopStop(CFRunLoopGetMain()) }
-                RunLoop.main.add(endTracking, forMode: .eventTracking)
-                RunLoop.main.run(mode: .eventTracking, before: Date().addingTimeInterval(2))
-                endTracking.invalidate()
-            }
-        }
-        RunLoop.main.add(invoke, forMode: .default)
-        await fulfillment(of: [opened], timeout: 3)
-        invoke.invalidate()
-        XCTAssertEqual(openedMode, CFRunLoopMode.defaultMode, "presentation belongs to the default loop, after native menu tracking")
-    }
-
-    /// Posts key presses while a menu tracks: each from a timer in the
-    /// common modes (menu tracking is not the default mode), with an Esc at
-    /// the end so a menu that ignores them cannot hang the run.
-    private func schedule(_ keys: [(characters: String, keyCode: UInt16)], in hosted: Hosted) -> [Timer] {
-        let window = hosted.window
-        func post(_ characters: String, _ keyCode: UInt16) {
-            for type in [NSEvent.EventType.keyDown, .keyUp] {
-                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                             windowNumber: window.windowNumber, context: nil, characters: characters,
-                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
-                NSApp.postEvent(event, atStart: false)
-            }
-        }
-        var when: TimeInterval = 0.8
-        var timers: [Timer] = []
-        for key in keys {
-            let timer = Timer(timeInterval: when, repeats: false) { _ in MainActor.assumeIsolated { post(key.characters, key.keyCode) } }
-            RunLoop.main.add(timer, forMode: .common)
-            timers.append(timer)
-            when += 0.2
-        }
-        let escape = Timer(timeInterval: when + 2, repeats: false) { _ in MainActor.assumeIsolated { post("\u{1B}", 53) } }
-        RunLoop.main.add(escape, forMode: .common)
-        timers.append(escape)
-        return timers
     }
 
     // MARK: - P2-04: a visible keyboard focus at every Tab stop
@@ -537,7 +341,7 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(hosted.model.editingTitleID, now[now.count - 2], "Return edits the row that shows the keyboard")
     }
 
-    func testCommandReturnFromDoneRevealsTheNewTasksInlineFiles() throws {
+    func testCommandReturnFromDoneRevealsTheNewTask() throws {
         try requireKeyWindowTests()
         let hosted = try Hosted(height: 560, addBarFocused: true)
         defer { hosted.close() }
@@ -550,154 +354,10 @@ final class DeepReviewFixTests: XCTestCase {
         XCTAssertEqual(task.status, .todo)
         XCTAssertEqual(hosted.model.tab, .now)
         XCTAssertEqual(hosted.shownPage(), TasksTab.now.rawValue)
-        XCTAssertTrue(hosted.model.expandedFiles.contains(task.id))
-        XCTAssertTrue(hosted.model.hasVisibleInlineFiles)
-        let open = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
-        hosted.model.setFilesExpanded(task.id, false)
-        hosted.spin(0.5)
-        let closed = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)])
-        XCTAssertEqual(open.height - closed.height, AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding, accuracy: 2,
-                       "the created task's inline Attach file line is rendered")
+        // Its row is built and shown (no files list opens: Accepted
+        // 2026-11-01 "Task rows: no paperclip count").
+        XCTAssertNotNil(hosted.pointer.frames[TasksRowID(tab: .now, id: task.id)], "the created task's row is rendered")
         XCTAssertNotNil(hosted.window.firstResponder, "the keyboard remains in the window after navigation")
-    }
-
-    func testDeletingFocusedFileLeavesPageShortcutsAndDoneTypingWorking() async throws {
-        try requireKeyWindowTests()
-        let hosted = try Hosted(height: 680)
-        defer { hosted.close() }
-        let screen = try XCTUnwrap(NSScreen.main)
-        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
-        hosted.window.makeKeyAndOrderFront(nil)
-        hosted.spin(0.3)
-        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-delete-\(UUID()).txt")
-        try Data("file".utf8).write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let imported = await hosted.store.attachFiles([url], to: id)
-        XCTAssertTrue(imported)
-        let file = try XCTUnwrap(hosted.store.task(withID: id)?.attachments.first)
-        hosted.spin(0.3)
-        try hosted.clickRow(id, tab: .now)
-        hosted.press("\r", keyCode: 36, modifiers: .command)
-        hosted.press("\t", keyCode: 48)
-        let target = TasksFileFocusID.file(owner: id, id: file.id)
-        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(target))
-        hosted.press("\u{F728}", keyCode: 117)
-        XCTAssertTrue(try XCTUnwrap(hosted.store.task(withID: id)).attachments.isEmpty)
-        // Reproduce SwiftUI resetting FocusState before disappearance can
-        // report blur, or delivering a final focus report after removal.
-        let requests = try XCTUnwrap(hosted.pointer.keyboardControlRequests)
-        requests.note(target, focused: true)
-        try hosted.clickRow(id, tab: .now)
-        hosted.press("1", keyCode: 18, modifiers: [.command, .option])
-        XCTAssertEqual(hosted.store.task(withID: id)?.priority, .low)
-        NSPasteboard.general.clearContents()
-        hosted.press("c", keyCode: 8, modifiers: .command)
-        XCTAssertTrue(NSPasteboard.general.string(forType: .string)?.contains(
-            try XCTUnwrap(hosted.store.task(withID: id)).title) == true)
-        hosted.go(to: .done)
-        let done = try XCTUnwrap(hosted.model.doneDays().first?.rows.first?.id)
-        try hosted.clickRow(done, tab: .done)
-        requests.note(target, focused: true)
-        hosted.press("q", keyCode: 12)
-        XCTAssertEqual(hosted.model.searchQuery(for: .done), "q")
-    }
-
-    func testTabVisitsInlineFilesAndTheirActionsInBothDirections() async throws {
-        try requireKeyWindowTests()
-        let policy = NSApp.activationPolicy()
-        NSApp.setActivationPolicy(.accessory)
-        defer { NSApp.setActivationPolicy(policy) }
-        let hosted = try Hosted(height: 680)
-        defer { hosted.close() }
-        let screen = try XCTUnwrap(NSScreen.main)
-        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
-        NSApp.activate(ignoringOtherApps: true)
-        hosted.window.makeKeyAndOrderFront(nil)
-        hosted.spin(0.3)
-        let id = try XCTUnwrap(hosted.model.rows(for: .now).first { $0.status == .todo }?.id)
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-files-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let urls = try (0..<6).map { index -> URL in
-            let image = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
-                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
-            for x in 0..<2 { for y in 0..<2 {
-                image.setColor(NSColor(calibratedRed: CGFloat(index) / 6, green: 0.5, blue: 0.5, alpha: 1), atX: x, y: y)
-            } }
-            let url = root.appendingPathComponent("File \(index).png")
-            try XCTUnwrap(image.representation(using: .png, properties: [:])).write(to: url)
-            return url
-        }
-        let imported = await hosted.store.attachFiles(urls, to: id)
-        XCTAssertTrue(imported)
-        let files = try XCTUnwrap(hosted.store.task(withID: id)).attachments
-        XCTAssertEqual(files.count, 6)
-        var attached: [UUID] = []
-        hosted.model.services.chooseFiles = { attached.append($0) }
-        hosted.spin(0.5)
-        try hosted.clickRow(id, tab: .now)
-        hosted.press("\r", keyCode: 36, modifiers: .command)
-        XCTAssertTrue(hosted.model.expandedFiles.contains(id))
-        XCTAssertTrue(hosted.window.isKeyWindow)
-
-        func focused() -> String? {
-            // AppKit reports the NSHostingView for SwiftUI content focus.
-            // Read the live view's FocusState report, not the requested stop.
-            switch hosted.pointer.keyboardControl?()?.base as? TasksFileFocusID {
-            case let .file(_, file)?: "task-attachment-\(file.uuidString)"
-            case .more?: "tasks-files-more"
-            case .attach?: "tasks-files-attach"
-            case nil: nil
-            }
-        }
-        func preview(_ file: TaskImageReference) async throws {
-            let verified = try await hosted.store.taskImageFiles.verifiedURL(for: file)
-            let expected = try XCTUnwrap(verified)
-            hosted.press(" ", keyCode: 49)
-            let panel = try XCTUnwrap(QLPreviewPanel.shared())
-            defer { panel.orderOut(nil); hosted.window.makeKey(); hosted.spin(0.2) }
-            func url() -> URL? {
-                AttachmentQuickLookPresenter.shared.previewPanel(panel, previewItemAt: 0) as? URL
-            }
-            let end = Date().addingTimeInterval(5)
-            while url() != expected, Date() < end { try await Task.sleep(for: .milliseconds(10)) }
-            XCTAssertEqual(url(), expected, "Space previews the exact file reached through Tab")
-            XCTAssertEqual(hosted.store.task(withID: id)?.status, .todo, "file activation never completes the selected parent")
-        }
-        let fileStops = files.map { "task-attachment-\($0.id.uuidString)" }
-        let collapsed = Array(fileStops.prefix(4)) + ["tasks-files-more", "tasks-files-attach"]
-        for expected in collapsed {
-            hosted.press("\t", keyCode: 48)
-            let actual = try XCTUnwrap(focused(), "Tab must land on a live inline control")
-            XCTAssertEqual(actual, expected, "Tab reaches each visible file/action")
-            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
-        }
-        for expected in collapsed.dropLast().reversed() {
-            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
-            XCTAssertEqual(focused(), expected, "Shift-Tab retraces each visible file/action")
-        }
-        // A focused file owns Space, even while its parent is selected.
-        try await preview(files[0])
-
-        // Forward to More; its Space expands the list. Backward now reaches
-        // both newly visible files before the original four.
-        for _ in 0..<4 { hosted.press("\t", keyCode: 48) }
-        XCTAssertEqual(focused(), "tasks-files-more")
-        hosted.press(" ", keyCode: 49)
-        for expected in fileStops.reversed() {
-            hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
-            XCTAssertEqual(focused(), expected)
-            if let file = files.first(where: { "task-attachment-\($0.id.uuidString)" == expected }) { try await preview(file) }
-        }
-        for expected in Array(fileStops.dropFirst()) + ["tasks-files-more", "tasks-files-attach"] {
-            hosted.press("\t", keyCode: 48)
-            XCTAssertEqual(focused(), expected)
-        }
-        hosted.press(" ", keyCode: 49)
-        XCTAssertEqual(attached, [id], "Attach file is reachable and acts on the owner")
-        XCTAssertNil(hosted.model.editingTitleID)
     }
 
     /// A8 P2-A8-1 (A10): in the combined app Tab reached rows out of view
@@ -772,96 +432,6 @@ final class DeepReviewFixTests: XCTestCase {
             XCTAssertEqual(next, cycle[(index + 1) % cycle.count], "Tab after \(stop)")
         }
         XCTAssertTrue(filtered.contains(.find), "Find is on the way")
-    }
-
-    private final class FileListPresence: ObservableObject {
-        @Published var original = true
-        @Published var replacement = false
-    }
-
-    private struct FileListLifetimeProbe: View {
-        @ObservedObject var presence: FileListPresence
-        let store: TaskStore
-        let owner: UUID
-        let pointer: TasksPointer
-
-        private var list: some View {
-            TasksFilesList(files: [], store: store, owner: owner, canAttach: true,
-                           isImporting: false, onAttach: {}, onRemove: { _ in },
-                           onTabStopsChanged: { list, stops in
-                               pointer.registerFileTabStops(stops, for: TasksRowID(tab: .now, id: list.owner), instance: list.instance)
-                           }, onTabStopsRemoved: { list in
-                               pointer.unregisterFileTabStops(for: TasksRowID(tab: .now, id: list.owner), instance: list.instance)
-                           })
-        }
-
-        var body: some View {
-            VStack {
-                if presence.original { list }
-                if presence.replacement { list }
-            }
-        }
-    }
-
-    func testDisappearingFileListCannotClearReplacementStops() throws {
-        let hosted = try Hosted(height: 520, keyWindow: false)
-        defer { hosted.close() }
-        let presence = FileListPresence(), pointer = TasksPointer(), owner = UUID()
-        hosted.window.contentView = NSHostingView(rootView: FileListLifetimeProbe(
-            presence: presence, store: hosted.store, owner: owner, pointer: pointer)
-            .atticDesign(AtticDesignContext(mode: .light)))
-        hosted.spin(0.2)
-        let row = TasksRowID(tab: .now, id: owner)
-        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)])
-        presence.replacement = true
-        hosted.spin(0.2)
-        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)])
-        presence.original = false
-        hosted.spin(0.2)
-        XCTAssertEqual(pointer.fileTabStops[row], [.attach(owner)], "a late old disappearance cannot erase the visible list")
-        presence.replacement = false
-        hosted.spin(0.2)
-        XCTAssertTrue(pointer.fileTabStops[row]?.isEmpty ?? true, "the last list unregisters its own stops")
-    }
-
-    func testShiftTabReachesFilesAfterTheirListScrollsOut() async throws {
-        try requireKeyWindowTests()
-        let hosted = try Hosted(height: 520, long: true)
-        defer { hosted.close() }
-        let screen = try XCTUnwrap(NSScreen.main)
-        hosted.window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100, y: screen.visibleFrame.minY + 100))
-        hosted.window.makeKeyAndOrderFront(nil)
-        hosted.spin(0.3)
-        hosted.model.services.chooseFiles = { _ in }
-        let owner = try XCTUnwrap(hosted.model.rows(for: .now).first?.id)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("prb2-scroll-\(UUID()).txt")
-        try Data("file".utf8).write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let imported = await hosted.store.attachFiles([url], to: owner)
-        XCTAssertTrue(imported)
-        hosted.spin(0.3)
-        try hosted.clickRow(owner, tab: .now)
-        hosted.press("\r", keyCode: 36, modifiers: .command)
-        hosted.press("\t", keyCode: 48) // File.
-        hosted.press("\t", keyCode: 48) // Attach.
-        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(TasksFileFocusID.attach(owner)))
-        hosted.press("\t", keyCode: 48) // Next task.
-        XCTAssertNotNil(hosted.pointer.keyboardRow)
-        XCTAssertNotEqual(hosted.pointer.keyboardRow?.id, owner)
-        let next = try XCTUnwrap(hosted.pointer.keyboardRow?.id)
-        let frame = try XCTUnwrap(hosted.pointer.frames[TasksRowID(tab: .now, id: next)])
-        let list = try shownList(hosted)
-        let listTop = TasksViewport.listTop(tabsTop: layout(hosted).headerBottom)
-        let clip = list.contentView
-        clip.scroll(to: CGPoint(x: 0, y: clip.bounds.origin.y + frame.minY - listTop))
-        list.reflectScrolledClipView(clip)
-        hosted.spin(0.5)
-        try hosted.clickRow(next, tab: .now)
-        XCTAssertEqual(hosted.pointer.keyboardRow?.id, next, "the next row stays visible and owns Shift-Tab")
-        XCTAssertFalse(hosted.pointer.fileTabStops[TasksRowID(tab: .now, id: owner)]?.isEmpty ?? true,
-                       "lazy disappearance must retain the expanded list's stops")
-        hosted.press("\u{19}", keyCode: 48, modifiers: .shift)
-        XCTAssertEqual(hosted.pointer.keyboardControl?(), AnyHashable(TasksFileFocusID.attach(owner)))
     }
 
     // MARK: - P3-01: the strip's values in full

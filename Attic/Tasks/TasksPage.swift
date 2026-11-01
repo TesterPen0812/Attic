@@ -12,9 +12,6 @@ struct TasksPageChrome {
     /// Edit mode: an editor, a picker or a popover is open. The host holds
     /// the panel open until it closes (then a short grace).
     var editLock: (Bool) -> Void = { _ in }
-    /// Visible inline files hold hover auto-hide without claiming typing
-    /// or blocking an agent show or a trackpad swipe.
-    var filesLock: (Bool) -> Void = { _ in }
 }
 
 /// The Tasks page (spec § Tasks, Direction A): the page tabs (Now · Later ·
@@ -273,11 +270,12 @@ struct TasksPage: View {
         model.showPagerPage(animated: false)
         // The settle steps on this page's display (round 11).
         swipe.motion.clockView = { [pointer] in pointer.view }
-        // O17-13: a file dropped on a row settles into its files list.
+        // O17-13: a file dropped on a row settles into the row, on its
+        // last line at the text column (where its tiles are).
         pointer.dropLandingSlot = { [weak model, weak pointer, $fileDropRow] point in
             guard let model, let pointer, let row = $fileDropRow.wrappedValue, row.tab == model.tab,
                   let frame = pointer.frames[row], frame.minY - 1 <= point.y, point.y <= frame.maxY + 1 else { return nil }
-            return Self.dropLandingSlot(rowFrame: frame, filesExpanded: model.expandedFiles.contains(row.id))
+            return Self.dropLandingSlot(rowFrame: frame)
         }
         AtticDropLanding.register(pointer)
         swipe.onCancel = { [weak model] in
@@ -400,7 +398,6 @@ struct TasksPage: View {
             }
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
-        .onChange(of: model.hasVisibleInlineFiles, initial: true) { _, _ in updateTypingLock() }
         .onChange(of: metaPopover) { old, new in
             updateTypingLock()
             // Move to Task… closed by Esc or a click outside, its subtask
@@ -679,7 +676,6 @@ struct TasksPage: View {
         // only over a draft, which the composer lock holds.
         chrome.editLock(model.editingTitleID != nil || model.newSubtaskParentID != nil || model.renamingSubtaskID != nil
             || composerPickerOpen || metaPopover != nil || selectionPicker != nil)
-        chrome.filesLock(model.hasVisibleInlineFiles)
     }
 
     /// When a change elsewhere (an agent's delete or move) takes the row of
@@ -1010,10 +1006,7 @@ struct TasksPage: View {
             }
         }
         let draft = !model.addBarState.text.text.trimmingCharacters(in: .whitespaces).isEmpty
-        let files = Dictionary(uniqueKeysWithValues: ids.map { id in
-            (id, model.expandedFiles.contains(id) ? pointer.fileTabStops[TasksRowID(tab: tab, id: id)] ?? [] : [])
-        })
-        return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) }, files: files,
+        return TasksTabOrder.stops(find: searchShown, rows: ids.map { ($0, open[$0] ?? []) },
                                    strip: draft && model.pasteOffer == nil && NSApp.isFullKeyboardAccessEnabled,
                                    plus: panelComposer != nil)
     }
@@ -1024,7 +1017,6 @@ struct TasksPage: View {
         if addBarFocused { return .addBar }
         if focusRequests.current?.base is PanelPlusFocusID { return .plus }
         if let strip = focusRequests.current?.base as? AtticStripFocusID { return .strip(strip) }
-        if let file = focusRequests.current?.base as? TasksFileFocusID, stops.contains(.file(file)) { return .file(file) }
         if let subtask = model.focusedSubtaskID, stops.contains(.subtask(subtask)) { return .subtask(subtask) }
         if let id = focusedID { return .row(id) }
         return nil
@@ -1058,17 +1050,6 @@ struct TasksPage: View {
             }
             settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts, landed: { focusedID == id }, revealing: id) {
                 setFocus(id)
-            }
-        case let .file(target):
-            focusedRow = nil
-            searchFocused = false
-            addBarFocused = false
-            // The list supplies IDs for its visible controls. Centre the
-            // actual file/action, including one far down a Show more list.
-            listProxies.lists[tab]?.scrollTo(target, anchor: .center)
-            settleKeyboard(on: stop, in: tab, attempts: Self.tabSettleAttempts,
-                           landed: { focusRequests.current == AnyHashable(target) }, revealing: nil) {
-                focusRequests.focus(target)
             }
         case let .subtask(id):
             focusedRow = nil
@@ -1144,15 +1125,6 @@ struct TasksPage: View {
             setFocus(open)
             return true
         }
-        // Then an open files list (A1), the same way.
-        let openFilesRow = current.flatMap { model.expandedFiles.contains($0) ? $0 : nil }
-            ?? (model.expandedFiles.count == 1 ? model.expandedFiles.first.flatMap { visible.contains($0) ? $0 : nil } : nil)
-            ?? model.selection.first { model.expandedFiles.contains($0) && visible.contains($0) }
-        if let openFilesRow {
-            toggleFiles(openFilesRow)
-            setFocus(openFilesRow)
-            return true
-        }
         if model.selection.count > 1 { model.clearSelection(); return true }
         return false
     }
@@ -1186,7 +1158,6 @@ struct TasksPage: View {
         if AtticTextInput.hasKeyboard || addBarFocused || searchFocused {
             return typingFieldShortcutPressed(event, in: window)
         }
-        if focusRequests.current?.base is TasksFileFocusID, case .file? = currentTabStop(in: tabStops()) { return false }
         let shortcuts = [AtticTaskShortcut.page, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
@@ -1632,9 +1603,6 @@ struct TasksPage: View {
         // Read when the cell draws (the closures below run in the cell's
         // own body), never captured when the list built it.
         let expanded = { model.expanded.contains(id) && row.status != .done }
-        // The files list opens on its own (A1), a finished row's too (its
-        // menu and ⌘Return reach it).
-        let filesExpanded = { model.expandedFiles.contains(id) }
         // Every row drags, out of the panel as a copy (owner-approved,
         // 2026-10-01); only Now's and Later's manual order reorders. A
         // sorted view (item 6) and Done have no place to drag to: there the
@@ -1669,7 +1637,6 @@ struct TasksPage: View {
             let isSelected = model.selection.contains(id)
             let run = selectionRun(for: id, in: tab)
             let isExpanded = expanded()
-            let isFilesExpanded = filesExpanded()
             // Only the page that answers the keyboard opens an editor: the
             // copy a kept page draws of the same task shows none (round 12).
             let editing = model.editingTitleID == id && live.isActive
@@ -1681,7 +1648,7 @@ struct TasksPage: View {
             // each rebuilt its whole row. An editor or a picker open on the
             // row always redraws it (they show live state).
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
-                                              isFilesExpanded: isFilesExpanded, isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
+                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
                                               layout: layout, isLive: editing || live.metaPopover != nil)) {
                 let drawRow = {
                     AtticTaskRow(
@@ -1689,8 +1656,6 @@ struct TasksPage: View {
                         isSelected: isSelected,
                         selectionRun: run,
                         isExpanded: isExpanded,
-                        isFilesExpanded: isFilesExpanded,
-                        onToggleFiles: { toggleFiles(id) },
                         dropLabel: live.isDropTarget ? (model.services.addFilesToTaskNote != nil ? String(localized: "Add to task's note")
                                                                                                     : String(localized: "Add to page")) : nil,
                         actions: actions(for: id, in: tab),
@@ -1810,31 +1775,6 @@ struct TasksPage: View {
                         .padding(.leading, TasksDesignMetrics.textX)
                 }
             }
-            if filesExpanded() {
-                TasksFilesList(
-                    files: row.files,
-                    store: store,
-                    owner: id,
-                    canAttach: model.services.chooseFiles != nil && !store.importingAttachmentTaskIDs.contains(id),
-                    isImporting: store.importingAttachmentTaskIDs.contains(id),
-                    onAttach: { model.services.chooseFiles?(id) },
-                    onRemove: { file in
-                        model.report(model.removeFile(file, from: id), on: id) { [weak model] in model?.removeFile(file, from: id) ?? .failed(.taskGone) }
-                    },
-                    onTabStopsChanged: { list, stops in
-                        pointer.registerFileTabStops(stops, for: TasksRowID(tab: tab, id: list.owner), instance: list.instance)
-                    },
-                    onTabStopsRemoved: { list in
-                        // A lazy row leaving the viewport is still in the
-                        // page's Tab order while its files remain expanded.
-                        guard !model.expandedFiles.contains(list.owner) else { return }
-                        pointer.unregisterFileTabStops(for: TasksRowID(tab: tab, id: list.owner), instance: list.instance)
-                    }
-                )
-                // It opens from under its row, as the quick look does.
-                .transition(AtticMotionPreset.expand.transition(reduceMotion: design.reduceMotion, edge: nil, anchor: .top)
-                    .combined(with: .atticTopReveal))
-            }
         }
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
@@ -1847,15 +1787,6 @@ struct TasksPage: View {
         PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
         withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
             model.toggleExpanded(id)
-        }
-    }
-
-    /// The files list opens and closes the same way, apart from the quick
-    /// look (A1).
-    private func toggleFiles(_ id: UUID) {
-        PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
-        withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
-            model.toggleFiles(id)
         }
     }
 
@@ -1967,8 +1898,8 @@ struct TasksPage: View {
         guard model.selection.contains(id), model.selection.count > 1 else { return .single }
         let ids = tab == .done ? model.doneDays().flatMap { $0.rows.map(\.id) } : model.rows(for: tab).map(\.id)
         guard let index = ids.firstIndex(of: id) else { return .single }
-        let above = index > 0 && model.selection.contains(ids[index - 1]) && !model.expanded.contains(ids[index - 1]) && !model.expandedFiles.contains(ids[index - 1])
-        let below = index + 1 < ids.count && model.selection.contains(ids[index + 1]) && !model.expanded.contains(id) && !model.expandedFiles.contains(id)
+        let above = index > 0 && model.selection.contains(ids[index - 1]) && !model.expanded.contains(ids[index - 1])
+        let below = index + 1 < ids.count && model.selection.contains(ids[index + 1]) && !model.expanded.contains(id)
         switch (above, below) {
         case (false, false): return .single
         case (false, true): return .first
@@ -2058,7 +1989,7 @@ struct TasksPage: View {
                 let targets = model.targets(for: id)
                 model.report(model.toggleWorking(targets), on: id) { [weak model] in model?.toggleWorking(targets) ?? .failed(.taskGone) }
             },
-            openPage: { opensTaskNotes ? openTaskNote(id) : openFiles(id) },
+            openPage: { opensTaskNotes ? openTaskNote(id) : model.openPage(id) },
             // ⌘B: to Later, or back to Now from Later, reported the same way.
             moveToBacklog: {
                 let targets = model.targets(for: id)
@@ -2082,28 +2013,17 @@ struct TasksPage: View {
             duplicate: { runCommand(on: id) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) } },
             changePriority: { showPriority(for: id) },
             showActions: { showActions(for: id, anchor: nil, tab: tab) },
-            names: .init(openPage: opensTaskNotes ? String(localized: "Open page") : filesActionName(for: id))
+            names: .init(openPage: String(localized: "Open page"))
         )
     }
-
-    /// One command for all routes. A main-queue block can run inside
-    /// NSMenu's nested tracking loop; it does not mean the menu has closed.
-    /// Present in the default mode, after AppKit finishes tracking and
-    /// restores the source window's responder and ordering state.
-    ///
-    /// A menu's choice runs through `AtticTextInput.choosing`, so the
-    /// Return that chose Open Files… is never mistaken for a typing field's
-    /// key (PR prep, P2). The queued block does not wake a sleeping run
-    /// loop by itself (`CFRunLoopPerformBlock`), so the loop is woken.
-    private static let log = Logger(subsystem: "com.taha.Attic", category: "TaskFiles")
 
     /// Phase 3: the host shows task pages (the shell does; the preview and
     /// tests without the service keep the files command on ⌘Return).
     private var opensTaskNotes: Bool { model.services.openTaskNote != nil }
 
-    /// Open Task Note: the task's page over the list (UX plan § 5.3). The
-    /// same deferral as Show Files: a menu's choice runs after AppKit has
-    /// finished tracking, and a typing field's key never opens it.
+    /// Open Task Note: the task's page over the list (UX plan § 5.3). A
+    /// menu's choice runs after AppKit has finished tracking, and a typing
+    /// field's key never opens it.
     private func openTaskNote(_ id: UUID) {
         guard !AtticTextInput.ownsCurrentKey else { return }
         guard store.listedTask(withID: id) != nil, let open = model.services.openTaskNote else { return }
@@ -2113,21 +2033,6 @@ struct TasksPage: View {
         if !model.selection.contains(id) { model.selectOnly(id) }
         RunLoop.main.perform(inModes: [.default]) {
             MainActor.assumeIsolated { open(id) }
-        }
-        CFRunLoopWakeUp(CFRunLoopGetMain())
-    }
-
-    private func openFiles(_ id: UUID) {
-        guard !AtticTextInput.ownsCurrentKey else {
-            Self.log.notice("Show Files \(id, privacy: .public) refused: the key belongs to a typing field")
-            return
-        }
-        pointer.endInvocation()
-        RunLoop.main.perform(inModes: [.default]) { [model] in
-            MainActor.assumeIsolated {
-                // A live task's files open or close under its row (A1).
-                if store.task(withID: id) != nil { toggleFiles(id) } else { model.openPage(id) }
-            }
         }
         CFRunLoopWakeUp(CFRunLoopGetMain())
     }
@@ -2145,11 +2050,6 @@ struct TasksPage: View {
     /// there, with its files).
     private func toggleDetails(_ id: UUID) {
         model.doneDetailID = model.doneDetailID == id ? nil : id
-    }
-
-    /// VoiceOver's name for the files command (⌘Return).
-    private func filesActionName(for id: UUID) -> String {
-        model.expandedFiles.contains(id) ? String(localized: "Hide files") : String(localized: "Show files")
     }
 
     /// VoiceOver's name for `toggleDetails`.
@@ -2233,7 +2133,7 @@ struct TasksPage: View {
         // 2026-10-24, answer 1 A): Complete, Start Working │ Open Page, Edit
         // Title, Add Subtask │ Date ›, Tags ›, Priority › │ Move to Later,
         // More › │ Remove from Tasks, Delete. Copy and Duplicate live in
-        // More ›, with Show Files and Move Up/Down; a selection, which has
+        // More ›, with Add Files… and Move Up/Down; a selection, which has
         // no More ›, keeps them on the root.
         var opensGroup = true
         if single, opensTaskNotes {
@@ -2288,16 +2188,13 @@ struct TasksPage: View {
             menuCommand(key) { [weak model] targets in model?.duplicate(targets) ?? .failed(.taskGone) }
         }
         if single {
-            // More ›: Show Files, Add Files… │ Copy, Duplicate │ Move Up,
-            // Move Down. Add Files… is the plan's menu word for § 2.4's
-            // picker: a task's files are its writing's.
+            // More ›: Add Files… │ Copy, Duplicate │ Move Up, Move Down.
+            // Add Files… is the plan's menu word for § 2.4's picker: a
+            // task's files are its writing's. (Show Files went with the
+            // files list: Accepted 2026-11-01 "Task rows: no paperclip
+            // count".)
             var more: [AtticMenuCommand] = []
             if tab != .done {
-                more.append(AtticMenuCommand(verbatim: model.expandedFiles.contains(id) ? String(localized: "Hide Files")
-                                                                                       : String(localized: "Show Files"),
-                                             shortcut: opensTaskNotes ? nil : AtticTaskShortcut.openPage) {
-                    openFiles(menuRowID(key))
-                })
                 if opensTaskNotes, let choose = model.services.chooseFilesForNote {
                     more.append(AtticMenuCommand(verbatim: String(localized: "Add Files…")) {
                         choose(menuRowID(key))
@@ -2717,9 +2614,6 @@ struct TasksPage: View {
             if modifiers == .command { model.undo(); return .handled }
             if modifiers == [.command, .shift] { model.redo(); return .handled }
         }
-        // Inline files and their buttons own activation/removal keys,
-        // even when their task remains selected.
-        if focusRequests.current?.base is TasksFileFocusID, case .file? = currentTabStop(in: tabStops()) { return .ignored }
         // Typing on Done faster than the search field takes the keyboard
         // (it appears, then focuses): the letters join the query, never
         // lost (round 8, CI run 3: "inv" became "i").
@@ -2836,9 +2730,6 @@ struct TasksPage: View {
                                            tiles: !row.model.tileFiles.isEmpty && row.status != .done)
         if model.expanded.contains(id), row.status != .done {
             height += CGFloat(row.subtasks.count + 1) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
-        }
-        if model.expandedFiles.contains(id) {
-            height += CGFloat(TasksFilesList.lineCount(files: row.files.count)) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
         }
         return height
     }
@@ -3128,24 +3019,20 @@ struct TasksPage: View {
     /// space: the files list's icon column. With the list open, the line
     /// the new file takes (where "Attach file…" is now, the list's last);
     /// closed, the row's last line, over which the list opens. Pure, tested.
-    nonisolated static func dropLandingSlot(rowFrame: CGRect, filesExpanded: Bool) -> CGRect {
+    nonisolated static func dropLandingSlot(rowFrame: CGRect) -> CGRect {
         let pitch = AtticLayout.subtaskPitch
         let side = AtticQuietActionMetrics.iconSlot
-        let lineTop = filesExpanded ? rowFrame.maxY - AtticQuickLookMetrics.bottomPadding - pitch
-                                    : max(rowFrame.minY, rowFrame.maxY - pitch)
+        let lineTop = max(rowFrame.minY, rowFrame.maxY - pitch)
         return CGRect(x: rowFrame.minX + TasksDesignMetrics.textX, y: lineTop + (pitch - side) / 2, width: side, height: side)
     }
 
     /// Whether the task can take what is dragged over it: files from
-    /// outside, or another task's file row (copied; its own task refuses
-    /// it, so releasing a row over its list never duplicates it).
+    /// outside. (A file row dragged from another task's files list went
+    /// with the list, Accepted 2026-11-01 "Task rows: no paperclip count";
+    /// Attic's own card marker is refused, so it never re-imports.)
     static func canAcceptDrop(_ content: TaskDropContent, onto id: UUID, store: TaskStore) -> Bool {
-        guard let owner = store.attachmentOwnerID(for: id) else { return false }
-        switch content {
-        case .files: return true
-        case .attachmentCard: return TaskAttachmentCardDrag.canCopy(toOwner: owner)
-        case .task, .unsupported: return false
-        }
+        guard store.attachmentOwnerID(for: id) != nil else { return false }
+        return content == .files
     }
 
     /// The row among `ids` on `tab`'s page whose frame holds `point` (pure,
@@ -3167,24 +3054,10 @@ struct TasksPage: View {
             }
             return
         }
-        // A file row dragged from another task's files list is copied (the
-        // drag recorded its source when it began).
-        let card = TaskAttachmentCardDrag.current
+        guard content == .files else { return }
         Task { @MainActor in
-            let added: [UUID]?
-            switch content {
-            case .files:
-                added = await store.attachStagedFiles(to: owner, stage: { try await TaskDroppedFiles.stage(providers) })
-            case .attachmentCard:
-                added = await store.attachCopies(to: owner) { try await TaskAttachmentCardDrag.sources(from: providers, expected: card) }
-            case .task, .unsupported:
-                return
-            }
-            guard let ids = added else { return }
-            // The files list opens to show what arrived (A1).
-            withAnimation(design.reduceMotion ? nil : AtticMotionPreset.expand.animation(reduceMotion: false)) {
-                model.setFilesExpanded(owner, true)
-            }
+            // What arrived shows as the row's tiles.
+            guard let ids = await store.attachStagedFiles(to: owner, stage: { try await TaskDroppedFiles.stage(providers) }) else { return }
             let title = store.task(withID: owner)?.title ?? ""
             AccessibilityNotification.Announcement(
                 ids.count == 1 ? String(localized: "Added 1 file to \(title)") : String(localized: "Added \(ids.count) files to \(title)")
@@ -4483,21 +4356,6 @@ final class TasksPointer {
     /// The row that has the keyboard (the page's focus), for tests: which
     /// row a Tab reached (deep review P2-04).
     var keyboardRow: TasksRowID?
-    /// Inline lists register their visible stops without redrawing the page.
-    private(set) var fileTabStops: [TasksRowID: [TasksFileFocusID]] = [:]
-    private var fileTabStopInstances: [TasksRowID: UUID] = [:]
-
-    func registerFileTabStops(_ stops: [TasksFileFocusID], for row: TasksRowID, instance: UUID) {
-        fileTabStopInstances[row] = instance
-        fileTabStops[row] = stops
-    }
-
-    func unregisterFileTabStops(for row: TasksRowID, instance: UUID) {
-        guard fileTabStopInstances[row] == instance else { return }
-        fileTabStopInstances[row] = nil
-        fileTabStops[row] = nil
-    }
-
     #if DEBUG
     /// Tests: the rows whose cells last drew them as the keyboard's row (with
     /// its ring), so a test can tell a focus the row never drew (P2-04).
@@ -4665,7 +4523,6 @@ struct TasksRowKey: Equatable {
     let isSelected: Bool
     let selectionRun: AtticSelectionRun
     let isExpanded: Bool
-    let isFilesExpanded: Bool
     let isDropTarget: Bool
     let isFocused: Bool
     let tab: TasksTab
@@ -4675,7 +4532,7 @@ struct TasksRowKey: Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
-            && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isFilesExpanded == rhs.isFilesExpanded && lhs.isDropTarget == rhs.isDropTarget
+            && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isDropTarget == rhs.isDropTarget
             && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab
             // Native layout resizes the row. Its controls and callbacks
             // change only when the chrome insets change, not every pixel
@@ -4749,9 +4606,9 @@ struct TasksFileDropDelegate: DropDelegate {
         return (content, id)
     }
 
-    /// Files from outside, and a file row from another task's files list.
+    /// Files from outside.
     static func takes(_ content: TaskDropContent) -> Bool {
-        content == .files || content == .attachmentCard
+        content == .files
     }
 
     func validateDrop(info: DropInfo) -> Bool {
@@ -5180,7 +5037,6 @@ enum TasksTabStop: Hashable {
     case find
     case row(UUID)
     case subtask(UUID)
-    case file(TasksFileFocusID)
     case addBar
     case strip(AtticStripFocusID)
     /// In the panel: the shared bar's "+" (the card replaces the add bar).
@@ -5190,18 +5046,17 @@ enum TasksTabStop: Hashable {
 /// The Tasks page's Tab order (A10), restoring Phase 1's: top to bottom as
 /// drawn, every stop visible. Find while it shows on the tabs' line; each
 /// row of the page shown (the filtered rows when a query or a view narrows
-/// it), with its open subtask lines and visible inline files/actions; the add bar;
+/// it), with its open subtask lines; the add bar;
 /// then the strip's buttons while a draft shows them and keyboard
 /// navigation is on (buttons are Tab stops on the Mac only then). Tab after
 /// the last stop goes round to the first: never to an unseen stop.
 enum TasksTabOrder {
-    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], files: [UUID: [TasksFileFocusID]] = [:], strip: Bool,
+    static func stops(find: Bool, rows: [(id: UUID, subtasks: [UUID])], strip: Bool,
                       plus: Bool = false) -> [TasksTabStop] {
         var stops: [TasksTabStop] = find ? [.find] : []
         for row in rows {
             stops.append(.row(row.id))
             stops.append(contentsOf: row.subtasks.map(TasksTabStop.subtask))
-            stops.append(contentsOf: (files[row.id] ?? []).map(TasksTabStop.file))
         }
         if plus {
             stops.append(.plus)
@@ -5225,7 +5080,7 @@ enum TasksTabOrder {
     /// that row is built and the list's own reveal is enough.
     static func isListNeighbour(_ current: TasksTabStop?, of stop: TasksTabStop, in stops: [TasksTabStop]) -> Bool {
         switch current {
-        case .row?, .subtask?, .file?: break
+        case .row?, .subtask?: break
         default: return false
         }
         guard let current, let a = stops.firstIndex(of: current), let b = stops.firstIndex(of: stop) else { return false }
