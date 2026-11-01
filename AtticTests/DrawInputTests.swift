@@ -185,6 +185,46 @@ final class DrawInputTests: XCTestCase {
         XCTAssertTrue(hit === rig.board, "hit chain: \(hitChain(rig.panel, at: point))")
     }
 
+    private func describeHit(_ panel: NSWindow, at point: CGPoint) -> String {
+        guard let content = panel.contentView, let hit = content.hitTest(content.convert(point, from: nil)) else { return "nil" }
+        let frame = hit.convert(hit.bounds, to: nil)
+        return "\(type(of: hit)) \(frame) subviews \(hit.subviews.map { "\(type(of: $0))" }) in \(hit.superview.map { "\(type(of: $0))" } ?? "-")"
+    }
+
+    /// Fields in the top row (the canvas menu's, Rename's, Search's) are
+    /// AppKit views; after any of them has shown, the board must still be
+    /// what the middle of the panel hit tests to, and still pan and zoom.
+    func testTheBoardKeepsItsGesturesAfterTheTopRowsFieldsHaveShown() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        let content = try XCTUnwrap(rig.panel.contentView)
+        let steps: [(String, () -> Void, () -> Void)] = [
+            ("the canvas menu", { rig.model.openFilter() }, { rig.model.closeFilter() }),
+            ("Rename", { rig.model.openFilter(); rig.model.library.perform(.rename) }, { rig.model.library.cancelRename() }),
+            ("Search", { rig.model.openSearch() }, { rig.model.closeSearch() }),
+        ]
+        for (name, open, close) in steps {
+            open()
+            spin(0.4)
+            close()
+            spin(0.4)
+            XCTAssertTrue(content.hitTest(content.convert(point, from: nil)) === rig.board,
+                          "after \(name): \(describeHit(rig.panel, at: point))")
+            let zoom = rig.model.viewport.zoom
+            rig.panel.sendEvent(try pinch(0, phase: 1, at: point, in: rig.panel))
+            rig.panel.sendEvent(try pinch(0.2, phase: 2, at: point, in: rig.panel))
+            rig.panel.sendEvent(try pinch(0, phase: 4, at: point, in: rig.panel))
+            XCTAssertNotEqual(rig.model.viewport.zoom, zoom, "after \(name): a pinch zooms")
+            let x = rig.model.viewport.x
+            rig.panel.sendEvent(try scroll(phase: 1, at: point, in: rig.panel))
+            rig.panel.sendEvent(try scroll(dx: 10, phase: 2, at: point, in: rig.panel))
+            rig.panel.sendEvent(try scroll(phase: 4, at: point, in: rig.panel))
+            XCTAssertNotEqual(rig.model.viewport.x, x, "after \(name): a scroll pans")
+            XCTAssertEqual(rig.hideRequests(), 0)
+        }
+    }
+
     func testAPinchThroughThePanelZoomsAroundThePointerWithTheClamp() throws {
         let rig = try makeRig()
         defer { close(rig) }
@@ -279,14 +319,19 @@ final class DrawInputTests: XCTestCase {
             send(try scroll(phase: 4, at: point, in: rig.panel))
             XCTAssertEqual(rig.model.viewport.x - start.x, expected, accuracy: 0.5,
                            "direction \(direction): the board follows the fingers (hit chain: \(hitChain(rig.panel, at: point)))")
-            let beforeMomentum = rig.model.viewport.x
-            var momentum: CGFloat = 0
+            // Momentum: through the panel it never hides. AppKit hands made
+            // momentum events to no view (the board got none of them through
+            // the window), so the board then gets them as AppKit hands real
+            // ones on: they keep panning the gesture it owns.
+            var momentumEvents: [NSEvent] = []
             for phase: Int64 in [1, 2, 2, 2, 2, 3] {
-                let event = try scroll(dx: 6 * direction, phase: 0, momentum: phase, at: point, in: rig.panel)
-                momentum += event.scrollingDeltaX
-                rig.panel.sendEvent(event)
+                momentumEvents.append(try scroll(dx: 6 * direction, phase: 0, momentum: phase, at: point, in: rig.panel))
             }
-            XCTAssertEqual(rig.model.viewport.x - beforeMomentum, momentum, accuracy: 0.5, "momentum keeps panning")
+            for event in momentumEvents { rig.panel.sendEvent(event) }
+            let beforeMomentum = rig.model.viewport.x
+            for event in momentumEvents { rig.board.scrollWheel(with: event) }
+            XCTAssertEqual(rig.model.viewport.x - beforeMomentum, momentumEvents.reduce(0) { $0 + $1.scrollingDeltaX }, accuracy: 0.5,
+                           "momentum keeps panning")
             spin(0.1)
             XCTAssertEqual(rig.hideRequests(), 0, "direction \(direction): never a hide")
             XCTAssertEqual(rig.controller.displayedProgressForProbe, 0, accuracy: 0.0001, "the panel never followed")
@@ -352,6 +397,8 @@ final class DrawInputTests: XCTestCase {
     /// are images; text, shape and select are the system's).
     private func assertCursor(_ tool: DrawTool, _ rig: Rig, _ when: String, file: StaticString = #filePath, line: UInt = #line) {
         let cursor = NSCursor.current
+        let named = cursor === NSCursor.arrow ? "arrow" : cursor === NSCursor.operationNotAllowed ? "sentinel" : "\(cursor.image.size)"
+        let when = "\(when) [now \(named); \(rig.board.cursorLog.suffix(3).joined(separator: " | "))]"
         switch tool {
         case .pen:
             let diameter = DrawBoardView.penDotDiameter(strokeWidth: rig.model.strokeSize.strokeWidth, zoom: rig.model.viewport.zoom)
@@ -380,18 +427,18 @@ final class DrawInputTests: XCTestCase {
             // A click on the tool (the tool bar's action).
             reset()
             rig.model.setTool(tool == .shape ? .select : (tool == .select ? .pen : .select))
-            spin(0.05)
+            spin(0.2)
             reset()
             if tool == .shape { rig.model.pickShape(.rectangle) } else { rig.model.setTool(tool) }
-            spin(0.05)
+            spin(0.2)
             assertCursor(tool, rig, "\(tool) by click")
             // Its key.
             rig.model.setTool(tool == .select ? .pen : .select)
-            spin(0.05)
+            spin(0.2)
             reset()
             XCTAssertTrue(rig.panel.makeFirstResponder(rig.board))
             rig.panel.sendEvent(try key(character, code: code, in: rig.panel))
-            spin(0.05)
+            spin(0.2)
             XCTAssertEqual(rig.model.tool, tool)
             assertCursor(tool, rig, "\(tool) by key")
             // A pan, then a pinch.
@@ -400,33 +447,33 @@ final class DrawInputTests: XCTestCase {
             rig.panel.sendEvent(try scroll(phase: 1, at: at, in: rig.panel))
             rig.panel.sendEvent(try scroll(dx: 5, phase: 2, at: at, in: rig.panel))
             rig.panel.sendEvent(try scroll(phase: 4, at: at, in: rig.panel))
-            spin(0.05)
+            spin(0.2)
             assertCursor(tool, rig, "\(tool) after a pan")
             reset()
             rig.panel.sendEvent(try pinch(0, phase: 1, at: at, in: rig.panel))
             rig.panel.sendEvent(try pinch(0.2, phase: 2, at: at, in: rig.panel))
             rig.panel.sendEvent(try pinch(0, phase: 4, at: at, in: rig.panel))
-            spin(0.05)
+            spin(0.2)
             assertCursor(tool, rig, "\(tool) after a zoom")
             // The canvas menu, and the swatch's colours (a popover), closing.
             rig.model.openFilter()
-            spin(0.05)
+            spin(0.2)
             reset()
             rig.model.closeFilter()
-            spin(0.05)
+            spin(0.6)
             assertCursor(tool, rig, "\(tool) after the menu closes")
             rig.model.strip = .colour
-            spin(0.05)
+            spin(0.2)
             reset()
             rig.model.strip = nil
-            spin(0.05)
+            spin(0.6)
             assertCursor(tool, rig, "\(tool) after the colours close")
             // A hide and a reveal.
             rig.uiState.panelDidHide()
-            spin(0.05)
+            spin(0.2)
             reset()
             rig.uiState.panelDidReveal()
-            spin(0.05)
+            spin(0.2)
             assertCursor(tool, rig, "\(tool) after the panel reveals")
             rig.model.setViewport(DrawViewport(), byUser: false)
         }
@@ -437,16 +484,16 @@ final class DrawInputTests: XCTestCase {
         defer { close(rig) }
         rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
         rig.model.setTool(.pen)
-        spin(0.05)
+        spin(0.2)
         let medium = NSCursor.current
         rig.model.pickSize(.large, for: .pen)
-        spin(0.05)
+        spin(0.2)
         XCTAssertFalse(NSCursor.current === medium, "a new size, a new dot")
         assertCursor(.pen, rig, "large")
         let large = NSCursor.current
         rig.model.pickColour(.red)
-        spin(0.05)
-        XCTAssertFalse(NSCursor.current === large, "a new colour, a new dot")
+        spin(0.2)
+        XCTAssertFalse(NSCursor.current === large, "a new colour, a new dot [\(rig.board.cursorLog.suffix(5).joined(separator: " | "))]")
         assertCursor(.pen, rig, "red")
     }
 
@@ -459,12 +506,12 @@ final class DrawInputTests: XCTestCase {
         rig.model.pointerUp(at: CGPoint(x: 180, y: 220))
         let id = try XCTUnwrap(rig.model.objects.last?.id)
         rig.model.select([id])
-        spin(0.05)
+        spin(0.2)
         let spot = try XCTUnwrap(rig.model.handleSpots.first { $0.handle == .bottomRight })
         rig.board.pointerOverride = windowPoint(rig.board, spot.point)
         NSCursor.operationNotAllowed.set()
         rig.model.setTool(.select)
-        spin(0.05)
+        spin(0.2)
         XCTAssertTrue(NSCursor.current === DrawBoardView.cursor(for: .bottomRight), "the handle's cursor wins over its reach")
         // Over the tool bar: the normal cursor.
         rig.model.setTool(.pen)
@@ -472,8 +519,8 @@ final class DrawInputTests: XCTestCase {
         rig.board.pointerOverride = windowPoint(rig.board, bar)
         NSCursor.operationNotAllowed.set()
         rig.model.setTool(.eraser)
-        spin(0.05)
-        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "over the tool bar (hit chain: \(hitChain(rig.panel, at: windowPoint(rig.board, bar))))")
+        spin(0.2)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "over the tool bar [\(rig.board.cursorLog.suffix(3).joined(separator: " | "))] (hit chain: \(hitChain(rig.panel, at: windowPoint(rig.board, bar))))")
     }
 
     // MARK: 4. The canvas menu's card
@@ -574,6 +621,7 @@ final class DrawInputTests: XCTestCase {
     func testTheMenusListRoomAllowsForTheSearchRow() {
         let before = DrawPageMetrics.menuListRoom(boardHeight: 700, chromeTop: 15.5, chromeBottom: 15.5)
         XCTAssertEqual(before, 700 - 15.5 - DrawPageMetrics.capsule - DrawPageMetrics.menuGap - DrawLibraryMetrics.searchRowHeight
-                       - DrawLibraryMetrics.searchRowGap - 15.5 - AtticGlassMenuShape.inset * 2, accuracy: 0.01)
+                       - DrawLibraryMetrics.searchRowGap - 15.5 - AtticGlassMenuShape.inset + DrawPageMetrics.bottomGrace, accuracy: 0.01,
+                       "the card: its search row over the top inset, 3 pt, the list, the bottom inset")
     }
 }
