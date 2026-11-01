@@ -47,8 +47,8 @@ final class AdaptiveFormatTests: XCTestCase {
         return design
     }
 
-    private func make() -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
-        let engine = NoteEditorEngine(noteID: UUID(), document: Self.sample, readOnly: false)
+    private func make(_ document: NoteDocument = AdaptiveFormatTests.sample) -> (NoteFormatControls, NoteEditorEngine, NoteEditorTextView) {
+        let engine = NoteEditorEngine(noteID: UUID(), document: document, readOnly: false)
         let (scrollView, textView) = engine.makeView()
         scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 500)
         scrollView.automaticallyAdjustsContentInsets = false
@@ -408,6 +408,85 @@ final class AdaptiveFormatTests: XCTestCase {
         XCTAssertEqual(link.url, "https://example.org")
         XCTAssertEqual(link.length, target.length, "the whole link")
         XCTAssertEqual(textView.selectedRange(), caret, "the caret comes back")
+    }
+
+    /// N3 in a table cell (batch 3): Link… on a cell's text opens the
+    /// address field in the bar over the cell, as on a line of text; the
+    /// bar's controls fold away and the field takes their room. Return
+    /// applies, a bad address keeps the field with the red ring, ⇧⌘K at a
+    /// caret in the link edits it, Remove Link is at the field's end, and
+    /// Esc gives back the bar and the cell's selection. No card.
+    func testN3ALinkInATableCellOpensTheFieldInTheBar() throws {
+        let table = NoteTable(texts: [["Pillar", "What happened"], ["Integrity", "Systems encrypted"]])
+        let (controls, engine, textView) = make(NoteDocument(blocks: [.text("Pricing page"), .text("Before"), .table(table), .text("After")]))
+        let attachment = try XCTUnwrap(engine.objects().compactMap { $0.0 as? NoteTableAttachment }.first)
+        spin(0.1)
+        let view = try XCTUnwrap(attachment.hostedView)
+        let cell = NoteTable.Position(row: 1, column: 1)
+        let word = NSRange(location: 0, length: 7)
+        view.activate(cell, caret: .range(word))
+        controls.refresh()
+        settle { controls.formatModel.barShown }
+        XCTAssertTrue(controls.formatModel.barShown, "the bar over the cell's text")
+        let host = try barHost(textView)
+        host.layoutSubtreeIfNeeded()
+        spin(0.1)
+        let model = controls.formatModel
+
+        controls.router.run(.mark(.link), from: .selectionBar)
+        XCTAssertTrue(controls.linkInBar, "the field opens in the bar")
+        XCTAssertTrue(model.linkFieldOpen)
+        XCTAssertEqual(controls.cardModel.card, .link(hasLink: false))
+        settle { controls.cardHasKeyboard }
+        XCTAssertTrue(controls.cardHasKeyboard, "the field takes the keyboard from the cell")
+        host.layoutSubtreeIfNeeded()
+        spin(0.1)
+        XCTAssertNotNil(element("notes-link-field", in: host))
+        XCTAssertNil(element("notes-link-card", in: textView.window!.contentView!), "no card")
+        for mark in NoteCommandCatalog.barMarks { XCTAssertNil(element(id(mark), in: host), "\(mark) folds away") }
+        let field = try XCTUnwrap(frame("notes-link-bar-field", in: host))
+        XCTAssertEqual(field.width, NoteLinkCell.fieldWidth(barWidth: model.barRestWidth), accuracy: 0.5, "the room the controls gave up")
+
+        controls.cardModel.linkText = "not a link"
+        controls.cardModel.submitLink()
+        XCTAssertNotNil(controls.cardModel.linkError, "a bad address keeps the field")
+        XCTAssertTrue(controls.linkInBar)
+        controls.cardModel.linkText = "example.com"
+        controls.cardModel.submitLink()
+        XCTAssertFalse(controls.linkInBar)
+        XCTAssertFalse(controls.isCardOpen)
+        XCTAssertEqual(attachment.table[cell].marks, [NoteMark(.link, offset: 0, length: 7, url: "https://example.com")])
+        XCTAssertEqual(view.editor.selectedRange(), word, "the cell's selection comes back")
+
+        // ⇧⌘K at a caret in the link edits it; Remove Link at the field's end removes it.
+        view.activate(cell, caret: .range(NSRange(location: 3, length: 0)))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertTrue(controls.linkInBar, "⇧⌘K in a cell's link opens the field in the bar")
+        XCTAssertEqual(controls.cardModel.linkText, "https://example.com")
+        host.layoutSubtreeIfNeeded()
+        spin(0.1)
+        press("notes-link-remove", in: host)
+        XCTAssertTrue(attachment.table[cell].marks.isEmpty)
+        XCTAssertFalse(controls.linkInBar)
+
+        // Esc gives back the bar and the cell's selection.
+        view.activate(cell, caret: .range(word))
+        controls.refresh()
+        settle { controls.formatModel.barShown }
+        controls.router.run(.mark(.link), from: .selectionBar)
+        XCTAssertTrue(controls.linkInBar)
+        XCTAssertEqual(controls.closeInnermostOnEscape(escape(textView.window!)), true)
+        XCTAssertFalse(controls.linkInBar)
+        XCTAssertFalse(controls.isCardOpen)
+        XCTAssertEqual(view.editor.selectedRange(), word)
+        settle { controls.formatModel.barShown && !controls.formatModel.linkFieldOpen }
+        XCTAssertTrue(controls.formatModel.barShown, "the bar is back")
+
+        // A click elsewhere closes it.
+        controls.router.run(.mark(.link), from: .selectionBar)
+        XCTAssertTrue(controls.linkInBar)
+        controls.cancelCard(refocus: false)
+        XCTAssertFalse(controls.linkInBar)
     }
 
     // MARK: N7

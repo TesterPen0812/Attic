@@ -672,6 +672,75 @@ final class TaskLifecycleSliceTests: XCTestCase {
         XCTAssertEqual(presenter.page.history.undoName, "Edited by Agent: can't undo past this")
     }
 
+    /// A proposal on a task's page, reviewed per change (N5) and accepted.
+    private func acceptedReviewOnATaskPage() async throws -> (TaskNotePresenter, UUID, [String]) {
+        let id = try seed(.boundary)
+        let presenter = try open(id)
+        let session = try XCTUnwrap(presenter.session)
+        await notes.recoverAtLaunchAndWait()
+        let tools = AgentTaskTools(store: tasks, noteStore: notes.store, library: library)
+        let before = try storedDocument(session.noteID).blocks.map(\.text)
+        let revision = try XCTUnwrap(notes.store.note(withID: session.noteID)?.revisionToken)
+        _ = try tools.call(name: "update_note", arguments: workspaceTokens(id, tools: tools).merging(["id": session.noteID.uuidString, "body": "External", "base_revision": revision]) { _, new in new })
+        let edit = try XCTUnwrap(notes.store.pendingEdits(noteID: session.noteID).first)
+        let reviewed = await notes.beginProposalReview(id: edit.id)
+        XCTAssertTrue(reviewed)
+        XCTAssertNotNil(notes.proposalReview?.changes, "reviewed per change")
+        return (presenter, session.noteID, before)
+    }
+
+    private func waitForStoredTexts(_ noteID: UUID, _ texts: [String]) async throws {
+        for _ in 0..<200 where (try? storedDocument(noteID).blocks.map(\.text)) != texts {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Batch 3: ⌘Z after an accepted review's write puts a task's note page
+    /// back, as Undo after Restore Version does on a regular note, and ⇧⌘Z
+    /// writes it again. The write resolves the proposal in the same commit.
+    func testUndoAfterAReviewedProposalsWriteRestoresATasksNotePage() async throws {
+        let (presenter, noteID, before) = try await acceptedReviewOnATaskPage()
+        let accepted = await notes.decideRemainingProposalChanges(accept: true)
+        XCTAssertTrue(accepted)
+        XCTAssertNil(notes.proposalReview)
+        let written = try storedDocument(noteID).blocks.map(\.text)
+        XCTAssertNotEqual(written, before)
+        XCTAssertEqual(written.last, "External")
+        XCTAssertEqual(notes.store.pendingEdits(noteID: noteID).count, 0, "the proposal is resolved with the write")
+        XCTAssertEqual(presenter.host.engine.document().blocks.map(\.text), written)
+
+        let engine = presenter.host.engine
+        XCTAssertTrue(engine.canUndoCommand, "⌘Z reaches the applied review")
+        XCTAssertTrue(engine.undoCommand())
+        try await waitForStoredTexts(noteID, before)
+        XCTAssertEqual(try storedDocument(noteID).blocks.map(\.text), before, "⌘Z puts the note back")
+        XCTAssertEqual(presenter.host.engine.document().blocks.map(\.text), before, "and the page shows it")
+        XCTAssertTrue(presenter.host.engine.redoCommand())
+        try await waitForStoredTexts(noteID, written)
+        XCTAssertEqual(try storedDocument(noteID).blocks.map(\.text), written, "⇧⌘Z writes it again")
+        XCTAssertEqual(presenter.host.engine.document().blocks.map(\.text), written)
+    }
+
+    /// Batch 3: a failed write on a task's page rolls back: nothing is
+    /// written, the proposal stays, and the review stays open with the reason.
+    func testAFailedReviewWriteOnATasksPageRollsBack() async throws {
+        let (presenter, noteID, before) = try await acceptedReviewOnATaskPage()
+        let save = coordinator.save
+        coordinator.save = { _ in throw WorkspaceFoundationError.unknown }
+        defer { coordinator.save = save }
+        let accepted = await notes.decideRemainingProposalChanges(accept: true)
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(try storedDocument(noteID).blocks.map(\.text), before, "nothing written")
+        XCTAssertEqual(presenter.host.engine.document().blocks.map(\.text), before)
+        XCTAssertEqual(notes.store.pendingEdits(noteID: noteID).count, 1, "the proposal stays")
+        XCTAssertNotNil(notes.proposalReview, "the review stays open")
+        XCTAssertNotNil(notes.proposalReviewNotice)
+        coordinator.save = save
+        let retried = await notes.decideRemainingProposalChanges(accept: true)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(try storedDocument(noteID).blocks.map(\.text).last, "External")
+    }
+
     func testP3F9MakeSubtaskUndoRefusesAChangedSecondaryReplica() async throws {
         let (id, presenter, _) = try makeSubtaskFixture()
         presenter.host.textView.setSelectedRange(NSRange(location: 3, length: 0))

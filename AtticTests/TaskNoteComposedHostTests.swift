@@ -1454,6 +1454,93 @@ final class TaskNoteComposedHostTests: XCTestCase {
         XCTAssertTrue(host.mapper.unobscuredRect().intersects(rect))
     }
 
+    /// N4 B on a task's page (batch 3): Find opens in the page's own top
+    /// row, as on a note. The row's controls (the riding title, and the
+    /// shell's pin through the top row's state) fold away; the field, the
+    /// count and ‹ › take the row, with no All notes pill (the page lives in
+    /// Tasks). Return and ⇧Return step, ⌘G steps, Esc and a click on empty
+    /// page space give the row back, and the note never moves.
+    func testFindOnATasksPageTakesItsOwnTopRow() async throws {
+        let id = try seed(.long), hosting = sectionHosting()
+        let topRow = PanelTopRowState()
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: panel)
+        hosting.rootView = AnyView(TaskNotePageContainer(taskID: id, tasks: tasks, controller: notes, noteStore: notes.store,
+            layout: layout, onClose: {})
+            .environment(\.panelTopRowState, topRow)
+            .environment(\.panelTopRowPage, .tasks))
+        hosting.view.layoutSubtreeIfNeeded()
+        var mounted: TaskNotePresenter?
+        for _ in 0..<50 where mounted == nil {
+            if let presenter = notes.taskNotePresenter, presenter.host.scrollView.window === hosting.view.window { mounted = presenter }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let presenter = try XCTUnwrap(mounted)
+        presenters.append(presenter)
+        let view = hosting.view
+        func spin(_ seconds: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+        func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        func element(_ identifier: String) -> AnyObject? {
+            view.layoutSubtreeIfNeeded()
+            return elements(view).first { ($0.accessibilityIdentifier?() ?? "") == identifier }
+        }
+        func key(_ code: UInt16, _ characters: String, _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                             characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+        }
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        spin(0.3)
+        let find = presenter.host.engine.find
+        let insets = presenter.host.scrollView.contentInsets.top
+        let scrolled = presenter.host.scrollView.contentView.bounds.origin
+
+        XCTAssertTrue(find.handleKey(key(3, "f", .command)))
+        spin(0.4)
+        XCTAssertTrue(find.isShown)
+        XCTAssertTrue(find.shownInTopRow, "Find takes the page's top row, not the two-row card")
+        XCTAssertEqual(find.clearance, 0)
+        XCTAssertEqual(presenter.host.scrollView.contentInsets.top, insets, "the note never moves")
+        XCTAssertEqual(presenter.host.scrollView.contentView.bounds.origin, scrolled)
+        XCTAssertTrue(topRow.isSearching(.tasks), "the row's controls fold away, the shell's pin with them")
+        XCTAssertNotNil(element("note-find-bar"), "the field in the row")
+        XCTAssertNotNil(element("note-find-previous"))
+        XCTAssertNotNil(element("note-find-next"))
+        XCTAssertNil(element("note-find-all-notes"), "no All notes pill on a task's page")
+
+        // Return and ⇧Return step; ⌘G steps too.
+        find.query = "Line 1"
+        spin(0.1)
+        XCTAssertGreaterThan(find.matches.count, 2)
+        let first = find.index
+        XCTAssertTrue(find.handleKey(key(36, "\r")))
+        XCTAssertNotEqual(find.index, first)
+        XCTAssertTrue(find.handleKey(key(36, "\r", .shift)))
+        XCTAssertEqual(find.index, first)
+        XCTAssertTrue(find.handleKey(key(5, "g", .command)))
+        XCTAssertNotEqual(find.index, first)
+
+        // Esc gives the row back.
+        XCTAssertTrue(find.handleKey(key(53, "\u{1b}")))
+        spin(0.4)
+        XCTAssertFalse(find.isShown)
+        XCTAssertFalse(topRow.isSearching(.tasks), "the row's controls are back")
+        XCTAssertNil(element("note-find-bar"))
+
+        // A click on empty page space gives it back too.
+        XCTAssertTrue(find.handleKey(key(3, "f", .command)))
+        spin(0.4)
+        XCTAssertTrue(find.shownInTopRow)
+        XCTAssertTrue(topRow.isSearching(.tasks))
+        topRow.endSearch(on: .tasks)
+        spin(0.4)
+        XCTAssertFalse(find.isShown)
+        XCTAssertFalse(topRow.isSearching(.tasks))
+    }
+
     /// Owner 2026-10-23 (draft B): "Show less" replaces the fold; the rows
     /// leaving still stay inside the block.
     func testTheBlockClipsRowsLeavingOnACollapse() throws {
