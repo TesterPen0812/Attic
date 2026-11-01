@@ -1,5 +1,6 @@
 import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -270,6 +271,81 @@ final class AdaptiveProposalTests: XCTestCase {
             "Forward the final quote.",
         ])
         XCTAssertTrue(store.versions(noteID: session.noteID).contains { $0.body.contains("Landlord agreed in writing.") })
+    }
+
+    /// The controls hold no state of their own, so any host (the top card,
+    /// or the bottom row's pill) shows the same review: one action at a time.
+    func testReviewActionsRunOneAtATimeThroughTheController() async throws {
+        let (controller, _) = try await reviewFixture()
+        let changes = try XCTUnwrap(controller.proposalReview?.changes?.changes)
+        var runs = 0
+        controller.performProposalReviewAction {
+            runs += 1
+            return await controller.decideProposalChange(changes[0].id, accept: true)
+        }
+        XCTAssertTrue(controller.isProposalReviewBusy)
+        XCTAssertFalse(controller.canUndoProposalDecision)
+        controller.performProposalReviewAction { runs += 1; return true }
+        while controller.isProposalReviewBusy { await Task.yield() }
+        XCTAssertEqual(runs, 1)
+        XCTAssertEqual(controller.proposalDecisions, [changes[0].id: true])
+        XCTAssertTrue(controller.canUndoProposalDecision)
+    }
+
+    // MARK: Idea C: the pill grows into the review bar
+
+    private func hasProposalStatus(_ controller: NotesPageController, _ session: NoteSession) -> Bool {
+        controller.statusItems(for: session).contains { if case .proposal = $0 { true } else { false } }
+    }
+
+    private func barWidth(_ controller: NotesPageController, proposalID: UUID) -> CGFloat {
+        let item = AtticStatusItem(id: "proposal", systemName: "sparkle", title: "Claude has changes")
+        let host = NSHostingView(rootView: NoteProposalReviewBar(controller: controller, item: item, proposalID: proposalID)
+            .environment(\.atticDesign, .default))
+        host.layoutSubtreeIfNeeded()
+        return host.fittingSize.width
+    }
+
+    func testThePillGrowsIntoTheBarAndEscapeFoldsItBack() async throws {
+        let (controller, session) = try await reviewFixture()
+        let proposalID = try XCTUnwrap(controller.proposalReview?.id)
+        XCTAssertTrue(controller.isReviewingProposalInPlace)
+        let bar = barWidth(controller, proposalID: proposalID)
+        // Esc: the review view's cancel key ends the review; the proposal waits.
+        let page = NSHostingView(rootView: NoteProposalInPlaceReview(controller: controller,
+            review: try XCTUnwrap(controller.proposalReview), changes: try XCTUnwrap(controller.proposalReview?.changes),
+            columnInset: 16, topInset: 40, bottomInset: 40, design: .default))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 480), styleMask: [.titled],
+                              backing: .buffered, defer: true)
+        window.contentView = page
+        page.layoutSubtreeIfNeeded()
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false, keyCode: 53))
+        if !page.performKeyEquivalent(with: escape) { window.sendEvent(escape) }
+        XCTAssertFalse(controller.isReviewingProposalInPlace, "Esc folds the bar back into the pill")
+        XCTAssertTrue(hasProposalStatus(controller, session), "the pill stays: the proposal waits")
+        XCTAssertEqual(store.pendingEdits(noteID: session.noteID).count, 1)
+        let pill = barWidth(controller, proposalID: proposalID)
+        XCTAssertGreaterThan(bar, pill + 60, "the bar adds •••, Reject and Accept at the pill's end")
+        // The pill opens the review again: pill → bar.
+        await XCTAssertTrueAsync(await controller.beginProposalReview(id: proposalID))
+        XCTAssertTrue(controller.isReviewingProposalInPlace)
+        XCTAssertEqual(barWidth(controller, proposalID: proposalID), bar, accuracy: 0.5)
+        window.contentView = nil
+    }
+
+    func testThePillGoesOnceTheLastChangeIsDecided() async throws {
+        let (controller, session) = try await reviewFixture()
+        let changes = try XCTUnwrap(controller.proposalReview?.changes?.changes)
+        XCTAssertTrue(hasProposalStatus(controller, session))
+        await XCTAssertTrueAsync(await controller.decideProposalChange(changes[0].id, accept: true))
+        XCTAssertTrue(hasProposalStatus(controller, session), "one change left: the bar stays")
+        XCTAssertEqual(controller.remainingProposalChanges, 1)
+        await XCTAssertTrueAsync(await controller.decideProposalChange(changes[1].id, accept: false))
+        XCTAssertFalse(controller.isReviewingProposalInPlace)
+        let applied = try XCTUnwrap(controller.active)
+        XCTAssertFalse(hasProposalStatus(controller, applied), "every change decided: the pill goes")
     }
 
     func testEndingTheReviewKeepsTheProposalForLater() async throws {

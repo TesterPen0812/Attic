@@ -302,7 +302,7 @@ struct NotesEditorPage: View {
     /// A per-change review shows inside the note (N5, Idea B); a deletion or
     /// a workspace operation keeps its whole-page comparison.
     private var reviewsInPlace: Bool {
-        !controller.isLibraryPresented && controller.proposalReview?.changes != nil
+        !controller.isLibraryPresented && controller.isReviewingProposalInPlace
     }
     private var hidesRowsForReview: Bool { controller.proposalReview != nil && !reviewsInPlace }
 
@@ -325,8 +325,9 @@ struct NotesEditorPage: View {
                 .transition(slide(from: Self.libraryEdge))
         } else if let review = controller.proposalReview, let changes = review.changes {
             NoteProposalInPlaceReview(controller: controller, review: review, changes: changes,
-                columnInset: columnInset, topInset: layout.headerBottom + 8, bottomInset: bottomControls + bottomInset,
+                columnInset: columnInset, topInset: topInset, bottomInset: bottomControls + bottomInset,
                 design: design)
+                .overlay { AtticFloatingControlsBand(height: bottomControls) }
                 .accessibilitySortPriority(3)
         } else if let review = controller.proposalReview {
             NoteProposalComparison(controller: controller, store: noteStore, review: review,
@@ -565,8 +566,13 @@ struct NotesEditorPage: View {
                     .padding(.trailing, AtticNoteMetrics.formatButtonGap)
                     .transition(.opacity)
             }
-            newNoteButton
+            // N5 Idea C: "+" folds away while the pill is the review bar.
+            if !reviewsInPlace {
+                newNoteButton
+                    .transition(.opacity)
+            }
         }
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: reviewsInPlace)
         .transition(.opacity)
     }
 
@@ -591,7 +597,9 @@ struct NotesEditorPage: View {
     /// 2026-10-11: on a title-only note it waits for the body), or while its
     /// format row is open.
     private var showsFormatButton: Bool {
-        showsEditor && controller.active?.isReadOnly == false && (chrome.hasBody || chrome.formatRow.isOpen)
+        // N5 Idea C: Aa keeps its place while a proposal is reviewed in the
+        // note (dimmed: the review's text can't be formatted).
+        (showsEditor || reviewsInPlace) && controller.active?.isReadOnly == false && (chrome.hasBody || chrome.formatRow.isOpen)
     }
 
     /// Aa (OD-14, p2-36 draft 1): the bottom row turns into the format row
@@ -603,6 +611,7 @@ struct NotesEditorPage: View {
             chrome.openFormatBar(keyboard: false)
         }
         .noteFormatRowSource()
+        .disabled(reviewsInPlace)
         .accessibilityIdentifier("notes-format-button")
     }
 
@@ -1081,7 +1090,13 @@ struct NoteStatusSlot: View {
         // A change of state springs in; typing never changes this key.
         let key = items.map(\.id).joined(separator: ",")
         ZStack {
-            if let primary = items.first {
+            if let primary = items.first, items.count == 1, primary.id == "proposal",
+               let proposalID = controller.proposalID(for: session, deletion: false) {
+                // N5 Idea C: the proposal's pill grows into the review bar.
+                NoteProposalReviewBar(controller: controller, item: primary, proposalID: proposalID, maxWidth: maxWidth)
+                    .id(key)
+                    .transition(AtticMotionScale.overlayTransition(reduceMotion: design.reduceMotion, from: .bottom))
+            } else if let primary = items.first {
                 AtticStatusPill(item: primary, more: items.count - 1,
                                 inlineAction: items.count == 1 || primary.id == "workspaceSave" ? inlineAction(for: primary) : nil,
                                 onCancel: items.count == 1 ? cancel(for: primary) : nil, maxWidth: maxWidth) {
@@ -1388,14 +1403,14 @@ struct NoteProposalComparison: View {
     }
 }
 
-/// N5, Idea B (Planning.md, Accepted "2026-11-01 · Adaptive picks"; draft
-/// `adaptive-drafts-notes.html`, panel N5 Idea B): an agent's proposal is
-/// reviewed inside the note. The card under the top row counts what's left,
-/// with ••• (Save as New Note, Discard Proposal), Reject and Accept for every
-/// change still open; each change shows in place, removed lines struck
-/// through on red above their added lines on green, with its own Reject and
-/// Accept. Decisions stay in memory (⌘Z, ⇧⌘Z) until the last one writes the
-/// note from the accepted changes only. Esc ends the review; the proposal waits.
+/// N5 (Planning.md, Accepted "2026-11-01 · Adaptive picks"; draft
+/// `adaptive-drafts-notes.html`, N5 Idea C): an agent's proposal is
+/// reviewed inside the note. Each change shows in place, removed lines
+/// struck through on red above their added lines on green, with its own
+/// Reject and Accept; the bottom row's status pill grows into the review
+/// bar (`NoteProposalReviewBar`). Decisions stay in memory (⌘Z, ⇧⌘Z) until
+/// the last one writes the note from the accepted changes only. Esc ends
+/// the review; the proposal waits.
 struct NoteProposalInPlaceReview: View {
     @ObservedObject var controller: NotesPageController
     let review: NoteProposalReview
@@ -1404,80 +1419,145 @@ struct NoteProposalInPlaceReview: View {
     let topInset: CGFloat
     let bottomInset: CGFloat
     let design: AtticDesignContext
-    @State private var busy = false
-    @State private var cardHeight: CGFloat = NoteProposalReviewMetrics.cardMinHeight
 
     var body: some View {
         let display = changes.display(decisions: controller.proposalDecisions)
-        ZStack(alignment: .top) {
+        ZStack(alignment: .bottom) {
             NoteProposalReviewDocument(display: display, noteID: review.noteID, design: design,
                                        imageProvider: controller, columnInset: columnInset,
-                                       topInset: topInset + cardHeight + NoteProposalReviewMetrics.cardGap,
-                                       bottomInset: bottomInset) { id, accept in
-                run { await controller.decideProposalChange(id, accept: accept) }
+                                       topInset: topInset, bottomInset: bottomInset) { [controller] id, accept in
+                controller.performProposalReviewAction { await controller.decideProposalChange(id, accept: accept) }
             }
             .accessibilityIdentifier("notes-proposal-document")
-            card
-                .padding(.horizontal, max(0, columnInset - NoteProposalReviewMetrics.cardOutset))
-                .padding(.top, topInset)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height - topInset }) { cardHeight = max($0, 0) }
+            if let message = controller.proposalReviewNotice {
+                // A refused or failed write says why, just above the bar.
+                Text(message)
+                    .font(.system(size: NoteProposalReviewMetrics.noticeFont))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .atticGlassControl(in: Squircle(cornerRadius: AtticRadius.row, exponent: AtticShape.surfaceExponent),
+                                       interactive: false)
+                    .padding(.horizontal, columnInset)
+                    .padding(.bottom, bottomInset + 6)
+                    .transition(AtticMotionScale.overlayTransition(reduceMotion: design.reduceMotion, from: .bottom))
+                    .accessibilityIdentifier("notes-proposal-failure")
+            }
             keys
         }
+        .animation(AtticMotionScale.overlayAnimation(reduceMotion: design.reduceMotion), value: controller.proposalReviewNotice)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-proposal-review")
     }
 
-    private var remaining: Int { controller.remainingProposalChanges }
+    /// Esc folds the bar back into the pill and ends the review (the
+    /// proposal waits); ⌘Z and ⇧⌘Z step through the decisions.
+    private var keys: some View {
+        ZStack {
+            Button("") { controller.endProposalReview() }
+                .keyboardShortcut(.cancelAction)
+            Button("") { _ = controller.undoProposalDecision() }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!controller.canUndoProposalDecision)
+            Button("") { _ = controller.redoProposalDecision() }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!controller.canRedoProposalDecision)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+}
 
-    private var card: some View {
-        let metrics = NoteProposalReviewMetrics.self
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: metrics.cardGapInside) {
-                Circle()
-                    .fill(Color(nsColor: .systemBlue))
-                    .frame(width: metrics.dot, height: metrics.dot)
-                    .accessibilityHidden(true)
-                Text(remaining == 1 ? "1 change to review." : "\(remaining) changes to review.")
-                    .font(.system(size: metrics.cardFont))
-                    .foregroundStyle(Color(nsColor: .labelColor))
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentTransition(.numericText())
-                    .accessibilityIdentifier("notes-proposal-count")
-                HStack(spacing: metrics.buttonGap) {
-                    actionsMenu
-                    pill("Reject", dark: false, id: "notes-proposal-reject-all") {
-                        run { await controller.decideRemainingProposalChanges(accept: false) }
-                    }
-                    pill("Accept", dark: true, id: "notes-proposal-accept-all") {
-                        run { await controller.decideRemainingProposalChanges(accept: true) }
-                    }
+/// N5 Idea C: the bottom row's "Claude has changes" pill, which grows in
+/// place into the review bar. Its ✦ stays put; the words become the count
+/// of undecided changes; •••, Reject and Accept come in at its end. A click
+/// on the words (or Esc) folds it back. Once every change is decided the
+/// proposal is resolved, so the status (and the pill) goes.
+struct NoteProposalReviewBar: View {
+    @ObservedObject var controller: NotesPageController
+    let item: AtticStatusItem
+    let proposalID: UUID
+    var maxWidth: CGFloat = AtticNoteMetrics.pillMaxWidth
+    @Environment(\.atticDesign) private var design
+
+    private var isOpen: Bool { controller.isReviewingProposalInPlace }
+    private var count: String {
+        let n = controller.remainingProposalChanges
+        return n == 1 ? String(localized: "1 change") : String(localized: "\(n) changes")
+    }
+
+    var body: some View {
+        let m = AtticNoteMetrics.self
+        let radius = AtticRadius.control(height: m.pillHeight)
+        HStack(spacing: 0) {
+            Button {
+                if isOpen { controller.endProposalReview() } else {
+                    Task { _ = await controller.beginProposalReview(id: proposalID) }
                 }
-                .disabled(busy)
+            } label: {
+                HStack(spacing: m.pillGap) {
+                    AtticIcon(systemName: item.systemName ?? "sparkle", size: m.pillIconSize, weight: .medium,
+                              ink: item.tone.iconInk)
+                    AtticText(verbatim: isOpen ? count : item.title, style: .toast, ink: .body, truncates: true)
+                        .contentTransition(.numericText())
+                        .accessibilityIdentifier("notes-proposal-count")
+                }
+                .frame(height: m.pillHeight)
+                .padding(.leading, m.pillPadding)
+                .padding(.trailing, isOpen ? 0 : m.pillPadding)
+                .contentShape(Rectangle())
             }
-            if let message = controller.proposalReviewNotice {
-                Text(message)
-                    .font(.system(size: metrics.noticeFont))
-                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, metrics.dot + metrics.cardGapInside)
-                    .accessibilityIdentifier("notes-proposal-failure")
+            .buttonStyle(AtticUndimmedButtonStyle())
+            .focusEffectDisabled()
+            .accessibilityLabel(isOpen ? count : item.title)
+            .accessibilityAddTraits(isOpen ? .isSelected : [])
+            .accessibilityIdentifier("notes-proposal-pill")
+            if isOpen {
+                NoteProposalReviewActions(controller: controller)
+                    .padding(.leading, NoteProposalReviewMetrics.actionsLead)
+                    .padding(.trailing, NoteProposalReviewMetrics.actionsTrail)
+                    .transition(.opacity)
             }
         }
-        .padding(.vertical, metrics.cardPadding)
-        .padding(.leading, metrics.cardLeading)
-        .padding(.trailing, metrics.cardPadding)
-        .atticGlassControl(in: Squircle(cornerRadius: NoteProposalReviewMetrics.cardRadius, exponent: AtticShape.surfaceExponent),
-                           interactive: false)
-        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: remaining)
+        .frame(maxWidth: isOpen ? nil : min(m.pillMaxWidth, maxWidth))
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: m.pillHeight)
+        .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: isOpen)
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: controller.remainingProposalChanges)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("notes-proposal-card")
+        .accessibilityIdentifier("notes-proposal-bar")
+    }
+}
+
+/// The review bar's actions: ••• (Save as New Note, Discard Proposal, any
+/// other proposals), then Reject and Accept for every change still open.
+/// All state is the controller's.
+struct NoteProposalReviewActions: View {
+    @ObservedObject var controller: NotesPageController
+
+    var body: some View {
+        HStack(spacing: NoteProposalReviewMetrics.buttonGap) {
+            actionsMenu
+            pill("Reject", dark: false, id: "notes-proposal-reject-all") {
+                controller.performProposalReviewAction { await controller.decideRemainingProposalChanges(accept: false) }
+            }
+            pill("Accept", dark: true, id: "notes-proposal-accept-all") {
+                controller.performProposalReviewAction { await controller.decideRemainingProposalChanges(accept: true) }
+            }
+        }
+        .disabled(controller.isProposalReviewBusy)
+        .fixedSize()
     }
 
     private var actionsMenu: some View {
         Menu {
-            Button("Save as New Note") { run { await controller.saveReviewedProposalAsNew() } }
-                .accessibilityIdentifier("notes-proposal-save-new")
+            Button("Save as New Note") {
+                controller.performProposalReviewAction { await controller.saveReviewedProposalAsNew() }
+            }
+            .accessibilityIdentifier("notes-proposal-save-new")
             Button("Discard Proposal") { _ = controller.discardReviewedProposal() }
                 .accessibilityIdentifier("notes-proposal-discard")
             if controller.reviewProposals.count > 1 {
@@ -1518,44 +1598,14 @@ struct NoteProposalInPlaceReview: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
     }
-
-    /// Esc ends the review (the proposal waits); ⌘Z and ⇧⌘Z step through
-    /// the decisions.
-    private var keys: some View {
-        ZStack {
-            Button("") { controller.endProposalReview() }
-                .keyboardShortcut(.cancelAction)
-            Button("") { _ = controller.undoProposalDecision() }
-                .keyboardShortcut("z", modifiers: .command)
-                .disabled(!controller.canUndoProposalDecision || busy)
-            Button("") { _ = controller.redoProposalDecision() }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!controller.canRedoProposalDecision || busy)
-        }
-        .frame(width: 0, height: 0)
-        .opacity(0)
-        .accessibilityHidden(true)
-    }
-
-    private func run(_ action: @escaping @MainActor () async -> Bool) {
-        busy = true
-        Task { _ = await action(); busy = false }
-    }
 }
 
-/// Draft N5 Idea B's values, design px halved.
+/// Draft N5 Idea C's values, design px halved.
 enum NoteProposalReviewMetrics {
-    static let cardGap: CGFloat = 11          // .pcard → .blks, 22 px
-    static let cardRadius: CGFloat = 17       // Accepted "Shapes": the review bar 34 px
-    static let cardPadding: CGFloat = 7       // 14 px
-    static let cardLeading: CGFloat = 9       // 18 px
-    static let cardOutset: CGFloat = 9        // the card's text lines up with the note's
-    static let cardGapInside: CGFloat = 7     // 14 px
-    static let cardMinHeight: CGFloat = 34    // 20 pt buttons + 2 × 7
-    static let cardFont: CGFloat = 10.5       // 21 px
+    static let actionsLead: CGFloat = 6       // .gact margin-left 12 px
+    static let actionsTrail: CGFloat = 3.5    // 7 px
     static let noticeFont: CGFloat = 9.5
-    static let dot: CGFloat = 6               // 12 px
-    static let pillHeight: CGFloat = 20       // 40 px
+    static let pillHeight: CGFloat = 20       // .pillbtn 40 px
     static let pillFont: CGFloat = 9.5        // 19 px
     static let pillPadding: CGFloat = 8       // 16 px
     static let softPillPadding: CGFloat = 7   // 14 px
