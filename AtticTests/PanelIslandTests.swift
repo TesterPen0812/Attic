@@ -634,6 +634,153 @@ final class PanelIslandTests: XCTestCase {
         }
     }
 
+    // MARK: Active glass (owner, 1 Nov: the island drew inactive glass while Attic was focused)
+
+    /// The island windows draw active exactly while their parent is key,
+    /// whatever their own key state (they are never key).
+    /// Key-window lane only: the invisible host freezes every window's
+    /// `isKeyWindow` override to false.
+    func testTheIslandWindowsDrawActiveExactlyWhileTheirParentIsKey() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
+        final class ReportsKey: NSWindow { var key = true; override var isKeyWindow: Bool { key } }
+        let parent = ReportsKey(contentRect: TestPresentationPolicy.offscreenFrame(CGRect(x: 0, y: 0, width: 80, height: 80)),
+                                styleMask: [.borderless], backing: .buffered, defer: true)
+        parent.isReleasedWhenClosed = false
+        let island = PanelIslandWindow(contentRect: TestPresentationPolicy.offscreenFrame(CGRect(x: 0, y: 0, width: 40, height: 40)),
+                                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        island.isReleasedWhenClosed = false
+        func active() -> Bool? { (island.value(forKey: "_hasActiveAppearance") as? NSNumber)?.boolValue }
+        XCTAssertEqual(active(), false, "alone: inactive")
+        parent.addChildWindow(island, ordered: .above)
+        defer { parent.removeChildWindow(island) }
+        XCTAssertEqual(active(), true, "the parent is key: active")
+        parent.key = false
+        XCTAssertEqual(active(), false, "the parent resigned: inactive")
+        XCTAssertFalse(island.isKeyWindow)
+        XCTAssertFalse(island.canBecomeMain)
+    }
+
+    /// With the panel key, the island's and its label's glass draw as active
+    /// as the panel's own; when the panel resigns key or Attic deactivates,
+    /// inactive with it; and the island never takes the keyboard.
+    func testTheIslandsGlassIsActiveExactlyWhileThePanelIsKey() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
+        try withController { controller, _, panel in
+            let windows = controller.islandWindowsForTesting
+            windows.model.point(at: PanelIslandLayout.pages[0])
+            let other = makeOtherKeyWindow()
+            defer { other.orderOut(nil) }
+            @MainActor func assertGlass(active: Bool, _ note: String, file: StaticString = #filePath, line: UInt = #line) throws {
+                spin(0.4)
+                let island = glassStates(in: try XCTUnwrap(windows.island.contentView))
+                let label = glassStates(in: try XCTUnwrap(windows.label.contentView))
+                let own = glassStates(in: try XCTUnwrap(panel.contentView))
+                XCTAssertFalse(island.isEmpty, "\(note): the island is glass", file: file, line: line)
+                XCTAssertFalse(label.isEmpty, "\(note): the label is glass", file: file, line: line)
+                XCTAssertTrue(own.contains(active), "\(note): the panel's own glass is \(active ? "active" : "inactive")",
+                              file: file, line: line)
+                XCTAssertEqual(Set(island), [active], "\(note): the island's glass", file: file, line: line)
+                XCTAssertEqual(Set(label), [active], "\(note): the label's glass", file: file, line: line)
+                XCTAssertFalse(windows.island.isKeyWindow, "\(note): the island is never key", file: file, line: line)
+                XCTAssertFalse(windows.label.isKeyWindow, "\(note): the label is never key", file: file, line: line)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKey()
+            spin(until: { panel.isKeyWindow })
+            let responder = panel.firstResponder
+            try assertGlass(active: true, "the panel is key")
+            XCTAssertTrue(NSApp.keyWindow === panel, "the keyboard stays with the panel")
+            XCTAssertTrue(panel.firstResponder === responder, "and its focus does not move")
+
+            other.makeKey()
+            spin(until: { !panel.isKeyWindow })
+            try assertGlass(active: false, "another window is key")
+
+            panel.makeKey()
+            spin(until: { panel.isKeyWindow })
+            try assertGlass(active: true, "the panel is key again")
+
+            var hidden = false
+            _ = controller.requestHide { hidden = $0 == .hidden }
+            spin(until: { hidden })
+            let screen = try XCTUnwrap(controller.currentScreen)
+            XCTAssertTrue(controller.show(on: screen, corner: .topRight, makeKey: true))
+            spin(until: { panel.isKeyWindow && !((try? self.content(panel).isIslandStandInShown) ?? true) })
+            windows.model.point(at: PanelIslandLayout.pages[0])
+            try assertGlass(active: true, "shown again, key")
+            XCTAssertTrue(NSApp.keyWindow === panel, "the keyboard stays with the panel")
+
+            NSApp.deactivate()
+            spin(until: { !panel.isKeyWindow })
+            try assertGlass(active: false, "Attic deactivated")
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKey()
+            spin(until: { panel.isKeyWindow })
+            try assertGlass(active: true, "Attic active again")
+        }
+    }
+
+    /// The stand-in (in the panel's own window) and the island window draw
+    /// the same glass state at every swap, key and not key.
+    func testTheStandInAndTheIslandDrawTheSameGlassStateAtEverySwap() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1", "needs a key window")
+        try withController { controller, _, panel in
+            let windows = controller.islandWindowsForTesting
+            let container = try content(panel)
+            let other = makeOtherKeyWindow()
+            defer { other.orderOut(nil) }
+            var seen: [String] = []
+            controller.islandSwapProbe = { after, toMotion in
+                MainActor.assumeIsolated {
+                    guard let live = windows.island.contentView else { return }
+                    let island = Set(self.glassStates(in: live)).map(String.init).sorted()
+                    let standIn = Set(self.glassStates(in: windows.standIn)).map(String.init).sorted()
+                    seen.append("\(toMotion ? "in" : "out")\(after ? "+" : "-") key=\(panel.isKeyWindow) island=\(island) standIn=\(standIn)")
+                }
+            }
+            defer { controller.islandSwapProbe = nil }
+            let screen = try XCTUnwrap(controller.currentScreen)
+            for key in [true, false] {
+                NSApp.activate(ignoringOtherApps: true)
+                if key { panel.makeKey() } else { other.makeKey() }
+                spin(until: { panel.isKeyWindow == key })
+                spin(0.3)
+                var hidden = false
+                _ = controller.requestHide { hidden = $0 == .hidden }
+                spin(until: { hidden })
+                XCTAssertTrue(controller.show(on: screen, corner: .topRight, makeKey: key))
+                spin(until: { !container.isIslandStandInShown && panel.isKeyWindow == key })
+            }
+            XCTAssertEqual(seen.count, 8, "\(seen)")
+            for (index, entry) in seen.enumerated() {
+                let key = index < 4
+                XCTAssertTrue(entry.hasSuffix("island=[\"\(key)\"] standIn=[\"\(key)\"]"), "swap \(index): \(entry)")
+            }
+        }
+    }
+
+    /// A window that can take key from the panel without activating Attic's panel.
+    private func makeOtherKeyWindow() -> NSWindow {
+        final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
+        let window = KeyPanel(contentRect: CGRect(x: 40, y: 40, width: 80, height: 80),
+                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFrontRegardless()
+        return window
+    }
+
+    /// Each live glass in `view`, active or not. AppKit's glass shows its
+    /// vibrant layer (a `vibrantColorMatrix` layer) at full opacity only in
+    /// a window that draws active, and at 0 otherwise (measured, macOS 26.4).
+    private func glassStates(in view: NSView) -> [Bool] {
+        func walk(_ layer: CALayer) -> [Bool] {
+            let vibrant = (layer.filters ?? []).contains { ($0 as? NSObject)?.value(forKey: "name") as? String == "vibrantColorMatrix" }
+            return (vibrant ? [layer.opacity > 0.5] : []) + (layer.sublayers ?? []).flatMap(walk)
+        }
+        guard let layer = view.layer else { return [] }
+        return walk(layer)
+    }
+
     // MARK: Helpers (one shape)
 
     private func content(_ panel: AtticPanel) throws -> AtticPanelContentContainer {
