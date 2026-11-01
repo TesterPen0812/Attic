@@ -339,7 +339,9 @@ final class Draw3PageTests: XCTestCase {
         model.undo()
         XCTAssertEqual(model.object(left.id)?.frame, left.frame)
         XCTAssertEqual(model.object(right.id)?.frame, right.frame)
-        XCTAssertFalse(model.canUndo, "The drag was one Undo step")
+        model.undo()
+        XCTAssertNil(model.object(left.id), "The drag was one Undo step: the next one takes back the placing")
+        XCTAssertFalse(model.canUndo)
     }
 
     func testHandlesTakePressesBeyondTheirSixPointsAndShowAResizeCursor() {
@@ -657,7 +659,7 @@ final class Draw3BoardTests: XCTestCase {
         return board.rasterInstalls > count
     }
 
-    func testALargeImageNeverDecodesOrRastersOnTheMainThread() async throws {
+    func testALargeImageNeverDecodesOrRastersOnTheMainThread() throws {
         let data = Draw3Images.encoded(width: 6000, height: 4000, type: .jpeg)
         let file = ownedTemporaryDirectory(prefix: "Draw3Large")
         try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
@@ -674,7 +676,10 @@ final class Draw3BoardTests: XCTestCase {
         // The drop handler only starts the import.
         XCTAssertTrue(board.acceptDrop(from: pasteboard, at: CGPoint(x: 160, y: 200)))
         XCTAssertEqual(DrawImageDecodeProbe.mainThreadDecodes, 0)
-        await model.pendingImport?.value
+        // A synchronous test that spins the run loop: the raster arrives on
+        // the main queue, which an async test's main-actor job would hold.
+        let deadline = Date().addingTimeInterval(20)
+        while model.objects.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
         XCTAssertEqual(model.objects.count, 1)
         let installs = board.rasterInstalls
         XCTAssertTrue(waitForInstall(after: installs))

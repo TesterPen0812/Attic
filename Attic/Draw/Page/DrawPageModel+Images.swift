@@ -68,6 +68,13 @@ extension DrawPageModel {
             || pasteboard.canReadObject(forClasses: [NSURL.self], options: imageFileOptions)
     }
 
+    /// The image type the writer put first: the pasteboard also offers
+    /// conversions (a JPEG reads as TIFF too), and the store keeps the original.
+    private static func originalImageType(on pasteboard: NSPasteboard) -> NSPasteboard.PasteboardType? {
+        let wanted = Set(imagePasteboardTypes)
+        return pasteboard.types?.first(where: wanted.contains) ?? pasteboard.availableType(from: imagePasteboardTypes)
+    }
+
     /// The pasteboard holds an image (and no Draw objects).
     var pasteboardHasImage: Bool { Self.holdsImages(pasteboard) }
 
@@ -79,7 +86,7 @@ extension DrawPageModel {
         var sources: [DrawImageSource] = []
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: Self.imageFileOptions) as? [URL], !urls.isEmpty {
             sources = urls.map(DrawImageSource.file)
-        } else if let type = pasteboard.availableType(from: Self.imagePasteboardTypes), let data = pasteboard.data(forType: type) {
+        } else if let type = Self.originalImageType(on: pasteboard), let data = pasteboard.data(forType: type) {
             sources = [.data(data)]
         }
         guard !sources.isEmpty else { return nil }
@@ -138,15 +145,17 @@ final class DrawImageActions: DrawImageSeam {
         return NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 
-    private var canvasName: String {
-        DrawLibraryMenuModel.displayName(model?.canvasName ?? "")
+    /// The canvas's name as the store has it now (a rename from the menu
+    /// reaches the page a moment later).
+    private func name(of id: UUID?) -> String {
+        guard let model else { return DrawLibraryMenuModel.displayName("") }
+        let stored = id.flatMap { try? model.store.open($0).canvas.name }
+        // A file name can't hold a slash or a colon.
+        return DrawLibraryMenuModel.displayName(stored ?? model.canvasName)
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
     }
 
-    private func name(of id: UUID) -> String {
-        guard let model else { return canvasName }
-        if id == model.canvasID { return canvasName }
-        return DrawLibraryMenuModel.displayName((try? model.store.open(id).canvas.name) ?? "")
-    }
+    private var canvasName: String { name(of: model?.canvasID) }
 
     private func objects(of id: UUID) -> [DrawObject] {
         guard let model else { return [] }
