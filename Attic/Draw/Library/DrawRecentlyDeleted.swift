@@ -9,9 +9,8 @@ struct DrawDeletedItem: Equatable, Sendable {
 }
 
 /// Recently Deleted's Draw rows, read from the store's `library(deleted:)`
-/// and `deletedImages(in:)`, restored through `restoreCanvas` and
-/// `restoreObjects`. The store has no permanent delete yet, so these rows
-/// offer Restore only.
+/// and `deletedImages()`, restored through `restoreCanvas` and
+/// `restoreObjects`, and removed for good through `purge`.
 @MainActor
 enum DrawRecentlyDeleted {
     static func entries(store: (any DrawStoreProtocol)?, now: Date, calendar: Calendar) -> [RecentlyDeletedEntry] {
@@ -28,22 +27,20 @@ enum DrawRecentlyDeleted {
             )
         }
         // D11: images deleted from a live canvas (a deleted canvas's images
-        // come back with it).
-        let images = ((try? store.library()) ?? []).flatMap { canvas -> [RecentlyDeletedEntry] in
-            let owner = RecentlyDeletedPresentation.displayTitle(canvas.name, kind: .canvas)
-            return ((try? store.deletedImages(in: canvas.id)) ?? []).compactMap { image in
-                guard let deletedAt = image.deletedAt else { return nil }
-                let detail = [String(localized: "From “\(owner)”"),
-                              RecentlyDeletedPresentation.deletedPhrase(deletedAt, now: now, calendar: calendar)]
-                return RecentlyDeletedEntry(
-                    kind: .attachment,
-                    title: String(localized: "Image"),
-                    detail: detail.joined(separator: " · "),
-                    deletedAt: deletedAt,
-                    ownerTitle: owner,
-                    source: .draw(DrawDeletedItem(canvasID: canvas.id, objectID: image.id))
-                )
-            }
+        // come back with it), from the store's metadata only.
+        let images = ((try? store.deletedImages()) ?? []).compactMap { image -> RecentlyDeletedEntry? in
+            guard let deletedAt = image.object.deletedAt else { return nil }
+            let owner = RecentlyDeletedPresentation.displayTitle(image.canvas.name, kind: .canvas)
+            let detail = [String(localized: "From “\(owner)”"),
+                          RecentlyDeletedPresentation.deletedPhrase(deletedAt, now: now, calendar: calendar)]
+            return RecentlyDeletedEntry(
+                kind: .attachment,
+                title: String(localized: "Image"),
+                detail: detail.joined(separator: " · "),
+                deletedAt: deletedAt,
+                ownerTitle: owner,
+                source: .draw(DrawDeletedItem(canvasID: image.canvas.id, objectID: image.object.id))
+            )
         }
         return canvases + images
     }
@@ -52,7 +49,18 @@ enum DrawRecentlyDeleted {
     /// in Recently Deleted for 30 days goes for good.
     @discardableResult
     static func purgeExpired(store: (any DrawStoreProtocol)?, now: Date, calendar: Calendar) -> DrawPurgeReport {
-        DrawPurgeReport()
+        store?.purge(deletedBefore: RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar)) ?? DrawPurgeReport()
+    }
+
+    /// Delete Permanently and Empty: exactly these rows, at the deletion
+    /// times the confirmation counted.
+    @discardableResult
+    static func purge(_ items: [(item: DrawDeletedItem, deletedAt: Date)], store: (any DrawStoreProtocol)?) -> DrawPurgeReport {
+        guard let store, !items.isEmpty else { return DrawPurgeReport(removed: 0, kept: items.count) }
+        return store.purge(items.map { entry in
+            entry.item.objectID.map { .image(canvas: entry.item.canvasID, object: $0, deletedAt: entry.deletedAt) }
+                ?? .canvas(entry.item.canvasID, deletedAt: entry.deletedAt)
+        })
     }
 
     /// Puts them back, one store command per canvas. Returns how many came

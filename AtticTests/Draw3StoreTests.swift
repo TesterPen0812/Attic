@@ -52,7 +52,9 @@ final class Draw3StoreTests: XCTestCase {
         let clock = Clock(), container = try container()
         let store = DrawPersistentStore(container: container, now: clock.now)
         let a = store.create(name: "A")
-        XCTAssertTrue(store.perform(.put([stroke()]), on: a.id).isSaved)
+        let first = stroke(), second = stroke()
+        XCTAssertTrue(store.perform(.put([first]), on: a.id).isSaved)
+        XCTAssertTrue(store.perform(.put([second]), on: a.id).isSaved)
         clock.advance()
         let b = store.create(name: "B")
         XCTAssertTrue(store.perform(.put([DrawObject(content: .text("b"))]), on: b.id).isSaved)
@@ -69,12 +71,14 @@ final class Draw3StoreTests: XCTestCase {
         XCTAssertEqual(after.first { $0.id == a.id }?.thumbnail, bytes)
         XCTAssertFalse(store.hasUnsettledEdits)
 
-        // Undo still undoes the stroke, and only the stroke.
+        // Undo still undoes the strokes, and only the strokes.
+        XCTAssertTrue(store.undo(on: a.id).isSaved)
+        XCTAssertEqual(try store.open(a.id).objects, [first])
+        XCTAssertEqual(try DrawPersistentStore(container: container).library().first { $0.id == a.id }?.thumbnail,
+                       bytes, "Undoing an earlier edit keeps the newer thumbnail")
         XCTAssertTrue(store.undo(on: a.id).isSaved)
         XCTAssertTrue(try store.open(a.id).objects.isEmpty)
         XCTAssertFalse(store.canUndo(on: a.id), "The thumbnail was never an Undo step")
-        XCTAssertEqual(try DrawPersistentStore(container: container).library(deleted: false).first { $0.id == a.id }?.thumbnail,
-                       bytes, "Undoing an earlier edit keeps the newer thumbnail")
     }
 
     func testAFailedThumbnailWriteNeverBlocksTheNextEdit() throws {

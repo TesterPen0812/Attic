@@ -142,10 +142,99 @@ final class DrawSwiftDataRepository: DrawRepository {
         }
     }
 
-    func discardAttempt(for id: UUID) {}
-    func deletedImageHeaders() throws -> [DrawDeletedImage] { [] }
-    func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
-        DrawRepositoryPurge(kept: canvases.count + images.count)
+    func discardAttempt(for id: UUID) { attempts[id] = nil }
+
+    /// Deleted object rows only, decoded from their headers (never their
+    /// payloads), with their canvases' metadata (never their thumbnails).
+    func deletedImageHeaders() throws -> [DrawDeletedImage] {
+        let context = context()
+        let rows = try context.fetch(FetchDescriptor<DrawObjectRecord>(predicate: #Predicate { $0.deletedAt != nil }))
+        metrics.objectRowsRead += rows.count
+        var canvases: [UUID: DrawCanvas?] = [:]
+        var result: [DrawDeletedImage] = []
+        for replicas in Dictionary(grouping: rows, by: \.id).values {
+            guard let row = objectWinner(replicas), row.formatVersion == 1,
+                  let object = try? DrawCodec.decode(DrawObject.self, from: row.header),
+                  object.isImage, object.deletedAt != nil else { continue }
+            let canvasID = row.canvasID
+            if canvases[canvasID] == nil {
+                let boards = try context.fetch(FetchDescriptor<DrawCanvasRecord>(predicate: #Predicate { $0.id == canvasID }))
+                metrics.metadataRowsRead += boards.count
+                canvases[canvasID] = .some(boards.isEmpty ? nil : try canvasWinner(boards).value())
+            }
+            guard let canvas = canvases[canvasID] ?? nil, canvas.deletedAt == nil else { continue }
+            result.append(DrawDeletedImage(canvas: canvas, object: object))
+        }
+        return result
+    }
+
+    /// Every physical replica of each target goes, in one save; a target
+    /// whose replicas disagree (or whose deletion moved) stays.
+    func purge(canvases targets: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
+        let everything = DrawRepositoryPurge(kept: targets.count + images.count)
+        let identity = ObjectIdentifier(container)
+        guard Self.writing.insert(identity).inserted else { return everything }
+        defer { Self.writing.remove(identity) }
+        let context = context()
+        var result = DrawRepositoryPurge()
+        var doomed: [PersistentIdentifier: any PersistentModel] = [:]
+        func doom(_ rows: [some PersistentModel]) { for row in rows { doomed[row.persistentModelID] = row } }
+        do {
+            for (id, deletedAt) in targets {
+                let boards = try context.fetch(FetchDescriptor<DrawCanvasRecord>(predicate: #Predicate { $0.id == id }))
+                let objects = try context.fetch(FetchDescriptor<DrawObjectRecord>(predicate: #Predicate { $0.canvasID == id }))
+                let objectIDs = Array(Set(objects.map(\.id)))
+                let replicas = objectIDs.isEmpty ? [] : try context.fetch(FetchDescriptor<DrawObjectRecord>(predicate:
+                    #Predicate { objectIDs.contains($0.id) }))
+                metrics.metadataRowsRead += boards.count
+                metrics.objectRowsRead += replicas.count
+                guard !boards.isEmpty, try Self.agree(boards), boards.allSatisfy({ $0.deletedAt == deletedAt }),
+                      Dictionary(grouping: replicas, by: \.id).values.allSatisfy({ Self.agree($0, parent: id) }) else {
+                    result.kept += 1
+                    continue
+                }
+                let payloads = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate: #Predicate { $0.canvasID == id }))
+                let objectPayloads = objectIDs.isEmpty ? [] : try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
+                    #Predicate { $0.role == "object" && objectIDs.contains($0.id) }))
+                doom(boards); doom(replicas); doom(payloads); doom(objectPayloads)
+                result.removedCanvases.insert(id)
+            }
+            for (objectID, target) in images {
+                let rows = try context.fetch(FetchDescriptor<DrawObjectRecord>(predicate: #Predicate { $0.id == objectID }))
+                metrics.objectRowsRead += rows.count
+                guard let first = rows.first, Self.agree(rows, parent: target.canvas), first.deletedAt == target.deletedAt,
+                      (try? DrawCodec.decode(DrawObject.self, from: first.header))?.isImage == true else {
+                    result.kept += 1
+                    continue
+                }
+                let payloads = try context.fetch(FetchDescriptor<DrawPayloadRecord>(predicate:
+                    #Predicate { $0.id == objectID && $0.role == "object" }))
+                doom(rows); doom(payloads)
+                result.removedImages.insert(objectID)
+            }
+            guard !doomed.isEmpty else { return result }
+            for row in doomed.values { context.delete(row) }
+            metrics.saveAttempts += 1
+            try save(context)
+            return result
+        } catch {
+            context.rollback()
+            return everything
+        }
+    }
+
+    private static func agree(_ boards: [DrawCanvasRecord]) throws -> Bool {
+        let values = try boards.map { try DrawCodec.encode([DrawCodec.string($0.value()), $0.thumbnailID?.uuidString ?? ""]) }
+        return Set(values).count <= 1
+    }
+
+    private static func agree(_ rows: [DrawObjectRecord], parent: UUID) -> Bool {
+        guard rows.allSatisfy({ $0.canvasID == parent }) else { return false }
+        let values = rows.map { row in
+            [row.header, String(row.formatVersion), String(row.zIndex), row.deletedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
+             row.textIndex, row.payloadDigest].joined(separator: "\u{1F}")
+        }
+        return Set(values).count <= 1
     }
 
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome {

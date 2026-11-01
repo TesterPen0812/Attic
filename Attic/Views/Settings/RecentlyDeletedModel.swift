@@ -63,9 +63,14 @@ struct RecentlyDeletedEntry: Identifiable, Equatable {
         }
     }
 
-    /// Draw's rows have Restore only: the Draw store has no permanent delete.
-    var canDeletePermanently: Bool {
-        if case .draw = source { false } else { true }
+    /// Every row, Draw's included, can be removed for good.
+    var canDeletePermanently: Bool { true }
+
+    /// What removing a Draw row for good asks of the Draw store.
+    var drawPurgeTarget: DrawPurgeTarget? {
+        guard case let .draw(item) = source else { return nil }
+        return item.objectID.map { .image(canvas: item.canvasID, object: $0, deletedAt: deletedAt) }
+            ?? .canvas(item.canvasID, deletedAt: deletedAt)
     }
 }
 
@@ -230,8 +235,10 @@ final class RecentlyDeletedModel: ObservableObject {
     struct EmptyRequest: Equatable {
         enum Scope: Equatable { case all, selected }
         let selection: RecentlyDeletedSelection
+        /// Draw's rows, removed through the Draw store.
+        var drawn: [DrawPurgeTarget] = []
         var scope: Scope = .all
-        var count: Int { selection.count }
+        var count: Int { selection.count + drawn.count }
         var title: String {
             scope == .all ? String(localized: "Empty Recently Deleted?") : RecentlyDeletedPresentation.deleteConfirmationTitle(count: count)
         }
@@ -493,7 +500,8 @@ final class RecentlyDeletedModel: ObservableObject {
             items: targets.compactMap { if case let .item(item) = $0.source { item } else { nil } },
             attachments: targets.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
         )
-        return selection.isEmpty ? nil : EmptyRequest(selection: selection, scope: scope)
+        let drawn = targets.compactMap(\.drawPurgeTarget)
+        return selection.isEmpty && drawn.isEmpty ? nil : EmptyRequest(selection: selection, drawn: drawn, scope: scope)
     }
 
     func cancelEmpty() {
@@ -506,7 +514,8 @@ final class RecentlyDeletedModel: ObservableObject {
     func confirmEmpty() {
         guard let request = emptyRequest else { return }
         emptyRequest = nil
-        guard let library else { return }
+        if !request.drawn.isEmpty { _ = draw()?.purge(request.drawn) }
+        guard let library, !request.selection.isEmpty else { return finishEmpty(request) }
         library.emptyRecentlyDeleted(request.selection)
         finishEmpty(request)
         // Deleted tasks with notes finish through the coordinated purge
@@ -525,7 +534,7 @@ final class RecentlyDeletedModel: ObservableObject {
             switch entry.source {
             case let .item(item): request.selection.contains(item: item.ref, deletedAt: item.deletedAt)
             case let .attachment(attachment): request.selection.contains(attachment: attachment.attachmentID, removedAt: attachment.deletedAt)
-            case .draw: false
+            case .draw: entry.drawPurgeTarget.map(request.drawn.contains) ?? false
             }
         }.count
         message = RecentlyDeletedPresentation.keptMessage(kept: kept).map { Message(text: $0, tone: .warning) }

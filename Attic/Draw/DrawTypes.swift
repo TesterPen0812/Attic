@@ -57,6 +57,15 @@ struct DrawObject: Identifiable, Codable, Equatable, Sendable {
     var text: String { if case .text(let text) = content { text } else { "" } }
     var isImage: Bool { if case .image = content { true } else { false } }
 
+    /// The object without an image's original bytes (metadata reads).
+    var header: Self {
+        guard case .image(var image) = content else { return self }
+        var result = self
+        image.original = Data()
+        result.content = .image(image)
+        return result
+    }
+
     func translated(by offset: DrawPoint, id: UUID = UUID()) -> Self {
         var result = self
         result.id = id

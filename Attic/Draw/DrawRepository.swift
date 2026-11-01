@@ -72,8 +72,28 @@ final class DrawMemoryRepository: DrawRepository {
     }
     func reconcile(_ change: DrawChange) -> DrawWriteOutcome { .retry("Retry the edit.") }
     func discardAttempt(for id: UUID) {}
-    func deletedImageHeaders() -> [DrawDeletedImage] { [] }
-    func purge(canvases: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
-        DrawRepositoryPurge(kept: canvases.count + images.count)
+    func deletedImageHeaders() -> [DrawDeletedImage] {
+        canvases.values.filter { $0.deletedAt == nil }.flatMap { canvas -> [DrawDeletedImage] in
+            var metadata = canvas
+            metadata.thumbnail = nil
+            return objects[canvas.id, default: [:]].values.filter { $0.isImage && $0.deletedAt != nil }
+                .map { DrawDeletedImage(canvas: metadata, object: $0.header) }
+        }
+    }
+    func purge(canvases targets: [UUID: Date], images: [UUID: DrawImageTarget]) -> DrawRepositoryPurge {
+        var result = DrawRepositoryPurge()
+        for (id, deletedAt) in targets {
+            guard let canvas = canvases[id], canvas.deletedAt == deletedAt else { result.kept += 1; continue }
+            canvases[id] = nil
+            objects[id] = nil
+            result.removedCanvases.insert(id)
+        }
+        for (objectID, target) in images {
+            guard canvases[target.canvas] != nil, let object = objects[target.canvas]?[objectID], object.isImage,
+                  object.deletedAt == target.deletedAt else { result.kept += 1; continue }
+            objects[target.canvas]?[objectID] = nil
+            result.removedImages.insert(objectID)
+        }
+        return result
     }
 }
