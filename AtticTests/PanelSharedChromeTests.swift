@@ -58,6 +58,15 @@ final class PanelSharedChromeTests: XCTestCase {
     /// their look on every frame: they are drawn once, above the pages, so
     /// the switch is one view whose open state lives on.
     func testSharedControlsStayStillThroughAPageSwitch() throws {
+        // Terra 9 (batch 3): the switch's motion is stated, never the
+        // system's (CI runners turn Reduce Motion on, which made the
+        // switch instant and this test vacuous); solid glass is stated too.
+        AtticMotionPreference.systemReduceMotionOverride = false
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
         let suite = "PanelSharedChrome.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -129,6 +138,10 @@ final class PanelSharedChromeTests: XCTestCase {
                 boxes.append(box(around: CGPoint(x: bar.maxX - 8, y: bar.midY - 7), side: 4))
                 names.append("tag bar card")
             }
+            // The pages' own content under the top row: it must travel
+            // (frames between the two pages), or the switch was instant.
+            let content = CGRect(x: 20, y: 64, width: size.width - 40, height: 120)
+            boxes.append(content)
             let before = try levels(host, boxes)
             var samples: [(ms: Int, levels: [CGFloat])] = []
             do {
@@ -158,6 +171,8 @@ final class PanelSharedChromeTests: XCTestCase {
             // Staying still means no frame leaves the span between the level
             // before and the level after: no replayed opening, no jump.
             let after = try levels(host, boxes)
+            let travelled = samples.dropFirst().map { abs($0.levels[names.count] - after[names.count]) }.max() ?? 0
+            XCTAssertGreaterThan(travelled, 0.01, "\(from) → \(to): the pages travel through frames of their own (the switch is animated)")
             for (index, name) in names.enumerated() {
                 // Known limit: Notes is never kept built, so it comes in by
                 // the shell's insertion transition, which its top row cannot
