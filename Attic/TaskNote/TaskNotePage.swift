@@ -1069,7 +1069,13 @@ struct TaskNoteHostRepresentable: NSViewRepresentable {
         if presenter.isOrdinary, let session = presenter.session, let store = presenter.page.controller?.store {
             let accessories = NoteTitleAccessories(engine: engine, textView: textView, scrollView: host.scrollView,
                 chrome: chrome, design: design, headerBottom: topInset,
-                isUntouched: { false }, tagEditor: { AnyView(NoteTagEditor(session: session, store: store, onClose: {})) })
+                isUntouched: { false }, tagEditor: { [weak chrome] in
+                    // N6: the tag line's editor closes itself in place.
+                    AnyView(NoteTagEditor(session: session, store: store) { returnKeyboard in
+                        chrome?.tagEditor = nil
+                        if returnKeyboard { chrome?.returnKeyboardToText() }
+                    })
+                })
             accessories.tagCounts = { store.tagCounts }
             coordinator.titleAccessories = accessories
         }

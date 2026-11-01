@@ -432,7 +432,8 @@ struct NoteTagEditor: View {
             return step(-1, in: shown, from: lit)
         case .leftArrow where query.isEmpty:
             return step(-1, in: shown, from: lit)
-        case .delete where query.isEmpty:
+        case .delete where query.isEmpty, KeyEquivalent("\u{7F}") where query.isEmpty:
+            // Backspace (the key sends U+007F; `.delete` is U+0008).
             guard let last = session.engine.tags.last else { return .ignored }
             remove(last)
             return .handled

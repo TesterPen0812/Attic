@@ -403,7 +403,7 @@ final class AdaptiveTagsTests: XCTestCase {
             let engine = harness.session.engine
             try press(harness, "Tag launch-october")
             XCTAssertEqual((window.firstResponder as? NSTextView)?.isFieldEditor, true, "the tag field has the keyboard")
-            func press(_ characters: String, _ code: UInt16) {
+            @MainActor func key(_ characters: String, _ code: UInt16) {
                 for type in [NSEvent.EventType.keyDown, .keyUp] {
                     let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
                                                  timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
@@ -418,16 +418,16 @@ final class AdaptiveTagsTests: XCTestCase {
                 }
                 spin(0.2)
             }
-            press("\u{F701}", 125)
+            key("\u{F701}", 125)
             XCTAssertEqual(try lit(harness), ["Add #launch, 2"], "↓ lights the first match")
-            press("\r", 36)
+            key("\r", 36)
             XCTAssertEqual(Set(engine.tags), ["launch-october", "launch"], "Return added it")
             try setQuery(harness, "kyoto")
-            press("\r", 36)
+            key("\r", 36)
             XCTAssertEqual(Set(engine.tags), ["launch-october", "launch", "kyoto"])
-            press("\u{7F}", 51)
+            key("\u{7F}", 51)
             XCTAssertEqual(engine.tags, ["kyoto", "launch"], "Backspace in an empty field took the last chip off")
-            press("\u{1B}", 53)
+            key("\u{1B}", 53)
             spin(0.3)
             XCTAssertFalse(try isEditorOpen(harness), "Esc closed it")
             XCTAssertTrue(window.firstResponder === engine.textView, "the keyboard is back in the text")
