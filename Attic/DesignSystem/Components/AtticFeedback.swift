@@ -59,9 +59,10 @@ struct AtticUndoToast: View {
     }
 
     /// The toast's outline (and the notice's, raised like it): a wide
-    /// control, rounded by half its height.
+    /// control on curve 1.4, rounded by half its height (Shapes, Accepted
+    /// 2026-10-30; the design's toast is superellipse(1.4)).
     static var shape: AtticControlOutline {
-        AtticControlOutline(cornerRadius: AtticRadius.control(height: AtticControlSize.toastHeight), exponent: nil)
+        AtticControlOutline(cornerRadius: AtticRadius.control(height: AtticControlSize.toastHeight), exponent: AtticShape.controlExponent)
     }
 
     /// The Undo (or Retry) chip inside it (or inside the status pill),
@@ -374,8 +375,8 @@ struct AtticCarryPreview: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// The lifted card's outline.
-    static var cardShape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.tile, exponent: nil) }
+    /// The lifted card's outline: a row's squircle (Shapes: rows 24 px).
+    static var cardShape: AtticControlOutline { AtticReorderLiftModifier.shape }
 
     @ViewBuilder
     private var card: some View {
@@ -678,7 +679,9 @@ struct AtticReorderLiftModifier: ViewModifier {
 
     /// The lifted card's outline: the drag tile a task leaves as (in the
     /// panel, the image the drag carries and the card springing home).
-    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.highlight, exponent: nil) }
+    /// A row's squircle (Shapes, Accepted 2026-10-30: rows 24 px), the
+    /// task row's own highlight (`TasksRowDesign.radius`).
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.row, exponent: AtticShape.surfaceExponent) }
 
     /// The lifted card's fill: the panel's base colour, fully opaque.
     static func fill(design: AtticDesignContext) -> AtticRGBA {

@@ -138,8 +138,10 @@ struct AtticContentCard<Content: View>: View {
             .atticControlProbe("Content card", id: probeID, expectedSize: nil, radius: AtticRadius.contentCard, expectedRadius: 10)
     }
 
-    /// The card's outline.
-    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.contentCard, exponent: nil) }
+    /// The card's outline: a squircle (Shapes, Accepted 2026-10-30). Its
+    /// radius stays 10: it sits 8 pt inside the window's corner, so the
+    /// concentric rule, not the card radius, sets it.
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.contentCard, exponent: AtticShape.surfaceExponent) }
 }
 
 /// The page's 16 pt bold title, aligned with the traffic lights.
@@ -172,7 +174,7 @@ struct AtticSectionHeading: View {
 }
 
 /// A group card: recessed, flat, borderless (a 1 pt border only under
-/// Increase Contrast), radius 17. Rows are separated by dividers that run
+/// Increase Contrast), the card radius (24), squircle. Rows are separated by dividers that run
 /// from the text column to the right edge.
 struct AtticGroupCard<Content: View>: View {
     @ViewBuilder let content: Content
@@ -189,14 +191,16 @@ struct AtticGroupCard<Content: View>: View {
             .overlay {
                 if let border = tokens.groupCardBorder { shape.strokeBorder(border.color, lineWidth: AtticHairline.contrastBorder) }
             }
-            .atticControlProbe("Group card", id: probeID, expectedSize: nil, radius: AtticRadius.groupCard, expectedRadius: 17)
+            .atticControlProbe("Group card", id: probeID, expectedSize: nil, radius: AtticRadius.groupCard, expectedRadius: AtticRadius.card)
     }
 }
 
 /// A group card's outline (and the Appearance preview's, a card of the
 /// same family).
 enum AtticGroupCardShape {
-    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.groupCard, exponent: nil) }
+    /// A card: the card radius, squircle (Shapes, Accepted 2026-10-30, and
+    /// "Rounder cards", 2026-10-31: 48 px for every card).
+    static var shape: AtticControlOutline { AtticControlOutline(cornerRadius: AtticRadius.groupCard, exponent: AtticShape.surfaceExponent) }
 }
 
 /// The divider inside a group card.

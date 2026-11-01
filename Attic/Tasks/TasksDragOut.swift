@@ -178,8 +178,8 @@ enum TasksDragOut {
         context == .outsideApplication ? .copy : []
     }
 
-    /// The label's outline.
-    static var labelShape: AtticControlOutline { AtticControlOutline(cornerRadius: 9, exponent: nil) }
+    /// The label's outline: the lifted card's row squircle.
+    static var labelShape: AtticControlOutline { AtticReorderLiftModifier.shape }
 
     /// A quiet label of what is being dragged.
     static func image(title: String) -> NSImage {

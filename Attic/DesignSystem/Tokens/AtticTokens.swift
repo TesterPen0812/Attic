@@ -82,8 +82,6 @@ enum AtticRadius {
     static let small: CGFloat = 6
     /// The format sheet: its 12 pt buttons plus its 7 pt padding (38 px).
     static let formatSheet: CGFloat = concentric(inner: 12, padding: 7)
-    /// The review bar: its 10 pt buttons plus its 7 pt padding (34 px).
-    static let reviewBar: CGFloat = concentric(inner: 10, padding: 7)
 
     /// Nested shapes stay concentric: the inner radius is the outer radius
     /// minus the padding between them, so the outer one is the inner one
@@ -110,7 +108,8 @@ enum AtticRadius {
     }
 
     static let popover: CGFloat = menu
-    static let groupCard: CGFloat = 17
+    /// Settings' group cards are cards (Shapes; owner, 2026-10-31).
+    static let groupCard: CGFloat = card
     static let contentCard: CGFloat = 10
     static let tile: CGFloat = 10
     static let image: CGFloat = 8

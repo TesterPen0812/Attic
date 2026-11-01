@@ -95,9 +95,10 @@ struct AtticChoiceRow: View {
         .accessibilityValue(check == .mixed ? String(localized: "some selected tasks") : "")
     }
 
-    /// The lit row's fill.
+    /// The lit row's fill: a surface squircle, as the menus' and the
+    /// dropdowns' rows (`AtticDropdownRow.highlightShape`).
     static func highlightShape(radius: CGFloat) -> AtticControlOutline {
-        AtticControlOutline(cornerRadius: radius, exponent: nil)
+        AtticControlOutline(cornerRadius: radius, exponent: AtticShape.surfaceExponent)
     }
 }
 

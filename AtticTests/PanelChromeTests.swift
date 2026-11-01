@@ -60,7 +60,6 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(TasksDesignMetrics.tileRadius, 6)
         // Concentric nesting.
         XCTAssertEqual(AtticRadius.formatSheet, 19, "24 + 14 px")
-        XCTAssertEqual(AtticRadius.reviewBar, 17, "20 + 14 px")
         XCTAssertEqual(AtticRadius.concentric(outer: AtticRadius.menu, padding: AtticRadius.menuPadding), AtticRadius.menuRow)
         // A day card's padding grows with its radius (10 px at 36 px).
         XCTAssertEqual(CalendarDesign.dayPadding, 6.5, "48 px radius: 13 px padding")
