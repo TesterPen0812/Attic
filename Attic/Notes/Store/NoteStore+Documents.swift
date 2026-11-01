@@ -1504,7 +1504,8 @@ extension NoteStore {
     /// Replacement, preservation of the live text, attribution and resolution commit together.
     func replaceWithProposal(_ id: UUID, noteID: UUID, expectedRevision: String,
                              expectedSavedContent: Data?, expectedProposal: NoteProposalSignature,
-                             preserving current: NoteDocument) -> Result<String, NoteDocumentStoreError> {
+                             preserving current: NoteDocument, merged: NoteDocument? = nil,
+                             preservationID: UUID = UUID()) -> Result<String, NoteDocumentStoreError> {
         guard expectedProposal.workspaceOperation == nil else { return .failure(.saveFailed("Review and apply the whole workspace operation.")) }
         do {
             let preflight = try noteMutationPreflight(noteID, format: .editable)
@@ -1520,7 +1521,7 @@ extension NoteStore {
             let timestamp = currentDate
             try stageDisplacedReplicas(preflight.replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             // This can be unsaved typing; preserve it even when it differs from the store.
-            modelContext.insert(NoteVersion(noteID: noteID, createdAt: timestamp, reason: .replacedByDraft,
+            modelContext.insert(NoteVersion(id: preservationID, noteID: noteID, createdAt: timestamp, reason: .replacedByDraft,
                 content: try NoteContentCodec.encode(current), contentFormat: current.format,
                 title: current.title, body: NoteTextExport.plainBody(current), attachmentIDs: current.attachmentIDs,
                 sourceRevisionID: note.revisionID,
@@ -1535,9 +1536,13 @@ extension NoteStore {
                 guard delete(note) else { throw NoteDocumentStoreError.saveFailed(lastErrorMessage ?? "Deletion failed.") }
                 return .success(expectedRevision)
             }
-            guard let bytes = edit.proposedContent, case let .editable(document) = NoteContentCodec.decode(bytes) else {
+            guard let bytes = edit.proposedContent, case let .editable(proposal) = NoteContentCodec.decode(bytes) else {
                 throw NoteDocumentStoreError.readOnly
             }
+            // A per-change review (N5) writes the note built from the
+            // accepted changes only, in this same transaction.
+            let document = merged ?? proposal
+            guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
             let token = try stage(document, on: preflight.replicas, timestamp: timestamp,
                                   revision: preflight.replicas.map(\.revision).max() ?? 0)
             attributeExternalEdit(preflight.replicas, name: edit.agentName, at: timestamp)

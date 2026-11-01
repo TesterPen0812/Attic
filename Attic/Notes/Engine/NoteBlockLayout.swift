@@ -54,6 +54,9 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
     /// typed first line's box covers its own.
     var lastLineLeading: CGFloat = 0
     var hasHistoryDifference = false
+    /// A proposal review's band behind the paragraph (N5): green added,
+    /// red removed, with a bar at its leading edge.
+    var reviewMark: NoteReviewMark?
     /// The paragraph's space before its first line (inside the fragment).
     var spacingBefore: CGFloat = 0
     /// How far the paragraph's line boxes sit above the draft's (see
@@ -310,14 +313,40 @@ final class NoteBlockLayoutFragment: NSTextLayoutFragment {
         [monoBlockRect, calloutBoxRect, lastLineBoxRect, quoteBar, lastLineQuoteBar].compactMap { $0?.maxY }.max() ?? 0
     }
 
+    /// The review band: the column's width plus 7 pt into the leading
+    /// margin and 3 pt into the trailing one, so the text never moves.
+    private var reviewBandRect: CGRect? {
+        guard reviewMark != nil else { return nil }
+        let width = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
+        return CGRect(x: -layoutFragmentFrame.minX - Self.reviewBandLead, y: spacingBefore,
+                      width: width + Self.reviewBandLead + 3, height: max(3, layoutFragmentFrame.height - spacingBefore))
+    }
+    static let reviewBandLead: CGFloat = 7
+    static let reviewControlsRoom: CGFloat = 48
+
     override var renderingSurfaceBounds: CGRect {
         var bounds = super.renderingSurfaceBounds.union(decorationRect)
+        if let band = reviewBandRect { bounds = bounds.union(band) }
         if lastLine != nil { bounds = bounds.union(lastLineDecorationRect) }
         if chipFill != nil { bounds = bounds.insetBy(dx: -T.inlineCodeChipPadding, dy: -1) }
         return bounds
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
+        if let mark = reviewMark, let band = reviewBandRect?.offsetBy(dx: point.x, dy: point.y) {
+            // Draft N5 B: rgba(52,168,83,0.1) / rgba(214,52,58,0.07) on a 6 pt
+            // squircle, a 1.5 pt bar; the system colours keep dark mode.
+            let tint: NSColor = mark == .added ? .systemGreen : .systemRed
+            let path = CGPath(roundedRect: band, cornerWidth: 6, cornerHeight: 6, transform: nil)
+            context.saveGState()
+            context.addPath(path)
+            context.clip()
+            context.setFillColor(tint.withAlphaComponent(mark == .added ? 0.12 : 0.09).cgColor)
+            context.fill(band)
+            context.setFillColor(tint.cgColor)
+            context.fill(CGRect(x: band.minX, y: band.minY, width: 1.5, height: band.height))
+            context.restoreGState()
+        }
         if hasHistoryDifference {
             context.saveGState()
             context.setFillColor(ink.withAlphaComponent(0.65).cgColor)
@@ -550,6 +579,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
               let style = textStorage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle else { return nil }
         let structured = !style.textLists.isEmpty || textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading"
         let chips = containsInlineCode(paragraphAt: range.location)
+        let reviewRoom = reviewControlOffsets.contains(range.location)
         let lastLine = hostsEmptyLastLine(range) ? emptyLastLineAttributes() : nil
         // An empty paragraph's line: TextKit 2 puts a paragraph's line
         // spacing under an empty line, inside its box, where AppKit's caret
@@ -565,7 +595,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         let end = NSMaxRange(range) - (string.character(at: NSMaxRange(range) - 1) == 0x0A ? 1 : 0)
         let trailingBreak = style.lineSpacing > 0 && end > range.location && string.character(at: end - 1) == 0x2028
             ? end - 1 - range.location : nil
-        guard structured || chips || lastLine != nil || blank || trailingBreak != nil else { return nil }
+        guard structured || chips || lastLine != nil || blank || trailingBreak != nil || reviewRoom else { return nil }
         let text = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
         if chips {
             // An inline code chip moves to the next line whole rather than
@@ -586,6 +616,11 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
             plain.textLists = []
             if textStorage.attribute(.noteBlockStyle, at: range.location, effectiveRange: nil) as? String == "heading" {
                 plain.tailIndent = -24
+            }
+            if reviewRoom {
+                // Room for the change's Accept and Reject (2 × 17 pt, 3 pt
+                // apart, 4 pt in, draft N5 B's 96 px padding halved).
+                plain.tailIndent = min(plain.tailIndent, 0) - NoteBlockLayoutFragment.reviewControlsRoom
             }
             if blank {
                 plain.paragraphSpacingBefore += plain.lineSpacing
@@ -617,12 +652,13 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
                            in textElement: NSTextElement) -> NSTextLayoutFragment {
         let offset = contentStorage.offset(from: contentStorage.documentRange.location, to: location)
         let changed = historyDifferenceOffsets.contains(offset)
+        let review = reviewMarkOffsets[offset]
         let inStorage = offset > 0 && offset < textStorage.length
         let native = inStorage ? decoration(forParagraphAt: offset) : nil
         let chips = inStorage && containsInlineCode(paragraphAt: offset)
         let lastLine = offset >= 0 && offset < textStorage.length ? emptyLastLineDecoration(afterParagraphAt: offset) : nil
         guard offset >= 0, offset < textStorage.length,
-              let decoration = native ?? (changed ? .history : (chips || lastLine != nil ? .plain : nil)) else {
+              let decoration = native ?? (changed ? .history : (chips || lastLine != nil || review != nil ? .plain : nil)) else {
             return NSTextLayoutFragment(textElement: textElement, range: nil)
         }
         let fragment = NoteBlockLayoutFragment(textElement: textElement, range: nil)
@@ -646,6 +682,7 @@ extension NoteEditorEngine: NSTextLayoutManagerDelegate, @preconcurrency NSTextC
         let paragraph = textStorage.attribute(.paragraphStyle, at: offset, effectiveRange: nil) as? NSParagraphStyle
         fragment.decoration = decoration
         fragment.hasHistoryDifference = changed
+        fragment.reviewMark = review
         fragment.spacingBefore = paragraph?.paragraphSpacingBefore ?? 0
         let kind = paragraphKind(at: offset)
         fragment.boxShift = NoteTextStyle.boxShift(kind)

@@ -116,6 +116,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     let isReadOnly: Bool
     /// Ephemeral comparison marks. Never serialized or used by live edits.
     var historyDifferenceOffsets = Set<Int>()
+    /// A proposal review's marks (N5), by paragraph start, and the
+    /// paragraphs that keep room at their end for Accept and Reject. Like
+    /// `historyDifferenceOffsets`: display only, set before the view is made.
+    private(set) var reviewMarkOffsets: [Int: NoteReviewMark] = [:]
+    private(set) var reviewControlOffsets = Set<Int>()
     /// A committed whole-note restore is a durable boundary after this
     /// engine's local text steps. The controller owns its inverse save.
     var canUndoVersionRestore: (() -> Bool)?
@@ -5179,5 +5184,59 @@ extension NoteEditorEngine {
             history.recordParagraphStyleChange(location: textStorage.length, before: before, after: after)
         }
         onTextChange?()
+    }
+}
+
+// MARK: - Proposal review marks (N5)
+
+/// How a proposal review marks a paragraph of its read-only document.
+enum NoteReviewMark: Equatable, Sendable {
+    case added, removed
+}
+
+extension NoteEditorEngine {
+    /// Each block's paragraph in the text, in block order. The codec writes
+    /// one paragraph per block, joined by "\n" (a block's own line breaks
+    /// are U+2028), so the i-th paragraph is the i-th block.
+    func paragraphRanges(forBlocks indices: [Int]) -> [NSRange] {
+        let all = blockParagraphRanges()
+        return indices.compactMap { all.indices.contains($0) ? all[$0] : nil }
+    }
+
+    private func blockParagraphRanges() -> [NSRange] {
+        let text = textStorage.string as NSString
+        var ranges: [NSRange] = []
+        var start = 0
+        while start <= text.length {
+            let newline = text.range(of: "\n", options: .literal,
+                                     range: NSRange(location: start, length: text.length - start))
+            let end = newline.location == NSNotFound ? text.length : newline.location
+            ranges.append(NSRange(location: start, length: end - start))
+            guard newline.location != NSNotFound else { break }
+            start = end + 1
+        }
+        return ranges
+    }
+
+    /// Marks the review document's paragraphs (one mark per block, nil for
+    /// unchanged) and keeps room at the end of `controls`' paragraphs. A
+    /// document whose paragraphs don't match its blocks gets no marks.
+    func applyReviewMarks(_ marks: [NoteProposalMark?], controls: Set<Int> = []) {
+        let ranges = blockParagraphRanges()
+        guard ranges.count == marks.count else {
+            reviewMarkOffsets = [:]
+            reviewControlOffsets = []
+            return
+        }
+        var offsets: [Int: NoteReviewMark] = [:]
+        for (index, mark) in marks.enumerated() {
+            switch mark {
+            case .added?: offsets[ranges[index].location] = .added
+            case .removed?: offsets[ranges[index].location] = .removed
+            case nil: break
+            }
+        }
+        reviewMarkOffsets = offsets
+        reviewControlOffsets = Set(controls.compactMap { ranges.indices.contains($0) ? ranges[$0].location : nil })
     }
 }
