@@ -312,6 +312,9 @@ final class DrawPageModel: ObservableObject {
 
     func closeStrip() { strip = nil }
 
+    /// Undo folds away while a strip is open (nobody undoes mid-pick).
+    var isUndoShown: Bool { strip == nil }
+
     // MARK: Selection
 
     func select(_ ids: [UUID]) {

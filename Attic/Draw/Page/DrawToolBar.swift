@@ -209,7 +209,7 @@ struct DrawToolBar: View {
                 }
                 .transition(.opacity)
             }
-            if model.strip == nil {
+            if model.isUndoShown {
                 DrawCell(help: String(localized: "Undo"), identifier: "draw-undo", action: model.undo) {
                     icon("arrow.uturn.backward")
                 }
