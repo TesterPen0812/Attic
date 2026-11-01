@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Observation
 import SwiftUI
 
 /// One line of Recently Deleted: an item a delete hid (a task with its
@@ -42,6 +43,8 @@ struct RecentlyDeletedEntry: Identifiable, Equatable {
     enum Source: Equatable {
         case item(DeletedItemSummary)
         case attachment(DeletedAttachmentSummary)
+        /// A Draw canvas or canvas image (`DrawRecentlyDeleted`).
+        case draw(DrawDeletedItem)
     }
 
     let kind: Kind
@@ -56,7 +59,13 @@ struct RecentlyDeletedEntry: Identifiable, Equatable {
         switch source {
         case let .item(item): "\(item.ref.kind.rawValue)-\(item.ref.id.uuidString)"
         case let .attachment(attachment): "attachment-\(attachment.attachmentID.uuidString)"
+        case let .draw(item): item.objectID.map { "draw-image-\($0.uuidString)" } ?? "draw-canvas-\(item.canvasID.uuidString)"
         }
+    }
+
+    /// Draw's rows have Restore only: the Draw store has no permanent delete.
+    var canDeletePermanently: Bool {
+        if case .draw = source { false } else { true }
     }
 }
 
@@ -252,11 +261,15 @@ final class RecentlyDeletedModel: ObservableObject {
     private let now: () -> Date
     private let calendar: Calendar
     private var observation: AnyCancellable?
+    /// The Draw store, while Draw is enabled (nil otherwise).
+    private let draw: @MainActor () -> (any DrawStoreProtocol)?
 
-    init(library: AtticLibrary?, now: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent) {
+    init(library: AtticLibrary?, now: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent,
+         draw: @escaping @MainActor () -> (any DrawStoreProtocol)? = { DrawLibraryHub.activeStore }) {
         self.library = library
         self.now = now
         self.calendar = calendar
+        self.draw = draw
     }
 
     var sections: [RecentlyDeletedPresentation.Section] {
@@ -350,6 +363,10 @@ final class RecentlyDeletedModel: ObservableObject {
     /// Starts following the stores (the page appeared).
     func start() {
         reload()
+        if !drawObserving {
+            drawObserving = true
+            observeDraw()
+        }
         guard observation == nil, let library else { return }
         var publishers: [AnyPublisher<Void, Never>] = [
             library.tasks.objectWillChange.map { _ in () }.eraseToAnyPublisher()
@@ -365,11 +382,27 @@ final class RecentlyDeletedModel: ObservableObject {
     /// the page is not shown.
     func stop() {
         observation = nil
+        drawObserving = false
+    }
+
+    private var drawObserving = false
+
+    /// Follows the Draw store's saves while the page is shown.
+    private func observeDraw() {
+        guard drawObserving, let store = draw() else { return }
+        withObservationTracking { _ = store.revision } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.drawObserving else { return }
+                self.reload()
+                self.observeDraw()
+            }
+        }
     }
 
     func reload() {
+        let drawn = DrawRecentlyDeleted.entries(store: draw(), now: now(), calendar: calendar)
         guard let library else {
-            entries = []
+            entries = drawn
             return
         }
         entries = RecentlyDeletedPresentation.entries(
@@ -378,14 +411,23 @@ final class RecentlyDeletedModel: ObservableObject {
             ownerTitle: { library.title(of: $0) },
             now: now(),
             calendar: calendar
-        )
+        ) + drawn
     }
 
     func restore(_ entry: RecentlyDeletedEntry) {
+        if case let .draw(item) = entry.source {
+            let report = DrawRecentlyDeleted.restore([item], store: draw())
+            message = report.failure.map {
+                Message(text: String(localized: "“\(entry.title)” couldn’t be restored: \($0)"), tone: .error)
+            }
+            reload()
+            return
+        }
         guard let library else { return }
         let restored: Bool = switch entry.source {
         case let .item(item): library.restore(item.ref)
         case let .attachment(attachment): library.restoreAttachment(attachment)
+        case .draw: false
         }
         message = restored
             ? nil
@@ -400,18 +442,28 @@ final class RecentlyDeletedModel: ObservableObject {
     /// back as one step, so one ⌘Z sends them all back. Whatever could not
     /// come back stays listed (and selected), with the reason.
     func restore(_ targets: [RecentlyDeletedEntry]) {
-        guard let library, !targets.isEmpty else { return }
+        guard !targets.isEmpty else { return }
         guard targets.count > 1 else { return restore(targets[0]) }
-        let report = library.restoreRecentlyDeleted(
-            items: targets.compactMap { if case let .item(item) = $0.source { item.ref } else { nil } },
-            attachments: targets.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
-        )
-        message = report.failures.first.map { failure in
-            Message(text: RecentlyDeletedPresentation.restoreFailure(count: report.failures.count, reason: failure.message), tone: .error)
+        // Draw's rows go back through the Draw store; the rest as one step.
+        let drawn = targets.compactMap { if case let .draw(item) = $0.source { item } else { nil } }
+        let others = targets.filter { if case .draw = $0.source { false } else { true } }
+        let drawReport = drawn.isEmpty ? (restored: 0, failure: nil) : DrawRecentlyDeleted.restore(drawn, store: draw())
+        var restored = drawReport.restored
+        var failures = drawReport.failure.map { [$0] } ?? []
+        if let library, !others.isEmpty {
+            let report = library.restoreRecentlyDeleted(
+                items: others.compactMap { if case let .item(item) = $0.source { item.ref } else { nil } },
+                attachments: others.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
+            )
+            restored += report.restored
+            failures += report.failures.map(\.message)
+        }
+        message = failures.first.map { reason in
+            Message(text: RecentlyDeletedPresentation.restoreFailure(count: failures.count, reason: reason), tone: .error)
         }
         reload()
-        if report.restored > 0 {
-            AccessibilityNotification.Announcement(RecentlyDeletedPresentation.restoredPhrase(report.restored)).post()
+        if restored > 0 {
+            AccessibilityNotification.Announcement(RecentlyDeletedPresentation.restoredPhrase(restored)).post()
         }
     }
 
@@ -473,6 +525,7 @@ final class RecentlyDeletedModel: ObservableObject {
             switch entry.source {
             case let .item(item): request.selection.contains(item: item.ref, deletedAt: item.deletedAt)
             case let .attachment(attachment): request.selection.contains(attachment: attachment.attachmentID, removedAt: attachment.deletedAt)
+            case .draw: false
             }
         }.count
         message = RecentlyDeletedPresentation.keptMessage(kept: kept).map { Message(text: $0, tone: .warning) }
