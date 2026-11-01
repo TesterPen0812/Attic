@@ -125,16 +125,21 @@ final class DrawLibraryMenuModel: ObservableObject {
         let query = query
         if !query.isEmpty { return ((try? store.search(query)) ?? []).map(\.canvas) }
         var list = (try? store.library()) ?? []
-        if let currentCanvasID, !list.contains(where: { $0.id == currentCanvasID }),
-           let current = try? store.open(currentCanvasID).canvas, current.deletedAt == nil {
+        if let current = currentCanvas(in: list), !list.contains(where: { $0.id == current.id }) {
             list.insert(current, at: 0)
         }
         return list
     }
 
     /// The open canvas, if it is live.
-    var currentCanvas: DrawCanvas? {
-        guard let currentCanvasID, let canvas = try? store.open(currentCanvasID).canvas, canvas.deletedAt == nil else { return nil }
+    var currentCanvas: DrawCanvas? { currentCanvas(in: (try? store.library()) ?? []) }
+
+    /// The open canvas from the library's metadata; only a draft (not in
+    /// the library yet) is read from the store's session.
+    private func currentCanvas(in library: [DrawCanvas]) -> DrawCanvas? {
+        guard let currentCanvasID else { return nil }
+        if let listed = library.first(where: { $0.id == currentCanvasID }) { return listed }
+        guard let canvas = try? store.open(currentCanvasID).canvas, canvas.deletedAt == nil else { return nil }
         return canvas
     }
 
@@ -153,7 +158,7 @@ final class DrawLibraryMenuModel: ObservableObject {
         rows.append(Row(kind: .newCanvas(name: query.isEmpty ? nil : query),
                         title: query.isEmpty ? String(localized: "New canvas") : String(localized: "New canvas “\(query)”")))
         guard query.isEmpty else { return rows }
-        let hasCanvas = currentCanvas != nil
+        let hasCanvas = currentCanvas(in: found) != nil
         for command in Command.allCases {
             let enabled: Bool = switch command {
             case .linkedFrom: false
