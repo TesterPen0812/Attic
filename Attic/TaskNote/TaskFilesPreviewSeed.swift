@@ -1,12 +1,7 @@
 import Foundation
 import SwiftData
 
-/// "Attic Task Files" (`com.taha.Attic.preview.taskfiles`, Phase 3 slice 2):
-/// its fresh store holds legacy-attachment tasks shaped like existing ones
-/// (removed files, child-held files, a refused family), so the first launch
-/// shows the migration's result and Earlier files. The legacy lists and
-/// originals are written in the forms older builds wrote them; the
-/// migration then runs exactly as it would on a real store.
+/// Legacy attachment fixtures for explicit UI tests and migration tests.
 @MainActor
 enum TaskFilesPreviewSeed {
     static let bundleIdentifier = "com.taha.Attic.preview.taskfiles"
@@ -36,7 +31,7 @@ enum TaskFilesPreviewSeed {
                 var urls: [URL] = []
                 for name in names {
                     let url = folder.appendingPathComponent(name)
-                    if name.hasSuffix(".png") { try AtticDemoData.demoImage().write(to: url, options: .atomic) }
+                    if name.hasSuffix(".png") { try PreviewFixtureImage.png().write(to: url, options: .atomic) }
                     else if name.hasSuffix(".pdf") { try TaskNotePreviewSeed.pdf(name).write(to: url, options: .atomic) }
                     else { try Data("\(name)\n".utf8).write(to: url, options: .atomic) }
                     urls.append(url)

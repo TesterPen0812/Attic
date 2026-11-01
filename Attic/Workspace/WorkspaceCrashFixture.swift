@@ -74,7 +74,7 @@ enum WorkspaceCrashFixture {
         var inputs: [URL] = []
         for name in ["shot.png", "Spec.pdf", "child.txt", "removed.txt"] {
             let input = root.appendingPathComponent(name)
-            if name.hasSuffix(".png") { try AtticDemoData.demoImage().write(to: input) } else { try Data((name + " bytes").utf8).write(to: input) }
+            if name.hasSuffix(".png") { try PreviewFixtureImage.png().write(to: input) } else { try Data((name + " bytes").utf8).write(to: input) }
             inputs.append(input)
         }
         let references = try await files.importAttachments(inputs, existing: [])

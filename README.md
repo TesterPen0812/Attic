@@ -135,6 +135,9 @@ switched off (see [What is not active](#what-is-not-active)).
    `--optimized` builds with `-O`, which is what to use when judging speed or
    feel. `--verify` checks that the running preview is the build on disk.
 
+   Fresh preview identities start empty. Sample notes and tasks are seeded only
+   by explicit test fixtures.
+
 `com.taha.Attic` is the identity of the everyday app. Do not run experiments
 under it. [Docs/DailyApp.md](Docs/DailyApp.md) explains how the everyday app
 is installed from a reviewed commit.
