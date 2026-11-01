@@ -98,6 +98,31 @@ final class AtticPanel: NSPanel {
     override var canBecomeKey: Bool { !TestPresentationPolicy.isInvisible }
     override var canBecomeMain: Bool { false }
 
+    // MARK: Clicks reach the panel (one click always registers)
+
+    private var mousePolicy = AtticMousePolicy()
+
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        if place == .out { mousePolicy.orderedOut() }
+        super.order(place, relativeTo: otherWin)
+        if place != .out { mousePolicy.orderedIn(self) }
+    }
+
+    override func orderFrontRegardless() {
+        super.orderFrontRegardless()
+        mousePolicy.orderedIn(self)
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        super.makeKeyAndOrderFront(sender)
+        mousePolicy.orderedIn(self)
+    }
+
+    override func orderOut(_ sender: Any?) {
+        mousePolicy.orderedOut()
+        super.orderOut(sender)
+    }
+
     /// Esc reaches the window only when no responder in it handled the key:
     /// a text field or editor, the page's own Esc (closing a quick look,
     /// clearing a selection) and an open menu all see it first. A text view
@@ -258,8 +283,10 @@ final class AtticPanel: NSPanel {
     /// scroll and table views accept it. (SwiftUI's
     /// `allowsWindowActivationEvents` is not used: on a dropdown's root it
     /// kept the tag field from the keyboard, TasksPageUITests.)
+    /// The island's windows count as the panel (2 Nov): `AtticFirstPress`
+    /// gives this policy to whatever view a press hits in any of them.
     nonisolated static func acceptsEveryFirstMouse(in window: NSWindow?) -> Bool {
-        window is AtticPanel
+        window is AtticFirstPressWindow
     }
 
     /// The presses that make an inactive panel key and still act.
@@ -334,6 +361,9 @@ final class AtticPanel: NSPanel {
                 // this new interaction at the untransformed content bounds.
                 onDirectContentInteraction?()
             }
+            // Whatever view this press hits takes it, the overlay layer's
+            // cards and bars included (2 Nov).
+            if Self.takesFirstPress(event.type) { AtticFirstPress.prepare(event, in: self) }
             super.sendEvent(event)
             // A native tracking loop can dequeue mouse-up inside mouseDown.
             // Reconcile only after dispatch returns and all buttons are up;
@@ -2551,6 +2581,55 @@ enum AtticHostDragHooks {
     }
 }
 
+
+/// The windows that take the panel's first press: the panel (docked and
+/// floating) and the island's windows. Their views all accept the first
+/// mouse (`AtticPanel.acceptsEveryFirstMouse`).
+protocol AtticFirstPressWindow: NSWindow {}
+
+extension AtticPanel: AtticFirstPressWindow {}
+
+/// One choke point for the first press (2 Nov, owner: "This keeps coming
+/// back"): before AppKit sees a press, the window hit-tests it as AppKit
+/// will and gives the view it hits the first-press policy. Views reached
+/// past the page's hosting view (the overlay layer's cards, menus and
+/// Notes' bars; the island) are covered too, and a new view that refuses
+/// the first mouse needs no opt-in.
+@MainActor
+enum AtticFirstPress {
+    static func prepare(_ event: NSEvent, in window: NSWindow) {
+        guard let root = window.contentView?.superview ?? window.contentView,
+              let hit = root.hitTest(event.locationInWindow), hit !== root else { return }
+        AtticPanelFirstMouseHooks.install(on: hit)
+    }
+}
+
+/// The window server forgets a window's explicit `ignoresMouseEvents`
+/// when the window is ordered out, and until the property is written again
+/// it sends each click by the window's drawn alpha (measured on the Air,
+/// macOS 26: for about 0.1 s of every reveal, and a whole Reduce Motion
+/// fade, a click on the panel went to the app behind; so did one on the
+/// island while its content was handed to the motion, and one on a clear
+/// floating panel). The passthrough writes the property only when its
+/// value changes, so each ordering in writes it again: clicks are routed by
+/// Attic's own shape, never by what happens to be drawn.
+@MainActor
+struct AtticMousePolicy {
+    private var needsWrite = true
+
+    mutating func orderedOut() { needsWrite = true }
+
+    mutating func orderedIn(_ window: NSWindow) {
+        guard needsWrite, window.isVisible else { return }
+        needsWrite = false
+        let ignores = window.ignoresMouseEvents
+        // Written as a change and back: the getter already reads the value
+        // (false before any write), so a plain write may not reach the
+        // window server.
+        window.ignoresMouseEvents = !ignores
+        window.ignoresMouseEvents = ignores
+    }
+}
 
 /// SwiftUI creates its native view classes itself (scroll, clip, group
 /// containers), so they cannot be supplied as Attic subclasses. Add the panel policy to each encountered
