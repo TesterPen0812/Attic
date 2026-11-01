@@ -422,6 +422,36 @@ final class PanelPullOutHostedTests: XCTestCase {
     // MARK: Helpers
 
     /// Pulls `page` off the island and drops it at `point`.
+    /// The docked panel shown again while an unpinned floating panel is
+    /// still fading out with its hide: the floating panel comes back and
+    /// stays, whatever point of the fade the reveal lands on, and the old
+    /// hide's end never orders it out (Astra F4).
+    func testARevealDuringAFloatingPanelsFadeOutWins() throws {
+        try withRig { rig in
+            try pull(.tasks, in: rig, to: CGPoint(x: rig.workArea.midX - 300, y: rig.workArea.midY))
+            let tasks = try XCTUnwrap(rig.pullOut.panel(for: .tasks))
+            let screen = try XCTUnwrap(rig.controller.currentScreen)
+            for offset in [0.01, 0.06, 0.12, 0.06] {
+                _ = rig.controller.requestHide { _ in }
+                spin(offset)
+                XCTAssertTrue(tasks.isVisible, "\(offset): still fading out")
+                XCTAssertTrue(rig.controller.show(on: screen, corner: .topRight), "\(offset)")
+                // Past the end of the hide's fade and the reveal's.
+                spin(1)
+                XCTAssertTrue(tasks.isVisible, "\(offset): back with the docked panel")
+                XCTAssertEqual(tasks.panel.alphaValue, 1, accuracy: 0.01, "\(offset): fully shown")
+                XCTAssertTrue(rig.panel.isVisible, "\(offset)")
+            }
+            // Raising it while it fades out brings it back too.
+            _ = rig.controller.requestHide { _ in }
+            spin(0.06)
+            rig.pullOut.raise(.tasks, makeKey: false)
+            spin(1)
+            XCTAssertTrue(tasks.isVisible, "raised while fading out")
+            XCTAssertEqual(tasks.panel.alphaValue, 1, accuracy: 0.01)
+        }
+    }
+
     private func pull(_ page: PanelPage, in rig: Rig, to point: CGPoint,
                       file: StaticString = #filePath, line: UInt = #line) throws {
         XCTAssertTrue(rig.pullOut.beginPull(page, at: rig.itemCentre(page)), "\(page) comes out", file: file, line: line)
