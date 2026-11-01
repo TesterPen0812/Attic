@@ -1470,6 +1470,11 @@ final class AtticPanelContentContainer: NSView {
     #if DEBUG
     /// The last flight start's cost: snapshot and live-material set-up (ms).
     private(set) var lastAlternateBeginMilliseconds: Double = 0
+    /// Tests: the progress Swoop's keyframes draw `fraction` of the way
+    /// through its run's duration (nil: no Swoop run).
+    func swoopProgressForTesting(atFraction fraction: Double) -> Double? {
+        swoopRun.map { $0.progress(at: $0.start + $0.duration * fraction) }
+    }
     #endif
 
     /// What a prepared snapshot was taken of; it is used only while nothing

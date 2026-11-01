@@ -439,37 +439,26 @@ final class PanelIslandTests: XCTestCase {
                 let screen = try XCTUnwrap(controller.currentScreen)
                 @MainActor func hide(_ corner: ScreenCorner) throws {
                     var hidden = false
-                    var checked: [Double] = []
                     _ = controller.requestHide { hidden = $0 == .hidden }
-                    let start = Date()
-                    while !hidden, Date().timeIntervalSince(start) < 3 {
-                        RunLoop.current.run(until: Date().addingTimeInterval(0.003))
-                        let p = controller.displayedProgressForProbe
-                        for fraction in [0.3, 0.7] where !checked.contains(fraction) && p >= fraction && p < 0.97 && !hidden {
-                            try assertOneShape(controller, panel, mode: mode, corner: corner, "\(mode) \(corner) hide at \(p)",
-                                               keyframed: true)
-                            checked.append(fraction)
-                        }
+                    let checked = try samplePausedMotion(controller, try content(panel), mode: mode, hiding: true,
+                                                         "\(mode) \(corner) hide") { p in
+                        try assertOneShape(controller, panel, mode: mode, corner: corner, "\(mode) \(corner) hide at \(p)",
+                                           keyframed: true)
                     }
+                    spin(until: { hidden })
                     XCTAssertTrue(hidden, "\(mode) \(corner)")
                     XCTAssertEqual(checked.sorted(), [0.3, 0.7], "\(mode) \(corner): sampled the hide")
                 }
                 // The reveal grows both back out of the same point.
                 @MainActor func reveal(_ corner: ScreenCorner) throws {
-                    var checked: [Double] = []
                     XCTAssertTrue(controller.show(on: screen, corner: corner))
-                    let start = Date()
                     let container = try content(panel)
-                    while Date().timeIntervalSince(start) < 2, container.isIslandStandInShown {
-                        RunLoop.current.run(until: Date().addingTimeInterval(0.003))
-                        let p = controller.displayedProgressForProbe
-                        for fraction in [0.7, 0.3] where !checked.contains(fraction) && p <= fraction && p > 0.03
-                            && container.isIslandStandInShown {
-                            try assertOneShape(controller, panel, mode: mode, corner: corner, "\(mode) \(corner) reveal at \(p)",
-                                               keyframed: true)
-                            checked.append(fraction)
-                        }
+                    let checked = try samplePausedMotion(controller, container, mode: mode, hiding: false,
+                                                         "\(mode) \(corner) reveal") { p in
+                        try assertOneShape(controller, panel, mode: mode, corner: corner, "\(mode) \(corner) reveal at \(p)",
+                                           keyframed: true)
                     }
+                    spin(until: { !container.isIslandStandInShown }, timeout: 2)
                     XCTAssertEqual(checked.sorted(), [0.3, 0.7], "\(mode) \(corner): sampled the reveal")
                     spin(0.05)
                     XCTAssertFalse(try content(panel).isIslandStandInShown, "\(mode) \(corner): handed back at rest")
@@ -1092,3 +1081,50 @@ final class PanelIslandTests: XCTestCase {
     }
 }
 
+/// Samples a timed hide or reveal on the frames Core Animation draws where
+/// its progress passes 0.3 and 0.7: the motion layer's run is paused and
+/// stepped through its duration (as
+/// `testEverySwoopFrameKeepsThePanelAndTheIslandOnTheCurve`), so a slow
+/// host can neither skip a sample nor hand one a frame it has not drawn
+/// yet. In real time CI 41274121451 presented a Swoop reveal in the top
+/// left still at the bottom-left hide's last frame (exactly, at opacity 0)
+/// while the run's clock passed 0.70 and 0.29, and passed a Slide hide's
+/// 0.7 between two samples. Returns the fractions sampled.
+@MainActor
+func samplePausedMotion(_ controller: AtticPanelController, _ container: AtticPanelContentContainer,
+                        mode: PanelHideAnimation, hiding: Bool, _ note: String,
+                        file: StaticString = #filePath, line: UInt = #line,
+                        _ check: (Double) throws -> Void) throws -> [Double] {
+    let key = mode == .swoop ? "attic.panel.swoop" : "attic.panel.collapse"
+    func running() -> (CALayer, CAAnimation)? {
+        for layer in container.subviews.compactMap(\.layer) {
+            if let animation = layer.animation(forKey: key) { return (layer, animation) }
+        }
+        return nil
+    }
+    let deadline = Date().addingTimeInterval(1)
+    while running() == nil, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.003)) }
+    guard let (layer, animation) = running() else {
+        XCTFail("\(note): no timed motion", file: file, line: line)
+        return []
+    }
+    layer.speed = 0
+    defer { layer.speed = 1; layer.timeOffset = 0 }
+    var checked: [Double] = []
+    let steps = 240
+    for step in 0...steps {
+        let fraction = Double(step) / Double(steps)
+        layer.timeOffset = animation.beginTime + animation.duration * fraction
+        CATransaction.flush()
+        let p = mode == .swoop ? (container.swoopProgressForTesting(atFraction: fraction) ?? 0)
+            : controller.displayedProgressForProbe
+        let due = (hiding ? [0.3, 0.7] : [0.7, 0.3]).filter { target in
+            !checked.contains(target) && (hiding ? p >= target && p < 0.97 : p <= target && p > 0.03)
+        }
+        for target in due {
+            try check(p)
+            checked.append(target)
+        }
+    }
+    return checked
+}
