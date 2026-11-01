@@ -262,11 +262,12 @@ enum AtticGeometryCheck {
         )?.radius ?? 0
     }
 
-    /// Settings' cards are surfaces too (squircles, Shapes): what the fit
-    /// reads from the card's own squircle drawn alone at the specimen's size.
-    static func surfaceRadius(_ radius: CGFloat, size: CGSize) -> CGFloat {
+    /// Settings' cards are surfaces too (squircles), and the toast a
+    /// curve-1.4 capsule (Shapes): what the fit reads from the same outline
+    /// drawn alone at the specimen's size.
+    static func surfaceRadius(_ radius: CGFloat, exponent: CGFloat = AtticShape.surfaceExponent, size: CGSize) -> CGFloat {
         AtticCornerMeasure.measure(
-            Squircle(cornerRadius: radius, exponent: AtticShape.surfaceExponent).fill(Color.gray),
+            Squircle(cornerRadius: radius, exponent: exponent).fill(Color.gray),
             layoutSize: size, context: .default
         )?.radius ?? 0
     }
@@ -296,7 +297,8 @@ enum AtticGeometryCheck {
                      expectedSize: CGSize(width: 0, height: 36), expectedRadius: AtticRadius.control(height: 36)),
             Specimen(name: "Undo toast", view: AnyView(AtticUndoToast(message: "Task deleted", onUndo: noop)),
                      expectedSize: CGSize(width: 0, height: AtticControlSize.toastHeight),
-                     expectedRadius: AtticRadius.control(height: AtticControlSize.toastHeight)),
+                     expectedRadius: surfaceRadius(AtticUndoToast.shape.cornerRadius, exponent: AtticShape.controlExponent,
+                                                   size: CGSize(width: 200, height: AtticControlSize.toastHeight))),
             Specimen(name: "Tag chip", view: AnyView(AtticTagChip(name: "launch")),
                      expectedSize: CGSize(width: 0, height: AtticControlSize.tagHeight),
                      expectedRadius: AtticRadius.control(height: AtticControlSize.tagHeight)),
