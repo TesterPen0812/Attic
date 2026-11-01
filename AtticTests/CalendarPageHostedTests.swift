@@ -75,6 +75,7 @@ final class CalendarPageHostedTests: XCTestCase {
                 try XCTUnwrap((page.element(id) as? NSAccessibilityElementProtocol)?.accessibilityFrame())
             }
             let previous = try frame("calendar-previous"), today = try frame("calendar-today"), next = try frame("calendar-next")
+            XCTAssertEqual(page.matching("calendar-today").count, 1, "no second Today remains in the footer")
             XCTAssertEqual(today.midY, previous.midY, accuracy: 0.5)
             // Arrow hit targets extend 3.5 pt beyond their 21 pt faces.
             // Assert the faces' exact spacing, rather than their hit halos.
