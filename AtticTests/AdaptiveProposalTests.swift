@@ -1,5 +1,6 @@
 import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
