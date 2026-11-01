@@ -165,7 +165,7 @@ final class AtticLibrary {
             case .canvas:
                 if legacyCanvasDormant { return .missing }
                 if canvases?.canvases.contains(where: { $0.id == id }) == true { return .live }
-                let rows = try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id }))
+                let rows = try context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id }))
                 guard !rows.isEmpty else { return .missing }
                 let winner = CanvasStore.winningBoardReplica(in: rows)
                 if winner.purgedAt != nil { return .missing }
@@ -197,7 +197,7 @@ final class AtticLibrary {
             return note.title.isEmpty ? String(note.body.split(whereSeparator: \.isNewline).first ?? "") : note.title
         case .canvas:
             guard !legacyCanvasDormant,
-                  let rows = try? context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })),
+                  let rows = try? context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })),
                   !rows.isEmpty else { return nil }
             return CanvasStore.winningBoardReplica(in: rows).name
         }
