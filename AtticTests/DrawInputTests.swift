@@ -1,0 +1,627 @@
+import AppKit
+import XCTest
+@testable import Attic
+
+/// Draw input on the real panel (brief "Draw input", 2 Nov): pinch and
+/// ⌘-scroll zoom, two-finger panning against swipe-to-close, the tool
+/// cursors and the canvas menu's card. Every event is a `CGEvent` made
+/// into an `NSEvent` and sent through the panel, as the system delivers
+/// it, with the panel not key (the invisible test host's panels can't be).
+@MainActor
+final class DrawInputTests: XCTestCase {
+    private var previousModel: DrawPageModel?
+
+    override func setUp() {
+        super.setUp()
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        AtticDraw.enabledOverride = true
+    }
+
+    override func tearDown() {
+        if let previousModel { DrawPageModel.replaceShared(previousModel) }
+        previousModel = nil
+        AtticDraw.enabledOverride = nil
+        AtticMotionPreference.systemReduceMotionOverride = nil
+        AtticTransparencySeam.systemOverride = nil
+        super.tearDown()
+    }
+
+    // MARK: The rig: the app's panel on the Draw page
+
+    private struct Rig {
+        let controller: AtticPanelController
+        let panel: AtticPanel
+        let uiState: PanelUIState
+        let model: DrawPageModel
+        let board: DrawBoardView
+        let defaults: UserDefaults
+        let suite: String
+        let hideRequests: () -> Int
+    }
+
+    private func makeRig(width: Double = PanelContentSize.standard.rawValue) throws -> Rig {
+        let suite = "DrawInputTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: persistence)
+        let notes = trackAttachmentReconciliation(of: NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore()))
+        let model = DrawPageModel(store: DrawInMemoryStore())
+        model.pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-draw-input-\(UUID().uuidString)"))
+        if previousModel == nil { previousModel = DrawPageModel.shared }
+        DrawPageModel.replaceShared(model)
+        let existing = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        let settings = AppSettings(defaults: defaults)
+        settings.panelContentSize = width
+        let uiState = PanelUIState()
+        let controller = AtticPanelController(
+            store: store, noteStore: notes, canvasSession: CanvasSession(store: CanvasStore(container: persistence)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: settings, uiState: uiState
+        )
+        let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
+            .first { !existing.contains(ObjectIdentifier($0)) })
+        let screen = try XCTUnwrap(controller.currentScreen ?? NSScreen.main)
+        XCTAssertTrue(controller.show(on: screen, corner: .topRight))
+        uiState.selectSection(.canvas)
+        let probe = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                   context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 0))
+        let deadline = Date().addingTimeInterval(5)
+        spin(0.3)
+        while (panel.canBeginTrackpadSwipe?(probe) != true || board(in: panel) == nil), Date() < deadline { spin(0.05) }
+        let board = try XCTUnwrap(board(in: panel), "the Draw page's board is in the panel")
+        XCTAssertTrue(model.isShown, "the Draw page is shown")
+        XCTAssertFalse(panel.isKeyWindow, "the panel is not key")
+        var requests = 0
+        let original = panel.onTrackpadDismissRequest
+        panel.onTrackpadDismissRequest = { requests += 1; original?() }
+        spin(0.2)
+        return Rig(controller: controller, panel: panel, uiState: uiState, model: model, board: board,
+                   defaults: defaults, suite: suite, hideRequests: { requests })
+    }
+
+    private func close(_ rig: Rig) {
+        rig.model.setShown(false)
+        rig.panel.orderOut(nil)
+        rig.model.pasteboard.releaseGlobally()
+        rig.defaults.removePersistentDomain(forName: rig.suite)
+    }
+
+    private func board(in panel: NSWindow) -> DrawBoardView? {
+        func find(_ view: NSView) -> DrawBoardView? {
+            if let board = view as? DrawBoardView { return board }
+            for child in view.subviews { if let found = find(child) { return found } }
+            return nil
+        }
+        return panel.contentView.flatMap(find)
+    }
+
+    private func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
+
+    /// A board point (y down, the model's space) in the panel's window space.
+    private func windowPoint(_ board: DrawBoardView, _ point: CGPoint) -> CGPoint {
+        board.convert(CGPoint(x: point.x, y: board.bounds.height - point.y), to: nil)
+    }
+
+    private func boardCentre(_ rig: Rig) -> CGPoint {
+        CGPoint(x: rig.model.clearRect.midX, y: rig.model.clearRect.midY)
+    }
+
+    /// A window point as the CGEvent's global location (top-left origin).
+    private func place(_ event: CGEvent, at point: CGPoint, in panel: NSWindow) {
+        let screen = panel.convertPoint(toScreen: point)
+        event.location = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.height ?? 0) - screen.y)
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(panel.windowNumber))
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(panel.windowNumber))
+        event.timestamp = CGEventTimestamp(DispatchTime.now().uptimeNanoseconds)
+    }
+
+    /// The `NSEvent` the panel gets, at `point` in its window. A made event
+    /// is tied to the panel when AppKit reads the window fields; when it
+    /// isn't, AppKit reads its location as the window's own, so the event
+    /// is placed there instead. Either way the event lands where asked.
+    private func made(_ event: CGEvent, at point: CGPoint, in panel: NSWindow) throws -> NSEvent {
+        place(event, at: point, in: panel)
+        if let ns = NSEvent(cgEvent: event), ns.window === panel,
+           hypot(ns.locationInWindow.x - point.x, ns.locationInWindow.y - point.y) < 0.5 { return ns }
+        event.location = CGPoint(x: point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - point.y)
+        let ns = try XCTUnwrap(NSEvent(cgEvent: event))
+        XCTAssertEqual(ns.locationInWindow.x, point.x, accuracy: 0.5, "the event lands at the point (window \(String(describing: ns.window)))")
+        XCTAssertEqual(ns.locationInWindow.y, point.y, accuracy: 0.5)
+        return ns
+    }
+
+    /// Phases: 1 began, 2 changed, 4 ended. Momentum: 1 begin, 2 continue, 3 end.
+    private func scroll(dx: Int32 = 0, dy: Int32 = 0, phase: Int64, momentum: Int64 = 0, command: Bool = false,
+                        at point: CGPoint, in panel: NSWindow) throws -> NSEvent {
+        let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0))
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum)
+        if command { event.flags = .maskCommand }
+        return try made(event, at: point, in: panel)
+    }
+
+    /// A trackpad pinch sample: a gesture event (type 29) of the zoom kind
+    /// (HID type 8), which AppKit reads as `.magnify`.
+    private func pinch(_ amount: Double, phase: Int64, at point: CGPoint, in panel: NSWindow) throws -> NSEvent {
+        let event = try XCTUnwrap(CGEvent(source: nil))
+        event.type = try XCTUnwrap(CGEventType(rawValue: 29))
+        event.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 110)), value: 8)
+        event.setDoubleValueField(try XCTUnwrap(CGEventField(rawValue: 113)), value: amount)
+        event.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 132)), value: phase)
+        let ns = try made(event, at: point, in: panel)
+        XCTAssertEqual(ns.type, .magnify, "a real magnify event")
+        XCTAssertEqual(ns.magnification, amount, accuracy: 0.0001)
+        return ns
+    }
+
+    private func key(_ characters: String, code: UInt16, shift: Bool = false, in panel: NSWindow) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? [.shift] : [],
+                                       timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                                       context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                       isARepeat: false, keyCode: code))
+    }
+
+    private func hitChain(_ panel: NSWindow, at point: CGPoint) -> String {
+        guard let content = panel.contentView else { return "no content" }
+        var names: [String] = []
+        var view = content.hitTest(content.convert(point, from: nil))
+        while let current = view {
+            let recognizers = current.gestureRecognizers.map { "\(type(of: $0))" }
+            names.append("\(type(of: current))" + (recognizers.isEmpty ? "" : "\(recognizers)"))
+            view = current.superview
+        }
+        return names.joined(separator: " < ")
+    }
+
+    // MARK: 1. Zoom
+
+    func testTheBoardIsWhatTheMiddleOfThePanelHitTests() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        let content = try XCTUnwrap(rig.panel.contentView)
+        let hit = content.hitTest(content.convert(point, from: nil))
+        XCTAssertTrue(hit === rig.board, "hit chain: \(hitChain(rig.panel, at: point))")
+    }
+
+    private func describeHit(_ panel: NSWindow, at point: CGPoint) -> String {
+        guard let content = panel.contentView, let hit = content.hitTest(content.convert(point, from: nil)) else { return "nil" }
+        let frame = hit.convert(hit.bounds, to: nil)
+        return "\(type(of: hit)) \(frame) subviews \(hit.subviews.map { "\(type(of: $0))" }) in \(hit.superview.map { "\(type(of: $0))" } ?? "-")"
+    }
+
+    /// Fields in the top row (the canvas menu's, Rename's, Search's) are
+    /// AppKit views; after any of them has shown, the board must still be
+    /// what the middle of the panel hit tests to, and still pan and zoom.
+    func testTheBoardKeepsItsGesturesAfterTheTopRowsFieldsHaveShown() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        let content = try XCTUnwrap(rig.panel.contentView)
+        let steps: [(String, () -> Void, () -> Void)] = [
+            ("the canvas menu", { rig.model.openFilter() }, { rig.model.closeFilter() }),
+            ("Rename", { rig.model.openFilter(); rig.model.library.perform(.rename) }, { rig.model.library.cancelRename() }),
+            ("Search", { rig.model.openSearch() }, { rig.model.closeSearch() }),
+        ]
+        for (name, open, close) in steps {
+            open()
+            spin(0.4)
+            close()
+            spin(0.4)
+            XCTAssertTrue(content.hitTest(content.convert(point, from: nil)) === rig.board,
+                          "after \(name): \(describeHit(rig.panel, at: point))")
+            let zoom = rig.model.viewport.zoom
+            rig.panel.sendEvent(try pinch(0, phase: 1, at: point, in: rig.panel))
+            rig.panel.sendEvent(try pinch(0.2, phase: 2, at: point, in: rig.panel))
+            rig.panel.sendEvent(try pinch(0, phase: 4, at: point, in: rig.panel))
+            XCTAssertNotEqual(rig.model.viewport.zoom, zoom, "after \(name): a pinch zooms")
+            let x = rig.model.viewport.x
+            rig.panel.sendEvent(try scroll(phase: 1, at: point, in: rig.panel))
+            rig.panel.sendEvent(try scroll(dx: 10, phase: 2, at: point, in: rig.panel))
+            rig.panel.sendEvent(try scroll(phase: 4, at: point, in: rig.panel))
+            XCTAssertNotEqual(rig.model.viewport.x, x, "after \(name): a scroll pans")
+            XCTAssertEqual(rig.hideRequests(), 0)
+        }
+    }
+
+    func testAPinchThroughThePanelZoomsAroundThePointerWithTheClamp() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let anchor = CGPoint(x: rig.model.clearRect.midX + 40, y: rig.model.clearRect.midY - 30)
+        let point = windowPoint(rig.board, anchor)
+        let world = rig.model.viewport.world(anchor)
+        rig.panel.sendEvent(try pinch(0, phase: 1, at: point, in: rig.panel))
+        for _ in 0..<5 { rig.panel.sendEvent(try pinch(0.1, phase: 2, at: point, in: rig.panel)) }
+        rig.panel.sendEvent(try pinch(0, phase: 4, at: point, in: rig.panel))
+        spin(0.05)
+        XCTAssertEqual(rig.model.viewport.zoom, pow(1.1, 5), accuracy: 0.01,
+                       "five 10 % steps zoom in (hit chain: \(hitChain(rig.panel, at: point)))")
+        let after = rig.model.viewport.screen(world)
+        XCTAssertEqual(after.x, anchor.x, accuracy: 0.5, "the point under the fingers stays put")
+        XCTAssertEqual(after.y, anchor.y, accuracy: 0.5)
+        XCTAssertTrue(rig.model.viewportState.pillShown, "the pill shows the level")
+        XCTAssertEqual(rig.model.viewportState.pillLabel, "\(Int((rig.model.viewport.zoom * 100).rounded())) %")
+        // The clamp, both ways.
+        rig.panel.sendEvent(try pinch(0, phase: 1, at: point, in: rig.panel))
+        for _ in 0..<40 { rig.panel.sendEvent(try pinch(0.5, phase: 2, at: point, in: rig.panel)) }
+        rig.panel.sendEvent(try pinch(0, phase: 4, at: point, in: rig.panel))
+        XCTAssertEqual(rig.model.viewport.zoom, DrawViewport.maxZoom, accuracy: 0.0001, "400 % at most")
+        rig.panel.sendEvent(try pinch(0, phase: 1, at: point, in: rig.panel))
+        for _ in 0..<60 { rig.panel.sendEvent(try pinch(-0.5, phase: 2, at: point, in: rig.panel)) }
+        rig.panel.sendEvent(try pinch(0, phase: 4, at: point, in: rig.panel))
+        XCTAssertEqual(rig.model.viewport.zoom, DrawViewport.minZoom, accuracy: 0.0001, "10 % at least")
+    }
+
+    func testCommandScrollThroughThePanelZoomsAroundThePointerWithTheClamp() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let anchor = CGPoint(x: rig.model.clearRect.midX - 30, y: rig.model.clearRect.midY + 20)
+        let point = windowPoint(rig.board, anchor)
+        let world = rig.model.viewport.world(anchor)
+        rig.panel.sendEvent(try scroll(phase: 1, command: true, at: point, in: rig.panel))
+        for _ in 0..<4 { rig.panel.sendEvent(try scroll(dy: 10, phase: 2, command: true, at: point, in: rig.panel)) }
+        rig.panel.sendEvent(try scroll(phase: 4, command: true, at: point, in: rig.panel))
+        spin(0.05)
+        XCTAssertNotEqual(rig.model.viewport.zoom, 1, accuracy: 0.01, "⌘-scroll zooms (hit chain: \(hitChain(rig.panel, at: point)))")
+        let after = rig.model.viewport.screen(world)
+        XCTAssertEqual(after.x, anchor.x, accuracy: 0.5, "around the pointer")
+        XCTAssertEqual(after.y, anchor.y, accuracy: 0.5)
+        XCTAssertTrue(rig.model.viewportState.pillShown)
+        for _ in 0..<200 { rig.panel.sendEvent(try scroll(dy: 25, phase: 2, command: true, at: point, in: rig.panel)) }
+        XCTAssertEqual(rig.model.viewport.zoom, DrawViewport.maxZoom, accuracy: 0.0001)
+        for _ in 0..<400 { rig.panel.sendEvent(try scroll(dy: -25, phase: 2, command: true, at: point, in: rig.panel)) }
+        XCTAssertEqual(rig.model.viewport.zoom, DrawViewport.minZoom, accuracy: 0.0001)
+        XCTAssertEqual(rig.hideRequests(), 0)
+    }
+
+    /// A mouse wheel with ⌘ (line deltas, not precise ones) zooms by a step
+    /// a notch can see, not by 1 %.
+    func testCommandWheelNotchesZoomAVisibleStep() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 1, wheel2: 0, wheel3: 0))
+        event.flags = .maskCommand
+        let notch = try made(event, at: point, in: rig.panel)
+        XCTAssertFalse(notch.hasPreciseScrollingDeltas)
+        rig.panel.sendEvent(notch)
+        XCTAssertGreaterThan(abs(rig.model.viewport.zoom - 1), 0.05, "one notch zooms at least 5 %")
+    }
+
+    func testShiftOneFitsAndShiftZeroIsActualSize() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.model.setTool(.pen)
+        rig.model.pointerDown(at: CGPoint(x: 60, y: 100))
+        rig.model.pointerDragged(to: CGPoint(x: 200, y: 200))
+        rig.model.pointerUp(at: CGPoint(x: 200, y: 200))
+        XCTAssertTrue(rig.panel.makeFirstResponder(rig.board))
+        rig.panel.sendEvent(try key("!", code: 18, shift: true, in: rig.panel))
+        let fitted = DrawViewport.fit(DrawGeometry.union(rig.model.objects), in: rig.model.clearRect)
+        XCTAssertEqual(rig.model.viewport, fitted, "⇧1 fits")
+        rig.panel.sendEvent(try key(")", code: 29, shift: true, in: rig.panel))
+        XCTAssertEqual(rig.model.viewport.zoom, 1, "⇧0 is 100 %")
+    }
+
+    // MARK: 2. Panning and swipe-to-close
+
+    func testASidewaysScrollOverTheBoardPansWithMomentumAndNeverHides() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        for direction: Int32 in [-1, 1] {
+            let start = rig.model.viewport
+            var expected: CGFloat = 0
+            func send(_ event: NSEvent) { expected += event.scrollingDeltaX; rig.panel.sendEvent(event) }
+            send(try scroll(phase: 1, at: point, in: rig.panel))
+            for _ in 0..<12 { spin(1.0 / 120); send(try scroll(dx: 8 * direction, phase: 2, at: point, in: rig.panel)) }
+            send(try scroll(phase: 4, at: point, in: rig.panel))
+            XCTAssertEqual(rig.model.viewport.x - start.x, expected, accuracy: 0.5,
+                           "direction \(direction): the board follows the fingers (hit chain: \(hitChain(rig.panel, at: point)))")
+            // Momentum: through the panel it never hides. AppKit hands made
+            // momentum events to no view (the board got none of them through
+            // the window), so the board then gets them as AppKit hands real
+            // ones on: they keep panning the gesture it owns.
+            var momentumEvents: [NSEvent] = []
+            for phase: Int64 in [1, 2, 2, 2, 2, 3] {
+                momentumEvents.append(try scroll(dx: 6 * direction, phase: 0, momentum: phase, at: point, in: rig.panel))
+            }
+            for event in momentumEvents { rig.panel.sendEvent(event) }
+            let beforeMomentum = rig.model.viewport.x
+            for event in momentumEvents { rig.board.scrollWheel(with: event) }
+            XCTAssertEqual(rig.model.viewport.x - beforeMomentum, momentumEvents.reduce(0) { $0 + $1.scrollingDeltaX }, accuracy: 0.5,
+                           "momentum keeps panning")
+            spin(0.1)
+            XCTAssertEqual(rig.hideRequests(), 0, "direction \(direction): never a hide")
+            XCTAssertEqual(rig.controller.displayedProgressForProbe, 0, accuracy: 0.0001, "the panel never followed")
+            XCTAssertTrue(rig.panel.isVisible)
+        }
+        // Up and down too.
+        let start = rig.model.viewport.y
+        rig.panel.sendEvent(try scroll(phase: 1, at: point, in: rig.panel))
+        for _ in 0..<6 { rig.panel.sendEvent(try scroll(dy: 10, phase: 2, at: point, in: rig.panel)) }
+        rig.panel.sendEvent(try scroll(phase: 4, at: point, in: rig.panel))
+        XCTAssertNotEqual(rig.model.viewport.y, start, "vertical scrolling pans too")
+    }
+
+    private func towardEdge(_ dx: Int32, in panel: NSWindow) throws -> Int32 {
+        let probe = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: 1, wheel3: 0))
+        return try XCTUnwrap(NSEvent(cgEvent: probe)).isDirectionInvertedFromDevice ? -dx : dx
+    }
+
+    private func swipeToEdge(at point: CGPoint, on rig: Rig) throws {
+        let step = try towardEdge(-6, in: rig.panel)
+        rig.panel.sendEvent(try scroll(phase: 1, at: point, in: rig.panel))
+        for _ in 0..<14 { spin(1.0 / 120); rig.panel.sendEvent(try scroll(dx: step, phase: 2, at: point, in: rig.panel)) }
+        spin(1.0 / 120)
+        rig.panel.sendEvent(try scroll(phase: 4, at: point, in: rig.panel))
+        spin(0.1)
+    }
+
+    func testTheSameSwipeOverTheTopRowStillCloses() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let top = CGPoint(x: rig.panel.frame.width / 2, y: rig.panel.frame.height - rig.panel.nativeMargin - 20)
+        let viewport = rig.model.viewport
+        try swipeToEdge(at: top, on: rig)
+        XCTAssertEqual(rig.hideRequests(), 1, "a swipe over the top row closes (hit chain: \(hitChain(rig.panel, at: top)))")
+        XCTAssertEqual(rig.model.viewport, viewport, "and doesn't pan")
+    }
+
+    func testTheSameSwipeOverTheBottomBarsEmptySpaceStillCloses() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        // Between the tool capsule and "+", inside the bar's band.
+        let band = CGPoint(x: rig.model.boardSize.width - 70, y: rig.model.boardSize.height - rig.model.clearInsets.bottom / 2)
+        let point = windowPoint(rig.board, band)
+        let viewport = rig.model.viewport
+        try swipeToEdge(at: point, on: rig)
+        XCTAssertEqual(rig.hideRequests(), 1, "a swipe over the bar's empty space closes (hit chain: \(hitChain(rig.panel, at: point)))")
+        XCTAssertEqual(rig.model.viewport, viewport, "and doesn't pan")
+    }
+
+    func testTheSwipeTowardTheEdgeOverTheBoardPansInstead() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = windowPoint(rig.board, boardCentre(rig))
+        let viewport = rig.model.viewport
+        try swipeToEdge(at: point, on: rig)
+        XCTAssertEqual(rig.hideRequests(), 0, "the board's swipe is its own")
+        XCTAssertNotEqual(rig.model.viewport.x, viewport.x, "it pans")
+    }
+
+    // MARK: 3. Tool cursors
+
+    /// The cursor the drawing gives each tool (the pen's and the eraser's
+    /// are images; text, shape and select are the system's).
+    private func assertCursor(_ tool: DrawTool, _ rig: Rig, _ when: String, file: StaticString = #filePath, line: UInt = #line) {
+        let cursor = NSCursor.current
+        let named = cursor === NSCursor.arrow ? "arrow" : cursor === NSCursor.operationNotAllowed ? "sentinel" : "\(cursor.image.size)"
+        let when = "\(when) [now \(named); \(rig.board.cursorLog.suffix(3).joined(separator: " | "))]"
+        switch tool {
+        case .pen:
+            let diameter = DrawBoardView.penDotDiameter(strokeWidth: rig.model.strokeSize.strokeWidth, zoom: rig.model.viewport.zoom)
+            XCTAssertEqual(cursor.hotSpot.x, cursor.image.size.width / 2, accuracy: 0.01, "\(when): pen hot spot centred", file: file, line: line)
+            XCTAssertEqual(cursor.image.size.width, diameter + DrawBoardView.cursorRing * 2, accuracy: 0.6,
+                           "\(when): the pen's dot (\(cursor.image.size))", file: file, line: line)
+        case .eraser:
+            XCTAssertEqual(cursor.image.size.width, DrawBoardView.eraserCursorSize, accuracy: 0.01,
+                           "\(when): the eraser's ring (\(cursor.image.size))", file: file, line: line)
+            XCTAssertEqual(cursor.hotSpot.x, DrawBoardView.eraserCursorSize / 2, accuracy: 0.01, file: file, line: line)
+        case .text: XCTAssertTrue(cursor === NSCursor.iBeam, "\(when): the I-beam", file: file, line: line)
+        case .shape: XCTAssertTrue(cursor === NSCursor.crosshair, "\(when): the crosshair", file: file, line: line)
+        case .select: XCTAssertTrue(cursor === NSCursor.arrow, "\(when): the arrow", file: file, line: line)
+        }
+    }
+
+    /// The pointer rests on the board; each transition must leave the tool's cursor.
+    func testTheCursorIsTheToolsAfterEveryTransition() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let point = boardCentre(rig)
+        rig.board.pointerOverride = windowPoint(rig.board, point)
+        func reset() { NSCursor.operationNotAllowed.set() }
+        let keys: [(DrawTool, String, UInt16)] = [(.select, "v", 9), (.pen, "p", 35), (.eraser, "e", 14), (.text, "t", 17), (.shape, "r", 15)]
+        for (tool, character, code) in keys {
+            // A click on the tool (the tool bar's action).
+            reset()
+            rig.model.setTool(tool == .shape ? .select : (tool == .select ? .pen : .select))
+            spin(0.2)
+            reset()
+            if tool == .shape { rig.model.pickShape(.rectangle) } else { rig.model.setTool(tool) }
+            spin(0.2)
+            assertCursor(tool, rig, "\(tool) by click")
+            // Its key.
+            rig.model.setTool(tool == .select ? .pen : .select)
+            spin(0.2)
+            reset()
+            XCTAssertTrue(rig.panel.makeFirstResponder(rig.board))
+            rig.panel.sendEvent(try key(character, code: code, in: rig.panel))
+            spin(0.2)
+            XCTAssertEqual(rig.model.tool, tool)
+            assertCursor(tool, rig, "\(tool) by key")
+            // A pan, then a pinch.
+            let at = windowPoint(rig.board, point)
+            reset()
+            rig.panel.sendEvent(try scroll(phase: 1, at: at, in: rig.panel))
+            rig.panel.sendEvent(try scroll(dx: 5, phase: 2, at: at, in: rig.panel))
+            rig.panel.sendEvent(try scroll(phase: 4, at: at, in: rig.panel))
+            spin(0.2)
+            assertCursor(tool, rig, "\(tool) after a pan")
+            reset()
+            rig.panel.sendEvent(try pinch(0, phase: 1, at: at, in: rig.panel))
+            rig.panel.sendEvent(try pinch(0.2, phase: 2, at: at, in: rig.panel))
+            rig.panel.sendEvent(try pinch(0, phase: 4, at: at, in: rig.panel))
+            spin(0.2)
+            assertCursor(tool, rig, "\(tool) after a zoom")
+            // The canvas menu, and the swatch's colours (a popover), closing.
+            rig.model.openFilter()
+            spin(0.2)
+            reset()
+            rig.model.closeFilter()
+            spin(0.6)
+            assertCursor(tool, rig, "\(tool) after the menu closes")
+            rig.model.strip = .colour
+            spin(0.2)
+            reset()
+            rig.model.strip = nil
+            spin(0.6)
+            assertCursor(tool, rig, "\(tool) after the colours close")
+            // A hide and a reveal.
+            rig.uiState.panelDidHide()
+            spin(0.2)
+            reset()
+            rig.uiState.panelDidReveal()
+            spin(0.2)
+            assertCursor(tool, rig, "\(tool) after the panel reveals")
+            rig.model.setViewport(DrawViewport(), byUser: false)
+        }
+    }
+
+    func testThePensCursorFollowsItsColourAndSize() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.board.pointerOverride = windowPoint(rig.board, boardCentre(rig))
+        rig.model.setTool(.pen)
+        spin(0.2)
+        let medium = NSCursor.current
+        rig.model.pickSize(.large, for: .pen)
+        spin(0.2)
+        XCTAssertFalse(NSCursor.current === medium, "a new size, a new dot")
+        assertCursor(.pen, rig, "large")
+        let large = NSCursor.current
+        rig.model.pickColour(.red)
+        spin(0.2)
+        XCTAssertFalse(NSCursor.current === large, "a new colour, a new dot [\(rig.board.cursorLog.suffix(5).joined(separator: " | "))]")
+        assertCursor(.pen, rig, "red")
+    }
+
+    func testOffTheBoardTheCursorIsTheNormalOneAndHandlesWin() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        rig.model.setTool(.shape)
+        rig.model.pointerDown(at: CGPoint(x: 80, y: 120))
+        rig.model.pointerDragged(to: CGPoint(x: 180, y: 220))
+        rig.model.pointerUp(at: CGPoint(x: 180, y: 220))
+        let id = try XCTUnwrap(rig.model.objects.last?.id)
+        rig.model.select([id])
+        spin(0.2)
+        let spot = try XCTUnwrap(rig.model.handleSpots.first { $0.handle == .bottomRight })
+        rig.board.pointerOverride = windowPoint(rig.board, spot.point)
+        NSCursor.operationNotAllowed.set()
+        rig.model.setTool(.select)
+        spin(0.2)
+        XCTAssertTrue(NSCursor.current === DrawBoardView.cursor(for: .bottomRight), "the handle's cursor wins over its reach")
+        // Over the tool bar: the normal cursor.
+        rig.model.setTool(.pen)
+        let bar = CGPoint(x: rig.model.clearInsets.left + 20, y: rig.model.boardSize.height - rig.model.clearInsets.bottom / 2)
+        rig.board.pointerOverride = windowPoint(rig.board, bar)
+        NSCursor.operationNotAllowed.set()
+        rig.model.setTool(.eraser)
+        spin(0.2)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow, "over the tool bar [\(rig.board.cursorLog.suffix(3).joined(separator: " | "))] (hit chain: \(hitChain(rig.panel, at: windowPoint(rig.board, bar))))")
+    }
+
+    // MARK: 4. The canvas menu's card
+
+    private func elements(_ root: AnyObject) -> [AnyObject] {
+        let children = (root.accessibilityChildren?() ?? nil) ?? []
+        return [root] + children.flatMap { elements($0 as AnyObject) }
+    }
+
+    private func frame(of identifier: String, in rig: Rig) -> CGRect? {
+        guard let content = rig.panel.contentView else { return nil }
+        content.layoutSubtreeIfNeeded()
+        guard let element = elements(content).first(where: { ($0.accessibilityIdentifier?() ?? "") == identifier }),
+              let screen = element.accessibilityFrame?(), screen.width > 0 else { return nil }
+        return rig.panel.convertFromScreen(screen)
+    }
+
+    func testTheMenuCardClearsPinMoreAndSearchAtEveryWidth() throws {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let widest = min(PanelContentSize.max, 640)
+        for width in [PanelContentSize.standard.rawValue, PanelContentSize.extraLarge.rawValue, widest] {
+            let rig = try makeRig(width: width)
+            defer { close(rig) }
+            rig.model.openFilter()
+            spin(0.6)
+            let card = try XCTUnwrap(frame(of: "draw-library-menu", in: rig), "\(width): the menu card")
+            let field = try XCTUnwrap(frame(of: "draw-library-search", in: rig), "\(width): the card's search field")
+            let title = try XCTUnwrap(frame(of: "draw-title", in: rig), "\(width): the title capsule stays a capsule")
+            for id in ["panel-pin-button", "panel-settings-button", "draw-search-button"] {
+                let control = try XCTUnwrap(frame(of: id, in: rig), "\(width): \(id)")
+                XCTAssertFalse(card.intersects(control), "\(width): the card clears \(id) (\(card) / \(control))")
+                XCTAssertFalse(field.intersects(control), "\(width): the field clears \(id)")
+                XCTAssertLessThanOrEqual(card.maxY, control.minY + 0.5, "\(width): the card starts below the top row")
+            }
+            XCTAssertLessThanOrEqual(card.maxY, title.minY + 0.5, "\(width): below the title")
+            XCTAssertTrue(card.insetBy(dx: -0.5, dy: -0.5).contains(field), "\(width): the field is in the card")
+            XCTAssertLessThan(card.maxY - field.maxY, DrawLibraryMetrics.searchRowHeight, "\(width): the card's first row")
+            XCTAssertEqual(card.midX, title.midX, accuracy: 1, "\(width): centred under the title")
+        }
+    }
+
+    private func searchField(in rig: Rig) throws -> NSTextField {
+        func find(_ view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.accessibilityIdentifier() == "draw-library-search" { return field }
+            for child in view.subviews { if let found = find(child) { return found } }
+            return nil
+        }
+        return try XCTUnwrap(rig.panel.contentView.flatMap(find), "the card's search field")
+    }
+
+    func testTheCardsSearchFiltersReturnOpensAndNewCanvasStillWork() throws {
+        let rig = try makeRig()
+        defer { close(rig) }
+        let model = rig.model
+        for name in ["Alpha", "Beta"] {
+            model.newCanvas(name: name)
+            model.setTool(.pen)
+            model.pointerDown(at: CGPoint(x: 60, y: 100))
+            model.pointerDragged(to: CGPoint(x: 120, y: 150))
+            model.pointerUp(at: CGPoint(x: 120, y: 150))
+        }
+        let alpha = try XCTUnwrap(model.library.rows.compactMap(\.canvas).first { $0.name == "Alpha" }?.id)
+        model.open(alpha)
+        model.openFilter()
+        spin(0.4)
+        let field = try searchField(in: rig)
+        XCTAssertTrue(rig.panel.firstResponder === field.currentEditor(), "the field has the keyboard when the menu opens")
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.insertText("Bet", replacementRange: editor.selectedRange())
+        spin(0.05)
+        XCTAssertEqual(model.library.filter, "Bet", "typing filters")
+        XCTAssertEqual(model.library.rows.compactMap(\.canvas).map(\.name), ["Beta"])
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        spin(0.1)
+        XCTAssertEqual(model.canvasName, "Beta", "Return opens the first match")
+        XCTAssertFalse(model.isFiltering)
+        // No match: Return makes New canvas "Gamma".
+        model.openFilter()
+        spin(0.4)
+        let again = try XCTUnwrap(try searchField(in: rig).currentEditor() as? NSTextView)
+        again.insertText("Gamma", replacementRange: again.selectedRange())
+        spin(0.05)
+        again.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        spin(0.1)
+        XCTAssertEqual(model.canvasName, "Gamma", "New canvas “Gamma”")
+        // Escape closes it.
+        model.openFilter()
+        spin(0.4)
+        let third = try XCTUnwrap(try searchField(in: rig).currentEditor() as? NSTextView)
+        third.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        spin(0.1)
+        XCTAssertFalse(model.isFiltering, "Escape closes the menu")
+    }
+
+    func testTheMenusListRoomAllowsForTheSearchRow() {
+        let before = DrawPageMetrics.menuListRoom(boardHeight: 700, chromeTop: 15.5, chromeBottom: 15.5)
+        XCTAssertEqual(before, 700 - 15.5 - DrawPageMetrics.capsule - DrawPageMetrics.menuGap - DrawLibraryMetrics.searchRowHeight
+                       - DrawLibraryMetrics.searchRowGap - 15.5 - AtticGlassMenuShape.inset + DrawPageMetrics.bottomGrace, accuracy: 0.01,
+                       "the card: its search row over the top inset, 3 pt, the list, the bottom inset")
+    }
+}

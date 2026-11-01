@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import QuartzCore
 
 /// The Draw board (restart plan §2): live ink draws incrementally on its own
@@ -9,7 +10,7 @@ import QuartzCore
 /// The view is unflipped; the page model's screen points are y down, so
 /// every conversion flips once here.
 @MainActor
-final class DrawBoardView: NSView, DrawBoardSink {
+final class DrawBoardView: NSView, DrawBoardSink, AtticHorizontalScrollOwner {
     let model: DrawPageModel
 
     private let dotsLayer = CALayer()
@@ -29,6 +30,36 @@ final class DrawBoardView: NSView, DrawBoardSink {
     private var needsRaster = true
     private var dots = DrawDots()
     private(set) var editor: DrawTextEditorView?
+    /// Whether the scroll gesture under way began over the board's clear
+    /// area (it pans and zooms) or over the top row or bar (it doesn't).
+    private var scrollGestureIsOwn = true
+    private var cursorArea: NSTrackingArea?
+    private var cursorRefreshQueued = false
+    /// The board set the cursor last (so leaving it restores the normal one).
+    private var showsBoardCursor = false
+    private var modelChanges: AnyCancellable?
+    private var stateObservers: [NSObjectProtocol] = []
+
+    #if DEBUG
+    /// Test seam: the pointer's window location in place of the real one.
+    var pointerOverride: CGPoint?
+    /// Test seam: scroll events this board was given, and the ones it used.
+    private(set) var scrollEventsReceived = 0
+    private(set) var scrollEventsUsed = 0
+    /// Test seam: the board's last cursor decisions.
+    private(set) var cursorLog: [String] = []
+    #endif
+
+    /// The drawing's pen cursor: a dot in the pen colour, sized to the
+    /// stroke on screen (its 16 px image, r = width ÷ 2 + 1 px, at most
+    /// 6 px: halved, the stroke plus 1 pt, at most 6 pt), in a white ring.
+    static let cursorRing: CGFloat = 0.6
+    static func penDotDiameter(strokeWidth: Double, zoom: CGFloat) -> CGFloat {
+        min(6, max(2, CGFloat(strokeWidth) * zoom + 1))
+    }
+    /// The eraser's 24 px ring, halved: 12 pt, its 10 pt circle the
+    /// eraser's own reach (5 pt either side of the pointer).
+    static let eraserCursorSize: CGFloat = 12
 
     #if DEBUG
     /// Test seam: rasters requested and installed by this board.
@@ -67,6 +98,17 @@ final class DrawBoardView: NSView, DrawBoardSink {
         marqueeLayer.fillColor = NSColor.systemBlue.withAlphaComponent(0.08).cgColor
         marqueeLayer.lineWidth = 0.75
         model.board = self
+        // Pinch is the board's own recognizer's: AppKit gives a view's
+        // recognizers the events hit-tested to it before any responder,
+        // and holds the magnify events back while it recognizes, so no
+        // ancestor or responder-chain route decides whether a pinch zooms
+        // (the old Canvas met the same in this panel, bc2d7991).
+        let pinch = NSMagnificationGestureRecognizer(target: self, action: #selector(pinched(_:)))
+        pinch.delaysMagnificationEvents = true
+        addGestureRecognizer(pinch)
+        // Anything the page changes (tool, size, colour, a strip, the menu,
+        // the selection) may change the cursor under a resting pointer.
+        modelChanges = model.objectWillChange.sink { [weak self] _ in self?.queueCursorRefresh() }
         registerForDraggedTypes(DrawPageModel.imagePasteboardTypes + [.fileURL])
         layoutLayers()
     }
@@ -189,12 +231,14 @@ final class DrawBoardView: NSView, DrawBoardSink {
     func drawViewportChanged() {
         layoutLayers()
         requestRaster()
+        queueCursorRefresh()
     }
 
     func drawSelectionChanged() { updateSelection() }
 
     func drawVisibilityChanged() {
         if model.isShown { needsRaster = true; requestRaster() } else { renderer.cancel(); requestedKey = nil }
+        queueCursorRefresh()
     }
 
     func drawLiveChanged() {
@@ -256,7 +300,7 @@ final class DrawBoardView: NSView, DrawBoardSink {
         let chosen = model.displayedSelection
         let outline = CGMutablePath(), handles = CGMutablePath()
         guard !chosen.isEmpty, model.editing == nil else {
-            if handlesLayer.path != nil { window?.invalidateCursorRects(for: self) }
+            if handlesLayer.path != nil { queueCursorRefresh() }
             selectionLayer.path = nil
             handlesLayer.path = nil
             return
@@ -277,7 +321,7 @@ final class DrawBoardView: NSView, DrawBoardSink {
         // One object's handles, or the corners around several (they scale
         // as a group).
         for spot in model.handleSpots { handle(boardToView(spot.point)) }
-        if model.live == nil { window?.invalidateCursorRects(for: self) }
+        if model.live == nil { queueCursorRefresh() }
         selectionLayer.path = outline
         handlesLayer.path = handles
     }
@@ -352,13 +396,60 @@ final class DrawBoardView: NSView, DrawBoardSink {
     override func otherMouseDragged(with event: NSEvent) { model.pointerDragged(to: boardPoint(event)) }
     override func otherMouseUp(with event: NSEvent) { model.pointerUp(at: boardPoint(event)) }
 
-    override func scrollWheel(with event: NSEvent) {
-        let command = event.modifierFlags.contains(.command)
-        model.scroll(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY, command: command, at: boardPoint(event))
+    /// A scroll gesture is the board's when it begins over the clear area
+    /// (a gesture belongs to what is under the pointer when it begins). Over
+    /// the top row and the bar's empty space it has no job here, so it is
+    /// swipe-to-close's (`AtticHorizontalScrollOwner`), and nothing pans.
+    var ownsHorizontalScrolling: Bool { model.isShown }
+
+    func ownsHorizontalScroll(beginningAt windowPoint: CGPoint) -> Bool {
+        model.isShown && model.clearRect.contains(boardPoint(convert(windowPoint, from: nil)))
     }
 
+    /// Line deltas (a mouse wheel's notches) in points, as AppKit's own
+    /// scroll views move them.
+    static let lineScroll: CGFloat = 8
+
+    override func scrollWheel(with event: NSEvent) {
+        #if DEBUG
+        scrollEventsReceived += 1
+        #endif
+        let point = boardPoint(event)
+        // A new gesture (or a wheel's lone event) decides ownership; its
+        // later samples and momentum keep the answer.
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) || (event.phase.isEmpty && event.momentumPhase.isEmpty) {
+            scrollGestureIsOwn = model.clearRect.contains(point)
+        }
+        guard scrollGestureIsOwn else { return super.scrollWheel(with: event) }
+        let command = event.modifierFlags.contains(.command)
+        // A physical pinch can send stray two-finger scrolls; the pinch wins.
+        if !command, isPinching { return }
+        let scale = event.hasPreciseScrollingDeltas ? 1 : Self.lineScroll
+        #if DEBUG
+        scrollEventsUsed += 1
+        #endif
+        model.scroll(dx: event.scrollingDeltaX * scale, dy: event.scrollingDeltaY * scale, command: command, at: point)
+        refreshCursor()
+    }
+
+    private var isPinching: Bool {
+        gestureRecognizers.contains { $0 is NSMagnificationGestureRecognizer && ($0.state == .began || $0.state == .changed) }
+    }
+
+    @objc private func pinched(_ recognizer: NSMagnificationGestureRecognizer) {
+        let amount = recognizer.magnification
+        // The recognizer reports the total so far; take each change once.
+        recognizer.magnification = 0
+        guard amount.isFinite, amount != 0 else { return }
+        let location = recognizer.location(in: self)
+        model.magnify(by: amount, at: boardPoint(location))
+        refreshCursor()
+    }
+
+    /// Reached only when the recognizer passes a magnify on (it fails).
     override func magnify(with event: NSEvent) {
         model.magnify(by: event.magnification, at: boardPoint(event))
+        refreshCursor()
     }
 
     // MARK: Keys
@@ -419,8 +510,17 @@ final class DrawBoardView: NSView, DrawBoardSink {
         acceptDrop(from: sender.draggingPasteboard, at: boardPoint(convert(sender.draggingLocation, from: nil)))
     }
 
-    /// The resize cursor for a handle.
+    /// The resize cursor for a handle (Draw 3), one instance per kind.
     static func cursor(for handle: DrawHandle) -> NSCursor {
+        if let cursor = handleCursors[handle] { return cursor }
+        let cursor = makeCursor(for: handle)
+        handleCursors[handle] = cursor
+        return cursor
+    }
+
+    private static var handleCursors: [DrawHandle: NSCursor] = [:]
+
+    private static func makeCursor(for handle: DrawHandle) -> NSCursor {
         switch handle {
         case .topLeft: .frameResize(position: .topLeft, directions: .all)
         case .topRight: .frameResize(position: .topRight, directions: .all)
@@ -431,22 +531,185 @@ final class DrawBoardView: NSView, DrawBoardSink {
         }
     }
 
-    override func resetCursorRects() {
-        let cursor: NSCursor = switch model.tool {
-        case .select: .arrow
-        case .text: .iBeam
-        case .pen, .eraser, .shape: .crosshair
+    // The cursor (brief "Draw input"): the board sets it itself, from a
+    // tracking area that is active whether or not the panel is key or
+    // Attic is active. Cursor rects (and `.cursorUpdate` tracking) only
+    // work in the key window, and the panel is a non-activating panel that
+    // becomes key only on a press, so they left the system's cursor in place
+    // after a reveal, a hover, or a menu or popover closing; and they were
+    // rebuilt only when SwiftUI happened to update the representable.
+    // The board's cursor shows only where the board is what the pointer is
+    // over (not under the tool bar, the top row or the selection bar), and
+    // handles win over their reach.
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorArea { removeTrackingArea(cursorArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        cursorArea = area
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        for observer in stateObservers { NotificationCenter.default.removeObserver(observer) }
+        stateObservers = []
+        guard let window else { return }
+        let names: [(Notification.Name, AnyObject?)] = [
+            (NSWindow.didBecomeKeyNotification, window), (NSWindow.didResignKeyNotification, window),
+            (NSApplication.didBecomeActiveNotification, nil), (NSApplication.didResignActiveNotification, nil),
+        ]
+        for (name, object) in names {
+            stateObservers.append(NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.queueCursorRefresh() }
+            })
         }
-        addCursorRect(bounds, cursor: cursor)
-        // The handles show which way they resize, over the same reach a
-        // press takes.
-        let reach = DrawPageModel.handleHitRadius
-        for spot in model.handleSpots {
-            let point = boardToView(spot.point)
-            addCursorRect(CGRect(x: point.x - reach, y: point.y - reach, width: reach * 2, height: reach * 2),
-                          cursor: Self.cursor(for: spot.handle))
+        queueCursorRefresh()
+    }
+
+    override func mouseEntered(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
+    override func mouseMoved(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
+    override func mouseExited(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
+    override func cursorUpdate(with event: NSEvent) { applyCursor(at: event.locationInWindow) }
+
+    /// Sets the cursor for the pointer where it rests, on the next turn of
+    /// the main loop (after the change that asked has laid out).
+    ///
+    /// The pointer's owner is found by hit testing, so the refresh waits for
+    /// SwiftUI to apply the change that asked (a menu or strip closing
+    /// takes its card away in the same turn's update): one hop on the main
+    /// queue lands before that update, the second after it.
+    func queueCursorRefresh() {
+        guard !cursorRefreshQueued else { return }
+        cursorRefreshQueued = true
+        DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.cursorRefreshQueued = false
+                    self?.refreshCursor()
+                }
+            }
         }
     }
+
+    /// A menu, strip or popover that is closing still covers the board
+    /// until its fade ends (SwiftUI removes it, and its AppKit container,
+    /// after the motion): one more look once the app's overlay motions are
+    /// over. Bounded: one retry per change.
+    static let overlaySettle: TimeInterval = 0.45
+    private var settleRetryPending = false
+
+    func refreshCursor() {
+        guard let window else { return }
+        var point = window.mouseLocationOutsideOfEventStream
+        #if DEBUG
+        if let pointerOverride { point = pointerOverride }
+        #endif
+        applyCursor(at: point)
+        if cursor(atWindowPoint: point) == nil, model.isShown, !settleRetryPending,
+           bounds.contains(convert(point, from: nil)) {
+            settleRetryPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.overlaySettle) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.settleRetryPending = false
+                    guard let window = self.window else { return }
+                    var point = window.mouseLocationOutsideOfEventStream
+                    #if DEBUG
+                    if let pointerOverride = self.pointerOverride { point = pointerOverride }
+                    #endif
+                    self.applyCursor(at: point)
+                }
+            }
+        }
+    }
+
+    private func applyCursor(at windowPoint: CGPoint) {
+        #if DEBUG
+        let hit = window?.contentView.flatMap { content in
+            content.hitTest(content.superview.map { $0.convert(windowPoint, from: nil) } ?? windowPoint)
+        }
+        cursorLog.append("\(windowPoint) \(model.tool) \(model.colour) shown=\(model.isShown) hit=\(hit.map { "\(type(of: $0))" } ?? "nil") had=\(showsBoardCursor)")
+        if cursorLog.count > 8 { cursorLog.removeFirst() }
+        #endif
+        if let cursor = cursor(atWindowPoint: windowPoint) {
+            showsBoardCursor = true
+            cursor.set()
+        } else if showsBoardCursor {
+            // Off the board: the normal cursor, then whatever the panel's
+            // own cursor rects (the drag region, the edges) say.
+            showsBoardCursor = false
+            NSCursor.arrow.set()
+            window?.resetCursorRects()
+        }
+    }
+
+    /// The board's cursor at a window point, or nil where the board isn't
+    /// what the pointer is over.
+    func cursor(atWindowPoint windowPoint: CGPoint) -> NSCursor? {
+        guard model.isShown, let window, window.isVisible, !isHiddenOrHasHiddenAncestor,
+              let content = window.contentView,
+              content.hitTest(content.superview.map { $0.convert(windowPoint, from: nil) } ?? windowPoint) === self
+        else { return nil }
+        let point = boardPoint(convert(windowPoint, from: nil))
+        let reach = DrawPageModel.handleHitRadius
+        if model.live == nil,
+           let spot = model.handleSpots.first(where: { abs($0.point.x - point.x) <= reach && abs($0.point.y - point.y) <= reach }) {
+            return Self.cursor(for: spot.handle)
+        }
+        return toolCursor
+    }
+
+    private var toolCursor: NSCursor {
+        switch model.tool {
+        case .select: .arrow
+        case .text: .iBeam
+        case .shape: .crosshair
+        case .pen:
+            Self.penCursor(diameter: Self.penDotDiameter(strokeWidth: model.strokeSize.strokeWidth, zoom: model.viewport.zoom),
+                           colour: DrawPalette(dark: isDark).cgColor(model.colour))
+        case .eraser: Self.eraserCursor
+        }
+    }
+
+    private static var penCursors: [String: NSCursor] = [:]
+
+    /// The pen's dot: the pen colour, a white ring, the hot spot at its centre.
+    static func penCursor(diameter: CGFloat, colour: CGColor) -> NSCursor {
+        let d = (diameter * 4).rounded() / 4
+        let key = "\(d) \(colour.components ?? [])"
+        if let cursor = penCursors[key] { return cursor }
+        let side = d + cursorRing * 2
+        let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { _ in
+            let dot = NSBezierPath(ovalIn: CGRect(x: cursorRing, y: cursorRing, width: d, height: d))
+            (NSColor(cgColor: colour) ?? .labelColor).setFill()
+            dot.fill()
+            NSColor.white.setStroke()
+            dot.lineWidth = cursorRing * 2
+            dot.stroke()
+            return true
+        }
+        let cursor = NSCursor(image: image, hotSpot: CGPoint(x: side / 2, y: side / 2))
+        if penCursors.count > 64 { penCursors.removeAll() }
+        penCursors[key] = cursor
+        return cursor
+    }
+
+    /// The eraser's ring: a faint white fill and a dark outline, centred.
+    static let eraserCursor: NSCursor = {
+        let side = eraserCursorSize
+        let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { _ in
+            let ring = NSBezierPath(ovalIn: CGRect(x: 1, y: 1, width: side - 2, height: side - 2))
+            NSColor(white: 1, alpha: 0.5).setFill()
+            ring.fill()
+            NSColor(srgbRed: 60 / 255, green: 62 / 255, blue: 66 / 255, alpha: 1).setStroke()
+            ring.lineWidth = 0.65
+            ring.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: CGPoint(x: side / 2, y: side / 2))
+    }()
 
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .group }

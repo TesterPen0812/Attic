@@ -10,6 +10,14 @@ enum DrawLibraryMetrics {
     /// The list scrolls past this unless the page gives the room it has
     /// (the drawing's 640 px).
     static let maxListHeight: CGFloat = 320
+    /// The card's first row, the search field: 60 px tall, 18 px side
+    /// padding, a 20 px magnifier 12 px from 22 px text; 6 px above the list.
+    static let searchRowHeight: CGFloat = 30
+    static let searchRowGap: CGFloat = 3
+    static let searchPadding: CGFloat = 9
+    static let searchIcon: CGFloat = 10
+    static let searchIconGap: CGFloat = 6
+    static let searchFont: CGFloat = 11
     /// The leading column: the canvas thumbnail (44 × 33 px), the "+" and
     /// the commands' icons share it.
     static let thumbnail = CGSize(width: 22, height: 16.5)
@@ -29,19 +37,23 @@ enum DrawLibraryMetrics {
     }
 }
 
-/// The menu that hangs under the title capsule. The page shows it while
-/// the capsule is open as the filter (D4: the menu has no search row of its
-/// own); keys come through the model.
+/// The canvas menu: a card under the top row. On the page its first row is
+/// the search field (the drawing's `dv.titleMenu`): typing filters, ↑ ↓
+/// move, Return opens the first match (or New canvas “…”), Escape closes.
 struct DrawLibraryMenu: View {
     @ObservedObject var model: DrawLibraryMenuModel
-    /// The list's tallest, before it scrolls: the room under the capsule.
+    /// The list's tallest, before it scrolls: the room under the card's search row.
     var maxListHeight: CGFloat = DrawLibraryMetrics.maxListHeight
+    /// Escape in the search row; without it the card has no search row.
+    var onSearchEscape: (() -> Void)?
     @Environment(\.atticDesign) private var design
     @Environment(\.atticPanelToasts) private var toasts
 
-    init(model: DrawLibraryMenuModel, maxListHeight: CGFloat = DrawLibraryMetrics.maxListHeight) {
+    init(model: DrawLibraryMenuModel, maxListHeight: CGFloat = DrawLibraryMetrics.maxListHeight,
+         onSearchEscape: (() -> Void)? = nil) {
         self.model = model
         self.maxListHeight = maxListHeight
+        self.onSearchEscape = onSearchEscape
     }
 
     var body: some View {
@@ -49,7 +61,12 @@ struct DrawLibraryMenu: View {
             switch model.mode {
             case .list:
                 DrawLibraryCard(width: DrawLibraryMetrics.width) {
-                    DrawLibraryRows(model: model, rows: model.rows, maxHeight: maxListHeight)
+                    VStack(spacing: 0) {
+                        if let onSearchEscape {
+                            searchRow(onEscape: onSearchEscape)
+                        }
+                        DrawLibraryRows(model: model, rows: model.rows, maxHeight: maxListHeight)
+                    }
                 }
                 .accessibilityLabel(String(localized: "Canvases"))
             case .tags:
@@ -60,6 +77,33 @@ struct DrawLibraryMenu: View {
         .onAppear { model.toasts = toasts }
         .onChange(of: toasts.map(ObjectIdentifier.init)) { _, _ in model.toasts = toasts }
         .accessibilityIdentifier("draw-library-menu")
+    }
+
+    /// The card's first row, edge to edge over the card's inset: a 10 pt
+    /// magnifier 6 pt from 11 pt text, a hairline under it, 3 pt above the list.
+    private func searchRow(onEscape: @escaping () -> Void) -> some View {
+        let m = DrawLibraryMetrics.self
+        let inset = AtticGlassMenuShape.inset
+        return HStack(spacing: m.searchIconGap) {
+            AtticIcon(systemName: "magnifyingglass", size: m.searchIcon, weight: AtticIconWeight.outline, ink: .helper)
+            DrawTitleField(text: $model.filter, placeholder: String(localized: "Search"),
+                           label: String(localized: "Find a canvas"), onReturn: model.openFirstMatch,
+                           onMove: model.moveHighlight(by:), onEscape: onEscape, onEnd: nil,
+                           alignment: .left, font: .systemFont(ofSize: m.searchFont),
+                           identifier: "draw-library-search")
+                .accessibilityIdentifier("draw-library-search")
+        }
+        .padding(.horizontal, m.searchPadding)
+        .frame(height: m.searchRowHeight)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(design.tokens.dropdownRule.color)
+                .frame(height: AtticDropdownMetrics.headerRule)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, -inset)
+        .padding(.top, -inset)
+        .padding(.bottom, m.searchRowGap)
     }
 }
 

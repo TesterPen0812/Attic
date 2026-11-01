@@ -1,7 +1,7 @@
 import AppKit
 
 /// A selection handle (Planning.md, Draw › Selection: the outline's handles).
-enum DrawHandle: Equatable, Sendable {
+enum DrawHandle: Hashable, Sendable {
     case topLeft, topRight, bottomLeft, bottomRight
     /// A text box's sides.
     case left, right
