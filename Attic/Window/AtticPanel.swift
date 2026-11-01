@@ -501,7 +501,7 @@ final class AtticPanel: NSPanel {
         var view = contentView.hitTest(contentView.convert(windowPoint, from: nil))
         while let candidate = view {
             if candidate is CanvasNSView || candidate is NSControl { return true }
-            if let owner = candidate as? AtticHorizontalScrollOwner, owner.ownsHorizontalScrolling { return true }
+            if let owner = candidate as? AtticHorizontalScrollOwner, owner.ownsHorizontalScroll(beginningAt: windowPoint) { return true }
             if let scroll = candidate as? NSScrollView,
                let document = scroll.documentView,
                document.bounds.width > scroll.contentView.bounds.width + 1 {
@@ -2476,12 +2476,21 @@ extension NSResponder {
     }
 }
 
-/// A view that scrolls sideways itself (a wide note table): a trackpad
-/// gesture that starts over it while it can scroll is its own, never a page
-/// swipe or swipe-to-close.
+/// A view that scrolls sideways itself (a wide note table, the Draw
+/// board): a trackpad gesture that starts over it while it can scroll is
+/// its own, never a page swipe or swipe-to-close. The gesture belongs to
+/// the view under the pointer when it begins; the panel asks that view,
+/// and its ancestors, rather than keeping a list of kinds.
 @MainActor
 protocol AtticHorizontalScrollOwner: AnyObject {
     var ownsHorizontalScrolling: Bool { get }
+    /// Whether a gesture beginning at this window point is the view's
+    /// (a view whose chrome bands have no job of their own says no there).
+    func ownsHorizontalScroll(beginningAt windowPoint: CGPoint) -> Bool
+}
+
+extension AtticHorizontalScrollOwner {
+    func ownsHorizontalScroll(beginningAt windowPoint: CGPoint) -> Bool { ownsHorizontalScrolling }
 }
 
 
