@@ -525,8 +525,20 @@ final class PanelChromeTests: XCTestCase {
             let otherCell = try XCTUnwrap(element("calendar-day-\(other.rawValue)", in: host))
             XCTAssertTrue(otherCell.accessibilityPerformPress?() ?? false)
             spin(1.0)
-            let calBottom = try assertRow(["calendar-today", "calendar-new-task"], in: host)
-            XCTAssertEqual(calBottom[0].minX, insets.leading, accuracy: 0.5, "Today on the left")
+            // Accepted 2026-11-01 Adaptive picks C3 moves Today between
+            // the arrows; the bottom bar keeps only the add control.
+            let navigation = try ["calendar-previous", "calendar-today", "calendar-next"].map {
+                try XCTUnwrap(frame(of: $0, in: host))
+            }
+            // These are the capsule's cells (21 pt faces; the arrows have
+            // 28 pt hit halos), not separate 27 pt raised controls.
+            for cell in navigation { XCTAssertEqual(cell.midY, calTop[2].midY, accuracy: 0.5) }
+            XCTAssertEqual(navigation[1].height, 21, accuracy: 0.5)
+            XCTAssertEqual(navigation[1].width, 44, accuracy: 0.5)
+            XCTAssertEqual(navigation[1].midX - navigation[0].midX, 33.5, accuracy: 0.5)
+            XCTAssertEqual(navigation[2].midX - navigation[1].midX, 33.5, accuracy: 0.5)
+            let calBottom = try assertRow(["calendar-new-task"], in: host)
+            XCTAssertGreaterThan(calBottom[0].minY, navigation[1].maxY)
         }
     }
 

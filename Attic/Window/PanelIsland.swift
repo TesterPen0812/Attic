@@ -299,6 +299,23 @@ final class PanelIslandModel: ObservableObject {
     /// Before a click's request: the panel becomes active (one click).
     var onClick: (() -> Void)?
 
+    var onOpenInOwnPanel: ((PanelPage) -> Void)?
+    var onPutBack: ((PanelPage) -> Void)?
+
+    /// The menu and VoiceOver run these same commands. A page already out
+    /// is raised; the last docked page cannot leave.
+    func commands(for page: PanelPage) -> [AtticMenuCommand] {
+        let out = outPages.contains(page)
+        var commands = [AtticMenuCommand("Open in Own Panel",
+            isDisabled: !out && outPages.count >= PanelPage.allCases.count - 1) { [weak self] in
+                self?.onOpenInOwnPanel?(page)
+            }]
+        if out {
+            commands.append(AtticMenuCommand("Put Back") { [weak self] in self?.onPutBack?(page) })
+        }
+        return commands
+    }
+
     func show(_ page: PanelPage) {
         if self.page != page { self.page = page }
     }
@@ -442,6 +459,13 @@ struct PanelIslandView: View {
         .atticFocusRing(focused == page && focusTracker.isKeyboardDriving, cornerRadius: chipRadius)
         .onHover { inside in
             if inside { model.point(at: page) } else { model.leave(page) }
+        }
+        .atticContextMenu { model.commands(for: page) }
+        .accessibilityActions {
+            // SwiftUI prepends custom actions to AppKit's rotor list.
+            ForEach(Array(model.commands(for: page).filter { !$0.isDisabled }.reversed())) { command in
+                Button(command.title, action: command.action)
+            }
         }
         .accessibilityLabel(page.title)
         .accessibilityValue(model.outPages.contains(page) ? String(localized: "In its own panel") : "")

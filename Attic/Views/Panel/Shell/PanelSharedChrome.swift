@@ -125,7 +125,7 @@ struct PanelBottomBarLook: Equatable {
         switch page {
         case .tasks: PanelBottomBarLook(middle: .tags(tags: [], selection: nil, idPrefix: "tasks-tag-bar", shown: true), plus: tasksPlus)
         case .notes: PanelBottomBarLook(middle: .tags(tags: [], selection: nil, idPrefix: "notes-tag-bar", shown: true), plus: notesPlus)
-        case .calendar: PanelBottomBarLook(middle: .today(shown: false), plus: calendarPlus)
+        case .calendar: PanelBottomBarLook(middle: .none, plus: calendarPlus)
         case .canvas: AtticDraw.isEnabled ? PanelBottomBarLook(middle: .none, plus: PanelBottomBarLook.drawPlus) : PanelBottomBarLook()
         }
     }

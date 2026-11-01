@@ -63,6 +63,7 @@ struct CalendarAgendaDay: View {
     let today: DueDay
     let taskActions: CalendarTaskRowActions
     @ObservedObject var rows = CalendarTaskRowState()
+    var eventRows: CalendarEventRowState = CalendarEventRowState()
     /// The page's keyboard focus for its task rows (Return, ⇧⌘I); nil
     /// leaves each row its own.
     var focus: FocusState<AtticRowFocusID?>.Binding? = nil
@@ -84,7 +85,7 @@ struct CalendarAgendaDay: View {
                         .atticContextMenu { taskActions.commands(for: task.id) }
                         .accessibilityIdentifier("calendar-task-\(task.id.uuidString)")
                     case let .event(event):
-                        CalendarEventRow(event: event, day: group.day, today: today)
+                        CalendarEventRow(event: event, day: group.day, today: today, rows: eventRows)
                     case .now:
                         CalendarNowLine()
                     }
@@ -218,14 +219,67 @@ struct CalendarEventRow: View {
     let event: CalendarEvent
     let day: DueDay
     let today: DueDay
+    @ObservedObject var rows = CalendarEventRowState()
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @FocusState private var headFocused: Bool
+
+    private var isOpen: Bool { rows.rowID == event.id && rows.rowDay == day }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                Button(action: toggleRow) { summary }
+                    .buttonStyle(.plain)
+                    .focused($headFocused)
+                    .focusEffectDisabled()
+                    .atticFocusRing(headFocused && keyboardFocusVisible, cornerRadius: CalendarDesign.eventRadius)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.isEmpty else { return .ignored }
+                        toggleRow()
+                        return .handled
+                    }
+                    .onKeyPress(.space, phases: .down) { press in
+                        guard press.modifiers.isEmpty else { return .ignored }
+                        toggleRow()
+                        return .handled
+                    }
+                    .accessibilityValue(isOpen ? String(localized: "Expanded") : String(localized: "Collapsed"))
+                    .accessibilityIdentifier("calendar-event-\(event.id)")
+                if isOpen, rows.canEdit {
+                    editableHead
+                }
+            }
+            if isOpen {
+                details
+                    .padding(.leading, TasksDesignMetrics.textX)
+                    .padding(.trailing, TasksDesignMetrics.rowPaddingX)
+                    .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background {
+            if isOpen {
+                Squircle(cornerRadius: CalendarDesign.eventRadius)
+                    .fill(design.tokens.ink(.heading).withAlpha(0.045).color)
+            }
+        }
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: isOpen)
+        .background(CalendarEventRowBoundary())
+        .atticContextMenu {
+            [AtticMenuCommand("Open in Calendar") { Task { await rows.openInCalendar(event, on: day) } }]
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func toggleRow() { Task { await rows.toggle(event, on: day) } }
+
+    private var summary: some View {
         let tokens = design.tokens
         let past = day < today || (day == today && !event.isAllDay && event.end <= Date())
         let ringCentre = AtticLayout.circleX + AtticControlSize.statusCircle / 2
-        ZStack(alignment: .topLeading) {
+        return ZStack(alignment: .topLeading) {
             Circle()
                 .fill(event.colour.rgba.color)
                 .frame(width: CalendarDesign.eventDot, height: CalendarDesign.eventDot)
@@ -235,6 +289,7 @@ struct CalendarEventRow: View {
             VStack(alignment: .leading, spacing: CalendarDesign.eventMetaTop) {
                 Text(verbatim: event.title)
                     .font(.system(size: CalendarDesign.eventTitleFont, weight: .medium))
+                    .opacity(isOpen && rows.canEdit ? 0 : 1)
                     .foregroundStyle(past ? TasksPanelDesign.toneInk(.meta, tokens: tokens).color : tokens.ink(.heading).color)
                     .lineSpacing(CalendarDesign.eventLine - CalendarDesign.eventTitleFont * 1.2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -251,14 +306,138 @@ struct CalendarEventRow: View {
                 .font(.system(size: CalendarDesign.eventMetaFont).monospacedDigit())
                 .lineLimit(1)
                 .frame(height: CalendarDesign.eventLine)
+                .opacity(isOpen && rows.canEdit && !event.isAllDay ? 0 : 1)
             }
             .padding(.leading, TasksDesignMetrics.textX)
             .padding(.trailing, TasksDesignMetrics.rowPaddingX)
             .padding(.vertical, CalendarDesign.eventPaddingY)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("calendar-event-\(event.id)")
+        .contentShape(Rectangle())
+    }
+
+    private var editableHead: some View {
+        VStack(alignment: .leading, spacing: CalendarDesign.eventMetaTop) {
+            TextField("Title", text: $rows.title)
+                .font(.system(size: CalendarDesign.eventTitleFont, weight: .medium))
+                .frame(height: CalendarDesign.eventLine)
+                .accessibilityIdentifier("calendar-event-title-\(event.id)")
+            if let owned = rows.owned, !owned.draft.isAllDay {
+                HStack(spacing: 0) {
+                    TextField("Start time", text: $rows.startText)
+                        .frame(width: 40)
+                        .accessibilityIdentifier("calendar-event-start-\(event.id)")
+                    Text(verbatim: "–" + Self.endText(start: rows.startText, length: rows.length))
+                    Spacer(minLength: 0)
+                    if let location = event.location { Text(verbatim: location).lineLimit(1) }
+                }
+                .font(.system(size: CalendarDesign.eventMetaFont).monospacedDigit())
+                .frame(height: CalendarDesign.eventLine)
+            }
+        }
+        .textFieldStyle(.plain)
+        .foregroundStyle(design.tokens.ink(.heading).color)
+        .padding(.leading, TasksDesignMetrics.textX)
+        .padding(.trailing, TasksDesignMetrics.rowPaddingX)
+        .padding(.vertical, CalendarDesign.eventPaddingY)
+        .onSubmit { Task { await rows.close() } }
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let notes = rows.owned?.draft.notes, !notes.isEmpty {
+                Text(verbatim: notes).font(.system(size: 11))
+                    .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
+            }
+            HStack(spacing: 4) {
+                if rows.canEdit {
+                    choices
+                    Spacer(minLength: 0)
+                    Button("Delete", role: .destructive) { Task { await rows.delete() } }
+                        .accessibilityIdentifier("calendar-event-delete-\(event.id)")
+                        .disabled(rows.busy)
+                } else {
+                    choiceLabel(event.calendarTitle, dot: event.colour)
+                    choiceLabel(event.isAllDay ? String(localized: "All day")
+                                : ComposerCard.length(Int(event.end.timeIntervalSince(event.start) / 60)))
+                        .accessibilityIdentifier("calendar-event-duration-\(event.id)")
+                    Spacer(minLength: 0)
+                    Button("Open in Calendar") { Task { await rows.openInCalendar(event, on: day) } }
+                        .fixedSize()
+                        .accessibilityIdentifier("calendar-event-open-\(event.id)")
+                }
+            }
+            .font(.system(size: 9))
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            if let failure = rows.failure {
+                Text(verbatim: failure)
+                    .font(.system(size: 11))
+                    .foregroundStyle(design.tokens.ink(.warningText).color)
+                    .accessibilityIdentifier("calendar-event-failure-\(event.id)")
+            }
+        }
+        .foregroundStyle(TasksPanelDesign.toneInk(.groupHeader, tokens: design.tokens).color)
+    }
+
+    private var choices: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 4) {
+                if rows.expandedChoice == .calendar {
+                    ForEach(rows.calendars) { calendar in
+                        choice(calendar.title, selected: calendar.id == rows.calendarID, dot: calendar.colour) {
+                            rows.calendarID = calendar.id
+                            rows.expandedChoice = nil
+                        }
+                    }
+                } else if rows.expandedChoice == .length {
+                    ForEach(ComposerModel.lengths, id: \.self) { length in
+                        choice(ComposerCard.length(length), selected: length == rows.length) {
+                            rows.length = length
+                            rows.expandedChoice = nil
+                        }
+                    }
+                } else {
+                    choice(rows.calendars.first { $0.id == rows.calendarID }?.title ?? event.calendarTitle,
+                           dot: rows.calendars.first { $0.id == rows.calendarID }?.colour ?? event.colour) {
+                        rows.expandedChoice = .calendar
+                    }
+                    if rows.owned?.draft.isAllDay == false {
+                        choice(ComposerCard.length(rows.length)) { rows.expandedChoice = .length }
+                    }
+                }
+            }
+        }
+        .scrollIndicators(.never)
+        .frame(height: 18)
+        .background {
+            if rows.expandedChoice != nil {
+                AtticControlShape.shape(cornerRadius: 9, exponent: AtticShape.controlExponent)
+                    .fill(design.tokens.ink(.heading).withAlpha(0.035).color)
+            }
+        }
+        .animation(AtticMotionPreset.expand.animation(reduceMotion: design.reduceMotion), value: rows.expandedChoice)
+    }
+
+    private func choice(_ title: String, selected: Bool = false, dot: CalendarEventColour? = nil,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) { choiceLabel(title, selected: selected, dot: dot) }
+            .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func choiceLabel(_ title: String, selected: Bool = false, dot: CalendarEventColour? = nil) -> some View {
+        HStack(spacing: 4) {
+            if let dot { Circle().fill(dot.rgba.color).frame(width: 4, height: 4) }
+            Text(verbatim: title).lineLimit(1)
+        }
+        .padding(.horizontal, 6).frame(height: 18)
+        .background(AtticControlShape.shape(cornerRadius: 9, exponent: AtticShape.controlExponent)
+            .fill(design.tokens.ink(.heading).withAlpha(selected ? 0.06 : (rows.expandedChoice == nil ? 0.05 : 0)).color))
+    }
+
+    private static func endText(start: String, length: Int) -> String {
+        guard let minutes = CalendarEventRowState.minutes(start) else { return "" }
+        return ComposerCard.clock((minutes + length) % (24 * 60))
     }
 
     /// "09:00–10:00", or "All day".

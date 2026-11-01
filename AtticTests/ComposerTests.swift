@@ -631,6 +631,52 @@ final class ComposerTests: XCTestCase {
         spin(0.1)
     }
 
+    func testPriorityWidensFoldsItsNeighboursAndEscapeHasTwoSteps() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced)
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        let (window, hosting, field) = try mountForKeys(on: .tasks(.now))
+        typeKeys(field, "Keep priority !")
+        @MainActor func elements(_ root: AnyObject) -> [AnyObject] {
+            [root] + ((root.accessibilityChildren?() ?? nil) ?? []).flatMap { elements($0 as AnyObject) }
+        }
+        @MainActor func element(_ id: String) -> AnyObject? {
+            hosting.layoutSubtreeIfNeeded()
+            return elements(hosting).first { $0.accessibilityIdentifier?() == id }
+        }
+        let create = try XCTUnwrap((element("composer-create") as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+        let priority = try XCTUnwrap(element("composer-chip-priority"))
+        XCTAssertTrue(priority.accessibilityPerformPress?() ?? false)
+        spin()
+        XCTAssertNotNil(element("composer-priority-low"), "choices widen in the card")
+        XCTAssertEqual(model.values.priority, .medium, "typed ! keeps the existing parser meaning")
+        XCTAssertNil(element("composer-chip-date"))
+        XCTAssertNil(element("composer-chip-tags"))
+        XCTAssertNotNil(element("composer-create"))
+        window.makeFirstResponder(field)
+        key(window, "\u{1b}", code: 53)
+        XCTAssertTrue(model.isOpen, "first Escape closes only the choices")
+        XCTAssertNotNil(element("composer-chip-date"))
+        XCTAssertNotNil(element("composer-chip-tags"))
+        key(window, "\u{1b}", code: 53)
+        XCTAssertFalse(model.isOpen)
+        XCTAssertEqual(page.addBar.text, "Keep priority !")
+        model.open(on: .tasks(.now)); spin()
+        XCTAssertTrue(try XCTUnwrap(element("composer-chip-priority")).accessibilityPerformPress?() ?? false)
+        spin()
+        XCTAssertTrue(try XCTUnwrap(element("composer-priority-high")).accessibilityPerformPress?() ?? false)
+        spin()
+        XCTAssertEqual(model.values.priority, .high)
+        XCTAssertNil(element("composer-priority-high"), "picking closes the levels")
+        XCTAssertNotNil(element("composer-chip-date"))
+        XCTAssertNotNil(element("composer-chip-tags"))
+        let restoredCreate = try XCTUnwrap((element("composer-create") as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+        XCTAssertEqual(restoredCreate, create, "Create stays in place")
+
+    }
+
     func testReturnInTheTitleCreatesAndClosesTheCard() throws {
         let (window, _, field) = try mountForKeys(on: .tasks(.now))
         typeKeys(field, "Call Sam")

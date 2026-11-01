@@ -102,6 +102,9 @@ enum CalendarDesign {
     /// 1 pt apart in their capsule.
     static let titleGap: CGFloat = 4.5
     static let arrowsGap: CGFloat = 1
+    // Adaptive C3's Today segment: 88 px wide, 21 px medium type.
+    static let navigationTodayWidth: CGFloat = 44
+    static let navigationTodayFont: CGFloat = 10.5
 
     // Footer: Today 61 px tall, 22 px padding, 22 px medium text.
     static let footerHeight: CGFloat = AtticControlSize.headerControl

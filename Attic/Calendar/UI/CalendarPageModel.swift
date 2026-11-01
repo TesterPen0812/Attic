@@ -33,6 +33,7 @@ final class CalendarPageModel: ObservableObject {
     let store: TaskStore
     /// The agenda's task rows' selection and rename (kept across Back).
     let taskRows = CalendarTaskRowState()
+    let eventRows: CalendarEventRowState
     private(set) var source: CalendarEventSource
     let calendar: Calendar
     private let now: () -> Date
@@ -64,8 +65,10 @@ final class CalendarPageModel: ObservableObject {
     #endif
 
     init(store: TaskStore, source: CalendarEventSource, calendar: Calendar = CalendarMonthMath.calendar(),
-         locale: Locale = .current, now: @escaping () -> Date = Date.init) {
+         locale: Locale = .current, now: @escaping () -> Date = Date.init,
+         makeWriter: (() throws -> CalendarEventWriter)? = nil) {
         self.store = store
+        self.eventRows = CalendarEventRowState(makeWriter: makeWriter)
         self.source = source
         self.calendar = calendar
         self.locale = locale

@@ -43,6 +43,126 @@ final class CalendarPageHostedTests: XCTestCase {
         }
     }
 
+    func testSearchFoldsToSelectedWeekAndClosingRestoresMonth() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try withPage(events: []) { page in
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-search-button")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5)
+            XCTAssertNotNil(page.element("calendar-search"))
+            XCTAssertTrue(try XCTUnwrap(page.element(label: "End search")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5)
+        }
+    }
+
+    func testTodayIsBetweenTheArrowsAndNeverInTheBottomBar() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try withPage(events: []) { page in
+            page.model.select(day(2026, 9, 30))
+            page.settle()
+            @MainActor func frame(_ id: String) throws -> CGRect {
+                try XCTUnwrap((page.element(id) as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+            }
+            let previous = try frame("calendar-previous"), today = try frame("calendar-today"), next = try frame("calendar-next")
+            XCTAssertEqual(page.matching("calendar-today").count, 1, "no second Today remains in the footer")
+            XCTAssertEqual(today.midY, previous.midY, accuracy: 0.5)
+            // Arrow hit targets extend 3.5 pt beyond their 21 pt faces.
+            // Assert the faces' exact spacing, rather than their hit halos.
+            let step = 21.0 / 2 + 1 + 44.0 / 2
+            XCTAssertEqual(today.midX - previous.midX, step, accuracy: 0.5)
+            XCTAssertEqual(next.midX - today.midX, step, accuracy: 0.5)
+            XCTAssertEqual(next.midY, previous.midY, accuracy: 0.5)
+        }
+    }
+
+    func testAnExternalEventOpensReadOnlyAndOnlyOneRowOpens() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try withPage(events: [event("one", on: 29), event("two", on: 29, hour: 11)]) { page in
+            let head = try XCTUnwrap((page.element("calendar-event-one") as? NSAccessibilityElementProtocol)?.accessibilityFrame())
+            let point = page.window.convertPoint(fromScreen: CGPoint(x: head.maxX - 2, y: head.midY))
+            page.click(at: point, count: 1)
+            page.settle()
+            XCTAssertNotNil(page.element("calendar-event-open-one"))
+            XCTAssertNotNil(page.element("calendar-event-duration-one"))
+            XCTAssertNil(page.element("calendar-event-delete-one"))
+            XCTAssertNil(page.element("calendar-event-title-one"))
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-event-two")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertNil(page.element("calendar-event-open-one"))
+            XCTAssertNotNil(page.element("calendar-event-open-two"))
+        }
+    }
+
+    func testAMultiDayEventOpensOnlyTheClickedDayRow() throws {
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = true
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        var span = event("span", on: 29)
+        span.isAllDay = true
+        span.start = date(2026, 10, 29)
+        span.end = date(2026, 10, 31)
+        try withPage(events: [span]) { page in
+            XCTAssertEqual(page.matching("calendar-event-span").count, 2)
+            XCTAssertTrue(try XCTUnwrap(page.matching("calendar-event-span").first).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.matching("calendar-event-open-span").count, 1, "one physical day row opens")
+            XCTAssertTrue(try XCTUnwrap(page.matching("calendar-event-span").last).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.matching("calendar-event-open-span").count, 1, "opening the other day closes the first")
+        }
+    }
+
+    func testCommandTReturnsToTodayAndEscapeClosesOnlyTheOpenEvent() throws {
+        try requireKeyWindowTests()
+        AtticMotionPreference.systemReduceMotionOverride = true
+        AtticTransparencySeam.systemOverride = false
+        defer {
+            AtticMotionPreference.systemReduceMotionOverride = nil
+            AtticTransparencySeam.systemOverride = nil
+        }
+        try withPage(events: [event("keys", on: 29)], keyWindow: true) { page in
+            page.model.select(day(2026, 10, 31)); page.settle()
+            page.press("t", keyCode: 17, modifiers: [.command, .shift])
+            XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 31))
+            page.press("t", keyCode: 17, modifiers: .command)
+            XCTAssertEqual(page.model.snapshot.selected, day(2026, 10, 29))
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-event-keys")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertNotNil(page.element("calendar-event-open-keys"))
+            page.press("\u{1b}", keyCode: 53)
+            XCTAssertNil(page.element("calendar-event-open-keys"))
+            XCTAssertNotNil(page.element("calendar-event-keys"))
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-search-button")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            XCTAssertEqual(page.offset, CalendarMonthMath.weekViewOffset(weekCount: page.model.snapshot.weeks.count), accuracy: 0.5)
+            page.press("\u{1b}", keyCode: 53)
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5, "Escape restores the month")
+            XCTAssertTrue(try XCTUnwrap(page.element("calendar-search-button")).accessibilityPerformPress?() ?? false)
+            page.settle()
+            page.click(at: CGPoint(x: 160, y: 80), count: 1)
+            XCTAssertEqual(page.offset, 0, accuracy: 0.5, "empty space restores the month")
+        }
+    }
+
     // MARK: - Every day's tile
 
     func testEmptyDaysKeepTheirOwnTileAndATileSelectsItsDay() throws {
@@ -382,9 +502,16 @@ final class CalendarPageHostedTests: XCTestCase {
             settle()
         }
 
-        func element(_ identifier: String) -> AnyObject? {
+        func element(_ identifier: String) -> AnyObject? { matching(identifier).first }
+
+        func element(label: String) -> AnyObject? {
             host.layoutSubtreeIfNeeded()
-            return Self.elements(host).first { ($0.accessibilityIdentifier?() ?? "") == identifier }
+            return Self.elements(host).first { ($0.accessibilityLabel?() ?? "") == label }
+        }
+
+        func matching(_ identifier: String) -> [AnyObject] {
+            host.layoutSubtreeIfNeeded()
+            return Self.elements(host).filter { ($0.accessibilityIdentifier?() ?? "") == identifier }
         }
 
         /// The dates (yyyy-MM-dd) of the drawn elements whose id starts with `prefix`.
@@ -425,10 +552,13 @@ final class CalendarPageHostedTests: XCTestCase {
         let model = CalendarPageModel(store: store, source: source, calendar: calendar, now: { self.date(2026, 10, 29, 12) })
         let size = CGSize(width: 320, height: 900)
         let layout = PanelPageLayout(cornerSize: 28, panelSize: size)
+        var design = AtticDesignContext(mode: .light)
+        design.reduceMotion = AtticMotionPreference.systemReduceMotionOverride ?? false
+        design.reduceTransparency = AtticTransparencySeam.systemOverride ?? false
         let page = CalendarPage(model: model, layout: layout,
                                 taskActions: taskActions?(store) ?? CalendarTaskRowActions(toggleDone: { _ in }, open: { _ in }),
                                 onNewTask: { _ in })
-            .atticDesign(AtticDesignContext(mode: .light))
+            .atticDesign(design)
             .frame(width: size.width, height: size.height)
         let window: NSWindow = keyWindow
             ? KeyPanel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),

@@ -111,7 +111,7 @@ struct ComposerCard: View {
             }
         }
         .onKeyPress(.escape) {
-            guard open == nil else { return .ignored }
+            guard open == nil else { open = nil; return .handled }
             model.close()
             return .handled
         }
@@ -193,6 +193,9 @@ struct ComposerCard: View {
                 }
             }
         }
+        .simultaneousGesture(TapGesture().onEnded {
+            if open == .priority { open = nil }
+        })
         .padding(.trailing, ComposerMetrics.titleTrailing(kinds: model.kinds.count))
         .atticDropdown(isPresented: Binding(get: { suggestion != nil }, set: { shown in
             if !shown, let suggestion { title.hiddenSuggestion = suggestion.range }
@@ -312,11 +315,15 @@ struct ComposerCard: View {
             HStack(spacing: ComposerMetrics.chipGap) {
                 switch kind {
                 case .task:
-                    dateChip(values, flex: true)
-                    chip(.priority, systemName: "exclamationmark",
-                         label: values.priority.map(\.composerTitle) ?? String(localized: "Priority"),
-                         set: values.priority != nil, colour: values.priority == .high ? TasksPanelDesign.vivid(design.tokens.ink(.priorityHigh), tokens: design.tokens) : nil)
-                    tagsChip(values)
+                    if open != .priority { dateChip(values, flex: true) }
+                    if open == .priority {
+                        priorityLevels
+                    } else {
+                        chip(.priority, systemName: "exclamationmark",
+                             label: values.priority.map(\.composerTitle) ?? String(localized: "Priority"),
+                             set: values.priority != nil, colour: values.priority == .high ? TasksPanelDesign.vivid(design.tokens.ink(.priorityHigh), tokens: design.tokens) : nil)
+                    }
+                    if open != .priority { tagsChip(values) }
                 case .event:
                     dateChip(values, flex: true)
                     if values.time != nil {
@@ -334,6 +341,45 @@ struct ComposerCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             createButton
         }
+        .animation(ComposerMotion.animation(), value: open == .priority)
+        .onChange(of: kind) { _, _ in open = nil }
+    }
+
+    private var priorityLevels: some View {
+        HStack(spacing: 1) {
+            ForEach([TaskPriority.none, .low, .medium, .high], id: \.self) { priority in
+                let selected = (model.values.priority ?? .none) == priority
+                Button {
+                    model.tasks.pickPriority(priority, editor: model.editor)
+                    open = nil
+                } label: {
+                    Text(priority == .none ? String(localized: "None") : priority.composerTitle)
+                        .font(AtticTextStyle.composerChip.font)
+                        .foregroundStyle(design.tokens.ink(.heading).color)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity, minHeight: ComposerMetrics.chipHeight)
+                        .background {
+                            if selected {
+                                AtticControlShape.shape(cornerRadius: ComposerMetrics.chipHeight / 2,
+                                                        exponent: AtticShape.controlExponent)
+                                    .fill(design.tokens.ink(.heading).withAlpha(0.06).color)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("composer-priority-\(priority)")
+            }
+        }
+        .background(AtticControlShape.shape(cornerRadius: ComposerMetrics.chipHeight / 2,
+                                             exponent: AtticShape.controlExponent)
+            .fill(design.tokens.ink(.heading).withAlpha(0.035).color))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Priority"))
+        .accessibilityAction(named: Text("Close Priority")) { open = nil }
     }
 
     private func dateChip(_ values: ComposerModel.Values, flex: Bool) -> some View {
@@ -407,7 +453,7 @@ struct ComposerCard: View {
         .focusEffectDisabled()
         .help(label)
         .accessibilityIdentifier("composer-chip-\(id)")
-        .atticDropdown(isPresented: Binding(get: { open == id }, set: { if !$0, open == id { open = nil } }),
+        .atticDropdown(isPresented: Binding(get: { open == id && id != .priority }, set: { if !$0, open == id { open = nil } }),
                        prefer: .above, label: label) {
             picker(id)
         }
