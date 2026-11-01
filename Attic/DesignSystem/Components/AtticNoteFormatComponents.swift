@@ -220,6 +220,7 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
     @ViewBuilder let content: Content
     @State private var probeID = UUID()
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCornerExponent) private var cornerExponent
 
     private var dark: Bool { design.tokens.context.mode == .dark }
 
@@ -257,7 +258,7 @@ struct AtticFormatRowSurface<Content: View>: View, Animatable {
                             .opacity(growth.sourceGlyphOpacity)
                             .accessibilityHidden(true)
                     }
-                    .clipShape(AtticControlShape.shape(cornerRadius: radius))
+                    .clipShape(AtticControlShape.shape(cornerRadius: radius, exponent: cornerExponent))
                     .atticRaisedMaterial(cornerRadius: radius, interactive: false)
                     // Placed by layout, not by an offset, so the glass is
                     // drawn exactly where the shape is on every frame.

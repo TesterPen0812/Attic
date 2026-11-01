@@ -617,6 +617,54 @@ final class PanelChromeTests: XCTestCase {
         XCTAssertEqual(AtticMaterialProbe.corners.filter { $0 == nil }.count, 0, "no control on the continuous (circle) corner")
     }
 
+    /// The notes bar's Back (‹) slides out under the bar's edge on a
+    /// revealed shape; at rest it must be the curve-1.4 superellipse the
+    /// other square controls draw (Accepted "Shapes": a square control is a
+    /// whole superellipse), not Apple's continuous corner, which draws a
+    /// 27 pt square with a 13.5 pt radius as a circle (owner's notes, 1 Nov).
+    func testTheNotesBackButtonIsASuperellipseNotACircle() throws {
+        AtticTransparencySeam.systemOverride = false
+        defer { AtticTransparencySeam.systemOverride = nil }
+        AtticMaterialProbe.resetCorners()
+        try withPanel { host, state, _, _, _, _ in
+            state.selectSection(.notes)
+            spin(1.5)
+            XCTAssertNotNil(frame(of: "notes-all-notes", in: host), "Back shows")
+            host.display()
+        }
+        let side = NotesBarMetrics.control
+        let rect = CGRect(x: 0, y: 0, width: side, height: side)
+        let atRest = AtticMaterialProbe.revealed.filter { $0.leading == 0 && $0.trailing == 0 }
+        XCTAssertFalse(atRest.isEmpty, "Back drew its revealed glass")
+        // Containment on a 0.25 pt grid: the two paths cover the same points.
+        func differences(_ a: Path, _ b: Path) -> Int {
+            var count = 0
+            for i in 0..<Int(side * 4) {
+                for j in 0..<Int(side * 4) {
+                    let point = CGPoint(x: (CGFloat(i) + 0.5) / 4, y: (CGFloat(j) + 0.5) / 4)
+                    if a.contains(point) != b.contains(point) { count += 1 }
+                }
+            }
+            return count
+        }
+        let superellipse = AtticControlShape.shape(cornerRadius: NotesBarMetrics.radius, exponent: AtticShape.controlExponent)
+            .path(in: rect)
+        XCTAssertGreaterThan(differences(superellipse, Circle().path(in: rect)), 20, "the two curves differ at this size")
+        for shape in atRest {
+            XCTAssertEqual(shape.exponent, AtticShape.controlExponent, "the inherited curve")
+            XCTAssertEqual(differences(shape.path(in: rect), superellipse), 0, "at rest: the superellipse")
+        }
+        // Sliding out, the part still inside keeps the same curve.
+        for shape in atRest.prefix(1) {
+            var sliding = shape
+            sliding.leading = 6
+            let part = CGRect(x: 6, y: 0, width: side - 6, height: side)
+            let expected = AtticControlShape.shape(cornerRadius: min(NotesBarMetrics.radius, part.width / 2),
+                                                   exponent: AtticShape.controlExponent).path(in: part)
+            XCTAssertEqual(differences(sliding.path(in: rect), expected), 0, "sliding: the same curve")
+        }
+    }
+
     // MARK: The "+" card (Phase B)
 
     private func barFrames(_ ids: [String], in host: AtticPanelHostingView) throws -> [CGRect] {

@@ -159,6 +159,14 @@ enum PanelHideMotionTuning {
     static let swoopPerspective: Double = 900
     static let swoopFadeStart: Double = 0.85
     static let swoopKeyframes = 30
+    /// The most progress one keyframe step may cover. Core Animation
+    /// interpolates between two keyframes' matrices by decomposing them,
+    /// which leaves Swoop's tilted, perspective curve in between: with 30
+    /// frames the drawn panel strayed from the curve by up to 37 pt on the
+    /// reveal's fast start and 13 pt mid-hide. Denser frames keep it on
+    /// the curve; the timing and the curve are unchanged.
+    static let swoopKeyframeMaxStep: Double = 0.02
+    static let swoopKeyframeLimit = 600
 
     // Swipe follows fingers
     /// A swipe released to close finishes into the corner on this spring
@@ -957,6 +965,12 @@ final class PanelGenieView: NSView {
         /// carries its own outline; nil is the rounded rectangle above.
         var exponent: CGFloat?
 
+        /// One glass read twice: in the same place, to within half a point.
+        func sameGlass(as other: GlassPill) -> Bool {
+            abs(rect.minX - other.rect.minX) < 0.5 && abs(rect.minY - other.rect.minY) < 0.5
+                && abs(rect.maxX - other.rect.maxX) < 0.5 && abs(rect.maxY - other.rect.maxY) < 0.5
+        }
+
         init(rect: CGRect, clip: CGRect, cornerRadius: CGFloat? = nil, continuous: Bool = true, exponent: CGFloat? = nil) {
             self.rect = rect
             self.clip = clip
@@ -1089,9 +1103,12 @@ final class PanelGenieView: NSView {
                 abs($0.rect.minX - group.rect.minX) < 1 && abs($0.rect.minY - group.rect.minY) < 1
                     && abs($0.rect.width - group.rect.width) < 1 && abs($0.rect.height - group.rect.height) < 1
             }
+            // Its rect too: the radius was read on that element's outline,
+            // which may sit a few hundredths of a point off the group's rect
+            // (paired with the group's, a capsule read wider than half its height).
             let candidates = inside.isEmpty
-                ? [(rect: group.rect, clip: group.clip, radius: alone?.radius ?? -1, continuous: alone?.continuous ?? true,
-                    exponent: alone?.exponent)]
+                ? [(rect: alone?.rect ?? group.rect, clip: group.clip, radius: alone?.radius ?? -1,
+                    continuous: alone?.continuous ?? true, exponent: alone?.exponent)]
                 : inside
             for pill in candidates where pill.rect.width > 4 && pill.rect.height > 4 {
                 if pill.clip.intersection(pill.rect).width > 0.5, pill.clip.intersection(pill.rect).height > 0.5 {
@@ -1100,8 +1117,11 @@ final class PanelGenieView: NSView {
                     // A glass group has two SDF layers (its backdrop's and its
                     // content's vibrancy): one control, one glass. Drawn twice,
                     // live glass doubled its tint (g8: the add bar 16-34
-                    // levels off rest).
-                    if !scan.pills.contains(made) { scan.pills.append(made) }
+                    // levels off rest). The two layers' frames may differ, so
+                    // one reads as the group's rect and the other as its padded
+                    // outline, a few hundredths of a point apart (the Tasks words
+                    // switch rode twice): the same place is the same glass.
+                    if !scan.pills.contains(where: { $0.sameGlass(as: made) }) { scan.pills.append(made) }
                 } else if !scan.leftOut.contains(pill.rect) {
                     scan.leftOut.append(pill.rect)
                 }

@@ -33,6 +33,8 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var keyLookAwaitsRelease = false
     private var fadeGeneration = 0
+    /// A hide's fade is running: its end will order the panel out.
+    private(set) var isHiding = false
 
     var onPressed: (() -> Void)?
     var onDragBegan: (() -> Void)?
@@ -140,14 +142,18 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         uiState.updatePanelSize(frame.size)
     }
 
-    /// Orders it in, fading in over `fade` seconds (0: at once).
+    /// Orders it in, fading in over `fade` seconds (0: at once). During a
+    /// hide's fade it turns the fade back (that hide's end no longer
+    /// applies, and no hide was recorded, so no reveal is either).
     func show(fade: TimeInterval, curve: CAMediaTimingFunction?) {
+        let reverses = isHiding
         fadeGeneration += 1
+        isHiding = false
         let wasVisible = panel.isVisible
         if !wasVisible { panel.alphaValue = fade > 0 ? 0 : 1 }
         panel.orderFrontRegardless()
-        uiState.panelDidReveal()
-        animateAlpha(1, duration: wasVisible ? 0 : fade, curve: curve)
+        if !reverses { uiState.panelDidReveal() }
+        animateAlpha(1, duration: wasVisible && !reverses ? 0 : fade, curve: curve)
     }
 
     /// Fades it out over `fade` seconds, then orders it out.
@@ -155,9 +161,11 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
         guard panel.isVisible else { return }
         fadeGeneration += 1
         let generation = fadeGeneration
+        isHiding = true
         hostingView.cancelActiveInteraction(reason: .explicitHide)
         animateAlpha(0, duration: fade, curve: curve) { [weak self] in
             guard let self, self.fadeGeneration == generation else { return }
+            self.isHiding = false
             self.panel.orderOut(nil)
             self.panel.alphaValue = 1
             self.toasts.dismiss()
@@ -168,12 +176,21 @@ final class PanelFloatingPanel: NSObject, NSWindowDelegate {
     /// Gone for good (its page docked again): the window and its pages go.
     func close() {
         fadeGeneration += 1
+        isHiding = false
         hostingView.cancelActiveInteraction(reason: .explicitHide)
         toasts.dismiss()
         panel.orderOut(nil)
         panel.delegate = nil
         uiState.releasePageContent()
         panel.contentView = nil
+        // The owner's callbacks go with it: none may keep it alive.
+        onPressed = nil
+        onDragBegan = nil
+        onDragChanged = nil
+        onDragEnded = nil
+        onPinChanged = nil
+        onResized = nil
+        cancellables.removeAll()
     }
 
     func makeKey() {
@@ -499,7 +516,12 @@ final class PanelPullOutController {
     func raise(_ page: PanelPage, makeKey: Bool) {
         guard let floating = panels[page] else { return }
         state.raise(page)
-        if !floating.isVisible { floating.show(fade: 0, curve: nil); arrived(floating) }
+        if !floating.isVisible {
+            floating.show(fade: 0, curve: nil)
+            arrived(floating)
+        } else if floating.isHiding {
+            floating.show(fade: 0, curve: nil)
+        }
         floating.panel.orderFrontRegardless()
         if makeKey { floating.makeKey() }
         save()
@@ -541,6 +563,9 @@ final class PanelPullOutController {
             if !floating.isVisible {
                 floating.show(fade: fadeDuration(showing: true), curve: Self.curve)
                 arrived(floating)
+            } else if floating.isHiding {
+                // Still fading out with the docked panel's hide: back in.
+                floating.show(fade: fadeDuration(showing: true), curve: Self.curve)
             } else {
                 floating.panel.orderFrontRegardless()
             }
@@ -606,8 +631,8 @@ final class PanelPullOutController {
         floating.uiState.onOpenElsewhere = { [weak self] other, switchesDocked in
             self?.bringForward(other, switchesDocked: switchesDocked) ?? false
         }
-        floating.onPressed = { [weak self] in
-            guard let self, state.front != page else { return }
+        floating.onPressed = { [weak self, weak floating] in
+            guard let self, let floating, state.front != page else { return }
             state.raise(page)
             floating.panel.orderFrontRegardless()
             save()
