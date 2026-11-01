@@ -156,8 +156,19 @@ enum DrawRaster {
             context.setLineWidth(DrawGeometry.strokeWidth(object))
             context.strokePath()
         case .text(let text):
-            drawText(text, at: CGPoint(x: object.frame.x, y: object.frame.y), size: object.style.size.textSize,
-                     width: object.textWidth.map { CGFloat($0) }, colour: colour, in: context)
+            let scale = CGFloat(object.textScale ?? 1)
+            if scale != 1, scale > 0 {
+                // Laid out at the style's size and drawn scaled: the same lines.
+                context.saveGState()
+                context.translateBy(x: object.frame.x, y: object.frame.y)
+                context.scaleBy(x: scale, y: scale)
+                drawText(text, at: .zero, size: object.style.size.textSize,
+                         width: object.textWidth.map { CGFloat($0) / scale }, colour: colour, in: context)
+                context.restoreGState()
+            } else {
+                drawText(text, at: CGPoint(x: object.frame.x, y: object.frame.y), size: object.style.size.textSize,
+                         width: object.textWidth.map { CGFloat($0) }, colour: colour, in: context)
+            }
         case .image(let image):
             drawImage(image, id: object.id, in: DrawGeometry.frame(object.frame), context: context, dark: palette.dark,
                       fullResolution: fullResolution)

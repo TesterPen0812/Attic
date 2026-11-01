@@ -53,8 +53,14 @@ struct DrawObject: Identifiable, Codable, Equatable, Sendable {
     /// A text box whose width was set by its handles: its lines wrap to this
     /// many points. Nil keeps the box as wide as its longest line.
     var textWidth: Double? = nil
+    /// A text box scaled with a group: its lines are laid out at the
+    /// style's size and drawn this much larger or smaller, so they scale
+    /// rather than reflow. Nil is 1.
+    var textScale: Double? = nil
 
     var text: String { if case .text(let text) = content { text } else { "" } }
+    /// The text's size as drawn, in points.
+    var textPointSize: Double { style.size.textSize * (textScale ?? 1) }
     var isImage: Bool { if case .image = content { true } else { false } }
 
     /// The object without an image's original bytes (metadata reads).

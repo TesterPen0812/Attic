@@ -42,6 +42,10 @@ struct DrawTextEdit: Equatable {
     var stored: Bool
     /// The box's wrap width, once a side handle has set one.
     var width: CGFloat? = nil
+    /// The box's scale from a group resize (1 for a new box).
+    var scale: CGFloat = 1
+    /// The text's size as drawn, in points.
+    var pointSize: CGFloat { CGFloat(style.size.textSize) * scale }
 }
 
 /// What the pointer is doing on the board right now (never published: the
@@ -693,7 +697,8 @@ final class DrawPageModel: ObservableObject {
         guard let object = object(id), case .text(let text) = object.content else { return }
         endEditing()
         editing = DrawTextEdit(id: id, origin: CGPoint(x: object.frame.x, y: object.frame.y), text: text,
-                               style: object.style, stored: true, width: object.textWidth.map { CGFloat($0) })
+                               style: object.style, stored: true, width: object.textWidth.map { CGFloat($0) },
+                               scale: CGFloat(object.textScale ?? 1))
         editingID = id
         select([])
         contentRevision += 1
@@ -746,7 +751,7 @@ final class DrawPageModel: ObservableObject {
 
     static func measure(_ object: inout DrawObject, text: String) {
         let size = DrawText.size(of: text, fontSize: CGFloat(object.style.size.textSize),
-                                 width: object.textWidth.map { CGFloat($0) })
+                                 width: object.textWidth.map { CGFloat($0) }, scale: CGFloat(object.textScale ?? 1))
         object.frame.width = size.width
         object.frame.height = size.height
     }

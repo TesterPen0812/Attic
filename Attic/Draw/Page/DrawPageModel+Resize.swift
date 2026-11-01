@@ -125,10 +125,18 @@ extension DrawPageModel {
             let rect = DrawGeometry.frame(original.frame)
             switch original.content {
             case .text:
-                // A text box in a group moves with it, at its own size.
+                // A text box in a group scales with it, like a stroke: its
+                // size and wrap width together, so its lines scale rather
+                // than reflow. Groups always keep their proportions; should
+                // the two ever differ, text takes the smaller.
+                let scale = min(sx, sy)
                 let corner = map(rect.minX, rect.minY)
                 object.frame.x = corner.x
                 object.frame.y = corner.y
+                let total = (original.textScale ?? 1) * scale
+                object.textScale = abs(total - 1) < 0.000_001 ? nil : total
+                object.textWidth = original.textWidth.map { $0 * scale }
+                measure(&object, text: object.text)
             case .shape(let kind) where kind == .line || kind == .arrow:
                 let (a, b) = DrawGeometry.endpoints(original.frame)
                 let p = map(a.x, a.y), q = map(b.x, b.y)
